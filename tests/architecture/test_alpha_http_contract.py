@@ -20,7 +20,27 @@ def test_alpha_catalog_is_public_and_contains_no_execution_implementation() -> N
 
     assert response.status_code == 200
     catalog = response.json()
-    assert "close_adj" in {field["identifier"] for field in catalog["fields"]}
+    market_fields = {
+        field["identifier"]: field["field_id"]
+        for field in catalog["fields"]
+        if field["family_id"] == "equity.eod_price"
+    }
+    assert market_fields == {
+        "open": "price.open.adjusted",
+        "high": "price.high.adjusted",
+        "low": "price.low.adjusted",
+        "close": "price.close.adjusted",
+        "volume": "market.volume.shares",
+        "amount": "market.turnover.cny",
+    }
+    assert not set(market_fields) & {
+        "open_adj",
+        "high_adj",
+        "low_adj",
+        "close_adj",
+        "volume_shares",
+        "turnover_amount_cny",
+    }
     assert "ts_mean" in {builtin["identifier"] for builtin in catalog["builtins"]}
     assert "evaluator" not in str(catalog).lower()
     assert "release" not in str(catalog).lower()
@@ -82,7 +102,7 @@ def test_alpha_diagnostics_is_non_mutating_for_valid_and_invalid_formulae() -> N
     with _client() as client:
         valid = client.post(
             "/api/alpha/diagnostics",
-            json={"source": "ts_mean(close_adj, 20)"},
+            json={"source": "ts_mean(close, 20)"},
         )
         invalid = client.post(
             "/api/alpha/diagnostics",
@@ -113,7 +133,7 @@ def test_alpha_diagnostics_rejects_request_shape_errors() -> None:
         missing = client.post("/api/alpha/diagnostics", json={})
         extra = client.post(
             "/api/alpha/diagnostics",
-            json={"source": "close_adj", "release_id": "alpha-v2"},
+            json={"source": "close", "release_id": "alpha-v2"},
         )
 
     assert missing.status_code == 422

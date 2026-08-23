@@ -5,7 +5,7 @@ status: accepted
 # Gate long Research performance on the complete Production Image path
 
 The Reference Long Research Workload evaluates both Research Kind variants of
-`cs_rank(pct_change(close_adj, 20))` over the Top 3000 Liquidity Universe from
+`cs_rank(pct_change(close, 20))` over the Top 3000 Liquidity Universe from
 2010-01-04 through 2026-08-13 against one frozen representative Data Generation.
 Each variant measures the complete ResearchRun path: admission and frozen plan
 facts, columnar reads, Alpha, 1-, 5-, and 20-session Factor Evaluation, Chunk

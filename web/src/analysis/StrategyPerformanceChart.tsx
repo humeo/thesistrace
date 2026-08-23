@@ -10,6 +10,9 @@ import {
   type Time,
 } from "lightweight-charts";
 
+// TradingView Lightweight Charts™
+// Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/
+
 export type StrategyChartObservation = {
   session: string;
   net_nav: string;
@@ -91,7 +94,7 @@ export function StrategyPerformanceChart({
         textColor: "#8a8f98",
         fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
         fontSize: 11,
-        attributionLogo: true,
+        attributionLogo: false,
       },
       grid: {
         vertLines: { color: "#18191a" },
@@ -198,7 +201,7 @@ export function StrategyPerformanceChart({
       <figcaption>
         <span><i className="strategy-swatch" /> Net strategy</span>
         <span><i className="benchmark-swatch" /> Selected-universe benchmark</span>
-        <span>{points.length} Research Sessions</span>
+        <span className="strategy-chart-session-count">{points.length} Research Sessions</span>
       </figcaption>
       <div className="strategy-chart-toolbar" aria-label="Chart range">
         {(["1Y", "3Y", "5Y", "All"] as const).map((range) => (
@@ -224,6 +227,16 @@ export function StrategyPerformanceChart({
             <span>Excess {formatPercent(tooltip.strategy - tooltip.benchmark)}</span>
           </>
         )}
+      </div>
+      <div className="strategy-chart-legal">
+        <a
+          className="strategy-chart-attribution"
+          href="https://www.tradingview.com/"
+          rel="noreferrer"
+          target="_blank"
+        >
+          TradingView Lightweight Charts™
+        </a>
       </div>
     </figure>
   );

@@ -93,7 +93,43 @@ CREATE TABLE research_runs.runs (
         )
     ),
     CONSTRAINT runs_result_provenance_check CHECK (((result_provenance IS NULL) OR (jsonb_typeof(result_provenance) = 'object'::text))),
-    CONSTRAINT runs_key_metrics_check CHECK (((key_metrics IS NULL) OR (jsonb_typeof(key_metrics) = 'object'::text))),
+    CONSTRAINT runs_key_metrics_check CHECK (
+        key_metrics IS NULL
+        OR (
+            jsonb_typeof(key_metrics) = 'object'::text
+            AND key_metrics->>'research_kind' = immutable_input->>'research_kind'
+            AND (
+                (
+                    key_metrics->>'research_kind' = 'factor_evaluation'
+                    AND key_metrics ?& ARRAY[
+                        'one_session_rank_ic',
+                        'five_session_rank_ic',
+                        'twenty_session_rank_ic'
+                    ]
+                    AND key_metrics - ARRAY[
+                        'research_kind',
+                        'one_session_rank_ic',
+                        'five_session_rank_ic',
+                        'twenty_session_rank_ic'
+                    ] = '{}'::jsonb
+                )
+                OR (
+                    key_metrics->>'research_kind' = 'strategy_backtest'
+                    AND key_metrics ?& ARRAY[
+                        'annualized_excess_return',
+                        'sharpe',
+                        'maximum_drawdown'
+                    ]
+                    AND key_metrics - ARRAY[
+                        'research_kind',
+                        'annualized_excess_return',
+                        'sharpe',
+                        'maximum_drawdown'
+                    ] = '{}'::jsonb
+                )
+            )
+        )
+    ),
     CONSTRAINT runs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'cancelling'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
 
@@ -258,6 +294,10 @@ CREATE UNIQUE INDEX research_runs_one_running_attempt_idx ON research_runs.attem
 CREATE INDEX research_runs_runs_created_idx ON research_runs.runs USING btree (created_at DESC, id);
 
 CREATE INDEX research_runs_runs_folder_created_idx ON research_runs.runs USING btree (folder_id, created_at DESC, id);
+
+CREATE INDEX research_runs_runs_kind_created_idx ON research_runs.runs USING btree ((immutable_input->>'research_kind'), created_at DESC, id);
+
+CREATE INDEX research_runs_runs_folder_kind_created_idx ON research_runs.runs USING btree (folder_id, (immutable_input->>'research_kind'), created_at DESC, id);
 
 
 --

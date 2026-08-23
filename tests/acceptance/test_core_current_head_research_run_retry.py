@@ -782,7 +782,7 @@ def _run_command(
         "name": "Same research question on current data",
         "start_date": sessions[0],
         "end_date": sessions[-1],
-        "formula": "close_adj",
+        "formula": "close",
         "universe": "top300",
         "neutralization": "none",
         "research_kind": research_kind,
@@ -869,14 +869,14 @@ def _reference_result(
     canonical = open_complete_refresh_basis(store, generation_id)
     research_data = align_canonical_market_data(
         canonical,
-        field_bindings={"price.close.adjusted": "close_adj"},
+        field_bindings={"price.close.adjusted": "close"},
         universe="top300",
         neutralization="none",
     )
     run_input = RunInput(
         research_data=research_data,
         alpha_expression={"kind": "field", "field_id": "price.close.adjusted"},
-        field_bindings={"price.close.adjusted": "close_adj"},
+        field_bindings={"price.close.adjusted": "close"},
         effective_alpha_lookback=0,
         universe="top300",
         neutralization="none",
@@ -903,7 +903,7 @@ def _reference_result(
             sessions=list(sessions),
             universe_name="top300",
             neutralization="none",
-            field_bindings={"price.close.adjusted": "close_adj"},
+            field_bindings={"price.close.adjusted": "close"},
             fact_instrument_ids=frozenset(),
         )
         calculation = execute_research_chunk(

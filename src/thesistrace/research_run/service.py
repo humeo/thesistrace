@@ -66,9 +66,11 @@ from thesistrace.research_run.execution import (
 from thesistrace.research_run.models import (
     AlphaAdmissionFacts,
     DataAdmissionFacts,
+    FactorEvaluationResearchRunKeyMetrics,
     FactorEvaluationResearchRunResult,
     ImmutableRunInput,
     OrganizeResearchRunCommand,
+    ResearchKind,
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionIssue,
     ResearchRunAuthorableInput,
@@ -82,6 +84,7 @@ from thesistrace.research_run.models import (
     ResearchRunSummary,
     StartTrackingCommand,
     StrategyBacktestAdmissionCommand,
+    StrategyBacktestResearchRunKeyMetrics,
     StrategyBacktestResearchRunResult,
 )
 from thesistrace.research_run.planning import (
@@ -486,6 +489,7 @@ class ResearchRunService:
         self,
         *,
         folder_id: str | None = None,
+        research_kind: ResearchKind | None = None,
         cursor: str | None = None,
         limit: int = 50,
     ) -> ResearchRunList:
@@ -498,6 +502,7 @@ class ResearchRunService:
                        key_metrics, failure_reason
                 FROM research_runs.runs
                 WHERE (%s::text IS NULL OR folder_id = %s::text)
+                  AND (%s::text IS NULL OR immutable_input->>'research_kind' = %s::text)
                   AND (
                     %s::timestamptz IS NULL
                     OR created_at < %s::timestamptz
@@ -509,6 +514,8 @@ class ResearchRunService:
                 (
                     folder_id,
                     folder_id,
+                    research_kind,
+                    research_kind,
                     cursor_created_at,
                     cursor_created_at,
                     cursor_created_at,
@@ -1582,15 +1589,14 @@ class ResearchRunService:
         self,
         claim: _ExecutionClaim,
         chunk: Mapping[str, object],
-    ) -> tuple[PreparedPublication, dict[str, object], ResearchRunKeyMetrics | None]:
+    ) -> tuple[PreparedPublication, dict[str, object], ResearchRunKeyMetrics]:
         assert self._publication is not None
         final_values = chunk.get("final_values")
         if not isinstance(final_values, Mapping):
             raise ResearchResultError("Final Research Chunk has no Result values")
-        key_metrics = (
-            _result_key_metrics(final_values)
-            if claim.immutable_input.research_kind == "strategy_backtest"
-            else None
+        key_metrics = _result_key_metrics(
+            final_values,
+            claim.immutable_input.research_kind,
         )
         provenance = _result_provenance(claim)
         with self._database.transaction() as transaction:
@@ -1935,7 +1941,7 @@ class ResearchRunService:
         claim: _ExecutionClaim,
         prepared: PreparedPublication,
         provenance: dict[str, object],
-        key_metrics: ResearchRunKeyMetrics | None,
+        key_metrics: ResearchRunKeyMetrics,
     ) -> None:
         assert self._publication is not None
         assert self._dataset_lifecycle is not None
@@ -1976,9 +1982,7 @@ class ResearchRunService:
                 (
                     published.manifest_sha256,
                     Jsonb(provenance),
-                    None
-                    if key_metrics is None
-                    else Jsonb(key_metrics.model_dump(mode="json")),
+                    Jsonb(key_metrics.model_dump(mode="json")),
                     claim.run_id,
                     claim.fence,
                 ),
@@ -2505,7 +2509,27 @@ def _summary(row: object) -> ResearchRunSummary:
 
 def _result_key_metrics(
     final_values: Mapping[str, object],
+    research_kind: ResearchKind,
 ) -> ResearchRunKeyMetrics:
+    if research_kind == "factor_evaluation":
+        factor_summary = final_values.get("factor_summary")
+        if not isinstance(factor_summary, Mapping):
+            raise ResearchResultError("Final Research values have no Factor summary")
+        horizons = factor_summary.get("horizons")
+        if not isinstance(horizons, Mapping):
+            raise ResearchResultError("Final Research Factor summary has no horizons")
+        try:
+            return FactorEvaluationResearchRunKeyMetrics.model_validate(
+                {
+                    "research_kind": research_kind,
+                    "one_session_rank_ic": _factor_rank_ic_mean(horizons, "1"),
+                    "five_session_rank_ic": _factor_rank_ic_mean(horizons, "5"),
+                    "twenty_session_rank_ic": _factor_rank_ic_mean(horizons, "20"),
+                }
+            )
+        except ValidationError as error:
+            raise ResearchResultError("Final Research Factor key metrics are invalid") from error
+
     strategy_summary = final_values.get("strategy_summary")
     if not isinstance(strategy_summary, Mapping):
         raise ResearchResultError("Final Research values have no Strategy summary")
@@ -2516,8 +2540,9 @@ def _result_key_metrics(
     if not isinstance(maximum_drawdown, Mapping):
         raise ResearchResultError("Final Research values have no Maximum Drawdown")
     try:
-        return ResearchRunKeyMetrics.model_validate(
+        return StrategyBacktestResearchRunKeyMetrics.model_validate(
             {
+                "research_kind": research_kind,
                 "annualized_excess_return": metrics.get("annualized_excess_return"),
                 "sharpe": metrics.get("sharpe"),
                 "maximum_drawdown": maximum_drawdown.get("value"),
@@ -2525,6 +2550,24 @@ def _result_key_metrics(
         )
     except ValidationError as error:
         raise ResearchResultError("Final Research key metrics are invalid") from error
+
+
+def _factor_rank_ic_mean(
+    horizons: Mapping[object, object],
+    horizon_name: str,
+) -> object:
+    horizon = horizons.get(horizon_name)
+    if not isinstance(horizon, Mapping):
+        raise ResearchResultError(
+            f"Final Research Factor summary has no {horizon_name}-session horizon"
+        )
+    summary = horizon.get("summary")
+    if not isinstance(summary, Mapping):
+        raise ResearchResultError(f"Final Research {horizon_name}-session horizon has no summary")
+    rank_ic = summary.get("rank_ic")
+    if not isinstance(rank_ic, Mapping):
+        raise ResearchResultError(f"Final Research {horizon_name}-session horizon has no Rank IC")
+    return rank_ic.get("mean")
 
 
 def _authorable_input(row: object) -> ResearchRunAuthorableInput:

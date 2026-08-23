@@ -1,6 +1,8 @@
 import { ArrowClockwise } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 
+import type { AlphaCatalog, AlphaCatalogField } from "../alphaCatalog";
+
 export type DataOverview = {
   market_coverage: { start: string; end: string } | null;
   financial_coverage: {
@@ -19,26 +21,55 @@ export type DataOverview = {
   financial_research_readiness: boolean;
 };
 
-export type DataOverviewLoad =
-  | { overview: DataOverview; error: null }
-  | { overview: null; error: string };
+type DataPageResources = {
+  overview: DataOverview;
+  catalog: AlphaCatalog;
+};
 
-export async function loadDataOverview(
+export type DataPageLoad =
+  | { resources: DataPageResources; error: null }
+  | { resources: null; error: string };
+
+const DATASET_FAMILIES = [
+  {
+    familyId: "equity.eod_price",
+    id: "market-data-fields",
+    title: "Market data fields",
+  },
+  {
+    familyId: "equity.financial_pit",
+    id: "financial-data-fields",
+    title: "Financial data fields",
+  },
+] as const;
+
+export async function loadDataPage(
   request: typeof fetch = fetch,
-): Promise<DataOverviewLoad> {
+): Promise<DataPageLoad> {
   try {
-    const response = await request("/api/data");
-    if (!response.ok) throw new Error("Data overview unavailable");
-    return { overview: (await response.json()) as DataOverview, error: null };
+    const [overviewResponse, catalogResponse] = await Promise.all([
+      request("/api/data"),
+      request("/api/alpha/catalog"),
+    ]);
+    if (!overviewResponse.ok || !catalogResponse.ok) {
+      throw new Error("Data unavailable");
+    }
+    const [overview, catalog] = await Promise.all([
+      overviewResponse.json() as Promise<DataOverview>,
+      catalogResponse.json() as Promise<AlphaCatalog>,
+    ]);
+    return { resources: { overview, catalog }, error: null };
   } catch {
-    return { overview: null, error: "Data overview unavailable" };
+    return { resources: null, error: "Data unavailable" };
   }
 }
 
 export function DataOverviewView({
+  catalog,
   overview,
   onRefresh,
 }: {
+  catalog: AlphaCatalog;
   overview: DataOverview;
   onRefresh: () => void;
 }) {
@@ -51,14 +82,14 @@ export function DataOverviewView({
           <h1>Data overview</h1>
         </div>
         <div className="hero-actions">
-          <button className="button button-quiet" onClick={onRefresh}>
+          <button className="button button-quiet" onClick={onRefresh} type="button">
             <ArrowClockwise aria-hidden="true" size={17} weight="regular" />
             Reload
           </button>
         </div>
       </header>
-      <div className="signal-strip" aria-label="Data readiness">
-        <span className="signal-strip-label"><span className="health-dot" /> Canonical data</span>
+      <div className="signal-strip" aria-label="Market data readiness">
+        <span className="signal-strip-label"><span className="health-dot" /> Market data</span>
         <strong>{overview.market_research_readiness ? "Market ready" : "Market not ready"}</strong>
       </div>
       <dl className="data-overview-stats" aria-label="Market data coverage">
@@ -101,17 +132,99 @@ export function DataOverviewView({
           <dd>{overview.last_financial_refresh_at ?? "Not available"}</dd>
         </div>
       </dl>
+      <ResearchFieldCatalog catalog={catalog} />
     </section>
   );
 }
 
+function ResearchFieldCatalog({ catalog }: { catalog: AlphaCatalog }) {
+  return (
+    <section aria-labelledby="research-fields-title" className="data-field-catalog">
+      <header>
+        <h2 id="research-fields-title">Research fields</h2>
+        <span>{catalog.fields.length} available</span>
+      </header>
+      {DATASET_FAMILIES.map((dataset) => {
+        const fields = catalog.fields.filter((field) => field.family_id === dataset.familyId);
+        return (
+          <section aria-labelledby={dataset.id} className="data-field-dataset" key={dataset.familyId}>
+            <header>
+              <h3 id={dataset.id}>{dataset.title}</h3>
+              <span>{fields.length} {fields.length === 1 ? "field" : "fields"}</span>
+            </header>
+            {fields.length > 0 ? <FieldTable fields={fields} title={dataset.title} /> : (
+              <p className="data-field-empty">No fields are currently available for research.</p>
+            )}
+          </section>
+        );
+      })}
+    </section>
+  );
+}
+
+function FieldTable({ fields, title }: { fields: AlphaCatalogField[]; title: string }) {
+  return (
+    <div className="data-field-table-scroll">
+      <table className="data-field-table">
+        <caption className="visually-hidden">{title}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Formula field</th>
+            <th scope="col">Meaning</th>
+            <th scope="col">Research-time value</th>
+            <th scope="col">Unit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {fields.map((field) => (
+            <tr key={field.field_id}>
+              <th scope="row">
+                <code>{field.identifier}</code>
+                <small>{field.field_id}</small>
+                {field.example !== "" ? <small>Example: <code>{field.example}</code></small> : null}
+              </th>
+              <td>
+                <span>{field.description}</span>
+                <small>{humanizeContract(field.missingness)}</small>
+              </td>
+              <td>
+                <span>{fieldTimeSemantics(field)}</span>
+                <small>{humanizeContract(field.availability)}</small>
+                <small>{field.applicable_company_types.length > 0
+                  ? `Company types ${field.applicable_company_types.join(", ")}`
+                  : "All supported instruments"}</small>
+              </td>
+              <td><code>{field.unit}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function fieldTimeSemantics(field: AlphaCatalogField): string {
+  if (field.report_period_selection === "latest_visible_full_year") {
+    return "Latest full year visible on each Research Session";
+  }
+  if (field.report_period_selection === "latest_visible_quarterly_or_annual") {
+    return "Latest quarterly or annual report visible on each Research Session";
+  }
+  return humanizeContract(field.report_period_selection);
+}
+
+function humanizeContract(value: string): string {
+  const text = value.replaceAll("_", " ").replaceAll("-", " ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 export function DataPage() {
-  const [overview, setOverview] = useState<DataOverview | null>(null);
+  const [resources, setResources] = useState<DataPageResources | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const result = await loadDataOverview();
-    if (result.overview !== null) setOverview(result.overview);
+    const result = await loadDataPage();
+    if (result.resources !== null) setResources(result.resources);
     setError(result.error);
   }, []);
 
@@ -122,11 +235,17 @@ export function DataPage() {
   if (error) return (
     <section aria-label="Data" className="page-section state-section">
       <p role="alert">{error}</p>
-      <button onClick={() => void refresh()}>Retry</button>
+      <button onClick={() => void refresh()} type="button">Retry</button>
     </section>
   );
-  if (!overview) {
+  if (!resources) {
     return <section aria-label="Data" className="page-section state-section"><p>Loading Data…</p></section>;
   }
-  return <DataOverviewView overview={overview} onRefresh={() => void refresh()} />;
+  return (
+    <DataOverviewView
+      catalog={resources.catalog}
+      onRefresh={() => void refresh()}
+      overview={resources.overview}
+    />
+  );
 }

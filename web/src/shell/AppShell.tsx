@@ -23,7 +23,7 @@ type AppShellProps = {
 
 export function AppShell({ currentPath, children }: AppShellProps) {
   const isResearch = currentPath === "/research";
-  const [isCollapsed, setIsCollapsed] = useState(isResearch);
+  const [isCollapsed, setIsCollapsed] = useState(false);
   const [isNavigationOpen, setIsNavigationOpen] = useState(false);
   const currentResource = resourceRoutes.find(
     (resource) => currentPath === resource.path || currentPath.startsWith(`${resource.path}/`),
@@ -91,7 +91,6 @@ export function AppShell({ currentPath, children }: AppShellProps) {
               <strong>{currentResource?.label ?? "Resource"}</strong>
             </div>
           </div>
-          <span className="context-mode">Core workspace</span>
         </header>
         <main className="main-content">{children}</main>
       </div>

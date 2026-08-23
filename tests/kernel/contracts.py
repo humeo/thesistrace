@@ -1,10 +1,10 @@
 FIELD_BINDINGS = {
-    "price.open.adjusted": "open_adj",
-    "price.high.adjusted": "high_adj",
-    "price.low.adjusted": "low_adj",
-    "price.close.adjusted": "close_adj",
-    "market.volume.shares": "volume_shares",
-    "market.turnover.cny": "turnover_amount_cny",
+    "price.open.adjusted": "open",
+    "price.high.adjusted": "high",
+    "price.low.adjusted": "low",
+    "price.close.adjusted": "close",
+    "market.volume.shares": "volume",
+    "market.turnover.cny": "amount",
 }
 
 

@@ -1,6 +1,8 @@
 from thesistrace.research_run.models import (
+    FactorEvaluationResearchRunKeyMetrics,
     ImmutableRunInput,
     OrganizeResearchRunCommand,
+    ResearchKind,
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionRejection,
     ResearchRunCancelCommand,
@@ -10,6 +12,7 @@ from thesistrace.research_run.models import (
     ResearchRunResult,
     ResearchRunSummary,
     StartTrackingCommand,
+    StrategyBacktestResearchRunKeyMetrics,
 )
 from thesistrace.research_run.service import (
     ResearchRunAdmissionConflict,
@@ -28,6 +31,7 @@ from thesistrace.research_run.service import (
 
 __all__ = [
     "ImmutableRunInput",
+    "FactorEvaluationResearchRunKeyMetrics",
     "OrganizeResearchRunCommand",
     "ResearchRunAdmissionCommand",
     "ResearchRunAdmissionConflict",
@@ -45,7 +49,9 @@ __all__ = [
     "ResearchRunService",
     "ResearchRunStartTrackingConflict",
     "ResearchRunSummary",
+    "ResearchKind",
     "StartTrackingCommand",
+    "StrategyBacktestResearchRunKeyMetrics",
     "ResearchRunTrackingUnavailable",
     "ResearchRunTrackingTemporarilyUnavailable",
     "research_result_manifest_is_referenced",

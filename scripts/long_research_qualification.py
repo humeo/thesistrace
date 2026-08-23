@@ -271,7 +271,7 @@ def _preload_canonical_objects() -> dict[str, object]:
                 sessions=list(calendar[context_start:context_end]),
                 universe_name=str(profile["universe"]),
                 neutralization="none",
-                field_bindings={"price.close.adjusted": "close_adj"},
+                field_bindings={"price.close.adjusted": "close"},
                 fact_instrument_ids=frozenset(),
             )
     return {
@@ -474,7 +474,7 @@ def _assemble(samples_path: Path, image_revision: str) -> dict[str, object]:
             "slot_count": 1,
         },
         "workload": {
-            "formula": "cs_rank(pct_change(close_adj, 20))",
+            "formula": "cs_rank(pct_change(close, 20))",
             "universe": "top3000",
             "start_date": "2010-01-04",
             "end_date": "2026-08-13",

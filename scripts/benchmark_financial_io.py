@@ -106,7 +106,7 @@ def _run(mount_root: Path, profile: dict[str, object]) -> dict[str, object]:
                 sessions=execution_sessions,
                 universe_name="top300",
                 neutralization="none",
-                field_bindings={"price.close.adjusted": "close_adj"},
+                field_bindings={"price.close.adjusted": "close"},
             )
         if name == "financial_only":
             return store.read_composite_slice(
@@ -127,7 +127,7 @@ def _run(mount_root: Path, profile: dict[str, object]) -> dict[str, object]:
                 universe_name="top300",
                 neutralization="none",
                 field_bindings={
-                    "price.close.adjusted": "close_adj",
+                    "price.close.adjusted": "close",
                     "financial.balance_sheet.total_assets.latest_reported": (
                         "total_assets_latest_reported"
                     ),
@@ -244,7 +244,7 @@ def _activate_benchmark_track(runtime: object, sessions: tuple[str, ...], suffix
             request_id=f"financial-io-benchmark-run-{suffix}",
             folder_id="folder_default",
             name=f"Financial I/O benchmark {suffix}",
-            formula="close_adj + total_assets_latest_reported",
+            formula="close + total_assets_latest_reported",
             universe="top300",
             neutralization="none",
             holdings_count=10,

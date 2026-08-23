@@ -46,7 +46,7 @@ def test_private_collection_removes_retired_input_without_losing_run_or_track(
                 "name": "Collected input remains an audit coordinate",
                 "start_date": sessions[0],
                 "end_date": sessions[-1],
-                "formula": "close_adj",
+                "formula": "close",
                 "universe": "top300",
                 "neutralization": "none",
                 "research_kind": "strategy_backtest",

@@ -17,12 +17,12 @@ from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_run.result import build_result_payload
 
 FIELD_BINDINGS = {
-    "price.open.adjusted": "open_adj",
-    "price.high.adjusted": "high_adj",
-    "price.low.adjusted": "low_adj",
-    "price.close.adjusted": "close_adj",
-    "market.volume.shares": "volume_shares",
-    "market.turnover.cny": "turnover_amount_cny",
+    "price.open.adjusted": "open",
+    "price.high.adjusted": "high",
+    "price.low.adjusted": "low",
+    "price.close.adjusted": "close",
+    "market.volume.shares": "volume",
+    "market.turnover.cny": "amount",
 }
 
 
@@ -134,7 +134,7 @@ def test_kernel_run_input_rejects_string_alpha_expression(
     with pytest.raises(KernelRunError, match="normalized tree"):
         RunInput(
             research_data=accepted_calculation_case["research_data"],
-            alpha_expression="pct_change($close_adj, 20)",  # type: ignore[arg-type]
+            alpha_expression="pct_change($close, 20)",  # type: ignore[arg-type]
             field_bindings=FIELD_BINDINGS,
             effective_alpha_lookback=20,
             universe=str(definition["universe"]),

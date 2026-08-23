@@ -216,7 +216,7 @@ def _run_command(
         "name": "DailyTrack latest 504",
         "start_date": start_date,
         "end_date": end_date,
-        "formula": "close_adj",
+        "formula": "close",
         "universe": "top300",
         "neutralization": "none",
         "research_kind": "strategy_backtest",

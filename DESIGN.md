@@ -145,7 +145,7 @@ This direction replaces the previous OpenAI light theme. Do not keep a legacy li
 
 ### Research Workspace
 
-- Default to the collapsed sidebar when horizontal space is needed by the formula editor or result inspection.
+- Default to the expanded sidebar on every resource so navigation behavior stays consistent. Users may collapse it manually when they need more editor or result width.
 - Keep Draft identity, validation state, saved state, dataset context, and Run action in a compact workbench header.
 - The formula editor uses `{colors.canvas}` or `{colors.surface-1}` with a single hairline boundary; it must not sit inside stacked ornamental cards.
 - Run parameters open in a focused panel or drawer with a clear title, close action, validation summary, and one primary Run action.

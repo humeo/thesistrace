@@ -362,7 +362,7 @@ cross-sectional, or stateful.
 For:
 
 ```text
-cs_rank(pct_change(close_adj, 20))
+cs_rank(pct_change(close, 20))
 ```
 
 the planner should:
@@ -489,7 +489,7 @@ Implement the replacement in this order, stopping to measure after every step:
 
 Required equivalence and performance gates:
 
-- `cs_rank(pct_change(close_adj, 20))`, Top 3000, 2010-to-latest completes
+- `cs_rank(pct_change(close, 20))`, Top 3000, 2010-to-latest completes
   without OOM.
 - Peak resident memory is bounded by configured chunk size and does not grow
   linearly with additional years.

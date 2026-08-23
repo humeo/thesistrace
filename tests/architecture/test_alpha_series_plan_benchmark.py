@@ -57,7 +57,7 @@ def test_committed_alpha_series_plan_benchmark_fixes_admission_limits() -> None:
 
 def test_alpha_series_plan_has_an_executable_performance_regression_gate() -> None:
     benchmark = run_benchmark(
-        formula=" + ".join("ts_mean(close_adj, 64)" for _ in range(4)),
+        formula=" + ".join("ts_mean(close, 64)" for _ in range(4)),
         session_count=1_000,
     )
     observed = benchmark["observed"]

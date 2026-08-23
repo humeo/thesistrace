@@ -27,12 +27,12 @@ Evaluation preserves the resulting metric signs.
 _Avoid_: Automatic factor reversal, absolute IC, inferred direction
 
 **Alpha Language**:
-The single backward-compatible, append-only contract for authoring, compiling,
-and executing Alpha Formulae. Existing syntax, stable Field References,
-Builtin identities and semantics, and compiled expression forms retain their
-published meaning; platform maintainers add capabilities without selecting or
-dispatching among language releases.
-_Avoid_: Alpha Language Release, selectable language version, runtime version dispatcher
+The single current contract for authoring, compiling, and executing Alpha
+Formulae. A Product State hard cut replaces obsolete authoring identifiers or
+semantics atomically; there are no selectable releases, aliases, migrations, or
+compatibility dispatch paths.
+_Avoid_: Alpha Language Release, backward-compatible alias, selectable language
+version, runtime version dispatcher
 
 **Alpha Formula**:
 The author-editable, single-expression text held in a Browser Draft and
@@ -150,11 +150,15 @@ Canonical or numeric status alone never grants access.
 _Avoid_: Kernel field allowlist, all-numeric auto-exposure, frontend field option
 
 **Alpha Identifier**:
-The stable lowercase `snake_case` name used in an Alpha Formula for either one
-Alpha-authorable Field Reference or one Alpha Builtin. Field and Builtin names
-share one globally unique namespace, never change meaning after publication,
-and cannot be disambiguated by call syntax or capitalization.
-_Avoid_: Display label, `$`-prefixed field, context-dependent identifier
+The lowercase `snake_case` name used in an Alpha Formula for either one
+Alpha-authorable Field Reference or one Alpha Builtin. Authoring-facing Field
+names express the research concept and omit internal adjustment and unit
+qualifiers when the current language exposes only one such meaning; compiled
+Field References retain the exact Canonical semantics. Field and Builtin names
+share one globally unique namespace, and a contract hard cut removes superseded
+names instead of retaining aliases.
+_Avoid_: Display label, Canonical column name, `_adj`, `_shares`, `_cny`,
+`$`-prefixed field, context-dependent identifier
 
 **Alpha Numeric Semantics**:
 The V1 evaluation contract that converts valid Canonical numeric inputs to

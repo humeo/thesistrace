@@ -23,7 +23,7 @@ intermediate rounding, natural `log`, three-valued `sign`, and population
 `ts_std` with `ddof=0`.
 
 Every field operand must belong to the six-field allowlist in ADR-0072.
-`pct_change(close_adj, 1)` is the canonical V1 one-session price-return
+`pct_change(close, 1)` is the canonical V1 one-session price-return
 expression; the source-normalized `pct_change_ratio` field is not an Alpha
 operand.
 

@@ -1,6 +1,6 @@
 {
   "benchmark": "alpha-series-plan",
-  "formula": "ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252)",
+  "formula": "ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252) + ts_mean(close, 252)",
   "limits": {
     "effective_lookback": 252,
     "alpha_run_estimated_work": 15000000,
@@ -21,7 +21,7 @@
   },
   "maximum_universe_date_shape": {
     "evaluate_ms": 3035.362,
-    "formula": "close_adj",
+    "formula": "close",
     "formula_work": 1,
     "peak_bytes": 120480054,
     "series_points": 15000000,

@@ -212,12 +212,28 @@ class ImmutableRunInput(BaseModel):
         return value
 
 
-class ResearchRunKeyMetrics(BaseModel):
+class FactorEvaluationResearchRunKeyMetrics(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
+    research_kind: Literal["factor_evaluation"]
+    one_session_rank_ic: StrictFloat | StrictInt | None
+    five_session_rank_ic: StrictFloat | StrictInt | None
+    twenty_session_rank_ic: StrictFloat | StrictInt | None
+
+
+class StrategyBacktestResearchRunKeyMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    research_kind: Literal["strategy_backtest"]
     annualized_excess_return: StrictFloat | StrictInt | None
     sharpe: StrictFloat | StrictInt | None
     maximum_drawdown: StrictFloat | StrictInt
+
+
+type ResearchRunKeyMetrics = Annotated[
+    FactorEvaluationResearchRunKeyMetrics | StrategyBacktestResearchRunKeyMetrics,
+    Field(discriminator="research_kind"),
+]
 
 
 class ResearchRunSummary(BaseModel):
@@ -242,6 +258,12 @@ class ResearchRunSummary(BaseModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+
+    @model_validator(mode="after")
+    def validate_key_metrics_kind(self) -> ResearchRunSummary:
+        if self.key_metrics is not None and self.key_metrics.research_kind != self.research_kind:
+            raise ValueError("ResearchRun key metrics must match its Research Kind")
+        return self
 
 
 class ResearchRunAuthorableInput(BaseModel):

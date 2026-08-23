@@ -124,7 +124,7 @@ def test_columnar_industry_neutralization_matches_the_row_reference() -> None:
         trading_states={},
         price_limits={},
     )
-    compiled = alpha_language.compile("cs_rank(pct_change(close_adj, 1))")
+    compiled = alpha_language.compile("cs_rank(pct_change(close, 1))")
 
     expected = evaluate_alpha_matrix(
         aligned,
@@ -144,7 +144,7 @@ def test_columnar_industry_neutralization_matches_the_row_reference() -> None:
 def test_top3000_industry_neutralization_has_an_executable_performance_gate() -> None:
     sessions = tuple(f"2024-01-{day:02d}" for day in range(2, 10))
     series = _industry_series(sessions=sessions, instrument_count=3_000)
-    compiled = alpha_language.compile("cs_rank(pct_change(close_adj, 1))")
+    compiled = alpha_language.compile("cs_rank(pct_change(close, 1))")
 
     started = perf_counter()
     evaluated = evaluate_columnar_alpha_sessions(

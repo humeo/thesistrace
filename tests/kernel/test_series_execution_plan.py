@@ -18,8 +18,8 @@ from thesistrace.research_kernel.series_plan import (
 )
 
 FIELD_BINDINGS = {
-    "price.close.adjusted": "close_adj",
-    "market.volume.shares": "volume_shares",
+    "price.close.adjusted": "close",
+    "market.volume.shares": "volume",
 }
 
 
@@ -111,13 +111,13 @@ def test_existing_expression_entrypoint_uses_the_series_plan() -> None:
 
     assert evaluate_series(
         expression,
-        {"close_adj": [1.0, -1.0, 4.0, 16.0]},
+        {"close": [1.0, -1.0, 4.0, 16.0]},
         field_bindings=FIELD_BINDINGS,
     ) == [None, None, None, pytest.approx(2.0794415416798357)]
 
 
 def test_compiled_expression_builds_a_canonical_field_plan() -> None:
-    compiled = alpha_language.compile("ts_mean(close_adj + 2, 2)")
+    compiled = alpha_language.compile("ts_mean(close + 2, 2)")
     plan = build_series_execution_plan(compiled)
 
     assert plan.field_names == ("price.close.adjusted",)
@@ -129,7 +129,7 @@ def test_compiled_expression_builds_a_canonical_field_plan() -> None:
 
 def test_columnar_plan_is_exactly_equivalent_for_time_series_and_cross_section() -> None:
     compiled = alpha_language.compile(
-        "cs_rank(pct_change(close_adj, 1)) + ts_mean(volume_shares, 2)"
+        "cs_rank(pct_change(close, 1)) + ts_mean(volume, 2)"
     )
     plan = build_series_execution_plan(compiled)
     instruments = ("instrument_a", "instrument_b")
@@ -172,7 +172,7 @@ def test_columnar_plan_is_exactly_equivalent_for_time_series_and_cross_section()
 
 def test_columnar_plan_checks_cancellation_between_bounded_operator_stages() -> None:
     plan = build_series_execution_plan(
-        alpha_language.compile("cs_rank(pct_change(close_adj, 1))")
+        alpha_language.compile("cs_rank(pct_change(close, 1))")
     )
     sessions = tuple(f"2026-08-{day:02d}" for day in range(1, 11))
     calls = 0

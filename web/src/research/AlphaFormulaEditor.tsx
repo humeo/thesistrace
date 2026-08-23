@@ -2,37 +2,20 @@ import { autocompletion, type Completion } from "@codemirror/autocomplete";
 import { bracketMatching } from "@codemirror/language";
 import { setDiagnostics, type Diagnostic as CodeMirrorDiagnostic } from "@codemirror/lint";
 import { EditorSelection, EditorState } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import {
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap,
+  lineNumbers,
+  placeholder,
+} from "@codemirror/view";
 import { useEffect, useRef } from "react";
 
+import type { AlphaCatalog } from "../alphaCatalog";
 import { alphaLanguageExtensions } from "./alpha-language";
 import type { FormulaDiagnostic } from "./diagnostics";
 import type { EditorState as StoredEditorState } from "./draft";
-
-export type AlphaCatalog = {
-  fields: Array<{
-    identifier: string;
-    field_id: string;
-    value_type: "numeric_series";
-    description: string;
-    unit: string;
-    family_id: string;
-    availability: string;
-    report_period_selection: string;
-    applicable_company_types: string[];
-    missingness: string;
-    example: string;
-  }>;
-  builtins: Array<{
-    identifier: string;
-    parameters: Array<{ name: string; value_type: string; minimum: number | null; maximum: number | null }>;
-    result_type: string;
-    description: string;
-    examples: string[];
-    missing_value_behavior: string;
-    numeric_behavior: string;
-  }>;
-};
 
 export function AlphaFormulaEditor({
   catalog,
@@ -76,9 +59,13 @@ export function AlphaFormulaEditor({
       selection: EditorSelection.single(initialAnchor, initialHead),
       extensions: [
         lineNumbers(),
+        highlightActiveLine(),
+        highlightActiveLineGutter(),
         bracketMatching(),
         alphaLanguageExtensions,
         EditorView.lineWrapping,
+        EditorView.contentAttributes.of({ "aria-labelledby": "alpha-formula-title", spellcheck: "false" }),
+        placeholder("Start with a field or function"),
         keymap.of([]),
         autocompletion({
           override: [(context) => {

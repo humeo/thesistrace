@@ -20,7 +20,7 @@ from thesistrace.research_kernel.series_plan import (
     evaluate_series_execution_plan,
 )
 
-FORMULA = " + ".join("ts_mean(close_adj, 252)" for _ in range(16))
+FORMULA = " + ".join("ts_mean(close, 252)" for _ in range(16))
 SESSION_COUNT = 5_000
 MAX_UNIVERSE_INSTRUMENTS = 3_000
 
@@ -72,7 +72,7 @@ def run_benchmark(
 
 
 def run_maximum_shape_benchmark() -> dict[str, object]:
-    compiled = alpha_language.compile("close_adj")
+    compiled = alpha_language.compile("close")
     plan = build_series_execution_plan(compiled)
     inputs = {
         "price.close.adjusted": [100.0 + (index % 31) * 0.1 for index in range(SESSION_COUNT)],
@@ -95,7 +95,7 @@ def run_maximum_shape_benchmark() -> dict[str, object]:
         "universe_instruments": MAX_UNIVERSE_INSTRUMENTS,
         "sessions": SESSION_COUNT,
         "series_points": MAX_UNIVERSE_INSTRUMENTS * SESSION_COUNT,
-        "formula": "close_adj",
+        "formula": "close",
         "formula_work": compiled.estimated_work,
         "evaluate_ms": round(evaluate_ms, 3),
         "peak_bytes": peak_bytes,

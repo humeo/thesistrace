@@ -141,8 +141,8 @@ def test_alpha_fields_own_their_canonical_series_readers() -> None:
         field.alpha.identifier: field for field in alpha_field_catalog() if field.alpha is not None
     }
 
-    close_reader = fields["close_adj"].alpha_series_reader
-    turnover_reader = fields["turnover_amount_cny"].alpha_series_reader
+    close_reader = fields["close"].alpha_series_reader
+    turnover_reader = fields["amount"].alpha_series_reader
     assert close_reader is not None
     assert turnover_reader is not None
     assert close_reader(rows) == (10.5, None)
@@ -153,11 +153,11 @@ def test_alpha_fields_own_their_canonical_series_readers() -> None:
     ("source", "expression"),
     [
         (
-            "close_adj",
+            "close",
             {"kind": "field", "field_id": "price.close.adjusted"},
         ),
         (
-            "ts_mean(close_adj, 20)",
+            "ts_mean(close, 20)",
             {
                 "kind": "call",
                 "identifier": "ts_mean",
@@ -168,7 +168,7 @@ def test_alpha_fields_own_their_canonical_series_readers() -> None:
             },
         ),
         (
-            "-(close_adj + 2) / ts_std(volume_shares, 5)",
+            "-(close + 2) / ts_std(volume, 5)",
             {
                 "kind": "binary",
                 "operator": "divide",
@@ -206,13 +206,38 @@ def test_compile_accepts_the_documented_expression_language(
     assert compiled.field_ids_by_identifier
 
 
+def test_market_identifiers_map_without_legacy_storage_aliases() -> None:
+    current = {
+        "open": "price.open.adjusted",
+        "high": "price.high.adjusted",
+        "low": "price.low.adjusted",
+        "close": "price.close.adjusted",
+        "volume": "market.volume.shares",
+        "amount": "market.turnover.cny",
+    }
+    for identifier, field_id in current.items():
+        compiled = alpha_language.compile(identifier)
+        assert compiled.field_ids_by_identifier == {identifier: field_id}
+
+    for legacy in (
+        "open_adj",
+        "high_adj",
+        "low_adj",
+        "close_adj",
+        "volume_shares",
+        "turnover_amount_cny",
+    ):
+        diagnostic = alpha_language.diagnose(legacy).diagnostics[0]
+        assert diagnostic.code == "UNKNOWN_IDENTIFIER"
+
+
 def test_compile_maps_financial_identifier_to_namespaced_field_reference() -> None:
     compiled = alpha_language.compile(
-        "cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)"
+        "cs_rank(close) + cs_rank(total_revenue_latest_fy)"
     )
 
     assert compiled.field_ids_by_identifier == {
-        "close_adj": "price.close.adjusted",
+        "close": "price.close.adjusted",
         "total_revenue_latest_fy": "financial.income.total_revenue.latest_fy",
     }
     assert compiled.expression == {
@@ -237,8 +262,8 @@ def test_compile_maps_financial_identifier_to_namespaced_field_reference() -> No
 
 
 def test_compile_estimates_builtin_work_from_its_definition() -> None:
-    short = alpha_language.compile("ts_mean(close_adj, 2)")
-    long = alpha_language.compile("ts_mean(close_adj, 20)")
+    short = alpha_language.compile("ts_mean(close, 2)")
+    long = alpha_language.compile("ts_mean(close, 20)")
 
     assert short.estimated_work == 5
     assert long.estimated_work == 23
@@ -363,22 +388,22 @@ def test_one_pass_rolling_matches_fixed_binary64_window_references() -> None:
 @pytest.mark.parametrize(
     ("source", "code"),
     [
-        ("value = close_adj", "SYNTAX_ERROR"),
-        ("close_adj; volume_shares", "SYNTAX_ERROR"),
-        ("close_adj.real", "UNSUPPORTED_SYNTAX"),
-        ("close_adj[0]", "UNSUPPORTED_SYNTAX"),
-        ("[close_adj]", "UNSUPPORTED_SYNTAX"),
-        ("{close_adj}", "UNSUPPORTED_SYNTAX"),
-        ("(x for x in [close_adj])", "UNSUPPORTED_SYNTAX"),
-        ("lambda: close_adj", "UNSUPPORTED_SYNTAX"),
-        ("close_adj if 1 else volume_shares", "UNSUPPORTED_SYNTAX"),
-        ("close_adj > volume_shares", "UNSUPPORTED_SYNTAX"),
-        ("ts_mean(series=close_adj, window=20)", "KEYWORD_ARGUMENT_NOT_ALLOWED"),
-        ("ts_mean(*(close_adj, 20))", "STARRED_ARGUMENT_NOT_ALLOWED"),
-        ("+close_adj", "UNSUPPORTED_OPERATOR"),
-        ("close_adj ** 2", "UNSUPPORTED_OPERATOR"),
+        ("value = close", "SYNTAX_ERROR"),
+        ("close; volume", "SYNTAX_ERROR"),
+        ("close.real", "UNSUPPORTED_SYNTAX"),
+        ("close[0]", "UNSUPPORTED_SYNTAX"),
+        ("[close]", "UNSUPPORTED_SYNTAX"),
+        ("{close}", "UNSUPPORTED_SYNTAX"),
+        ("(x for x in [close])", "UNSUPPORTED_SYNTAX"),
+        ("lambda: close", "UNSUPPORTED_SYNTAX"),
+        ("close if 1 else volume", "UNSUPPORTED_SYNTAX"),
+        ("close > volume", "UNSUPPORTED_SYNTAX"),
+        ("ts_mean(series=close, window=20)", "KEYWORD_ARGUMENT_NOT_ALLOWED"),
+        ("ts_mean(*(close, 20))", "STARRED_ARGUMENT_NOT_ALLOWED"),
+        ("+close", "UNSUPPORTED_OPERATOR"),
+        ("close ** 2", "UNSUPPORTED_OPERATOR"),
         ("True", "BOOLEAN_NOT_ALLOWED"),
-        ("1e309 + close_adj", "NON_FINITE_LITERAL"),
+        ("1e309 + close", "NON_FINITE_LITERAL"),
     ],
 )
 def test_compile_rejects_every_non_allowlisted_language_form(source: str, code: str) -> None:
@@ -394,12 +419,12 @@ def test_compile_rejects_every_non_allowlisted_language_form(source: str, code: 
     ("source", "code", "start_offset", "end_offset"),
     [
         ("closes + 1", "UNKNOWN_IDENTIFIER", 0, 6),
-        ("close_adj(1)", "NOT_CALLABLE", 0, 9),
+        ("close(1)", "NOT_CALLABLE", 0, 5),
         ("ts_mean", "EXPECTED_FIELD", 0, 7),
-        ("ts_mean(close_adj)", "INVALID_ARITY", 0, 18),
-        ("ts_mean(close_adj, 0)", "WINDOW_OUT_OF_RANGE", 19, 20),
-        ("ts_mean(close_adj, 2.5)", "WINDOW_MUST_BE_INTEGER", 19, 22),
-        ("abs(close_adj, 2)", "INVALID_ARITY", 0, 17),
+        ("ts_mean(close)", "INVALID_ARITY", 0, 14),
+        ("ts_mean(close, 0)", "WINDOW_OUT_OF_RANGE", 15, 16),
+        ("ts_mean(close, 2.5)", "WINDOW_MUST_BE_INTEGER", 15, 18),
+        ("abs(close, 2)", "INVALID_ARITY", 0, 13),
         ("20", "ROOT_MUST_BE_SERIES", 0, 2),
     ],
 )
@@ -423,7 +448,7 @@ def test_diagnostics_are_stable_and_source_ranged(
 
 
 def test_incomplete_formula_diagnostic_points_to_end_of_source() -> None:
-    source = "close_adj +"
+    source = "close +"
 
     diagnostic = alpha_language.diagnose(source).diagnostics[0]
 
@@ -431,7 +456,7 @@ def test_incomplete_formula_diagnostic_points_to_end_of_source() -> None:
     assert diagnostic.range.start.offset == len(source)
     assert diagnostic.range.end.offset == len(source)
     assert diagnostic.range.start.line == 1
-    assert diagnostic.range.start.column == 12
+    assert diagnostic.range.start.column == 8
     assert diagnostic.details is not None
     assert diagnostic.details.model_dump(mode="json") == {
         "kind": "syntax",
@@ -441,9 +466,9 @@ def test_incomplete_formula_diagnostic_points_to_end_of_source() -> None:
 
 
 def test_relevant_diagnostics_include_typed_expected_and_actual_details() -> None:
-    arity = alpha_language.diagnose("ts_mean(close_adj)").diagnostics[0]
+    arity = alpha_language.diagnose("ts_mean(close)").diagnostics[0]
     value_type = alpha_language.diagnose("ts_mean(1, 2)").diagnostics[0]
-    window = alpha_language.diagnose("ts_mean(close_adj, 0)").diagnostics[0]
+    window = alpha_language.diagnose("ts_mean(close, 0)").diagnostics[0]
 
     assert arity.details is not None
     assert arity.details.model_dump(mode="json") == {
@@ -466,29 +491,29 @@ def test_relevant_diagnostics_include_typed_expected_and_actual_details() -> Non
 
 
 def test_multiline_unicode_identifier_has_character_accurate_range() -> None:
-    source = "(close_adj +\n收盘)"
+    source = "(close +\n收盘)"
 
     diagnostic = alpha_language.diagnose(source).diagnostics[0]
 
     assert diagnostic.code == "UNKNOWN_IDENTIFIER"
-    assert diagnostic.range.start.offset == 13
-    assert diagnostic.range.end.offset == 15
+    assert diagnostic.range.start.offset == 9
+    assert diagnostic.range.end.offset == 11
     assert diagnostic.range.start.line == 2
     assert diagnostic.range.start.column == 1
     assert diagnostic.range.end.column == 3
 
 
 def test_effective_lookback_is_composed_and_bounded() -> None:
-    accepted = alpha_language.compile("ts_mean(lag(close_adj, 3), 20)")
-    rejected = alpha_language.diagnose("lag(ts_mean(close_adj, 252), 2)")
+    accepted = alpha_language.compile("ts_mean(lag(close, 3), 20)")
+    rejected = alpha_language.diagnose("lag(ts_mean(close, 252), 2)")
 
     assert accepted.effective_lookback == 22
     assert rejected.diagnostics[0].code == "LOOKBACK_EXCEEDS_LIMIT"
 
 
 def test_formula_limits_reject_before_compilation() -> None:
-    too_long = "close_adj + " + "1" * 4090
-    too_deep = "close_adj"
+    too_long = "close + " + "1" * 4090
+    too_deep = "close"
     for _ in range(33):
         too_deep = f"abs({too_deep})"
 
@@ -497,7 +522,7 @@ def test_formula_limits_reject_before_compilation() -> None:
 
 
 def test_formula_node_limit_is_independent_of_depth_limit() -> None:
-    parts = ["close_adj", *("1" for _ in range(128))]
+    parts = ["close", *("1" for _ in range(128))]
     while len(parts) > 1:
         parts = [
             f"({parts[index]} + {parts[index + 1]})" if index + 1 < len(parts) else parts[index]
@@ -531,8 +556,8 @@ def test_work_limit_accepts_boundary_and_rejects_one_over() -> None:
         ),
     )
 
-    assert boundary.compile("abs(close_adj)").estimated_work == 4096
-    diagnostic = one_over.diagnose("abs(close_adj)").diagnostics[0]
+    assert boundary.compile("abs(close)").estimated_work == 4096
+    diagnostic = one_over.diagnose("abs(close)").diagnostics[0]
     assert diagnostic.code == "WORK_EXCEEDS_LIMIT"
     assert diagnostic.details is not None
     assert diagnostic.details.expected == 4096
@@ -540,14 +565,14 @@ def test_work_limit_accepts_boundary_and_rejects_one_over() -> None:
 
 
 def test_source_limit_accepts_boundary_and_rejects_one_over() -> None:
-    boundary = "close_adj".ljust(4096)
+    boundary = "close".ljust(4096)
 
     assert alpha_language.compile(boundary).source == boundary
     assert alpha_language.diagnose(f"{boundary} ").diagnostics[0].code == "FORMULA_TOO_LONG"
 
 
 def test_depth_limit_accepts_boundary_and_rejects_one_over() -> None:
-    boundary = "close_adj"
+    boundary = "close"
     for _ in range(31):
         boundary = f"abs({boundary})"
 
@@ -558,8 +583,8 @@ def test_depth_limit_accepts_boundary_and_rejects_one_over() -> None:
 
 
 def test_lookback_limit_accepts_boundary_and_rejects_one_over() -> None:
-    assert alpha_language.compile("lag(close_adj, 252)").effective_lookback == 252
-    assert alpha_language.diagnose("lag(lag(close_adj, 252), 1)").diagnostics[0].code == (
+    assert alpha_language.compile("lag(close, 252)").effective_lookback == 252
+    assert alpha_language.diagnose("lag(lag(close, 252), 1)").diagnostics[0].code == (
         "LOOKBACK_EXCEEDS_LIMIT"
     )
 
@@ -573,7 +598,7 @@ def test_node_limit_accepts_boundary_and_rejects_one_over() -> None:
 
 
 def _balanced_node_formula(*, node_count: int) -> str:
-    leaves = ["close_adj" for _ in range(65)]
+    leaves = ["close" for _ in range(65)]
     unary_count = node_count - (len(leaves) * 2 - 1)
     assert 0 <= unary_count <= len(leaves) * 2
     for index in range(unary_count):

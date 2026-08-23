@@ -47,8 +47,8 @@ type CommonFrozenResearchAuthorableInput = {
   hypothesis: string | null;
   start_date: string;
   end_date: string;
-  universe: string;
-  neutralization: string;
+  universe: "top300" | "top1000" | "top2000" | "top3000";
+  neutralization: "none" | "industry";
 };
 
 export type FrozenResearchAuthorableInput = CommonFrozenResearchAuthorableInput & ({

@@ -255,7 +255,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         },
     )
     compiled = alpha_language.compile(
-        "cs_rank(ts_mean(close_adj, 5)) + cs_rank(total_revenue_latest_fy)"
+        "cs_rank(ts_mean(close, 5)) + cs_rank(total_revenue_latest_fy)"
     )
     run_input = RunInput(
         research_data=fixture,

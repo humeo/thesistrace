@@ -1,4 +1,10 @@
-import { CaretDown, CaretUp, CaretUpDown } from "@phosphor-icons/react";
+import {
+  CaretDown,
+  CaretLeft,
+  CaretRight,
+  CaretUp,
+  CaretUpDown,
+} from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { StrategyPerformanceChart } from "../analysis/StrategyPerformanceChart";
@@ -148,16 +154,26 @@ export type ResearchRun = {
   end_date: string;
   formula_summary: string;
   research_kind: "factor_evaluation" | "strategy_backtest";
-  key_metrics?: {
-    annualized_excess_return: number | null;
-    sharpe: number | null;
-    maximum_drawdown: number;
-  };
+  key_metrics?: FactorEvaluationKeyMetrics | StrategyBacktestKeyMetrics;
   input?: FrozenResearchAuthorableInput;
   failure_reason?: string;
   result?: ResearchResult;
   progress?: ResearchRunProgress;
   execution_timing?: ResearchRunExecutionTiming;
+};
+
+type FactorEvaluationKeyMetrics = {
+  research_kind: "factor_evaluation";
+  one_session_rank_ic: number | null;
+  five_session_rank_ic: number | null;
+  twenty_session_rank_ic: number | null;
+};
+
+type StrategyBacktestKeyMetrics = {
+  research_kind: "strategy_backtest";
+  annualized_excess_return: number | null;
+  sharpe: number | null;
+  maximum_drawdown: number;
 };
 
 type ResearchRunList = { items: ResearchRun[]; next_cursor: string | null };
@@ -172,12 +188,18 @@ const FACTOR_HORIZONS = ["1", "5", "20"] as const;
 const ACTIVE_TRACK_LIMIT_DETAIL = "Active DailyTrack limit of 10 reached";
 const ACTIVE_TRACK_LIMIT_MESSAGE =
   "10 active or blocked DailyTracks already exist. Stop one before starting another.";
+const RESEARCH_RUN_PAGE_SIZE = 20;
+type ResearchKindFilter = "" | ResearchRun["research_kind"];
 
 export function ResearchRunsPage({ runId }: { runId?: string }) {
   const [run, setRun] = useState<ResearchRun | null>(null);
   const [items, setItems] = useState<ResearchRun[] | null>(null);
   const [folders, setFolders] = useState<ResearchFolderOption[]>([]);
   const [folderFilter, setFolderFilter] = useState("");
+  const [researchKindFilter, setResearchKindFilter] = useState<ResearchKindFilter>("");
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageCursors, setPageCursors] = useState<Array<string | null>>([null]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
@@ -196,6 +218,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   const trackingRequest = useRef<{ runId: string; requestId: string } | null>(null);
   const deleteGeneration = useRef(0);
   const deleteController = useRef<AbortController | null>(null);
+  const currentPageCursor = pageCursors[pageIndex] ?? null;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -218,12 +241,14 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     const generation = ++loadGeneration.current;
     let timeout: number | undefined;
     setError(null);
-    setLoadState(refreshGeneration === 0 ? "loading" : "refreshing");
+    setLoadState(run === null && items === null ? "loading" : "refreshing");
     const path = runId
       ? `/api/research-runs/${runId}`
-      : folderFilter
-        ? `/api/research-runs?folder_id=${encodeURIComponent(folderFilter)}`
-        : "/api/research-runs";
+      : researchRunListPath({
+          cursor: currentPageCursor,
+          folderId: folderFilter,
+          researchKind: researchKindFilter,
+        });
 
     async function load(polling = false) {
       try {
@@ -242,9 +267,11 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
             timeout = window.setTimeout(() => void load(true), 500);
           }
         } else {
-          const nextItems = ((await response.json()) as ResearchRunList).items;
+          const payload = (await response.json()) as ResearchRunList;
+          const nextItems = payload.items;
           if (generation !== loadGeneration.current) return;
           setItems(nextItems);
+          setNextCursor(payload.next_cursor);
           if (
             nextItems.some(
               (item) =>
@@ -271,7 +298,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       if (timeout !== undefined) window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [folderFilter, refreshGeneration, runId]);
+  }, [currentPageCursor, folderFilter, refreshGeneration, researchKindFilter, runId]);
 
   useEffect(() => () => {
     cancelGeneration.current += 1;
@@ -293,6 +320,44 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
 
   function refreshFolders() {
     setFolderRefreshGeneration((generation) => generation + 1);
+  }
+
+  function resetListPage(): void {
+    setItems([]);
+    setLoadState("refreshing");
+    setPageIndex(0);
+    setPageCursors([null]);
+    setNextCursor(null);
+  }
+
+  function changeFolderFilter(value: string): void {
+    setFolderFilter(value);
+    resetListPage();
+  }
+
+  function changeResearchKindFilter(value: ResearchKindFilter): void {
+    setResearchKindFilter(value);
+    resetListPage();
+  }
+
+  function showPreviousPage(): void {
+    if (pageIndex === 0) return;
+    setItems([]);
+    setLoadState("refreshing");
+    setNextCursor(null);
+    setPageIndex((current) => current - 1);
+  }
+
+  function showNextPage(): void {
+    if (nextCursor === null) return;
+    setItems([]);
+    setLoadState("refreshing");
+    setPageCursors((current) => [
+      ...current.slice(0, pageIndex + 1),
+      nextCursor,
+    ]);
+    setNextCursor(null);
+    setPageIndex((current) => current + 1);
   }
 
   async function cancel() {
@@ -482,13 +547,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
         {loadState === "refreshing" ? (
           <p role="status">Refreshing ResearchRun…</p>
         ) : null}
-        <div className="research-run-facts">
-          <p><strong>Status</strong> {run.status}</p>
-          <p><strong>Name</strong> {run.name}</p>
-          <p><strong>Research type</strong> {researchKindLabel(run.research_kind)}</p>
-          <p><strong>Formula</strong> <code>{run.input?.formula ?? run.formula_summary}</code></p>
-          <p><strong>Research period</strong> {run.start_date} to {run.end_date}</p>
-        </div>
+        <ResearchRunFacts run={run} />
         {!terminal ? progressView : null}
         {deleteError !== null ? <p role="alert">{deleteError}</p> : null}
         {deleting ? null : folderError !== null ? (
@@ -521,35 +580,103 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   return (
     <section aria-label="Research Runs" className="research-runs-list-page">
       <header className="page-header">
-        <div>
-          <p className="eyebrow">Research history</p>
-          <h1>Research Runs</h1>
-        </div>
+        <h1>Research Runs</h1>
       </header>
       <div className="research-run-list-toolbar">
-        {folderError !== null ? (
-          <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
-        ) : folders.length === 0 ? (
-          <p role="status">Loading Research Folders…</p>
-        ) : (
-          <label>Filter by Folder
+        <div className="research-run-filters">
+          {folderError !== null ? (
+            <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
+          ) : folders.length === 0 ? (
+            <p role="status">Loading Research Folders…</p>
+          ) : (
+            <label>Folder
+              <select
+                aria-label="Filter by Folder"
+                onChange={(event) => changeFolderFilter(event.target.value)}
+                value={folderFilter}
+              >
+                <option value="">All Folders</option>
+                {folders.map((folder) => (
+                  <option key={folder.id} value={folder.id}>{folder.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label>Type
             <select
-              aria-label="Filter by Folder"
-              onChange={(event) => setFolderFilter(event.target.value)}
-              value={folderFilter}
+              aria-label="Filter by Type"
+              onChange={(event) => changeResearchKindFilter(
+                event.target.value as ResearchKindFilter,
+              )}
+              value={researchKindFilter}
             >
-              <option value="">All Folders</option>
-              {folders.map((folder) => (
-                <option key={folder.id} value={folder.id}>{folder.name}</option>
-              ))}
+              <option value="">All Types</option>
+              <option value="factor_evaluation">Factor Evaluation</option>
+              <option value="strategy_backtest">Strategy Backtest</option>
             </select>
           </label>
-        )}
-        <p>Sort by a metric heading to compare Runs.</p>
+        </div>
       </div>
-      {items?.length === 0 ? <p>No Research Runs yet.</p> : null}
-      <ResearchRunHistory items={items ?? []} />
+      {loadState === "refreshing" ? (
+        <p className="research-run-list-status" role="status">Loading Research Runs…</p>
+      ) : null}
+      {loadState === null && items?.length === 0 ? (
+        <p className="research-run-list-empty">No Research Runs match these filters.</p>
+      ) : null}
+      <ResearchRunHistory
+        items={items ?? []}
+        key={researchKindFilter || "all"}
+        researchKind={researchKindFilter}
+      />
+      <ResearchRunPagination
+        hasNextPage={nextCursor !== null}
+        onNextPage={showNextPage}
+        onPreviousPage={showPreviousPage}
+        pageIndex={pageIndex}
+      />
     </section>
+  );
+}
+
+export function researchRunListPath({
+  cursor,
+  folderId,
+  researchKind,
+}: {
+  cursor: string | null;
+  folderId: string;
+  researchKind: ResearchKindFilter;
+}): string {
+  const parameters = new URLSearchParams({ limit: String(RESEARCH_RUN_PAGE_SIZE) });
+  if (folderId !== "") parameters.set("folder_id", folderId);
+  if (researchKind !== "") parameters.set("research_kind", researchKind);
+  if (cursor !== null) parameters.set("cursor", cursor);
+  return `/api/research-runs?${parameters.toString()}`;
+}
+
+export function ResearchRunPagination({
+  hasNextPage,
+  onNextPage,
+  onPreviousPage,
+  pageIndex,
+}: {
+  hasNextPage: boolean;
+  onNextPage: () => void;
+  onPreviousPage: () => void;
+  pageIndex: number;
+}) {
+  return (
+    <nav aria-label="Research Runs pages" className="research-run-pagination">
+      <button disabled={pageIndex === 0} onClick={onPreviousPage} type="button">
+        <CaretLeft aria-hidden="true" size={13} weight="bold" />
+        Previous
+      </button>
+      <span>Page {pageIndex + 1}</span>
+      <button disabled={!hasNextPage} onClick={onNextPage} type="button">
+        Next
+        <CaretRight aria-hidden="true" size={13} weight="bold" />
+      </button>
+    </nav>
   );
 }
 
@@ -566,18 +693,39 @@ export function ResearchRunProgressView({
   const completed = progress.completed_warmup_sessions + progress.completed_research_sessions;
   const total = progress.total_warmup_sessions + progress.total_research_sessions;
   const active = status === "running" || status === "cancelling";
+  const progressPercentage = total === 0 ? 0 : Math.round((completed / total) * 100);
   return (
     <section aria-label="ResearchRun progress" className="research-run-progress">
-      <div className="research-run-progress-heading">
-        <div>
+      <header className="research-run-progress-heading">
+        <div className="research-run-progress-title">
           <h2>Execution progress</h2>
-          <p>{progressLabel(status, progress.phase)}</p>
+          <span className="research-run-progress-state" data-status={status}>
+            {progressLabel(status, progress.phase)}
+          </span>
         </div>
-        <dl className="research-run-timing">
+        <dl className="research-run-duration">
           <div>
             <dt>{timing?.is_final ? "Execution time" : "Elapsed"}</dt>
             <dd>{formatDuration(timing?.elapsed_seconds ?? null)}</dd>
           </div>
+        </dl>
+      </header>
+      <div className="research-run-progress-track">
+        <progress
+          aria-label="Research execution progress"
+          max={Math.max(total, 1)}
+          value={completed}
+        />
+        <span aria-hidden="true">{progressPercentage}%</span>
+      </div>
+      <div className="research-run-progress-ledger">
+        <dl className="research-run-progress-stats">
+          <div>
+            <dt>Research sessions</dt>
+            <dd>{progress.completed_research_sessions} / {progress.total_research_sessions}</dd>
+          </div>
+        </dl>
+        <dl className="research-run-timing">
           <div>
             <dt>Started</dt>
             <dd><ExecutionTimestamp value={timing?.started_at ?? null} /></dd>
@@ -588,23 +736,56 @@ export function ResearchRunProgressView({
           </div>
         </dl>
       </div>
-      <progress
-        aria-label="Research execution progress"
-        max={Math.max(total, 1)}
-        value={completed}
-      />
-      <div className="research-run-progress-stats">
-        <p><strong>{progress.completed_warmup_sessions} / {progress.total_warmup_sessions}</strong> Warm-up</p>
-        <p><strong>{progress.completed_research_sessions} / {progress.total_research_sessions}</strong> Research</p>
-        <p><strong>{progress.committed_chunk_count}</strong> Committed chunks</p>
-      </div>
       {active && estimate !== null ? (
         <p className="research-run-progress-note">
           About {formatDuration(estimate)} remaining
-          {progress.duration_is_estimate ? " · estimate may change" : ""}
+          {progress.duration_is_estimate ? " (estimate may change)" : ""}
         </p>
       ) : null}
     </section>
+  );
+}
+
+export function ResearchRunFacts({ run }: { run: ResearchRun }) {
+  const input = run.input;
+  const factorConditionClass = input?.research_kind === "factor_evaluation"
+    ? "research-run-fact-half"
+    : undefined;
+  return (
+    <div
+      aria-label="Research execution conditions"
+      className="research-run-facts research-run-execution-facts"
+      role="group"
+    >
+      <p><strong>Status</strong> {run.status}</p>
+      <p><strong>Research type</strong> {researchKindLabel(run.research_kind)}</p>
+      <p className="research-run-fact-name"><strong>Name</strong> {run.name}</p>
+      <p className="research-run-fact-formula">
+        <strong>Formula</strong> <code>{input?.formula ?? run.formula_summary}</code>
+      </p>
+      <p className="research-run-fact-period">
+        <strong>Research period</strong> {run.start_date} to {run.end_date}
+      </p>
+      {input !== undefined ? (
+        <>
+          <p className={factorConditionClass}>
+            <strong>Universe</strong> {universeLabel(input.universe)}
+          </p>
+          <p className={factorConditionClass}>
+            <strong>Neutralization</strong> {neutralizationLabel(input.neutralization)}
+          </p>
+          {input.research_kind === "strategy_backtest" ? (
+            <>
+              <p><strong>Holdings count</strong> {input.holdings_count}</p>
+              <p>
+                <strong>Rebalance</strong>{" "}
+                {rebalanceLabel(input.rebalance_every_sessions)}
+              </p>
+            </>
+          ) : null}
+        </>
+      ) : null}
+    </div>
   );
 }
 
@@ -796,11 +977,19 @@ export type ResearchRunSortKey =
   | "created_at"
   | "annualized_excess_return"
   | "sharpe"
-  | "maximum_drawdown";
+  | "maximum_drawdown"
+  | "one_session_rank_ic"
+  | "five_session_rank_ic"
+  | "twenty_session_rank_ic";
 type ResearchRunSortDirection = "ascending" | "descending";
 type ResearchRunSort = {
   key: ResearchRunSortKey;
   direction: ResearchRunSortDirection;
+};
+type ResearchRunMetricColumn = {
+  key: Exclude<ResearchRunSortKey, "created_at">;
+  label: string;
+  shortLabel: string;
 };
 
 const DEFAULT_RESEARCH_RUN_SORT: ResearchRunSort = {
@@ -808,8 +997,31 @@ const DEFAULT_RESEARCH_RUN_SORT: ResearchRunSort = {
   direction: "descending",
 };
 
-export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
+const FACTOR_RESEARCH_RUN_METRICS: ResearchRunMetricColumn[] = [
+  { key: "one_session_rank_ic", label: "1-session Rank IC", shortLabel: "1S Rank IC" },
+  { key: "five_session_rank_ic", label: "5-session Rank IC", shortLabel: "5S Rank IC" },
+  { key: "twenty_session_rank_ic", label: "20-session Rank IC", shortLabel: "20S Rank IC" },
+];
+
+const STRATEGY_RESEARCH_RUN_METRICS: ResearchRunMetricColumn[] = [
+  {
+    key: "annualized_excess_return",
+    label: "Annualized excess",
+    shortLabel: "Excess",
+  },
+  { key: "sharpe", label: "Sharpe", shortLabel: "Sharpe" },
+  { key: "maximum_drawdown", label: "Max drawdown", shortLabel: "Drawdown" },
+];
+
+export function ResearchRunHistory({
+  items,
+  researchKind = "",
+}: {
+  items: ResearchRun[];
+  researchKind?: ResearchKindFilter;
+}) {
   const [sort, setSort] = useState<ResearchRunSort>(DEFAULT_RESEARCH_RUN_SORT);
+  const metricColumns = researchRunMetricColumns(researchKind);
   const sortedItems = useMemo(
     () => sortResearchRuns(items, sort.key, sort.direction),
     [items, sort.direction, sort.key],
@@ -825,7 +1037,7 @@ export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
       }
       return {
         key,
-        direction: key === "maximum_drawdown" ? "ascending" : "descending",
+        direction: defaultResearchRunSortDirection(key),
       };
     });
   }
@@ -833,7 +1045,7 @@ export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
   function selectSort(key: ResearchRunSortKey) {
     setSort({
       key,
-      direction: key === "maximum_drawdown" ? "ascending" : "descending",
+      direction: defaultResearchRunSortDirection(key),
     });
   }
 
@@ -856,9 +1068,9 @@ export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
             value={sort.key}
           >
             <option value="created_at">Created</option>
-            <option value="annualized_excess_return">Annualized excess</option>
-            <option value="sharpe">Sharpe</option>
-            <option value="maximum_drawdown">Maximum drawdown</option>
+            {metricColumns.map((column) => (
+              <option key={column.key} value={column.key}>{column.label}</option>
+            ))}
           </select>
         </label>
         <button
@@ -872,6 +1084,17 @@ export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
       </div>
       <div className="research-run-history-scroll">
       <table aria-label="Research Runs" className="research-run-history">
+        <colgroup>
+          <col className="research-run-col-name" />
+          <col className="research-run-col-type" />
+          <col className="research-run-col-created" />
+          <col className="research-run-col-status" />
+          {metricColumns.length === 0 ? (
+            <col className="research-run-col-summary" />
+          ) : metricColumns.map((column) => (
+            <col className="research-run-col-metric" key={column.key} />
+          ))}
+        </colgroup>
         <thead>
           <tr>
             <th scope="col">Research</th>
@@ -883,24 +1106,17 @@ export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
               onSort={() => changeSort("created_at")}
             />
             <th scope="col">Status</th>
-            <SortableResearchRunHeading
-              direction={sort.direction}
-              isActive={sort.key === "annualized_excess_return"}
-              label="Annualized excess"
-              onSort={() => changeSort("annualized_excess_return")}
-            />
-            <SortableResearchRunHeading
-              direction={sort.direction}
-              isActive={sort.key === "sharpe"}
-              label="Sharpe"
-              onSort={() => changeSort("sharpe")}
-            />
-            <SortableResearchRunHeading
-              direction={sort.direction}
-              isActive={sort.key === "maximum_drawdown"}
-              label="Max drawdown"
-              onSort={() => changeSort("maximum_drawdown")}
-            />
+            {metricColumns.length === 0 ? (
+              <th className="research-run-metric-heading" scope="col">Result summary</th>
+            ) : metricColumns.map((column) => (
+              <SortableResearchRunHeading
+                direction={sort.direction}
+                isActive={sort.key === column.key}
+                key={column.key}
+                label={column.label}
+                onSort={() => changeSort(column.key)}
+              />
+            ))}
           </tr>
         </thead>
         <tbody>
@@ -914,15 +1130,13 @@ export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
                 <time dateTime={item.created_at}>{formatResearchRunCreatedAt(item.created_at)}</time>
               </td>
               <td data-label="Status"><span className={`run-status run-status-${item.status}`}>{item.status}</span></td>
-              <td className="research-run-metric" data-label="Annualized excess">
-                {formatSignedPercent(item.key_metrics?.annualized_excess_return ?? null)}
-              </td>
-              <td className="research-run-metric" data-label="Sharpe">
-                {formatDecimal(item.key_metrics?.sharpe ?? null)}
-              </td>
-              <td className="research-run-metric" data-label="Max drawdown">
-                {formatPercent(item.key_metrics?.maximum_drawdown ?? null)}
-              </td>
+              {metricColumns.length === 0 ? (
+                <ResearchRunResultSummary item={item} />
+              ) : metricColumns.map((column) => (
+                <td className="research-run-metric" data-label={column.label} key={column.key}>
+                  {formatResearchRunMetric(item, column.key)}
+                </td>
+              ))}
             </tr>
           ))}
         </tbody>
@@ -930,6 +1144,38 @@ export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
       </div>
     </div>
   );
+}
+
+function ResearchRunResultSummary({ item }: { item: ResearchRun }) {
+  const columns = item.research_kind === "factor_evaluation"
+    ? FACTOR_RESEARCH_RUN_METRICS
+    : STRATEGY_RESEARCH_RUN_METRICS;
+  return (
+    <td className="research-run-result-summary" data-label="Result summary">
+      <div>
+        {columns.map((column) => (
+          <span key={column.key}>
+            <small>{column.shortLabel}</small>
+            <strong>{formatResearchRunMetric(item, column.key)}</strong>
+          </span>
+        ))}
+      </div>
+    </td>
+  );
+}
+
+function researchRunMetricColumns(
+  researchKind: ResearchKindFilter,
+): ResearchRunMetricColumn[] {
+  if (researchKind === "factor_evaluation") return FACTOR_RESEARCH_RUN_METRICS;
+  if (researchKind === "strategy_backtest") return STRATEGY_RESEARCH_RUN_METRICS;
+  return [];
+}
+
+function defaultResearchRunSortDirection(
+  key: ResearchRunSortKey,
+): ResearchRunSortDirection {
+  return key === "maximum_drawdown" ? "ascending" : "descending";
 }
 
 function SortableResearchRunHeading({
@@ -985,7 +1231,21 @@ function researchRunSortValue(item: ResearchRun, key: ResearchRunSortKey): numbe
     const value = new Date(item.created_at).getTime();
     return Number.isFinite(value) ? value : null;
   }
-  return item.key_metrics?.[key] ?? null;
+  const metrics = item.key_metrics;
+  if (key === "annualized_excess_return" || key === "sharpe" || key === "maximum_drawdown") {
+    return metrics?.research_kind === "strategy_backtest" ? metrics[key] : null;
+  }
+  return metrics?.research_kind === "factor_evaluation" ? metrics[key] : null;
+}
+
+function formatResearchRunMetric(
+  item: ResearchRun,
+  key: Exclude<ResearchRunSortKey, "created_at">,
+): string {
+  const value = researchRunSortValue(item, key);
+  if (key === "annualized_excess_return") return formatSignedPercent(value);
+  if (key === "maximum_drawdown") return formatPercent(value);
+  return formatDecimal(value);
 }
 
 function compareCreatedDescending(left: ResearchRun, right: ResearchRun): number {
@@ -1045,25 +1305,22 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
 
 export function TerminalStrategyStateView({ state }: { state: TerminalStrategyState }) {
   return (
-    <section className="research-result-section" aria-label="Terminal Strategy State">
+    <section className="research-result-section" aria-label="Final Portfolio">
       <div className="section-heading">
-        <div>
-          <p className="eyebrow">Retained account at the Research Period boundary</p>
-          <h2>Terminal Strategy State</h2>
-        </div>
+        <h2>Final Portfolio</h2>
       </div>
       <div className="strategy-metrics">
-        <Metric label="Session" value={state.session} />
-        <Metric label="Net NAV" value={state.net_nav} />
-        <Metric label="Net cash" value={state.net_cash} />
-        <Metric label="Holdings" value={String(state.positions.length)} />
-        <Metric label="Cumulative costs" value={state.cumulative_transaction_cost} />
+        <Metric label="As of" value={state.session} />
+        <Metric label="Portfolio value" value={state.net_nav} />
+        <Metric label="Cash" value={state.net_cash} />
+        <Metric label="Positions" value={String(state.positions.length)} />
+        <Metric label="Transaction costs" value={state.cumulative_transaction_cost} />
       </div>
       {state.positions.length === 0 ? (
-        <p>No terminal holdings.</p>
+        <p>No holdings at the end of the Research Period.</p>
       ) : (
         <div className="result-table-scroll">
-          <table aria-label="Terminal holdings">
+          <table aria-label="Final holdings">
             <thead>
               <tr><th>Instrument</th><th>Shares</th><th>Adjusted units</th><th>Last price</th></tr>
             </thead>
@@ -1080,11 +1337,11 @@ export function TerminalStrategyStateView({ state }: { state: TerminalStrategySt
           </table>
         </div>
       )}
-      <p>
-        {state.pending_signal
-          ? `Signal from ${state.pending_signal.signal_session} remains pending for the next Research Session open.`
-          : "No pending signal at this boundary."}
-      </p>
+      {state.pending_signal ? (
+        <p>
+          Signal from {state.pending_signal.signal_session} remains pending for the next Research Session open.
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -1143,4 +1400,23 @@ function researchKindLabel(
   value: ResearchRun["research_kind"],
 ): "Factor Evaluation" | "Strategy Backtest" {
   return value === "factor_evaluation" ? "Factor Evaluation" : "Strategy Backtest";
+}
+
+function universeLabel(value: FrozenResearchAuthorableInput["universe"]): string {
+  return {
+    top300: "Top 300",
+    top1000: "Top 1000",
+    top2000: "Top 2000",
+    top3000: "Top 3000",
+  }[value];
+}
+
+function neutralizationLabel(
+  value: FrozenResearchAuthorableInput["neutralization"],
+): string {
+  return value === "none" ? "None" : "Industry";
+}
+
+function rebalanceLabel(sessions: number): string {
+  return sessions === 1 ? "Every session" : `Every ${sessions} sessions`;
 }

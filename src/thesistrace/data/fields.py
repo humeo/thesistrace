@@ -59,7 +59,7 @@ MARKET_FIELDS = (
         "instrument_by_research_session",
         "missing_when_no_valid_session_bar",
         "equity.eod_price",
-        AlphaFieldCapability("open_adj"),
+        AlphaFieldCapability("open"),
         _row_series("open_adj"),
     ),
     FieldDefinition(
@@ -71,7 +71,7 @@ MARKET_FIELDS = (
         "instrument_by_research_session",
         "missing_when_no_valid_session_bar",
         "equity.eod_price",
-        AlphaFieldCapability("high_adj"),
+        AlphaFieldCapability("high"),
         _row_series("high_adj"),
     ),
     FieldDefinition(
@@ -83,7 +83,7 @@ MARKET_FIELDS = (
         "instrument_by_research_session",
         "missing_when_no_valid_session_bar",
         "equity.eod_price",
-        AlphaFieldCapability("low_adj"),
+        AlphaFieldCapability("low"),
         _row_series("low_adj"),
     ),
     FieldDefinition(
@@ -95,7 +95,7 @@ MARKET_FIELDS = (
         "instrument_by_research_session",
         "missing_when_no_valid_session_bar",
         "equity.eod_price",
-        AlphaFieldCapability("close_adj"),
+        AlphaFieldCapability("close"),
         _row_series("close_adj"),
     ),
     FieldDefinition(
@@ -107,7 +107,7 @@ MARKET_FIELDS = (
         "instrument_by_research_session",
         "missing_when_no_valid_session_bar",
         "equity.eod_price",
-        AlphaFieldCapability("volume_shares"),
+        AlphaFieldCapability("volume"),
         _row_series("volume_shares"),
     ),
     FieldDefinition(
@@ -119,7 +119,7 @@ MARKET_FIELDS = (
         "instrument_by_research_session",
         "missing_when_no_valid_session_bar",
         "equity.eod_price",
-        AlphaFieldCapability("turnover_amount_cny"),
+        AlphaFieldCapability("amount"),
         _row_series("turnover_cny"),
     ),
 )

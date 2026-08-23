@@ -52,6 +52,7 @@ from thesistrace.data.io_metrics import record_parquet_scan
 from thesistrace.data.market_series import (
     MarketSeriesError,
     align_market_research_data,
+    market_field_column_bindings,
     market_field_columns,
 )
 from thesistrace.data.source import (
@@ -922,7 +923,7 @@ class MountedGenerationStore:
             _industries=industries,
             _financial_values=financial_values,
             _field_columns={
-                **market_bindings,
+                **market_field_column_bindings(market_bindings),
                 **{field_id: field_id for field_id in financial_bindings},
             },
         )

@@ -78,12 +78,12 @@ def test_normalized_input_has_one_bounded_semantics() -> None:
         operation("abs", field("market.volume.shares")),
     )
     values = {
-        "close_adj": [float(index + 1) for index in range(40)],
-        "volume_shares": [10.0] * 40,
+        "close": [float(index + 1) for index in range(40)],
+        "volume": [10.0] * 40,
     }
 
     parsed = validate_alpha(normalized, field_bindings=FIELD_BINDINGS)
-    assert parsed.field_names == ("close_adj", "volume_shares")
+    assert parsed.field_names == ("close", "volume")
     assert parsed.field_ids == (
         "market.volume.shares",
         "price.close.adjusted",
@@ -165,13 +165,13 @@ def test_every_normalized_operator_has_exact_semantics(
     normalized: dict[str, object],
     expected: list[float | None],
 ) -> None:
-    values = {"close_adj": [1.0, 2.0, 4.0, 8.0, 16.0]}
+    values = {"close": [1.0, 2.0, 4.0, 8.0, 16.0]}
     assert evaluate_series(normalized, values, field_bindings=FIELD_BINDINGS) == expected
 
 
 def test_normalized_evaluation_preserves_missing_and_non_finite_rules() -> None:
     close = field("price.close.adjusted")
-    values = {"close_adj": [1.0, 2.0, None, 4.0, 8.0]}
+    values = {"close": [1.0, 2.0, None, 4.0, 8.0]}
 
     assert evaluate_series(
         operation("pct_change", close, literal(1)),
@@ -305,7 +305,7 @@ def test_normalized_matrix_matches_characterized_kernel_matrix() -> None:
     ("expression", "reason_code"),
     [
         (field("price.close.raw"), "UNKNOWN_FIELD"),
-        (field("close_adj"), "UNKNOWN_FIELD"),
+        (field("close"), "UNKNOWN_FIELD"),
         (operation("python_eval", literal(1)), "INVALID_OPERATOR"),
         (operation("add", literal(1)), "INVALID_OPERATOR"),
         (

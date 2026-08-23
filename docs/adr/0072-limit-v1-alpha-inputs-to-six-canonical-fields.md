@@ -7,12 +7,12 @@ status: accepted
 V1 Alpha Expression permits exactly these Field References:
 
 ```text
-open_adj
-high_adj
-low_adj
-close_adj
-volume_shares
-turnover_amount_cny
+open
+high
+low
+close
+volume
+amount
 ```
 
 The editor offers only the fields whose Data-owned Field Definitions carry an
@@ -32,7 +32,7 @@ second Alpha return path. An author expresses a return through the closed
 function set, for example:
 
 ```text
-pct_change(close_adj, 1)
+pct_change(close, 1)
 ```
 
 This keeps return calculations on the same Adjusted Research Price coordinate

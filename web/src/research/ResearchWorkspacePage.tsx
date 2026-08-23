@@ -2,17 +2,20 @@ import {
   CalendarBlank,
   CaretDown,
   FolderSimple,
-  PencilSimple,
+  Minus,
   Play,
   Plus,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { AlphaCatalog } from "../alphaCatalog";
 import type { DataOverview } from "../data/DataPage";
-import { AlphaFormulaEditor, type AlphaCatalog } from "./AlphaFormulaEditor";
+import { AlphaFormulaEditor } from "./AlphaFormulaEditor";
+import { buildResearchDatePresets } from "./dateRange";
 import {
   createDiagnosticsScheduler,
   type DiagnosticState,
+  type FormulaDiagnostic,
 } from "./diagnostics";
 import {
   beginResearchRun,
@@ -27,7 +30,6 @@ import {
   selectResearchKind,
   type ResearchDraft,
 } from "./draft";
-import type { FormulaDiagnostic } from "./diagnostics";
 
 export type ResearchFolder = {
   id: string;
@@ -184,54 +186,57 @@ export function ResearchFolderNavigation({
   const [renameName, setRenameName] = useState(activeFolder.name);
   useEffect(() => setRenameName(activeFolder.name), [activeFolder.id, activeFolder.name]);
   return (
-    <details aria-label="Research Folders" className="research-folder-navigation">
-      <summary>
-        <FolderSimple aria-hidden="true" size={18} weight="regular" />
-        <span>{activeFolder.name} folder</span>
-        <CaretDown aria-hidden="true" className="folder-menu-caret" size={16} weight="regular" />
-      </summary>
-      <div className="folder-menu-panel">
-        <div className="folder-navigation-heading">
-          <span>Folders</span>
-          <small>One level</small>
-        </div>
-        <nav aria-label="Research Folder navigation">
-          {folders.map((folder) => (
-            <a
-              aria-current={folder.id === activeFolder.id ? "page" : undefined}
-              href={folder.is_default ? "/research" : `/research?folder=${folder.id}`}
-              key={folder.id}
-            >
-              <span>{folder.name}</span>
-              {folder.is_default ? <small>Default</small> : null}
-            </a>
-          ))}
-        </nav>
-        <form onSubmit={(event) => {
-          event.preventDefault();
-          if (newName.trim() === "") return;
-          void onCreate(newName).then(() => setNewName(""));
-        }}>
-          <label htmlFor="new-folder-name">New Folder</label>
-          <div className="folder-inline-action">
-            <input id="new-folder-name" maxLength={120} onChange={(event) => setNewName(event.target.value)} value={newName} />
-            <button aria-label="Create Folder" disabled={newName.trim() === ""} type="submit">
-              <Plus aria-hidden="true" size={16} weight="regular" />
-              Create
-            </button>
+    <div className="research-folder-control">
+      <span className="research-control-label">Folder</span>
+      <details aria-label="Research Folders" className="research-folder-navigation">
+        <summary>
+          <FolderSimple aria-hidden="true" size={18} weight="regular" />
+          <span>{activeFolder.name} folder</span>
+          <CaretDown aria-hidden="true" className="folder-menu-caret" size={16} weight="regular" />
+        </summary>
+        <div className="folder-menu-panel">
+          <div className="folder-navigation-heading">
+            <span>Folders</span>
+            <small>One level</small>
           </div>
-        </form>
-        {!activeFolder.is_default ? (
-          <section aria-label="Selected Folder actions" className="folder-actions">
-            <label htmlFor="rename-folder-name">Folder name</label>
-            <input id="rename-folder-name" maxLength={120} onChange={(event) => setRenameName(event.target.value)} value={renameName} />
-            <button disabled={renameName.trim() === "" || renameName.trim() === activeFolder.name} onClick={() => void onRename(activeFolder.id, renameName)}>Rename Folder</button>
-            <button className="folder-delete" onClick={() => void onDelete(activeFolder)}>Delete Folder</button>
-          </section>
-        ) : null}
-        {error !== null ? <p className="inline-status inline-status-error" role="alert">{error}</p> : null}
-      </div>
-    </details>
+          <nav aria-label="Research Folder navigation">
+            {folders.map((folder) => (
+              <a
+                aria-current={folder.id === activeFolder.id ? "page" : undefined}
+                href={folder.is_default ? "/research" : `/research?folder=${folder.id}`}
+                key={folder.id}
+              >
+                <span>{folder.name}</span>
+                {folder.is_default ? <small>Default</small> : null}
+              </a>
+            ))}
+          </nav>
+          <form onSubmit={(event) => {
+            event.preventDefault();
+            if (newName.trim() === "") return;
+            void onCreate(newName).then(() => setNewName(""));
+          }}>
+            <label htmlFor="new-folder-name">New Folder</label>
+            <div className="folder-inline-action">
+              <input id="new-folder-name" maxLength={120} onChange={(event) => setNewName(event.target.value)} value={newName} />
+              <button aria-label="Create Folder" disabled={newName.trim() === ""} type="submit">
+                <Plus aria-hidden="true" size={16} weight="regular" />
+                Create
+              </button>
+            </div>
+          </form>
+          {!activeFolder.is_default ? (
+            <section aria-label="Selected Folder actions" className="folder-actions">
+              <label htmlFor="rename-folder-name">Folder name</label>
+              <input id="rename-folder-name" maxLength={120} onChange={(event) => setRenameName(event.target.value)} value={renameName} />
+              <button disabled={renameName.trim() === "" || renameName.trim() === activeFolder.name} onClick={() => void onRename(activeFolder.id, renameName)}>Rename Folder</button>
+              <button className="folder-delete" onClick={() => void onDelete(activeFolder)}>Delete Folder</button>
+            </section>
+          ) : null}
+          {error !== null ? <p className="inline-status inline-status-error" role="alert">{error}</p> : null}
+        </div>
+      </details>
+    </div>
   );
 }
 
@@ -243,6 +248,82 @@ async function folderMutationError(response: Response): Promise<string> {
     // The public status remains enough when an upstream response has no JSON body.
   }
   return `Folder request failed (${response.status})`;
+}
+
+function nextBoundedInteger(
+  value: string,
+  minimum: number,
+  maximum: number,
+  direction: -1 | 1,
+): string {
+  const current = value.trim() === "" ? null : Number(value);
+  if (current === null || !Number.isFinite(current)) {
+    return direction === 1 ? String(minimum) : value;
+  }
+  const candidate = direction === 1
+    ? Math.floor(current) + 1
+    : Math.ceil(current) - 1;
+  return String(Math.min(maximum, Math.max(minimum, candidate)));
+}
+
+function ResearchNumberStepper({
+  actionLabel,
+  id,
+  label,
+  maximum,
+  minimum,
+  onChange,
+  value,
+}: {
+  actionLabel: string;
+  id: string;
+  label: string;
+  maximum: number;
+  minimum: number;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  const numericValue = value.trim() === "" ? null : Number(value);
+  const hasFiniteValue = numericValue !== null && Number.isFinite(numericValue);
+  const canDecrease = hasFiniteValue && numericValue > minimum;
+  const canIncrease = !hasFiniteValue || numericValue < maximum;
+
+  return (
+    <div className="research-number-field">
+      <label htmlFor={id}>{label}</label>
+      <div className="research-number-stepper">
+        <button
+          aria-controls={id}
+          aria-label={`Decrease ${actionLabel}`}
+          disabled={!canDecrease}
+          onClick={() => onChange(nextBoundedInteger(value, minimum, maximum, -1))}
+          type="button"
+        >
+          <Minus aria-hidden="true" size={16} weight="regular" />
+        </button>
+        <input
+          id={id}
+          inputMode="numeric"
+          max={maximum}
+          min={minimum}
+          onChange={(event) => onChange(event.target.value)}
+          required
+          step={1}
+          type="number"
+          value={value}
+        />
+        <button
+          aria-controls={id}
+          aria-label={`Increase ${actionLabel}`}
+          disabled={!canIncrease}
+          onClick={() => onChange(nextBoundedInteger(value, minimum, maximum, 1))}
+          type="button"
+        >
+          <Plus aria-hidden="true" size={16} weight="regular" />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export function ResearchDraftWorkspace({
@@ -394,25 +475,30 @@ export function ResearchDraftWorkspace({
     <section aria-label="Research" className="page-section research-workspace">
       <header className="research-workspace-header">
         <label className="research-name-field" htmlFor="research-name">
-          <span className="visually-hidden">Research name</span>
+          <span className="research-control-label">Draft name</span>
           <input
             aria-label="Research name"
+            autoComplete="off"
             id="research-name"
             maxLength={200}
             onChange={(event) => updateDraft((current) => ({ ...current, name: event.target.value }))}
             placeholder="Untitled research"
+            type="text"
             value={draft.name}
           />
-          <PencilSimple aria-hidden="true" size={19} weight="regular" />
         </label>
-        <button className="button button-quiet research-new" disabled={submitting} onClick={startNewResearch}>
+        <button className="button research-new" disabled={submitting} onClick={startNewResearch} type="button">
           <Plus aria-hidden="true" size={17} weight="regular" />
-          <span className="visually-hidden">New Research</span>
+          New research
         </button>
       </header>
 
       <section className="research-editor-panel" aria-label="Alpha authoring">
-          <div className="formula-heading"><label>Alpha formula</label></div>
+        <div className="formula-workbench">
+          <header className="formula-heading">
+            <span aria-hidden="true" className="formula-heading-symbol">α</span>
+            <h2 id="alpha-formula-title">Alpha formula</h2>
+          </header>
           <AlphaFormulaEditor
             catalog={catalog}
             diagnostics={serverDiagnostics}
@@ -420,27 +506,27 @@ export function ResearchDraftWorkspace({
             onChange={(formula, editor) => updateDraft((current) => ({ ...current, formula, editor }))}
             selection={draft.editor}
           />
-          <AlphaFieldReference catalog={catalog} />
-          {diagnosticState.kind === "complete" && diagnosticState.result.diagnostics.length > 0 ? (
-            <ul aria-label="Formula diagnostics" className="formula-diagnostics">
-              {diagnosticState.result.diagnostics.map((diagnostic) => (
-                <li key={`${diagnostic.code}-${diagnostic.range.start.offset}`}>
-                  <code>{diagnostic.code}</code> {diagnostic.message}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-          {diagnosticState.kind === "unavailable" ? (
-            <p className="inline-status inline-status-error" role="status">Formula validation is unavailable.</p>
-          ) : null}
-          {storageError !== null ? <p className="inline-status inline-status-error" role="alert">{storageError}</p> : null}
-          {visibleIssues.length > 0 ? (
-            <ul aria-label="Run issues" className="formula-diagnostics">
-              {visibleIssues.map((issue, index) => (
-                <li key={`${issue.code}-${index}`}><code>{issue.code}</code> {issue.message}</li>
-              ))}
-            </ul>
-          ) : null}
+        </div>
+        {diagnosticState.kind === "complete" && diagnosticState.result.diagnostics.length > 0 ? (
+          <ul aria-label="Formula diagnostics" className="formula-diagnostics">
+            {diagnosticState.result.diagnostics.map((diagnostic) => (
+              <li key={`${diagnostic.code}-${diagnostic.range.start.offset}`}>
+                <code>{diagnostic.code}</code> {diagnostic.message}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {diagnosticState.kind === "unavailable" ? (
+          <p className="inline-status inline-status-error" role="status">Formula validation is unavailable.</p>
+        ) : null}
+        {storageError !== null ? <p className="inline-status inline-status-error" role="alert">{storageError}</p> : null}
+        {visibleIssues.length > 0 ? (
+          <ul aria-label="Run issues" className="formula-diagnostics">
+            {visibleIssues.map((issue, index) => (
+              <li key={`${issue.code}-${index}`}><code>{issue.code}</code> {issue.message}</li>
+            ))}
+          </ul>
+        ) : null}
       </section>
 
       <section className="research-run-settings" id="research-parameters" aria-label="Research parameters">
@@ -479,8 +565,11 @@ export function ResearchDraftWorkspace({
               coverageEnd={coverage?.end ?? null}
               coverageStart={coverage?.start ?? null}
               endDate={draft.endDate}
-              onEndDateChange={(endDate) => updateDraft((current) => ({ ...current, endDate }))}
-              onStartDateChange={(startDate) => updateDraft((current) => ({ ...current, startDate }))}
+              onChange={({ startDate, endDate }) => updateDraft((current) => ({
+                ...current,
+                startDate,
+                endDate,
+              }))}
               startDate={draft.startDate}
             />
             <label>Universe
@@ -501,12 +590,24 @@ export function ResearchDraftWorkspace({
             </label>
             {draft.researchKind === "strategy_backtest" ? (
               <>
-                <label>Holdings count
-                  <input inputMode="numeric" max={100} min={1} onChange={(event) => updateDraft((current) => ({ ...current, holdingsCount: event.target.value }))} required type="number" value={draft.holdingsCount} />
-                </label>
-                <label>Rebalance sessions
-                  <input inputMode="numeric" max={20} min={1} onChange={(event) => updateDraft((current) => ({ ...current, rebalanceEverySessions: event.target.value }))} required type="number" value={draft.rebalanceEverySessions} />
-                </label>
+                <ResearchNumberStepper
+                  actionLabel="number of holdings"
+                  id="research-holdings-count"
+                  label="Holdings count"
+                  maximum={100}
+                  minimum={1}
+                  onChange={(value) => updateDraft((current) => ({ ...current, holdingsCount: value }))}
+                  value={draft.holdingsCount}
+                />
+                <ResearchNumberStepper
+                  actionLabel="rebalance interval"
+                  id="research-rebalance-sessions"
+                  label="Rebalance sessions"
+                  maximum={20}
+                  minimum={1}
+                  onChange={(value) => updateDraft((current) => ({ ...current, rebalanceEverySessions: value }))}
+                  value={draft.rebalanceEverySessions}
+                />
               </>
             ) : null}
             <div className="research-notes">
@@ -535,53 +636,6 @@ export function ResearchDraftWorkspace({
   );
 }
 
-function AlphaFieldReference({ catalog }: { catalog: AlphaCatalog }) {
-  const financialFields = catalog.fields.filter(
-    (field) => field.family_id === "equity.financial_pit",
-  );
-  if (financialFields.length === 0) return null;
-  return (
-    <details className="alpha-field-reference">
-      <summary>Financial fields</summary>
-      <div className="alpha-field-reference-list">
-        {financialFields.map((field) => (
-          <article key={field.field_id}>
-            <h3><code>{field.identifier}</code></h3>
-            <p>{field.description}</p>
-            <dl>
-              <div><dt>Unit</dt><dd>{field.unit}</dd></div>
-              <div><dt>Time semantics</dt><dd>{fieldTimeSemantics(field)}</dd></div>
-              <div>
-                <dt>Applicability</dt>
-                <dd>{field.applicable_company_types.length > 0
-                  ? `Company types ${field.applicable_company_types.join(", ")}`
-                  : "All supported instruments"}</dd>
-              </div>
-              <div><dt>Missingness</dt><dd>{humanizeContract(field.missingness)}</dd></div>
-              <div><dt>Example</dt><dd><code>{field.example}</code></dd></div>
-            </dl>
-          </article>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-function fieldTimeSemantics(field: AlphaCatalog["fields"][number]): string {
-  if (field.report_period_selection === "latest_visible_full_year") {
-    return "Latest full year visible on each Research Session";
-  }
-  if (field.report_period_selection === "latest_visible_quarterly_or_annual") {
-    return "Latest quarterly or annual report visible on each Research Session";
-  }
-  return humanizeContract(field.report_period_selection);
-}
-
-function humanizeContract(value: string): string {
-  const text = value.replaceAll("_", " ").replaceAll("-", " ");
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
 type ResearchRunAdmissionIssue = {
   code: string;
   field: string;
@@ -606,26 +660,23 @@ export function ResearchDateFields({
   coverageEnd,
   startDate,
   endDate,
-  onStartDateChange,
-  onEndDateChange,
+  onChange,
 }: {
   coverageStart: string | null;
   coverageEnd: string | null;
   startDate: string;
   endDate: string;
-  onStartDateChange: (value: string) => void;
-  onEndDateChange: (value: string) => void;
+  onChange: (range: { startDate: string; endDate: string }) => void;
 }) {
   const startDateInput = useRef<HTMLInputElement>(null);
   const endDateInput = useRef<HTMLInputElement>(null);
+  const presets = buildResearchDatePresets(coverageStart, coverageEnd);
   return (
-    <fieldset>
-      <legend>Research period</legend>
-      <p>{coverageStart && coverageEnd ? `Available data: ${coverageStart} to ${coverageEnd}` : "Current Data is not ready."}</p>
+    <div aria-label="Research dates" className="research-date-range" role="group">
       <div className="research-date-field">
         <label htmlFor="research-start-date">Start date</label>
         <div className="research-date-control">
-          <input id="research-start-date" ref={startDateInput} aria-label="Research start date" max={endDate || coverageEnd || undefined} min={coverageStart ?? undefined} onChange={(event) => onStartDateChange(event.target.value)} type="date" value={startDate} />
+          <input id="research-start-date" ref={startDateInput} aria-label="Research start date" max={endDate || coverageEnd || undefined} min={coverageStart ?? undefined} onChange={(event) => onChange({ startDate: event.target.value, endDate })} onClick={() => startDateInput.current?.showPicker()} type="date" value={startDate} />
           <button aria-label="Open start date calendar" onClick={() => startDateInput.current?.showPicker()} type="button">
             <CalendarBlank aria-hidden="true" size={18} weight="regular" />
           </button>
@@ -634,12 +685,34 @@ export function ResearchDateFields({
       <div className="research-date-field">
         <label htmlFor="research-end-date">End date</label>
         <div className="research-date-control">
-          <input id="research-end-date" ref={endDateInput} aria-label="Research end date" max={coverageEnd ?? undefined} min={startDate || coverageStart || undefined} onChange={(event) => onEndDateChange(event.target.value)} type="date" value={endDate} />
+          <input id="research-end-date" ref={endDateInput} aria-label="Research end date" max={coverageEnd ?? undefined} min={startDate || coverageStart || undefined} onChange={(event) => onChange({ startDate, endDate: event.target.value })} onClick={() => endDateInput.current?.showPicker()} type="date" value={endDate} />
           <button aria-label="Open end date calendar" onClick={() => endDateInput.current?.showPicker()} type="button">
             <CalendarBlank aria-hidden="true" size={18} weight="regular" />
           </button>
         </div>
       </div>
-    </fieldset>
+      <div aria-label="Quick date ranges" className="research-date-presets" role="group">
+        {presets.map((preset) => {
+          const active = preset.startDate !== null &&
+            preset.startDate === startDate &&
+            preset.endDate === endDate;
+          return (
+            <button
+              aria-label={preset.accessibleLabel}
+              aria-pressed={active}
+              disabled={preset.startDate === null || preset.endDate === null}
+              key={preset.label}
+              onClick={() => {
+                if (preset.startDate === null || preset.endDate === null) return;
+                onChange({ startDate: preset.startDate, endDate: preset.endDate });
+              }}
+              type="button"
+            >
+              {preset.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

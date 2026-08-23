@@ -5,15 +5,79 @@ import {
   ResearchFolderLoadFailure,
   ResearchOrganizationPanel,
   ResearchResultView,
+  ResearchRunFacts,
   ResearchRunProgressView,
   ResearchRunHistory,
+  ResearchRunPagination,
   TerminalStrategyStateView,
   UseAsDraftPanel,
   formatResearchRunCreatedAt,
   isTerminalResearch,
+  researchRunListPath,
   sortResearchRuns,
+  type ResearchRun,
   type TerminalStrategyState,
 } from "./ResearchRunsPage";
+
+const STRATEGY_RUN: ResearchRun = {
+  id: "run_conditions",
+  status: "succeeded",
+  name: "Execution conditions",
+  folder_id: "folder_default",
+  created_at: "2026-08-13T01:02:03Z",
+  start_date: "2026-08-01",
+  end_date: "2026-08-05",
+  formula_summary: "ts_mean(close, 2)",
+  research_kind: "strategy_backtest",
+  input: {
+    formula: "ts_mean(close, 2)",
+    hypothesis: null,
+    start_date: "2026-08-01",
+    end_date: "2026-08-05",
+    universe: "top300",
+    neutralization: "industry",
+    research_kind: "strategy_backtest",
+    holdings_count: 10,
+    rebalance_every_sessions: 2,
+  },
+};
+
+describe("ResearchRunFacts", () => {
+  it("shows the frozen Strategy execution conditions in user language", () => {
+    const markup = renderToStaticMarkup(<ResearchRunFacts run={STRATEGY_RUN} />);
+
+    expect(markup).toContain('aria-label="Research execution conditions"');
+    expect(markup).toContain("<strong>Universe</strong> Top 300");
+    expect(markup).toContain("<strong>Neutralization</strong> Industry");
+    expect(markup).toContain("<strong>Holdings count</strong> 10");
+    expect(markup).toContain("<strong>Rebalance</strong> Every 2 sessions");
+  });
+
+  it("omits Strategy-only conditions from a Factor Evaluation", () => {
+    const markup = renderToStaticMarkup(
+      <ResearchRunFacts
+        run={{
+          ...STRATEGY_RUN,
+          research_kind: "factor_evaluation",
+          input: {
+            formula: "close",
+            hypothesis: null,
+            start_date: "2026-08-01",
+            end_date: "2026-08-05",
+            universe: "top1000",
+            neutralization: "none",
+            research_kind: "factor_evaluation",
+          },
+        }}
+      />,
+    );
+
+    expect(markup).toContain("<strong>Universe</strong> Top 1000");
+    expect(markup).toContain("<strong>Neutralization</strong> None");
+    expect(markup).not.toContain("Holdings count");
+    expect(markup).not.toContain("Rebalance");
+  });
+});
 
 describe("ResearchRunProgressView", () => {
   it("separates committed warm-up and Research progress from in-flight work", () => {
@@ -43,7 +107,11 @@ describe("ResearchRunProgressView", () => {
     expect(markup).toContain("Execution progress");
     expect(markup).toContain("value=\"378\"");
     expect(markup).toContain("max=\"4286\"");
-    expect(markup).toContain("252 / 252");
+    expect(markup).toContain("9%");
+    expect(markup).not.toContain("252 / 252");
+    expect(markup).not.toContain("Warm-up");
+    expect(markup).not.toContain("Committed chunks");
+    expect(markup).toContain("Research sessions");
     expect(markup).toContain("126 / 4034");
     expect(markup).toContain("1h 2m 3s");
     expect(markup).toContain("Started");
@@ -130,13 +198,26 @@ describe("TerminalStrategyStateView", () => {
       <TerminalStrategyStateView state={TERMINAL_STATE} />,
     );
 
-    expect(markup).toContain("Terminal Strategy State");
+    expect(markup).toContain("Final Portfolio");
+    expect(markup).toContain("As of");
+    expect(markup).toContain("Portfolio value");
+    expect(markup).not.toContain("Terminal Strategy State");
     expect(markup).toContain("2026-08-05");
     expect(markup).toContain("10000995");
     expect(markup).toContain("8999995");
     expect(markup).toContain("cn.stock.000001");
     expect(markup).toContain("remains pending");
+    expect(markup).not.toContain("Retained account at the Research Period boundary");
     expect(markup).not.toMatch(/Generation|manifest|checkpoint|fence|object location/i);
+  });
+
+  it("does not add empty boundary commentary when no signal is pending", () => {
+    const markup = renderToStaticMarkup(
+      <TerminalStrategyStateView state={{ ...TERMINAL_STATE, pending_signal: null }} />,
+    );
+
+    expect(markup).not.toContain("No pending signal at this boundary.");
+    expect(markup).not.toContain("Retained account at the Research Period boundary");
   });
 });
 
@@ -231,9 +312,10 @@ describe("ResearchRunHistory", () => {
       created_at: "2026-08-13T01:02:03.987654Z",
       start_date: "2026-08-01",
       end_date: "2026-08-05",
-      formula_summary: "ts_mean(close_adj, 20)",
+      formula_summary: "ts_mean(close, 20)",
       research_kind: "strategy_backtest" as const,
       key_metrics: {
+        research_kind: "strategy_backtest" as const,
         annualized_excess_return: 0.03,
         sharpe: 1.2345,
         maximum_drawdown: 0.12,
@@ -247,8 +329,14 @@ describe("ResearchRunHistory", () => {
       created_at: "2026-08-13T01:03:04Z",
       start_date: "2026-08-01",
       end_date: "2026-08-05",
-      formula_summary: "ts_mean(close_adj, 60)",
+      formula_summary: "ts_mean(close, 60)",
       research_kind: "factor_evaluation" as const,
+      key_metrics: {
+        research_kind: "factor_evaluation" as const,
+        one_session_rank_ic: 0.031,
+        five_session_rank_ic: 0.052,
+        twenty_session_rank_ic: 0.018,
+      },
     },
     {
       id: "run_cccccccc",
@@ -258,9 +346,10 @@ describe("ResearchRunHistory", () => {
       created_at: "2026-08-13T01:01:02Z",
       start_date: "2026-08-01",
       end_date: "2026-08-05",
-      formula_summary: "cs_rank(close_adj)",
+      formula_summary: "cs_rank(close)",
       research_kind: "strategy_backtest" as const,
       key_metrics: {
+        research_kind: "strategy_backtest" as const,
         annualized_excess_return: 0.05,
         sharpe: 0.8,
         maximum_drawdown: 0.08,
@@ -268,7 +357,7 @@ describe("ResearchRunHistory", () => {
     },
   ];
 
-  it("shows user-facing metrics without Run ID or Formula", () => {
+  it("shows type-labelled summaries for a mixed Research list", () => {
     const markup = renderToStaticMarkup(<ResearchRunHistory items={items} />);
 
     expect(markup).toContain(">Type</th>");
@@ -276,14 +365,40 @@ describe("ResearchRunHistory", () => {
     expect(markup).toContain("Strategy Backtest");
     expect(markup).toContain("Created (UTC)");
     expect(markup).toContain(">2026-08-13 01:02:03</time>");
-    expect(markup).toContain("Annualized excess");
+    expect(markup).toContain("Result summary");
+    expect(markup).toContain("1S Rank IC");
+    expect(markup).toContain("Excess");
     expect(markup).toContain("+3.00%");
+    expect(markup).toContain("0.031");
     expect(markup).toContain("1.234");
     expect(markup).toContain("12.00%");
     expect(markup).not.toContain(">Run ID<");
     expect(markup).not.toContain(">Formula<");
-    expect(markup).not.toContain("ts_mean(close_adj, 20)");
+    expect(markup).not.toContain("ts_mean(close, 20)");
     expect(markup.match(/>Mean</g)).toHaveLength(2);
+  });
+
+  it("uses comparable strategy metrics when the Type filter is narrowed", () => {
+    const markup = renderToStaticMarkup(
+      <ResearchRunHistory items={items.filter((item) => item.research_kind === "strategy_backtest")} researchKind="strategy_backtest" />,
+    );
+
+    expect(markup).toContain("Annualized excess");
+    expect(markup).toContain("Sharpe");
+    expect(markup).toContain("Max drawdown");
+    expect(markup).not.toContain("1S Rank IC");
+  });
+
+  it("uses primary Rank IC across all Factor horizons when Type is Factor Evaluation", () => {
+    const markup = renderToStaticMarkup(
+      <ResearchRunHistory items={[items[1]]} researchKind="factor_evaluation" />,
+    );
+
+    expect(markup).toContain("1-session Rank IC");
+    expect(markup).toContain("5-session Rank IC");
+    expect(markup).toContain("20-session Rank IC");
+    expect(markup).toContain("0.052");
+    expect(markup).not.toContain("Annualized excess");
   });
 
   it("sorts metrics with unavailable values last", () => {
@@ -299,6 +414,13 @@ describe("ResearchRunHistory", () => {
       "run_aaaaaaaa",
       "run_bbbbbbbb",
     ]);
+    expect(
+      sortResearchRuns(items, "five_session_rank_ic", "descending").map((item) => item.id),
+    ).toEqual([
+      "run_bbbbbbbb",
+      "run_aaaaaaaa",
+      "run_cccccccc",
+    ]);
   });
 
   it("formats creation timestamps in UTC through whole seconds", () => {
@@ -306,6 +428,34 @@ describe("ResearchRunHistory", () => {
       "2026-08-13 01:02:03",
     );
     expect(formatResearchRunCreatedAt("invalid")).toBe("Not available");
+  });
+});
+
+describe("Research Runs pagination", () => {
+  it("builds a bounded, filtered cursor request", () => {
+    expect(researchRunListPath({
+      cursor: "cursor+/=",
+      folderId: "folder signals",
+      researchKind: "factor_evaluation",
+    })).toBe(
+      "/api/research-runs?limit=20&folder_id=folder+signals&research_kind=factor_evaluation&cursor=cursor%2B%2F%3D",
+    );
+  });
+
+  it("keeps the current page and both navigation directions visible", () => {
+    const markup = renderToStaticMarkup(
+      <ResearchRunPagination
+        hasNextPage={false}
+        onNextPage={() => undefined}
+        onPreviousPage={() => undefined}
+        pageIndex={1}
+      />,
+    );
+
+    expect(markup).toContain("Page 2");
+    expect(markup).toContain("Previous");
+    expect(markup).toContain("Next");
+    expect(markup).toContain("disabled");
   });
 });
 
@@ -367,7 +517,7 @@ describe("ResearchResultView", () => {
     expect(markup).not.toMatch(/Quantile|Top-Bottom|Positive fraction|Sample deviation/i);
     expect(markup).not.toContain("Strategy Summary");
     expect(markup).not.toContain("Daily Observations");
-    expect(markup).not.toContain("Terminal Strategy State");
+    expect(markup).not.toContain("Final Portfolio");
   });
 });
 
@@ -388,7 +538,7 @@ describe("ResearchOrganizationPanel", () => {
           created_at: "2026-08-13T01:02:03Z",
           start_date: "2026-08-01",
           end_date: "2026-08-05",
-          formula_summary: "close_adj",
+          formula_summary: "close",
           research_kind: "strategy_backtest",
         }}
       />,
@@ -417,7 +567,7 @@ describe("UseAsDraftPanel", () => {
       <UseAsDraftPanel
         folders={[{ id: "folder_default", name: "Default", is_default: true }]}
         input={{
-          formula: "close_adj",
+          formula: "close",
           hypothesis: null,
           start_date: "2026-08-01",
           end_date: "2026-08-05",

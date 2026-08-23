@@ -494,7 +494,7 @@ def test_market_slice_skips_unrequested_families_and_session_partitions(
         sessions=sessions,
         universe_name="top300",
         neutralization="none",
-        field_bindings={"price.close.adjusted": "close_adj"},
+        field_bindings={"price.close.adjusted": "close"},
     )
 
     assert list(market.research_data.sessions) == sessions
@@ -502,6 +502,49 @@ def test_market_slice_skips_unrequested_families_and_session_partitions(
     assert set(market.research_data.fields) == {"price.close.adjusted"}
     assert set(market.research_data.fields["price.close.adjusted"]) == {
         (session, "equity:A.SH") for session in sessions
+    }
+
+
+def test_columnar_slice_resolves_alpha_names_to_physical_columns(tmp_path: Path) -> None:
+    canonical = _canonical()
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    session = str(canonical["research_calendar"][-1])
+    field_bindings = {
+        "price.open.adjusted": "open",
+        "price.high.adjusted": "high",
+        "price.low.adjusted": "low",
+        "price.close.adjusted": "close",
+        "market.volume.shares": "volume",
+        "market.turnover.cny": "amount",
+    }
+
+    research_data = store.read_columnar_slice(
+        generation.manifest_sha256,
+        sessions=[session],
+        universe_name="top300",
+        neutralization="none",
+        field_bindings=field_bindings,
+        fact_instrument_ids=frozenset(),
+    )
+    instrument = "equity:A.SH"
+    matrices = research_data.numeric_field_matrices(
+        tuple(field_bindings),
+        (instrument,),
+    )
+
+    assert {field_id: matrix[0, 0] for field_id, matrix in matrices.items()} == {
+        "price.open.adjusted": pytest.approx(float(canonical["prices"][-2]["open_adj"])),
+        "price.high.adjusted": pytest.approx(float(canonical["prices"][-2]["high_adj"])),
+        "price.low.adjusted": pytest.approx(float(canonical["prices"][-2]["low_adj"])),
+        "price.close.adjusted": pytest.approx(float(canonical["prices"][-2]["close_adj"])),
+        "market.volume.shares": pytest.approx(float(canonical["prices"][-2]["volume_shares"])),
+        "market.turnover.cny": pytest.approx(float(canonical["prices"][-2]["turnover_cny"])),
     }
 
 
@@ -534,7 +577,7 @@ def test_market_slice_rejects_a_corrupt_selected_session_partition(
             sessions=canonical["research_calendar"][-2:],
             universe_name="top300",
             neutralization="none",
-            field_bindings={"price.close.adjusted": "close_adj"},
+            field_bindings={"price.close.adjusted": "close"},
         )
 
 
@@ -568,7 +611,7 @@ def test_market_slice_projects_only_required_auxiliary_and_field_columns(
         sessions=_canonical()["research_calendar"][-2:],
         universe_name="top300",
         neutralization="industry",
-        field_bindings={"price.close.adjusted": "close_adj"},
+        field_bindings={"price.close.adjusted": "close"},
     )
 
     assert tuple(sorted(("instrument_id", "board", "listed_to"))) in projected_columns
@@ -618,26 +661,26 @@ def test_admission_reads_only_root_and_family_descriptors(
 @pytest.mark.parametrize(
     ("sessions", "universe", "neutralization", "field_bindings", "message"),
     [
-        ([], "top300", "none", {"price.close.adjusted": "close_adj"}, "sessions"),
+        ([], "top300", "none", {"price.close.adjusted": "close"}, "sessions"),
         (
             ["2026-08-05", "2026-08-04"],
             "top300",
             "none",
-            {"price.close.adjusted": "close_adj"},
+            {"price.close.adjusted": "close"},
             "sessions",
         ),
         (
             ["2026-08-04"],
             "unknown",
             "none",
-            {"price.close.adjusted": "close_adj"},
+            {"price.close.adjusted": "close"},
             "Universe",
         ),
         (
             ["2026-08-04"],
             "top300",
             "market",
-            {"price.close.adjusted": "close_adj"},
+            {"price.close.adjusted": "close"},
             "Neutralization",
         ),
         (
@@ -1612,7 +1655,7 @@ def _canonical(
         ],
         "field_catalog": [
             {
-                "name": "turnover_amount_cny",
+                "name": "amount",
                 "field_id": "market.turnover.cny",
                 "definition": "turnover amount",
                 "unit": "CNY",
@@ -1622,7 +1665,7 @@ def _canonical(
                 "coverage": "canonical EOD price rows",
             },
             {
-                "name": "close_adj",
+                "name": "close",
                 "field_id": "price.close.adjusted",
                 "definition": "adjusted close",
                 "unit": "CNY/share",

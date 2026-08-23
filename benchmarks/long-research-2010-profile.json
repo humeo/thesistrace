@@ -7,7 +7,7 @@
   "ordinary_a_share_instrument_count": 5541,
   "execution_universe_size": 3000,
   "market_dense_session_count": 4354,
-  "formula": "cs_rank(pct_change(close_adj, 20))",
+  "formula": "cs_rank(pct_change(close, 20))",
   "universe": "top3000",
   "repetitions_per_phase": 5
 }

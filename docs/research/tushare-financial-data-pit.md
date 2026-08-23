@@ -364,7 +364,7 @@ Composite Alpha，而不需要独立“多因子模型”资源。按照
 Universe 内把异质量纲的子因子变成 0–1 横截面百分位。例如：
 
 ```text
-0.6 * cs_rank(pct_change(close_adj, 20))
+0.6 * cs_rank(pct_change(close, 20))
 + 0.4 * cs_rank(net_profit_parent_latest_fy / total_assets_latest_reported)
 ```
 

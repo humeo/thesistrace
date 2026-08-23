@@ -18,6 +18,7 @@ test("renders four resources and composes only the active resource content", () 
   expect(markup).toContain('href="/daily-tracks"');
   expect(markup).not.toContain("Canonical data");
   expect(markup).not.toContain("Through ");
+  expect(markup).not.toContain("Core workspace");
   expect(markup).not.toContain("New research");
   expect(markup).toContain("Selected resource");
 });
@@ -34,3 +35,17 @@ test("keeps the Research header focused on navigation and folder context", () =>
   expect(markup).not.toContain("New research");
   expect(markup).toContain("Research workspace");
 });
+
+test.each(["/data", "/research", "/research-runs", "/daily-tracks"])(
+  "defaults the sidebar to expanded on %s",
+  (currentPath) => {
+    const markup = renderToStaticMarkup(
+      <AppShell currentPath={currentPath}>
+        <section>Current resource</section>
+      </AppShell>,
+    );
+
+    expect(markup).not.toContain("app-shell-collapsed");
+    expect(markup).toContain('aria-expanded="true" aria-label="Collapse sidebar"');
+  },
+);

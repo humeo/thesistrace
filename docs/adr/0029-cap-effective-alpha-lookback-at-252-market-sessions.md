@@ -12,10 +12,10 @@ cause either operation to search farther back. ADR-0082 requires every `n` to
 be a positive integer literal no greater than 252.
 
 Validation calculates the Effective Alpha Lookback across nested functions. For
-example, `ts_mean(pct_change(close_adj, 5), 20)` has an effective lookback of
+example, `ts_mean(pct_change(close, 5), 20)` has an effective lookback of
 24 market sessions. A rolling length and a historical offset are distinct:
-`ts_mean(close_adj, 252)` has offset 251, while
-`lag(close_adj, 252)` has offset 252. The composed total must not exceed 252
+`ts_mean(close, 252)` has offset 251, while
+`lag(close, 252)` has offset 252. The composed total must not exceed 252
 market sessions. A submitted Browser Draft that exceeds the limit fails
 validation when Run is requested. The local Draft remains intact, but no
 immutable input or ResearchRun is created. The runtime neither expands the

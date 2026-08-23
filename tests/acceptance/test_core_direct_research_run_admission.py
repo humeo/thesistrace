@@ -117,9 +117,9 @@ def test_every_data_or_folder_rejection_leaves_no_durable_admission_state(
                 {"start_date": "2026-08-08", "end_date": "2026-08-09"},
                 "RESEARCH_PERIOD_HAS_NO_SESSIONS",
             ),
-            ({"formula": "volume_shares"}, "FIELD_UNAVAILABLE_IN_CURRENT_DATA"),
+            ({"formula": "volume"}, "FIELD_UNAVAILABLE_IN_CURRENT_DATA"),
             (
-                {"formula": "ts_mean(close_adj, 2)"},
+                {"formula": "ts_mean(close, 2)"},
                 "INSUFFICIENT_CALCULATION_WARMUP",
             ),
             ({"folder_id": "folder_missing"}, "FOLDER_NOT_FOUND"),
@@ -220,7 +220,7 @@ def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan()
     command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(
         {
             **_valid_command("direct-over-budget"),
-            "formula": "ts_mean(close_adj, 252)",
+            "formula": "ts_mean(close, 252)",
             "start_date": sessions[252],
             "end_date": sessions[-1],
             "universe": "top3000",
@@ -269,7 +269,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
         replay = client.post("/api/research-runs", json=command)
         conflict = client.post(
             "/api/research-runs",
-            json={**command, "formula": "volume_shares"},
+            json={**command, "formula": "volume"},
         )
 
         assert accepted.status_code == 202
@@ -285,7 +285,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "created_at": queued["created_at"],
             "start_date": "2026-08-03",
             "end_date": "2026-08-04",
-            "formula_summary": "close_adj",
+            "formula_summary": "close",
             "research_kind": "strategy_backtest",
         }
         queued_detail = client.get(f"/api/research-runs/{queued['id']}").json()
@@ -315,12 +315,12 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
         assert frozen["name"] == "Direct Research"
         assert frozen["folder_id"] == "folder_default"
         assert frozen["immutable_input"] == {
-            "formula_source": "close_adj",
+            "formula_source": "close",
             "alpha_expression": {"kind": "field", "field_id": "price.close.adjusted"},
             "hypothesis": None,
             "requested_start_date": "2026-08-03",
             "requested_end_date": "2026-08-04",
-            "field_bindings": {"price.close.adjusted": "close_adj"},
+            "field_bindings": {"price.close.adjusted": "close"},
             "universe": "top300",
             "neutralization": "none",
             "research_kind": "strategy_backtest",
@@ -398,7 +398,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
         assert completed.json()["execution_timing"]["elapsed_seconds"] >= 0
         assert completed.json()["execution_timing"]["is_final"] is True
         assert completed.json()["input"] == {
-            "formula": "close_adj",
+            "formula": "close",
             "hypothesis": None,
             "start_date": "2026-08-03",
             "end_date": "2026-08-04",
@@ -466,6 +466,42 @@ def test_research_organization_changes_without_changing_evidence(tmp_path: Path)
         assert [item["id"] for item in default_page["items"]] == [second["id"]]
         assert (
             client.get("/api/research-runs", params={"cursor": "not-a-cursor"}).status_code == 422
+        )
+        factor = client.post(
+            "/api/research-runs",
+            json=_valid_command(
+                "organization-factor-filter",
+                research_kind="factor_evaluation",
+            ),
+        ).json()
+        factor_page = client.get(
+            "/api/research-runs",
+            params={"research_kind": "factor_evaluation"},
+        ).json()
+        strategy_page = client.get(
+            "/api/research-runs",
+            params={"research_kind": "strategy_backtest"},
+        ).json()
+        combined_page = client.get(
+            "/api/research-runs",
+            params={
+                "folder_id": "folder_default",
+                "research_kind": "factor_evaluation",
+            },
+        ).json()
+
+        assert [item["id"] for item in factor_page["items"]] == [factor["id"]]
+        assert {item["id"] for item in strategy_page["items"]} == {
+            first["id"],
+            second["id"],
+        }
+        assert [item["id"] for item in combined_page["items"]] == [factor["id"]]
+        assert (
+            client.get(
+                "/api/research-runs",
+                params={"research_kind": "not_a_research_kind"},
+            ).status_code
+            == 422
         )
 
 
@@ -610,7 +646,7 @@ def _valid_command(
         "request_id": request_id,
         "folder_id": "folder_default",
         "name": "Direct Research",
-        "formula": "close_adj",
+        "formula": "close",
         "hypothesis": None,
         "start_date": "2026-08-03",
         "end_date": "2026-08-04",

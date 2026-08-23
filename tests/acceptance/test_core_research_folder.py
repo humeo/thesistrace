@@ -117,7 +117,7 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
                     "request_id": "folder-guard",
                     "folder_id": folder["id"],
                     "name": "Folder guard",
-                    "formula": "close_adj",
+                    "formula": "close",
                     "start_date": sessions[0].isoformat(),
                     "end_date": sessions[-1].isoformat(),
                     "universe": "top300",

@@ -34,6 +34,7 @@ from thesistrace.research_folder import (
 )
 from thesistrace.research_run import (
     OrganizeResearchRunCommand,
+    ResearchKind,
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionConflict,
     ResearchRunAdmissionRejected,
@@ -145,12 +146,14 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     def list_research_runs(
         request: Request,
         folder_id: str | None = None,
+        research_kind: ResearchKind | None = None,
         cursor: str | None = None,
         limit: int = Query(default=50, ge=1, le=100),
     ) -> ResearchRunList:
         try:
             return _runtime(request).research_runs.list(
                 folder_id=folder_id,
+                research_kind=research_kind,
                 cursor=cursor,
                 limit=limit,
             )

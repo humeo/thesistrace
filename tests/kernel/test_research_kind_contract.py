@@ -11,7 +11,7 @@ def test_research_run_admission_is_discriminated_by_research_kind() -> None:
     common = {
         "request_id": "research-kind-contract",
         "folder_id": "folder_default",
-        "formula": "close_adj",
+        "formula": "close",
         "start_date": "2026-08-03",
         "end_date": "2026-08-05",
         "universe": "top300",

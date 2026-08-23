@@ -100,7 +100,7 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
             "/api/research-runs",
             json=_run_command(
                 "composite-formula",
-                formula="cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)",
+                formula="cs_rank(close) + cs_rank(total_revenue_latest_fy)",
             ),
         )
         assert accepted.status_code == 202
@@ -182,7 +182,7 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
             "/api/research-runs",
             json=_run_command(
                 "composite-factor-evaluation",
-                formula="cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)",
+                formula="cs_rank(close) + cs_rank(total_revenue_latest_fy)",
                 research_kind="factor_evaluation",
             ),
         )
@@ -293,7 +293,7 @@ def test_research_kinds_publish_identical_factor_evidence_when_strategy_changes(
         operation_id="factor-scientific-equivalence",
     )
     common = {
-        "formula": "cs_rank(pct_change(close_adj, 20))",
+        "formula": "cs_rank(pct_change(close, 20))",
         "start_date": sessions[20],
         "end_date": sessions[-1],
     }
@@ -412,9 +412,9 @@ def test_2010_to_latest_market_financial_and_composite_runs_commit_multiple_chun
         runtime = client.app.state.core_runtime
         for index, formula in enumerate(
             (
-                "close_adj",
+                "close",
                 "total_revenue_latest_fy",
-                "cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)",
+                "cs_rank(close) + cs_rank(total_revenue_latest_fy)",
             )
         ):
             execution_events: list[dict[str, object]] = []
@@ -535,7 +535,7 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
         "2026-08-05",
     )
     seed_head = _publish_composite_head(settings, sessions=seed_sessions)
-    formula = "cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)"
+    formula = "cs_rank(close) + cs_rank(total_revenue_latest_fy)"
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
             "/api/research-runs",
@@ -1624,6 +1624,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         assert len(public_run["result"]["strategy"]["observations"]) == 3
         result_metrics = public_run["result"]["strategy"]["summary"]["metrics"]
         assert public_run["key_metrics"] == {
+            "research_kind": "strategy_backtest",
             "annualized_excess_return": result_metrics["annualized_excess_return"],
             "sharpe": result_metrics["sharpe"],
             "maximum_drawdown": result_metrics["maximum_drawdown"]["value"],
@@ -2948,7 +2949,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
             "/api/research-runs",
-            json=_run_command("forward-only-seed-run", formula="ts_mean(close_adj, 2)"),
+            json=_run_command("forward-only-seed-run", formula="ts_mean(close, 2)"),
         )
         assert accepted.status_code == 202
         run_id = str(accepted.json()["id"])
@@ -3483,7 +3484,7 @@ def test_insufficient_warmup_is_rejected_before_run_creation(tmp_path: Path) -> 
             "/api/research-runs",
             json=_run_command(
                 "attempt-insufficient-warmup",
-                formula="ts_mean(close_adj, 2)",
+                formula="ts_mean(close, 2)",
             ),
         )
         assert rejected.status_code == 422
@@ -3575,15 +3576,23 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
             assert horizon["coverage"]["ic_valid_session_count"] == 0
             assert horizon["coverage"]["rank_ic_valid_session_count"] == 0
             assert horizon["coverage"]["quantile_valid_session_count"] == 0
-        if research_kind == "strategy_backtest":
+        listed = client.get("/api/research-runs").json()["items"]
+        assert len(listed) == 1
+        if research_kind == "factor_evaluation":
+            assert listed[0]["key_metrics"] == {
+                "research_kind": "factor_evaluation",
+                "one_session_rank_ic": None,
+                "five_session_rank_ic": None,
+                "twenty_session_rank_ic": None,
+            }
+        else:
             observations = result["strategy_daily_observations"]
             assert [row["session"] for row in observations] == list(sessions)
             strategy_metrics = result["strategy_summary"]["metrics"]
             assert strategy_metrics["annualized_volatility"] is None
             assert strategy_metrics["sharpe"] is None
-            listed = client.get("/api/research-runs").json()["items"]
-            assert len(listed) == 1
             assert listed[0]["key_metrics"] == {
+                "research_kind": "strategy_backtest",
                 "annualized_excess_return": strategy_metrics[
                     "annualized_excess_return"
                 ],
@@ -3811,7 +3820,7 @@ def test_result_read_failure_stays_sanitized(tmp_path: Path) -> None:
 def _run_command(
     request_id: str,
     *,
-    formula: str = "close_adj",
+    formula: str = "close",
     start_date: str = "2026-08-03",
     end_date: str = "2026-08-05",
     research_kind: str = "strategy_backtest",
@@ -3857,7 +3866,7 @@ def _canonical(
             {
                 **template["field_catalog"][0],
                 "name": (
-                    "close_adj" if available_field_id == "price.close.adjusted" else "volume_shares"
+                    "close" if available_field_id == "price.close.adjusted" else "volume"
                 ),
                 "field_id": available_field_id,
             }
@@ -4377,7 +4386,7 @@ def _kernel_input(
     return RunInput(
         research_data=_research_data(canonical),
         alpha_expression={"kind": "field", "field_id": "price.close.adjusted"},
-        field_bindings={"price.close.adjusted": "close_adj"},
+        field_bindings={"price.close.adjusted": "close"},
         effective_alpha_lookback=0,
         universe="top300",
         neutralization="none",
@@ -4467,7 +4476,7 @@ def _reference_result(
 def _research_data(canonical: dict[str, object]):
     return align_canonical_market_data(
         canonical,
-        field_bindings={"price.close.adjusted": "close_adj"},
+        field_bindings={"price.close.adjusted": "close"},
         universe="top300",
         neutralization="none",
     )

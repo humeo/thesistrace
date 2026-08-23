@@ -17,20 +17,27 @@ class MarketSeriesError(ValueError):
 
 
 _MARKET_FIELD_COLUMNS = {
-    "open_adj": "open_adj",
-    "high_adj": "high_adj",
-    "low_adj": "low_adj",
-    "close_adj": "close_adj",
-    "volume_shares": "volume_shares",
-    "turnover_amount_cny": "turnover_amount_cny",
+    "open": "open_adj",
+    "high": "high_adj",
+    "low": "low_adj",
+    "close": "close_adj",
+    "volume": "volume_shares",
+    "amount": "turnover_amount_cny",
 }
 
 
 def market_field_columns(field_bindings: Mapping[str, str]) -> frozenset[str]:
+    return frozenset(market_field_column_bindings(field_bindings).values())
+
+
+def market_field_column_bindings(field_bindings: Mapping[str, str]) -> dict[str, str]:
     unknown = set(field_bindings.values()) - set(_MARKET_FIELD_COLUMNS)
     if unknown:
         raise MarketSeriesError("Market Field binding is unsupported")
-    return frozenset(_MARKET_FIELD_COLUMNS[name] for name in field_bindings.values())
+    return {
+        field_id: _MARKET_FIELD_COLUMNS[alpha_identifier]
+        for field_id, alpha_identifier in field_bindings.items()
+    }
 
 
 def align_market_research_data(
