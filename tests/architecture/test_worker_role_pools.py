@@ -137,8 +137,14 @@ def test_tracking_worker_claims_one_advance_and_reconciles_terminal_caches() -> 
     assert tracking.calls == 1
     assert publication.calls == 0
     assert tracking.cache_calls == 1
-    assert events[0]["resource_type"] == "TrackingAdvance"
-    assert events[0]["resource_id"] == "track-1"
+    assert events[0] == {
+        "event": "tracking_advance_claimed",
+        "level": "INFO",
+        "component": "tracking_worker",
+        "worker_role": "tracking",
+        "track_id": "track-1",
+        "attempt_id": "attempt-track-1",
+    }
     assert events[1] == {
         "event": "worker_cache_reconciliation",
         "role": "tracking",

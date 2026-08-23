@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -52,6 +53,7 @@ from thesistrace.data import (
     DatasetLifecycle,
     MountedGenerationStore,
 )
+from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication import (
     JsonPayload,
     PreparedPublication,
@@ -210,6 +212,22 @@ class _BlockedProgressionCreated:
     progression_id: str
 
 
+@dataclass(frozen=True)
+class _TrackingFailure:
+    track_id: str
+    attempt_id: str
+    attempt_number: int
+    retry: bool
+    failure_code: str
+    attempt_level: str
+
+
+@dataclass(frozen=True)
+class _StoppedTrack:
+    track_id: str
+    attempt_id: str | None = None
+
+
 class DailyTrackService:
     def __init__(
         self,
@@ -226,6 +244,7 @@ class DailyTrackService:
         seed_research_exists: SeedResearchExists | None = None,
         research_references_result: ResearchReferencesResult | None = None,
         execution_memory_bytes: int = DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES,
+        lifecycle_event: ExecutionEvent | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0 or execution_memory_bytes <= 0:
             raise ValueError("DailyTrack lease and heartbeat intervals must be positive")
@@ -252,6 +271,10 @@ class DailyTrackService:
         self._seed_research_exists = seed_research_exists
         self._research_references_result = research_references_result
         self._execution_memory_bytes = execution_memory_bytes
+        self._lifecycle_event = non_blocking_operational_event_sink(
+            lifecycle_event or (lambda _event: None),
+            component="core_api",
+        )
         self._child_watchdog_grace_seconds = min(
             5.0,
             (lease_seconds - heartbeat_seconds) / 2,
@@ -379,13 +402,31 @@ class DailyTrackService:
         on_claim: Callable[[str, str], None] | None = None,
         on_execution_event: ExecutionEvent | None = None,
     ) -> bool:
-        if self._recover_stopping_attempt():
+        emit = non_blocking_operational_event_sink(
+            on_execution_event or (lambda _event: None),
+            component="tracking_worker",
+            worker_role="tracking",
+        )
+        recovered_stop = self._recover_stopping_attempt()
+        if recovered_stop is not None:
+            emit(_tracking_stopped_event(recovered_stop))
             return True
-        if self._recover_expired_current():
+        recovered_failure = self._recover_expired_current()
+        if recovered_failure is not None:
+            _emit_tracking_failure(emit, recovered_failure)
             return True
         selected = self._claim_current(self._execution_memory_bytes)
         if isinstance(selected, _BlockedProgressionCreated):
             self._progress("blocked", selected.track_id, selected.progression_id)
+            emit(
+                _tracking_event(
+                    "daily_track_blocked",
+                    level="WARNING",
+                    track_id=selected.track_id,
+                    status="blocked",
+                    failure_code="CAPACITY_EXCEEDED",
+                )
+            )
             return True
         current_claim = selected
         if current_claim is not None:
@@ -393,29 +434,60 @@ class DailyTrackService:
                 _attempt_owner_lock(current_claim.attempt_id)
             ):
                 if on_claim is not None:
-                    on_claim(current_claim.track_id, current_claim.attempt_id)
+                    try:
+                        on_claim(current_claim.track_id, current_claim.attempt_id)
+                    except Exception:
+                        pass
+                emit(
+                    _tracking_event(
+                        "tracking_attempt_started",
+                        track_id=current_claim.track_id,
+                        attempt_id=current_claim.attempt_id,
+                        attempt_number=current_claim.cycle_attempt_ordinal,
+                        status="running",
+                    )
+                )
+                emit(
+                    _tracking_event(
+                        "tracking_advance_started",
+                        track_id=current_claim.track_id,
+                        attempt_id=current_claim.attempt_id,
+                        status="running",
+                    )
+                )
                 self._progress(
                     "claimed",
                     current_claim.track_id,
                     current_claim.data_generation_id,
                 )
-                external_event = on_execution_event or (lambda _event: None)
 
                 def execution_event(event: dict[str, object]) -> None:
                     if event.get("event") == "tracking_execution_progress":
+                        phase = str(event["phase"])
                         self._record_current_progress(
                             current_claim,
-                            phase=str(event["phase"]),
+                            phase=phase,
                             current_session=str(event["current_session"]),
                         )
-                    external_event(event)
+                        if phase == "result_ready":
+                            emit(
+                                _tracking_event(
+                                    "tracking_phase_completed",
+                                    track_id=current_claim.track_id,
+                                    attempt_id=current_claim.attempt_id,
+                                    phase="calculating",
+                                )
+                            )
+                        emit(event)
+                        return
+                    emit(event)
 
                 execution: SupervisedTrackingExecution | None = None
                 failure: Exception | None = None
                 stopping_pending = False
                 stop_monitor: Thread | None = None
                 stop_monitor_finished = Event()
-                with self._maintain_current_claim(current_claim) as authority_lost:
+                with self._maintain_current_claim(current_claim, emit) as authority_lost:
                     try:
                         execution = self._execute_current(
                             current_claim,
@@ -425,7 +497,7 @@ class DailyTrackService:
                         )
                         stop_monitor = Thread(
                             target=self._monitor_current_stop,
-                            args=(current_claim, execution, stop_monitor_finished),
+                            args=(current_claim, execution, stop_monitor_finished, emit),
                             name=f"daily-track-stop-monitor-{current_claim.track_id}",
                             daemon=True,
                         )
@@ -434,6 +506,14 @@ class DailyTrackService:
                             current_claim,
                             phase="staging",
                             current_session=current_claim.target_sessions[-1],
+                        )
+                        emit(
+                            _tracking_event(
+                                "tracking_phase_completed",
+                                track_id=current_claim.track_id,
+                                attempt_id=current_claim.attempt_id,
+                                phase="result_ready",
+                            )
                         )
                         prepared, provenance = self._prepare_current_result(
                             current_claim,
@@ -453,10 +533,35 @@ class DailyTrackService:
                             provenance,
                             execution.result.terminal_strategy_state,
                         )
+                        emit(
+                            _tracking_event(
+                                "tracking_phase_completed",
+                                track_id=current_claim.track_id,
+                                attempt_id=current_claim.attempt_id,
+                                phase="staging",
+                            )
+                        )
+                        emit(
+                            _tracking_event(
+                                "tracking_checkpoint_published",
+                                track_id=current_claim.track_id,
+                                attempt_id=current_claim.attempt_id,
+                                status="succeeded",
+                            )
+                        )
+                        emit(
+                            _tracking_event(
+                                "tracking_head_advanced",
+                                track_id=current_claim.track_id,
+                                attempt_id=current_claim.attempt_id,
+                                status="active",
+                            )
+                        )
                         self._store_current_working_cache(
                             current_claim,
                             published,
                             execution.result,
+                            emit,
                         )
                         self._progress(
                             "published",
@@ -481,30 +586,55 @@ class DailyTrackService:
                             stop_monitor.join(timeout=5)
                 stopping_pending = stopping_pending or self._stop_is_pending(current_claim)
                 if stopping_pending:
-                    self._confirm_stopped(current_claim)
+                    if self._confirm_stopped(current_claim):
+                        emit(
+                            _tracking_stopped_event(
+                                _StoppedTrack(
+                                    track_id=current_claim.track_id,
+                                    attempt_id=current_claim.attempt_id,
+                                )
+                            )
+                        )
                 elif isinstance(failure, DailyTrackFenced):
-                    logger.info(
-                        "DailyTrack session progression rejected by execution fence",
-                        extra={"track_id": current_claim.track_id},
+                    emit(
+                        _tracking_event(
+                            "tracking_attempt_fenced",
+                            track_id=current_claim.track_id,
+                            attempt_id=current_claim.attempt_id,
+                            outcome="fenced",
+                        )
                     )
                 elif isinstance(failure, FinancialCoverageUnavailable):
-                    if not self._record_current_failure(
+                    recorded = self._record_current_failure(
                         current_claim,
                         failure,
                         blocked_reason=FINANCIAL_COVERAGE_BLOCKED_REASON,
-                    ):
-                        logger.info(
-                            "DailyTrack Financial Coverage block rejected by execution fence",
-                            extra={"track_id": current_claim.track_id},
+                    )
+                    if recorded is None:
+                        emit(
+                            _tracking_event(
+                                "tracking_attempt_fenced",
+                                track_id=current_claim.track_id,
+                                attempt_id=current_claim.attempt_id,
+                                outcome="fenced",
+                            )
                         )
+                    else:
+                        _emit_tracking_failure(emit, recorded)
                 elif failure is not None:
-                    if self._record_current_failure(current_claim, failure):
+                    recorded = self._record_current_failure(current_claim, failure)
+                    if recorded is not None:
+                        _emit_tracking_failure(emit, recorded)
                         raise DailyTrackProgressionFailed(
                             "DailyTrack progression failed at its current target"
                         ) from failure
-                    logger.info(
-                        "DailyTrack session failure rejected by execution fence",
-                        extra={"track_id": current_claim.track_id},
+                    emit(
+                        _tracking_event(
+                            "tracking_attempt_fenced",
+                            track_id=current_claim.track_id,
+                            attempt_id=current_claim.attempt_id,
+                            outcome="fenced",
+                        )
                     )
                 if not stopping_pending:
                     self._release_cancelled_pin(current_claim)
@@ -530,6 +660,7 @@ class DailyTrackService:
         if not request_id:
             raise ValueError("DailyTrack Retry request_id is required")
         fingerprint = _retry_fingerprint(track_id)
+        retry_scheduled = False
         with self._database.transaction() as transaction:
             transaction.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -613,6 +744,7 @@ class DailyTrackService:
                 )
                 if progression.rowcount != 1 or activated.rowcount != 1:
                     raise DailyTrackFenced
+                retry_scheduled = True
             outcome = DailyTrackSummary(
                 **{
                     **_summary(track).model_dump(mode="python"),
@@ -633,6 +765,15 @@ class DailyTrackService:
                     progression_id,
                     Jsonb(outcome.model_dump(mode="json")),
                 ),
+            )
+        if retry_scheduled:
+            self._lifecycle_event(
+                {
+                    "event": "tracking_retry_scheduled",
+                    "level": "WARNING",
+                    "track_id": track_id,
+                    "status": "active",
+                }
             )
         return outcome
 
@@ -675,6 +816,7 @@ class DailyTrackService:
         if not request_id:
             raise ValueError("DailyTrack Stop request_id is required")
         fingerprint = _stop_fingerprint(track_id)
+        stopped_after_commit = False
         with self._database.transaction() as transaction:
             transaction.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -737,6 +879,7 @@ class DailyTrackService:
                         (track_id,),
                     )
                     outcome_status = "stopped"
+                    stopped_after_commit = True
                 else:
                     attempt = transaction.execute(
                         """
@@ -792,6 +935,14 @@ class DailyTrackService:
                 )
         if outcome.status == "stopped" and self._working_cache is not None:
             self._working_cache.delete(track_id)
+        if stopped_after_commit:
+            self._lifecycle_event(
+                {
+                    "event": "daily_track_stopped",
+                    "track_id": track_id,
+                    "status": "stopped",
+                }
+            )
         return outcome
 
     def delete(self, track_id: str) -> bool:
@@ -1505,9 +1656,9 @@ class DailyTrackService:
                 )
         return None
 
-    def _recover_expired_current(self) -> bool:
+    def _recover_expired_current(self) -> _TrackingFailure | None:
         if self._dataset_lifecycle is None:
-            return False
+            return None
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
@@ -1530,12 +1681,12 @@ class DailyTrackService:
                 """
             ).fetchone()
         if row is None:
-            return False
+            return None
         with self._database.try_session_advisory_lock(
             _attempt_owner_lock(str(row["attempt_id"]))
         ) as owner_is_dead:
             if not owner_is_dead:
-                return False
+                return None
             with self._database.transaction() as transaction:
                 current = transaction.execute(
                     """
@@ -1559,7 +1710,7 @@ class DailyTrackService:
                     (row["attempt_id"],),
                 ).fetchone()
                 if current is None:
-                    return False
+                    return None
                 attempt = transaction.execute(
                     """
                     UPDATE daily_tracks.session_progression_attempts
@@ -1577,7 +1728,9 @@ class DailyTrackService:
                         current["fence"],
                     ),
                 )
-                if int(current["cycle_attempt_ordinal"]) < 3:
+                attempt_number = int(current["cycle_attempt_ordinal"])
+                retry = attempt_number < 3
+                if retry:
                     retry_delay = 5 if int(current["cycle_attempt_ordinal"]) == 1 else 30
                     progression = transaction.execute(
                         """
@@ -1630,7 +1783,14 @@ class DailyTrackService:
                     str(current["generation_pin_id"]),
                     owner_id=str(current["attempt_id"]),
                 )
-            return True
+            return _TrackingFailure(
+                track_id=str(current["track_id"]),
+                attempt_id=str(current["attempt_id"]),
+                attempt_number=attempt_number,
+                retry=retry,
+                failure_code="WORKER_LOST",
+                attempt_level="WARNING" if retry else "ERROR",
+            )
 
     def _release_cancelled_pin(self, claim: _SessionProgressionClaim) -> bool:
         if self._dataset_lifecycle is None:
@@ -1653,9 +1813,9 @@ class DailyTrackService:
                 owner_id=str(row["id"]),
             )
 
-    def _recover_stopping_attempt(self) -> bool:
+    def _recover_stopping_attempt(self) -> _StoppedTrack | None:
         if self._dataset_lifecycle is None:
-            return False
+            return None
         for pin in self._dataset_lifecycle.active_pins():
             if pin.owner_kind != "tracking_advance_attempt":
                 continue
@@ -1713,16 +1873,18 @@ class DailyTrackService:
                     )
                     if attempt.rowcount != 1 or progression.rowcount != 1 or track.rowcount != 1:
                         raise DailyTrackFenced
-                    released = self._dataset_lifecycle.release_pin_if_active_in_transaction(
+                    self._dataset_lifecycle.release_pin_if_active_in_transaction(
                         transaction,
                         str(current["generation_pin_id"]),
                         owner_id=str(current["id"]),
                     )
-                if released:
-                    if self._working_cache is not None:
-                        self._working_cache.delete(str(current["track_id"]))
-                    return True
-        return False
+                if self._working_cache is not None:
+                    self._working_cache.delete(str(current["track_id"]))
+                return _StoppedTrack(
+                    track_id=str(current["track_id"]),
+                    attempt_id=str(current["id"]),
+                )
+        return None
 
     def _stop_is_pending(self, claim: _SessionProgressionClaim) -> bool:
         with self._database.transaction() as transaction:
@@ -1750,21 +1912,36 @@ class DailyTrackService:
         claim: _SessionProgressionClaim,
         execution: SupervisedTrackingExecution,
         finished: Event,
+        emit: ExecutionEvent,
     ) -> None:
         while not finished.wait(0.05):
             if not self._stop_is_pending(claim):
                 continue
             try:
                 execution.cancel()
-                self._confirm_stopped(claim)
-            except Exception:
-                logger.exception(
-                    "DailyTrack Stop monitor failed",
-                    extra={"track_id": claim.track_id, "attempt_id": claim.attempt_id},
+                if self._confirm_stopped(claim):
+                    emit(
+                        _tracking_stopped_event(
+                            _StoppedTrack(
+                                track_id=claim.track_id,
+                                attempt_id=claim.attempt_id,
+                            )
+                        )
+                    )
+            except Exception as error:
+                emit(
+                    _tracking_event(
+                        "daily_track_stop_confirmation_failed",
+                        level="WARNING",
+                        track_id=claim.track_id,
+                        attempt_id=claim.attempt_id,
+                        failure_code="INFRASTRUCTURE_UNAVAILABLE",
+                        exception_type=type(error).__name__,
+                    )
                 )
             return
 
-    def _confirm_stopped(self, claim: _SessionProgressionClaim) -> None:
+    def _confirm_stopped(self, claim: _SessionProgressionClaim) -> bool:
         assert self._dataset_lifecycle is not None
         with self._database.transaction() as transaction:
             current = transaction.execute(
@@ -1783,7 +1960,7 @@ class DailyTrackService:
                 (claim.attempt_id, claim.progression_id, claim.track_id),
             ).fetchone()
             if current is None:
-                return
+                return False
             attempt = transaction.execute(
                 """
                 UPDATE daily_tracks.session_progression_attempts
@@ -1820,17 +1997,19 @@ class DailyTrackService:
             )
         if self._working_cache is not None:
             self._working_cache.delete(claim.track_id)
+        return True
 
     @contextmanager
     def _maintain_current_claim(
         self,
         claim: _SessionProgressionClaim,
+        emit: ExecutionEvent,
     ) -> Iterator[Event]:
         stopped = Event()
         authority_lost = Event()
         heartbeat = Thread(
             target=self._heartbeat_current_claim,
-            args=(claim, stopped, authority_lost),
+            args=(claim, stopped, authority_lost, emit),
             name=f"daily-track-session-heartbeat-{claim.track_id}",
             daemon=True,
         )
@@ -1887,6 +2066,7 @@ class DailyTrackService:
         claim: _SessionProgressionClaim,
         stopped: Event,
         authority_lost: Event,
+        emit: ExecutionEvent,
     ) -> None:
         assert self._dataset_lifecycle is not None
         while not stopped.wait(self._heartbeat_seconds):
@@ -1927,12 +2107,15 @@ class DailyTrackService:
                         )
             except Exception as error:
                 authority_lost.set()
-                logger.error(
-                    "DailyTrack session claim heartbeat failed",
-                    extra={
-                        "track_id": claim.track_id,
-                        "error_type": type(error).__name__,
-                    },
+                emit(
+                    _tracking_event(
+                        "tracking_attempt_heartbeat_failed",
+                        level="WARNING",
+                        track_id=claim.track_id,
+                        attempt_id=claim.attempt_id,
+                        failure_code="INFRASTRUCTURE_UNAVAILABLE",
+                        exception_type=type(error).__name__,
+                    )
                 )
                 return
             if renewed.rowcount != 1:
@@ -2056,6 +2239,7 @@ class DailyTrackService:
         claim: _SessionProgressionClaim,
         published: PublishedRef,
         result: TrackingExecutionResult,
+        emit: ExecutionEvent,
     ) -> None:
         if self._working_cache is None:
             return
@@ -2067,17 +2251,27 @@ class DailyTrackService:
                 fence=claim.fence,
                 verified_continuation=result.continuation,
             )
-        except Exception:
-            logger.warning(
-                "DailyTrack session Working Cache update failed",
-                extra={"track_id": claim.track_id},
-                exc_info=True,
+        except Exception as error:
+            emit(
+                _tracking_event(
+                    "tracking_working_cache_update_failed",
+                    level="WARNING",
+                    track_id=claim.track_id,
+                    attempt_id=claim.attempt_id,
+                    failure_code="WORKING_CACHE_UPDATE_FAILED",
+                    exception_type=type(error).__name__,
+                )
             )
             return
         if not stored:
-            logger.info(
-                "DailyTrack session Working Cache exceeded its bound or was unavailable",
-                extra={"track_id": claim.track_id},
+            emit(
+                _tracking_event(
+                    "tracking_working_cache_update_failed",
+                    level="WARNING",
+                    track_id=claim.track_id,
+                    attempt_id=claim.attempt_id,
+                    failure_code="WORKING_CACHE_UNAVAILABLE",
+                )
             )
             return
         with self._database.transaction() as transaction:
@@ -2105,7 +2299,7 @@ class DailyTrackService:
         error: Exception,
         *,
         blocked_reason: str = PUBLIC_BLOCKED_REASON,
-    ) -> bool:
+    ) -> _TrackingFailure | None:
         assert self._dataset_lifecycle is not None
         retryable = _tracking_failure_is_retryable(error)
         failure_reason = "InfrastructureFailure" if retryable else type(error).__name__
@@ -2133,7 +2327,7 @@ class DailyTrackService:
                 "attempt_status": "running",
                 "fence": claim.fence,
             }:
-                return False
+                return None
             attempt = transaction.execute(
                 """
                 UPDATE daily_tracks.session_progression_attempts
@@ -2204,7 +2398,90 @@ class DailyTrackService:
                 claim.generation_pin_id,
                 owner_id=claim.attempt_id,
             )
-        return True
+        return _TrackingFailure(
+            track_id=claim.track_id,
+            attempt_id=claim.attempt_id,
+            attempt_number=claim.cycle_attempt_ordinal,
+            retry=retry_wait,
+            failure_code=(
+                "INFRASTRUCTURE_FAILURE"
+                if retryable
+                else _failure_code(type(error).__name__)
+            ),
+            attempt_level=(
+                "WARNING"
+                if retry_wait or isinstance(error, FinancialCoverageUnavailable)
+                else "ERROR"
+            ),
+        )
+
+
+def _tracking_event(
+    event: str,
+    *,
+    level: str = "INFO",
+    **context: object,
+) -> dict[str, object]:
+    return {
+        "event": event,
+        "level": level,
+        **context,
+    }
+
+
+def _tracking_stopped_event(stopped: _StoppedTrack) -> dict[str, object]:
+    context: dict[str, object] = {
+        "track_id": stopped.track_id,
+        "status": "stopped",
+    }
+    if stopped.attempt_id is not None:
+        context["attempt_id"] = stopped.attempt_id
+    return _tracking_event("daily_track_stopped", **context)
+
+
+def _emit_tracking_failure(
+    emit: ExecutionEvent,
+    failure: _TrackingFailure,
+) -> None:
+    emit(
+        _tracking_event(
+            "tracking_attempt_failed",
+            level=failure.attempt_level,
+            track_id=failure.track_id,
+            attempt_id=failure.attempt_id,
+            attempt_number=failure.attempt_number,
+            status="failed",
+            failure_code=failure.failure_code,
+        )
+    )
+    if failure.retry:
+        emit(
+            _tracking_event(
+                "tracking_retry_scheduled",
+                level="WARNING",
+                track_id=failure.track_id,
+                attempt_id=failure.attempt_id,
+                attempt_number=failure.attempt_number,
+                status="active",
+                failure_code=failure.failure_code,
+            )
+        )
+        return
+    emit(
+        _tracking_event(
+            "daily_track_blocked",
+            level="WARNING",
+            track_id=failure.track_id,
+            attempt_id=failure.attempt_id,
+            attempt_number=failure.attempt_number,
+            status="blocked",
+            failure_code=failure.failure_code,
+        )
+    )
+
+
+def _failure_code(value: str) -> str:
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value).upper()
 
 
 def _tracking_failure_is_retryable(error: Exception) -> bool:

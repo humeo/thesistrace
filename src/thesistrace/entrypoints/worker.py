@@ -258,12 +258,6 @@ def _claim_event(
     configuration: WorkerConfiguration,
     emit: WorkerEventSink,
 ) -> Callable[[str, str], None]:
-    resource_type = (
-        "ResearchRun"
-        if configuration.role is WorkerRole.RESEARCH
-        else "TrackingAdvance"
-    )
-
     def claimed(resource_id: str, attempt_id: str) -> None:
         if configuration.role is WorkerRole.RESEARCH:
             emit(
@@ -279,11 +273,11 @@ def _claim_event(
             return
         emit(
             {
-                "event": "worker_claim",
-                "role": configuration.role.value,
-                "slot": configuration.slot,
-                "resource_type": resource_type,
-                "resource_id": resource_id,
+                "event": "tracking_advance_claimed",
+                "level": "INFO",
+                "component": "tracking_worker",
+                "worker_role": "tracking",
+                "track_id": resource_id,
                 "attempt_id": attempt_id,
             }
         )
@@ -303,11 +297,7 @@ def _process_tracking(
             on_claim=on_claim,
             on_execution_event=emit,
         )
-    except DailyTrackProgressionFailed as error:
-        logger.error(
-            "Tracking Worker isolated one DailyTrack failure at its current target",
-            extra={"error_type": type(error.__cause__).__name__},
-        )
+    except DailyTrackProgressionFailed:
         return True
 
 

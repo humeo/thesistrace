@@ -21,7 +21,11 @@ def main() -> None:
     barrier_event = (
         sys.argv[2]
         if len(sys.argv) > 2
-        else ("research_run_claimed" if role is WorkerRole.RESEARCH else "worker_claim")
+        else (
+            "research_run_claimed"
+            if role is WorkerRole.RESEARCH
+            else "tracking_advance_claimed"
+        )
     )
     configuration = WorkerConfiguration(
         role=role,

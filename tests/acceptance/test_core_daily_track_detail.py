@@ -81,7 +81,7 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         assert first_advance.returncode == 0, first_advance.stdout + first_advance.stderr
         tracking_events = _worker_events(first_advance)
         assert tracking_events[0]["worker_role"] == "tracking"
-        assert tracking_events[1]["event"] == "worker_claim"
+        assert tracking_events[1]["event"] == "tracking_advance_claimed"
         assert tracking_events[1]["track_id"] == track_id
         first_detail = client.get(f"/api/daily-tracks/{track_id}").json()
         assert first_detail["strategy_session"] == sessions[66]

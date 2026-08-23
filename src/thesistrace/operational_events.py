@@ -11,6 +11,7 @@ from typing import IO, Literal
 
 OperationalLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 OperationalEventWriter = Callable[["OperationalEvent"], None]
+OperationalEventDataWriter = Callable[[dict[str, object]], None]
 
 _LEVEL_NUMBERS = {
     "DEBUG": logging.DEBUG,
@@ -250,3 +251,26 @@ def emit_operational_event_data(event: Mapping[str, object]) -> None:
             context=event,
         )
     )
+
+
+def non_blocking_operational_event_sink(
+    emit: OperationalEventDataWriter,
+    *,
+    component: str,
+    worker_role: str | None = None,
+) -> OperationalEventDataWriter:
+    def emit_without_effect(event: dict[str, object]) -> None:
+        normalized: dict[str, object] = {**event, "component": component}
+        if worker_role is not None:
+            normalized["worker_role"] = worker_role
+        resource_type = event.get("resource_type")
+        if resource_type == "ResearchRun":
+            normalized["run_id"] = event.get("resource_id")
+        elif resource_type == "TrackingAdvance":
+            normalized["track_id"] = event.get("resource_id")
+        try:
+            emit(normalized)
+        except Exception:
+            pass
+
+    return emit_without_effect

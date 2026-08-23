@@ -888,7 +888,7 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
         if isinstance(value, dict):
             events.append(value)
 
-    lifecycle_names = {
+    research_lifecycle_names = {
         "research_execution_child_started",
         "research_execution_child_exited",
         "research_execution_chunk_committed",
@@ -896,9 +896,11 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
         "research_result_published",
         "research_run_succeeded",
     }
-    lifecycle = [event for event in events if event.get("event") in lifecycle_names]
-    assert lifecycle
-    for event in lifecycle:
+    research_lifecycle = [
+        event for event in events if event.get("event") in research_lifecycle_names
+    ]
+    assert research_lifecycle
+    for event in research_lifecycle:
         assert event["component"] == "research_worker"
         assert event["worker_role"] == "research"
         assert str(event["run_id"]).startswith("run_")
@@ -912,27 +914,58 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
 
     started = [
         event
-        for event in lifecycle
+        for event in research_lifecycle
         if event["event"] == "research_execution_child_started"
     ]
     assert started
 
     exited = [
         event
-        for event in lifecycle
+        for event in research_lifecycle
         if event["event"] == "research_execution_child_exited"
     ]
     assert exited
 
     committed = [
         event
-        for event in lifecycle
+        for event in research_lifecycle
         if event["event"] == "research_execution_chunk_committed"
     ]
     assert committed
+
+    tracking_lifecycle_names = {
+        "tracking_advance_claimed",
+        "tracking_attempt_started",
+        "tracking_advance_started",
+        "tracking_execution_child_started",
+        "tracking_execution_child_exited",
+        "tracking_phase_completed",
+        "tracking_checkpoint_published",
+        "tracking_head_advanced",
+    }
+    tracking_lifecycle = [
+        event for event in events if event.get("event") in tracking_lifecycle_names
+    ]
+    assert tracking_lifecycle
+    assert tracking_lifecycle_names <= {
+        str(event["event"]) for event in tracking_lifecycle
+    }
+    for event in tracking_lifecycle:
+        assert event["component"] == "tracking_worker"
+        assert event["worker_role"] == "tracking"
+        assert str(event["track_id"]).startswith("track_")
+        assert str(event["attempt_id"]).startswith("track_attempt_")
+        assert "resource_type" not in event
+        assert "resource_id" not in event
+        assert "child_pid" not in event
+        assert "current_session" not in event
+        assert "checkpoint" not in event
+        assert "object_key" not in event
     return {
         "worker_event_contract_verified": True,
-        "worker_lifecycle_event_count": len(lifecycle),
+        "worker_lifecycle_event_count": len(research_lifecycle)
+        + len(tracking_lifecycle),
+        "tracking_lifecycle_event_count": len(tracking_lifecycle),
     }
 
 

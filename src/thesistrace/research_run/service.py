@@ -31,6 +31,7 @@ from thesistrace.data import (
     DatasetWarmupUnavailable,
     MountedGenerationStore,
 )
+from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication import (
     JsonPayload,
     ParquetRowsPayload,
@@ -292,7 +293,7 @@ class ResearchRunService:
         self._track_references_result = track_references_result
         self._execution = execution
         self._execution_memory_bytes = execution_memory_bytes
-        self._lifecycle_event = _non_blocking_event_sink(
+        self._lifecycle_event = non_blocking_operational_event_sink(
             lifecycle_event or (lambda _event: None),
             component="core_api",
         )
@@ -428,7 +429,7 @@ class ResearchRunService:
     ) -> bool:
         self._require_execution_dependencies()
         emit_execution_event = on_execution_event or (lambda _event: None)
-        emit = _non_blocking_event_sink(
+        emit = non_blocking_operational_event_sink(
             emit_execution_event,
             component="research_worker",
             worker_role="research",
@@ -2622,26 +2623,6 @@ def _research_event(
         "worker_role": "research",
         **context,
     }
-
-
-def _non_blocking_event_sink(
-    emit: ExecutionEvent,
-    *,
-    component: str,
-    worker_role: str | None = None,
-) -> ExecutionEvent:
-    def emit_without_effect(event: dict[str, object]) -> None:
-        normalized: dict[str, object] = {"component": component, **event}
-        if worker_role is not None:
-            normalized["worker_role"] = worker_role
-        if event.get("resource_type") == "ResearchRun":
-            normalized["run_id"] = event.get("resource_id")
-        try:
-            emit(normalized)
-        except Exception:
-            pass
-
-    return emit_without_effect
 
 
 def _chunk_completes_phase(

@@ -169,6 +169,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             seed_research_exists=research_run_exists,
             research_references_result=research_result_manifest_is_referenced,
             execution_memory_bytes=settings.tracking_execution_memory_bytes,
+            lifecycle_event=emit_operational_event_data,
         )
         research_runs = ResearchRunService(
             database,
