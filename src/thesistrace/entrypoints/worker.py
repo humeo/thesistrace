@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
 import sys
@@ -11,6 +10,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
+
+from thesistrace.operational_events import emit_operational_event_data
 
 if TYPE_CHECKING:
     from thesistrace.entrypoints.runtime import CoreRuntime
@@ -264,6 +265,18 @@ def _claim_event(
     )
 
     def claimed(resource_id: str, attempt_id: str) -> None:
+        if configuration.role is WorkerRole.RESEARCH:
+            emit(
+                {
+                    "event": "research_run_claimed",
+                    "level": "INFO",
+                    "component": "research_worker",
+                    "worker_role": "research",
+                    "run_id": resource_id,
+                    "attempt_id": attempt_id,
+                }
+            )
+            return
         emit(
             {
                 "event": "worker_claim",
@@ -317,10 +330,29 @@ def _collect_one_publication(runtime: CoreRuntime) -> None:
 
 
 def _emit_event(event: dict[str, object]) -> None:
-    print(
-        json.dumps(event, sort_keys=True, separators=(",", ":")),
-        file=sys.stderr,
-        flush=True,
+    resource_type = event.get("resource_type")
+    resource_id = event.get("resource_id")
+    role = event.get("worker_role", event.get("role"))
+    if role is None and resource_type == "ResearchRun":
+        role = "research"
+    elif role is None and resource_type == "TrackingAdvance":
+        role = "tracking"
+    component = event.get("component")
+    if not isinstance(component, str):
+        component = "tracking_worker" if role == "tracking" else "research_worker"
+    context = dict(event)
+    context["worker_role"] = role
+    if resource_type == "ResearchRun":
+        context["run_id"] = resource_id
+    elif resource_type == "TrackingAdvance":
+        context["track_id"] = resource_id
+    emit_operational_event_data(
+        {
+            **context,
+            "level": event.get("level", "INFO"),
+            "component": component,
+            "event": str(event["event"]),
+        }
     )
 
 

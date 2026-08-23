@@ -8,7 +8,6 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import date
 from pathlib import Path
 from threading import Event, Thread
 
@@ -893,37 +892,30 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
         "research_execution_child_started",
         "research_execution_child_exited",
         "research_execution_chunk_committed",
+        "research_checkpoint_committed",
+        "research_result_published",
+        "research_run_succeeded",
     }
     lifecycle = [event for event in events if event.get("event") in lifecycle_names]
     assert lifecycle
     for event in lifecycle:
-        assert event["resource_type"] == "ResearchRun"
-        assert str(event["resource_id"]).startswith("run_")
+        assert event["component"] == "research_worker"
+        assert event["worker_role"] == "research"
+        assert str(event["run_id"]).startswith("run_")
         assert str(event["attempt_id"]).startswith("attempt_")
-        assert event["research_kind"] in {"factor_evaluation", "strategy_backtest"}
+        assert "resource_type" not in event
+        assert "resource_id" not in event
+        assert "research_kind" not in event
+        assert "child_pid" not in event
+        assert "boundary_session" not in event
+        assert "data_io" not in event
 
     started = [
         event
         for event in lifecycle
         if event["event"] == "research_execution_child_started"
     ]
-    assert {event["research_kind"] for event in started} == {
-        "factor_evaluation",
-        "strategy_backtest",
-    }
-    for event in started:
-        assert int(event["child_pid"]) > 0
-        resumed = event["resumed_from_checkpoint"]
-        resumed_ordinal = event["resumed_from_chunk_ordinal"]
-        assert isinstance(resumed, bool)
-        assert (resumed_ordinal is not None) is resumed
-        if resumed_ordinal is not None:
-            assert int(resumed_ordinal) >= 1
-    assert any(
-        event["research_kind"] == "factor_evaluation"
-        and event["resumed_from_checkpoint"] is True
-        for event in started
-    )
+    assert started
 
     exited = [
         event
@@ -931,24 +923,13 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
         if event["event"] == "research_execution_child_exited"
     ]
     assert exited
-    for event in exited:
-        assert int(event["child_pid"]) > 0
-        assert isinstance(event["exit_code"], int)
-        assert isinstance(event["acknowledged"], bool)
 
     committed = [
         event
         for event in lifecycle
         if event["event"] == "research_execution_chunk_committed"
     ]
-    assert {event["research_kind"] for event in committed} == {
-        "factor_evaluation",
-        "strategy_backtest",
-    }
-    for event in committed:
-        assert int(event["chunk_ordinal"]) >= 1
-        date.fromisoformat(str(event["boundary_session"]))
-        assert float(event["supervisor_commit_seconds"]) >= 0
+    assert committed
     return {
         "worker_event_contract_verified": True,
         "worker_lifecycle_event_count": len(lifecycle),

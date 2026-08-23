@@ -56,15 +56,9 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         assert completed.returncode == 0, completed.stdout + completed.stderr
         research_events = _worker_events(completed)
         assert research_events[0]["event"] == "worker_started"
-        assert research_events[0]["role"] == "research"
-        assert research_events[0]["slot_count"] == 1
-        assert research_events[0]["declared_cpu_count"] == 2
-        assert research_events[0]["declared_memory_bytes"] == 2 * 1024**3
-        assert research_events[0]["execution_memory_bytes"] == 1536 * 1024**2
-        assert research_events[0]["calculation_threads"] == 2
-        assert research_events[1]["event"] == "worker_claim"
-        assert research_events[1]["resource_type"] == "ResearchRun"
-        assert research_events[1]["resource_id"] == run_id
+        assert research_events[0]["worker_role"] == "research"
+        assert research_events[1]["event"] == "research_run_claimed"
+        assert research_events[1]["run_id"] == run_id
 
         started = client.post(
             f"/api/research-runs/{run_id}/daily-tracks",
@@ -86,9 +80,9 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         first_advance = _run_worker_once(settings, "tracking")
         assert first_advance.returncode == 0, first_advance.stdout + first_advance.stderr
         tracking_events = _worker_events(first_advance)
-        assert tracking_events[0]["role"] == "tracking"
-        assert tracking_events[1]["resource_type"] == "TrackingAdvance"
-        assert tracking_events[1]["resource_id"] == track_id
+        assert tracking_events[0]["worker_role"] == "tracking"
+        assert tracking_events[1]["event"] == "worker_claim"
+        assert tracking_events[1]["track_id"] == track_id
         first_detail = client.get(f"/api/daily-tracks/{track_id}").json()
         assert first_detail["strategy_session"] == sessions[66]
         assert first_detail["lag_sessions"] == 236

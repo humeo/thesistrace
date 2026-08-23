@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64DecodeError
 from collections.abc import Callable, Iterator, Mapping
@@ -213,6 +214,8 @@ SEMANTIC_VERSIONS = {
 class _ExecutionClaim:
     run_id: str
     attempt_id: str
+    attempt_number: int
+    previous_status: str
     fence: int
     generation_pin_id: str
     data_generation_id: str
@@ -226,6 +229,33 @@ class _FailurePolicy:
     public_reason: str
     max_attempts: int
     retryable: bool
+
+
+@dataclass(frozen=True)
+class _RecordedFailure:
+    retry: bool
+    attempt_number: int
+    failure_code: str
+
+
+@dataclass(frozen=True)
+class _RecoveredCancellation:
+    run_id: str
+    attempt_id: str
+
+
+@dataclass(frozen=True)
+class _WorkerLossRecovery:
+    run_id: str
+    attempt_id: str
+    attempt_number: int
+    retry: bool
+
+
+@dataclass(frozen=True)
+class _ClaimResult:
+    claim: _ExecutionClaim | None
+    worker_loss: _WorkerLossRecovery | None = None
 
 
 class ResearchRunService:
@@ -245,6 +275,7 @@ class ResearchRunService:
         track_references_result: TrackReferencesResult | None = None,
         execution: SupervisedResearchExecutor | None = None,
         execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
+        lifecycle_event: ExecutionEvent | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
@@ -261,6 +292,10 @@ class ResearchRunService:
         self._track_references_result = track_references_result
         self._execution = execution
         self._execution_memory_bytes = execution_memory_bytes
+        self._lifecycle_event = _non_blocking_event_sink(
+            lifecycle_event or (lambda _event: None),
+            component="core_api",
+        )
 
     @property
     def execution_memory_bytes(self) -> int:
@@ -392,15 +427,77 @@ class ResearchRunService:
         on_execution_event: ExecutionEvent | None = None,
     ) -> bool:
         self._require_execution_dependencies()
-        if self._recover_cancelled_attempt():
+        emit_execution_event = on_execution_event or (lambda _event: None)
+        emit = _non_blocking_event_sink(
+            emit_execution_event,
+            component="research_worker",
+            worker_role="research",
+        )
+        recovered_cancellation = self._recover_cancelled_attempt()
+        if recovered_cancellation is not None:
+            emit(
+                _research_event(
+                    "research_run_cancelled",
+                    run_id=recovered_cancellation.run_id,
+                    attempt_id=recovered_cancellation.attempt_id,
+                    status="cancelled",
+                )
+            )
             return True
-        claim = self._claim_next()
+        claim_result = self._claim_next()
+        if claim_result.worker_loss is not None:
+            recovery = claim_result.worker_loss
+            level = "WARNING" if recovery.retry else "ERROR"
+            emit(
+                _research_event(
+                    "research_attempt_failed",
+                    level=level,
+                    run_id=recovery.run_id,
+                    attempt_id=recovery.attempt_id,
+                    attempt_number=recovery.attempt_number,
+                    status="failed",
+                    failure_code=_failure_code(WORKER_LOST_FAILURE),
+                )
+            )
+            emit(
+                _research_event(
+                    "research_retry_scheduled" if recovery.retry else "research_run_failed",
+                    level=level,
+                    run_id=recovery.run_id,
+                    attempt_id=recovery.attempt_id,
+                    attempt_number=recovery.attempt_number,
+                    status="running" if recovery.retry else "failed",
+                    failure_code=_failure_code(WORKER_LOST_FAILURE),
+                )
+            )
+        claim = claim_result.claim
         if claim is None:
             return False
         if on_claim is not None:
-            on_claim(claim.run_id, claim.attempt_id)
-        emit_execution_event = on_execution_event or (lambda _event: None)
-        with self._maintain_claim(claim):
+            try:
+                on_claim(claim.run_id, claim.attempt_id)
+            except Exception:
+                pass
+        emit(
+            _research_event(
+                "research_attempt_started",
+                run_id=claim.run_id,
+                attempt_id=claim.attempt_id,
+                attempt_number=claim.attempt_number,
+                status="running",
+            )
+        )
+        if claim.previous_status != "running":
+            emit(
+                _research_event(
+                    "research_run_state_changed",
+                    run_id=claim.run_id,
+                    attempt_id=claim.attempt_id,
+                    previous_status=claim.previous_status,
+                    status="running",
+                )
+            )
+        with self._maintain_claim(claim, emit):
             self._progress("claimed", claim.run_id)
             execution: SupervisedResearchExecution | None = None
             cancellation_pending = False
@@ -408,14 +505,14 @@ class ResearchRunService:
             try:
                 execution = self._execute(
                     claim,
-                    emit=emit_execution_event,
+                    emit=emit,
                 )
                 while True:
                     chunk = execution.chunk
                     if chunk.get("reused_checkpoint") is not True:
                         commit_started = monotonic()
                         self._commit_execution_chunk(claim, chunk)
-                        emit_execution_event(
+                        emit(
                             {
                                 "event": "research_execution_chunk_committed",
                                 "resource_type": "ResearchRun",
@@ -426,6 +523,23 @@ class ResearchRunService:
                                 "boundary_session": str(chunk["boundary_session"]),
                                 "supervisor_commit_seconds": monotonic() - commit_started,
                             }
+                        )
+                        if _chunk_completes_phase(claim, chunk):
+                            emit(
+                                _research_event(
+                                    "research_run_phase_completed",
+                                    run_id=claim.run_id,
+                                    attempt_id=claim.attempt_id,
+                                    phase=str(chunk["phase"]),
+                                )
+                            )
+                        emit(
+                            _research_event(
+                                "research_checkpoint_committed",
+                                run_id=claim.run_id,
+                                attempt_id=claim.attempt_id,
+                                phase=str(chunk["phase"]),
+                            )
                         )
                         self._progress("checkpoint", claim.run_id)
                     if chunk["final"] is True:
@@ -444,6 +558,22 @@ class ResearchRunService:
                             provenance,
                             key_metrics,
                         )
+                        emit(
+                            _research_event(
+                                "research_result_published",
+                                run_id=claim.run_id,
+                                attempt_id=claim.attempt_id,
+                                status="succeeded",
+                            )
+                        )
+                        emit(
+                            _research_event(
+                                "research_run_succeeded",
+                                run_id=claim.run_id,
+                                attempt_id=claim.attempt_id,
+                                status="succeeded",
+                            )
+                        )
                         self._progress("succeeded", claim.run_id)
                         break
                     execution.advance(cancel_requested=lambda: self._cancellation_is_pending(claim))
@@ -451,12 +581,13 @@ class ResearchRunService:
                 cancellation_pending = True
             except ResearchRunFenced:
                 cancellation_pending = self._cancellation_is_pending(claim)
-                logger.info(
-                    "ResearchRun result rejected by execution fence",
-                    extra={
-                        "run_id": claim.run_id,
-                        "cancellation_pending": cancellation_pending,
-                    },
+                emit(
+                    _research_event(
+                        "research_attempt_fenced",
+                        run_id=claim.run_id,
+                        attempt_id=claim.attempt_id,
+                        outcome="fenced",
+                    )
                 )
             except Exception as error:
                 execution_failure = error
@@ -467,22 +598,55 @@ class ResearchRunService:
                     else:
                         execution.close()
             if execution_failure is not None:
-                self._record_failure(claim, execution_failure)
+                recorded_failure = self._record_failure(claim, execution_failure)
                 cancellation_pending = cancellation_pending or self._cancellation_is_pending(claim)
-                logger.error(
-                    "ResearchRun execution failed",
-                    extra={
-                        "run_id": claim.run_id,
-                        "error_type": type(execution_failure).__name__,
-                    },
-                    exc_info=(
-                        type(execution_failure),
-                        execution_failure,
-                        execution_failure.__traceback__,
-                    ),
-                )
+                if recorded_failure is not None:
+                    level = "WARNING" if recorded_failure.retry else "ERROR"
+                    emit(
+                        _research_event(
+                            "research_attempt_failed",
+                            level=level,
+                            run_id=claim.run_id,
+                            attempt_id=claim.attempt_id,
+                            attempt_number=recorded_failure.attempt_number,
+                            status="failed",
+                            failure_code=recorded_failure.failure_code,
+                        )
+                    )
+                    if recorded_failure.retry:
+                        emit(
+                            _research_event(
+                                "research_retry_scheduled",
+                                level="WARNING",
+                                run_id=claim.run_id,
+                                attempt_id=claim.attempt_id,
+                                attempt_number=recorded_failure.attempt_number,
+                                status="running",
+                                failure_code=recorded_failure.failure_code,
+                            )
+                        )
+                    else:
+                        emit(
+                            _research_event(
+                                "research_run_failed",
+                                level="ERROR",
+                                run_id=claim.run_id,
+                                attempt_id=claim.attempt_id,
+                                attempt_number=recorded_failure.attempt_number,
+                                status="failed",
+                                failure_code=recorded_failure.failure_code,
+                            )
+                        )
             if cancellation_pending:
-                self._confirm_cancelled(claim)
+                if self._confirm_cancelled(claim):
+                    emit(
+                        _research_event(
+                            "research_run_cancelled",
+                            run_id=claim.run_id,
+                            attempt_id=claim.attempt_id,
+                            status="cancelled",
+                        )
+                    )
         return True
 
     def list(
@@ -652,6 +816,8 @@ class ResearchRunService:
         if not request_id:
             raise ValueError("ResearchRun Cancel request_id is required")
         fingerprint = _cancel_fingerprint(run_id)
+        cancelled_attempt_id: str | None = None
+        cancelled_after_commit = False
         with self._database.transaction() as transaction:
             transaction.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -714,7 +880,9 @@ class ResearchRunService:
                             transaction,
                             retention_id=f"queued-research-run:{run_id}",
                         )
+                    cancelled_after_commit = updated is not None
                 else:
+                    cancelled_attempt_id = str(cancelling_attempt["id"])
                     updated = transaction.execute(
                         """
                         UPDATE research_runs.runs
@@ -748,6 +916,7 @@ class ResearchRunService:
                 if updated is None:
                     raise ResearchRunFenced
                 row = updated
+                cancelled_after_commit = True
                 if self._dataset_lifecycle is not None:
                     self._dataset_lifecycle.release_retention_in_transaction(
                         transaction,
@@ -767,6 +936,19 @@ class ResearchRunService:
                     Jsonb(outcome.model_dump(mode="json")),
                 ),
             )
+        if cancelled_after_commit:
+            event_context: dict[str, object] = {
+                "run_id": run_id,
+                "status": "cancelled",
+            }
+            if cancelled_attempt_id is not None:
+                event_context["attempt_id"] = cancelled_attempt_id
+            self._lifecycle_event(
+                {
+                    "event": "research_run_cancelled",
+                    **event_context,
+                }
+            )
         return outcome
 
     def _cancellation_is_pending(self, claim: _ExecutionClaim) -> bool:
@@ -782,7 +964,7 @@ class ResearchRunService:
             ).fetchone()
         return row == {"run_status": "cancelling", "attempt_status": "cancelling"}
 
-    def _confirm_cancelled(self, claim: _ExecutionClaim) -> None:
+    def _confirm_cancelled(self, claim: _ExecutionClaim) -> bool:
         assert self._dataset_lifecycle is not None
         with self._database.transaction() as transaction:
             run = transaction.execute(
@@ -795,7 +977,7 @@ class ResearchRunService:
                 (claim.run_id,),
             ).fetchone()
             if run != {"status": "cancelling"}:
-                return
+                return False
             attempt = transaction.execute(
                 """
                 UPDATE research_runs.attempts
@@ -807,7 +989,7 @@ class ResearchRunService:
                 (claim.attempt_id, claim.run_id, claim.fence),
             )
             if attempt.rowcount != 1:
-                return
+                return False
             transaction.execute(
                 """
                 UPDATE research_runs.runs
@@ -822,8 +1004,9 @@ class ResearchRunService:
                 claim.generation_pin_id,
                 owner_id=claim.attempt_id,
             )
+        return True
 
-    def _recover_cancelled_attempt(self) -> bool:
+    def _recover_cancelled_attempt(self) -> _RecoveredCancellation | None:
         assert self._dataset_lifecycle is not None
         with self._database.transaction() as transaction:
             row = transaction.execute(
@@ -841,7 +1024,7 @@ class ResearchRunService:
                 """
             ).fetchone()
             if row is None:
-                return False
+                return None
             transaction.execute(
                 """
                 UPDATE research_runs.attempts
@@ -865,7 +1048,10 @@ class ResearchRunService:
                 str(row["generation_pin_id"]),
                 owner_id=str(row["attempt_id"]),
             )
-        return True
+        return _RecoveredCancellation(
+            run_id=str(row["run_id"]),
+            attempt_id=str(row["attempt_id"]),
+        )
 
     def start_tracking(
         self,
@@ -1126,7 +1312,7 @@ class ResearchRunService:
         if self._dataset_lifecycle is None or self._publication is None or self._execution is None:
             raise RuntimeError("ResearchRun execution dependencies are not configured")
 
-    def _claim_next(self) -> _ExecutionClaim | None:
+    def _claim_next(self) -> _ClaimResult:
         assert self._dataset_lifecycle is not None
         with self._database.transaction() as transaction:
             row = transaction.execute(
@@ -1167,8 +1353,9 @@ class ResearchRunService:
                 (list(RETRYABLE_FAILURES),),
             ).fetchone()
             if row is None:
-                return None
+                return _ClaimResult(claim=None)
             run_id = str(row["id"])
+            worker_loss: _WorkerLossRecovery | None = None
             if row["latest_attempt_status"] == "running":
                 recovered = transaction.execute(
                     """
@@ -1182,13 +1369,21 @@ class ResearchRunService:
                     (WORKER_LOST_FAILURE, row["latest_attempt_id"], run_id),
                 )
                 if recovered.rowcount != 1:
-                    return None
+                    return _ClaimResult(claim=None)
                 self._dataset_lifecycle.release_pin_in_transaction(
                     transaction,
                     str(row["latest_generation_pin_id"]),
                     owner_id=str(row["latest_attempt_id"]),
                 )
-                if int(row["latest_attempt_ordinal"]) >= MAX_RESEARCH_RUN_ATTEMPTS:
+                attempt_number = int(row["latest_attempt_ordinal"])
+                retry = attempt_number < MAX_RESEARCH_RUN_ATTEMPTS
+                worker_loss = _WorkerLossRecovery(
+                    run_id=run_id,
+                    attempt_id=str(row["latest_attempt_id"]),
+                    attempt_number=attempt_number,
+                    retry=retry,
+                )
+                if not retry:
                     transaction.execute(
                         """
                         UPDATE research_runs.runs
@@ -1204,7 +1399,7 @@ class ResearchRunService:
                         ),
                     )
                     self._release_execution_checkpoints(transaction, run_id)
-                    return None
+                    return _ClaimResult(claim=None, worker_loss=worker_loss)
             fence = int(row["execution_fence"]) + 1
             ordinal_row = transaction.execute(
                 """
@@ -1274,22 +1469,31 @@ class ResearchRunService:
                     self._lease_seconds,
                 ),
             )
-        return _ExecutionClaim(
-            run_id=run_id,
-            attempt_id=attempt_id,
-            fence=fence,
-            generation_pin_id=pin.id,
-            data_generation_id=generation.manifest_sha256,
-            data_through_session=generation.data_through_session,
-            immutable_input=immutable_input,
+        return _ClaimResult(
+            claim=_ExecutionClaim(
+                run_id=run_id,
+                attempt_id=attempt_id,
+                attempt_number=int(ordinal_row["ordinal"]),
+                previous_status=str(row["status"]),
+                fence=fence,
+                generation_pin_id=pin.id,
+                data_generation_id=generation.manifest_sha256,
+                data_through_session=generation.data_through_session,
+                immutable_input=immutable_input,
+            ),
+            worker_loss=worker_loss,
         )
 
     @contextmanager
-    def _maintain_claim(self, claim: _ExecutionClaim) -> Iterator[None]:
+    def _maintain_claim(
+        self,
+        claim: _ExecutionClaim,
+        emit: ExecutionEvent,
+    ) -> Iterator[None]:
         stopped = Event()
         heartbeat = Thread(
             target=self._heartbeat_claim,
-            args=(claim, stopped),
+            args=(claim, stopped, emit),
             name=f"research-run-heartbeat-{claim.run_id}",
             daemon=True,
         )
@@ -1300,7 +1504,12 @@ class ResearchRunService:
             stopped.set()
             heartbeat.join(timeout=5)
 
-    def _heartbeat_claim(self, claim: _ExecutionClaim, stopped: Event) -> None:
+    def _heartbeat_claim(
+        self,
+        claim: _ExecutionClaim,
+        stopped: Event,
+        emit: ExecutionEvent,
+    ) -> None:
         assert self._dataset_lifecycle is not None
         while not stopped.wait(self._heartbeat_seconds):
             try:
@@ -1335,12 +1544,15 @@ class ResearchRunService:
                             lease_seconds=self._lease_seconds,
                         )
             except Exception as error:
-                logger.error(
-                    "ResearchRun claim heartbeat failed",
-                    extra={
-                        "run_id": claim.run_id,
-                        "error_type": type(error).__name__,
-                    },
+                emit(
+                    _research_event(
+                        "research_attempt_heartbeat_failed",
+                        level="WARNING",
+                        run_id=claim.run_id,
+                        attempt_id=claim.attempt_id,
+                        failure_code="INFRASTRUCTURE_UNAVAILABLE",
+                        exception_type=type(error).__name__,
+                    )
                 )
                 return
             if renewed.rowcount != 1:
@@ -2003,7 +2215,11 @@ class ResearchRunService:
                 owner_id=claim.attempt_id,
             )
 
-    def _record_failure(self, claim: _ExecutionClaim, error: Exception) -> None:
+    def _record_failure(
+        self,
+        claim: _ExecutionClaim,
+        error: Exception,
+    ) -> _RecordedFailure | None:
         assert self._dataset_lifecycle is not None
         policy = _failure_policy(error)
         with self._database.transaction() as transaction:
@@ -2017,7 +2233,7 @@ class ResearchRunService:
                 (claim.run_id,),
             ).fetchone()
             if current != {"status": "running", "execution_fence": claim.fence}:
-                return
+                return None
             attempt = transaction.execute(
                 """
                 SELECT status,
@@ -2036,8 +2252,9 @@ class ResearchRunService:
                 ),
             ).fetchone()
             if attempt is None or attempt["status"] != "running":
-                return
-            retry = policy.retryable and int(attempt["attempt_count"]) < policy.max_attempts
+                return None
+            attempt_number = int(attempt["attempt_count"])
+            retry = policy.retryable and attempt_number < policy.max_attempts
             failed_attempt = transaction.execute(
                 """
                 UPDATE research_runs.attempts
@@ -2053,7 +2270,7 @@ class ResearchRunService:
                 ),
             )
             if failed_attempt.rowcount != 1:
-                return
+                return None
             transaction.execute(
                 """
                 UPDATE research_runs.runs
@@ -2083,6 +2300,11 @@ class ResearchRunService:
                 claim.generation_pin_id,
                 owner_id=claim.attempt_id,
             )
+        return _RecordedFailure(
+            retry=retry,
+            attempt_number=attempt_number,
+            failure_code=_failure_code(policy.attempt_reason),
+        )
 
     def _release_execution_checkpoints(
         self,
@@ -2385,6 +2607,58 @@ def _result_provenance(claim: _ExecutionClaim) -> dict[str, object]:
         "calculation_contracts": calculation_contracts,
         "semantic_versions": value["semantic_versions"],
     }
+
+
+def _research_event(
+    event: str,
+    *,
+    level: str = "INFO",
+    **context: object,
+) -> dict[str, object]:
+    return {
+        "event": event,
+        "level": level,
+        "component": "research_worker",
+        "worker_role": "research",
+        **context,
+    }
+
+
+def _non_blocking_event_sink(
+    emit: ExecutionEvent,
+    *,
+    component: str,
+    worker_role: str | None = None,
+) -> ExecutionEvent:
+    def emit_without_effect(event: dict[str, object]) -> None:
+        normalized: dict[str, object] = {"component": component, **event}
+        if worker_role is not None:
+            normalized["worker_role"] = worker_role
+        if event.get("resource_type") == "ResearchRun":
+            normalized["run_id"] = event.get("resource_id")
+        try:
+            emit(normalized)
+        except Exception:
+            pass
+
+    return emit_without_effect
+
+
+def _chunk_completes_phase(
+    claim: _ExecutionClaim,
+    chunk: Mapping[str, object],
+) -> bool:
+    ordinal = int(chunk["ordinal"])
+    chunks = claim.immutable_input.execution_plan.chunks
+    if ordinal >= len(chunks):
+        return True
+    next_chunk = chunks[ordinal]
+    next_phase = "research" if next_chunk.research_session_count else "warmup"
+    return next_phase != chunk["phase"]
+
+
+def _failure_code(attempt_reason: str) -> str:
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", attempt_reason).upper()
 
 
 def _failure_policy(error: Exception) -> _FailurePolicy:

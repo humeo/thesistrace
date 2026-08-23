@@ -18,7 +18,11 @@ from thesistrace.entrypoints.worker import (
 
 def main() -> None:
     role = WorkerRole(sys.argv[1])
-    barrier_event = sys.argv[2] if len(sys.argv) > 2 else "worker_claim"
+    barrier_event = (
+        sys.argv[2]
+        if len(sys.argv) > 2
+        else ("research_run_claimed" if role is WorkerRole.RESEARCH else "worker_claim")
+    )
     configuration = WorkerConfiguration(
         role=role,
         capacity=WorkerCapacity(

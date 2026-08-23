@@ -60,7 +60,7 @@ from thesistrace.research_kernel import (
     empty_continuation,
     run,
 )
-from thesistrace.research_run import ResearchRunService
+from thesistrace.research_run import ResearchRunCancelCommand, ResearchRunService
 from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.models import ImmutableRunInput
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
@@ -103,7 +103,7 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
                 formula="rank(close) + rank(revenue)",
             ),
         )
-        assert accepted.status_code == 202
+        assert accepted.status_code == 202, accepted.text
         run_id = accepted.json()["id"]
         assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "queued"
         execution_events: list[dict[str, object]] = []
@@ -123,21 +123,36 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
             is True
         )
         assert [event["event"] for event in execution_events] == [
+            "research_attempt_started",
+            "research_run_state_changed",
             "research_execution_child_started",
             "research_execution_chunk_received",
             "research_execution_chunk_committed",
+            "research_run_phase_completed",
+            "research_checkpoint_committed",
             "research_execution_child_acknowledged",
             "research_execution_child_exited",
+            "research_result_published",
+            "research_run_succeeded",
         ]
-        for event in execution_events:
+        child_events = [
+            event for event in execution_events if event["event"].startswith("research_execution_")
+        ]
+        for event in child_events:
             assert event["resource_type"] == "ResearchRun"
             assert event["resource_id"] == run_id
             assert event["attempt_id"].startswith("attempt_")
             assert event["research_kind"] == "strategy_backtest"
-        started = execution_events[0]
+        lifecycle_events = [
+            event for event in execution_events if event not in child_events
+        ]
+        assert all(event["run_id"] == run_id for event in lifecycle_events)
+        assert all(event["attempt_id"].startswith("attempt_") for event in lifecycle_events)
+        assert all(event["worker_role"] == "research" for event in lifecycle_events)
+        started = child_events[0]
         assert started["resumed_from_checkpoint"] is False
         assert started["resumed_from_chunk_ordinal"] is None
-        received = execution_events[1]
+        received = child_events[1]
         assert float(received["child_data_read_seconds"]) >= 0
         assert float(received["child_calculation_seconds"]) >= 0
         assert (
@@ -273,6 +288,414 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
         )
         assert started.status_code == 201
         assert started.json()["status"] == "active"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_research_lifecycle_events_follow_commits_and_do_not_control_success(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command("observability-success"),
+        )
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()["id"]
+        events: list[dict[str, object]] = []
+
+        def lossy_sink(event: dict[str, object]) -> None:
+            events.append(event)
+            if event["event"] == "research_run_state_changed":
+                raise RuntimeError("simulated telemetry sink loss canary-secret")
+
+        assert runtime.research_runs.process_next(on_execution_event=lossy_sink) is True
+
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "succeeded"
+        assert [event["event"] for event in events] == [
+            "research_attempt_started",
+            "research_run_state_changed",
+            "research_execution_child_started",
+            "research_execution_chunk_received",
+            "research_execution_chunk_committed",
+            "research_run_phase_completed",
+            "research_checkpoint_committed",
+            "research_execution_child_acknowledged",
+            "research_execution_child_exited",
+            "research_result_published",
+            "research_run_succeeded",
+        ]
+        assert all(event["run_id"] == run_id for event in events)
+        assert all(event["attempt_id"].startswith("attempt_") for event in events)
+        assert all(event["worker_role"] == "research" for event in events)
+        assert events[-2]["status"] == "succeeded"
+        assert events[-1]["status"] == "succeeded"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_research_retry_events_follow_rollback_then_publication(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command("observability-retry"),
+        )
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()["id"]
+        first_attempt_events: list[dict[str, object]] = []
+        _install_observability_result_failure(settings)
+        try:
+            assert (
+                runtime.research_runs.process_next(
+                    on_execution_event=first_attempt_events.append
+                )
+                is True
+            )
+        finally:
+            _remove_observability_result_failure(settings)
+
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "running"
+        warning_events = [
+            event
+            for event in first_attempt_events
+            if event["event"] in {"research_attempt_failed", "research_retry_scheduled"}
+        ]
+        assert [event["event"] for event in warning_events] == [
+            "research_attempt_failed",
+            "research_retry_scheduled",
+        ]
+        assert all(event["level"] == "WARNING" for event in warning_events)
+        assert all(
+            event["failure_code"] == "INFRASTRUCTURE_UNAVAILABLE"
+            for event in warning_events
+        )
+        assert not {
+            "research_result_published",
+            "research_run_succeeded",
+        } & {event["event"] for event in first_attempt_events}
+
+        second_attempt_events: list[dict[str, object]] = []
+        assert (
+            runtime.research_runs.process_next(
+                on_execution_event=second_attempt_events.append
+            )
+            is True
+        )
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "succeeded"
+        assert [
+            event["event"]
+            for event in second_attempt_events
+            if event["event"] in {"research_result_published", "research_run_succeeded"}
+        ] == ["research_result_published", "research_run_succeeded"]
+        assert _stored_execution(settings, run_id)["attempt_count"] == 2
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_research_terminal_failure_event_matches_committed_state(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command("observability-terminal-failure"),
+        )
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()["id"]
+        processor = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+            execution=SupervisedResearchExecutor(
+                settings.data_mount,
+                execution_memory_bytes=1,
+            ),
+        )
+        events: list[dict[str, object]] = []
+
+        assert processor.process_next(on_execution_event=events.append) is True
+
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "failed"
+        assert [
+            event["event"]
+            for event in events
+            if event["event"] in {"research_attempt_failed", "research_run_failed"}
+        ] == ["research_attempt_failed", "research_run_failed"]
+        assert events[-1]["level"] == "ERROR"
+        assert events[-1]["failure_code"] == "RESOURCE_EXHAUSTED"
+        assert events[-1]["run_id"] == run_id
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_research_cancellation_event_follows_confirmation(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    _publish_head(settings, sessions=sessions, price_offset=0)
+    child_ready = Event()
+    release_child = Event()
+    events: list[dict[str, object]] = []
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command("observability-cancellation"),
+        )
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()["id"]
+
+        def hold_child(event: dict[str, object]) -> None:
+            events.append(event)
+            if event["event"] == "research_execution_chunk_received":
+                child_ready.set()
+                assert release_child.wait(timeout=20)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                runtime.research_runs.process_next,
+                on_execution_event=hold_child,
+            )
+            assert child_ready.wait(timeout=20)
+            cancelled = client.post(
+                f"/api/research-runs/{run_id}/cancel",
+                json={"request_id": "observability-cancellation-request"},
+            )
+            assert cancelled.status_code == 200
+            assert cancelled.json()["status"] == "cancelling"
+            assert "research_run_cancelled" not in {event["event"] for event in events}
+            release_child.set()
+            assert future.result(timeout=10) is True
+
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "cancelled"
+        assert events[-1]["event"] == "research_run_cancelled"
+        assert events[-1]["run_id"] == run_id
+        assert events[-1]["status"] == "cancelled"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+@pytest.mark.parametrize("initial_status", ("queued", "running"))
+def test_immediate_research_cancellation_event_follows_commit_without_attempt(
+    tmp_path: Path,
+    initial_status: str,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command(f"observability-immediate-cancel-{initial_status}"),
+        )
+        assert accepted.status_code == 202, accepted.text
+        run_id = str(accepted.json()["id"])
+        if initial_status == "running":
+            with runtime.database.transaction() as transaction:
+                transaction.execute(
+                    "UPDATE research_runs.runs SET status = 'running' WHERE id = %s",
+                    (run_id,),
+                )
+        events: list[dict[str, object]] = []
+
+        def lossy_sink(event: dict[str, object]) -> None:
+            events.append(event)
+            with runtime.database.transaction() as transaction:
+                committed = transaction.execute(
+                    "SELECT status FROM research_runs.runs WHERE id = %s",
+                    (run_id,),
+                ).fetchone()
+            assert committed == {"status": "cancelled"}
+            raise RuntimeError("simulated cancellation telemetry loss canary-secret")
+
+        canceller = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            lifecycle_event=lossy_sink,
+        )
+        outcome = canceller.cancel(
+            run_id,
+            ResearchRunCancelCommand(
+                request_id=f"observability-immediate-cancel-{initial_status}-request"
+            ),
+        )
+
+        assert outcome is not None
+        assert outcome.status == "cancelled"
+        assert events == [
+            {
+                "component": "core_api",
+                "event": "research_run_cancelled",
+                "run_id": run_id,
+                "status": "cancelled",
+            }
+        ]
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "cancelled"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_worker_loss_recovery_emits_retry_events_before_replacement_attempt(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command("observability-worker-loss-retry"),
+        )
+        assert accepted.status_code == 202, accepted.text
+        run_id = str(accepted.json()["id"])
+        lost_attempt_id = _claim_kill_and_expire_research_worker(settings, run_id)
+        events: list[dict[str, object]] = []
+
+        assert runtime.research_runs.process_next(on_execution_event=events.append) is True
+
+        recovery_events = [
+            event
+            for event in events
+            if event["event"]
+            in {"research_attempt_failed", "research_retry_scheduled"}
+        ]
+        assert [event["event"] for event in recovery_events] == [
+            "research_attempt_failed",
+            "research_retry_scheduled",
+        ]
+        assert all(event["level"] == "WARNING" for event in recovery_events)
+        assert all(event["failure_code"] == "WORKER_LOST" for event in recovery_events)
+        assert all(event["attempt_id"] == lost_attempt_id for event in recovery_events)
+        replacement_started = next(
+            event for event in events if event["event"] == "research_attempt_started"
+        )
+        assert replacement_started["attempt_id"] != lost_attempt_id
+        assert events.index(recovery_events[-1]) < events.index(replacement_started)
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "succeeded"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_worker_loss_exhaustion_emits_terminal_events_after_commit(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command("observability-worker-loss-exhaustion"),
+        )
+        assert accepted.status_code == 202, accepted.text
+        run_id = str(accepted.json()["id"])
+        last_attempt_id = ""
+        for _attempt_number in range(3):
+            last_attempt_id = _claim_and_expire_research_attempt(
+                runtime.research_runs,
+                runtime.database,
+                run_id,
+            )
+        events: list[dict[str, object]] = []
+
+        assert runtime.research_runs.process_next(on_execution_event=events.append) is False
+
+        assert [event["event"] for event in events] == [
+            "research_attempt_failed",
+            "research_run_failed",
+        ]
+        assert all(event["level"] == "ERROR" for event in events)
+        assert all(event["failure_code"] == "WORKER_LOST" for event in events)
+        assert all(event["attempt_id"] == last_attempt_id for event in events)
+        assert all(event["attempt_number"] == 3 for event in events)
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "failed"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_phase_completion_is_emitted_once_for_a_multi_chunk_phase(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = _weekday_sessions_between(date(2025, 1, 2), date(2025, 8, 13))[:140]
+    assert len(sessions) == 140
+    _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "observability-multi-chunk-phase",
+                start_date=sessions[0],
+                end_date=sessions[-1],
+            ),
+        )
+        assert accepted.status_code == 202, accepted.text
+        run_id = str(accepted.json()["id"])
+        events: list[dict[str, object]] = []
+
+        assert runtime.research_runs.process_next(on_execution_event=events.append) is True
+
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        checkpoint_events = [
+            event for event in events if event["event"] == "research_checkpoint_committed"
+        ]
+        phase_events = [
+            event for event in events if event["event"] == "research_run_phase_completed"
+        ]
+        assert detail["progress"]["committed_chunk_count"] >= 3
+        assert len(checkpoint_events) == detail["progress"]["committed_chunk_count"]
+        assert [event["phase"] for event in phase_events] == ["research"]
+        assert len(phase_events) < len(checkpoint_events)
 
 
 @pytest.mark.skipif(
@@ -1370,7 +1793,7 @@ def test_fixed_role_worker_replicas_claim_distinct_runs_and_tracks(
             json=_run_command("single-research-owner"),
         ).json()["id"]
         research_owner = _start_claim_barrier_worker(settings, "research")
-        assert _wait_for_barrier_claim(research_owner)["resource_id"] == guarded_run_id
+        assert _wait_for_barrier_claim(research_owner)["run_id"] == guarded_run_id
         rejected_research_owner = _run_worker_once(settings, "research")
         assert rejected_research_owner.returncode == 0, (
             rejected_research_owner.stdout + rejected_research_owner.stderr
@@ -1378,7 +1801,7 @@ def test_fixed_role_worker_replicas_claim_distinct_runs_and_tracks(
         assert not [
             event
             for event in _worker_events(rejected_research_owner)
-            if event["event"] == "worker_claim"
+            if event["event"] == "research_run_claimed"
         ]
         _release_claim_barrier_worker(research_owner)
         assert _stored_execution(settings, guarded_run_id)["attempt_count"] == 1
@@ -1396,29 +1819,29 @@ def test_fixed_role_worker_replicas_claim_distinct_runs_and_tracks(
             client.get(f"/api/research-runs/{run_id}").json()["status"] for run_id in run_ids
         } == {"succeeded"}
         assert {
-            event["resource_id"]
+            event["run_id"]
             for worker in research_workers
             for event in _worker_events(worker)
-            if event["event"] == "worker_claim"
+            if event["event"] == "research_run_claimed"
         } == set(run_ids)
         research_events = [event for worker in research_workers for event in _worker_events(worker)]
         assert {
-            (event["resource_id"], event["attempt_id"])
+            (event["run_id"], event["attempt_id"])
             for event in research_events
             if event["event"] == "research_execution_child_started"
         } == {
-            (event["resource_id"], event["attempt_id"])
+            (event["run_id"], event["attempt_id"])
             for event in research_events
-            if event["event"] == "worker_claim"
+            if event["event"] == "research_run_claimed"
         }
         assert {
-            (event["resource_id"], event["attempt_id"])
+            (event["run_id"], event["attempt_id"])
             for event in research_events
             if event["event"] == "research_execution_child_acknowledged"
         } == {
-            (event["resource_id"], event["attempt_id"])
+            (event["run_id"], event["attempt_id"])
             for event in research_events
-            if event["event"] == "worker_claim"
+            if event["event"] == "research_run_claimed"
         }
 
         guarded_track_id = client.post(
@@ -1467,7 +1890,7 @@ def test_fixed_role_worker_replicas_claim_distinct_runs_and_tracks(
             for track_id in track_ids
         } == {extended_sessions[-1]}
         assert {
-            event["resource_id"]
+            event["track_id"]
             for worker in tracking_workers
             for event in _worker_events(worker)
             if event["event"] == "worker_claim"
@@ -3752,11 +4175,20 @@ def test_denied_rustfs_write_never_publishes_or_keeps_a_pin(
         assert stored["active_pin_count"] == 0
         assert _publication_manifest_count(settings) == manifest_count
         assert [event["event"] for event in execution_events] == [
+            "research_attempt_started",
+            "research_run_state_changed",
             "research_execution_child_started",
             "research_execution_chunk_received",
             "research_execution_child_exited",
+            "research_attempt_failed",
+            "research_run_failed",
         ]
-        assert execution_events[-1]["acknowledged"] is False
+        child_exit = next(
+            event
+            for event in execution_events
+            if event["event"] == "research_execution_child_exited"
+        )
+        assert child_exit["acknowledged"] is False
 
 
 @pytest.mark.skipif(
@@ -4482,6 +4914,48 @@ def _research_data(canonical: dict[str, object]):
     )
 
 
+def _install_observability_result_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION publication.reject_observability_result_transiently()
+                RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    RAISE EXCEPTION 'injected transient Result publication failure'
+                        USING ERRCODE = '08006';
+                END
+                $$;
+                CREATE TRIGGER reject_observability_result_transiently
+                BEFORE INSERT ON publication.manifests
+                FOR EACH ROW
+                WHEN (NEW.kind = 'research.result')
+                EXECUTE FUNCTION publication.reject_observability_result_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _remove_observability_result_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_observability_result_transiently
+                    ON publication.manifests;
+                DROP FUNCTION publication.reject_observability_result_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
 def _stored_execution(settings: CoreSettings, run_id: str) -> dict[str, object]:
     database = PostgresDatabase(settings.database_url)
     database.open()
@@ -5013,14 +5487,17 @@ def _run_worker_replicas(
 def _start_claim_barrier_worker(
     settings: CoreSettings,
     role: str,
-    barrier_event: str = "worker_claim",
+    barrier_event: str | None = None,
 ) -> subprocess.Popen[str]:
+    selected_barrier = barrier_event or (
+        "research_run_claimed" if role == "research" else "worker_claim"
+    )
     return subprocess.Popen(
         [
             sys.executable,
             "tests/acceptance/process_worker_with_claim_barrier.py",
             role,
-            barrier_event,
+            selected_barrier,
         ],
         cwd=ROOT,
         env=_worker_environment(settings),
@@ -5042,7 +5519,7 @@ def _wait_for_barrier_claim(process: subprocess.Popen[str]) -> dict[str, object]
         selector.close()
     assert line, f"Worker exited before claim: {process.stderr.read() if process.stderr else ''}"
     event = json.loads(line)
-    assert event["event"] == "worker_claim"
+    assert event["event"] in {"research_run_claimed", "worker_claim"}
     return event
 
 
@@ -5084,6 +5561,65 @@ def _worker_events(
     completed: subprocess.CompletedProcess[str],
 ) -> list[dict[str, object]]:
     return [json.loads(line) for line in completed.stderr.splitlines() if line.startswith("{")]
+
+
+def _claim_kill_and_expire_research_worker(
+    settings: CoreSettings,
+    run_id: str,
+) -> str:
+    owner = _start_claim_barrier_worker(settings, "research")
+    try:
+        claim = _wait_for_worker_event(owner, "research_run_claimed")
+        assert claim["run_id"] == run_id
+        attempt_id = str(claim["attempt_id"])
+    finally:
+        owner.kill()
+        owner.communicate(timeout=10)
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            expired = transaction.execute(
+                """
+                UPDATE research_runs.attempts
+                SET lease_expires_at = now() - interval '1 second'
+                WHERE id = %s AND run_id = %s AND status = 'running'
+                """,
+                (attempt_id, run_id),
+            )
+        assert expired.rowcount == 1
+    finally:
+        database.close()
+    return attempt_id
+
+
+def _claim_and_expire_research_attempt(
+    service: ResearchRunService,
+    database: PostgresDatabase,
+    run_id: str,
+) -> str:
+    claimed_attempt_id = ""
+
+    def stop_claimed_worker(claimed_run_id: str, attempt_id: str) -> None:
+        nonlocal claimed_attempt_id
+        assert claimed_run_id == run_id
+        claimed_attempt_id = attempt_id
+        raise SystemExit("simulated Worker loss after committed claim")
+
+    with pytest.raises(SystemExit, match="simulated Worker loss"):
+        service.process_next(on_claim=stop_claimed_worker)
+    assert claimed_attempt_id
+    with database.transaction() as transaction:
+        expired = transaction.execute(
+            """
+            UPDATE research_runs.attempts
+            SET lease_expires_at = now() - interval '1 second'
+            WHERE id = %s AND run_id = %s AND status = 'running'
+            """,
+            (claimed_attempt_id, run_id),
+        )
+    assert expired.rowcount == 1
+    return claimed_attempt_id
 
 
 def _run_data_operator(

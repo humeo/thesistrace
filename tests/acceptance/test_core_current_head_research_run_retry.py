@@ -224,6 +224,21 @@ def test_worker_loss_retry_resumes_committed_chunks_on_the_frozen_generation(
         runtime = restarted_process.app.state.core_runtime
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
+        recovery_events = _worker_events(completed)
+        worker_loss_events = [
+            event
+            for event in recovery_events
+            if event["event"]
+            in {"research_attempt_failed", "research_retry_scheduled"}
+        ]
+        assert [event["event"] for event in worker_loss_events] == [
+            "research_attempt_failed",
+            "research_retry_scheduled",
+        ]
+        assert all(event["level"] == "WARNING" for event in worker_loss_events)
+        assert all(event["failure_code"] == "WORKER_LOST" for event in worker_loss_events)
+        assert all(event["run_id"] == run_id for event in worker_loss_events)
+        assert worker_loss_events[0]["attempt_id"] == worker_loss_events[1]["attempt_id"]
         detail = restarted_process.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "succeeded"
         assert "attempt" not in str(detail).lower()
@@ -297,8 +312,14 @@ def test_publication_retry_reuses_the_validated_final_checkpoint(
             research_kind=research_kind,
         )
         _install_transient_result_publication_failure(settings)
+        first_attempt_events: list[dict[str, object]] = []
         try:
-            assert runtime.research_runs.process_next() is True
+            assert (
+                runtime.research_runs.process_next(
+                    on_execution_event=first_attempt_events.append
+                )
+                is True
+            )
         finally:
             _remove_transient_result_publication_failure(settings)
 
@@ -308,6 +329,25 @@ def test_publication_retry_reuses_the_validated_final_checkpoint(
         plan = _stored_run(settings, run_id)["immutable_input"]["execution_plan"]
         assert checkpoint_ordinals == list(range(1, len(plan["chunks"]) + 1))
         assert _attempts(settings, run_id)[0]["failure_reason"] == ("InfrastructureUnavailable")
+        retry_events = [
+            event
+            for event in first_attempt_events
+            if event["event"] in {"research_attempt_failed", "research_retry_scheduled"}
+        ]
+        assert [event["event"] for event in retry_events] == [
+            "research_attempt_failed",
+            "research_retry_scheduled",
+        ]
+        assert all(event["level"] == "WARNING" for event in retry_events)
+        assert all(event["run_id"] == run_id for event in retry_events)
+        assert all(
+            event["failure_code"] == "INFRASTRUCTURE_UNAVAILABLE"
+            for event in retry_events
+        )
+        assert not {
+            "research_result_published",
+            "research_run_succeeded",
+        } & {event["event"] for event in first_attempt_events}
 
         events: list[dict[str, object]] = []
         assert runtime.research_runs.process_next(on_execution_event=events.append) is True
@@ -616,9 +656,17 @@ def test_real_child_execution_memory_breach_is_terminal_capacity_failure(
         ]
         assert _checkpoint_ordinals(settings, run_id) == []
         assert [event["event"] for event in events] == [
+            "research_attempt_started",
+            "research_run_state_changed",
             "research_execution_child_started",
             "research_execution_child_exited",
+            "research_attempt_failed",
+            "research_run_failed",
         ]
+        terminal = events[-1]
+        assert terminal["level"] == "ERROR"
+        assert terminal["run_id"] == run_id
+        assert terminal["failure_code"] == "RESOURCE_EXHAUSTED"
 
 
 @pytest.mark.skipif(
@@ -698,6 +746,18 @@ def test_worker_loss_retry_exhaustion_is_bounded_and_restart_stable(
 
         exhausted = _run_worker_once(settings)
         assert exhausted.returncode == 0, exhausted.stdout + exhausted.stderr
+        terminal_events = [
+            event
+            for event in _worker_events(exhausted)
+            if event["event"] in {"research_attempt_failed", "research_run_failed"}
+        ]
+        assert [event["event"] for event in terminal_events] == [
+            "research_attempt_failed",
+            "research_run_failed",
+        ]
+        assert all(event["level"] == "ERROR" for event in terminal_events)
+        assert all(event["failure_code"] == "WORKER_LOST" for event in terminal_events)
+        assert all(event["run_id"] == run_id for event in terminal_events)
         failed = client.get(f"/api/research-runs/{run_id}").json()
         assert failed["status"] == "failed"
         assert failed["failure_reason"] == (
@@ -1447,6 +1507,12 @@ def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]
         timeout=30,
         env=_worker_environment(settings),
     )
+
+
+def _worker_events(
+    completed: subprocess.CompletedProcess[str],
+) -> list[dict[str, object]]:
+    return [json.loads(line) for line in completed.stderr.splitlines() if line.startswith("{")]
 
 
 def _worker_environment(settings: CoreSettings) -> dict[str, str]:

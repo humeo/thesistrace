@@ -239,3 +239,14 @@ _default_sink = OperationalEventSink()
 
 def emit_operational_event(event: OperationalEvent) -> None:
     _default_sink(event)
+
+
+def emit_operational_event_data(event: Mapping[str, object]) -> None:
+    emit_operational_event(
+        OperationalEvent(
+            level=event.get("level", "INFO"),  # type: ignore[arg-type]
+            component=str(event["component"]),
+            event=str(event["event"]),
+            context=event,
+        )
+    )

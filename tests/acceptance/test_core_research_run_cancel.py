@@ -244,7 +244,12 @@ def test_running_cancel_cooperatively_stops_child_before_terminal_state(
         event_names = [event["event"] for event in events]
         assert "research_execution_child_cancel_requested" in event_names
         assert "research_execution_child_termination_requested" not in event_names
-        assert event_names[-1] == "research_execution_child_exited"
+        assert event_names[-2:] == [
+            "research_execution_child_exited",
+            "research_run_cancelled",
+        ]
+        assert events[-1]["run_id"] == run_id
+        assert events[-1]["status"] == "cancelled"
 
 
 @pytest.mark.skipif(
@@ -303,7 +308,10 @@ def test_running_cancel_forces_an_unresponsive_child_to_exit_within_budget(
         event_names = [event["event"] for event in events]
         assert "research_execution_child_cancel_requested" in event_names
         assert "research_execution_child_termination_requested" in event_names
-        assert event_names[-1] == "research_execution_child_exited"
+        assert event_names[-2:] == [
+            "research_execution_child_exited",
+            "research_run_cancelled",
+        ]
 
 
 @pytest.mark.skipif(
@@ -334,7 +342,7 @@ def test_lost_supervisor_cancel_waits_for_lease_expiry_before_recovery(
         )
         try:
             owner = _start_claim_barrier_worker(settings, "research")
-            assert _wait_for_barrier_claim(owner)["resource_id"] == run_id
+            assert _wait_for_barrier_claim(owner)["run_id"] == run_id
             owner.terminate()
             owner.communicate(timeout=10)
         finally:
@@ -870,7 +878,7 @@ def _wait_for_barrier_claim(process: subprocess.Popen[str]) -> dict[str, object]
         selector.close()
     assert line, f"Worker exited before claim: {process.stderr.read() if process.stderr else ''}"
     event = json.loads(line)
-    assert event["event"] == "worker_claim"
+    assert event["event"] == "research_run_claimed"
     return event
 
 

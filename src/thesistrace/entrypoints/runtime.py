@@ -22,6 +22,7 @@ from thesistrace.data import (
     MountedGenerationStore,
 )
 from thesistrace.entrypoints.schema import verify_core_schema
+from thesistrace.operational_events import emit_operational_event_data
 from thesistrace.publication import Publication
 from thesistrace.research_folder import ResearchFolderService
 from thesistrace.research_run import (
@@ -183,6 +184,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             ),
             execution_memory_bytes=settings.research_execution_memory_bytes,
+            lifecycle_event=emit_operational_event_data,
         )
         yield CoreRuntime(
             database=database,
