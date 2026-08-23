@@ -127,9 +127,14 @@ _Avoid_: Result Bundle, durable signal table
 ### Research Lifecycle and Factor Evaluation
 
 **Research Folder**:
-A durable, user-named, one-level container that organizes ResearchRuns without
-owning their inputs or results.
+A durable, one-level container that organizes ResearchRuns without owning their
+inputs or results.
 _Avoid_: Research Definition, nested directory, Browser Draft
+
+**Batch Research Folder**:
+The system-created default Research Folder for ResearchRuns admitted through a
+Research Batch; Folder membership does not define Batch ownership.
+_Avoid_: Research Batch, immutable membership, folder-name lookup
 
 **Browser Draft**:
 The browser-local, non-authoritative authoring state for prospective Research in
@@ -150,6 +155,44 @@ _Avoid_: Execution role, optional Strategy flag
 The durable Research resource that freezes one submitted research question,
 calculation contract, Research Kind, and Data Generation.
 _Avoid_: Research Folder, Browser Draft, Result Bundle
+
+**Research Batch**:
+A durable Research resource that groups ordinary ResearchRuns sharing one
+Research Folder, Research Period, Liquidity Universe, Industry Neutralization
+choice, and Data Generation without owning their Result Bundles.
+_Avoid_: Batch, Batch-Incremental Equivalence, bulk request receipt
+
+**Research Batch Kind**:
+The immutable choice between evaluating several Alphas independently and
+scanning several Strategy parameter combinations for one shared Alpha.
+_Avoid_: Research Kind, mixed Batch, inferred Batch type
+
+**Research Batch Item**:
+The immutable membership record that maps one submitted `item_key` to its
+ResearchRun identity and final execution outcome, even if that terminal Run is
+later deleted.
+_Avoid_: ResearchRun, Result Bundle, Folder entry
+
+**Research Batch State**:
+The durable aggregate lifecycle of a Research Batch from admission through one
+terminal execution or cancellation outcome.
+_Avoid_: ResearchRun State, task heartbeat, inferred UI status
+
+**Research Batch Cancellation**:
+The explicit stop of one Research Batch's remaining work that preserves its
+terminal record and already-published Results while discarding incomplete
+calculation state.
+_Avoid_: Research Deletion, Result rollback, individual Run cancellation
+
+**Research Batch Attempt**:
+One infrastructure execution attempt for an existing Research Batch using its
+unchanged Runs, shared research scope, and Data Generation.
+_Avoid_: Research Batch, ResearchRun Attempt, modified submission
+
+**Research Batch Progress**:
+The user-visible combination of durably completed Batch tasks and estimated
+work within the current incomplete task.
+_Avoid_: Partial Result, recovery checkpoint, guaranteed completion time
 
 **ResearchRun State**:
 The durable user-visible lifecycle of a ResearchRun from admission through one

@@ -125,6 +125,7 @@ their real authority instead of adding an ADR.
 - [ADR-0105 — Publish one immutable Tracking Checkpoint per Advance](0105-publish-one-immutable-tracking-checkpoint-per-advance.md)
 - [ADR-0108 — Require canonical exact Batch-Incremental Equivalence](0108-require-canonical-exact-batch-incremental-equivalence.md)
 - [ADR-0109 — Pin one canonical numeric execution and serialization contract](0109-pin-one-canonical-numeric-execution-and-serialization-contract.md)
+- [ADR-0216 — Make Research Batch a durable orchestration resource](0216-make-research-batch-a-durable-orchestration-resource.md)
 
 ## Core runtime, storage, and data lifecycle
 
@@ -193,7 +194,7 @@ their real authority instead of adding an ADR.
 - [ADR-0202 — Claim ResearchRuns in strict FIFO order](0202-claim-researchruns-in-strict-fifo-order.md)
 - [ADR-0206 — Retry only transient ResearchRun infrastructure failures](0206-retry-only-transient-researchrun-infrastructure-failures.md)
 - [ADR-0207 — Reset development Product State without erasing Canonical Data](0207-reset-development-product-state-without-erasing-canonical-data.md)
-- [ADR-0208 — Separate Research and Tracking Worker pools](0208-separate-research-and-tracking-worker-pools.md)
+- [ADR-0218 — Separate ordinary Research, Batch Research, and Tracking Worker pools](0218-separate-ordinary-batch-research-and-tracking-worker-pools.md)
 - [ADR-0209 — Recompute failed Tracking Advances from the authoritative Head](0209-recompute-failed-tracking-advances-from-the-authoritative-head.md)
 - [ADR-0210 — Confirm DailyTrack Stop after the execution child exits](0210-confirm-dailytrack-stop-after-the-execution-child-exits.md)
 - [ADR-0211 — Hard-cut result-changing calculation contracts](0211-hard-cut-result-changing-calculation-contracts.md)
