@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import re
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -32,6 +31,10 @@ from thesistrace.daily_track.execution import (
     TrackingExecutionOwnershipLost,
     TrackingExecutionRequest,
     TrackingExecutionResult,
+)
+from thesistrace.daily_track.failure_policy import (
+    tracking_attempt_failure_code,
+    tracking_attempt_retry_eligible,
 )
 from thesistrace.daily_track.models import (
     DailyTrackDetail,
@@ -1729,7 +1732,10 @@ class DailyTrackService:
                     ),
                 )
                 attempt_number = int(current["cycle_attempt_ordinal"])
-                retry = attempt_number < 3
+                retry = tracking_attempt_retry_eligible(
+                    WORKER_LOST_FAILURE,
+                    attempt_number,
+                )
                 if retry:
                     retry_delay = 5 if int(current["cycle_attempt_ordinal"]) == 1 else 30
                     progression = transaction.execute(
@@ -2303,7 +2309,10 @@ class DailyTrackService:
         assert self._dataset_lifecycle is not None
         retryable = _tracking_failure_is_retryable(error)
         failure_reason = "InfrastructureFailure" if retryable else type(error).__name__
-        retry_wait = retryable and claim.cycle_attempt_ordinal < 3
+        retry_wait = tracking_attempt_retry_eligible(
+            failure_reason,
+            claim.cycle_attempt_ordinal,
+        )
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
@@ -2404,9 +2413,8 @@ class DailyTrackService:
             attempt_number=claim.cycle_attempt_ordinal,
             retry=retry_wait,
             failure_code=(
-                "INFRASTRUCTURE_FAILURE"
-                if retryable
-                else _failure_code(type(error).__name__)
+                tracking_attempt_failure_code(failure_reason)
+                or "UNCLASSIFIED_FAILURE"
             ),
             attempt_level=(
                 "WARNING"
@@ -2478,10 +2486,6 @@ def _emit_tracking_failure(
             failure_code=failure.failure_code,
         )
     )
-
-
-def _failure_code(value: str) -> str:
-    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value).upper()
 
 
 def _tracking_failure_is_retryable(error: Exception) -> bool:

@@ -203,10 +203,12 @@ def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> Non
     }
 
 
-def test_research_run_diagnostic_entrypoint_is_postgresql_only() -> None:
+def test_core_diagnostic_entrypoint_is_postgresql_only() -> None:
     source = (ROOT / "src/thesistrace/entrypoints/diagnose.py").read_text()
 
     assert "PostgresDatabase" in source
+    assert "ResearchRunDiagnostics" in source
+    assert "DailyTrackDiagnostics" in source
     assert "open_core_runtime" not in source
     assert "Publication" not in source
     assert "DatasetLifecycle" not in source

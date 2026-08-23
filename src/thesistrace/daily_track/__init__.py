@@ -1,3 +1,7 @@
+from thesistrace.daily_track.diagnostics import (
+    DailyTrackDiagnosticNotFound,
+    DailyTrackDiagnostics,
+)
 from thesistrace.daily_track.models import (
     DailyTrackDetail,
     DailyTrackList,
@@ -21,6 +25,8 @@ from thesistrace.daily_track.session_persistence import SessionCoordinateReposit
 
 __all__ = [
     "DailyTrackActivationLimitReached",
+    "DailyTrackDiagnosticNotFound",
+    "DailyTrackDiagnostics",
     "DailyTrackDetail",
     "DailyTrackDetailUnavailable",
     "DailyTrackDeleteConflict",
