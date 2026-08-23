@@ -31,6 +31,7 @@ _THREAD_ENVIRONMENT_NAMES = (
 
 class WorkerRole(StrEnum):
     RESEARCH = "research"
+    BATCH_RESEARCH = "batch-research"
     TRACKING = "tracking"
 
 
@@ -149,6 +150,18 @@ def process_one_poll(
             on_claim=claim,
             on_execution_event=emit,
         )
+    elif configuration.role is WorkerRole.BATCH_RESEARCH:
+        if (
+            runtime.research_batches.execution_memory_bytes
+            > configuration.capacity.execution_memory_bytes
+        ):
+            raise WorkerCapacityError(
+                "Batch Research Worker execution memory cannot fit planning capacity"
+            )
+        product_worked = runtime.research_batches.process_next_factor(
+            on_claim=claim,
+            on_execution_event=emit,
+        )
     else:
         if (
             runtime.daily_tracks.execution_memory_bytes
@@ -260,7 +273,11 @@ def _claim_event(
     resource_type = (
         "ResearchRun"
         if configuration.role is WorkerRole.RESEARCH
-        else "TrackingAdvance"
+        else (
+            "ResearchBatch"
+            if configuration.role is WorkerRole.BATCH_RESEARCH
+            else "TrackingAdvance"
+        )
     )
 
     def claimed(resource_id: str, attempt_id: str) -> None:

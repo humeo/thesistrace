@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64DecodeError
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
+from threading import Event, Thread
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
@@ -13,6 +17,14 @@ from psycopg.types.json import Jsonb
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data import DatasetLifecycle
 from thesistrace.publication.serialization import canonical_json_bytes
+from thesistrace.research_batch.execution import (
+    ExecutionEvent,
+    FactorBatchExecutionItem,
+    FactorBatchExecutionRequest,
+    SupervisedFactorBatchExecution,
+    SupervisedFactorBatchExecutor,
+    item_failure_error,
+)
 from thesistrace.research_batch.models import (
     FactorEvaluationBatchAdmissionCommand,
     ResearchBatchAdmissionCommand,
@@ -37,10 +49,24 @@ from thesistrace.research_run.models import (
 from thesistrace.research_run.service import (
     PreparedResearchRunAdmission,
     ResearchRunAdmissionRejected,
+    ResearchRunExecutionClaim,
     ResearchRunService,
 )
 
 BATCH_ADMISSION_RETENTION_SECONDS = 15 * 60
+BATCH_ATTEMPT_LEASE_SECONDS = 15 * 60
+BATCH_ATTEMPT_HEARTBEAT_SECONDS = 30
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _FactorBatchClaim:
+    batch_id: str
+    attempt_id: str
+    fence: int
+    generation_pin_id: str
+    data_generation_id: str
+    items: tuple[tuple[int, str, ResearchRunExecutionClaim], ...]
 
 
 class ResearchBatchAdmissionConflict(RuntimeError):
@@ -60,14 +86,143 @@ class ResearchBatchService:
         *,
         research_runs: ResearchRunService,
         dataset_lifecycle: DatasetLifecycle,
+        execution: SupervisedFactorBatchExecutor | None = None,
         retention_seconds: float = BATCH_ADMISSION_RETENTION_SECONDS,
+        lease_seconds: float = BATCH_ATTEMPT_LEASE_SECONDS,
+        heartbeat_seconds: float = BATCH_ATTEMPT_HEARTBEAT_SECONDS,
     ) -> None:
-        if retention_seconds <= 0:
-            raise ValueError("Research Batch retention duration must be positive")
+        if retention_seconds <= 0 or lease_seconds <= 0 or heartbeat_seconds <= 0:
+            raise ValueError("Research Batch lease durations must be positive")
         self._database = database
         self._research_runs = research_runs
         self._dataset_lifecycle = dataset_lifecycle
+        self._execution = execution
         self._retention_seconds = retention_seconds
+        self._lease_seconds = lease_seconds
+        self._heartbeat_seconds = heartbeat_seconds
+
+    @property
+    def execution_memory_bytes(self) -> int:
+        return self._research_runs.execution_memory_bytes
+
+    def process_next_factor(
+        self,
+        *,
+        on_claim: Callable[[str, str], None] | None = None,
+        on_execution_event: ExecutionEvent | None = None,
+    ) -> bool:
+        if self._execution is None:
+            raise RuntimeError("Research Batch execution is not configured")
+        claim = self._claim_next_factor()
+        if claim is None:
+            return False
+        if on_claim is not None:
+            on_claim(claim.batch_id, claim.attempt_id)
+        emit = on_execution_event or (lambda _event: None)
+        execution: SupervisedFactorBatchExecution | None = None
+        try:
+            with self._maintain_claim(claim):
+                execution = self._execution.execute(
+                    FactorBatchExecutionRequest(
+                        batch_id=claim.batch_id,
+                        attempt_id=claim.attempt_id,
+                        data_generation_id=claim.data_generation_id,
+                        items=tuple(
+                            FactorBatchExecutionItem(
+                                ordinal=ordinal,
+                                item_key=item_key,
+                                run_id=run_claim.run_id,
+                                immutable_input=run_claim.immutable_input,
+                            )
+                            for ordinal, item_key, run_claim in claim.items
+                        ),
+                    ),
+                    emit=emit,
+                )
+                if execution.message.get("status") != "batch_prepared":
+                    raise RuntimeError("Factor Batch child did not prepare shared data")
+                execution.advance("acknowledge_preparation")
+                claims_by_ordinal = {
+                    ordinal: (item_key, run_claim)
+                    for ordinal, item_key, run_claim in claim.items
+                }
+                while execution.message.get("status") != "batch_succeeded":
+                    message = execution.message
+                    self._validate_claim(claim)
+                    ordinal = int(message.get("item_ordinal", 0))
+                    selected = claims_by_ordinal.get(ordinal)
+                    if selected is None:
+                        raise RuntimeError("Factor Batch child returned an unknown item")
+                    item_key, run_claim = selected
+                    if (
+                        message.get("item_key") != item_key
+                        or message.get("run_id") != run_claim.run_id
+                    ):
+                        raise RuntimeError("Factor Batch child item identity is invalid")
+                    if message.get("status") == "item_failed":
+                        self._research_runs.fail_batch_owned_item(
+                            run_claim,
+                            item_failure_error(message),
+                            authorize_batch=lambda transaction: (
+                                self._authorize_claim_in_transaction(transaction, claim)
+                            ),
+                        )
+                        self._complete_item(claim.batch_id)
+                        execution.advance("acknowledge_item")
+                        continue
+                    if message.get("status") != "item_chunk_succeeded":
+                        raise RuntimeError("Factor Batch child response is invalid")
+                    chunk = message.get("chunk")
+                    if not isinstance(chunk, Mapping):
+                        raise RuntimeError("Factor Batch child Chunk is invalid")
+                    if chunk.get("final") is True:
+                        self._research_runs.complete_batch_owned_factor_item(
+                            run_claim,
+                            chunk,
+                            authorize_batch=lambda transaction: (
+                                self._authorize_claim_in_transaction(transaction, claim)
+                            ),
+                        )
+                        self._complete_item(claim.batch_id)
+                        command = "acknowledge_item"
+                    else:
+                        command = "acknowledge_chunk"
+                    execution.advance(command)
+                self._validate_claim(claim)
+                execution.acknowledge()
+                self._finish_attempt(claim, failed=False)
+        except Exception as error:
+            if execution is not None:
+                execution.close()
+            try:
+                self._fail_running_items(claim, error)
+            except Exception as cleanup_error:
+                logger.error(
+                    "Research Batch failure cleanup did not reach every child",
+                    extra={
+                        "batch_id": claim.batch_id,
+                        "error_type": type(cleanup_error).__name__,
+                    },
+                    exc_info=(
+                        type(cleanup_error),
+                        cleanup_error,
+                        cleanup_error.__traceback__,
+                    ),
+                )
+            else:
+                self._finish_attempt(claim, failed=True, error=error)
+            logger.error(
+                "Research Batch execution failed",
+                extra={
+                    "batch_id": claim.batch_id,
+                    "error_type": type(error).__name__,
+                },
+                exc_info=(type(error), error, error.__traceback__),
+            )
+        finally:
+            if execution is not None:
+                execution.close()
+        return True
 
     def admit(self, command: ResearchBatchAdmissionCommand) -> ResearchBatchSummary:
         fingerprint = _admission_fingerprint(command)
@@ -244,6 +399,310 @@ class ResearchBatchService:
             return _summary_in_transaction(
                 transaction,
                 batch_id,
+                research_runs=self._research_runs,
+            )
+
+    def _claim_next_factor(self) -> _FactorBatchClaim | None:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT id, execution_fence, scope
+                FROM research_batches.batches
+                WHERE batch_kind = 'factor_evaluation' AND status = 'queued'
+                ORDER BY created_at, id
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            batch_id = str(row["id"])
+            fence = int(row["execution_fence"]) + 1
+            ordinal_row = transaction.execute(
+                """
+                SELECT coalesce(max(ordinal), 0) + 1 AS ordinal
+                FROM research_batches.attempts
+                WHERE batch_id = %s
+                """,
+                (batch_id,),
+            ).fetchone()
+            assert ordinal_row is not None
+            attempt_id = f"batch_attempt_{uuid4().hex[:20]}"
+            scope = ResearchBatchScope.model_validate(row["scope"])
+            pinned = self._dataset_lifecycle.pin_generation_in_transaction(
+                transaction,
+                generation_manifest_sha256=scope.data_generation_id,
+                owner_kind="research_batch_attempt",
+                owner_id=attempt_id,
+                lease_seconds=self._lease_seconds,
+            )
+            if (
+                pinned.descriptor.manifest_sha256 != scope.data_generation_id
+                or pinned.descriptor.data_through_session
+                != scope.data_through_session.isoformat()
+            ):
+                raise RuntimeError("Factor Batch Generation facts changed")
+            item_rows = transaction.execute(
+                """
+                SELECT ordinal, item_key, research_run_id
+                FROM research_batches.items
+                WHERE batch_id = %s AND dependency_role = 'factor'
+                ORDER BY ordinal
+                FOR UPDATE
+                """,
+                (batch_id,),
+            ).fetchall()
+            if not item_rows:
+                raise RuntimeError("Factor Batch has no items")
+            claimed_items = tuple(
+                (
+                    int(item["ordinal"]),
+                    str(item["item_key"]),
+                    self._research_runs.begin_batch_owned_execution_in_transaction(
+                        transaction,
+                        str(item["research_run_id"]),
+                        batch_attempt_id=attempt_id,
+                        generation_pin_id=pinned.pin.id,
+                        generation=pinned.descriptor,
+                    ),
+                )
+                for item in item_rows
+            )
+            generation_ids = {item[2].data_generation_id for item in claimed_items}
+            if len(generation_ids) != 1:
+                raise RuntimeError("Factor Batch Generation is inconsistent")
+            updated = transaction.execute(
+                """
+                UPDATE research_batches.batches
+                SET status = 'running', execution_fence = %s, updated_at = now()
+                WHERE id = %s AND status = 'queued'
+                """,
+                (fence, batch_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("Factor Batch claim was fenced")
+            transaction.execute(
+                """
+                INSERT INTO research_batches.attempts (
+                    id, batch_id, ordinal, fence, generation_pin_id,
+                    data_generation_id, data_through_session,
+                    status, lease_expires_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, 'running',
+                    now() + make_interval(secs => %s)
+                )
+                """,
+                (
+                    attempt_id,
+                    batch_id,
+                    int(ordinal_row["ordinal"]),
+                    fence,
+                    pinned.pin.id,
+                    pinned.descriptor.manifest_sha256,
+                    pinned.descriptor.data_through_session,
+                    self._lease_seconds,
+                ),
+            )
+            self._dataset_lifecycle.release_retention_in_transaction(
+                transaction,
+                retention_id=f"research-batch:{batch_id}",
+            )
+        return _FactorBatchClaim(
+            batch_id=batch_id,
+            attempt_id=attempt_id,
+            fence=fence,
+            generation_pin_id=pinned.pin.id,
+            data_generation_id=pinned.descriptor.manifest_sha256,
+            items=claimed_items,
+        )
+
+    @contextmanager
+    def _maintain_claim(self, claim: _FactorBatchClaim) -> Iterator[None]:
+        stopped = Event()
+        heartbeat = Thread(
+            target=self._heartbeat_claim,
+            args=(claim, stopped),
+            name=f"research-batch-heartbeat-{claim.batch_id}",
+            daemon=True,
+        )
+        heartbeat.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            heartbeat.join(timeout=5)
+
+    def _heartbeat_claim(self, claim: _FactorBatchClaim, stopped: Event) -> None:
+        while not stopped.wait(self._heartbeat_seconds):
+            try:
+                with self._database.transaction() as transaction:
+                    renewed = transaction.execute(
+                        """
+                        UPDATE research_batches.attempts AS attempt
+                        SET heartbeat_at = now(),
+                            lease_expires_at = now() + make_interval(secs => %s)
+                        WHERE attempt.id = %s AND attempt.batch_id = %s
+                          AND attempt.fence = %s AND attempt.status = 'running'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM research_batches.batches AS batch
+                              WHERE batch.id = attempt.batch_id
+                                AND batch.status = 'running'
+                                AND batch.execution_fence = attempt.fence
+                          )
+                        """,
+                        (
+                            self._lease_seconds,
+                            claim.attempt_id,
+                            claim.batch_id,
+                            claim.fence,
+                        ),
+                    )
+                    if renewed.rowcount == 1:
+                        self._dataset_lifecycle.heartbeat_pin_in_transaction(
+                            transaction,
+                            claim.generation_pin_id,
+                            owner_id=claim.attempt_id,
+                            lease_seconds=self._lease_seconds,
+                        )
+            except Exception as error:
+                logger.error(
+                    "Research Batch claim heartbeat failed",
+                    extra={
+                        "batch_id": claim.batch_id,
+                        "error_type": type(error).__name__,
+                    },
+                )
+                return
+            if renewed.rowcount != 1:
+                return
+
+    def _validate_claim(self, claim: _FactorBatchClaim) -> None:
+        with self._database.transaction() as transaction:
+            self._authorize_claim_in_transaction(transaction, claim)
+
+    def _authorize_claim_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        claim: _FactorBatchClaim,
+    ) -> None:
+        current = transaction.execute(
+            """
+            SELECT batch.status, batch.execution_fence,
+                   attempt.status AS attempt_status,
+                   attempt.generation_pin_id
+            FROM research_batches.batches AS batch
+            JOIN research_batches.attempts AS attempt ON attempt.batch_id = batch.id
+            WHERE batch.id = %s AND attempt.id = %s AND attempt.fence = %s
+            FOR UPDATE OF batch, attempt
+            """,
+            (claim.batch_id, claim.attempt_id, claim.fence),
+        ).fetchone()
+        if current != {
+            "status": "running",
+            "execution_fence": claim.fence,
+            "attempt_status": "running",
+            "generation_pin_id": claim.generation_pin_id,
+        }:
+            raise RuntimeError("Factor Batch execution was fenced")
+
+    def _complete_item(self, batch_id: str) -> None:
+        with self._database.transaction() as transaction:
+            _refresh_progress_in_transaction(
+                transaction,
+                batch_id,
+                research_runs=self._research_runs,
+            )
+
+    def _fail_running_items(self, claim: _FactorBatchClaim, error: Exception) -> None:
+        for _ordinal, _item_key, run_claim in claim.items:
+            self._research_runs.fail_batch_owned_item(
+                run_claim,
+                error,
+                authorize_batch=lambda transaction: (
+                    self._authorize_claim_in_transaction(transaction, claim)
+                ),
+            )
+        with self._database.transaction() as transaction:
+            _refresh_progress_in_transaction(
+                transaction,
+                claim.batch_id,
+                research_runs=self._research_runs,
+            )
+
+    def _finish_attempt(
+        self,
+        claim: _FactorBatchClaim,
+        *,
+        failed: bool,
+        error: Exception | None = None,
+    ) -> None:
+        with self._database.transaction() as transaction:
+            item_rows = transaction.execute(
+                """
+                SELECT research_run_id
+                FROM research_batches.items
+                WHERE batch_id = %s
+                ORDER BY ordinal
+                """,
+                (claim.batch_id,),
+            ).fetchall()
+            run_ids = [str(row["research_run_id"]) for row in item_rows]
+            child_statuses = self._research_runs.project_child_statuses_in_transaction(
+                transaction,
+                run_ids,
+            )
+            statuses = [child_statuses[run_id] for run_id in run_ids]
+            succeeded = sum(status == "succeeded" for status in statuses)
+            terminal = sum(
+                status in {"succeeded", "failed", "cancelled"} for status in statuses
+            )
+            if terminal != len(statuses):
+                raise RuntimeError(
+                    "Research Batch Attempt cannot finish before every child is terminal"
+                )
+            if succeeded == len(statuses):
+                batch_status = "succeeded"
+            elif succeeded:
+                batch_status = "completed_with_failures"
+            else:
+                batch_status = "failed"
+            finished_attempt = transaction.execute(
+                """
+                UPDATE research_batches.attempts
+                SET status = %s, heartbeat_at = now(), lease_expires_at = now(),
+                    finished_at = now(), failure_reason = %s
+                WHERE id = %s AND batch_id = %s AND fence = %s
+                  AND status = 'running'
+                """,
+                (
+                    "failed" if failed else "succeeded",
+                    None if error is None else type(error).__name__,
+                    claim.attempt_id,
+                    claim.batch_id,
+                    claim.fence,
+                ),
+            )
+            if finished_attempt.rowcount != 1:
+                raise RuntimeError("Research Batch Attempt completion was fenced")
+            finished_batch = transaction.execute(
+                """
+                UPDATE research_batches.batches
+                SET status = %s, updated_at = now()
+                WHERE id = %s AND execution_fence = %s AND status = 'running'
+                """,
+                (batch_status, claim.batch_id, claim.fence),
+            )
+            if finished_batch.rowcount != 1:
+                raise RuntimeError("Research Batch completion was fenced")
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction,
+                claim.generation_pin_id,
+                owner_id=claim.attempt_id,
+            )
+            _refresh_progress_in_transaction(
+                transaction,
+                claim.batch_id,
                 research_runs=self._research_runs,
             )
 
@@ -513,6 +972,37 @@ def _summary_in_transaction(
             )
             for item in item_rows
         ],
+    )
+
+
+def _refresh_progress_in_transaction(
+    transaction: PostgresTransaction,
+    batch_id: str,
+    *,
+    research_runs: ResearchRunService,
+) -> None:
+    rows = transaction.execute(
+        """
+        SELECT research_run_id
+        FROM research_batches.items
+        WHERE batch_id = %s
+        ORDER BY ordinal
+        """,
+        (batch_id,),
+    ).fetchall()
+    run_ids = [str(row["research_run_id"]) for row in rows]
+    statuses = research_runs.project_child_statuses_in_transaction(transaction, run_ids)
+    completed = sum(
+        status in {"succeeded", "failed", "cancelled"}
+        for status in statuses.values()
+    )
+    transaction.execute(
+        """
+        UPDATE research_batches.progress
+        SET completed_items = %s, updated_at = now()
+        WHERE batch_id = %s
+        """,
+        (completed, batch_id),
     )
 
 

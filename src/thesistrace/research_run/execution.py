@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import json
-import os
 import resource
-import selectors
-import signal
 import subprocess
 import sys
 from collections.abc import Callable, Iterator, Mapping
@@ -13,6 +10,7 @@ from pathlib import Path
 from time import monotonic
 
 from thesistrace.data import GenerationStoreError, MountedGenerationStore
+from thesistrace.research_kernel.factor import prepare_columnar_forward_labels
 from thesistrace.research_kernel.kernel_run import (
     KernelRunError,
     RunInput,
@@ -24,16 +22,14 @@ from thesistrace.research_kernel.research_chunks import (
     execute_research_chunk,
 )
 from thesistrace.research_run.models import ImmutableRunInput
-
-_MAX_PROTOCOL_LINE_BYTES = 16 * 1024 * 1024
-_CANCEL_COOPERATIVE_GRACE_SECONDS = 1.0
-_CANCEL_CHILD_EXIT_BUDGET_SECONDS = 3.0
-_THREAD_ENVIRONMENT_NAMES = (
-    "OMP_NUM_THREADS",
-    "OPENBLAS_NUM_THREADS",
-    "MKL_NUM_THREADS",
-    "NUMEXPR_NUM_THREADS",
+from thesistrace.research_run.supervised_child import (
+    ChildTransportCancelled,
+    ChildTransportCgroupOom,
+    ChildTransportError,
+    SupervisedChildTransport,
+    enforce_cancellation_deadline,
 )
+
 ExecutionEvent = Callable[[dict[str, object]], None]
 
 
@@ -83,19 +79,18 @@ class ResearchExecutionResume:
 class SupervisedResearchExecution:
     def __init__(
         self,
-        process: subprocess.Popen[str],
+        transport: SupervisedChildTransport,
         request: ResearchExecutionRequest,
         chunk: dict[str, object],
         emit: ExecutionEvent,
         execution_memory_bytes: int,
-        oom_kill_count_before: int | None,
     ) -> None:
-        self._process = process
+        self._transport = transport
+        self._process = transport.process
         self._request = request
         self.chunk = chunk
         self._emit = emit
         self._execution_memory_bytes = execution_memory_bytes
-        self._oom_kill_count_before = oom_kill_count_before
         self._acknowledged = False
         self._exit_emitted = False
 
@@ -109,11 +104,10 @@ class SupervisedResearchExecution:
         self._process.stdin.write('{"command":"acknowledge_chunk"}\n')
         self._process.stdin.flush()
         response = _read_message(
-            self._process,
+            self._transport,
             self._request,
             emit=self._emit,
             cancel_requested=cancel_requested,
-            oom_kill_count_before=self._oom_kill_count_before,
         )
         self.chunk = _chunk_from_response(
             response,
@@ -159,11 +153,11 @@ class SupervisedResearchExecution:
                 cancellation_started = now
                 self._emit(self._event("research_execution_child_cancel_requested"))
             if cancellation_started is not None:
-                termination_sent = _enforce_cancellation_deadline(
+                termination_sent = enforce_cancellation_deadline(
                     self._process,
                     elapsed=now - cancellation_started,
                     termination_sent=termination_sent,
-                    emit_termination=lambda: self._emit(
+                    on_termination=lambda: self._emit(
                         self._event("research_execution_child_termination_requested")
                     ),
                 )
@@ -192,11 +186,11 @@ class SupervisedResearchExecution:
         started = monotonic()
         termination_sent = False
         while self._process.poll() is None:
-            termination_sent = _enforce_cancellation_deadline(
+            termination_sent = enforce_cancellation_deadline(
                 self._process,
                 elapsed=monotonic() - started,
                 termination_sent=termination_sent,
-                emit_termination=lambda: self._emit(
+                on_termination=lambda: self._emit(
                     self._event("research_execution_child_termination_requested")
                 ),
             )
@@ -270,15 +264,10 @@ class SupervisedResearchExecutor:
         emit: ExecutionEvent,
         cancel_requested: Callable[[], bool],
     ) -> SupervisedResearchExecution:
-        oom_kill_count_before = _cgroup_oom_kill_count()
-        process = subprocess.Popen(
-            [sys.executable, "-m", "thesistrace.entrypoints.research_child"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=_child_environment(),
+        transport = SupervisedChildTransport.spawn(
+            "thesistrace.entrypoints.research_child"
         )
+        process = transport.process
         try:
             emit(
                 {
@@ -335,11 +324,10 @@ class SupervisedResearchExecutor:
             process.stdin.flush()
             try:
                 response = _read_message(
-                    process,
+                    transport,
                     request,
                     emit=emit,
                     cancel_requested=cancel_requested,
-                    oom_kill_count_before=oom_kill_count_before,
                 )
             except ResearchExecutionCancelled:
                 process.wait(timeout=1)
@@ -379,12 +367,11 @@ class SupervisedResearchExecutor:
                 }
             )
             return SupervisedResearchExecution(
-                process,
+                transport,
                 request,
                 chunk,
                 emit,
                 self._execution_memory_bytes,
-                oom_kill_count_before,
             )
         except Exception:
             if process.stdin is not None and not process.stdin.closed:
@@ -588,6 +575,10 @@ def _calculate_chunks(
                 run_input=run_input,
                 binding=alpha_factor_binding,
                 research_data=research_data,
+                forward_labels=prepare_columnar_forward_labels(
+                    research_data,
+                    cancellation_check=lambda: _require_not_cancelled(cancel_requested),
+                ),
                 research_sessions=research_sessions,
                 final_chunk=final_chunk,
                 continuation=continuation,
@@ -757,91 +748,45 @@ def _kernel_input(
     )
 
 
-def _child_environment() -> dict[str, str]:
-    environment = {
-        "PATH": os.environ.get("PATH", ""),
-        "PYTHONUNBUFFERED": "1",
-    }
-    for name in _THREAD_ENVIRONMENT_NAMES:
-        value = os.environ.get(name)
-        if value is not None:
-            environment[name] = value
-    if os.environ.get("THESISTRACE_QUALIFICATION_COLD_DATA_READS") == "1":
-        environment["THESISTRACE_QUALIFICATION_COLD_DATA_READS"] = "1"
-    return environment
-
-
 def _read_message(
-    process: subprocess.Popen[str],
+    transport: SupervisedChildTransport,
     request: ResearchExecutionRequest,
     *,
     emit: ExecutionEvent,
     cancel_requested: Callable[[], bool],
-    oom_kill_count_before: int | None,
 ) -> dict[str, object]:
-    stream = process.stdout
-    if stream is None:
-        raise ResearchExecutionError("Research execution child has no output pipe")
-    selector = selectors.DefaultSelector()
-    selector.register(stream, selectors.EVENT_READ)
-    cancellation_started: float | None = None
-    termination_sent = False
     try:
-        while True:
-            now = monotonic()
-            if cancellation_started is None and cancel_requested():
-                cancellation_started = now
-                assert process.stdin is not None
-                process.stdin.write('{"command":"cancel"}\n')
-                process.stdin.flush()
-                emit(
-                    {
-                        "event": "research_execution_child_cancel_requested",
-                        "resource_type": "ResearchRun",
-                        "resource_id": request.run_id,
-                        "attempt_id": request.attempt_id,
-                        "research_kind": request.immutable_input.research_kind,
-                        "child_pid": process.pid,
-                    }
-                )
-            if cancellation_started is not None:
-                termination_sent = _enforce_cancellation_deadline(
-                    process,
-                    elapsed=now - cancellation_started,
-                    termination_sent=termination_sent,
-                    emit_termination=lambda: emit(
-                        {
-                            "event": "research_execution_child_termination_requested",
-                            "resource_type": "ResearchRun",
-                            "resource_id": request.run_id,
-                            "attempt_id": request.attempt_id,
-                            "research_kind": request.immutable_input.research_kind,
-                            "child_pid": process.pid,
-                        }
-                    ),
-                )
-            if selector.select(timeout=0.05):
-                line = stream.readline(_MAX_PROTOCOL_LINE_BYTES + 1)
-                if line:
-                    break
-            if process.poll() is not None:
-                if cancellation_started is not None:
-                    raise ResearchExecutionCancelled("Research execution was cancelled")
-                if _is_confirmed_cgroup_oom(process, oom_kill_count_before):
-                    raise ResearchExecutionResourceExhausted(
-                        "Research execution child exceeded its cgroup memory limit"
-                    )
-                raise ResearchExecutionError("Research execution child exited without a response")
-    finally:
-        selector.close()
-    if cancellation_started is not None:
-        raise ResearchExecutionCancelled("Research execution was cancelled")
-    if len(line.encode()) > _MAX_PROTOCOL_LINE_BYTES or not line.endswith("\n"):
-        raise ResearchExecutionError("Research execution child response exceeds its bound")
-    value = json.loads(line)
-    if not isinstance(value, dict):
-        raise ResearchExecutionError("Research execution child response is invalid")
-    return value
+        return transport.read(
+            cancel_requested=cancel_requested,
+            on_cancel=lambda: emit(
+                {
+                    "event": "research_execution_child_cancel_requested",
+                    "resource_type": "ResearchRun",
+                    "resource_id": request.run_id,
+                    "attempt_id": request.attempt_id,
+                    "research_kind": request.immutable_input.research_kind,
+                    "child_pid": transport.process.pid,
+                }
+            ),
+            on_termination=lambda: emit(
+                {
+                    "event": "research_execution_child_termination_requested",
+                    "resource_type": "ResearchRun",
+                    "resource_id": request.run_id,
+                    "attempt_id": request.attempt_id,
+                    "research_kind": request.immutable_input.research_kind,
+                    "child_pid": transport.process.pid,
+                }
+            ),
+        )
+    except ChildTransportCancelled as error:
+        raise ResearchExecutionCancelled("Research execution was cancelled") from error
+    except ChildTransportCgroupOom as error:
+        raise ResearchExecutionResourceExhausted(
+            "Research execution child exceeded its cgroup memory limit"
+        ) from error
+    except ChildTransportError as error:
+        raise ResearchExecutionError(str(error)) from error
 
 
 def _chunk_from_response(
@@ -885,40 +830,6 @@ def _chunk_from_response(
             "Research execution child exceeded its execution memory budget"
         )
     return chunk
-
-
-def _cgroup_oom_kill_count() -> int | None:
-    for path in (
-        Path("/sys/fs/cgroup/memory.events.local"),
-        Path("/sys/fs/cgroup/memory.events"),
-    ):
-        try:
-            values = dict(
-                line.split(maxsplit=1) for line in path.read_text(encoding="utf-8").splitlines()
-            )
-        except (FileNotFoundError, OSError, ValueError):
-            continue
-        value = values.get("oom_kill")
-        if value is not None:
-            try:
-                return int(value)
-            except ValueError:
-                return None
-    return None
-
-
-def _is_confirmed_cgroup_oom(
-    process: subprocess.Popen[str],
-    oom_kill_count_before: int | None,
-) -> bool:
-    if process.returncode not in {-signal.SIGKILL, 128 + signal.SIGKILL}:
-        return False
-    oom_kill_count_after = _cgroup_oom_kill_count()
-    return (
-        oom_kill_count_before is not None
-        and oom_kill_count_after is not None
-        and oom_kill_count_after > oom_kill_count_before
-    )
 
 
 def _peak_rss_bytes(response: Mapping[str, object]) -> int:
@@ -990,25 +901,6 @@ def _current_process_peak_rss_bytes() -> int:
 def _require_not_cancelled(cancel_requested: Callable[[], bool]) -> None:
     if cancel_requested():
         raise ResearchExecutionCancelled("Research execution was cancelled")
-
-
-def _enforce_cancellation_deadline(
-    process: subprocess.Popen[str],
-    *,
-    elapsed: float,
-    termination_sent: bool,
-    emit_termination: Callable[[], None],
-) -> bool:
-    if process.poll() is not None:
-        return termination_sent
-    if elapsed >= _CANCEL_CHILD_EXIT_BUDGET_SECONDS:
-        process.kill()
-        return termination_sent
-    if elapsed >= _CANCEL_COOPERATIVE_GRACE_SECONDS and not termination_sent:
-        process.terminate()
-        emit_termination()
-        return True
-    return termination_sent
 
 
 def _child_stderr_detail(process: subprocess.Popen[str]) -> str:

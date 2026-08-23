@@ -92,9 +92,10 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "data",
             "publication",
             "research_folder",
-            "research_kernel",
-            "research_run",
-        },
+                "research_kernel",
+                "research_run",
+                "research_series",
+            },
         "fixture": {"data"},
         "adapters": {"data", "fixture"},
         "entrypoints": {
@@ -233,8 +234,11 @@ def test_current_runtime_initializes_before_starting_long_running_processes() ->
         "  research-worker:\n", maxsplit=1
     )[0]
     research_worker = compose.split("  research-worker:\n", maxsplit=1)[1].split(
-        "  tracking-worker:\n", maxsplit=1
+        "  batch-research-worker:\n", maxsplit=1
     )[0]
+    batch_research_worker = compose.split(
+        "  batch-research-worker:\n", maxsplit=1
+    )[1].split("  tracking-worker:\n", maxsplit=1)[0]
     tracking_worker = compose.split("  tracking-worker:\n", maxsplit=1)[1].split(
         "  web:\n", maxsplit=1
     )[0]
@@ -242,6 +246,7 @@ def test_current_runtime_initializes_before_starting_long_running_processes() ->
     assert 'command: ["thesistrace-initialize"]' in initialize_service
     assert "condition: service_completed_successfully" in api_service
     assert "condition: service_completed_successfully" in research_worker
+    assert "condition: service_completed_successfully" in batch_research_worker
     assert "condition: service_completed_successfully" in tracking_worker
 
     script = """
@@ -670,6 +675,9 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     execution_source = (
         ROOT / "src" / "thesistrace" / "research_run" / "execution.py"
     ).read_text()
+    transport_source = (
+        ROOT / "src" / "thesistrace" / "research_run" / "supervised_child.py"
+    ).read_text()
     service_source = (
         ROOT / "src" / "thesistrace" / "research_run" / "service.py"
     ).read_text()
@@ -686,9 +694,9 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     assert "run_kernel(" not in service_source
     assert "canonical-data:/var/lib/thesistrace/canonical-data:ro" in compose_source
     assert ":/var/lib/thesistrace/canonical-data:ro" in test_compose_source
-    child_environment = execution_source[
-        execution_source.index("def _child_environment(") : execution_source.index(
-            "def _read_message("
+    child_environment = transport_source[
+        transport_source.index("def child_environment(") : transport_source.index(
+            "def enforce_cancellation_deadline("
         )
     ]
     for authority in (

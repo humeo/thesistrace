@@ -15,7 +15,10 @@ from thesistrace.alpha_language import alpha_language
 from thesistrace.publication import VerifiedBundle, VerifiedPayload
 from thesistrace.publication.serialization import canonical_json_bytes, parquet_bytes
 from thesistrace.research_kernel.equivalence import equivalence_bytes
-from thesistrace.research_kernel.factor import evaluate_factor
+from thesistrace.research_kernel.factor import (
+    evaluate_factor,
+    prepare_columnar_forward_labels,
+)
 from thesistrace.research_kernel.kernel_run import (
     RunInput,
     StrategyRunInput,
@@ -43,6 +46,13 @@ from thesistrace.research_run.result import (
     read_result_bundle,
 )
 from thesistrace.research_series import ExecutionPrice, InstrumentProfile, PriceLimit
+
+
+def _forward_labels(research_data):
+    return prepare_columnar_forward_labels(
+        research_data,
+        cancellation_check=lambda: None,
+    )
 
 
 def _label_session(session: str, offset: float) -> dict[str, object]:
@@ -319,6 +329,7 @@ def test_alpha_factor_chunk_outcome_is_bound_immutable_and_chunk_equivalent() ->
         run_input=factor_input,
         binding=binding,
         research_data=fixture,
+        forward_labels=_forward_labels(fixture),
         research_sessions=research_sessions,
         final_chunk=True,
         continuation=empty_alpha_factor_continuation(),
@@ -327,7 +338,8 @@ def test_alpha_factor_chunk_outcome_is_bound_immutable_and_chunk_equivalent() ->
     first = execute_alpha_factor_chunk(
         run_input=factor_input,
         binding=binding,
-        research_data=fixture.slice_sessions(research_sessions[:15]),
+        research_data=(first_data := fixture.slice_sessions(research_sessions[:15])),
+        forward_labels=_forward_labels(first_data),
         research_sessions=research_sessions[:15],
         final_chunk=False,
         continuation=empty_alpha_factor_continuation(),
@@ -337,6 +349,7 @@ def test_alpha_factor_chunk_outcome_is_bound_immutable_and_chunk_equivalent() ->
         run_input=factor_input,
         binding=binding,
         research_data=fixture,
+        forward_labels=_forward_labels(fixture),
         research_sessions=research_sessions[15:],
         final_chunk=True,
         continuation=first.continuation_snapshot(),
@@ -388,6 +401,7 @@ def test_alpha_factor_chunk_rejects_contract_mismatch_and_non_finite_state() -> 
         run_input=run_input,
         binding=binding,
         research_data=fixture,
+        forward_labels=_forward_labels(fixture),
         research_sessions=fixture.sessions,
         final_chunk=True,
         continuation=empty_alpha_factor_continuation(),
@@ -420,6 +434,7 @@ def test_alpha_factor_chunk_rejects_contract_mismatch_and_non_finite_state() -> 
             run_input=changed_input,
             binding=binding,
             research_data=fixture,
+            forward_labels=_forward_labels(fixture),
             research_sessions=fixture.sessions,
             final_chunk=True,
             continuation=empty_alpha_factor_continuation(),
@@ -435,6 +450,7 @@ def test_alpha_factor_chunk_rejects_contract_mismatch_and_non_finite_state() -> 
             run_input=run_input,
             binding=binding,
             research_data=fixture,
+            forward_labels=_forward_labels(fixture),
             research_sessions=fixture.sessions,
             final_chunk=True,
             continuation=invalid,
@@ -450,6 +466,7 @@ def test_alpha_factor_chunk_rejects_contract_mismatch_and_non_finite_state() -> 
             run_input=run_input,
             binding=binding,
             research_data=fixture,
+            forward_labels=_forward_labels(fixture),
             research_sessions=fixture.sessions,
             final_chunk=True,
             continuation=invalid_research,
@@ -463,7 +480,8 @@ def test_alpha_factor_continuation_cannot_resume_under_another_binding() -> None
     first = execute_alpha_factor_chunk(
         run_input=run_input,
         binding=first_binding,
-        research_data=fixture.slice_sessions(fixture.sessions[:15]),
+        research_data=(first_data := fixture.slice_sessions(fixture.sessions[:15])),
+        forward_labels=_forward_labels(first_data),
         research_sessions=fixture.sessions[:15],
         final_chunk=False,
         continuation=empty_alpha_factor_continuation(),
@@ -478,6 +496,7 @@ def test_alpha_factor_continuation_cannot_resume_under_another_binding() -> None
             run_input=run_input,
             binding=_alpha_factor_binding(run_input, data_generation_id="f" * 64),
             research_data=fixture,
+            forward_labels=_forward_labels(fixture),
             research_sessions=fixture.sessions[15:],
             final_chunk=True,
             continuation=first.continuation_snapshot(),
@@ -510,6 +529,7 @@ def test_alpha_factor_outcome_rejects_factor_summary_contract_drift(
             run_input=run_input,
             binding=_alpha_factor_binding(run_input),
             research_data=fixture,
+            forward_labels=_forward_labels(fixture),
             research_sessions=fixture.sessions,
             final_chunk=True,
             continuation=empty_alpha_factor_continuation(),
@@ -554,6 +574,7 @@ def test_alpha_factor_outcome_hot_path_has_a_performance_regression_gate(
         run_input=run_input,
         binding=_alpha_factor_binding(run_input),
         research_data=fixture,
+        forward_labels=_forward_labels(fixture),
         research_sessions=fixture.sessions,
         final_chunk=True,
         continuation=empty_research_continuation("factor_evaluation"),
@@ -570,6 +591,7 @@ def test_one_alpha_factor_outcome_produces_independent_strategy_outcomes() -> No
         run_input=factor_input,
         binding=binding,
         research_data=fixture,
+        forward_labels=_forward_labels(fixture),
         research_sessions=fixture.sessions,
         final_chunk=True,
         continuation=empty_alpha_factor_continuation(),
@@ -636,6 +658,7 @@ def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None
         run_input=factor_input,
         binding=binding,
         research_data=fixture,
+        forward_labels=_forward_labels(fixture),
         research_sessions=fixture.sessions,
         final_chunk=True,
         continuation=empty_alpha_factor_continuation(),
@@ -749,6 +772,7 @@ def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None
         run_input=factor_input,
         binding=next_binding,
         research_data=fixture,
+        forward_labels=_forward_labels(fixture),
         research_sessions=fixture.sessions,
         final_chunk=True,
         continuation=empty_alpha_factor_continuation(),
@@ -791,6 +815,7 @@ def test_repeated_strategy_consumption_has_a_shared_stage_performance_gate(
         run_input=factor_input,
         binding=binding,
         research_data=fixture,
+        forward_labels=_forward_labels(fixture),
         research_sessions=fixture.sessions,
         final_chunk=True,
         continuation=empty_alpha_factor_continuation(),
@@ -830,7 +855,7 @@ def test_repeated_strategy_consumption_has_a_shared_stage_performance_gate(
     )
     monkeypatch.setattr(
         research_chunks_module,
-        "columnar_forward_factor_days_by_horizon",
+        "prepared_forward_factor_days_by_horizon",
         reject_shared_recalculation,
     )
     monkeypatch.setattr(
@@ -960,6 +985,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         run_input=run_input,
         binding=_alpha_factor_binding(run_input),
         research_data=fixture,
+        forward_labels=_forward_labels(fixture),
         research_sessions=research_sessions,
         final_chunk=True,
         continuation=empty_research_continuation("strategy_backtest"),
@@ -982,7 +1008,12 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
             calculation = execute_research_chunk(
                 run_input=run_input,
                 binding=_alpha_factor_binding(run_input),
-                research_data=fixture.slice_sessions(sessions[max(0, start - 21) : end]),
+                research_data=(
+                    chunk_data := fixture.slice_sessions(
+                        sessions[max(0, start - 21) : end]
+                    )
+                ),
+                forward_labels=_forward_labels(chunk_data),
                 research_sessions=sessions[start:end],
                 final_chunk=ordinal == len(boundaries),
                 continuation=continuation,
@@ -1034,6 +1065,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         run_input=factor_run_input,
         binding=_alpha_factor_binding(factor_run_input),
         research_data=fixture,
+        forward_labels=_forward_labels(fixture),
         research_sessions=research_sessions,
         final_chunk=True,
         continuation=empty_research_continuation("factor_evaluation"),
@@ -1050,7 +1082,12 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
             calculation = execute_research_chunk(
                 run_input=factor_run_input,
                 binding=_alpha_factor_binding(factor_run_input),
-                research_data=fixture.slice_sessions(sessions[max(0, start - 21) : end]),
+                research_data=(
+                    chunk_data := fixture.slice_sessions(
+                        sessions[max(0, start - 21) : end]
+                    )
+                ),
+                forward_labels=_forward_labels(chunk_data),
                 research_sessions=sessions[start:end],
                 final_chunk=ordinal == len(boundaries),
                 continuation=factor_continuation,

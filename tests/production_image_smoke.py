@@ -148,7 +148,13 @@ def _before_restart(
             "name": "Default",
             "is_default": True,
             "created_at": folders["items"][0]["created_at"],
-        }
+        },
+        {
+            "id": "folder_batch_research",
+            "name": "Batch Research",
+            "is_default": False,
+            "created_at": folders["items"][1]["created_at"],
+        },
     ]
     for obsolete_path in (
         "/api/definitions",
@@ -180,6 +186,39 @@ def _before_restart(
         factor_run_id,
         research_kind="factor_evaluation",
     )
+    factor_batch = _request_json(
+        api_origin,
+        "POST",
+        "/api/research-batches",
+        {
+            "request_id": "production-image-smoke-factor-batch",
+            "batch_kind": "factor_evaluation",
+            "start_date": "2026-08-03",
+            "end_date": "2026-08-05",
+            "universe": "top300",
+            "neutralization": "none",
+            "factors": [
+                {"item_key": "value", "formula": "close"},
+                {"item_key": "rank", "formula": "rank(close)"},
+            ],
+        },
+    )
+    factor_batch_detail = _wait_for_batch(api_origin, str(factor_batch["id"]))
+    assert [item["status"] for item in factor_batch_detail["items"]] == [
+        "succeeded",
+        "succeeded",
+    ]
+    factor_batch_run_ids = [
+        str(item["research_run_id"]) for item in factor_batch_detail["items"]
+    ]
+    for batch_run_id in factor_batch_run_ids:
+        batch_run = _wait_for_run(
+            api_origin,
+            batch_run_id,
+            research_kind="factor_evaluation",
+        )
+        assert batch_run["result"]["provenance"]["research_run_id"] == batch_run_id
+        _assert_batch_owned_durable_result(settings, batch_run_id)
     factor_tracking_error = _request_error_json(
         api_origin,
         "POST",
@@ -336,6 +375,8 @@ def _before_restart(
         "image_identity": image_identity,
         "canonical_identity": canonical_identity,
         "factor_run_id": factor_run_id,
+        "factor_batch_id": factor_batch_detail["id"],
+        "factor_batch_run_ids": factor_batch_run_ids,
         "factor_research_kind": factor_detail["research_kind"],
         "factor_public_result_sha256": hashlib.sha256(
             canonical_json_bytes(factor_detail)
@@ -902,6 +943,24 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
         assert str(event["attempt_id"]).startswith("attempt_")
         assert event["research_kind"] in {"factor_evaluation", "strategy_backtest"}
 
+    batch_lifecycle = [
+        event
+        for event in events
+        if str(event.get("event", "")).startswith("research_batch_execution_")
+    ]
+    assert batch_lifecycle
+    assert {
+        "research_batch_execution_child_started",
+        "research_batch_execution_batch_prepared",
+        "research_batch_execution_batch_succeeded",
+        "research_batch_execution_child_acknowledged",
+        "research_batch_execution_child_exited",
+    } <= {str(event["event"]) for event in batch_lifecycle}
+    for event in batch_lifecycle:
+        assert event["resource_type"] == "ResearchBatch"
+        assert str(event["resource_id"]).startswith("batch_")
+        assert str(event["attempt_id"]).startswith("batch_attempt_")
+
     started = [
         event
         for event in lifecycle
@@ -952,6 +1011,7 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
     return {
         "worker_event_contract_verified": True,
         "worker_lifecycle_event_count": len(lifecycle),
+        "batch_worker_lifecycle_event_count": len(batch_lifecycle),
     }
 
 
@@ -987,6 +1047,29 @@ def _wait_for_run(
             raise AssertionError(last)
         poll_interval.wait(0.1)
     raise AssertionError({"timeout": True, "last_run": last})
+
+
+def _wait_for_batch(
+    api_origin: str,
+    batch_id: str,
+    *,
+    timeout: float = 60,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    last: dict[str, object] | None = None
+    poll_interval = Event()
+    while time.monotonic() < deadline:
+        last = _request_json(api_origin, "GET", f"/api/research-batches/{batch_id}")
+        if last["status"] == "succeeded":
+            assert last["progress"] == {
+                "completed_items": len(last["items"]),
+                "total_items": len(last["items"]),
+            }
+            return last
+        if last["status"] in {"completed_with_failures", "failed", "cancelled"}:
+            raise AssertionError(last)
+        poll_interval.wait(0.1)
+    raise AssertionError({"timeout": True, "last_batch": last})
 
 
 def _wait_for_run_status(
@@ -1226,6 +1309,35 @@ def _checkpoint_state(settings: CoreSettings, run_id: str) -> dict[str, object]:
             "checkpoint_count": int(row["checkpoint_count"]),
             "checkpoint_manifest_sha256s": row["checkpoint_manifest_sha256s"],
         }
+    finally:
+        database.close()
+
+
+def _assert_batch_owned_durable_result(settings: CoreSettings, run_id: str) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT run.execution_owner, run.status,
+                       run.result_manifest_sha256,
+                       run.result_provenance->>'research_run_id' AS provenance_run_id,
+                       (SELECT count(*) FROM research_runs.attempts AS attempt
+                        WHERE attempt.run_id = run.id) AS attempt_count
+                FROM research_runs.runs AS run
+                WHERE run.id = %s
+                """,
+                (run_id,),
+            ).fetchone()
+        assert row == {
+            "execution_owner": "research_batch",
+            "status": "succeeded",
+            "result_manifest_sha256": row["result_manifest_sha256"],
+            "provenance_run_id": run_id,
+            "attempt_count": 0,
+        }
+        assert isinstance(row["result_manifest_sha256"], str)
     finally:
         database.close()
 

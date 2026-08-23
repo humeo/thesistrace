@@ -16,3 +16,9 @@ services:
       - ${THESISTRACE_TEST_EVIDENCE_DIR}:/qualification-evidence
       - ../../scripts:/qualification:ro
       - ../../benchmarks:/benchmarks:ro
+  batch-research-worker:
+    volumes:
+      - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data:ro
+      - ${THESISTRACE_TEST_EVIDENCE_DIR}:/qualification-evidence
+      - ../../scripts:/qualification:ro
+      - ../../benchmarks:/benchmarks:ro

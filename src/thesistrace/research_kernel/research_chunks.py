@@ -15,8 +15,9 @@ from thesistrace.research_kernel.alpha import (
 )
 from thesistrace.research_kernel.factor import (
     HORIZONS,
-    columnar_forward_factor_days_by_horizon,
+    PreparedColumnarForwardLabels,
     factor_day,
+    prepared_forward_factor_days_by_horizon,
 )
 from thesistrace.research_kernel.kernel_run import RunInput, calculation_definition
 from thesistrace.research_kernel.numeric import (
@@ -305,6 +306,7 @@ def execute_research_chunk(
     run_input: RunInput,
     binding: AlphaFactorExecutionBinding,
     research_data: ColumnarResearchSeries,
+    forward_labels: PreparedColumnarForwardLabels,
     research_sessions: tuple[str, ...],
     final_chunk: bool,
     continuation: Mapping[str, object],
@@ -332,6 +334,7 @@ def execute_research_chunk(
         run_input=run_input,
         binding=binding,
         research_data=research_data,
+        forward_labels=forward_labels,
         research_sessions=research_sessions,
         final_chunk=final_chunk,
         state={name: state[name] for name in _ALPHA_FACTOR_CONTINUATION_KEYS},
@@ -568,6 +571,7 @@ def execute_alpha_factor_chunk(
     run_input: RunInput,
     binding: AlphaFactorExecutionBinding,
     research_data: ColumnarResearchSeries,
+    forward_labels: PreparedColumnarForwardLabels,
     research_sessions: tuple[str, ...],
     final_chunk: bool,
     continuation: Mapping[str, object],
@@ -578,6 +582,7 @@ def execute_alpha_factor_chunk(
         run_input=run_input,
         binding=binding,
         research_data=research_data,
+        forward_labels=forward_labels,
         research_sessions=research_sessions,
         final_chunk=final_chunk,
         state=state,
@@ -590,6 +595,7 @@ def _execute_alpha_factor_chunk_from_validated(
     run_input: RunInput,
     binding: AlphaFactorExecutionBinding,
     research_data: ColumnarResearchSeries,
+    forward_labels: PreparedColumnarForwardLabels,
     research_sessions: tuple[str, ...],
     final_chunk: bool,
     state: dict[str, object],
@@ -662,8 +668,8 @@ def _execute_alpha_factor_chunk_from_validated(
         signal_sessions_by_horizon[horizon] = resolvable
     alpha_and_pending_seconds = monotonic() - alpha_started
     factor_started = monotonic()
-    daily_by_horizon = columnar_forward_factor_days_by_horizon(
-        research_data,
+    daily_by_horizon = prepared_forward_factor_days_by_horizon(
+        forward_labels,
         matrix,
         signal_sessions_by_horizon=signal_sessions_by_horizon,
         cancellation_check=cancellation_check,

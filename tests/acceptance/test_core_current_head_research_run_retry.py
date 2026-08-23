@@ -36,6 +36,7 @@ from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import RunInput, StrategyRunInput, run
+from thesistrace.research_kernel.factor import prepare_columnar_forward_labels
 from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
 from thesistrace.research_kernel.research_chunks import (
     AlphaFactorExecutionBinding,
@@ -918,6 +919,10 @@ def _reference_result(
                 semantic_versions=research_run_service.SEMANTIC_VERSIONS,
             ),
             research_data=columnar,
+            forward_labels=prepare_columnar_forward_labels(
+                columnar,
+                cancellation_check=lambda: None,
+            ),
             research_sessions=sessions,
             final_chunk=True,
             continuation=empty_research_continuation("factor_evaluation"),

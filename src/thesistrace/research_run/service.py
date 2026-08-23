@@ -28,6 +28,7 @@ from thesistrace.data import (
     DatasetAdmissionSnapshot,
     DatasetLifecycle,
     DatasetWarmupUnavailable,
+    MountedFamilyGenerationDescriptor,
     MountedGenerationStore,
 )
 from thesistrace.publication import (
@@ -129,6 +130,7 @@ Progress = Callable[[str, str], None]
 CompileFormula = Callable[[str], CompiledAlpha]
 CurrentDataset = Callable[[], DatasetAdmissionSnapshot | None]
 TrackReferencesResult = Callable[[PostgresTransaction, str], bool]
+BatchExecutionAuthorization = Callable[[PostgresTransaction], None]
 ActivateTrack = Callable[
     [PostgresTransaction, TrackingOrigin],
     DailyTrackSummary,
@@ -210,7 +212,7 @@ SEMANTIC_VERSIONS = {
 
 
 @dataclass(frozen=True)
-class _ExecutionClaim:
+class ResearchRunExecutionClaim:
     run_id: str
     attempt_id: str
     fence: int
@@ -278,6 +280,234 @@ class ResearchRunService:
         if self._current_dataset is None:
             raise RuntimeError("ResearchRun admission Dataset is not configured")
         return self._current_dataset()
+
+    def begin_batch_owned_execution_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        run_id: str,
+        *,
+        batch_attempt_id: str,
+        generation_pin_id: str,
+        generation: MountedFamilyGenerationDescriptor,
+    ) -> ResearchRunExecutionClaim:
+        """Fence one queued Batch-owned Run under its Batch Attempt authority."""
+        row = transaction.execute(
+            """
+            SELECT id, status, execution_owner, execution_fence, immutable_input
+            FROM research_runs.runs
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (run_id,),
+        ).fetchone()
+        if row is None or row["execution_owner"] != "research_batch":
+            raise ResearchRunInputInvalid("Batch-owned ResearchRun is unavailable")
+        if row["status"] != "queued":
+            raise ResearchRunFenced
+        immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
+        if immutable_input.research_kind != "factor_evaluation":
+            raise ResearchRunInputInvalid("Batch Run is not a Factor Evaluation")
+        fence = int(row["execution_fence"]) + 1
+        if not _generation_matches_frozen_facts(generation, immutable_input):
+            raise ResearchRunInputInvalid("selected Data Generation facts changed")
+        updated = transaction.execute(
+            """
+            UPDATE research_runs.runs
+            SET status = 'running', execution_fence = %s,
+                failure_reason = NULL, updated_at = now()
+            WHERE id = %s AND status = 'queued'
+            """,
+            (fence, run_id),
+        )
+        if updated.rowcount != 1:
+            raise ResearchRunFenced
+        return ResearchRunExecutionClaim(
+            run_id=run_id,
+            attempt_id=batch_attempt_id,
+            fence=fence,
+            generation_pin_id=generation_pin_id,
+            data_generation_id=generation.manifest_sha256,
+            data_through_session=generation.data_through_session,
+            immutable_input=immutable_input,
+        )
+
+    def complete_batch_owned_factor_item(
+        self,
+        claim: ResearchRunExecutionClaim,
+        final_chunk: Mapping[str, object],
+        *,
+        authorize_batch: BatchExecutionAuthorization,
+    ) -> None:
+        if self._publication is None:
+            raise RuntimeError("ResearchRun Result publication is not configured")
+        final_values = self._validate_batch_factor_final_chunk(claim, final_chunk)
+        provenance = _result_provenance(claim)
+        key_metrics = _result_key_metrics(final_values, "factor_evaluation")
+        prepared = self._publication.prepare(
+            kind="research.result",
+            payloads=result_publication_payloads_from_staged(
+                final_values,
+                [],
+                research_kind="factor_evaluation",
+            ),
+            provenance=provenance,
+            staging_authority=lambda: self._authorize_batch_result_staging(
+                claim,
+                authorize_batch,
+            ),
+        )
+        completed_sessions = sum(
+            chunk.research_session_count
+            for chunk in claim.immutable_input.execution_plan.chunks
+        )
+        enforce_result_bundle_budget(prepared.exact_bytes, completed_sessions)
+        with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
+            authorize_batch(transaction)
+            self._validate_batch_owned_run_in_transaction(transaction, claim)
+            published = self._publication.record(transaction, prepared)
+            updated = transaction.execute(
+                """
+                UPDATE research_runs.runs
+                SET status = 'succeeded', result_manifest_sha256 = %s,
+                    result_provenance = %s, key_metrics = %s,
+                    failure_reason = NULL, updated_at = now()
+                WHERE id = %s AND status = 'running'
+                  AND execution_owner = 'research_batch' AND execution_fence = %s
+                """,
+                (
+                    published.manifest_sha256,
+                    Jsonb(provenance),
+                    Jsonb(key_metrics.model_dump(mode="json")),
+                    claim.run_id,
+                    claim.fence,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise ResearchRunFenced
+            transaction.execute(
+                """
+                UPDATE research_runs.progress
+                SET phase = 'succeeded', completed_research_sessions = %s,
+                    committed_chunk_count = %s,
+                    last_completed_research_session = %s,
+                    remaining_duration_estimate_seconds = NULL,
+                    updated_at = now()
+                WHERE run_id = %s
+                """,
+                (
+                    completed_sessions,
+                    len(claim.immutable_input.execution_plan.chunks),
+                    claim.immutable_input.data_admission.last_research_session,
+                    claim.run_id,
+                ),
+            )
+
+    def fail_batch_owned_item(
+        self,
+        claim: ResearchRunExecutionClaim,
+        error: Exception,
+        *,
+        authorize_batch: BatchExecutionAuthorization,
+    ) -> bool:
+        policy = _failure_policy(error)
+        with self._database.transaction() as transaction:
+            authorize_batch(transaction)
+            current = transaction.execute(
+                """
+                SELECT status, execution_fence
+                FROM research_runs.runs
+                WHERE id = %s AND execution_owner = 'research_batch'
+                FOR UPDATE
+                """,
+                (claim.run_id,),
+            ).fetchone()
+            if current is None or current["execution_fence"] != claim.fence:
+                raise ResearchRunFenced
+            if current["status"] in {"succeeded", "failed", "cancelled"}:
+                return False
+            if current["status"] != "running":
+                raise ResearchRunFenced
+            updated = transaction.execute(
+                """
+                UPDATE research_runs.runs
+                SET status = 'failed', failure_reason = %s, updated_at = now()
+                WHERE id = %s AND status = 'running'
+                  AND execution_owner = 'research_batch' AND execution_fence = %s
+                """,
+                (policy.public_reason, claim.run_id, claim.fence),
+            )
+            if updated.rowcount != 1:
+                raise ResearchRunFenced
+            transaction.execute(
+                """
+                UPDATE research_runs.progress
+                SET remaining_duration_estimate_seconds = NULL, updated_at = now()
+                WHERE run_id = %s
+                """,
+                (claim.run_id,),
+            )
+        return True
+
+    def _validate_batch_factor_final_chunk(
+        self,
+        claim: ResearchRunExecutionClaim,
+        chunk: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        plan = claim.immutable_input.execution_plan
+        final_values = chunk.get("final_values")
+        continuation = chunk.get("continuation")
+        observations = chunk.get("strategy_daily_observations")
+        completed_research = sum(value.research_session_count for value in plan.chunks)
+        if (
+            claim.immutable_input.research_kind != "factor_evaluation"
+            or chunk.get("final") is not True
+            or int(chunk.get("ordinal", 0)) != len(plan.chunks)
+            or str(chunk.get("boundary_session"))
+            != plan.chunks[-1].last_session.isoformat()
+            or int(chunk.get("completed_research_sessions", -1)) != completed_research
+            or not isinstance(continuation, Mapping)
+            or observations != []
+            or not isinstance(final_values, Mapping)
+        ):
+            raise ResearchResultError("Batch Factor item boundary is invalid")
+        try:
+            validated_research_continuation(
+                continuation,
+                research_kind="factor_evaluation",
+            )
+        except ValueError as error:
+            raise ResearchResultError("Batch Factor item continuation is invalid") from error
+        return final_values
+
+    def _validate_batch_owned_run_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        claim: ResearchRunExecutionClaim,
+    ) -> None:
+        current = transaction.execute(
+            """
+            SELECT status, execution_fence
+            FROM research_runs.runs
+            WHERE id = %s AND execution_owner = 'research_batch'
+            FOR UPDATE
+            """,
+            (claim.run_id,),
+        ).fetchone()
+        if current != {"status": "running", "execution_fence": claim.fence}:
+            raise ResearchRunFenced
+
+    @contextmanager
+    def _authorize_batch_result_staging(
+        self,
+        claim: ResearchRunExecutionClaim,
+        authorize_batch: BatchExecutionAuthorization,
+    ) -> Iterator[None]:
+        with self._database.transaction() as transaction:
+            self._lock_result_staging(transaction, claim.run_id)
+            authorize_batch(transaction)
+            self._validate_batch_owned_run_in_transaction(transaction, claim)
+            yield
 
     def prepare_child_admission(
         self,
@@ -847,7 +1077,7 @@ class ResearchRunService:
             )
         return outcome
 
-    def _cancellation_is_pending(self, claim: _ExecutionClaim) -> bool:
+    def _cancellation_is_pending(self, claim: ResearchRunExecutionClaim) -> bool:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
@@ -860,7 +1090,7 @@ class ResearchRunService:
             ).fetchone()
         return row == {"run_status": "cancelling", "attempt_status": "cancelling"}
 
-    def _confirm_cancelled(self, claim: _ExecutionClaim) -> None:
+    def _confirm_cancelled(self, claim: ResearchRunExecutionClaim) -> None:
         assert self._dataset_lifecycle is not None
         with self._database.transaction() as transaction:
             run = transaction.execute(
@@ -1204,7 +1434,7 @@ class ResearchRunService:
         if self._dataset_lifecycle is None or self._publication is None or self._execution is None:
             raise RuntimeError("ResearchRun execution dependencies are not configured")
 
-    def _claim_next(self) -> _ExecutionClaim | None:
+    def _claim_next(self) -> ResearchRunExecutionClaim | None:
         assert self._dataset_lifecycle is not None
         with self._database.transaction() as transaction:
             row = transaction.execute(
@@ -1355,7 +1585,7 @@ class ResearchRunService:
                     self._lease_seconds,
                 ),
             )
-        return _ExecutionClaim(
+        return ResearchRunExecutionClaim(
             run_id=run_id,
             attempt_id=attempt_id,
             fence=fence,
@@ -1366,7 +1596,7 @@ class ResearchRunService:
         )
 
     @contextmanager
-    def _maintain_claim(self, claim: _ExecutionClaim) -> Iterator[None]:
+    def _maintain_claim(self, claim: ResearchRunExecutionClaim) -> Iterator[None]:
         stopped = Event()
         heartbeat = Thread(
             target=self._heartbeat_claim,
@@ -1381,7 +1611,11 @@ class ResearchRunService:
             stopped.set()
             heartbeat.join(timeout=5)
 
-    def _heartbeat_claim(self, claim: _ExecutionClaim, stopped: Event) -> None:
+    def _heartbeat_claim(
+        self,
+        claim: ResearchRunExecutionClaim,
+        stopped: Event,
+    ) -> None:
         assert self._dataset_lifecycle is not None
         while not stopped.wait(self._heartbeat_seconds):
             try:
@@ -1429,7 +1663,7 @@ class ResearchRunService:
 
     def _execute(
         self,
-        claim: _ExecutionClaim,
+        claim: ResearchRunExecutionClaim,
         *,
         emit: ExecutionEvent,
     ) -> SupervisedResearchExecution:
@@ -1497,7 +1731,7 @@ class ResearchRunService:
 
     def _validated_resume_checkpoint(
         self,
-        claim: _ExecutionClaim,
+        claim: ResearchRunExecutionClaim,
     ) -> ResearchExecutionResume | None:
         assert self._publication is not None
         with self._database.transaction() as transaction:
@@ -1668,7 +1902,7 @@ class ResearchRunService:
 
     def _prepare_execution_result(
         self,
-        claim: _ExecutionClaim,
+        claim: ResearchRunExecutionClaim,
         chunk: Mapping[str, object],
     ) -> tuple[PreparedPublication, dict[str, object], ResearchRunKeyMetrics]:
         assert self._publication is not None
@@ -1728,7 +1962,7 @@ class ResearchRunService:
 
     def _commit_execution_chunk(
         self,
-        claim: _ExecutionClaim,
+        claim: ResearchRunExecutionClaim,
         chunk: Mapping[str, object],
     ) -> None:
         assert self._publication is not None
@@ -1966,14 +2200,14 @@ class ResearchRunService:
                 ),
             )
 
-    def _validate_current_execution(self, claim: _ExecutionClaim) -> None:
+    def _validate_current_execution(self, claim: ResearchRunExecutionClaim) -> None:
         with self._database.transaction() as transaction:
             self._validate_current_execution_in_transaction(transaction, claim)
 
     def _validate_current_execution_in_transaction(
         self,
         transaction: PostgresTransaction,
-        claim: _ExecutionClaim,
+        claim: ResearchRunExecutionClaim,
     ) -> None:
         current = transaction.execute(
             """
@@ -2000,7 +2234,7 @@ class ResearchRunService:
     @contextmanager
     def _authorize_result_staging(
         self,
-        claim: _ExecutionClaim,
+        claim: ResearchRunExecutionClaim,
     ) -> Iterator[None]:
         with self._database.transaction() as transaction:
             self._lock_result_staging(transaction, claim.run_id)
@@ -2019,7 +2253,7 @@ class ResearchRunService:
 
     def _publish_success(
         self,
-        claim: _ExecutionClaim,
+        claim: ResearchRunExecutionClaim,
         prepared: PreparedPublication,
         provenance: dict[str, object],
         key_metrics: ResearchRunKeyMetrics,
@@ -2084,7 +2318,11 @@ class ResearchRunService:
                 owner_id=claim.attempt_id,
             )
 
-    def _record_failure(self, claim: _ExecutionClaim, error: Exception) -> None:
+    def _record_failure(
+        self,
+        claim: ResearchRunExecutionClaim,
+        error: Exception,
+    ) -> None:
         assert self._dataset_lifecycle is not None
         policy = _failure_policy(error)
         with self._database.transaction() as transaction:
@@ -2443,7 +2681,7 @@ def _generation_matches_frozen_facts(
     )
 
 
-def _result_provenance(claim: _ExecutionClaim) -> dict[str, object]:
+def _result_provenance(claim: ResearchRunExecutionClaim) -> dict[str, object]:
     value = claim.immutable_input.canonical_value()
     calculation_contracts: dict[str, object] = {
         "numeric_execution_contract": value["numeric_execution_contract"],

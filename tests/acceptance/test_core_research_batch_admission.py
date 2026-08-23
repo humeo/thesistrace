@@ -387,6 +387,8 @@ def _publish_current_data(
     operation_id: str = "research-batch-admission-head",
     expected_generation: str | None = None,
     prepared_at: datetime = datetime(2026, 8, 11, 12, tzinfo=UTC),
+    sessions: tuple[str, ...] = SESSIONS,
+    instrument_count: int = 1,
 ) -> str:
     s3 = boto3.client(
         "s3",
@@ -403,23 +405,61 @@ def _publish_current_data(
     finally:
         s3.close()
     template = build_minimal_canonical_fixture()
-    instrument = str(template["instruments"][0]["instrument_id"])
+    instrument_template = template["instruments"][0]
     price = template["prices"][0]
     state = template["trading_states"][0]
     limit = template["price_limits"][0]
-    universe = {"instrument_ids": [instrument], "status": "available"}
+    industry = template["industry_membership"][0]
+    instruments = [
+        {
+            **instrument_template,
+            "instrument_id": f"equity:{ordinal:06d}.SZ",
+            "ts_code": f"{ordinal:06d}.SZ",
+        }
+        for ordinal in range(1, instrument_count + 1)
+    ]
+    instrument_ids = [str(value["instrument_id"]) for value in instruments]
     canonical = {
         **template,
-        "research_calendar": list(SESSIONS),
-        "prices": [{**price, "session": session} for session in SESSIONS],
-        "trading_states": [{**state, "session": session} for session in SESSIONS],
-        "price_limits": [{**limit, "session": session} for session in SESSIONS],
+        "instruments": instruments,
+        "research_calendar": list(sessions),
+        "prices": [
+            {**price, "session": session, "instrument_id": instrument_id}
+            for session in sessions
+            for instrument_id in instrument_ids
+        ],
+        "trading_states": [
+            {**state, "session": session, "instrument_id": instrument_id}
+            for session in sessions
+            for instrument_id in instrument_ids
+        ],
+        "price_limits": [
+            {**limit, "session": session, "instrument_id": instrument_id}
+            for session in sessions
+            for instrument_id in instrument_ids
+        ],
+        "industry_membership": [
+            {**industry, "instrument_id": instrument_id}
+            for instrument_id in instrument_ids
+        ],
         "base_pool": [
-            {"session": session, "instrument_ids": [instrument]} for session in SESSIONS
+            {"session": session, "instrument_ids": instrument_ids} for session in sessions
         ],
         "liquidity_universes": {
-            name: [{"session": session, **universe} for session in SESSIONS]
-            for name in ("top300", "top1000", "top2000", "top3000")
+            name: [
+                {
+                    "session": session,
+                    "instrument_ids": instrument_ids[:maximum_size],
+                    "status": "available",
+                }
+                for session in sessions
+            ]
+            for name, maximum_size in (
+                ("top300", 300),
+                ("top1000", 1_000),
+                ("top2000", 2_000),
+                ("top3000", 3_000),
+            )
         },
     }
     generation = MountedGenerationStore(settings.data_mount).materialize(

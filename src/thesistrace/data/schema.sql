@@ -262,7 +262,7 @@ CREATE TABLE data.generation_pins (
     CONSTRAINT generation_pins_check CHECK ((((status = 'active'::text) AND (released_at IS NULL)) OR ((status = ANY (ARRAY['released'::text, 'fenced'::text])) AND (released_at IS NOT NULL)))),
     CONSTRAINT generation_pins_generation_manifest_sha256_check CHECK ((generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT generation_pins_owner_id_check CHECK (((owner_id <> ''::text) AND (owner_id = btrim(owner_id)))),
-    CONSTRAINT generation_pins_owner_kind_check CHECK ((owner_kind = ANY (ARRAY['research_run_attempt'::text, 'tracking_advance_attempt'::text]))),
+    CONSTRAINT generation_pins_owner_kind_check CHECK ((owner_kind = ANY (ARRAY['research_batch_attempt'::text, 'research_run_attempt'::text, 'tracking_advance_attempt'::text]))),
     CONSTRAINT generation_pins_status_check CHECK ((status = ANY (ARRAY['active'::text, 'released'::text, 'fenced'::text])))
 );
 

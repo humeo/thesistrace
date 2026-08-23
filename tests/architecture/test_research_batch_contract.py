@@ -164,3 +164,33 @@ def test_batch_schema_keeps_membership_separate_and_claims_structural() -> None:
     assert "run.execution_owner = 'ordinary'" in run_service
     assert "execution_owner=\"research_batch\"" in batch_service
     assert "project_child_statuses_in_transaction" in batch_service
+
+
+def test_factor_batch_execution_has_one_supervised_child_and_owned_publication_seam() -> None:
+    batch_schema = (ROOT / "src/thesistrace/research_batch/schema.sql").read_text()
+    batch_execution = (
+        ROOT / "src/thesistrace/research_batch/execution.py"
+    ).read_text()
+    batch_child = (
+        ROOT / "src/thesistrace/entrypoints/batch_research_child.py"
+    ).read_text()
+    batch_service = (ROOT / "src/thesistrace/research_batch/service.py").read_text()
+    run_service = (ROOT / "src/thesistrace/research_run/service.py").read_text()
+    worker = (ROOT / "src/thesistrace/entrypoints/worker.py").read_text()
+
+    assert "CREATE TABLE research_batches.attempts" in batch_schema
+    assert "execution_fence" in batch_schema
+    assert 'BATCH_RESEARCH = "batch-research"' in worker
+    assert "runtime.research_batches.process_next_factor(" in worker
+    assert "thesistrace.entrypoints.batch_research_child" in batch_execution
+    assert "execute_factor_batch_messages" in batch_child
+    assert "read_columnar_slice(" in batch_execution
+    assert "execute_research_chunk(" in batch_execution
+    assert "begin_batch_owned_execution_in_transaction" in run_service
+    assert "complete_batch_owned_factor_item" in batch_service
+    assert "commit_batch_owned_chunk" not in batch_service
+    assert "prepare_batch_owned_result" not in batch_service
+    assert "publish_batch_owned_success" not in batch_service
+    assert "owner_kind=\"research_batch_attempt\"" in batch_service
+    assert "research.result" not in batch_service
+    assert "compile(" not in batch_execution

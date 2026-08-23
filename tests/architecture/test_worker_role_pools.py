@@ -33,6 +33,15 @@ class _ProductQueue:
 
 
 @dataclass
+class _BatchQueue(_ProductQueue):
+    def process_next_factor(self, *, on_claim=None, on_execution_event=None) -> bool:
+        return self.process_next(
+            on_claim=on_claim,
+            on_execution_event=on_execution_event,
+        )
+
+
+@dataclass
 class _PublicationMaintenance:
     calls: int = 0
 
@@ -62,7 +71,7 @@ def _configuration(role: WorkerRole) -> WorkerConfiguration:
     )
 
 
-@pytest.mark.parametrize("role", (WorkerRole.RESEARCH, WorkerRole.TRACKING))
+@pytest.mark.parametrize("role", tuple(WorkerRole))
 def test_worker_role_is_required_and_frozen_by_argument_parsing(role: WorkerRole) -> None:
     with pytest.raises(SystemExit):
         parse_worker_arguments(["--once"])
@@ -80,6 +89,7 @@ def test_research_worker_claims_only_one_research_run_and_skips_maintenance() ->
     events: list[dict[str, object]] = []
     runtime = SimpleNamespace(
         research_runs=research,
+        research_batches=_BatchQueue("batch-1", True),
         daily_tracks=tracking,
         publication=publication,
     )
@@ -106,6 +116,7 @@ def test_research_worker_refuses_a_plan_from_another_memory_envelope() -> None:
     research = _ProductQueue("run-1", True, execution_memory_bytes=2 * 1024**3)
     runtime = SimpleNamespace(
         research_runs=research,
+        research_batches=_BatchQueue("batch-1", False),
         daily_tracks=_TrackingQueue("track-1", False),
         publication=_PublicationMaintenance(),
     )
@@ -120,6 +131,41 @@ def test_research_worker_refuses_a_plan_from_another_memory_envelope() -> None:
     assert research.calls == 0
 
 
+def test_batch_research_worker_claims_only_one_factor_batch() -> None:
+    research = _ProductQueue("run-1", True)
+    batches = _BatchQueue("batch-1", True)
+    tracking = _TrackingQueue("track-1", True)
+    publication = _PublicationMaintenance()
+    events: list[dict[str, object]] = []
+    runtime = SimpleNamespace(
+        research_runs=research,
+        research_batches=batches,
+        daily_tracks=tracking,
+        publication=publication,
+    )
+
+    process_one_poll(
+        runtime,
+        _configuration(WorkerRole.BATCH_RESEARCH),
+        emit=events.append,
+    )
+
+    assert research.calls == 0
+    assert batches.calls == 1
+    assert tracking.calls == 0
+    assert publication.calls == 0
+    assert events == [
+        {
+            "event": "worker_claim",
+            "role": "batch-research",
+            "slot": 1,
+            "resource_type": "ResearchBatch",
+            "resource_id": "batch-1",
+            "attempt_id": "attempt-batch-1",
+        }
+    ]
+
+
 def test_tracking_worker_claims_one_advance_and_reconciles_terminal_caches() -> None:
     research = _ProductQueue("run-1", True)
     tracking = _TrackingQueue("track-1", True)
@@ -127,6 +173,7 @@ def test_tracking_worker_claims_one_advance_and_reconciles_terminal_caches() -> 
     events: list[dict[str, object]] = []
     runtime = SimpleNamespace(
         research_runs=research,
+        research_batches=_BatchQueue("batch-1", False),
         daily_tracks=tracking,
         publication=publication,
     )
@@ -149,7 +196,11 @@ def test_tracking_worker_claims_one_advance_and_reconciles_terminal_caches() -> 
 
 @pytest.mark.parametrize(
     ("role", "expected_cache_calls"),
-    ((WorkerRole.RESEARCH, 0), (WorkerRole.TRACKING, 1)),
+    (
+        (WorkerRole.RESEARCH, 0),
+        (WorkerRole.BATCH_RESEARCH, 0),
+        (WorkerRole.TRACKING, 1),
+    ),
 )
 def test_idle_worker_reclaims_at_most_one_publication_and_only_tracking_caches(
     role: WorkerRole,
@@ -160,6 +211,7 @@ def test_idle_worker_reclaims_at_most_one_publication_and_only_tracking_caches(
     publication = _PublicationMaintenance()
     runtime = SimpleNamespace(
         research_runs=research,
+        research_batches=_BatchQueue("batch-1", False),
         daily_tracks=tracking,
         publication=publication,
     )

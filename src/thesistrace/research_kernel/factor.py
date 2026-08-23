@@ -2,6 +2,7 @@ import hashlib
 import math
 from collections import Counter
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from statistics import stdev
 
 import numpy as np
@@ -18,6 +19,186 @@ HORIZONS = (1, 5, 20)
 
 class FactorDataError(RuntimeError):
     pass
+
+
+_LABEL_UNAVAILABLE = np.uint8(1)
+_LABEL_INVALID_ZERO_ENTRY = np.uint8(2)
+_LABEL_INVALID_ENTRY = np.uint8(3)
+_LABEL_INVALID_EXIT = np.uint8(4)
+_LABEL_INVALID_NON_FINITE = np.uint8(5)
+
+
+@dataclass(frozen=True)
+class PreparedColumnarForwardLabels:
+    sessions: tuple[str, ...]
+    instrument_ids: tuple[str, ...]
+    labels_by_horizon: dict[int, np.ndarray]
+    states_by_horizon: dict[int, np.ndarray]
+
+    def factor_days_by_horizon(
+        self,
+        alpha_matrix: dict[str, object],
+        *,
+        signal_sessions_by_horizon: dict[int, Sequence[str]],
+        cancellation_check: Callable[[], None],
+    ) -> dict[str, list[dict[str, object]]]:
+        session_positions = {
+            session: index for index, session in enumerate(self.sessions)
+        }
+        instrument_positions = {
+            instrument_id: index
+            for index, instrument_id in enumerate(self.instrument_ids)
+        }
+        alpha_by_session = {
+            str(item["session"]): item for item in alpha_matrix["sessions"]
+        }
+        days_by_horizon: dict[str, list[dict[str, object]]] = {}
+        for horizon, signal_sessions in signal_sessions_by_horizon.items():
+            labels = self.labels_by_horizon[horizon]
+            states = self.states_by_horizon[horizon]
+            days: list[dict[str, object]] = []
+            for signal_session in signal_sessions:
+                cancellation_check()
+                signal_session = str(signal_session)
+                signal_index = session_positions[signal_session]
+                alpha_values = list(alpha_by_session[signal_session]["values"])
+                instrument_ids = tuple(
+                    str(value["instrument_id"]) for value in alpha_values
+                )
+                positions = np.fromiter(
+                    (instrument_positions[instrument_id] for instrument_id in instrument_ids),
+                    dtype=np.intp,
+                    count=len(instrument_ids),
+                )
+                alpha_array = np.fromiter(
+                    (float(value["value"]) for value in alpha_values),
+                    dtype=np.float64,
+                    count=len(alpha_values),
+                )
+                selected_states = states[positions, signal_index]
+                _raise_selected_label_error(
+                    selected_states,
+                    instrument_ids=instrument_ids,
+                    signal_session=signal_session,
+                    entry_session=(
+                        self.sessions[signal_index + 1]
+                        if signal_index + 1 < len(self.sessions)
+                        else signal_session
+                    ),
+                    exit_session=(
+                        self.sessions[signal_index + 1 + horizon]
+                        if signal_index + 1 + horizon < len(self.sessions)
+                        else signal_session
+                    ),
+                )
+                included = selected_states == 0
+                selected_labels = labels[positions, signal_index][included]
+                included_alpha = alpha_array[included]
+                days.append(
+                    {
+                        "session": signal_session,
+                        "sample_count": len(included_alpha),
+                        **_factor_array_values(included_alpha, selected_labels),
+                    }
+                )
+                cancellation_check()
+            days_by_horizon[str(horizon)] = days
+        return days_by_horizon
+
+
+def prepare_columnar_forward_labels(
+    research_data: ColumnarResearchSeries,
+    *,
+    cancellation_check: Callable[[], None],
+) -> PreparedColumnarForwardLabels:
+    sessions = tuple(research_data.sessions)
+    instrument_ids = tuple(sorted(research_data.instruments))
+    adjusted_opens = research_data.adjusted_open_matrix(instrument_ids)
+    labels_by_horizon: dict[int, np.ndarray] = {}
+    states_by_horizon: dict[int, np.ndarray] = {}
+    for horizon in HORIZONS:
+        labels = np.full(adjusted_opens.shape, np.nan, dtype=np.float64)
+        states = np.full(adjusted_opens.shape, _LABEL_UNAVAILABLE, dtype=np.uint8)
+        for signal_index, _signal_session in enumerate(sessions):
+            cancellation_check()
+            entry_index = signal_index + 1
+            exit_index = signal_index + 1 + horizon
+            if exit_index >= len(sessions):
+                continue
+            entry_session = sessions[entry_index]
+            exit_session = sessions[exit_index]
+            entry_opens = adjusted_opens[:, entry_index]
+            exit_opens = adjusted_opens[:, exit_index]
+            valid_entry = np.isfinite(entry_opens)
+            valid_exit = np.isfinite(exit_opens)
+            zero_entry = valid_entry & (entry_opens == 0.0)
+            states[zero_entry, signal_index] = _LABEL_INVALID_ZERO_ENTRY
+            valid = valid_entry & valid_exit & ~zero_entry
+            labels[valid, signal_index] = (
+                exit_opens[valid] / entry_opens[valid] - 1.0
+            )
+            states[valid, signal_index] = 0
+            for position in np.flatnonzero(~valid_entry):
+                instrument_id = instrument_ids[int(position)]
+                reason = unavailable_reason(
+                    research_data.trading_states.get((entry_session, instrument_id)),
+                    research_data.instruments[instrument_id],
+                    entry_session,
+                    valid_entry=False,
+                )
+                if reason == "unexplained_missing_or_invalid_data":
+                    states[position, signal_index] = _LABEL_INVALID_ENTRY
+            for position in np.flatnonzero(valid_entry & ~valid_exit & ~zero_entry):
+                instrument_id = instrument_ids[int(position)]
+                reason = unavailable_reason(
+                    research_data.trading_states.get((exit_session, instrument_id)),
+                    research_data.instruments[instrument_id],
+                    exit_session,
+                    valid_entry=True,
+                )
+                if reason == "terminal_delisting":
+                    labels[position, signal_index] = -1.0
+                    states[position, signal_index] = 0
+                elif reason == "unexplained_missing_or_invalid_data":
+                    states[position, signal_index] = _LABEL_INVALID_EXIT
+            non_finite = (states[:, signal_index] == 0) & ~np.isfinite(
+                labels[:, signal_index]
+            )
+            states[non_finite, signal_index] = _LABEL_INVALID_NON_FINITE
+        labels_by_horizon[horizon] = labels
+        states_by_horizon[horizon] = states
+    return PreparedColumnarForwardLabels(
+        sessions=sessions,
+        instrument_ids=instrument_ids,
+        labels_by_horizon=labels_by_horizon,
+        states_by_horizon=states_by_horizon,
+    )
+
+
+def _raise_selected_label_error(
+    states: np.ndarray,
+    *,
+    instrument_ids: tuple[str, ...],
+    signal_session: str,
+    entry_session: str,
+    exit_session: str,
+) -> None:
+    for code, message in (
+        (_LABEL_INVALID_ZERO_ENTRY, "invalid Label entry Open"),
+        (_LABEL_INVALID_ENTRY, "unexplained Label entry Open"),
+        (_LABEL_INVALID_EXIT, "unexplained Label exit Open"),
+        (_LABEL_INVALID_NON_FINITE, "non-finite Label"),
+    ):
+        selected = np.flatnonzero(states == code)
+        if not len(selected):
+            continue
+        instrument_id = instrument_ids[int(selected[0])]
+        session = (
+            entry_session
+            if code in {_LABEL_INVALID_ZERO_ENTRY, _LABEL_INVALID_ENTRY}
+            else exit_session if code == _LABEL_INVALID_EXIT else signal_session
+        )
+        raise FactorDataError(f"{message} for {instrument_id} on {session}")
 
 
 def affected_label_sessions(
@@ -189,122 +370,18 @@ def unavailable_reason(
     return "unexplained_missing_or_invalid_data"
 
 
-def columnar_forward_factor_days_by_horizon(
-    research_data: ColumnarResearchSeries,
+def prepared_forward_factor_days_by_horizon(
+    forward_labels: PreparedColumnarForwardLabels,
     alpha_matrix: dict[str, object],
     *,
     signal_sessions_by_horizon: dict[int, Sequence[str]],
     cancellation_check: Callable[[], None],
 ) -> dict[str, list[dict[str, object]]]:
-    calendar = tuple(research_data.sessions)
-    session_positions = {session: index for index, session in enumerate(calendar)}
-    instruments = tuple(
-        sorted(
-            {
-                str(value["instrument_id"])
-                for item in alpha_matrix["sessions"]
-                for value in item["values"]
-            }
-        )
+    return forward_labels.factor_days_by_horizon(
+        alpha_matrix,
+        signal_sessions_by_horizon=signal_sessions_by_horizon,
+        cancellation_check=cancellation_check,
     )
-    instrument_positions = {
-        instrument_id: index for index, instrument_id in enumerate(instruments)
-    }
-    adjusted_opens = research_data.adjusted_open_matrix(instruments)
-    alpha_by_session = {
-        str(item["session"]): item for item in alpha_matrix["sessions"]
-    }
-    alpha_coordinates: dict[str, tuple[tuple[str, ...], np.ndarray, np.ndarray]] = {}
-    days_by_horizon: dict[str, list[dict[str, object]]] = {}
-    for horizon, signal_sessions in signal_sessions_by_horizon.items():
-        days: list[dict[str, object]] = []
-        for signal_session in signal_sessions:
-            cancellation_check()
-            signal_session = str(signal_session)
-            signal_index = session_positions[signal_session]
-            alpha_values = list(alpha_by_session[signal_session]["values"])
-            coordinates = alpha_coordinates.get(signal_session)
-            if coordinates is None:
-                instrument_ids = tuple(str(value["instrument_id"]) for value in alpha_values)
-                positions = np.fromiter(
-                    (instrument_positions[instrument_id] for instrument_id in instrument_ids),
-                    dtype=np.intp,
-                    count=len(instrument_ids),
-                )
-                alpha_array = np.fromiter(
-                    (float(value["value"]) for value in alpha_values),
-                    dtype=np.float64,
-                    count=len(alpha_values),
-                )
-                coordinates = (instrument_ids, positions, alpha_array)
-                alpha_coordinates[signal_session] = coordinates
-            instrument_ids, positions, alpha_array = coordinates
-            entry_index = signal_index + 1
-            exit_index = signal_index + 1 + horizon
-            included_alpha = np.asarray([], dtype=np.float64)
-            selected_labels = np.asarray([], dtype=np.float64)
-            if exit_index < len(calendar) and alpha_values:
-                entry_session = calendar[entry_index]
-                exit_session = calendar[exit_index]
-                entry_opens = adjusted_opens[positions, entry_index]
-                exit_opens = adjusted_opens[positions, exit_index]
-                valid_entry = np.isfinite(entry_opens)
-                valid_exit = np.isfinite(exit_opens)
-                zero_entry = valid_entry & (entry_opens == 0.0)
-                if np.any(zero_entry):
-                    instrument_id = instrument_ids[int(np.flatnonzero(zero_entry)[0])]
-                    raise FactorDataError(
-                        f"invalid Label entry Open for {instrument_id} on {entry_session}"
-                    )
-                included = valid_entry & valid_exit
-                label_array = np.empty(len(alpha_values), dtype=np.float64)
-                label_array[included] = (
-                    exit_opens[included] / entry_opens[included] - 1.0
-                )
-                for index in np.flatnonzero(~valid_entry):
-                    instrument_id = instrument_ids[int(index)]
-                    reason = unavailable_reason(
-                        research_data.trading_states.get((entry_session, instrument_id)),
-                        research_data.instruments[instrument_id],
-                        entry_session,
-                        valid_entry=False,
-                    )
-                    if reason == "unexplained_missing_or_invalid_data":
-                        raise FactorDataError(
-                            f"unexplained Label entry Open for {instrument_id} on {entry_session}"
-                        )
-                for index in np.flatnonzero(valid_entry & ~valid_exit):
-                    instrument_id = instrument_ids[int(index)]
-                    reason = unavailable_reason(
-                        research_data.trading_states.get((exit_session, instrument_id)),
-                        research_data.instruments[instrument_id],
-                        exit_session,
-                        valid_entry=True,
-                    )
-                    if reason == "terminal_delisting":
-                        label_array[index] = -1.0
-                        included[index] = True
-                    elif reason == "unexplained_missing_or_invalid_data":
-                        raise FactorDataError(
-                            f"unexplained Label exit Open for {instrument_id} on {exit_session}"
-                        )
-                selected_labels = label_array[included]
-                if not np.all(np.isfinite(selected_labels)):
-                    index = int(np.flatnonzero(included & ~np.isfinite(label_array))[0])
-                    raise FactorDataError(
-                        f"non-finite Label for {instrument_ids[index]} on {signal_session}"
-                    )
-                included_alpha = alpha_array[included]
-            days.append(
-                {
-                    "session": signal_session,
-                    "sample_count": len(included_alpha),
-                    **_factor_array_values(included_alpha, selected_labels),
-                }
-            )
-            cancellation_check()
-        days_by_horizon[str(horizon)] = days
-    return days_by_horizon
 
 
 def evaluate_factor(labels: dict[str, object]) -> dict[str, object]:

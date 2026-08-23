@@ -363,6 +363,7 @@ def test_development_topology_declares_every_core_service_and_pinned_infrastruct
         "initialize",
         "api",
         "research-worker",
+        "batch-research-worker",
         "tracking-worker",
         "web",
     ):
@@ -372,14 +373,20 @@ def test_development_topology_declares_every_core_service_and_pinned_infrastruct
     assert ":latest" not in compose
     assert "service_completed_successfully" in compose
     research_worker = compose.split("  research-worker:\n", maxsplit=1)[1].split(
-        "  tracking-worker:\n", maxsplit=1
+        "  batch-research-worker:\n", maxsplit=1
     )[0]
+    batch_research_worker = compose.split(
+        "  batch-research-worker:\n", maxsplit=1
+    )[1].split("  tracking-worker:\n", maxsplit=1)[0]
     tracking_worker = compose.split("  tracking-worker:\n", maxsplit=1)[1].split(
         "  web:\n", maxsplit=1
     )[0]
-    for role, service in (("research", research_worker), ("tracking", tracking_worker)):
+    for role, variable_role, service in (
+        ("research", "RESEARCH", research_worker),
+        ("batch-research", "BATCH_RESEARCH", batch_research_worker),
+        ("tracking", "TRACKING", tracking_worker),
+    ):
         assert f"      - {role}\n" in service
-        variable_role = role.upper()
         assert f"THESISTRACE_{variable_role}_WORKER_CPU_COUNT:-2" in service
         assert f"THESISTRACE_{variable_role}_WORKER_MEMORY_BYTES:-2147483648" in service
         assert (
@@ -747,7 +754,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
-    for role in ("research-worker", "tracking-worker"):
+    for role in ("research-worker", "batch-research-worker", "tracking-worker"):
         assert (
             f"docker image tag {project_name}-initialize {project_name}-{role}\n"
             in commands
@@ -759,7 +766,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert "wait initialize\n" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 300 "
-        "api research-worker tracking-worker web\n" in commands
+        "api research-worker batch-research-worker tracking-worker web\n" in commands
     )
     assert "--build" not in commands
     assert "uv run thesistrace-initialize" not in commands
@@ -815,7 +822,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
-    for role in ("research-worker", "tracking-worker"):
+    for role in ("research-worker", "batch-research-worker", "tracking-worker"):
         assert (
             f"docker image tag {project_name}-initialize {project_name}-{role}\n"
             in commands
@@ -827,11 +834,11 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert "wait initialize\n" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 300 "
-        "api research-worker tracking-worker web\n" in commands
+        "api research-worker batch-research-worker tracking-worker web\n" in commands
     )
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
-        "api research-worker tracking-worker\n" in commands
+        "api research-worker batch-research-worker tracking-worker\n" in commands
     )
     assert "--build" not in commands
 
