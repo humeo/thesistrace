@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from time import perf_counter_ns
+from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from thesistrace.daily_track import (
     DailyTrackActivationLimitReached,
@@ -25,6 +27,12 @@ from thesistrace.daily_track import (
 from thesistrace.data import DataOverview
 from thesistrace.entrypoints.alpha_http import install_alpha_http
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
+from thesistrace.operational_events import (
+    OperationalEvent,
+    OperationalEventWriter,
+    emit_operational_event,
+    sanitized_exception_context,
+)
 from thesistrace.research_folder import (
     CreateResearchFolder,
     RenameResearchFolder,
@@ -53,8 +61,24 @@ from thesistrace.research_run import (
     StartTrackingCommand,
 )
 
+_HEALTH_PATHS = frozenset({"/health/live", "/health/ready"})
 
-def create_app(settings: CoreSettings | None = None) -> FastAPI:
+
+def create_app(
+    settings: CoreSettings | None = None,
+    *,
+    event_sink: OperationalEventWriter | None = None,
+    http_request_id_factory: Callable[[], str] | None = None,
+    monotonic_ns: Callable[[], int] | None = None,
+) -> FastAPI:
+    selected_event_sink = emit_operational_event if event_sink is None else event_sink
+    selected_request_id_factory = (
+        _new_http_request_id
+        if http_request_id_factory is None
+        else http_request_id_factory
+    )
+    selected_monotonic_ns = perf_counter_ns if monotonic_ns is None else monotonic_ns
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         selected_settings = settings or CoreSettings.from_environment()
@@ -63,6 +87,54 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
             yield
 
     app = FastAPI(title="ThesisTrace Core", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def observe_http_request(request: Request, call_next):  # type: ignore[no-untyped-def]
+        if request.url.path in _HEALTH_PATHS:
+            return await call_next(request)
+
+        http_request_id = selected_request_id_factory()
+        started = selected_monotonic_ns()
+        try:
+            response = await call_next(request)
+        except Exception as error:
+            route = _normalized_route(request)
+            selected_event_sink(
+                OperationalEvent(
+                    level="ERROR",
+                    component="core_api",
+                    event="http_request_failed",
+                    context={
+                        "http_request_id": http_request_id,
+                        "method": request.method,
+                        "route": route,
+                        "status_code": status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        **sanitized_exception_context(error),
+                    },
+                )
+            )
+            response = PlainTextResponse(
+                "Internal Server Error",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        response.headers["X-Request-ID"] = http_request_id
+        selected_event_sink(
+            OperationalEvent(
+                level="INFO",
+                component="core_api",
+                event="http_request_completed",
+                context={
+                    "http_request_id": http_request_id,
+                    "method": request.method,
+                    "route": _normalized_route(request),
+                    "status_code": response.status_code,
+                    "duration_ms": (selected_monotonic_ns() - started) // 1_000_000,
+                },
+            )
+        )
+        return response
+
     install_alpha_http(
         app,
         financial_authoring_ready=lambda request: (
@@ -330,6 +402,16 @@ def _runtime(request: Request) -> CoreRuntime:
     return request.app.state.core_runtime
 
 
+def _normalized_route(request: Request) -> str:
+    route = request.scope.get("route")
+    path = getattr(route, "path", None)
+    return path if isinstance(path, str) else "unmatched"
+
+
+def _new_http_request_id() -> str:
+    return str(uuid4())
+
+
 app = create_app()
 
 
@@ -338,7 +420,13 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8100)
     arguments = parser.parse_args()
-    uvicorn.run(app, host=arguments.host, port=arguments.port, log_level="warning")
+    uvicorn.run(
+        app,
+        host=arguments.host,
+        port=arguments.port,
+        log_level="warning",
+        access_log=False,
+    )
 
 
 if __name__ == "__main__":

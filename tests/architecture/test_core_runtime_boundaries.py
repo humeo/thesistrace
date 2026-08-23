@@ -14,6 +14,7 @@ CORE_PACKAGES = (
     "data",
     "daily_track",
     "entrypoints",
+    "operational_events",
     "publication",
     "research_folder",
     "research_run",
@@ -89,11 +90,13 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "adapters",
             "daily_track",
             "data",
+            "operational_events",
             "publication",
             "research_folder",
             "research_kernel",
             "research_run",
         },
+        "operational_events": set(),
     }
 
     graph: dict[str, set[str]] = {}

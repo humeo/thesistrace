@@ -199,3 +199,4 @@ their real authority instead of adding an ADR.
 - [ADR-0211 — Hard-cut result-changing calculation contracts](0211-hard-cut-result-changing-calculation-contracts.md)
 - [ADR-0212 — Filter Research membership by positive-turnover observations](0212-filter-research-membership-by-positive-turnover-observations.md)
 - [ADR-0214 — Select Factor Evaluation or Strategy Backtest within ResearchRun](0214-select-factor-evaluation-or-strategy-backtest-within-researchrun.md)
+- [ADR-0217 — Keep operational telemetry diagnostic and Product State authoritative](0217-keep-operational-telemetry-diagnostic-and-product-state-authoritative.md)
