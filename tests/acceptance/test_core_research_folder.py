@@ -10,7 +10,7 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
 from thesistrace.data import DatasetAdmissionSnapshot
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
-from thesistrace.research_folder import DEFAULT_FOLDER_ID
+from thesistrace.research_folder import BATCH_RESEARCH_FOLDER_ID, DEFAULT_FOLDER_ID
 from thesistrace.research_run import ImmutableRunInput, ResearchRunService
 from thesistrace.research_run.models import ResearchRunAdmissionCommand
 
@@ -19,7 +19,7 @@ from thesistrace.research_run.models import ResearchRunAdmissionCommand
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_fresh_core_has_exactly_one_deterministic_default_folder_and_public_read_contract() -> None:
+def test_fresh_core_has_both_deterministic_system_folders_and_public_read_contract() -> None:
     settings = CoreSettings.from_environment()
     drop_product_schemas(settings)
 
@@ -33,7 +33,13 @@ def test_fresh_core_has_exactly_one_deterministic_default_folder_and_public_read
                     "name": "Default",
                     "is_default": True,
                     "created_at": response.json()["items"][0]["created_at"],
-                }
+                },
+                {
+                    "id": BATCH_RESEARCH_FOLDER_ID,
+                    "name": "Batch Research",
+                    "is_default": False,
+                    "created_at": response.json()["items"][1]["created_at"],
+                },
             ],
             "next_cursor": None,
         }
@@ -46,18 +52,21 @@ def test_fresh_core_has_exactly_one_deterministic_default_folder_and_public_read
                 """
                 SELECT count(*) AS count,
                        count(*) FILTER (WHERE is_default) AS default_count,
-                       min(id) AS only_id
+                       count(*) FILTER (
+                           WHERE id = 'folder_batch_research'
+                       ) AS batch_folder_count
                 FROM research_folders.folders
                 """
             ).fetchone()
-        assert row == {"count": 1, "default_count": 1, "only_id": DEFAULT_FOLDER_ID}
+        assert row == {"count": 2, "default_count": 1, "batch_folder_count": 1}
     finally:
         database.close()
 
     with TestClient(create_app(settings)) as restarted:
         folders = restarted.get("/api/research-folders").json()["items"]
         assert [(folder["id"], folder["is_default"]) for folder in folders] == [
-            (DEFAULT_FOLDER_ID, True)
+            (DEFAULT_FOLDER_ID, True),
+            (BATCH_RESEARCH_FOLDER_ID, False),
         ]
 
 

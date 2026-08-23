@@ -14,10 +14,12 @@ CORE_SCHEMAS = (
     "data",
     "research_folders",
     "research_runs",
+    "research_batches",
     "daily_tracks",
 )
 _SCHEMA_PACKAGES = {
     "research_runs": "research_run",
+    "research_batches": "research_batch",
     "daily_tracks": "daily_track",
     "research_folders": "research_folder",
 }

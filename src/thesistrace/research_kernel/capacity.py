@@ -33,6 +33,7 @@ def plan_session_capacity(
     maximum_universe_cardinality: int,
     effective_lookback: int,
     execution_memory_bytes: int,
+    additional_live_columns: int = 0,
 ) -> SessionCapacityPlan:
     positive_values = (
         formula_work,
@@ -41,7 +42,11 @@ def plan_session_capacity(
         maximum_universe_cardinality,
         execution_memory_bytes,
     )
-    if any(value <= 0 for value in positive_values) or effective_lookback < 0:
+    if (
+        any(value <= 0 for value in positive_values)
+        or effective_lookback < 0
+        or additional_live_columns < 0
+    ):
         raise ValueError("Research capacity facts are invalid")
     continuation_sessions = max(effective_lookback, _MAX_LABEL_HORIZON)
     continuation_bytes = (
@@ -53,7 +58,12 @@ def plan_session_capacity(
     per_session_bytes = (
         maximum_universe_cardinality
         * _BINARY64_BYTES
-        * (field_count + node_count + _LIVE_CALCULATION_COLUMNS)
+        * (
+            field_count
+            + node_count
+            + _LIVE_CALCULATION_COLUMNS
+            + additional_live_columns
+        )
         * _LIVE_BUFFER_MULTIPLIER
     )
     fixed_bytes = _FIXED_EXECUTION_OVERHEAD_BYTES + continuation_bytes

@@ -15,6 +15,7 @@ CORE_PACKAGES = (
     "daily_track",
     "entrypoints",
     "publication",
+    "research_batch",
     "research_folder",
     "research_run",
 )
@@ -30,8 +31,12 @@ PRODUCT_SCHEMAS = {
     "daily_track": "daily_tracks",
     "publication": "publication",
     "research_folder": "research_folders",
+    "research_batch": "research_batches",
 }
-ALLOWED_SCHEMA_REFERENCES = {("research_run", "research_folders")}
+ALLOWED_SCHEMA_REFERENCES = {
+    ("research_batch", "research_folders"),
+    ("research_run", "research_folders"),
+}
 
 
 def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
@@ -81,6 +86,15 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_kernel",
             "research_series",
         },
+        "research_batch": {
+            "_postgres",
+            "alpha_language",
+            "data",
+            "publication",
+            "research_folder",
+            "research_kernel",
+            "research_run",
+        },
         "fixture": {"data"},
         "adapters": {"data", "fixture"},
         "entrypoints": {
@@ -90,6 +104,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "daily_track",
             "data",
             "publication",
+            "research_batch",
             "research_folder",
             "research_kernel",
             "research_run",
@@ -135,6 +150,12 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "research_runs.attempts",
             "research_runs.cancel_receipts",
             "research_runs.start_tracking_receipts",
+        ),
+        "research_batch": (
+            "research_batches.batches",
+            "research_batches.items",
+            "research_batches.progress",
+            "research_batches.admission_receipts",
         ),
         "daily_track": (
             "daily_tracks.tracks",
@@ -337,7 +358,7 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
         assert not (ROOT / "web" / removed_path).exists()
 
 
-def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() -> None:
+def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None:
     assert _http_routes() == {
         ("get", "/api/alpha/catalog"),
         ("post", "/api/alpha/diagnostics"),
@@ -346,6 +367,9 @@ def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() ->
         ("post", "/api/research-folders"),
         ("patch", "/api/research-folders/{folder_id}"),
         ("delete", "/api/research-folders/{folder_id}"),
+        ("get", "/api/research-batches"),
+        ("post", "/api/research-batches"),
+        ("get", "/api/research-batches/{batch_id}"),
         ("get", "/api/research-runs"),
         ("post", "/api/research-runs"),
         ("patch", "/api/research-runs/{run_id}"),
@@ -556,7 +580,13 @@ def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> No
     assert "def record(" in service
     assert "def read_in_transaction(" in service
     assert ".commit(" not in service
-    for product_schema in ("data.", "definitions.", "research_runs.", "daily_tracks."):
+    for product_schema in (
+        "data.",
+        "definitions.",
+        "research_runs.",
+        "research_batches.",
+        "daily_tracks.",
+    ):
         assert product_schema not in service
         assert product_schema not in schema
 

@@ -23,6 +23,7 @@ from thesistrace.data import (
 )
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.publication import Publication
+from thesistrace.research_batch import ResearchBatchService
 from thesistrace.research_folder import ResearchFolderService
 from thesistrace.research_run import (
     ResearchRunService,
@@ -123,6 +124,7 @@ class CoreRuntime:
     database: PostgresDatabase
     data_overview: DatasetOverviewService
     research_folders: ResearchFolderService
+    research_batches: ResearchBatchService
     research_runs: ResearchRunService
     daily_tracks: DailyTrackService
     daily_track_sessions: SessionCoordinateRepository
@@ -184,10 +186,16 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             ),
             execution_memory_bytes=settings.research_execution_memory_bytes,
         )
+        research_batches = ResearchBatchService(
+            database,
+            research_runs=research_runs,
+            dataset_lifecycle=dataset_lifecycle,
+        )
         yield CoreRuntime(
             database=database,
             data_overview=data_overview,
             research_folders=ResearchFolderService(database),
+            research_batches=research_batches,
             research_runs=research_runs,
             daily_tracks=daily_tracks,
             daily_track_sessions=SessionCoordinateRepository(database),

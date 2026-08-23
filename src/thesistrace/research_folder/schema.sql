@@ -21,3 +21,6 @@ WHERE is_default;
 
 INSERT INTO research_folders.folders (id, name, is_default)
 VALUES ('folder_default', 'Default', true);
+
+INSERT INTO research_folders.folders (id, name, is_default)
+VALUES ('folder_batch_research', 'Batch Research', false);

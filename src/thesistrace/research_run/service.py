@@ -6,7 +6,7 @@ import logging
 import math
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64DecodeError
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -228,6 +228,14 @@ class _FailurePolicy:
     retryable: bool
 
 
+@dataclass(frozen=True)
+class PreparedResearchRunAdmission:
+    run_id: str
+    folder_id: str
+    name: str
+    immutable_input: ImmutableRunInput
+
+
 class ResearchRunService:
     def __init__(
         self,
@@ -266,6 +274,128 @@ class ResearchRunService:
     def execution_memory_bytes(self) -> int:
         return self._execution_memory_bytes
 
+    def current_admission_dataset(self) -> DatasetAdmissionSnapshot | None:
+        if self._current_dataset is None:
+            raise RuntimeError("ResearchRun admission Dataset is not configured")
+        return self._current_dataset()
+
+    def prepare_child_admission(
+        self,
+        command: ResearchRunAdmissionCommand,
+        *,
+        dataset: DatasetAdmissionSnapshot | None,
+    ) -> PreparedResearchRunAdmission:
+        if self._compile_formula is None:
+            raise RuntimeError("ResearchRun admission compiler is not configured")
+        try:
+            compiled = self._compile_formula(command.formula)
+        except FormulaCompilationError as error:
+            raise ResearchRunAdmissionRejected(
+                [
+                    ResearchRunAdmissionIssue(
+                        code=diagnostic.code,
+                        field="formula",
+                        message=diagnostic.message,
+                        range=diagnostic.range,
+                        details=diagnostic.details,
+                    )
+                    for diagnostic in error.diagnostics
+                ]
+            ) from error
+        immutable_input = _admitted_input(
+            command,
+            compiled,
+            dataset,
+            execution_memory_bytes=self._execution_memory_bytes,
+        )
+        run_id = f"run_{uuid4().hex[:20]}"
+        submitted_name = (command.name or "").strip()
+        return PreparedResearchRunAdmission(
+            run_id=run_id,
+            folder_id=command.folder_id,
+            name=submitted_name or f"Research {run_id[-8:].upper()}",
+            immutable_input=immutable_input,
+        )
+
+    def admit_prepared_child_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        prepared: PreparedResearchRunAdmission,
+        *,
+        execution_owner: str,
+        retain_generation: bool,
+    ) -> Mapping[str, object]:
+        if execution_owner not in {"ordinary", "research_batch"}:
+            raise ValueError("ResearchRun execution owner is invalid")
+        immutable_input = prepared.immutable_input
+        row = transaction.execute(
+            """
+            INSERT INTO research_runs.runs (
+                id, folder_id, name, requested_start_date,
+                requested_end_date, status, execution_owner, immutable_input
+            ) VALUES (%s, %s, %s, %s, %s, 'queued', %s, %s)
+            RETURNING id, name, folder_id, status, requested_start_date,
+                      requested_end_date, created_at, immutable_input, failure_reason
+            """,
+            (
+                prepared.run_id,
+                prepared.folder_id,
+                prepared.name,
+                immutable_input.requested_start_date,
+                immutable_input.requested_end_date,
+                execution_owner,
+                Jsonb(immutable_input.canonical_value()),
+            ),
+        ).fetchone()
+        assert row is not None
+        transaction.execute(
+            """
+            INSERT INTO research_runs.progress (
+                run_id, phase,
+                completed_warmup_sessions, total_warmup_sessions,
+                completed_research_sessions, total_research_sessions,
+                committed_chunk_count
+            ) VALUES (%s, 'queued', 0, %s, 0, %s, 0)
+            """,
+            (
+                prepared.run_id,
+                immutable_input.execution_plan.research_session_offset,
+                immutable_input.execution_plan.research_session_count,
+            ),
+        )
+        if retain_generation:
+            if self._dataset_lifecycle is None:
+                raise RuntimeError("ResearchRun Dataset retention is not configured")
+            self._dataset_lifecycle.retain_generation_in_transaction(
+                transaction,
+                retention_id=f"queued-research-run:{prepared.run_id}",
+                generation_manifest_sha256=(
+                    immutable_input.data_admission.generation_manifest_sha256
+                ),
+                lease_seconds=self._lease_seconds,
+            )
+        return row
+
+    def project_child_statuses_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        run_ids: Sequence[str],
+    ) -> dict[str, str]:
+        if not run_ids:
+            return {}
+        rows = transaction.execute(
+            """
+            SELECT id, status
+            FROM research_runs.runs
+            WHERE id = ANY(%s)
+            """,
+            (list(run_ids),),
+        ).fetchall()
+        statuses = {str(row["id"]): str(row["status"]) for row in rows}
+        if set(statuses) != set(run_ids):
+            raise RuntimeError("ResearchRun child projection is incomplete")
+        return statuses
+
     def admit(
         self,
         command: ResearchRunAdmissionCommand,
@@ -283,31 +413,10 @@ class ResearchRunService:
                 if receipt["request_fingerprint"] != fingerprint:
                     raise ResearchRunAdmissionConflict("ResearchRun request_id conflicts")
                 return _summary(receipt)
-        try:
-            compiled = self._compile_formula(command.formula)
-        except FormulaCompilationError as error:
-            raise ResearchRunAdmissionRejected(
-                [
-                    ResearchRunAdmissionIssue(
-                        code=diagnostic.code,
-                        field="formula",
-                        message=diagnostic.message,
-                        range=diagnostic.range,
-                        details=diagnostic.details,
-                    )
-                    for diagnostic in error.diagnostics
-                ]
-            ) from error
-        snapshot = self._current_dataset()
-        immutable_input = _admitted_input(
+        prepared = self.prepare_child_admission(
             command,
-            compiled,
-            snapshot,
-            execution_memory_bytes=self._execution_memory_bytes,
+            dataset=self.current_admission_dataset(),
         )
-        run_id = f"run_{uuid4().hex[:20]}"
-        submitted_name = (command.name or "").strip()
-        name = submitted_name or f"Research {run_id[-8:].upper()}"
         with self._database.transaction() as transaction:
             transaction.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -332,56 +441,20 @@ class ResearchRunService:
                         )
                     ]
                 )
-            row = transaction.execute(
-                """
-                INSERT INTO research_runs.runs (
-                    id, folder_id, name, requested_start_date,
-                    requested_end_date, status, immutable_input
-                ) VALUES (%s, %s, %s, %s, %s, 'queued', %s)
-                RETURNING id, name, folder_id, status, requested_start_date,
-                          requested_end_date, created_at, immutable_input, failure_reason
-                """,
-                (
-                    run_id,
-                    command.folder_id,
-                    name,
-                    immutable_input.requested_start_date,
-                    immutable_input.requested_end_date,
-                    Jsonb(immutable_input.canonical_value()),
-                ),
-            ).fetchone()
+            row = self.admit_prepared_child_in_transaction(
+                transaction,
+                prepared,
+                execution_owner="ordinary",
+                retain_generation=self._dataset_lifecycle is not None,
+            )
             transaction.execute(
                 """
                 INSERT INTO research_runs.admission_requests (
                     request_id, request_fingerprint, run_id
                 ) VALUES (%s, %s, %s)
                 """,
-                (command.request_id, fingerprint, run_id),
+                (command.request_id, fingerprint, prepared.run_id),
             )
-            transaction.execute(
-                """
-                INSERT INTO research_runs.progress (
-                    run_id, phase,
-                    completed_warmup_sessions, total_warmup_sessions,
-                    completed_research_sessions, total_research_sessions,
-                    committed_chunk_count
-                ) VALUES (%s, 'queued', 0, %s, 0, %s, 0)
-                """,
-                (
-                    run_id,
-                    immutable_input.execution_plan.research_session_offset,
-                    immutable_input.execution_plan.research_session_count,
-                ),
-            )
-            if self._dataset_lifecycle is not None:
-                self._dataset_lifecycle.retain_generation_in_transaction(
-                    transaction,
-                    retention_id=f"queued-research-run:{run_id}",
-                    generation_manifest_sha256=(
-                        immutable_input.data_admission.generation_manifest_sha256
-                    ),
-                    lease_seconds=self._lease_seconds,
-                )
         assert row is not None
         return _summary(row)
 
@@ -673,7 +746,8 @@ class ResearchRunService:
             self._lock_result_staging(transaction, run_id)
             row = transaction.execute(
                 """
-                SELECT id, name, folder_id, status, requested_start_date,
+                SELECT id, name, folder_id, status, execution_owner,
+                       requested_start_date,
                        requested_end_date, created_at, immutable_input,
                        failure_reason
                 FROM research_runs.runs
@@ -684,6 +758,10 @@ class ResearchRunService:
             ).fetchone()
             if row is None:
                 return None
+            if row["execution_owner"] != "ordinary":
+                raise ResearchRunCancelConflict(
+                    "Batch-owned ResearchRun cancellation is controlled by its Research Batch"
+                )
             if row["status"] == "running":
                 cancelling_attempt = transaction.execute(
                     """
@@ -1146,8 +1224,10 @@ class ResearchRunService:
                     ORDER BY ordinal DESC
                     LIMIT 1
                 ) AS attempt ON true
-                WHERE run.status = 'queued'
-                   OR (
+                WHERE run.execution_owner = 'ordinary'
+                  AND (
+                    run.status = 'queued'
+                    OR (
                         run.status = 'running'
                         AND (
                             (
@@ -1159,7 +1239,8 @@ class ResearchRunService:
                                 AND attempt.failure_reason = ANY(%s)
                             )
                         )
-                   )
+                    )
+                  )
                 ORDER BY run.created_at, run.id
                 FOR UPDATE OF run SKIP LOCKED
                 LIMIT 1
