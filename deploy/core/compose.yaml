@@ -105,6 +105,7 @@ services:
     <<: *backend
     volumes:
       - canonical-data:/var/lib/thesistrace/canonical-data:ro
+      - batch-attempt-control:/var/lib/thesistrace/canonical-data/.batch-attempts
     command:
       - thesistrace-core-worker
       - --role
@@ -175,6 +176,7 @@ services:
       retries: 60
 
 volumes:
+  batch-attempt-control:
   canonical-data:
   postgres-data:
   rustfs-data:

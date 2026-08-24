@@ -693,7 +693,14 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     assert "deepcopy(" not in execution_source
     assert "run_kernel(" not in service_source
     assert "canonical-data:/var/lib/thesistrace/canonical-data:ro" in compose_source
+    assert (
+        "batch-attempt-control:/var/lib/thesistrace/canonical-data/.batch-attempts"
+        in compose_source
+    )
     assert ":/var/lib/thesistrace/canonical-data:ro" in test_compose_source
+    assert (
+        ":/var/lib/thesistrace/canonical-data/.batch-attempts" in test_compose_source
+    )
     child_environment = transport_source[
         transport_source.index("def child_environment(") : transport_source.index(
             "def enforce_cancellation_deadline("

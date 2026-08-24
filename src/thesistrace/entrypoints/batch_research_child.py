@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import queue
 import sys
 from contextlib import nullcontext
+from pathlib import Path
 from threading import Thread
 
 from thesistrace.data.io_metrics import cold_file_reads, measure_data_io
@@ -18,6 +20,14 @@ def main() -> None:
     request = json.loads(request_line)
     if not isinstance(request, dict):
         raise SystemExit(64)
+    control_path_value = request.get("attempt_control_path")
+    if not isinstance(control_path_value, str):
+        raise SystemExit(64)
+    control_path = Path(control_path_value)
+    if not control_path.is_absolute() or control_path.parent.name != ".batch-attempts":
+        raise SystemExit(64)
+    control_file = control_path.open("a+")
+    fcntl.flock(control_file.fileno(), fcntl.LOCK_EX)
     commands: queue.Queue[str] = queue.Queue()
 
     def watch_supervisor() -> None:
@@ -37,6 +47,20 @@ def main() -> None:
     cold_reads = os.environ.get("THESISTRACE_QUALIFICATION_COLD_DATA_READS") == "1"
     read_context = cold_file_reads() if cold_reads else nullcontext()
     with measure_data_io() as measurement, read_context:
+        print(
+            json.dumps(
+                {
+                    "status": "child_ready",
+                    "child_peak_rss_bytes": _current_peak_rss_bytes(),
+                    "data_io": measurement.snapshot(),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+        if commands.get() != "acknowledge_ready":
+            raise SystemExit(65)
         for response in execute_research_batch_messages(request):
             response["data_io"] = measurement.snapshot()
             print(json.dumps(response, sort_keys=True, separators=(",", ":")), flush=True)
@@ -46,6 +70,13 @@ def main() -> None:
             expected = _expected_command(response)
             if commands.get() != expected:
                 raise SystemExit(65)
+
+
+def _current_peak_rss_bytes() -> int:
+    import resource
+
+    value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return value if sys.platform == "darwin" else value * 1024
 
 
 def _expected_command(response: dict[str, object]) -> str:

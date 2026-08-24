@@ -144,6 +144,7 @@ class ResearchBatchItemSummary(BaseModel):
     ]
     outcome: Literal["succeeded", "failed", "cancelled"] | None = None
     run_availability: Literal["available", "deleted"]
+    task_attempt_count: int = Field(ge=0, le=3)
     diagnostic: ResearchBatchDiagnostic | None = None
     deleted_at: datetime | None = None
 

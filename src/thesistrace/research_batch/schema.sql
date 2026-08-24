@@ -51,8 +51,23 @@ CREATE TABLE research_batches.attempts (
     total_research_sessions integer,
     task_started_at timestamp with time zone,
     live_progress_updated_at timestamp with time zone,
+    child_pid integer NOT NULL,
+    child_control_path text NOT NULL,
+    child_started_at timestamp with time zone NOT NULL,
+    child_exited_at timestamp with time zone,
+    child_exit_code integer,
+    child_acknowledged boolean,
     CONSTRAINT attempts_ordinal_check CHECK (ordinal > 0),
     CONSTRAINT attempts_fence_check CHECK (fence > 0),
+    CONSTRAINT attempts_child_check CHECK (
+        child_pid > 0
+        AND child_control_path = btrim(child_control_path)
+        AND child_control_path <> ''
+        AND (
+            (child_exited_at IS NULL AND child_exit_code IS NULL AND child_acknowledged IS NULL)
+            OR (child_exited_at IS NOT NULL AND child_exit_code IS NOT NULL AND child_acknowledged IS NOT NULL)
+        )
+    ),
     CONSTRAINT attempts_status_check CHECK (
         status = ANY (ARRAY[
             'running'::text,
@@ -132,6 +147,27 @@ CREATE TABLE research_batches.attempts (
     ),
     UNIQUE (batch_id, ordinal),
     UNIQUE (generation_pin_id),
+    UNIQUE (id, batch_id, fence),
+    FOREIGN KEY (batch_id) REFERENCES research_batches.batches(id) ON DELETE CASCADE
+);
+
+CREATE TABLE research_batches.starting_claims (
+    id text PRIMARY KEY,
+    batch_id text NOT NULL UNIQUE,
+    ordinal integer NOT NULL,
+    fence integer NOT NULL,
+    generation_pin_id text NOT NULL UNIQUE,
+    data_generation_id text NOT NULL,
+    data_through_session date NOT NULL,
+    child_control_path text NOT NULL,
+    heartbeat_at timestamp with time zone DEFAULT now() NOT NULL,
+    lease_expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT starting_claims_ordinal_check CHECK (ordinal > 0),
+    CONSTRAINT starting_claims_fence_check CHECK (fence > 0),
+    CONSTRAINT starting_claims_child_control_path_check CHECK (
+        child_control_path = btrim(child_control_path) AND child_control_path <> ''
+    ),
+    UNIQUE (id, batch_id, fence),
     FOREIGN KEY (batch_id) REFERENCES research_batches.batches(id) ON DELETE CASCADE
 );
 
@@ -175,6 +211,74 @@ CREATE TABLE research_batches.items (
     FOREIGN KEY (batch_id) REFERENCES research_batches.batches(id) ON DELETE CASCADE
 );
 
+CREATE TABLE research_batches.task_attempts (
+    id text PRIMARY KEY,
+    batch_id text NOT NULL,
+    item_ordinal integer,
+    task_key text NOT NULL,
+    task_role text NOT NULL,
+    ordinal integer NOT NULL,
+    batch_attempt_id text NOT NULL,
+    fence integer NOT NULL,
+    status text NOT NULL,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    failure_reason text,
+    failure_diagnostic jsonb,
+    CONSTRAINT task_attempts_item_ordinal_check CHECK (
+        item_ordinal IS NULL OR item_ordinal > 0
+    ),
+    CONSTRAINT task_attempts_key_check CHECK (
+        task_key = btrim(task_key) AND task_key <> ''
+    ),
+    CONSTRAINT task_attempts_role_check CHECK (
+        (task_role = 'shared_alpha_factor' AND item_ordinal IS NULL)
+        OR (
+            task_role = ANY (ARRAY['factor'::text, 'strategy'::text])
+            AND item_ordinal IS NOT NULL
+        )
+    ),
+    CONSTRAINT task_attempts_ordinal_check CHECK (
+        ordinal > 0 AND ordinal <= 3
+    ),
+    CONSTRAINT task_attempts_fence_check CHECK (fence > 0),
+    CONSTRAINT task_attempts_status_check CHECK (
+        status = ANY (ARRAY[
+            'running'::text,
+            'succeeded'::text,
+            'failed'::text
+        ])
+    ),
+    CONSTRAINT task_attempts_failure_diagnostic_check CHECK (
+        failure_diagnostic IS NULL OR jsonb_typeof(failure_diagnostic) = 'object'
+    ),
+    CONSTRAINT task_attempts_lifecycle_check CHECK ((
+        (
+            status = 'running'
+            AND finished_at IS NULL
+            AND failure_reason IS NULL
+            AND failure_diagnostic IS NULL
+        )
+        OR (
+            status = 'succeeded'
+            AND finished_at IS NOT NULL
+            AND failure_reason IS NULL
+            AND failure_diagnostic IS NULL
+        )
+        OR (
+            status = 'failed'
+            AND finished_at IS NOT NULL
+            AND failure_reason IS NOT NULL
+            AND failure_diagnostic IS NOT NULL
+        )
+    ) IS TRUE),
+    UNIQUE (batch_id, task_role, task_key, ordinal),
+    FOREIGN KEY (batch_id, item_ordinal)
+        REFERENCES research_batches.items(batch_id, ordinal) ON DELETE CASCADE,
+    FOREIGN KEY (batch_attempt_id, batch_id, fence)
+        REFERENCES research_batches.attempts(id, batch_id, fence) ON DELETE CASCADE
+);
+
 CREATE TABLE research_batches.progress (
     batch_id text PRIMARY KEY,
     completed_items integer DEFAULT 0 NOT NULL,
@@ -214,3 +318,7 @@ ON research_batches.batches (created_at DESC, id);
 
 CREATE INDEX research_batch_attempts_claim_idx
 ON research_batches.attempts (batch_id, ordinal DESC);
+
+CREATE UNIQUE INDEX research_batch_task_attempts_running_idx
+ON research_batches.task_attempts (batch_id)
+WHERE status = 'running';

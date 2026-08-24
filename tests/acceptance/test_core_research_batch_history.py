@@ -10,7 +10,7 @@ import pytest
 from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
-from psycopg.errors import CheckViolation
+from psycopg.errors import CheckViolation, ForeignKeyViolation
 from psycopg.types.json import Jsonb
 from test_core_research_batch_admission import (
     _factor_command,
@@ -114,7 +114,7 @@ def test_batch_history_schema_rejects_contradictory_attempts_and_item_outcomes(
         )
         for ordinal, invalid in enumerate(invalid_attempts, start=1):
             attempt_id, status, finished_expression, failure_reason, diagnostic = invalid
-            with pytest.raises(CheckViolation):
+            with pytest.raises((CheckViolation, ForeignKeyViolation)):
                 with runtime.database.transaction() as transaction:
                     transaction.execute(
                         """
@@ -122,10 +122,12 @@ def test_batch_history_schema_rejects_contradictory_attempts_and_item_outcomes(
                             id, batch_id, ordinal, fence, generation_pin_id,
                             data_generation_id, data_through_session, status,
                             lease_expires_at, finished_at, failure_reason,
-                            failure_diagnostic
+                            failure_diagnostic, child_pid, child_control_path,
+                            child_started_at
                         ) VALUES (
                             %s, %s, %s, 1, %s, %s, %s, %s,
-                            now() + interval '1 minute', %s, %s, %s
+                            now() + interval '1 minute', %s, %s, %s,
+                            1, '/tmp/.batch-attempts/invalid.lock', now()
                         )
                         """,
                         (
@@ -137,6 +139,104 @@ def test_batch_history_schema_rejects_contradictory_attempts_and_item_outcomes(
                             admitted["scope"]["data_through_session"],
                             status,
                             finished_expression,
+                            failure_reason,
+                            None if diagnostic is None else Jsonb(diagnostic),
+                        ),
+                    )
+
+        with runtime.database.transaction() as transaction:
+            transaction.execute(
+                """
+                INSERT INTO research_batches.attempts (
+                    id, batch_id, ordinal, fence, generation_pin_id,
+                    data_generation_id, data_through_session, status,
+                    lease_expires_at, child_pid, child_control_path,
+                    child_started_at
+                ) VALUES (
+                    'task-schema-parent', %s, 10, 10, 'task-schema-pin',
+                    %s, %s, 'running', now() + interval '1 minute',
+                    1, '/tmp/.batch-attempts/task-schema-parent.lock', now()
+                )
+                """,
+                (
+                    admitted["id"],
+                    admitted["scope"]["data_generation_id"],
+                    admitted["scope"]["data_through_session"],
+                ),
+            )
+        invalid_task_attempts = (
+            (
+                "task-succeeded-unfinished",
+                1,
+                "factor",
+                1,
+                10,
+                "succeeded",
+                False,
+                None,
+                None,
+            ),
+            (
+                "task-failed-no-diagnostic",
+                1,
+                "factor",
+                1,
+                10,
+                "failed",
+                True,
+                "Failure",
+                None,
+            ),
+            ("task-over-retry-limit", 1, "factor", 4, 10, "running", False, None, None),
+            (
+                "task-shared-with-item",
+                1,
+                "shared_alpha_factor",
+                1,
+                10,
+                "running",
+                False,
+                None,
+                None,
+            ),
+            ("task-stale-fence", 1, "factor", 1, 11, "running", False, None, None),
+        )
+        for invalid in invalid_task_attempts:
+            (
+                task_id,
+                item_ordinal,
+                task_role,
+                task_ordinal,
+                fence,
+                status,
+                finished,
+                failure_reason,
+                diagnostic,
+            ) = invalid
+            with pytest.raises((CheckViolation, ForeignKeyViolation)):
+                with runtime.database.transaction() as transaction:
+                    transaction.execute(
+                        """
+                        INSERT INTO research_batches.task_attempts (
+                            id, batch_id, item_ordinal, task_key, task_role,
+                            ordinal, batch_attempt_id, fence, status,
+                            finished_at, failure_reason, failure_diagnostic
+                        ) VALUES (
+                            %s, %s, %s, 'value', %s, %s,
+                            'task-schema-parent', %s, %s,
+                            CASE WHEN %s THEN now() END,
+                            %s, %s
+                        )
+                        """,
+                        (
+                            task_id,
+                            admitted["id"],
+                            item_ordinal,
+                            task_role,
+                            task_ordinal,
+                            fence,
+                            status,
+                            finished,
                             failure_reason,
                             None if diagnostic is None else Jsonb(diagnostic),
                         ),
@@ -212,6 +312,7 @@ def test_batch_detail_separates_durable_and_live_progress_and_survives_restart(
             runtime.database,
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            attempt_control_directory=settings.data_mount / ".batch-attempts",
             execution=barrier,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:

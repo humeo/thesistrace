@@ -10,7 +10,6 @@ import pytest
 from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
-from psycopg import sql
 from test_core_research_batch_admission import _factor_command, _publish_current_data
 
 from thesistrace._postgres import PostgresDatabase
@@ -79,8 +78,9 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
         )
         processor = ResearchBatchService(
             runtime.database,
-            research_runs=runtime.research_runs,
-            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+                research_runs=runtime.research_runs,
+                dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+                attempt_control_directory=settings.data_mount / ".batch-attempts",
             execution=barrier,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -88,7 +88,9 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
                 processor.process_next,
                 on_execution_event=events.append,
             )
-            assert barrier.prepared.wait(timeout=10)
+            if not barrier.prepared.wait(timeout=10):
+                future.result(timeout=1)
+                raise AssertionError("Batch preparation barrier was not reached")
             active = client.get(f"/api/research-batches/{batch['id']}").json()
             assert active["status"] == "running"
             assert all(item["status"] == "running" for item in active["items"])
@@ -286,7 +288,7 @@ def test_factor_batch_isolates_one_deterministic_item_failure_and_continues(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_partial_failure_cleanup_keeps_attempt_and_generation_pin_active(
+def test_transport_failure_before_child_ready_does_not_charge_a_task_attempt(
     tmp_path: Path,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
@@ -306,34 +308,44 @@ def test_partial_failure_cleanup_keeps_attempt_and_generation_pin_active(
             },
         ).json()
         runtime = client.app.state.core_runtime
-        second_run_id = str(admitted["items"][1]["research_run_id"])
-        _install_cleanup_failure_constraint(settings, second_run_id)
         processor = ResearchBatchService(
             runtime.database,
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            attempt_control_directory=settings.data_mount / ".batch-attempts",
             execution=_TransportFailureExecutor(),
         )
 
-        try:
-            assert processor.process_next() is True
-        finally:
-            _remove_cleanup_failure_constraint(settings)
+        assert processor.process_next() is True
 
         current = client.get(f"/api/research-batches/{admitted['id']}").json()
-        assert current["status"] == "running"
-        assert [item["status"] for item in current["items"]] == [
-            "failed",
-            "running",
-            "running",
+        assert current["status"] == "queued"
+        assert [item["status"] for item in current["items"]] == ["queued"] * 3
+        assert [item["task_attempt_count"] for item in current["items"]] == [0, 0, 0]
+        assert [(item["outcome"], item["diagnostic"]) for item in current["items"]] == [
+            (None, None),
+            (None, None),
+            (None, None),
         ]
-        assert current["items"][0]["outcome"] == "failed"
-        assert current["items"][0]["diagnostic"] is not None
-        assert [
-            (item["outcome"], item["diagnostic"]) for item in current["items"][1:]
-        ] == [(None, None), (None, None)]
-        assert _batch_attempt_status(settings, admitted["id"]) == "running"
-        assert _batch_pin_state(settings, admitted["id"]) == (1, 0)
+        assert current["attempt"] is None
+        assert _batch_pin_state(settings, admitted["id"]) == (0, 0)
+
+        recovery = ResearchBatchService(
+            runtime.database,
+            research_runs=runtime.research_runs,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            execution=SupervisedResearchBatchExecutor(
+                settings.data_mount,
+                execution_memory_bytes=settings.research_execution_memory_bytes,
+            ),
+        )
+        assert recovery.process_next() is True
+        completed = client.get(f"/api/research-batches/{admitted['id']}").json()
+        assert completed["status"] == "succeeded"
+        assert [item["status"] for item in completed["items"]] == ["succeeded"] * 3
+        assert [item["task_attempt_count"] for item in completed["items"]] == [1, 1, 1]
+        assert completed["attempt"]["number"] == 1
 
 
 @pytest.mark.skipif(
@@ -582,42 +594,6 @@ def _batch_attempt_status(settings: CoreSettings, batch_id: str) -> str:
             ).fetchone()
         assert row is not None
         return str(row["status"])
-    finally:
-        database.close()
-
-
-def _install_cleanup_failure_constraint(
-    settings: CoreSettings,
-    run_id: str,
-) -> None:
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            transaction.execute(
-                sql.SQL(
-                    """
-                    ALTER TABLE research_runs.runs
-                    ADD CONSTRAINT test_batch_cleanup_failure
-                    CHECK (id <> {} OR status <> 'failed') NOT VALID
-                    """
-                ).format(sql.Literal(run_id))
-            )
-    finally:
-        database.close()
-
-
-def _remove_cleanup_failure_constraint(settings: CoreSettings) -> None:
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            transaction.execute(
-                """
-                ALTER TABLE research_runs.runs
-                DROP CONSTRAINT test_batch_cleanup_failure
-                """
-            )
     finally:
         database.close()
 

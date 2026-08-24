@@ -8,6 +8,7 @@ import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 
 import pytest
 from core_runtime import create_initialized_test_app as create_app
@@ -198,12 +199,14 @@ def _worker_environment(settings: CoreSettings) -> dict[str, str]:
 def _start_claim_barrier_worker(
     settings: CoreSettings,
     role: str,
+    barrier_event: str = "worker_claim",
 ) -> subprocess.Popen[str]:
     return subprocess.Popen(
         [
             sys.executable,
             "tests/acceptance/process_worker_with_claim_barrier.py",
             role,
+            barrier_event,
         ],
         cwd=ROOT,
         env=_worker_environment(settings),
@@ -221,26 +224,27 @@ def _wait_for_worker_event(
     assert process.stdout is not None
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
+    deadline = monotonic() + 30
+    observed: list[dict[str, object]] = []
     try:
-        ready = selector.select(timeout=30)
+        while monotonic() < deadline:
+            ready = selector.select(timeout=max(0.0, deadline - monotonic()))
+            if not ready:
+                break
+            line = process.stdout.readline()
+            if not line:
+                break
+            event = json.loads(line)
+            observed.append(event)
+            if event.get("event") == event_name:
+                return event
     finally:
         selector.close()
-    if not ready:
-        stdout, stderr = _terminate_and_collect(process)
-        raise AssertionError(
-            f"Worker did not emit {event_name}; returncode={process.returncode}; "
-            f"stdout={stdout!r}; stderr={stderr!r}"
-        )
-    line = process.stdout.readline()
-    if not line:
-        stdout, stderr = _terminate_and_collect(process)
-        raise AssertionError(
-            f"Worker exited before {event_name}; returncode={process.returncode}; "
-            f"stdout={stdout!r}; stderr={stderr!r}"
-        )
-    event = json.loads(line)
-    assert event["event"] == event_name
-    return event
+    stdout, stderr = _terminate_and_collect(process)
+    raise AssertionError(
+        f"Worker did not emit {event_name}; returncode={process.returncode}; "
+        f"observed={observed!r}; stdout={stdout!r}; stderr={stderr!r}"
+    )
 
 
 def _release_claim_barrier_worker(

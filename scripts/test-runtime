@@ -365,28 +365,47 @@ case "$command" in
     cleanup_project
     exit 0
     ;;
-  restart-postgres)
+  stop-postgres | restart-postgres | stop-rustfs | restart-rustfs)
     project_name=${THESISTRACE_TEST_PROJECT_NAME-}
     bucket_name=${project_name#"$canonical_prefix"}
     run_id=${project_name#"$canonical_prefix"}
     data_mount="$state_root/$run_id/canonical-data"
     validate_cleanup_target
-    compose restart postgres >&2
+    service=postgres
+    if [ "$command" = stop-rustfs ] || [ "$command" = restart-rustfs ]; then
+      service=rustfs
+    fi
+    if [ "$command" = stop-postgres ] || [ "$command" = stop-rustfs ]; then
+      compose stop "$service" >&2
+      exit 0
+    fi
+    compose restart "$service" >&2
     readiness_attempt=0
-    until compose exec -T postgres pg_isready -U thesistrace -d thesistrace >/dev/null 2>&1; do
+    until {
+      if [ "$service" = postgres ]; then
+        compose exec -T postgres pg_isready -U thesistrace -d thesistrace >/dev/null 2>&1
+      else
+        compose exec -T rustfs sh -c \
+          'curl -fsS http://127.0.0.1:9000/health' >/dev/null 2>&1
+      fi
+    }; do
       readiness_attempt=$((readiness_attempt + 1))
       if [ "$readiness_attempt" -ge 60 ]; then
-        echo "PostgreSQL did not become ready after restart" >&2
+        echo "$service did not become ready after restart" >&2
         exit 1
       fi
       sleep 1
     done
-    mapped_port postgres 5432
+    if [ "$service" = postgres ]; then
+      mapped_port postgres 5432
+    else
+      mapped_port rustfs 9000
+    fi
     exit 0
     ;;
   integration | benchmark | e2e | image-smoke) ;;
   *)
-    echo "usage: $0 {identity|cleanup|restart-postgres|integration|benchmark|e2e|image-smoke [--keep-environment]}" >&2
+    echo "usage: $0 {identity|cleanup|stop-postgres|restart-postgres|stop-rustfs|restart-rustfs|integration|benchmark|e2e|image-smoke [--keep-environment]}" >&2
     exit 2
     ;;
 esac
@@ -417,9 +436,10 @@ data_mount="$run_root/canonical-data"
 evidence_dir="$run_root/evidence"
 pytest_report="$evidence_dir/pytest.xml"
 database_restart_report="$evidence_dir/pytest-database-restart.xml"
+dependency_restart_report="$evidence_dir/pytest-dependency-restart.xml"
 run_metadata="$run_root/run.txt"
 validate_test_project
-mkdir -p "$evidence_dir" "$data_mount"
+mkdir -p "$evidence_dir" "$data_mount" "$data_mount/.batch-attempts"
 git_revision=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf unknown)
 git_worktree_dirty=false
 if [ -n "$(git -C "$repo_root" status --short 2>/dev/null)" ]; then
@@ -522,13 +542,25 @@ case "$command" in
     run_phase integration-initialization run_with_environment uv run thesistrace-initialize
     run_phase integration-pytest run_with_environment uv run pytest -q \
       tests/integration tests/acceptance \
-      -m "not database_restart" \
+      -m "not database_restart and not dependency_restart" \
       --junitxml="$pytest_report"
     postgres_port=$(mapped_port postgres 5432)
     run_phase integration-database-restart run_with_environment env \
       THESISTRACE_DATABASE_RESTART_PHASE=1 \
       uv run pytest -q tests/acceptance/test_core_direct_research_run_admission.py \
       -m database_restart --junitxml="$database_restart_report"
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-rustfs-restart run_with_environment env \
+      THESISTRACE_DATABASE_RESTART_PHASE=1 uv run pytest -q \
+      tests/acceptance/test_core_research_batch_factor_recovery.py::test_real_rustfs_loss_retries_the_complete_factor_task \
+      --junitxml="$dependency_restart_report"
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-postgres-batch-restart run_with_environment env \
+      THESISTRACE_DATABASE_RESTART_PHASE=1 uv run pytest -q \
+      tests/acceptance/test_core_research_batch_factor_recovery.py::test_real_postgres_loss_recovers_after_child_exit \
+      --junitxml="$evidence_dir/pytest-postgres-batch-restart.xml"
     ;;
   e2e)
     run_phase e2e-images build_runtime_images

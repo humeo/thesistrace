@@ -340,6 +340,81 @@ class ResearchRunService:
             immutable_input=immutable_input,
         )
 
+    def reset_incomplete_batch_owned_executions_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        run_ids: Sequence[str],
+    ) -> None:
+        """Fence lost Batch authority and return only incomplete child Runs to queued."""
+        if not run_ids:
+            return
+        rows = transaction.execute(
+            """
+            SELECT id, status, execution_owner
+            FROM research_runs.runs
+            WHERE id = ANY(%s)
+            ORDER BY id
+            FOR UPDATE
+            """,
+            (list(run_ids),),
+        ).fetchall()
+        if len(rows) != len(run_ids) or any(
+            row["execution_owner"] != "research_batch"
+            or row["status"] not in {"queued", "running"}
+            for row in rows
+        ):
+            raise ResearchRunFenced
+        transaction.execute(
+            """
+            UPDATE research_runs.runs
+            SET status = 'queued',
+                execution_fence = CASE
+                    WHEN status = 'running' THEN execution_fence + 1
+                    ELSE execution_fence
+                END,
+                failure_reason = NULL,
+                updated_at = now()
+            WHERE id = ANY(%s) AND execution_owner = 'research_batch'
+              AND status = ANY(ARRAY['queued'::text, 'running'::text])
+            """,
+            (list(run_ids),),
+        )
+        transaction.execute(
+            """
+            UPDATE research_runs.progress
+            SET remaining_duration_estimate_seconds = NULL, updated_at = now()
+            WHERE run_id = ANY(%s)
+            """,
+            (list(run_ids),),
+        )
+
+    def fail_recovered_batch_owned_item_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        run_id: str,
+        *,
+        public_reason: str,
+    ) -> None:
+        updated = transaction.execute(
+            """
+            UPDATE research_runs.runs
+            SET status = 'failed', failure_reason = %s, updated_at = now()
+            WHERE id = %s AND status = 'queued'
+              AND execution_owner = 'research_batch'
+            """,
+            (public_reason, run_id),
+        )
+        if updated.rowcount != 1:
+            raise ResearchRunFenced
+        transaction.execute(
+            """
+            UPDATE research_runs.progress
+            SET remaining_duration_estimate_seconds = NULL, updated_at = now()
+            WHERE run_id = %s
+            """,
+            (run_id,),
+        )
+
     def complete_batch_owned_factor_item(
         self,
         claim: ResearchRunExecutionClaim,

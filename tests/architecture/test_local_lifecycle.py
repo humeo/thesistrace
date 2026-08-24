@@ -18,6 +18,7 @@ def _fake_development_docker(tmp_path: Path) -> tuple[Path, Path, dict[str, str]
     volume_root = tmp_path / "volumes"
     volume_root.mkdir()
     for volume in (
+        "thesistrace-dev_batch-attempt-control",
         "thesistrace-dev_canonical-data",
         "thesistrace-dev_postgres-data",
         "thesistrace-dev_rustfs-data",
@@ -51,6 +52,7 @@ if "down" in arguments and "--volumes" in arguments:
         shutil.rmtree(volume)
 if "up" in arguments:
     for volume in (
+        "thesistrace-dev_batch-attempt-control",
         "thesistrace-dev_canonical-data",
         "thesistrace-dev_postgres-data",
         "thesistrace-dev_rustfs-data",
@@ -318,7 +320,7 @@ def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) 
     assert (
         volume_root / "thesistrace-dev_canonical-data" / "preserved-marker"
     ).exists()
-    for volume in ("postgres-data", "rustfs-data"):
+    for volume in ("batch-attempt-control", "postgres-data", "rustfs-data"):
         recreated = volume_root / f"thesistrace-dev_{volume}"
         assert recreated.is_dir()
         assert not (recreated / "preserved-marker").exists()
@@ -327,6 +329,7 @@ def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) 
     assert "down --volumes" not in commands
     assert "volume rm thesistrace-dev_postgres-data" in commands
     assert "volume rm thesistrace-dev_rustfs-data" in commands
+    assert "volume rm thesistrace-dev_batch-attempt-control" in commands
     assert "volume rm thesistrace-dev_canonical-data" not in commands
     assert "up --detach --build --wait --wait-timeout 300" in commands
 
@@ -350,6 +353,7 @@ def test_development_erase_removes_every_development_volume(tmp_path: Path) -> N
     assert "down --volumes" not in commands
     assert "volume rm thesistrace-dev_postgres-data" in commands
     assert "volume rm thesistrace-dev_rustfs-data" in commands
+    assert "volume rm thesistrace-dev_batch-attempt-control" in commands
     assert "volume rm thesistrace-dev_canonical-data" in commands
     assert "up --detach" not in commands
 
@@ -604,6 +608,7 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
     assert "synchronous_commit=off" not in overlay
     assert "postgres-data:" in base
     assert "rustfs-data:" in base
+    assert "batch-attempt-control:" in base
     assert "name:" not in base.split("volumes:", maxsplit=1)[1]
 
 

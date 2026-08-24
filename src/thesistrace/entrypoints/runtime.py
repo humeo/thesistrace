@@ -191,6 +191,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             database,
             research_runs=research_runs,
             dataset_lifecycle=dataset_lifecycle,
+            attempt_control_directory=settings.data_mount / ".batch-attempts",
             execution=SupervisedResearchBatchExecutor(
                 settings.data_mount,
                 execution_memory_bytes=settings.research_execution_memory_bytes,

@@ -12,6 +12,7 @@ from test_core_research_batch_admission import _publish_current_data, _strategy_
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
+from thesistrace.data import DatasetLifecycle
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.publication import PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
@@ -19,8 +20,46 @@ from thesistrace.research_batch.planning import (
     ResearchBatchCapacityError,
     validate_research_batch_capacity,
 )
+from thesistrace.research_batch.service import ResearchBatchService
 from thesistrace.research_run.models import StrategyBacktestAdmissionCommand
 from thesistrace.research_run.result import read_result_bundle
+
+
+class _StrategyTransportFailureExecutor:
+    def execute(self, request, *, emit):
+        raise RuntimeError("injected Strategy Sweep transport failure")
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_strategy_transport_failure_before_child_ready_fails_without_an_attempt(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    with TestClient(create_app(settings)) as client:
+        _publish_current_data(settings)
+        admitted = client.post(
+            "/api/research-batches",
+            json=_strategy_command("strategy-startup-failure"),
+        ).json()
+        runtime = client.app.state.core_runtime
+        processor = ResearchBatchService(
+            runtime.database,
+            research_runs=runtime.research_runs,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            execution=_StrategyTransportFailureExecutor(),
+        )
+
+        assert processor.process_next() is True
+        failed = client.get(f"/api/research-batches/{admitted['id']}").json()
+        assert failed["status"] == "failed"
+        assert failed["attempt"] is None
+        assert all(item["status"] == "failed" for item in failed["items"])
+        assert all(item["diagnostic"] is not None for item in failed["items"])
 
 
 @pytest.mark.skipif(

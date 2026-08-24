@@ -49,6 +49,10 @@ from thesistrace.research_series import ColumnarResearchSeries
 ExecutionEvent = Callable[[dict[str, object]], None]
 
 
+class ResearchBatchChildLost(ResearchExecutionError):
+    """The supervised child disappeared before its current task was acknowledged."""
+
+
 @dataclass(frozen=True)
 class ResearchBatchExecutionItem:
     ordinal: int
@@ -208,11 +212,16 @@ class SupervisedResearchBatchExecution:
         self._acknowledged = False
         self._exit_emitted = False
 
+    @property
+    def child_pid(self) -> int:
+        return self._process.pid
+
     def advance(
         self,
         command: str,
     ) -> None:
         if command not in {
+            "acknowledge_ready",
             "acknowledge_preparation",
             "acknowledge_progress",
             "acknowledge_shared",
@@ -336,32 +345,29 @@ class SupervisedResearchBatchExecutor:
         self._data_mount = data_mount.resolve()
         self._execution_memory_bytes = execution_memory_bytes
 
+    def attempt_control_path(self, attempt_id: str) -> Path:
+        return self._data_mount / ".batch-attempts" / f"{attempt_id}.lock"
+
     def execute(
         self,
         request: ResearchBatchExecutionRequest,
         *,
         emit: ExecutionEvent,
     ) -> SupervisedResearchBatchExecution:
+        control_directory = self._data_mount / ".batch-attempts"
+        control_directory.mkdir(parents=True, exist_ok=True)
+        control_path = self.attempt_control_path(request.attempt_id)
         transport = SupervisedChildTransport.spawn(
             "thesistrace.entrypoints.batch_research_child"
         )
         process = transport.process
-        emit(
-            {
-                "event": "research_batch_execution_child_started",
-                "resource_type": "ResearchBatch",
-                "resource_id": request.batch_id,
-                "attempt_id": request.attempt_id,
-                "child_pid": process.pid,
-                "item_count": len(request.items),
-            }
-        )
         try:
             transport.write(
                 {
                     "schema_version": "research-batch-child-request-v1",
                     "batch_kind": request.batch_kind,
                     "data_mount": str(self._data_mount),
+                    "attempt_control_path": str(control_path),
                     "data_generation_id": request.data_generation_id,
                     "items": [
                         {
@@ -378,6 +384,19 @@ class SupervisedResearchBatchExecutor:
                 transport,
                 execution_memory_bytes=self._execution_memory_bytes,
             )
+            if message.get("status") != "child_ready":
+                raise ResearchExecutionError("Research Batch child did not become ready")
+            emit(
+                {
+                    "event": "research_batch_execution_child_started",
+                    "resource_type": "ResearchBatch",
+                    "resource_id": request.batch_id,
+                    "attempt_id": request.attempt_id,
+                    "child_pid": process.pid,
+                    "child_control_path": str(control_path),
+                    "item_count": len(request.items),
+                }
+            )
             execution = SupervisedResearchBatchExecution(
                 transport,
                 request,
@@ -385,7 +404,7 @@ class SupervisedResearchBatchExecutor:
                 emit=emit,
                 execution_memory_bytes=self._execution_memory_bytes,
             )
-            execution._emit_message()
+            execution.advance("acknowledge_ready")
             return execution
         except Exception:
             if process.stdin is not None and not process.stdin.closed:
@@ -426,7 +445,8 @@ def execute_research_batch_messages(
         if not isinstance(raw_items, list) or not 1 <= len(raw_items) <= 20:
             raise ResearchExecutionInputInvalid("Research Batch items are invalid")
         items = tuple(_execution_item(item, batch_kind=batch_kind) for item in raw_items)
-        if tuple(item.ordinal for item in items) != tuple(range(1, len(items) + 1)):
+        ordinals = tuple(item.ordinal for item in items)
+        if any(ordinal <= 0 for ordinal in ordinals) or ordinals != tuple(sorted(set(ordinals))):
             raise ResearchExecutionInputInvalid("Research Batch item order is invalid")
         store = MountedGenerationStore(data_mount)
         admission = store.open_admission(generation_id)
@@ -1116,7 +1136,7 @@ def _read_message(
         ) from error
     except ChildTransportError as error:
         detail = _child_stderr_detail(transport.process)
-        raise ResearchExecutionError(f"{error}{detail}") from error
+        raise ResearchBatchChildLost(f"{error}{detail}") from error
     peak = _peak_rss_bytes(message)
     _data_io(message)
     if peak > execution_memory_bytes:
@@ -1132,6 +1152,7 @@ def _read_message(
             raise ResearchExecutionResourceExhausted(str(message.get("message")))
         raise ResearchExecutionInputInvalid(str(message.get("message")))
     if status not in {
+        "child_ready",
         "batch_prepared",
         "shared_alpha_factor_started",
         "shared_alpha_factor_chunk_succeeded",

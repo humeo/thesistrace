@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
@@ -10,16 +11,21 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from threading import Event, Thread
 from uuid import uuid4
 
+from psycopg import OperationalError
 from psycopg.types.json import Jsonb
+from psycopg_pool import PoolTimeout
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data import DatasetLifecycle
+from thesistrace.publication import PublicationUnavailableError
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_batch.execution import (
     ExecutionEvent,
+    ResearchBatchChildLost,
     ResearchBatchExecutionItem,
     ResearchBatchExecutionRequest,
     SupervisedResearchBatchExecution,
@@ -63,7 +69,32 @@ from thesistrace.research_run.service import (
 BATCH_ADMISSION_RETENTION_SECONDS = 15 * 60
 BATCH_ATTEMPT_LEASE_SECONDS = 15 * 60
 BATCH_ATTEMPT_HEARTBEAT_SECONDS = 30
+MAX_FACTOR_TASK_ATTEMPTS = 3
+FACTOR_TASK_INFRASTRUCTURE_FAILURE = "InfrastructureUnavailable"
+FACTOR_TASK_WORKER_LOST_FAILURE = "WorkerLost"
+FACTOR_TASK_PERMANENT_FAILURE = "PermanentExecutionFailure"
+FACTOR_TASK_INFRASTRUCTURE_PUBLIC_REASON = (
+    "Research execution could not complete after automatic retries."
+)
+FACTOR_TASK_PERMANENT_PUBLIC_REASON = "Research execution failed."
 logger = logging.getLogger(__name__)
+
+
+def _confirm_child_exited(value: str) -> bool:
+    path = Path(value)
+    if not path.is_absolute() or path.parent.name != ".batch-attempts":
+        raise RuntimeError("Research Batch child control path is invalid")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    control = path.open("a+")
+    try:
+        try:
+            fcntl.flock(control.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        path.unlink(missing_ok=True)
+        return True
+    finally:
+        control.close()
 
 
 @dataclass(frozen=True)
@@ -76,6 +107,13 @@ class _ResearchBatchClaim:
     generation_pin_id: str
     data_generation_id: str
     items: tuple[tuple[int, str, ResearchRunExecutionClaim], ...]
+
+
+@dataclass(frozen=True)
+class _FactorTaskFailurePolicy:
+    attempt_reason: str
+    public_reason: str
+    retryable: bool
 
 
 class ResearchBatchAdmissionConflict(RuntimeError):
@@ -95,6 +133,7 @@ class ResearchBatchService:
         *,
         research_runs: ResearchRunService,
         dataset_lifecycle: DatasetLifecycle,
+        attempt_control_directory: Path,
         execution: SupervisedResearchBatchExecutor | None = None,
         retention_seconds: float = BATCH_ADMISSION_RETENTION_SECONDS,
         lease_seconds: float = BATCH_ATTEMPT_LEASE_SECONDS,
@@ -105,6 +144,7 @@ class ResearchBatchService:
         self._database = database
         self._research_runs = research_runs
         self._dataset_lifecycle = dataset_lifecycle
+        self._attempt_control_directory = attempt_control_directory.resolve()
         self._execution = execution
         self._retention_seconds = retention_seconds
         self._lease_seconds = lease_seconds
@@ -125,25 +165,41 @@ class ResearchBatchService:
         claim = self._claim_next()
         if claim is None:
             return False
-        if on_claim is not None:
-            on_claim(
-                claim.batch_id,
-                claim.attempt_id,
-                {
-                    "batch_kind": claim.batch_kind,
-                    "claim_order": {
-                        "admitted_at": claim.admitted_at.isoformat(),
-                        "batch_id": claim.batch_id,
-                    },
-                    "owner_kind": "research_batch_attempt",
-                    "owner_id": claim.attempt_id,
-                    "item_count": len(claim.items),
-                },
-            )
         external_emit = on_execution_event or (lambda _event: None)
+        claim_announced = False
 
         def emit(event: dict[str, object]) -> None:
-            self._record_live_execution_event(claim, event)
+            nonlocal claim_announced
+            if event.get("event") == "research_batch_execution_child_exited":
+                try:
+                    self._record_live_execution_event(claim, event)
+                except (OperationalError, PoolTimeout):
+                    logger.error(
+                        "Research Batch child exit could not be persisted",
+                        extra={"batch_id": claim.batch_id, "attempt_id": claim.attempt_id},
+                    )
+            else:
+                self._record_live_execution_event(claim, event)
+            if (
+                event.get("event") == "research_batch_execution_child_started"
+                and on_claim is not None
+                and not claim_announced
+            ):
+                on_claim(
+                    claim.batch_id,
+                    claim.attempt_id,
+                    {
+                        "batch_kind": claim.batch_kind,
+                        "claim_order": {
+                            "admitted_at": claim.admitted_at.isoformat(),
+                            "batch_id": claim.batch_id,
+                        },
+                        "owner_kind": "research_batch_attempt",
+                        "owner_id": claim.attempt_id,
+                        "item_count": len(claim.items),
+                    },
+                )
+                claim_announced = True
             external_emit(event)
 
         execution: SupervisedResearchBatchExecution | None = None
@@ -308,7 +364,13 @@ class ResearchBatchService:
             if execution is not None:
                 execution.close()
             try:
-                self._fail_running_items(claim, error)
+                starting_closed = self._finish_interrupted_starting_claim(claim, error)
+                if starting_closed:
+                    pass
+                elif claim.batch_kind == "factor_evaluation":
+                    self._finish_interrupted_factor_attempt(claim, error)
+                else:
+                    self._fail_running_items(claim, error)
             except Exception as cleanup_error:
                 logger.error(
                     "Research Batch failure cleanup did not reach every child",
@@ -323,7 +385,16 @@ class ResearchBatchService:
                     ),
                 )
             else:
-                self._finish_attempt(claim, failed=True, error=error)
+                if starting_closed or claim.batch_kind == "factor_evaluation":
+                    logger.error(
+                        "Research Batch execution ended for recovery",
+                        extra={
+                            "batch_id": claim.batch_id,
+                            "error_type": type(error).__name__,
+                        },
+                    )
+                elif not starting_closed:
+                    self._finish_attempt(claim, failed=True, error=error)
             logger.error(
                 "Research Batch execution failed",
                 extra={
@@ -531,18 +602,77 @@ class ResearchBatchService:
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 ("research_batches.claim_fifo",),
             ).fetchone()
-            row = transaction.execute(
-                """
-                SELECT id, batch_kind, created_at, execution_fence, scope
-                FROM research_batches.batches
-                WHERE status = 'queued'
-                ORDER BY created_at, id
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-                """
-            ).fetchone()
-            if row is None:
-                return None
+            while True:
+                row = transaction.execute(
+                    """
+                    SELECT batch.id, batch.batch_kind, batch.created_at,
+                           batch.execution_fence, batch.scope, batch.status,
+                           expired.id AS expired_attempt_id,
+                           expired.fence AS expired_attempt_fence,
+                           expired.generation_pin_id AS expired_generation_pin_id,
+                           expired.child_control_path AS expired_child_control_path,
+                           starting.id AS expired_starting_id,
+                           starting.fence AS expired_starting_fence,
+                           starting.generation_pin_id AS expired_starting_pin_id,
+                           starting.child_control_path AS expired_starting_control_path
+                    FROM research_batches.batches AS batch
+                    LEFT JOIN LATERAL (
+                        SELECT attempt.id, attempt.fence,
+                               attempt.generation_pin_id,
+                               attempt.child_control_path,
+                               attempt.lease_expires_at
+                        FROM research_batches.attempts AS attempt
+                        WHERE attempt.batch_id = batch.id
+                          AND attempt.status = 'running'
+                        ORDER BY attempt.ordinal DESC
+                        LIMIT 1
+                    ) AS expired ON true
+                    LEFT JOIN research_batches.starting_claims AS starting
+                      ON starting.batch_id = batch.id
+                    WHERE batch.status = 'queued'
+                       OR (
+                           batch.status = 'running'
+                           AND (
+                               starting.lease_expires_at <= now()
+                               OR (
+                                   batch.batch_kind = 'factor_evaluation'
+                                   AND expired.lease_expires_at <= now()
+                               )
+                           )
+                       )
+                    ORDER BY batch.created_at, batch.id
+                    FOR UPDATE OF batch SKIP LOCKED
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if row is None:
+                    return None
+                if row["status"] == "running":
+                    if row["expired_starting_id"] is not None:
+                        recovered = self._recover_expired_starting_claim_in_transaction(
+                            transaction, row
+                        )
+                    else:
+                        recovered = self._recover_expired_factor_attempt_in_transaction(
+                            transaction,
+                            row,
+                        )
+                    if not recovered:
+                        return None
+                    refreshed = transaction.execute(
+                        """
+                        SELECT id, batch_kind, created_at, execution_fence,
+                               scope, status
+                        FROM research_batches.batches
+                        WHERE id = %s
+                        FOR UPDATE
+                        """,
+                        (row["id"],),
+                    ).fetchone()
+                    if refreshed is None or refreshed["status"] != "queued":
+                        continue
+                    row = refreshed
+                break
             batch_id = str(row["id"])
             batch_kind = str(row["batch_kind"])
             if batch_kind == "factor_evaluation":
@@ -562,6 +692,9 @@ class ResearchBatchService:
             ).fetchone()
             assert ordinal_row is not None
             attempt_id = f"batch_attempt_{uuid4().hex[:20]}"
+            child_control_path = str(
+                self._attempt_control_directory / f"{attempt_id}.lock"
+            )
             scope = ResearchBatchScope.model_validate(row["scope"])
             pinned = self._dataset_lifecycle.pin_generation_in_transaction(
                 transaction,
@@ -580,13 +713,14 @@ class ResearchBatchService:
                 SELECT ordinal, item_key, research_run_id
                 FROM research_batches.items
                 WHERE batch_id = %s AND dependency_role = %s
+                  AND outcome IS NULL
                 ORDER BY ordinal
                 FOR UPDATE
                 """,
                 (batch_id, dependency_role),
             ).fetchall()
             if not item_rows:
-                raise RuntimeError("Research Batch has no items")
+                raise RuntimeError("Research Batch has no incomplete items")
             claimed_items = tuple(
                 (
                     int(item["ordinal"]),
@@ -617,12 +751,12 @@ class ResearchBatchService:
                 raise RuntimeError("Factor Batch claim was fenced")
             transaction.execute(
                 """
-                INSERT INTO research_batches.attempts (
+                INSERT INTO research_batches.starting_claims (
                     id, batch_id, ordinal, fence, generation_pin_id,
                     data_generation_id, data_through_session,
-                    status, lease_expires_at
+                    child_control_path, lease_expires_at
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, 'running',
+                    %s, %s, %s, %s, %s, %s, %s, %s,
                     now() + make_interval(secs => %s)
                 )
                 """,
@@ -634,6 +768,7 @@ class ResearchBatchService:
                     pinned.pin.id,
                     pinned.descriptor.manifest_sha256,
                     pinned.descriptor.data_through_session,
+                    child_control_path,
                     self._lease_seconds,
                 ),
             )
@@ -651,6 +786,166 @@ class ResearchBatchService:
             data_generation_id=pinned.descriptor.manifest_sha256,
             items=claimed_items,
         )
+
+    def _recover_expired_factor_attempt_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        row: Mapping[str, object],
+    ) -> bool:
+        batch_id = str(row["id"])
+        attempt_id = row["expired_attempt_id"]
+        attempt_fence = row["expired_attempt_fence"]
+        generation_pin_id = row["expired_generation_pin_id"]
+        child_control_path = row["expired_child_control_path"]
+        if (
+            not isinstance(attempt_id, str)
+            or not isinstance(attempt_fence, int)
+            or not isinstance(generation_pin_id, str)
+            or not isinstance(child_control_path, str)
+            or attempt_fence != int(row["execution_fence"])
+        ):
+            raise RuntimeError("Expired Factor Batch Attempt authority is invalid")
+        if not _confirm_child_exited(child_control_path):
+            return False
+        diagnostic = ResearchBatchDiagnostic(
+            code="FACTOR_TASK_WORKER_LOST",
+            category="infrastructure",
+            message="The Factor task Worker was lost before acknowledgement.",
+        )
+        self._close_factor_attempt_in_transaction(
+            transaction,
+            batch_id=batch_id,
+            attempt_id=attempt_id,
+            fence=attempt_fence,
+            generation_pin_id=generation_pin_id,
+            policy=_FactorTaskFailurePolicy(
+                attempt_reason=FACTOR_TASK_WORKER_LOST_FAILURE,
+                public_reason=FACTOR_TASK_INFRASTRUCTURE_PUBLIC_REASON,
+                retryable=True,
+            ),
+            diagnostic=diagnostic,
+            require_expired=True,
+        )
+        return True
+
+    def _recover_expired_starting_claim_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        row: Mapping[str, object],
+    ) -> bool:
+        batch_id = str(row["id"])
+        claim_id = row["expired_starting_id"]
+        fence = row["expired_starting_fence"]
+        pin_id = row["expired_starting_pin_id"]
+        control_path = row["expired_starting_control_path"]
+        if (
+            not isinstance(claim_id, str)
+            or not isinstance(fence, int)
+            or not isinstance(pin_id, str)
+            or not isinstance(control_path, str)
+            or fence != int(row["execution_fence"])
+        ):
+            raise RuntimeError("Expired Factor Batch starting authority is invalid")
+        if not _confirm_child_exited(control_path):
+            return False
+        incomplete = transaction.execute(
+            """
+            SELECT research_run_id
+            FROM research_batches.items
+            WHERE batch_id = %s AND outcome IS NULL
+            ORDER BY ordinal
+            FOR UPDATE
+            """,
+            (batch_id,),
+        ).fetchall()
+        self._research_runs.reset_incomplete_batch_owned_executions_in_transaction(
+            transaction,
+            [str(item["research_run_id"]) for item in incomplete],
+        )
+        deleted = transaction.execute(
+            """
+            DELETE FROM research_batches.starting_claims
+            WHERE id = %s AND batch_id = %s AND fence = %s
+              AND lease_expires_at <= now()
+            """,
+            (claim_id, batch_id, fence),
+        )
+        if deleted.rowcount != 1:
+            raise RuntimeError("Expired Factor Batch starting claim was fenced")
+        self._dataset_lifecycle.release_pin_in_transaction(
+            transaction,
+            pin_id,
+            owner_id=claim_id,
+        )
+        updated = transaction.execute(
+            """
+            UPDATE research_batches.batches
+            SET status = 'queued', updated_at = now()
+            WHERE id = %s AND status = 'running' AND execution_fence = %s
+            """,
+            (batch_id, fence),
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError("Expired Factor Batch starting recovery was fenced")
+        return True
+
+    def _fail_recovered_factor_item_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        *,
+        batch_id: str,
+        item_ordinal: int,
+        run_id: str,
+        diagnostic: ResearchBatchDiagnostic,
+    ) -> None:
+        self._research_runs.fail_recovered_batch_owned_item_in_transaction(
+            transaction,
+            run_id,
+            public_reason=diagnostic.message,
+        )
+        updated = transaction.execute(
+            """
+            UPDATE research_batches.items
+            SET outcome = 'failed', diagnostic = %s
+            WHERE batch_id = %s AND ordinal = %s AND outcome IS NULL
+            """,
+            (Jsonb(diagnostic.model_dump(mode="json")), batch_id, item_ordinal),
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError("Recovered Factor task completion was fenced")
+        progress = transaction.execute(
+            """
+            UPDATE research_batches.progress
+            SET completed_items = completed_items + 1, updated_at = now()
+            WHERE batch_id = %s AND completed_items < total_items
+            """,
+            (batch_id,),
+        )
+        if progress.rowcount != 1:
+            raise RuntimeError("Recovered Factor progress was fenced")
+
+    def _terminal_status_from_items_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        batch_id: str,
+    ) -> str:
+        counts = transaction.execute(
+            """
+            SELECT count(*) FILTER (WHERE outcome = 'succeeded') AS succeeded,
+                   count(*) FILTER (WHERE outcome IS NULL) AS incomplete,
+                   count(*) AS total
+            FROM research_batches.items
+            WHERE batch_id = %s
+            """,
+            (batch_id,),
+        ).fetchone()
+        if counts is None or int(counts["incomplete"]) != 0:
+            raise RuntimeError("Research Batch terminal outcomes are incomplete")
+        succeeded = int(counts["succeeded"])
+        total = int(counts["total"])
+        if succeeded == total:
+            return "succeeded"
+        return "completed_with_failures" if succeeded else "failed"
 
     @contextmanager
     def _maintain_claim(self, claim: _ResearchBatchClaim) -> Iterator[None]:
@@ -683,6 +978,7 @@ class ResearchBatchService:
                             END
                         WHERE attempt.id = %s AND attempt.batch_id = %s
                           AND attempt.fence = %s AND attempt.status = 'running'
+                          AND attempt.lease_expires_at > now()
                           AND EXISTS (
                               SELECT 1
                               FROM research_batches.batches AS batch
@@ -698,6 +994,30 @@ class ResearchBatchService:
                             claim.fence,
                         ),
                     )
+                    if renewed.rowcount == 0:
+                        renewed = transaction.execute(
+                            """
+                            UPDATE research_batches.starting_claims AS claim
+                            SET heartbeat_at = now(),
+                                lease_expires_at = now() + make_interval(secs => %s)
+                            WHERE claim.id = %s AND claim.batch_id = %s
+                              AND claim.fence = %s
+                              AND claim.lease_expires_at > now()
+                              AND EXISTS (
+                                  SELECT 1
+                                  FROM research_batches.batches AS batch
+                                  WHERE batch.id = claim.batch_id
+                                    AND batch.status = 'running'
+                                    AND batch.execution_fence = claim.fence
+                              )
+                            """,
+                            (
+                                self._lease_seconds,
+                                claim.attempt_id,
+                                claim.batch_id,
+                                claim.fence,
+                            ),
+                        )
                     if renewed.rowcount == 1:
                         self._dataset_lifecycle.heartbeat_pin_in_transaction(
                             transaction,
@@ -734,6 +1054,7 @@ class ResearchBatchService:
             FROM research_batches.batches AS batch
             JOIN research_batches.attempts AS attempt ON attempt.batch_id = batch.id
             WHERE batch.id = %s AND attempt.id = %s AND attempt.fence = %s
+              AND attempt.lease_expires_at > now()
             FOR UPDATE OF batch, attempt
             """,
             (claim.batch_id, claim.attempt_id, claim.fence),
@@ -759,9 +1080,64 @@ class ResearchBatchService:
         total: int | None = None
         reset_started_at = False
         if name == "research_batch_execution_child_started":
+            child_pid = event.get("child_pid")
+            child_control_path = event.get("child_control_path")
+            if not isinstance(child_pid, int) or not isinstance(child_control_path, str):
+                raise RuntimeError("Research Batch child identity is invalid")
+            with self._database.transaction() as transaction:
+                self._activate_starting_claim_in_transaction(
+                    transaction,
+                    claim,
+                    child_pid=child_pid,
+                    child_control_path=child_control_path,
+                )
             task_role = "preparation"
             phase = "preparing_data"
             reset_started_at = True
+        elif name == "research_batch_execution_child_exited":
+            child_pid = event.get("child_pid")
+            exit_code = event.get("exit_code")
+            acknowledged = event.get("acknowledged")
+            if (
+                not isinstance(child_pid, int)
+                or not isinstance(exit_code, int)
+                or not isinstance(acknowledged, bool)
+            ):
+                raise RuntimeError("Research Batch child exit evidence is invalid")
+            with self._database.transaction() as transaction:
+                updated = transaction.execute(
+                    """
+                    UPDATE research_batches.attempts
+                    SET child_exited_at = now(), child_exit_code = %s,
+                        child_acknowledged = %s
+                    WHERE id = %s AND batch_id = %s AND fence = %s
+                      AND child_pid = %s AND child_exited_at IS NULL
+                    """,
+                    (
+                        exit_code,
+                        acknowledged,
+                        claim.attempt_id,
+                        claim.batch_id,
+                        claim.fence,
+                        child_pid,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    existing = transaction.execute(
+                        """
+                        SELECT child_exit_code, child_acknowledged
+                        FROM research_batches.attempts
+                        WHERE id = %s AND batch_id = %s AND fence = %s
+                          AND child_pid = %s AND child_exited_at IS NOT NULL
+                        """,
+                        (claim.attempt_id, claim.batch_id, claim.fence, child_pid),
+                    ).fetchone()
+                    if existing != {
+                        "child_exit_code": exit_code,
+                        "child_acknowledged": acknowledged,
+                    }:
+                        raise RuntimeError("Research Batch child exit was fenced")
+            return
         elif name in {
             "research_batch_execution_shared_alpha_factor_started",
             "research_batch_execution_item_started",
@@ -787,13 +1163,25 @@ class ResearchBatchService:
         else:
             return
         with self._database.transaction() as transaction:
+            if (
+                claim.batch_kind == "factor_evaluation"
+                and name == "research_batch_execution_item_started"
+            ):
+                item_ordinal = event.get("item_ordinal")
+                if not isinstance(item_ordinal, int):
+                    raise RuntimeError("Factor task start ordinal is invalid")
+                self._ensure_factor_task_attempt_in_transaction(
+                    transaction,
+                    claim,
+                    item_ordinal,
+                )
             current = transaction.execute(
                 """
                 SELECT current_task_role, current_item_key, current_phase,
                        completed_research_sessions, total_research_sessions
                 FROM research_batches.attempts
                 WHERE id = %s AND batch_id = %s AND fence = %s
-                  AND status = 'running'
+                  AND status = 'running' AND lease_expires_at > now()
                 FOR UPDATE
                 """,
                 (claim.attempt_id, claim.batch_id, claim.fence),
@@ -834,6 +1222,7 @@ class ResearchBatchService:
                 FROM research_batches.batches AS batch
                 WHERE attempt.id = %s AND attempt.batch_id = %s
                   AND attempt.fence = %s AND attempt.status = 'running'
+                  AND attempt.lease_expires_at > now()
                   AND batch.id = attempt.batch_id AND batch.status = 'running'
                   AND batch.execution_fence = attempt.fence
                 """,
@@ -862,6 +1251,123 @@ class ResearchBatchService:
                 )
                 if shared.rowcount != 1:
                     raise RuntimeError("Shared Alpha-and-Factor live progress did not start")
+
+    def _activate_starting_claim_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        claim: _ResearchBatchClaim,
+        *,
+        child_pid: int,
+        child_control_path: str,
+    ) -> None:
+        starting = transaction.execute(
+            """
+            SELECT ordinal, generation_pin_id, data_generation_id,
+                   data_through_session, child_control_path
+            FROM research_batches.starting_claims
+            WHERE id = %s AND batch_id = %s AND fence = %s
+              AND lease_expires_at > now()
+            FOR UPDATE
+            """,
+            (claim.attempt_id, claim.batch_id, claim.fence),
+        ).fetchone()
+        if starting is None or starting["child_control_path"] != child_control_path:
+            raise RuntimeError("Research Batch starting claim was fenced")
+        inserted = transaction.execute(
+            """
+            INSERT INTO research_batches.attempts (
+                id, batch_id, ordinal, fence, generation_pin_id,
+                data_generation_id, data_through_session, status,
+                lease_expires_at, child_pid, child_control_path, child_started_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, 'running',
+                now() + make_interval(secs => %s), %s, %s, now()
+            )
+            """,
+            (
+                claim.attempt_id,
+                claim.batch_id,
+                starting["ordinal"],
+                claim.fence,
+                starting["generation_pin_id"],
+                starting["data_generation_id"],
+                starting["data_through_session"],
+                self._lease_seconds,
+                child_pid,
+                child_control_path,
+            ),
+        )
+        if inserted.rowcount != 1:
+            raise RuntimeError("Research Batch Attempt activation was fenced")
+        if claim.batch_kind == "factor_evaluation":
+            self._ensure_factor_task_attempt_in_transaction(
+                transaction,
+                claim,
+                claim.items[0][0],
+            )
+        deleted = transaction.execute(
+            """
+            DELETE FROM research_batches.starting_claims
+            WHERE id = %s AND batch_id = %s AND fence = %s
+            """,
+            (claim.attempt_id, claim.batch_id, claim.fence),
+        )
+        if deleted.rowcount != 1:
+            raise RuntimeError("Research Batch starting claim activation was fenced")
+
+    def _ensure_factor_task_attempt_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        claim: _ResearchBatchClaim,
+        item_ordinal: int,
+    ) -> None:
+        running = transaction.execute(
+            """
+            SELECT item_ordinal
+            FROM research_batches.task_attempts
+            WHERE batch_id = %s AND status = 'running'
+            FOR UPDATE
+            """,
+            (claim.batch_id,),
+        ).fetchone()
+        if running is not None:
+            if int(running["item_ordinal"]) != item_ordinal:
+                raise RuntimeError("A different Factor task Attempt is still active")
+            return
+        ordinal_row = transaction.execute(
+            """
+            SELECT coalesce(max(ordinal), 0) + 1 AS ordinal
+            FROM research_batches.task_attempts
+            WHERE batch_id = %s AND item_ordinal = %s
+            """,
+            (claim.batch_id, item_ordinal),
+        ).fetchone()
+        assert ordinal_row is not None
+        ordinal = int(ordinal_row["ordinal"])
+        if ordinal > MAX_FACTOR_TASK_ATTEMPTS:
+            raise RuntimeError("Factor task retry limit was exceeded")
+        inserted = transaction.execute(
+            """
+            INSERT INTO research_batches.task_attempts (
+                id, batch_id, item_ordinal, task_key, task_role, ordinal,
+                batch_attempt_id, fence, status
+            ) SELECT %s, %s, %s, item.item_key, 'factor', %s, %s, %s, 'running'
+            FROM research_batches.items AS item
+            WHERE item.batch_id = %s AND item.ordinal = %s
+            """,
+            (
+                f"factor_task_attempt_{uuid4().hex[:20]}",
+                claim.batch_id,
+                item_ordinal,
+                ordinal,
+                claim.attempt_id,
+                claim.fence,
+                claim.batch_id,
+                item_ordinal,
+            ),
+        )
+        if inserted.rowcount != 1:
+            raise RuntimeError("Factor task Attempt item is unavailable")
 
     def _set_shared_alpha_factor_status(
         self,
@@ -901,6 +1407,32 @@ class ResearchBatchService:
                 category="execution",
                 message=public_reason,
             )
+        if claim.batch_kind == "factor_evaluation":
+            task_attempt = transaction.execute(
+                """
+                UPDATE research_batches.task_attempts
+                SET status = %s, finished_at = now(),
+                    failure_reason = %s, failure_diagnostic = %s
+                WHERE batch_id = %s AND item_ordinal = %s
+                  AND batch_attempt_id = %s AND fence = %s
+                  AND status = 'running'
+                """,
+                (
+                    "succeeded" if outcome == "succeeded" else "failed",
+                    None if outcome == "succeeded" else (public_reason or "FactorTaskFailed"),
+                    (
+                        None
+                        if outcome == "succeeded"
+                        else Jsonb(diagnostic.model_dump(mode="json"))
+                    ),
+                    claim.batch_id,
+                    ordinal,
+                    claim.attempt_id,
+                    claim.fence,
+                ),
+            )
+            if task_attempt.rowcount != 1:
+                raise RuntimeError("Factor task Attempt completion was fenced")
         updated = transaction.execute(
             """
             UPDATE research_batches.items
@@ -966,6 +1498,257 @@ class ResearchBatchService:
                 ),
             )
 
+    def _finish_interrupted_starting_claim(
+        self,
+        claim: _ResearchBatchClaim,
+        error: Exception,
+    ) -> bool:
+        with self._database.transaction() as transaction:
+            starting = transaction.execute(
+                """
+                SELECT child_control_path
+                FROM research_batches.starting_claims
+                WHERE id = %s AND batch_id = %s AND fence = %s
+                FOR UPDATE
+                """,
+                (claim.attempt_id, claim.batch_id, claim.fence),
+            ).fetchone()
+            if starting is None:
+                return False
+            if not _confirm_child_exited(str(starting["child_control_path"])):
+                raise RuntimeError("Interrupted Batch starting child exit is not confirmed")
+            incomplete = transaction.execute(
+                """
+                SELECT ordinal, research_run_id
+                FROM research_batches.items
+                WHERE batch_id = %s AND outcome IS NULL
+                ORDER BY ordinal
+                FOR UPDATE
+                """,
+                (claim.batch_id,),
+            ).fetchall()
+            self._research_runs.reset_incomplete_batch_owned_executions_in_transaction(
+                transaction,
+                [str(item["research_run_id"]) for item in incomplete],
+            )
+            if claim.batch_kind == "factor_evaluation":
+                batch_status = "queued"
+            else:
+                diagnostic = _exception_diagnostic(error)
+                for item in incomplete:
+                    self._fail_recovered_factor_item_in_transaction(
+                        transaction,
+                        batch_id=claim.batch_id,
+                        item_ordinal=int(item["ordinal"]),
+                        run_id=str(item["research_run_id"]),
+                        diagnostic=diagnostic,
+                    )
+                batch_status = "failed"
+            deleted = transaction.execute(
+                """
+                DELETE FROM research_batches.starting_claims
+                WHERE id = %s AND batch_id = %s AND fence = %s
+                """,
+                (claim.attempt_id, claim.batch_id, claim.fence),
+            )
+            if deleted.rowcount != 1:
+                raise RuntimeError("Interrupted Batch starting claim was fenced")
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction,
+                claim.generation_pin_id,
+                owner_id=claim.attempt_id,
+            )
+            updated = transaction.execute(
+                """
+                UPDATE research_batches.batches
+                SET status = %s, updated_at = now()
+                WHERE id = %s AND status = 'running' AND execution_fence = %s
+                """,
+                (batch_status, claim.batch_id, claim.fence),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("Interrupted Batch starting recovery was fenced")
+            return True
+
+    def _finish_interrupted_factor_attempt(
+        self,
+        claim: _ResearchBatchClaim,
+        error: Exception,
+    ) -> None:
+        policy = _factor_task_failure_policy(error)
+        attempt_diagnostic = _exception_diagnostic(error)
+        with self._database.transaction() as transaction:
+            self._authorize_claim_in_transaction(transaction, claim)
+            child = transaction.execute(
+                """
+                SELECT child_control_path, child_exited_at
+                FROM research_batches.attempts
+                WHERE id = %s AND batch_id = %s AND fence = %s
+                FOR UPDATE
+                """,
+                (claim.attempt_id, claim.batch_id, claim.fence),
+            ).fetchone()
+            if (
+                child is None
+                or child["child_exited_at"] is None
+                or not _confirm_child_exited(str(child["child_control_path"]))
+            ):
+                raise RuntimeError("Interrupted Factor child exit is not confirmed")
+            self._close_factor_attempt_in_transaction(
+                transaction,
+                batch_id=claim.batch_id,
+                attempt_id=claim.attempt_id,
+                fence=claim.fence,
+                generation_pin_id=claim.generation_pin_id,
+                policy=policy,
+                diagnostic=attempt_diagnostic,
+                require_expired=False,
+            )
+
+    def _close_factor_attempt_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        *,
+        batch_id: str,
+        attempt_id: str,
+        fence: int,
+        generation_pin_id: str,
+        policy: _FactorTaskFailurePolicy,
+        diagnostic: ResearchBatchDiagnostic,
+        require_expired: bool,
+    ) -> None:
+        task_attempt = transaction.execute(
+            """
+            SELECT id, item_ordinal, ordinal
+            FROM research_batches.task_attempts
+            WHERE batch_id = %s AND batch_attempt_id = %s
+              AND fence = %s AND status = 'running'
+            FOR UPDATE
+            """,
+            (batch_id, attempt_id, fence),
+        ).fetchone()
+        if task_attempt is not None:
+            closed_task = transaction.execute(
+                """
+                UPDATE research_batches.task_attempts
+                SET status = 'failed', finished_at = now(),
+                    failure_reason = %s, failure_diagnostic = %s
+                WHERE id = %s AND status = 'running'
+                """,
+                (
+                    policy.attempt_reason,
+                    Jsonb(diagnostic.model_dump(mode="json")),
+                    task_attempt["id"],
+                ),
+            )
+            if closed_task.rowcount != 1:
+                raise RuntimeError("Factor task Attempt closure was fenced")
+        closed_attempt = transaction.execute(
+            """
+            UPDATE research_batches.attempts
+            SET status = 'failed', heartbeat_at = now(), lease_expires_at = now(),
+                finished_at = now(), failure_reason = %s,
+                failure_diagnostic = %s,
+                current_task_role = NULL, current_item_key = NULL,
+                current_phase = NULL, completed_research_sessions = NULL,
+                total_research_sessions = NULL, task_started_at = NULL,
+                live_progress_updated_at = NULL
+            WHERE id = %s AND batch_id = %s AND fence = %s
+              AND status = 'running'
+              AND (%s = false OR lease_expires_at <= now())
+            """,
+            (
+                policy.attempt_reason,
+                Jsonb(diagnostic.model_dump(mode="json")),
+                attempt_id,
+                batch_id,
+                fence,
+                require_expired,
+            ),
+        )
+        if closed_attempt.rowcount != 1:
+            raise RuntimeError("Factor Batch Attempt closure was fenced")
+        incomplete = transaction.execute(
+            """
+            SELECT ordinal, research_run_id
+            FROM research_batches.items
+            WHERE batch_id = %s AND outcome IS NULL
+            ORDER BY ordinal
+            FOR UPDATE
+            """,
+            (batch_id,),
+        ).fetchall()
+        self._research_runs.reset_incomplete_batch_owned_executions_in_transaction(
+            transaction,
+            [str(item["research_run_id"]) for item in incomplete],
+        )
+        terminal_task = task_attempt is not None and (
+            not policy.retryable
+            or int(task_attempt["ordinal"]) >= MAX_FACTOR_TASK_ATTEMPTS
+        )
+        if terminal_task:
+            selected = next(
+                (
+                    item
+                    for item in incomplete
+                    if int(item["ordinal"]) == int(task_attempt["item_ordinal"])
+                ),
+                None,
+            )
+            if selected is not None:
+                exhausted = (
+                    policy.retryable
+                    and int(task_attempt["ordinal"]) >= MAX_FACTOR_TASK_ATTEMPTS
+                )
+                self._fail_recovered_factor_item_in_transaction(
+                    transaction,
+                    batch_id=batch_id,
+                    item_ordinal=int(selected["ordinal"]),
+                    run_id=str(selected["research_run_id"]),
+                    diagnostic=ResearchBatchDiagnostic(
+                        code=(
+                            "FACTOR_TASK_RETRY_EXHAUSTED"
+                            if exhausted
+                            else "FACTOR_TASK_PERMANENT_FAILURE"
+                        ),
+                        category=("infrastructure" if exhausted else "execution"),
+                        message=(
+                            FACTOR_TASK_INFRASTRUCTURE_PUBLIC_REASON
+                            if exhausted
+                            else policy.public_reason
+                        ),
+                    ),
+                )
+        self._dataset_lifecycle.release_pin_in_transaction(
+            transaction,
+            generation_pin_id,
+            owner_id=attempt_id,
+        )
+        remaining = transaction.execute(
+            """
+            SELECT count(*) AS count
+            FROM research_batches.items
+            WHERE batch_id = %s AND outcome IS NULL
+            """,
+            (batch_id,),
+        ).fetchone()
+        assert remaining is not None
+        status = (
+            "queued"
+            if int(remaining["count"]) > 0
+            else self._terminal_status_from_items_in_transaction(transaction, batch_id)
+        )
+        updated = transaction.execute(
+            """
+            UPDATE research_batches.batches
+            SET status = %s, updated_at = now()
+            WHERE id = %s AND status = 'running' AND execution_fence = %s
+            """,
+            (status, batch_id, fence),
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError("Factor Batch recovery was fenced")
+
     def _finish_attempt(
         self,
         claim: _ResearchBatchClaim,
@@ -974,6 +1757,22 @@ class ResearchBatchService:
         error: Exception | None = None,
     ) -> None:
         with self._database.transaction() as transaction:
+            child = transaction.execute(
+                """
+                SELECT child_control_path, child_exited_at, child_acknowledged
+                FROM research_batches.attempts
+                WHERE id = %s AND batch_id = %s AND fence = %s
+                FOR UPDATE
+                """,
+                (claim.attempt_id, claim.batch_id, claim.fence),
+            ).fetchone()
+            if (
+                child is None
+                or child["child_exited_at"] is None
+                or child["child_acknowledged"] is not True
+                or not _confirm_child_exited(str(child["child_control_path"]))
+            ):
+                raise RuntimeError("Research Batch acknowledged child exit is not confirmed")
             item_rows = transaction.execute(
                 """
                 SELECT research_run_id
@@ -1299,7 +2098,13 @@ def _detail_in_transaction(
         """
         SELECT item.ordinal, item.item_key, item.research_run_id,
                item.dependency_role, item.outcome, item.diagnostic,
-               item.run_deleted_at AS deleted_at
+               item.run_deleted_at AS deleted_at,
+               (
+                   SELECT count(*)
+                   FROM research_batches.task_attempts AS task_attempt
+                   WHERE task_attempt.batch_id = item.batch_id
+                     AND task_attempt.item_ordinal = item.ordinal
+               ) AS task_attempt_count
         FROM research_batches.items AS item
         WHERE item.batch_id = %s
         ORDER BY item.ordinal
@@ -1553,7 +2358,37 @@ def _message_diagnostic(message: Mapping[str, object]) -> ResearchBatchDiagnosti
     )
 
 
+def _factor_task_failure_policy(error: Exception) -> _FactorTaskFailurePolicy:
+    if isinstance(
+        error,
+        (
+            ResearchBatchChildLost,
+            PublicationUnavailableError,
+            OperationalError,
+            PoolTimeout,
+            ConnectionError,
+            TimeoutError,
+        ),
+    ):
+        return _FactorTaskFailurePolicy(
+            attempt_reason=FACTOR_TASK_INFRASTRUCTURE_FAILURE,
+            public_reason=FACTOR_TASK_INFRASTRUCTURE_PUBLIC_REASON,
+            retryable=True,
+        )
+    return _FactorTaskFailurePolicy(
+        attempt_reason=FACTOR_TASK_PERMANENT_FAILURE,
+        public_reason=FACTOR_TASK_PERMANENT_PUBLIC_REASON,
+        retryable=False,
+    )
+
+
 def _exception_diagnostic(error: Exception) -> ResearchBatchDiagnostic:
+    if _factor_task_failure_policy(error).retryable:
+        return ResearchBatchDiagnostic(
+            code="RESEARCH_BATCH_INFRASTRUCTURE_UNAVAILABLE",
+            category="infrastructure",
+            message="Research Batch execution lost required infrastructure.",
+        )
     if isinstance(error, MemoryError):
         return ResearchBatchDiagnostic(
             code="RESEARCH_BATCH_RESOURCE_EXHAUSTED",
