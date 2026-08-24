@@ -57,8 +57,8 @@ class _KillSecondFactorOnceExecutor:
         self._delegate = delegate
         self.killed = False
 
-    def execute(self, request, *, emit):
-        execution = self._delegate.execute(request, emit=emit)
+    def execute(self, request, *, emit, cancel_requested):
+        execution = self._delegate.execute(request, emit=emit, cancel_requested=cancel_requested)
         if self.killed:
             return execution
         self.killed = True
@@ -103,9 +103,9 @@ class _FinalFactorChunkBarrierExecutor:
         self.final_chunk = Event()
         self.release = Event()
 
-    def execute(self, request, *, emit):
+    def execute(self, request, *, emit, cancel_requested):
         return _FinalFactorChunkBarrierExecution(
-            self._delegate.execute(request, emit=emit),
+            self._delegate.execute(request, emit=emit, cancel_requested=cancel_requested),
             self.final_chunk,
             self.release,
         )
@@ -197,9 +197,9 @@ def test_real_postgres_loss_recovers_after_child_exit(tmp_path: Path) -> None:
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(processor.process_next)
             assert barrier.final_chunk.wait(timeout=20)
-            attempt_id = client.get(f"/api/research-batches/{admitted['id']}").json()[
-                "attempt"
-            ]["id"]
+            attempt_id = client.get(f"/api/research-batches/{admitted['id']}").json()["attempt"][
+                "id"
+            ]
             _run_dependency_command("stop-postgres")
             barrier.release.set()
             try:
@@ -261,9 +261,9 @@ def test_expired_lease_rejects_stale_child_output_before_publication(
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(processor.process_next)
             assert barrier.prepared.wait(timeout=10)
-            first_attempt = client.get(
-                f"/api/research-batches/{admitted['id']}"
-            ).json()["attempt"]["id"]
+            first_attempt = client.get(f"/api/research-batches/{admitted['id']}").json()["attempt"][
+                "id"
+            ]
             _expire_batch_attempt(runtime, first_attempt)
             barrier.release.set()
             assert future.result(timeout=20) is True
@@ -279,9 +279,7 @@ def test_expired_lease_rejects_stale_child_output_before_publication(
         completed = client.get(f"/api/research-batches/{admitted['id']}").json()
         assert completed["status"] == "succeeded"
         assert [item["task_attempt_count"] for item in completed["items"]] == [2, 1]
-        assert _lost_attempt_evidence(runtime, [first_attempt]) == [
-            ("failed", "WorkerLost")
-        ]
+        assert _lost_attempt_evidence(runtime, [first_attempt]) == [("failed", "WorkerLost")]
 
 
 @pytest.mark.skipif(
@@ -342,9 +340,12 @@ def test_factor_child_loss_restarts_only_the_unacknowledged_whole_task(
         completed = client.get(f"/api/research-batches/{admitted['id']}").json()
         assert completed["status"] == "succeeded"
         assert [item["task_attempt_count"] for item in completed["items"]] == [1, 2]
-        assert client.get(
-            f"/api/research-runs/{completed['items'][0]['research_run_id']}"
-        ).json()["result"] == first_result
+        assert (
+            client.get(f"/api/research-runs/{completed['items'][0]['research_run_id']}").json()[
+                "result"
+            ]
+            == first_result
+        )
         assert all(
             _run_generation_id(runtime, str(item["research_run_id"])) == frozen_generation
             for item in completed["items"]

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from threading import Event, Thread
 from time import monotonic
+from typing import Literal
 from uuid import uuid4
 
 from psycopg import OperationalError
@@ -349,8 +350,37 @@ class ResearchRunService:
         run_ids: Sequence[str],
     ) -> None:
         """Fence lost Batch authority and return only incomplete child Runs to queued."""
+        self._transition_incomplete_batch_owned_executions_in_transaction(
+            transaction,
+            run_ids,
+            target_status="queued",
+            delete_checkpoints=False,
+        )
+
+    def cancel_incomplete_batch_owned_executions_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        run_ids: Sequence[str],
+    ) -> None:
+        """Fence and terminally cancel only unfinished children of one Batch."""
+        self._transition_incomplete_batch_owned_executions_in_transaction(
+            transaction,
+            run_ids,
+            target_status="cancelled",
+            delete_checkpoints=True,
+        )
+
+    def _transition_incomplete_batch_owned_executions_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        run_ids: Sequence[str],
+        *,
+        target_status: Literal["queued", "cancelled"],
+        delete_checkpoints: bool,
+    ) -> None:
         if not run_ids:
             return
+        selected_ids = list(run_ids)
         rows = transaction.execute(
             """
             SELECT id, status, execution_owner
@@ -359,18 +389,17 @@ class ResearchRunService:
             ORDER BY id
             FOR UPDATE
             """,
-            (list(run_ids),),
+            (selected_ids,),
         ).fetchall()
         if len(rows) != len(run_ids) or any(
-            row["execution_owner"] != "research_batch"
-            or row["status"] not in {"queued", "running"}
+            row["execution_owner"] != "research_batch" or row["status"] not in {"queued", "running"}
             for row in rows
         ):
             raise ResearchRunFenced
-        transaction.execute(
+        updated = transaction.execute(
             """
             UPDATE research_runs.runs
-            SET status = 'queued',
+            SET status = %s,
                 execution_fence = CASE
                     WHEN status = 'running' THEN execution_fence + 1
                     ELSE execution_fence
@@ -380,15 +409,22 @@ class ResearchRunService:
             WHERE id = ANY(%s) AND execution_owner = 'research_batch'
               AND status = ANY(ARRAY['queued'::text, 'running'::text])
             """,
-            (list(run_ids),),
+            (target_status, selected_ids),
         )
+        if updated.rowcount != len(run_ids):
+            raise ResearchRunFenced
+        if delete_checkpoints:
+            transaction.execute(
+                "DELETE FROM research_runs.execution_checkpoints WHERE run_id = ANY(%s)",
+                (selected_ids,),
+            )
         transaction.execute(
             """
             UPDATE research_runs.progress
             SET remaining_duration_estimate_seconds = NULL, updated_at = now()
             WHERE run_id = ANY(%s)
             """,
-            (list(run_ids),),
+            (selected_ids,),
         )
 
     def fail_recovered_batch_owned_item_in_transaction(
@@ -445,8 +481,7 @@ class ResearchRunService:
             ),
         )
         completed_sessions = sum(
-            chunk.research_session_count
-            for chunk in claim.immutable_input.execution_plan.chunks
+            chunk.research_session_count for chunk in claim.immutable_input.execution_plan.chunks
         )
         enforce_result_bundle_budget(prepared.exact_bytes, completed_sessions)
         with self._database.transaction() as transaction:
@@ -562,9 +597,7 @@ class ResearchRunService:
             row_count = plan_chunk.research_session_count
             if row_count == 0:
                 continue
-            partition_rows = observations[
-                observation_offset : observation_offset + row_count
-            ]
+            partition_rows = observations[observation_offset : observation_offset + row_count]
             observation_offset += row_count
             if row_count > RESULT_DAILY_PARTITION_SESSION_COUNT:
                 raise ResearchResultError(
@@ -589,9 +622,7 @@ class ResearchRunService:
                 )
             )
         if observation_offset != len(observations):
-            raise ResearchResultError(
-                "Strategy Sweep observation partitions are incomplete"
-            )
+            raise ResearchResultError("Strategy Sweep observation partitions are incomplete")
         prepared = self._publication.prepare(
             kind="research.result",
             payloads=result_publication_payloads_from_staged(
@@ -673,12 +704,9 @@ class ResearchRunService:
             immutable_input.research_kind != "strategy_backtest"
             or chunk.get("final") is not True
             or int(chunk.get("ordinal", 0)) != len(plan.chunks)
-            or str(chunk.get("boundary_session"))
-            != plan.chunks[-1].last_session.isoformat()
-            or int(chunk.get("completed_warmup_sessions", -1))
-            != plan.research_session_offset
-            or int(chunk.get("completed_research_sessions", -1))
-            != plan.research_session_count
+            or str(chunk.get("boundary_session")) != plan.chunks[-1].last_session.isoformat()
+            or int(chunk.get("completed_warmup_sessions", -1)) != plan.research_session_offset
+            or int(chunk.get("completed_research_sessions", -1)) != plan.research_session_count
             or not isinstance(continuation, Mapping)
             or not isinstance(final_values, Mapping)
             or not isinstance(observations, list)
@@ -697,9 +725,7 @@ class ResearchRunService:
                 research_kind="strategy_backtest",
             )
         except ValueError as error:
-            raise ResearchResultError(
-                "Strategy Sweep final continuation is invalid"
-            ) from error
+            raise ResearchResultError("Strategy Sweep final continuation is invalid") from error
         return final_values, observations
 
     def _validate_batch_factor_final_chunk(
@@ -716,8 +742,7 @@ class ResearchRunService:
             claim.immutable_input.research_kind != "factor_evaluation"
             or chunk.get("final") is not True
             or int(chunk.get("ordinal", 0)) != len(plan.chunks)
-            or str(chunk.get("boundary_session"))
-            != plan.chunks[-1].last_session.isoformat()
+            or str(chunk.get("boundary_session")) != plan.chunks[-1].last_session.isoformat()
             or int(chunk.get("completed_research_sessions", -1)) != completed_research
             or not isinstance(continuation, Mapping)
             or observations != []
@@ -3152,9 +3177,7 @@ def _authorable_input(row: object) -> ResearchRunAuthorableInput:
         assert immutable_input.strategy is not None
         strategy_values = {
             "holdings_count": int(immutable_input.strategy["holdings_count"]),
-            "rebalance_every_sessions": int(
-                immutable_input.strategy["rebalance_every_sessions"]
-            ),
+            "rebalance_every_sessions": int(immutable_input.strategy["rebalance_every_sessions"]),
         }
     return ResearchRunAuthorableInput(
         formula=immutable_input.formula_source,
@@ -3197,11 +3220,7 @@ def _research_execution_timing(
             elapsed_seconds = max(0.0, (endpoint - started_at).total_seconds())
     return ResearchRunExecutionTiming(
         started_at=started_at if isinstance(started_at, datetime) else None,
-        finished_at=(
-            finished_at
-            if is_final and isinstance(finished_at, datetime)
-            else None
-        ),
+        finished_at=(finished_at if is_final and isinstance(finished_at, datetime) else None),
         elapsed_seconds=elapsed_seconds,
         is_final=is_final,
     )

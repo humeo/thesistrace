@@ -246,7 +246,8 @@ CREATE TABLE research_batches.task_attempts (
         status = ANY (ARRAY[
             'running'::text,
             'succeeded'::text,
-            'failed'::text
+            'failed'::text,
+            'cancelled'::text
         ])
     ),
     CONSTRAINT task_attempts_failure_diagnostic_check CHECK (
@@ -270,6 +271,12 @@ CREATE TABLE research_batches.task_attempts (
             AND finished_at IS NOT NULL
             AND failure_reason IS NOT NULL
             AND failure_diagnostic IS NOT NULL
+        )
+        OR (
+            status = 'cancelled'
+            AND finished_at IS NOT NULL
+            AND failure_reason IS NULL
+            AND failure_diagnostic IS NULL
         )
     ) IS TRUE),
     UNIQUE (batch_id, task_role, task_key, ordinal),
@@ -321,7 +328,8 @@ CREATE TABLE research_batches.progress (
             'pending'::text,
             'running'::text,
             'succeeded'::text,
-            'failed'::text
+            'failed'::text,
+            'cancelled'::text
         ])
     ),
     FOREIGN KEY (batch_id) REFERENCES research_batches.batches(id) ON DELETE CASCADE
@@ -334,6 +342,14 @@ CREATE TABLE research_batches.admission_receipts (
     outcome jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT admission_receipts_outcome_check CHECK (jsonb_typeof(outcome) = 'object'),
+    FOREIGN KEY (batch_id) REFERENCES research_batches.batches(id)
+);
+
+CREATE TABLE research_batches.cancel_receipts (
+    request_id text PRIMARY KEY,
+    request_fingerprint text NOT NULL,
+    batch_id text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
     FOREIGN KEY (batch_id) REFERENCES research_batches.batches(id)
 );
 

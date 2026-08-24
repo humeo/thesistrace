@@ -55,7 +55,7 @@ from thesistrace.research_run.service import ResearchRunService
 
 
 class _StrategyTransportFailureExecutor:
-    def execute(self, request, *, emit):
+    def execute(self, request, *, emit, cancel_requested):
         raise RuntimeError("injected Strategy Sweep transport failure")
 
 
@@ -93,9 +93,9 @@ class _FirstStrategyStartedBarrierExecutor:
         self.started = Event()
         self.release = Event()
 
-    def execute(self, request, *, emit):
+    def execute(self, request, *, emit, cancel_requested):
         return _FirstStrategyStartedBarrierExecution(
-            self._delegate.execute(request, emit=emit),
+            self._delegate.execute(request, emit=emit, cancel_requested=cancel_requested),
             self.started,
             self.release,
         )
@@ -140,9 +140,9 @@ class _InvalidSharedEvidenceExecutor:
         self._delegate = delegate
         self._invalid_evidence = invalid_evidence
 
-    def execute(self, request, *, emit):
+    def execute(self, request, *, emit, cancel_requested):
         return _InvalidSharedEvidenceExecution(
-            self._delegate.execute(request, emit=emit),
+            self._delegate.execute(request, emit=emit, cancel_requested=cancel_requested),
             self._invalid_evidence,
         )
 
@@ -181,9 +181,9 @@ class _SharedArtifactReadyBarrierExecutor:
         self.ready = Event()
         self.release = Event()
 
-    def execute(self, request, *, emit):
+    def execute(self, request, *, emit, cancel_requested):
         return _SharedArtifactReadyBarrierExecution(
-            self._delegate.execute(request, emit=emit),
+            self._delegate.execute(request, emit=emit, cancel_requested=cancel_requested),
             self.ready,
             self.release,
         )
@@ -486,10 +486,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         command = _strategy_command("strategy-sweep-equivalence")
         batch = client.post("/api/research-batches", json=command).json()
         child_ids = [str(item["research_run_id"]) for item in batch["items"]]
-        assert (
-            client.delete(f"/api/research-runs/{child_ids[0]}").status_code
-            == 409
-        )
+        assert client.delete(f"/api/research-runs/{child_ids[0]}").status_code == 409
         batch_folder_runs = client.get(
             "/api/research-runs",
             params={"folder_id": BATCH_RESEARCH_FOLDER_ID},
@@ -511,13 +508,9 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
             (item["ordinal"], item["item_key"], item["research_run_id"])
             for item in organized_batch["items"]
         ] == [
-            (item["ordinal"], item["item_key"], item["research_run_id"])
-            for item in batch["items"]
+            (item["ordinal"], item["item_key"], item["research_run_id"]) for item in batch["items"]
         ]
-        assert (
-            client.delete(f"/api/research-folders/{BATCH_RESEARCH_FOLDER_ID}").status_code
-            == 409
-        )
+        assert client.delete(f"/api/research-folders/{BATCH_RESEARCH_FOLDER_ID}").status_code == 409
         ordinary = [
             client.post(
                 "/api/research-runs",
@@ -580,9 +573,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         assert track.status_code == 201
         assert track.json()["status"] == "active"
         track_id = str(track.json()["id"])
-        untracked_manifest = str(
-            _stored_run(settings, child_ids[1])["result_manifest_sha256"]
-        )
+        untracked_manifest = str(_stored_run(settings, child_ids[1])["result_manifest_sha256"])
 
         projection_entered = Event()
         release_projection = Event()
@@ -664,10 +655,13 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         assert client.get(f"/api/research-runs/{ordinary_in_batch_folder['id']}").status_code == 200
         assert client.delete(f"/api/research-batches/{batch['id']}").status_code == 405
         with runtime.database.transaction() as transaction:
-            assert transaction.execute(
-                "SELECT 1 FROM publication.manifests WHERE sha256 = %s",
-                (untracked_manifest,),
-            ).fetchone() is None
+            assert (
+                transaction.execute(
+                    "SELECT 1 FROM publication.manifests WHERE sha256 = %s",
+                    (untracked_manifest,),
+                ).fetchone()
+                is None
+            )
 
     prepared = [
         event for event in events if event["event"] == "research_batch_execution_batch_prepared"

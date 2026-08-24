@@ -28,8 +28,8 @@ class _PreparationBarrierExecutor:
         self.prepared = Event()
         self.release = Event()
 
-    def execute(self, request, *, emit):
-        execution = self._delegate.execute(request, emit=emit)
+    def execute(self, request, *, emit, cancel_requested):
+        execution = self._delegate.execute(request, emit=emit, cancel_requested=cancel_requested)
         self.prepared.set()
         if not self.release.wait(timeout=10):
             execution.close()
@@ -38,7 +38,7 @@ class _PreparationBarrierExecutor:
 
 
 class _TransportFailureExecutor:
-    def execute(self, request, *, emit):
+    def execute(self, request, *, emit, cancel_requested):
         raise RuntimeError("injected Batch transport failure")
 
 

@@ -5,6 +5,7 @@ from thesistrace.research_batch.models import (
     ResearchBatchAdmissionIssue,
     ResearchBatchAdmissionRejection,
     ResearchBatchAttemptSummary,
+    ResearchBatchCancelCommand,
     ResearchBatchDetail,
     ResearchBatchDiagnostic,
     ResearchBatchExecutionTiming,
@@ -23,6 +24,7 @@ from thesistrace.research_batch.models import (
 from thesistrace.research_batch.service import (
     ResearchBatchAdmissionConflict,
     ResearchBatchAdmissionRejected,
+    ResearchBatchCancelConflict,
     ResearchBatchService,
     preserve_deleted_run_history,
 )
@@ -36,6 +38,8 @@ __all__ = (
     "ResearchBatchAdmissionRejection",
     "ResearchBatchAdmissionRejected",
     "ResearchBatchAttemptSummary",
+    "ResearchBatchCancelCommand",
+    "ResearchBatchCancelConflict",
     "ResearchBatchDetail",
     "ResearchBatchDiagnostic",
     "ResearchBatchExecutionTiming",

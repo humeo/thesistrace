@@ -53,6 +53,7 @@ from thesistrace.research_run.supervised_child import (
 from thesistrace.research_series import ColumnarResearchSeries
 
 ExecutionEvent = Callable[[dict[str, object]], None]
+CancellationCheck = Callable[[], bool]
 
 
 class ResearchBatchChildLost(ResearchExecutionError):
@@ -210,6 +211,7 @@ class SupervisedResearchBatchExecution:
         *,
         emit: ExecutionEvent,
         execution_memory_bytes: int,
+        cancel_requested: CancellationCheck,
     ) -> None:
         self._transport = transport
         self._process = transport.process
@@ -217,6 +219,7 @@ class SupervisedResearchBatchExecution:
         self.message = message
         self._emit = emit
         self._execution_memory_bytes = execution_memory_bytes
+        self._cancel_requested = cancel_requested
         self._acknowledged = False
         self._exit_emitted = False
 
@@ -241,6 +244,7 @@ class SupervisedResearchBatchExecution:
         self.message = _read_message(
             self._transport,
             execution_memory_bytes=self._execution_memory_bytes,
+            cancel_requested=self._cancel_requested,
         )
         self._emit_message()
 
@@ -364,6 +368,7 @@ class SupervisedResearchBatchExecutor:
         request: ResearchBatchExecutionRequest,
         *,
         emit: ExecutionEvent,
+        cancel_requested: CancellationCheck,
     ) -> SupervisedResearchBatchExecution:
         control_directory = self._data_mount / ".batch-attempts"
         control_directory.mkdir(parents=True, exist_ok=True)
@@ -399,6 +404,7 @@ class SupervisedResearchBatchExecutor:
             message = _read_message(
                 transport,
                 execution_memory_bytes=self._execution_memory_bytes,
+                cancel_requested=cancel_requested,
             )
             if message.get("status") != "child_ready":
                 raise ResearchExecutionError("Research Batch child did not become ready")
@@ -419,6 +425,7 @@ class SupervisedResearchBatchExecutor:
                 message,
                 emit=emit,
                 execution_memory_bytes=self._execution_memory_bytes,
+                cancel_requested=cancel_requested,
             )
             execution.advance("acknowledge_ready")
             return execution
@@ -1219,9 +1226,10 @@ def _read_message(
     transport: SupervisedChildTransport,
     *,
     execution_memory_bytes: int,
+    cancel_requested: CancellationCheck,
 ) -> dict[str, object]:
     try:
-        message = transport.read()
+        message = transport.read(cancel_requested=cancel_requested)
     except ChildTransportCgroupOom as error:
         raise ResearchExecutionResourceExhausted(
             "Research Batch child exceeded its cgroup memory limit"

@@ -39,6 +39,8 @@ def main() -> None:
             command = value.get("command") if isinstance(value, dict) else None
             if not isinstance(command, str):
                 os._exit(65)
+            if command == "cancel":
+                os._exit(0)
             commands.put(command)
             if command == "acknowledge_batch":
                 return

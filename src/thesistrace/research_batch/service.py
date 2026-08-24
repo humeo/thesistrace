@@ -45,6 +45,7 @@ from thesistrace.research_batch.models import (
     ResearchBatchAdmissionCommand,
     ResearchBatchAdmissionIssue,
     ResearchBatchAttemptSummary,
+    ResearchBatchCancelCommand,
     ResearchBatchDetail,
     ResearchBatchDiagnostic,
     ResearchBatchExecutionTiming,
@@ -142,6 +143,48 @@ def _confirm_child_exited(value: str) -> bool:
         control.close()
 
 
+def _starting_guard_path(child_control_path: str) -> Path:
+    path = Path(child_control_path)
+    if not path.is_absolute() or path.parent.name != ".batch-attempts":
+        raise RuntimeError("Research Batch child control path is invalid")
+    return path.with_name(f"{path.name}.starting")
+
+
+class _StartingGuard:
+    def __init__(self, child_control_path: str) -> None:
+        self._path = _starting_guard_path(child_control_path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._file = self._path.open("a+")
+        fcntl.flock(self._file.fileno(), fcntl.LOCK_EX)
+
+    def release(self) -> None:
+        if self._file.closed:
+            return
+        fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
+        self._file.close()
+        self._path.unlink(missing_ok=True)
+
+    def __del__(self) -> None:
+        try:
+            self.release()
+        except Exception:
+            pass
+
+
+def _confirm_starting_child_exited(child_control_path: str) -> bool:
+    guard_path = _starting_guard_path(child_control_path)
+    guard = guard_path.open("a+")
+    try:
+        try:
+            fcntl.flock(guard.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        guard_path.unlink(missing_ok=True)
+    finally:
+        guard.close()
+    return _confirm_child_exited(child_control_path)
+
+
 @dataclass(frozen=True)
 class _ResearchBatchClaim:
     batch_id: str
@@ -152,6 +195,8 @@ class _ResearchBatchClaim:
     generation_pin_id: str
     data_generation_id: str
     items: tuple[tuple[int, str, ResearchRunExecutionClaim], ...]
+    child_control_path: str
+    starting_guard: _StartingGuard
 
 
 @dataclass(frozen=True)
@@ -162,6 +207,10 @@ class _TaskFailurePolicy:
 
 
 class ResearchBatchAdmissionConflict(RuntimeError):
+    pass
+
+
+class ResearchBatchCancelConflict(RuntimeError):
     pass
 
 
@@ -213,6 +262,9 @@ class ResearchBatchService:
     ) -> bool:
         if self._execution is None:
             raise RuntimeError("Research Batch execution is not configured")
+        cancelling = self._reconcile_cancelling_batch()
+        if cancelling is not None:
+            return cancelling
         claim = self._claim_next()
         if claim is None:
             return False
@@ -231,6 +283,8 @@ class ResearchBatchService:
                     )
             else:
                 self._record_live_execution_event(claim, event)
+            if event.get("event") == "research_batch_execution_child_started":
+                claim.starting_guard.release()
             if (
                 event.get("event") == "research_batch_execution_child_started"
                 and on_claim is not None
@@ -283,6 +337,7 @@ class ResearchBatchService:
                         reuse_private_artifact=reuse_private_artifact,
                     ),
                     emit=emit,
+                    cancel_requested=lambda: self._cancellation_is_pending(claim),
                 )
                 if execution.message.get("status") != "batch_prepared":
                     raise RuntimeError("Research Batch child did not prepare shared data")
@@ -429,11 +484,15 @@ class ResearchBatchService:
                 execution.acknowledge()
                 self._finish_successful_attempt(claim)
         except Exception as error:
+            claim.starting_guard.release()
             if execution is not None:
                 execution.close()
             try:
-                starting_closed = self._finish_interrupted_starting_claim(claim, error)
-                if starting_closed:
+                cancelled = self._finish_cancelling_claim(claim)
+                starting_closed = False
+                if cancelled:
+                    pass
+                elif starting_closed := self._finish_interrupted_starting_claim(claim, error):
                     pass
                 elif claim.batch_kind == "factor_evaluation":
                     self._finish_interrupted_factor_attempt(claim, error)
@@ -453,10 +512,15 @@ class ResearchBatchService:
                     ),
                 )
             else:
-                if starting_closed or claim.batch_kind in {
-                    "factor_evaluation",
-                    "strategy_sweep",
-                }:
+                if (
+                    cancelled
+                    or starting_closed
+                    or claim.batch_kind
+                    in {
+                        "factor_evaluation",
+                        "strategy_sweep",
+                    }
+                ):
                     logger.error(
                         "Research Batch execution ended for recovery",
                         extra={
@@ -473,6 +537,7 @@ class ResearchBatchService:
                 exc_info=(type(error), error, error.__traceback__),
             )
         finally:
+            claim.starting_guard.release()
             if execution is not None:
                 execution.close()
             if private_artifact_path is not None:
@@ -551,6 +616,8 @@ class ResearchBatchService:
         scope = _scope(prepared)
         with self._database.transaction() as transaction:
             _lock_admission(transaction, command.request_id)
+            if _cancel_receipt_exists(transaction, command.request_id):
+                raise ResearchBatchAdmissionConflict("Research Batch request_id conflicts")
             receipt = _receipt(transaction, command.request_id)
             if receipt is not None:
                 return _replayed_receipt(receipt, fingerprint)
@@ -698,6 +765,343 @@ class ResearchBatchService:
                 research_runs=self._research_runs,
             )
 
+    def cancel(
+        self,
+        batch_id: str,
+        command: ResearchBatchCancelCommand,
+    ) -> ResearchBatchDetail | None:
+        fingerprint = _cancel_fingerprint(batch_id)
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"research_batches.request:{command.request_id}",),
+            ).fetchone()
+            if _receipt(transaction, command.request_id) is not None:
+                raise ResearchBatchCancelConflict("Research Batch Cancel request_id conflicts")
+            receipt = transaction.execute(
+                """
+                SELECT request_fingerprint, batch_id
+                FROM research_batches.cancel_receipts
+                WHERE request_id = %s
+                """,
+                (command.request_id,),
+            ).fetchone()
+            if receipt is not None:
+                if receipt != {
+                    "request_fingerprint": fingerprint,
+                    "batch_id": batch_id,
+                }:
+                    raise ResearchBatchCancelConflict("Research Batch Cancel request_id conflicts")
+                return _detail_in_transaction(
+                    transaction,
+                    batch_id,
+                    research_runs=self._research_runs,
+                )
+
+            lock_publication_mutation(transaction)
+            batch = transaction.execute(
+                """
+                SELECT id, status, execution_fence
+                FROM research_batches.batches
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (batch_id,),
+            ).fetchone()
+            if batch is None:
+                return None
+            batch_status = str(batch["status"])
+            if batch_status == "queued":
+                transaction.execute(
+                    """
+                    UPDATE research_batches.batches
+                    SET execution_fence = execution_fence + 1, updated_at = now()
+                    WHERE id = %s AND status = 'queued'
+                    """,
+                    (batch_id,),
+                )
+                self._finish_cancelled_batch_in_transaction(transaction, batch_id)
+            elif batch_status == "running":
+                updated = transaction.execute(
+                    """
+                    UPDATE research_batches.batches
+                    SET status = 'cancelling', execution_fence = execution_fence + 1,
+                        updated_at = now()
+                    WHERE id = %s AND status = 'running'
+                      AND execution_fence = %s
+                    """,
+                    (batch_id, batch["execution_fence"]),
+                )
+                if updated.rowcount != 1:
+                    raise RuntimeError("Research Batch cancellation was fenced")
+            transaction.execute(
+                """
+                INSERT INTO research_batches.cancel_receipts (
+                    request_id, request_fingerprint, batch_id
+                ) VALUES (%s, %s, %s)
+                """,
+                (command.request_id, fingerprint, batch_id),
+            )
+            return _detail_in_transaction(
+                transaction,
+                batch_id,
+                research_runs=self._research_runs,
+            )
+
+    def _cancellation_is_pending(self, claim: _ResearchBatchClaim) -> bool:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT status, execution_fence
+                FROM research_batches.batches
+                WHERE id = %s
+                """,
+                (claim.batch_id,),
+            ).fetchone()
+        return row == {
+            "status": "cancelling",
+            "execution_fence": claim.fence + 1,
+        }
+
+    def _finish_cancelling_claim(self, claim: _ResearchBatchClaim) -> bool:
+        with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
+            batch = transaction.execute(
+                """
+                SELECT status, execution_fence
+                FROM research_batches.batches
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (claim.batch_id,),
+            ).fetchone()
+            if batch != {
+                "status": "cancelling",
+                "execution_fence": claim.fence + 1,
+            }:
+                return False
+            child = transaction.execute(
+                """
+                SELECT child_control_path, 'active' AS claim_phase
+                FROM research_batches.attempts
+                WHERE id = %s AND batch_id = %s AND fence = %s
+                  AND status = 'running'
+                UNION ALL
+                SELECT child_control_path, 'starting' AS claim_phase
+                FROM research_batches.starting_claims
+                WHERE id = %s AND batch_id = %s AND fence = %s
+                """,
+                (
+                    claim.attempt_id,
+                    claim.batch_id,
+                    claim.fence,
+                    claim.attempt_id,
+                    claim.batch_id,
+                    claim.fence,
+                ),
+            ).fetchone()
+            child_exited = (
+                _confirm_starting_child_exited(str(child["child_control_path"]))
+                if child is not None and child["claim_phase"] == "starting"
+                else child is not None and _confirm_child_exited(str(child["child_control_path"]))
+            )
+            if not child_exited:
+                raise RuntimeError("Cancelled Research Batch child exit is not confirmed")
+            self._finish_cancelled_batch_in_transaction(transaction, claim.batch_id)
+        return True
+
+    def _reconcile_cancelling_batch(self) -> bool | None:
+        with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
+            batch = transaction.execute(
+                """
+                SELECT id
+                FROM research_batches.batches
+                WHERE status = 'cancelling'
+                ORDER BY created_at, id
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+                """
+            ).fetchone()
+            if batch is None:
+                return None
+            batch_id = str(batch["id"])
+            child = transaction.execute(
+                """
+                SELECT child_control_path, 'active' AS claim_phase
+                FROM research_batches.attempts
+                WHERE batch_id = %s AND status = 'running'
+                UNION ALL
+                SELECT child_control_path, 'starting' AS claim_phase
+                FROM research_batches.starting_claims
+                WHERE batch_id = %s
+                """,
+                (batch_id, batch_id),
+            ).fetchone()
+            if child is not None:
+                child_exited = (
+                    _confirm_starting_child_exited(str(child["child_control_path"]))
+                    if child["claim_phase"] == "starting"
+                    else _confirm_child_exited(str(child["child_control_path"]))
+                )
+                if not child_exited:
+                    return False
+            self._finish_cancelled_batch_in_transaction(transaction, batch_id)
+        return True
+
+    def _finish_cancelled_batch_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        batch_id: str,
+    ) -> None:
+        batch = transaction.execute(
+            """
+            SELECT status
+            FROM research_batches.batches
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (batch_id,),
+        ).fetchone()
+        if batch is None or batch["status"] not in {"queued", "cancelling"}:
+            raise RuntimeError("Research Batch cannot finish cancellation")
+        incomplete = transaction.execute(
+            """
+            SELECT ordinal, research_run_id
+            FROM research_batches.items
+            WHERE batch_id = %s AND outcome IS NULL
+            ORDER BY ordinal
+            FOR UPDATE
+            """,
+            (batch_id,),
+        ).fetchall()
+        run_ids = [str(item["research_run_id"]) for item in incomplete]
+        self._research_runs.cancel_incomplete_batch_owned_executions_in_transaction(
+            transaction,
+            run_ids,
+        )
+        if incomplete:
+            transaction.execute(
+                """
+                UPDATE research_batches.items
+                SET outcome = 'cancelled', diagnostic = NULL
+                WHERE batch_id = %s AND outcome IS NULL
+                """,
+                (batch_id,),
+            )
+        transaction.execute(
+            """
+            UPDATE research_batches.task_attempts
+            SET status = 'cancelled', finished_at = now(),
+                failure_reason = NULL, failure_diagnostic = NULL
+            WHERE batch_id = %s AND status = 'running'
+            """,
+            (batch_id,),
+        )
+        attempt = transaction.execute(
+            """
+            SELECT id, generation_pin_id
+            FROM research_batches.attempts
+            WHERE batch_id = %s AND status = 'running'
+            ORDER BY ordinal DESC
+            LIMIT 1
+            FOR UPDATE
+            """,
+            (batch_id,),
+        ).fetchone()
+        starting = transaction.execute(
+            """
+            SELECT id, generation_pin_id
+            FROM research_batches.starting_claims
+            WHERE batch_id = %s
+            FOR UPDATE
+            """,
+            (batch_id,),
+        ).fetchone()
+        if attempt is not None and starting is not None:
+            raise RuntimeError("Research Batch has overlapping cancellation claims")
+        if attempt is not None:
+            updated_attempt = transaction.execute(
+                """
+                UPDATE research_batches.attempts
+                SET status = 'cancelled', heartbeat_at = now(), lease_expires_at = now(),
+                    finished_at = now(), failure_reason = NULL,
+                    failure_diagnostic = NULL,
+                    current_task_role = NULL, current_item_key = NULL,
+                    current_phase = NULL, completed_research_sessions = NULL,
+                    total_research_sessions = NULL, task_started_at = NULL,
+                    live_progress_updated_at = NULL,
+                    child_exited_at = coalesce(child_exited_at, now()),
+                    child_exit_code = coalesce(child_exit_code, -1),
+                    child_acknowledged = coalesce(child_acknowledged, false)
+                WHERE id = %s AND batch_id = %s AND status = 'running'
+                """,
+                (attempt["id"], batch_id),
+            )
+            if updated_attempt.rowcount != 1:
+                raise RuntimeError("Research Batch cancelled Attempt was fenced")
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction,
+                str(attempt["generation_pin_id"]),
+                owner_id=str(attempt["id"]),
+            )
+        elif starting is not None:
+            transaction.execute(
+                "DELETE FROM research_batches.starting_claims WHERE id = %s",
+                (starting["id"],),
+            )
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction,
+                str(starting["generation_pin_id"]),
+                owner_id=str(starting["id"]),
+            )
+        self._release_private_artifact_in_transaction(transaction, batch_id)
+        self._dataset_lifecycle.release_retention_in_transaction(
+            transaction,
+            retention_id=f"research-batch:{batch_id}",
+        )
+        counts = transaction.execute(
+            """
+            SELECT count(*) FILTER (
+                       WHERE outcome = ANY(ARRAY['succeeded'::text, 'failed'::text])
+                   ) AS completed
+            FROM research_batches.items
+            WHERE batch_id = %s
+            """,
+            (batch_id,),
+        ).fetchone()
+        assert counts is not None
+        transaction.execute(
+            """
+            UPDATE research_batches.progress
+            SET completed_items = %s,
+                shared_alpha_factor_status = CASE
+                    WHEN shared_alpha_factor_status IN ('pending', 'running')
+                    THEN 'cancelled'
+                    ELSE shared_alpha_factor_status
+                END,
+                updated_at = now()
+            WHERE batch_id = %s
+            """,
+            (int(counts["completed"]), batch_id),
+        )
+        updated_batch = transaction.execute(
+            """
+            UPDATE research_batches.batches
+            SET status = 'cancelled', updated_at = now()
+            WHERE id = %s AND status = ANY(ARRAY['queued'::text, 'cancelling'::text])
+            """,
+            (batch_id,),
+        )
+        if updated_batch.rowcount != 1:
+            raise RuntimeError("Research Batch terminal cancellation was fenced")
+        attempt_ids = transaction.execute(
+            "SELECT id FROM research_batches.attempts WHERE batch_id = %s",
+            (batch_id,),
+        ).fetchall()
+        for row in attempt_ids:
+            self._private_artifact_path(str(row["id"])).unlink(missing_ok=True)
+
     def _claim_next(self) -> _ResearchBatchClaim | None:
         with self._database.transaction() as transaction:
             lock_publication_mutation(transaction)
@@ -802,6 +1206,7 @@ class ResearchBatchService:
             assert ordinal_row is not None
             attempt_id = f"batch_attempt_{uuid4().hex[:20]}"
             child_control_path = str(self._attempt_control_directory / f"{attempt_id}.lock")
+            starting_guard = _StartingGuard(child_control_path)
             scope = ResearchBatchScope.model_validate(row["scope"])
             pinned = self._dataset_lifecycle.pin_generation_in_transaction(
                 transaction,
@@ -892,6 +1297,8 @@ class ResearchBatchService:
             generation_pin_id=pinned.pin.id,
             data_generation_id=pinned.descriptor.manifest_sha256,
             items=claimed_items,
+            child_control_path=child_control_path,
+            starting_guard=starting_guard,
         )
 
     def _recover_expired_factor_attempt_in_transaction(
@@ -993,7 +1400,7 @@ class ResearchBatchService:
             or fence != int(row["execution_fence"])
         ):
             raise RuntimeError("Expired Factor Batch starting authority is invalid")
-        if not _confirm_child_exited(control_path):
+        if not _confirm_starting_child_exited(control_path):
             return False
         incomplete = transaction.execute(
             """
@@ -1270,6 +1677,16 @@ class ResearchBatchService:
                     ),
                 )
                 if updated.rowcount != 1:
+                    starting = transaction.execute(
+                        """
+                        SELECT 1
+                        FROM research_batches.starting_claims
+                        WHERE id = %s AND batch_id = %s AND fence = %s
+                        """,
+                        (claim.attempt_id, claim.batch_id, claim.fence),
+                    ).fetchone()
+                    if starting is not None:
+                        return
                     existing = transaction.execute(
                         """
                         SELECT child_exit_code, child_acknowledged
@@ -2045,7 +2462,7 @@ class ResearchBatchService:
             ).fetchone()
             if starting is None:
                 return False
-            if not _confirm_child_exited(str(starting["child_control_path"])):
+            if not _confirm_starting_child_exited(str(starting["child_control_path"])):
                 raise RuntimeError("Interrupted Batch starting child exit is not confirmed")
             incomplete = transaction.execute(
                 """
@@ -2576,6 +2993,8 @@ class ResearchBatchService:
     ) -> ResearchBatchDetail | None:
         with self._database.transaction() as transaction:
             _lock_admission(transaction, request_id)
+            if _cancel_receipt_exists(transaction, request_id):
+                raise ResearchBatchAdmissionConflict("Research Batch request_id conflicts")
             receipt = _receipt(transaction, request_id)
             return None if receipt is None else _replayed_receipt(receipt, fingerprint)
 
@@ -2754,10 +3173,19 @@ def _admission_fingerprint(command: ResearchBatchAdmissionCommand) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
+def _cancel_fingerprint(batch_id: str) -> str:
+    value = {
+        "action": "research-batches.cancel/v1",
+        "batch_id": batch_id,
+    }
+    serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(serialized).hexdigest()
+
+
 def _lock_admission(transaction: PostgresTransaction, request_id: str) -> None:
     transaction.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-        (f"research_batches.admit:{request_id}",),
+        (f"research_batches.request:{request_id}",),
     ).fetchone()
 
 
@@ -2773,6 +3201,19 @@ def _receipt(
         """,
         (request_id,),
     ).fetchone()
+
+
+def _cancel_receipt_exists(
+    transaction: PostgresTransaction,
+    request_id: str,
+) -> bool:
+    return (
+        transaction.execute(
+            "SELECT 1 FROM research_batches.cancel_receipts WHERE request_id = %s",
+            (request_id,),
+        ).fetchone()
+        is not None
+    )
 
 
 def _replayed_receipt(
@@ -2833,11 +3274,7 @@ def _detail_in_transaction(
         """,
         (batch_id,),
     ).fetchall()
-    run_ids = [
-        str(item["research_run_id"])
-        for item in item_rows
-        if item["deleted_at"] is None
-    ]
+    run_ids = [str(item["research_run_id"]) for item in item_rows if item["deleted_at"] is None]
     child_statuses = research_runs.project_child_statuses_in_transaction(
         transaction,
         run_ids,

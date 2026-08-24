@@ -64,9 +64,9 @@ class _TaskStartBarrierExecutor:
         self.execution: _TaskStartBarrierExecution | None = None
         self.created = Event()
 
-    def execute(self, request, *, emit):
+    def execute(self, request, *, emit, cancel_requested):
         self.execution = _TaskStartBarrierExecution(
-            self._delegate.execute(request, emit=emit),
+            self._delegate.execute(request, emit=emit, cancel_requested=cancel_requested),
             target_status=self._target_status,
         )
         self.created.set()
@@ -244,10 +244,9 @@ def test_batch_history_schema_rejects_contradictory_attempts_and_item_outcomes(
 
         batch_id = admitted["id"]
         invalid_item_updates = (
-            "SET diagnostic = "
-            "'{\"code\":\"X\",\"category\":\"execution\",\"message\":\"failed\"}'",
+            'SET diagnostic = \'{"code":"X","category":"execution","message":"failed"}\'',
             "SET outcome = 'succeeded', diagnostic = "
-            "'{\"code\":\"X\",\"category\":\"execution\",\"message\":\"failed\"}'",
+            '\'{"code":"X","category":"execution","message":"failed"}\'',
             "SET outcome = 'failed', diagnostic = NULL",
             "SET run_deleted_at = now()",
         )
@@ -480,16 +479,14 @@ def test_strategy_sweep_reports_intermediate_shared_and_item_progress(
         if not isinstance(completed, int) or not isinstance(total, int) or completed >= total:
             return
         if (
-            event.get("event")
-            == "research_batch_execution_shared_alpha_factor_chunk_succeeded"
+            event.get("event") == "research_batch_execution_shared_alpha_factor_chunk_succeeded"
             and not shared_observed.is_set()
         ):
             shared_observed.set()
             if not release_shared.wait(timeout=10):
                 raise TimeoutError("Shared Alpha-and-Factor progress barrier timed out")
         elif (
-            event.get("event")
-            == "research_batch_execution_item_strategy_chunk_succeeded"
+            event.get("event") == "research_batch_execution_item_strategy_chunk_succeeded"
             and not strategy_observed.is_set()
         ):
             strategy_observed.set()
@@ -524,9 +521,7 @@ def test_strategy_sweep_reports_intermediate_shared_and_item_progress(
                 on_execution_event=observe,
             )
             assert shared_observed.wait(timeout=20)
-            shared_active = client.get(
-                f"/api/research-batches/{admitted['id']}"
-            ).json()
+            shared_active = client.get(f"/api/research-batches/{admitted['id']}").json()
             assert shared_active["progress"] == {
                 "shared_alpha_factor_status": "running",
                 "completed_strategy_tasks": 0,
@@ -535,16 +530,16 @@ def test_strategy_sweep_reports_intermediate_shared_and_item_progress(
             shared_live = shared_active["live_progress"]
             assert shared_live["task_role"] == "shared_alpha_factor"
             assert shared_live["item_key"] is None
-            assert 0 < shared_live["completed_research_sessions"] < shared_live[
-                "total_research_sessions"
-            ]
+            assert (
+                0
+                < shared_live["completed_research_sessions"]
+                < shared_live["total_research_sessions"]
+            )
             assert shared_live["remaining_duration_estimate_seconds"] >= 1
             release_shared.set()
 
             assert strategy_observed.wait(timeout=20)
-            strategy_active = client.get(
-                f"/api/research-batches/{admitted['id']}"
-            ).json()
+            strategy_active = client.get(f"/api/research-batches/{admitted['id']}").json()
             assert strategy_active["progress"] == {
                 "shared_alpha_factor_status": "succeeded",
                 "completed_strategy_tasks": 0,
@@ -553,9 +548,11 @@ def test_strategy_sweep_reports_intermediate_shared_and_item_progress(
             strategy_live = strategy_active["live_progress"]
             assert strategy_live["task_role"] == "strategy"
             assert strategy_live["item_key"] == "focused"
-            assert 0 < strategy_live["completed_research_sessions"] < strategy_live[
-                "total_research_sessions"
-            ]
+            assert (
+                0
+                < strategy_live["completed_research_sessions"]
+                < strategy_live["total_research_sessions"]
+            )
             assert strategy_live["remaining_duration_estimate_seconds"] >= 1
             release_strategy.set()
             assert future.result(timeout=30) is True

@@ -157,6 +157,7 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "research_batches.items",
             "research_batches.progress",
             "research_batches.admission_receipts",
+            "research_batches.cancel_receipts",
         ),
         "daily_track": (
             "daily_tracks.tracks",
@@ -375,6 +376,7 @@ def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None
         ("get", "/api/research-batches"),
         ("post", "/api/research-batches"),
         ("get", "/api/research-batches/{batch_id}"),
+        ("post", "/api/research-batches/{batch_id}/cancel"),
         ("get", "/api/research-runs"),
         ("post", "/api/research-runs"),
         ("patch", "/api/research-runs/{run_id}"),

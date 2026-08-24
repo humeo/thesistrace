@@ -33,6 +33,8 @@ from thesistrace.research_batch import (
     ResearchBatchAdmissionIssue,
     ResearchBatchAdmissionRejected,
     ResearchBatchAdmissionRejection,
+    ResearchBatchCancelCommand,
+    ResearchBatchCancelConflict,
     ResearchBatchDetail,
     ResearchBatchList,
 )
@@ -89,6 +91,7 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
                 content=rejection.model_dump(mode="json"),
             )
         return await request_validation_exception_handler(request, error)
+
     install_alpha_http(
         app,
         financial_authoring_ready=lambda request: (
@@ -185,6 +188,23 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     )
     def get_research_batch(request: Request, batch_id: str) -> ResearchBatchDetail:
         batch = _runtime(request).research_batches.get(batch_id)
+        if batch is None:
+            raise HTTPException(status_code=404, detail="Research Batch not found")
+        return batch
+
+    @app.post(
+        "/api/research-batches/{batch_id}/cancel",
+        response_model=ResearchBatchDetail,
+    )
+    def cancel_research_batch(
+        request: Request,
+        batch_id: str,
+        command: ResearchBatchCancelCommand,
+    ) -> ResearchBatchDetail:
+        try:
+            batch = _runtime(request).research_batches.cancel(batch_id, command)
+        except ResearchBatchCancelConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         if batch is None:
             raise HTTPException(status_code=404, detail="Research Batch not found")
         return batch
@@ -430,8 +450,7 @@ def _batch_validation_item_key(
         position = components.index(array_name)
         ordinal = (
             components[position + 1]
-            if position + 1 < len(components)
-            and isinstance(components[position + 1], int)
+            if position + 1 < len(components) and isinstance(components[position + 1], int)
             else 20
         )
         items = body.get(array_name)

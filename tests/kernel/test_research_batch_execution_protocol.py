@@ -30,7 +30,9 @@ def test_supervised_child_reports_invalid_input_without_losing_its_category(
         ResearchExecutionInputInvalid,
         match="Research Batch items are invalid",
     ):
-        executor.execute(_empty_request(), emit=lambda _event: None)
+        executor.execute(
+            _empty_request(), emit=lambda _event: None, cancel_requested=lambda: False
+        )
 
 
 def test_supervisor_preserves_resource_exhausted_child_category(
@@ -52,7 +54,9 @@ def test_supervisor_preserves_resource_exhausted_child_category(
         ResearchExecutionResourceExhausted,
         match="injected resource envelope",
     ):
-        executor.execute(_empty_request(), emit=lambda _event: None)
+        executor.execute(
+            _empty_request(), emit=lambda _event: None, cancel_requested=lambda: False
+        )
 
 
 def test_supervised_child_rejects_an_unknown_batch_kind(tmp_path: Path) -> None:
@@ -69,7 +73,9 @@ def test_supervised_child_rejects_an_unknown_batch_kind(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ResearchExecutionInputInvalid, match="Batch Kind is invalid"):
-        executor.execute(request, emit=lambda _event: None)
+        executor.execute(
+            request, emit=lambda _event: None, cancel_requested=lambda: False
+        )
 
 
 def _empty_request() -> ResearchBatchExecutionRequest:

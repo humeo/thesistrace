@@ -101,6 +101,12 @@ type ResearchBatchAdmissionCommand = Annotated[
 ]
 
 
+class ResearchBatchCancelCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    request_id: RequestId
+
+
 class ResearchBatchAdmissionIssue(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -165,7 +171,7 @@ class FactorEvaluationBatchProgress(BaseModel):
 class StrategySweepBatchProgress(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    shared_alpha_factor_status: Literal["pending", "running", "succeeded", "failed"]
+    shared_alpha_factor_status: Literal["pending", "running", "succeeded", "failed", "cancelled"]
     completed_strategy_tasks: int
     total_strategy_tasks: int
 
