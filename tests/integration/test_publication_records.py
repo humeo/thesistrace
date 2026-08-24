@@ -1,5 +1,6 @@
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import boto3
@@ -19,6 +20,7 @@ from thesistrace.publication import (
     PublicationVerificationError,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
+from thesistrace.publication.service import lock_publication_mutation
 
 
 @pytest.fixture(autouse=True)
@@ -131,7 +133,62 @@ def test_rollback_leaves_an_invisible_orphan_and_preserves_previous_reference(
         assert candidate.payload_sha256s["canonical"] in runtime.publication.find_orphan_sha256s(
             uploaded_before=datetime.now(UTC) + timedelta(minutes=5)
         )
+        assert (
+            runtime.publication.collect_one_orphan(
+                uploaded_before=datetime.now(UTC) - timedelta(minutes=5)
+            )
+            is False
+        )
+        cutoff = datetime.now(UTC) + timedelta(minutes=5)
+        for _ in range(20):
+            if candidate.payload_sha256s["canonical"] not in (
+                runtime.publication.find_orphan_sha256s(uploaded_before=cutoff)
+            ):
+                break
+            assert runtime.publication.collect_one_orphan(uploaded_before=cutoff) is True
+        assert candidate.payload_sha256s["canonical"] not in (
+            runtime.publication.find_orphan_sha256s(uploaded_before=cutoff)
+        )
         assert runtime.publication.read(baseline_ref).provenance == {"sequence": 1}
+
+
+def test_orphan_collection_rechecks_a_new_reference_under_the_mutation_lock(
+    core_settings: CoreSettings,
+) -> None:
+    with open_core_runtime(core_settings) as runtime:
+        _reset_product_probe(runtime.database)
+        prepared = runtime.publication.prepare(
+            kind="publication.probe",
+            payloads={"canonical": JsonPayload({"race": "record-before-delete"})},
+            provenance={"owner": "new-reference"},
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with runtime.database.transaction() as transaction:
+                lock_publication_mutation(transaction)
+                collection = pool.submit(
+                    runtime.publication.collect_one_orphan,
+                    uploaded_before=datetime.now(UTC) + timedelta(minutes=5),
+                )
+                published = runtime.publication.record(transaction, prepared)
+            collection.result(timeout=10)
+
+        verified = runtime.publication.read(published)
+        assert verified.provenance == {"owner": "new-reference"}
+
+
+def test_orphan_collection_fails_closed_when_the_bucket_is_missing(
+    core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
+) -> None:
+    database = PostgresDatabase(core_settings.database_url)
+    publication = Publication(
+        database,
+        rustfs_admin,
+        bucket=f"{core_settings.s3_bucket}-missing",
+    )
+
+    with pytest.raises(PublicationUnavailableError):
+        publication.collect_one_orphan(uploaded_before=datetime.now(UTC) + timedelta(minutes=5))
 
 
 def test_release_collects_only_after_the_last_manifest_reference(
@@ -170,10 +227,13 @@ def test_release_collects_only_after_the_last_manifest_reference(
             )
         assert runtime.publication.collect_one_pending_deletion() is False
         assert runtime.publication.read(second_ref).provenance == {"owner": "second"}
-        assert rustfs_admin.head_object(
-            Bucket=core_settings.s3_bucket,
-            Key=object_key,
-        )["ResponseMetadata"]["HTTPStatusCode"] == 200
+        assert (
+            rustfs_admin.head_object(
+                Bucket=core_settings.s3_bucket,
+                Key=object_key,
+            )["ResponseMetadata"]["HTTPStatusCode"]
+            == 200
+        )
 
         with runtime.database.transaction() as transaction:
             runtime.publication.release_manifest_in_transaction(
@@ -271,10 +331,13 @@ def test_failed_object_deletion_remains_durable_until_worker_retry(
                 (object_sha256, object_sha256),
             ).fetchone()
         assert retained == {"objects": 1, "pending": 1}
-        assert rustfs_admin.head_object(
-            Bucket=core_settings.s3_bucket,
-            Key=object_key,
-        )["ResponseMetadata"]["HTTPStatusCode"] == 200
+        assert (
+            rustfs_admin.head_object(
+                Bucket=core_settings.s3_bucket,
+                Key=object_key,
+            )["ResponseMetadata"]["HTTPStatusCode"]
+            == 200
+        )
 
     completed = subprocess.run(
         [

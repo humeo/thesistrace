@@ -34,11 +34,15 @@ class _ProductQueue:
 
 @dataclass
 class _BatchQueue(_ProductQueue):
-    pass
+    def reconcile_attempt_files(self) -> int:
+        return 0
 
 
 @dataclass
 class _ObservedBatchQueue(_ProductQueue):
+    def reconcile_attempt_files(self) -> int:
+        return 0
+
     def process_next(self, *, on_claim=None, on_execution_event=None) -> bool:
         self.calls += 1
         if self.has_work and on_claim is not None:
@@ -113,9 +117,7 @@ def test_worker_startup_rejects_unknown_role_and_multi_slot_configuration() -> N
     with pytest.raises(SystemExit):
         parse_worker_arguments(["--role", "unknown", "--once"])
     with pytest.raises(SystemExit):
-        parse_worker_arguments(
-            ["--role", "batch-research", "--slot-count", "2", "--once"]
-        )
+        parse_worker_arguments(["--role", "batch-research", "--slot-count", "2", "--once"])
 
 
 def test_research_worker_claims_only_one_research_run_and_skips_maintenance() -> None:

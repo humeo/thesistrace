@@ -139,9 +139,7 @@ class ResearchBatchItemSummary(BaseModel):
     item_key: str
     research_run_id: str
     dependency_role: Literal["factor", "strategy"]
-    status: Literal[
-        "queued", "running", "cancelling", "succeeded", "failed", "cancelled"
-    ]
+    status: Literal["queued", "running", "cancelling", "succeeded", "failed", "cancelled"]
     outcome: Literal["succeeded", "failed", "cancelled"] | None = None
     run_availability: Literal["available", "deleted"]
     task_attempt_count: int = Field(ge=0, le=3)
@@ -167,9 +165,7 @@ class FactorEvaluationBatchProgress(BaseModel):
 class StrategySweepBatchProgress(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    shared_alpha_factor_status: Literal[
-        "pending", "running", "succeeded", "failed"
-    ]
+    shared_alpha_factor_status: Literal["pending", "running", "succeeded", "failed"]
     completed_strategy_tasks: int
     total_strategy_tasks: int
 

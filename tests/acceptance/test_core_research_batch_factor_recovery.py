@@ -189,6 +189,7 @@ def test_real_postgres_loss_recovers_after_child_exit(tmp_path: Path) -> None:
             runtime.database,
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            publication=runtime.publication,
             attempt_control_directory=settings.data_mount / ".batch-attempts",
             execution=barrier,
             heartbeat_seconds=60,
@@ -253,6 +254,7 @@ def test_expired_lease_rejects_stale_child_output_before_publication(
             runtime.database,
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            publication=runtime.publication,
             attempt_control_directory=settings.data_mount / ".batch-attempts",
             execution=barrier,
         )
@@ -308,6 +310,7 @@ def test_factor_child_loss_restarts_only_the_unacknowledged_whole_task(
             runtime.database,
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            publication=runtime.publication,
             attempt_control_directory=settings.data_mount / ".batch-attempts",
             execution=executor,
         )

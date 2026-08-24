@@ -8,6 +8,7 @@ import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -190,6 +191,17 @@ def process_one_poll(
                     "role": configuration.role.value,
                     "slot": configuration.slot,
                     "removed_cache_count": removed_caches,
+                }
+            )
+    elif configuration.role is WorkerRole.BATCH_RESEARCH:
+        removed_attempt_files = runtime.research_batches.reconcile_attempt_files()
+        if removed_attempt_files:
+            emit(
+                {
+                    "event": "worker_batch_attempt_file_reconciliation",
+                    "role": configuration.role.value,
+                    "slot": configuration.slot,
+                    "removed_file_count": removed_attempt_files,
                 }
             )
     if product_worked:
@@ -378,6 +390,19 @@ def _collect_one_publication(runtime: CoreRuntime) -> None:
         return
     if removed:
         logger.info("Worker removed one unreferenced Publication object")
+        return
+    try:
+        orphan_removed = runtime.publication.collect_one_orphan(
+            uploaded_before=datetime.now(UTC) - timedelta(hours=1)
+        )
+    except (PublicationPreparationError, PublicationUnavailableError) as error:
+        logger.warning(
+            "Worker retained an orphan Publication upload for retry",
+            extra={"error_type": type(error).__name__},
+        )
+        return
+    if orphan_removed:
+        logger.info("Worker removed one orphan Publication upload")
 
 
 def _emit_event(event: dict[str, object]) -> None:

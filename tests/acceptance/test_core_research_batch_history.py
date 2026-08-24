@@ -312,6 +312,7 @@ def test_batch_detail_separates_durable_and_live_progress_and_survives_restart(
             runtime.database,
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            publication=runtime.publication,
             attempt_control_directory=settings.data_mount / ".batch-attempts",
             execution=barrier,
         )

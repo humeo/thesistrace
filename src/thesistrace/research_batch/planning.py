@@ -68,25 +68,19 @@ def validate_research_batch_capacity(
         _ARROW_SOURCE_AND_COORDINATE_BYTES
         + _DECIMAL_OPEN_OBJECT_BYTES
         + _UNIVERSE_MEMBER_BYTES
-        + _BINARY64_BYTES
-        * (len(field_ids) + _ADJUSTED_OPEN_COLUMNS + _FORWARD_LABEL_COLUMNS)
+        + _BINARY64_BYTES * (len(field_ids) + _ADJUSTED_OPEN_COLUMNS + _FORWARD_LABEL_COLUMNS)
         + _FORWARD_LABEL_STATE_BYTES
         + _UNIVERSE_MASK_BYTES
     )
-    ordinary_chunk_peak_bytes = max(
-        value.execution_plan.estimated_peak_bytes for value in inputs
-    )
+    ordinary_chunk_peak_bytes = max(value.execution_plan.estimated_peak_bytes for value in inputs)
     strategy_private_bytes = 0
     if batch_kind == "strategy_sweep":
         encoded_outcome_cell_count = max(
             strategy_sweep_encoded_outcome_cell_count(
                 research_session_counts=tuple(
-                    chunk.research_session_count
-                    for chunk in value.execution_plan.chunks
+                    chunk.research_session_count for chunk in value.execution_plan.chunks
                 ),
-                maximum_universe_cardinality=(
-                    value.data_admission.universe_instrument_count
-                ),
+                maximum_universe_cardinality=(value.data_admission.universe_instrument_count),
             )
             for value in inputs
         )
@@ -106,7 +100,8 @@ def validate_research_batch_capacity(
         # and Python/Arrow allocators retain high-water pages. Keep explicit
         # headroom proven by the real widest-admitted child RSS boundary.
         capacity_limit_bytes = (
-            execution_memory_bytes * _STRATEGY_SWEEP_CAPACITY_UTILIZATION_NUMERATOR
+            execution_memory_bytes
+            * _STRATEGY_SWEEP_CAPACITY_UTILIZATION_NUMERATOR
             // _STRATEGY_SWEEP_CAPACITY_UTILIZATION_DENOMINATOR
         )
     if estimated_peak_bytes > capacity_limit_bytes:
@@ -114,16 +109,10 @@ def validate_research_batch_capacity(
             "Worker capacity cannot retain the complete shared Batch data and Forward Labels"
         )
     return SessionCapacityPlan(
-        session_count=min(
-            value.execution_plan.chunk_session_count for value in inputs
-        ),
-        time_target_exceeded=any(
-            value.execution_plan.time_target_exceeded for value in inputs
-        ),
+        session_count=min(value.execution_plan.chunk_session_count for value in inputs),
+        time_target_exceeded=any(value.execution_plan.time_target_exceeded for value in inputs),
         estimated_peak_bytes=estimated_peak_bytes,
-        estimated_work=max(
-            value.execution_plan.estimated_chunk_work for value in inputs
-        ),
+        estimated_work=max(value.execution_plan.estimated_chunk_work for value in inputs),
     )
 
 

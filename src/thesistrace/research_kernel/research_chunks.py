@@ -76,15 +76,9 @@ class AlphaFactorExecutionBinding:
         require_current_numeric_contract(numeric_execution_contract)
         if not data_generation_id:
             raise ValueError("Alpha-and-Factor Data Generation is invalid")
-        if (
-            not semantic_versions
-            or any(
-                not isinstance(name, str)
-                or not name
-                or not isinstance(version, str)
-                or not version
-                for name, version in semantic_versions.items()
-            )
+        if not semantic_versions or any(
+            not isinstance(name, str) or not name or not isinstance(version, str) or not version
+            for name, version in semantic_versions.items()
         ):
             raise ValueError("Alpha-and-Factor semantic versions are invalid")
         run_contract = run_input.alpha_factor_contract_snapshot()
@@ -104,6 +98,46 @@ class AlphaFactorExecutionBinding:
 
     def value_snapshot(self) -> dict[str, object]:
         return _json_mapping(self._value_json, "Alpha-and-Factor binding")
+
+    @classmethod
+    def from_value_snapshot(
+        cls,
+        value: Mapping[str, object],
+    ) -> AlphaFactorExecutionBinding:
+        if set(value) != {
+            "data_generation_id",
+            "alpha",
+            "research_period",
+            "universe",
+            "neutralization",
+            "label_horizons",
+            "numeric_execution_contract",
+            "semantic_versions",
+        }:
+            raise ValueError("Alpha-and-Factor binding snapshot is invalid")
+        numeric_contract = value.get("numeric_execution_contract")
+        semantic_versions = value.get("semantic_versions")
+        data_generation_id = value.get("data_generation_id")
+        if (
+            not isinstance(numeric_contract, str)
+            or not isinstance(data_generation_id, str)
+            or not data_generation_id
+            or not isinstance(semantic_versions, Mapping)
+            or not semantic_versions
+            or value.get("label_horizons") != list(HORIZONS)
+        ):
+            raise ValueError("Alpha-and-Factor binding snapshot is invalid")
+        require_current_numeric_contract(numeric_contract)
+        run_contract = {
+            name: deepcopy(value[name])
+            for name in ("alpha", "research_period", "universe", "neutralization")
+        }
+        encoded = canonical_json_bytes(value)
+        instance = object.__new__(cls)
+        object.__setattr__(instance, "_value_json", encoded)
+        object.__setattr__(instance, "_run_contract", run_contract)
+        object.__setattr__(instance, "checksum", hashlib.sha256(encoded).hexdigest())
+        return instance
 
     def require_run_input(self, run_input: RunInput) -> None:
         if run_input.alpha_factor_contract_snapshot() != self._run_contract:
@@ -247,8 +281,7 @@ class AlphaFactorChunkOutcome:
                 alpha_matrix=alpha_matrix,
                 factor_summary=factor_summary,
                 phase_seconds={
-                    str(name): float(seconds)
-                    for name, seconds in phase_seconds.items()
+                    str(name): float(seconds) for name, seconds in phase_seconds.items()
                 },
             )
         except (ArithmeticError, TypeError, ValueError):
@@ -437,9 +470,7 @@ def execute_research_chunk(
         return ResearchChunkCalculation(
             continuation=state,
             strategy_daily_observations=(),
-            final_values=(
-                None if factor_summary is None else {"factor_summary": factor_summary}
-            ),
+            final_values=(None if factor_summary is None else {"factor_summary": factor_summary}),
             phase_seconds={
                 "alpha_and_pending": alpha_and_pending_seconds,
                 "factor": factor_seconds,
@@ -460,17 +491,13 @@ def execute_research_chunk(
     state.update(strategy_outcome._continuation_for_current_process())
     return ResearchChunkCalculation(
         continuation=state,
-        strategy_daily_observations=(
-            strategy_outcome._daily_observations_for_current_process()
-        ),
+        strategy_daily_observations=(strategy_outcome._daily_observations_for_current_process()),
         final_values=strategy_outcome._final_values_for_current_process(),
         phase_seconds={
             "alpha_and_pending": alpha_and_pending_seconds,
             "factor": factor_seconds,
             "strategy": strategy_outcome.phase_seconds["strategy"],
-            "finalize": (
-                factor_finalize_seconds + strategy_outcome.phase_seconds["finalize"]
-            ),
+            "finalize": (factor_finalize_seconds + strategy_outcome.phase_seconds["finalize"]),
         },
     )
 
@@ -561,9 +588,7 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
     if not isinstance(metric_state, Mapping):
         raise ValueError("Strategy calculation metric state is invalid")
     metric_state = dict(metric_state)
-    metric_state["cumulative_cost"] = str(
-        Decimal(str(metric_state["cumulative_cost"])).normalize()
-    )
+    metric_state["cumulative_cost"] = str(Decimal(str(metric_state["cumulative_cost"])).normalize())
     strategy_seconds = monotonic() - strategy_started
     finalize_started = monotonic()
     completed_count = alpha_factor_outcome.completed_research_session_count
@@ -600,9 +625,7 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
             "factor_summary": factor_summary,
             "strategy_summary": {
                 "alpha_checksum": str(
-                    alpha_factor_outcome._continuation_for_current_process()[
-                        "alpha_checksum"
-                    ]
+                    alpha_factor_outcome._continuation_for_current_process()["alpha_checksum"]
                 ),
                 "initial_cash_cny": str(strategy["initial_cash_cny"]),
                 "source_checksum": str(continuation["strategy_checksum"]),
@@ -718,10 +741,7 @@ def _execute_alpha_factor_chunk_from_validated(
     pending = state["pending_alpha"]
     if not isinstance(pending, list):
         raise ValueError("Pending Alpha continuation is invalid")
-    pending.extend(
-        _compact_pending_alpha(row, research_data)
-        for row in new_alpha
-    )
+    pending.extend(_compact_pending_alpha(row, research_data) for row in new_alpha)
     if len(pending) > _MAX_PENDING_ALPHA_SESSIONS + len(research_sessions):
         raise ValueError("Pending Alpha continuation exceeded its bound")
 
@@ -771,9 +791,7 @@ def _execute_alpha_factor_chunk_from_validated(
         raise ValueError("Pending Alpha continuation exceeded its bound")
 
     factor_seconds = monotonic() - factor_started
-    completed_count = int(state["completed_research_session_count"]) + len(
-        research_sessions
-    )
+    completed_count = int(state["completed_research_session_count"]) + len(research_sessions)
     state["completed_research_session_count"] = completed_count
     lookback = max(run_input.alpha_execution_plan().effective_lookback, 2)
     state["rolling_tail_sessions"] = list(calendar[-lookback:])
@@ -1254,14 +1272,17 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
         or not isinstance(report_session_count, int)
         or report_session_count < 1
         or not isinstance(metric_state, dict)
-        or any(state[name] != [] for name in (
-            "orders",
-            "child_orders",
-            "fills",
-            "rebalance_events",
-            "rejections",
-            "diagnostics",
-        ))
+        or any(
+            state[name] != []
+            for name in (
+                "orders",
+                "child_orders",
+                "fills",
+                "rebalance_events",
+                "rejections",
+                "diagnostics",
+            )
+        )
     ):
         raise ValueError("Strategy continuation is invalid")
     last_daily = daily[0]
@@ -1274,9 +1295,7 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
         "benchmark_nav",
         "cumulative_transaction_cost",
     }
-    if not required_daily <= set(last_daily) or not isinstance(
-        last_daily["session"], str
-    ):
+    if not required_daily <= set(last_daily) or not isinstance(last_daily["session"], str):
         raise ValueError("Strategy continuation is invalid")
     try:
         for name in required_daily - {"session"}:
@@ -1362,9 +1381,7 @@ def _validated_factor_summary(
     try:
         copied = _json_mapping(canonical_json_bytes(value), "Factor Summary")
         horizons = _mapping(copied.get("horizons"), "Factor Summary horizons")
-        if set(copied) != {"horizons"} or set(horizons) != {
-            str(horizon) for horizon in HORIZONS
-        }:
+        if set(copied) != {"horizons"} or set(horizons) != {str(horizon) for horizon in HORIZONS}:
             raise ValueError("Factor Summary is invalid")
         for horizon in HORIZONS:
             item = _mapping(horizons[str(horizon)], f"Factor horizon {horizon}")
@@ -1384,8 +1401,7 @@ def _validated_factor_summary(
                 or item.get("alpha_checksum") != alpha_checksum
                 or not _is_sha256(item.get("label_checksum"))
                 or not _is_sha256(item.get("source_checksum"))
-                or set(summary)
-                != {"ic", "rank_ic", "quantile_returns", "top_bottom_return"}
+                or set(summary) != {"ic", "rank_ic", "quantile_returns", "top_bottom_return"}
                 or set(coverage)
                 != {
                     "signal_session_count",
@@ -1471,10 +1487,7 @@ def _copy_factor_state(value: Mapping[str, object]) -> dict[str, object]:
 
 
 def _validated_factor_state_mapping(value: object) -> dict[str, object]:
-    if (
-        not isinstance(value, dict)
-        or value.get("schema_version") != "research-factor-aggregate-v1"
-    ):
+    if not isinstance(value, dict) or value.get("schema_version") != "research-factor-aggregate-v1":
         raise ValueError("Factor aggregate state is invalid")
     return value
 

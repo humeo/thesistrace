@@ -78,9 +78,10 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
         )
         processor = ResearchBatchService(
             runtime.database,
-                research_runs=runtime.research_runs,
-                dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
-                attempt_control_directory=settings.data_mount / ".batch-attempts",
+            research_runs=runtime.research_runs,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            publication=runtime.publication,
+            attempt_control_directory=settings.data_mount / ".batch-attempts",
             execution=barrier,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -312,6 +313,7 @@ def test_transport_failure_before_child_ready_does_not_charge_a_task_attempt(
             runtime.database,
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            publication=runtime.publication,
             attempt_control_directory=settings.data_mount / ".batch-attempts",
             execution=_TransportFailureExecutor(),
         )
@@ -334,6 +336,7 @@ def test_transport_failure_before_child_ready_does_not_charge_a_task_attempt(
             runtime.database,
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            publication=runtime.publication,
             attempt_control_directory=settings.data_mount / ".batch-attempts",
             execution=SupervisedResearchBatchExecutor(
                 settings.data_mount,

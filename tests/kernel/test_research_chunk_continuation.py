@@ -14,6 +14,11 @@ import thesistrace.research_kernel.strategy as strategy_module
 from thesistrace.alpha_language import alpha_language
 from thesistrace.publication import VerifiedBundle, VerifiedPayload
 from thesistrace.publication.serialization import canonical_json_bytes, parquet_bytes
+from thesistrace.research_batch.private_artifact import (
+    PrivateAlphaFactorChunk,
+    decode_private_alpha_factor_artifact,
+    encode_private_alpha_factor_artifact,
+)
 from thesistrace.research_kernel.equivalence import equivalence_bytes
 from thesistrace.research_kernel.factor import (
     evaluate_factor,
@@ -120,14 +125,20 @@ def test_research_continuation_requires_the_exact_frozen_kind_shape() -> None:
     factor = empty_research_continuation("factor_evaluation")
     strategy = empty_research_continuation("strategy_backtest")
 
-    assert validated_research_continuation(
-        factor,
-        research_kind="factor_evaluation",
-    ) == factor
-    assert validated_research_continuation(
-        strategy,
-        research_kind="strategy_backtest",
-    ) == strategy
+    assert (
+        validated_research_continuation(
+            factor,
+            research_kind="factor_evaluation",
+        )
+        == factor
+    )
+    assert (
+        validated_research_continuation(
+            strategy,
+            research_kind="strategy_backtest",
+        )
+        == strategy
+    )
 
     with pytest.raises(ValueError, match="continuation is invalid"):
         validated_research_continuation(
@@ -199,9 +210,7 @@ class _ColumnarFixture:
         return np.asarray(
             [
                 [
-                    Decimal(
-                        self.execution_prices[(session, instrument_id)].adjusted_open
-                    )
+                    Decimal(self.execution_prices[(session, instrument_id)].adjusted_open)
                     for session in self.sessions
                 ]
                 for instrument_id in instruments
@@ -240,8 +249,7 @@ def _minimal_alpha_factor_case(
         execution_prices=execution_prices,
         trading_states={},
         price_limits={
-            coordinate: PriceLimit(upper="100000", lower="0.01")
-            for coordinate in execution_prices
+            coordinate: PriceLimit(upper="100000", lower="0.01") for coordinate in execution_prices
         },
         matrices={
             "price.close.adjusted": np.asarray(
@@ -410,17 +418,14 @@ def test_alpha_factor_chunk_rejects_contract_mismatch_and_non_finite_state() -> 
     )
 
     with pytest.raises(ValueError, match="binding does not match"):
-        outcome.require_binding(
-            _alpha_factor_binding(run_input, data_generation_id="f" * 64)
-        )
+        outcome.require_binding(_alpha_factor_binding(run_input, data_generation_id="f" * 64))
 
     changed = alpha_language.compile("-close")
     changed_input = RunInput(
         research_data=fixture,
         alpha_expression=changed.expression,
         field_bindings={
-            field_id: identifier
-            for identifier, field_id in changed.field_ids_by_identifier.items()
+            field_id: identifier for identifier, field_id in changed.field_ids_by_identifier.items()
         },
         effective_alpha_lookback=changed.effective_lookback,
         universe=run_input.universe,
@@ -443,9 +448,7 @@ def test_alpha_factor_chunk_rejects_contract_mismatch_and_non_finite_state() -> 
         )
 
     invalid = empty_alpha_factor_continuation()
-    invalid["factor_state"]["horizons"]["1"]["statistics"]["ic"][
-        "fsum_partials"
-    ] = [float("inf")]
+    invalid["factor_state"]["horizons"]["1"]["statistics"]["ic"]["fsum_partials"] = [float("inf")]
     with pytest.raises(ValueError, match="Alpha-and-Factor continuation is invalid"):
         execute_alpha_factor_chunk(
             run_input=run_input,
@@ -459,9 +462,9 @@ def test_alpha_factor_chunk_rejects_contract_mismatch_and_non_finite_state() -> 
         )
 
     invalid_research = empty_research_continuation("factor_evaluation")
-    invalid_research["factor_state"]["horizons"]["1"]["statistics"]["ic"][
-        "fsum_partials"
-    ] = [float("inf")]
+    invalid_research["factor_state"]["horizons"]["1"]["statistics"]["ic"]["fsum_partials"] = [
+        float("inf")
+    ]
     with pytest.raises(ValueError, match="Research Chunk continuation is invalid"):
         execute_research_chunk(
             run_input=run_input,
@@ -551,17 +554,13 @@ def test_alpha_factor_outcome_hot_path_has_a_performance_regression_gate(
             "research-chunk-continuation-v2"
         ):
             research_continuation_serializations += 1
-        if (
-            isinstance(value, Mapping)
-            and set(value)
-            == {
-                "expression",
-                "effective_lookback",
-                "neutralization",
-                "sessions",
-                "checksum",
-            }
-        ):
+        if isinstance(value, Mapping) and set(value) == {
+            "expression",
+            "effective_lookback",
+            "neutralization",
+            "sessions",
+            "checksum",
+        }:
             raise AssertionError("Alpha Matrix was serialized on the in-process hot path")
         return original_serialize(value)
 
@@ -632,12 +631,11 @@ def test_one_alpha_factor_outcome_produces_independent_strategy_outcomes() -> No
     assert shared.continuation_snapshot() == continuation_before
     assert concentrated.final_values_snapshot()["factor_summary"] == factor_before
     assert diversified.final_values_snapshot()["factor_summary"] == factor_before
-    assert concentrated.final_values_snapshot()["strategy_summary"] != (
-        diversified.final_values_snapshot()["strategy_summary"]
+    assert (
+        concentrated.final_values_snapshot()["strategy_summary"]
+        != (diversified.final_values_snapshot()["strategy_summary"])
     )
-    assert concentrated.daily_observations_snapshot() != (
-        diversified.daily_observations_snapshot()
-    )
+    assert concentrated.daily_observations_snapshot() != (diversified.daily_observations_snapshot())
     with pytest.raises(ValueError, match="does not match Strategy input"):
         concentrated.require_strategy_input(
             _strategy_input(
@@ -682,6 +680,58 @@ def test_alpha_factor_outcome_compact_reuse_is_exact_and_binding_scoped() -> Non
                 factor_input,
                 data_generation_id="f" * 64,
             ),
+        )
+
+
+def test_private_alpha_factor_artifact_is_canonical_and_batch_scoped() -> None:
+    fixture, factor_input = _minimal_alpha_factor_case()
+    binding = _alpha_factor_binding(factor_input)
+    shared = execute_alpha_factor_chunk(
+        run_input=factor_input,
+        binding=binding,
+        research_data=fixture,
+        forward_labels=_forward_labels(fixture),
+        research_sessions=fixture.sessions,
+        final_chunk=True,
+        continuation=empty_alpha_factor_continuation(),
+        cancellation_check=lambda: None,
+    )
+    content = encode_private_alpha_factor_artifact(
+        batch_id="batch_private_artifact",
+        binding=binding,
+        chunks=(
+            PrivateAlphaFactorChunk(
+                outcome_payload=shared.compact_for_reuse(),
+                completed_research_sessions=shared.completed_research_session_count,
+                final=True,
+            ),
+        ),
+        final_alpha_continuation=shared.continuation_snapshot(),
+    )
+
+    restored_binding = AlphaFactorExecutionBinding.from_value_snapshot(binding.value_snapshot())
+    restored = decode_private_alpha_factor_artifact(
+        content,
+        expected_batch_id="batch_private_artifact",
+        expected_binding=restored_binding,
+    )
+
+    assert restored.content == content
+    assert restored.binding.checksum == binding.checksum
+    assert restored.chunks[0].outcome_payload == shared.compact_for_reuse()
+    with pytest.raises(ValueError, match="artifact is invalid"):
+        decode_private_alpha_factor_artifact(
+            content,
+            expected_batch_id="batch_other",
+            expected_binding=restored_binding,
+        )
+    corrupt = bytearray(content)
+    corrupt[-2] = ord("0") if corrupt[-2] != ord("0") else ord("1")
+    with pytest.raises(ValueError, match="artifact is invalid"):
+        decode_private_alpha_factor_artifact(
+            bytes(corrupt),
+            expected_batch_id="batch_private_artifact",
+            expected_binding=restored_binding,
         )
 
 
@@ -748,8 +798,7 @@ def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None
         research_data=fixture,
         alpha_expression=changed.expression,
         field_bindings={
-            field_id: identifier
-            for identifier, field_id in changed.field_ids_by_identifier.items()
+            field_id: identifier for identifier, field_id in changed.field_ids_by_identifier.items()
         },
         effective_alpha_lookback=changed.effective_lookback,
         universe=factor_input.universe,
@@ -987,9 +1036,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
             "financial.income.total_revenue.latest_fy": revenue,
         },
     )
-    compiled = alpha_language.compile(
-        "rank(ts_mean(close, 5)) + rank(revenue)"
-    )
+    compiled = alpha_language.compile("rank(ts_mean(close, 5)) + rank(revenue)")
     run_input = RunInput(
         research_data=fixture,
         alpha_expression=compiled.expression,
@@ -1043,9 +1090,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
                 run_input=run_input,
                 binding=_alpha_factor_binding(run_input),
                 research_data=(
-                    chunk_data := fixture.slice_sessions(
-                        sessions[max(0, start - 21) : end]
-                    )
+                    chunk_data := fixture.slice_sessions(sessions[max(0, start - 21) : end])
                 ),
                 forward_labels=_forward_labels(chunk_data),
                 research_sessions=sessions[start:end],
@@ -1117,9 +1162,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
                 run_input=factor_run_input,
                 binding=_alpha_factor_binding(factor_run_input),
                 research_data=(
-                    chunk_data := fixture.slice_sessions(
-                        sessions[max(0, start - 21) : end]
-                    )
+                    chunk_data := fixture.slice_sessions(sessions[max(0, start - 21) : end])
                 ),
                 forward_labels=_forward_labels(chunk_data),
                 research_sessions=sessions[start:end],
@@ -1143,9 +1186,9 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
             (factor_final.final_values or {})["factor_summary"]
         ) == equivalence_bytes(uninterrupted.final_values["factor_summary"])
         for horizon in ("1", "5", "20"):
-            chunked_horizon = (factor_final.final_values or {})["factor_summary"][
-                "horizons"
-            ][horizon]
+            chunked_horizon = (factor_final.final_values or {})["factor_summary"]["horizons"][
+                horizon
+            ]
             reference_horizon = legacy["factor_summary"]["horizons"][horizon]
             assert chunked_horizon["coverage"] == reference_horizon["coverage"]
             assert chunked_horizon["alpha_checksum"] == reference_horizon["alpha_checksum"]

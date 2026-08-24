@@ -279,6 +279,30 @@ CREATE TABLE research_batches.task_attempts (
         REFERENCES research_batches.attempts(id, batch_id, fence) ON DELETE CASCADE
 );
 
+CREATE TABLE research_batches.private_alpha_factor_artifacts (
+    batch_id text PRIMARY KEY,
+    manifest_sha256 text NOT NULL UNIQUE,
+    binding_checksum text NOT NULL,
+    binding jsonb NOT NULL,
+    content_sha256 text NOT NULL,
+    byte_size bigint NOT NULL,
+    created_by_attempt_id text NOT NULL,
+    created_by_fence integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT private_alpha_factor_artifacts_binding_check CHECK (
+        jsonb_typeof(binding) = 'object'
+    ),
+    CONSTRAINT private_alpha_factor_artifacts_checksum_check CHECK (
+        binding_checksum ~ '^[0-9a-f]{64}$'
+        AND content_sha256 ~ '^[0-9a-f]{64}$'
+    ),
+    CONSTRAINT private_alpha_factor_artifacts_byte_size_check CHECK (byte_size > 0),
+    CONSTRAINT private_alpha_factor_artifacts_fence_check CHECK (created_by_fence > 0),
+    FOREIGN KEY (batch_id) REFERENCES research_batches.batches(id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by_attempt_id, batch_id, created_by_fence)
+        REFERENCES research_batches.attempts(id, batch_id, fence) ON DELETE RESTRICT
+);
+
 CREATE TABLE research_batches.progress (
     batch_id text PRIMARY KEY,
     completed_items integer DEFAULT 0 NOT NULL,

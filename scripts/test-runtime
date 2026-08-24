@@ -557,10 +557,22 @@ case "$command" in
       --junitxml="$dependency_restart_report"
     postgres_port=$(mapped_port postgres 5432)
     s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-rustfs-strategy-restart run_with_environment env \
+      THESISTRACE_DATABASE_RESTART_PHASE=1 uv run pytest -q \
+      tests/acceptance/test_core_research_batch_strategy_execution.py::test_real_rustfs_loss_retries_shared_strategy_prerequisite \
+      --junitxml="$evidence_dir/pytest-rustfs-strategy-restart.xml"
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
     run_phase integration-postgres-batch-restart run_with_environment env \
       THESISTRACE_DATABASE_RESTART_PHASE=1 uv run pytest -q \
       tests/acceptance/test_core_research_batch_factor_recovery.py::test_real_postgres_loss_recovers_after_child_exit \
       --junitxml="$evidence_dir/pytest-postgres-batch-restart.xml"
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-postgres-strategy-restart run_with_environment env \
+      THESISTRACE_DATABASE_RESTART_PHASE=1 uv run pytest -q \
+      tests/acceptance/test_core_research_batch_strategy_execution.py::test_real_postgres_loss_reuses_acknowledged_private_artifact \
+      --junitxml="$evidence_dir/pytest-postgres-strategy-restart.xml"
     ;;
   e2e)
     run_phase e2e-images build_runtime_images
