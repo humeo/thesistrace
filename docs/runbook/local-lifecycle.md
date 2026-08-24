@@ -116,13 +116,20 @@ Data mount on an internal-only Compose network:
 mise exec -- pnpm test:image-smoke
 ```
 
-The image smoke initializes a fresh database, prepares deterministic mounted data,
-executes short Research and Tracking work through the real fixed-role Workers,
-restarts API and both Workers, and verifies the same Head, Result manifest,
-readiness, and single Attempts remain authoritative. It also rejects capacity
-declarations above the actual cgroup limits and records structured startup/claim
-events, image identities, health/exit state, network isolation, and before/after
-results under the run evidence directory.
+The image smoke initializes a fresh database, prepares deterministic mounted
+data, and executes ordinary Research, both Research Batch Kinds, and Tracking
+through the three real fixed-role Workers. It compares Batch Results and elapsed
+time with strictly serial ordinary Runs, exercises Batch cancellation, restarts
+API, PostgreSQL, and all Workers, and verifies the same Head, Results, Batch
+history, and Attempts remain authoritative. It also rejects capacity declarations
+above actual cgroup limits and records structured Worker events, image identity,
+timing, RSS, object bytes, health/exit state, network isolation, and Product State
+before and after cleanup under the run evidence directory.
+
+Publication uses one S3 request attempt with a five-second connect/read bound.
+The bound covers observed immutable Result uploads under the full long-range
+qualification load; it does not retry, fall back, or turn a failed publication
+into a successful Run.
 
 Before merge, run the standard fail-fast gate:
 

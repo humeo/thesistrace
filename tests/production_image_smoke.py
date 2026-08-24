@@ -8,8 +8,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
+from statistics import median
 from threading import Event, Thread
 
 import boto3
@@ -41,6 +43,10 @@ EXPECTED_OVERVIEW = {
     "market_research_readiness": True,
     "financial_research_readiness": True,
 }
+
+BATCH_PERFORMANCE_WARMUP_SAMPLES = 1
+BATCH_PERFORMANCE_MEASURED_SAMPLES = 4
+BATCH_PERFORMANCE_MAXIMUM_MEDIAN_RATIO = 0.8
 
 
 def main() -> None:
@@ -91,7 +97,9 @@ def main() -> None:
             result = _verify_reset_ready(settings, expected)
         elif phase == "worker-events":
             result = _verify_worker_events(
-                Path(_required_environment("THESISTRACE_TEST_WORKER_EVENTS"))
+                Path(_required_environment("THESISTRACE_TEST_WORKER_EVENTS")),
+                expected,
+                execution_memory_bytes=settings.research_execution_memory_bytes,
             )
         else:
             result = _after_product_state_reset(api_origin, settings, expected)
@@ -379,6 +387,11 @@ def _before_restart(
         f"/api/research-runs/{stop_run['id']}/daily-tracks",
         {"request_id": "production-image-smoke-running-stop-track"},
     )
+    batch_qualification = _qualify_research_batches(
+        api_origin,
+        settings,
+        image_identity=image_identity,
+    )
     recovery_run = _request_json(
         api_origin,
         "POST",
@@ -443,11 +456,693 @@ def _before_restart(
         "result_manifest_sha256": durable["manifest_sha256"],
         "strategy_result_object_names": durable["result_object_names"],
         "strategy_payload_names": durable["payload_names"],
+        "batch_qualification": batch_qualification,
         "attempt_count": durable["attempt_count"],
         "execution_snapshot": durable["execution_snapshot"],
         "overview": overview,
         "mounted_data_sha256": mounted_data_sha256,
     }
+
+
+def _qualify_research_batches(
+    api_origin: str,
+    settings: CoreSettings,
+    *,
+    image_identity: str,
+) -> dict[str, object]:
+    factor_specs = (
+        {"item_key": "positive", "formula": "rank(close)"},
+        {"item_key": "negative", "formula": "-rank(close)"},
+    )
+    strategy_specs = (
+        {
+            "item_key": "baseline",
+            "holdings_count": 1,
+            "rebalance_every_sessions": 1,
+        },
+        {
+            "item_key": "holdings-only",
+            "holdings_count": 2,
+            "rebalance_every_sessions": 1,
+        },
+        {
+            "item_key": "rebalance-only",
+            "holdings_count": 1,
+            "rebalance_every_sessions": 5,
+        },
+    )
+    scope = {
+        "start_date": "2026-05-04",
+        "end_date": "2026-07-01",
+        "universe": "top300",
+        "neutralization": "none",
+    }
+    samples: list[dict[str, object]] = []
+    completed_batch_ids: list[str] = []
+    completed_run_ids: list[str] = []
+
+    total_sample_count = BATCH_PERFORMANCE_WARMUP_SAMPLES + BATCH_PERFORMANCE_MEASURED_SAMPLES
+    for sample_index in range(total_sample_count):
+        prefix = f"production-image-batch-qualification-{sample_index + 1}"
+        sample_number = sample_index + 1
+        request_response_records: list[dict[str, object]] = []
+
+        def execute_factor_serial(
+            request_prefix: str = prefix,
+            selected_sample: int = sample_number,
+            records: list[dict[str, object]] = request_response_records,
+        ) -> list[dict[str, object]]:
+            details: list[dict[str, object]] = []
+            for item in factor_specs:
+                request = {
+                    "request_id": f"{request_prefix}-factor-serial-{item['item_key']}",
+                    "folder_id": "folder_default",
+                    "name": f"Qualification Factor {selected_sample} {item['item_key']}",
+                    "hypothesis": "Factor Batch and serial execution are identical.",
+                    **scope,
+                    "formula": item["formula"],
+                    "research_kind": "factor_evaluation",
+                }
+                accepted = _request_json(
+                    api_origin,
+                    "POST",
+                    "/api/research-runs",
+                    request,
+                )
+                terminal = _wait_for_run(
+                    api_origin,
+                    str(accepted["id"]),
+                    research_kind="factor_evaluation",
+                    timeout=180,
+                )
+                records.append(
+                    {
+                        "resource": "serial_factor",
+                        "request": request,
+                        "admission_response": accepted,
+                        "terminal_response": terminal,
+                    }
+                )
+                details.append(terminal)
+            return details
+
+        def execute_factor_batch(
+            request_prefix: str = prefix,
+            records: list[dict[str, object]] = request_response_records,
+        ) -> dict[str, object]:
+            request = {
+                "request_id": f"{request_prefix}-factor-batch",
+                "batch_kind": "factor_evaluation",
+                **scope,
+                "factors": list(factor_specs),
+            }
+            admitted = _request_json(
+                api_origin,
+                "POST",
+                "/api/research-batches",
+                request,
+            )
+            terminal = _wait_for_batch(api_origin, str(admitted["id"]), timeout=180)
+            records.append(
+                {
+                    "resource": "factor_batch",
+                    "request": request,
+                    "admission_response": admitted,
+                    "terminal_response": terminal,
+                }
+            )
+            return terminal
+
+        def execute_strategy_serial(
+            request_prefix: str = prefix,
+            selected_sample: int = sample_number,
+            records: list[dict[str, object]] = request_response_records,
+        ) -> list[dict[str, object]]:
+            details: list[dict[str, object]] = []
+            for item in strategy_specs:
+                request = {
+                    "request_id": f"{request_prefix}-strategy-serial-{item['item_key']}",
+                    "folder_id": "folder_default",
+                    "name": f"Qualification Strategy {selected_sample} {item['item_key']}",
+                    "hypothesis": "Strategy Sweep and serial execution are identical.",
+                    **scope,
+                    "formula": "rank(close)",
+                    "research_kind": "strategy_backtest",
+                    "holdings_count": item["holdings_count"],
+                    "rebalance_every_sessions": item["rebalance_every_sessions"],
+                }
+                accepted = _request_json(
+                    api_origin,
+                    "POST",
+                    "/api/research-runs",
+                    request,
+                )
+                terminal = _wait_for_run(
+                    api_origin,
+                    str(accepted["id"]),
+                    research_kind="strategy_backtest",
+                    timeout=180,
+                )
+                records.append(
+                    {
+                        "resource": "serial_strategy",
+                        "request": request,
+                        "admission_response": accepted,
+                        "terminal_response": terminal,
+                    }
+                )
+                details.append(terminal)
+            return details
+
+        def execute_strategy_batch(
+            request_prefix: str = prefix,
+            records: list[dict[str, object]] = request_response_records,
+        ) -> dict[str, object]:
+            request = {
+                "request_id": f"{request_prefix}-strategy-batch",
+                "batch_kind": "strategy_sweep",
+                **scope,
+                "alpha": {
+                    "formula": "rank(close)",
+                    "hypothesis": "One Alpha supports deterministic Strategy variants.",
+                },
+                "strategies": list(strategy_specs),
+            }
+            admitted = _request_json(
+                api_origin,
+                "POST",
+                "/api/research-batches",
+                request,
+            )
+            terminal = _wait_for_batch(api_origin, str(admitted["id"]), timeout=180)
+            records.append(
+                {
+                    "resource": "strategy_batch",
+                    "request": request,
+                    "admission_response": admitted,
+                    "terminal_response": terminal,
+                }
+            )
+            return terminal
+
+        if sample_index % 2 == 0:
+            factor_batch = execute_factor_batch()
+            factor_serial = execute_factor_serial()
+            strategy_batch = execute_strategy_batch()
+            strategy_serial = execute_strategy_serial()
+        else:
+            factor_serial = execute_factor_serial()
+            factor_batch = execute_factor_batch()
+            strategy_serial = execute_strategy_serial()
+            strategy_batch = execute_strategy_batch()
+
+        factor_batch_results = [
+            _result_qualification_evidence(
+                api_origin,
+                settings,
+                str(item["research_run_id"]),
+                research_kind="factor_evaluation",
+            )
+            for item in factor_batch["items"]
+        ]
+        factor_serial_results = [
+            _result_qualification_evidence(
+                api_origin,
+                settings,
+                str(detail["id"]),
+                research_kind="factor_evaluation",
+            )
+            for detail in factor_serial
+        ]
+        strategy_batch_results = [
+            _result_qualification_evidence(
+                api_origin,
+                settings,
+                str(item["research_run_id"]),
+                research_kind="strategy_backtest",
+            )
+            for item in strategy_batch["items"]
+        ]
+        strategy_serial_results = [
+            _result_qualification_evidence(
+                api_origin,
+                settings,
+                str(detail["id"]),
+                research_kind="strategy_backtest",
+            )
+            for detail in strategy_serial
+        ]
+        _assert_equivalent_result_pairs(factor_batch_results, factor_serial_results)
+        _assert_equivalent_result_pairs(strategy_batch_results, strategy_serial_results)
+        _assert_factor_negation_and_coverage(factor_batch_results)
+        _assert_strategy_science(strategy_batch_results)
+
+        factor_serial_elapsed = sum(
+            _final_elapsed_seconds(detail["execution_timing"]) for detail in factor_serial
+        )
+        strategy_serial_elapsed = sum(
+            _final_elapsed_seconds(detail["execution_timing"]) for detail in strategy_serial
+        )
+        factor_batch_elapsed = _final_elapsed_seconds(factor_batch["execution_timing"])
+        strategy_batch_elapsed = _final_elapsed_seconds(strategy_batch["execution_timing"])
+        factor_batch_id = str(factor_batch["id"])
+        strategy_batch_id = str(strategy_batch["id"])
+        completed_batch_ids.extend((factor_batch_id, strategy_batch_id))
+        sample_run_ids = [
+            *(str(detail["id"]) for detail in factor_serial),
+            *(str(item["research_run_id"]) for item in factor_batch["items"]),
+            *(str(detail["id"]) for detail in strategy_serial),
+            *(str(item["research_run_id"]) for item in strategy_batch["items"]),
+        ]
+        completed_run_ids.extend(sample_run_ids)
+        samples.append(
+            {
+                "sample_index": sample_index + 1,
+                "execution_order": (
+                    "batch_then_serial" if sample_index % 2 == 0 else "serial_then_batch"
+                ),
+                "factor_batch_id": factor_batch_id,
+                "strategy_batch_id": strategy_batch_id,
+                "factor_item_order": [item["item_key"] for item in factor_batch["items"]],
+                "strategy_item_order": [item["item_key"] for item in strategy_batch["items"]],
+                "factor_batch_elapsed_seconds": factor_batch_elapsed,
+                "factor_serial_elapsed_seconds": factor_serial_elapsed,
+                "strategy_batch_elapsed_seconds": strategy_batch_elapsed,
+                "strategy_serial_elapsed_seconds": strategy_serial_elapsed,
+                "factor_batch_queue_wait_seconds": _queue_wait_seconds(factor_batch),
+                "strategy_batch_queue_wait_seconds": _queue_wait_seconds(strategy_batch),
+                "factor_serial_queue_wait_seconds": [
+                    _queue_wait_seconds(detail) for detail in factor_serial
+                ],
+                "strategy_serial_queue_wait_seconds": [
+                    _queue_wait_seconds(detail) for detail in strategy_serial
+                ],
+                "factor_calculation_payload_checksums": [
+                    result["calculation_payload_checksum"] for result in factor_batch_results
+                ],
+                "factor_semantic_result_checksums": [
+                    result["semantic_result_checksum"] for result in factor_batch_results
+                ],
+                "strategy_calculation_payload_checksums": [
+                    result["calculation_payload_checksum"] for result in strategy_batch_results
+                ],
+                "strategy_semantic_result_checksums": [
+                    result["semantic_result_checksum"] for result in strategy_batch_results
+                ],
+                "factor_batch_result_objects": [
+                    {
+                        "run_id": result["run_id"],
+                        "manifest_sha256": result["manifest_sha256"],
+                        "object_references": result["object_references"],
+                    }
+                    for result in factor_batch_results
+                ],
+                "factor_serial_result_objects": [
+                    {
+                        "run_id": result["run_id"],
+                        "manifest_sha256": result["manifest_sha256"],
+                        "object_references": result["object_references"],
+                    }
+                    for result in factor_serial_results
+                ],
+                "strategy_batch_result_objects": [
+                    {
+                        "run_id": result["run_id"],
+                        "manifest_sha256": result["manifest_sha256"],
+                        "object_references": result["object_references"],
+                    }
+                    for result in strategy_batch_results
+                ],
+                "strategy_serial_result_objects": [
+                    {
+                        "run_id": result["run_id"],
+                        "manifest_sha256": result["manifest_sha256"],
+                        "object_references": result["object_references"],
+                    }
+                    for result in strategy_serial_results
+                ],
+                "batch_result_object_bytes": sum(
+                    int(result["object_bytes"])
+                    for result in (*factor_batch_results, *strategy_batch_results)
+                ),
+                "serial_result_object_bytes": sum(
+                    int(result["object_bytes"])
+                    for result in (*factor_serial_results, *strategy_serial_results)
+                ),
+                "batch_attempts": [
+                    _batch_attempt_evidence(settings, factor_batch_id),
+                    _batch_attempt_evidence(settings, strategy_batch_id),
+                ],
+                "request_response_records": request_response_records,
+                "run_ids": sample_run_ids,
+            }
+        )
+
+    first = samples[0]
+    for key in (
+        "factor_calculation_payload_checksums",
+        "factor_semantic_result_checksums",
+        "strategy_calculation_payload_checksums",
+        "strategy_semantic_result_checksums",
+        "factor_item_order",
+        "strategy_item_order",
+    ):
+        assert all(sample[key] == first[key] for sample in samples[1:])
+
+    measured_samples = samples[BATCH_PERFORMANCE_WARMUP_SAMPLES:]
+    assert len(measured_samples) == BATCH_PERFORMANCE_MEASURED_SAMPLES
+    assert [sample["execution_order"] for sample in measured_samples] == [
+        "serial_then_batch",
+        "batch_then_serial",
+        "serial_then_batch",
+        "batch_then_serial",
+    ]
+    performance = {
+        "warmup_sample_count": BATCH_PERFORMANCE_WARMUP_SAMPLES,
+        "measured_sample_count": BATCH_PERFORMANCE_MEASURED_SAMPLES,
+        "maximum_median_ratio": BATCH_PERFORMANCE_MAXIMUM_MEDIAN_RATIO,
+        "factor_batch_median_seconds": median(
+            float(sample["factor_batch_elapsed_seconds"]) for sample in measured_samples
+        ),
+        "factor_serial_median_seconds": median(
+            float(sample["factor_serial_elapsed_seconds"]) for sample in measured_samples
+        ),
+        "strategy_batch_median_seconds": median(
+            float(sample["strategy_batch_elapsed_seconds"]) for sample in measured_samples
+        ),
+        "strategy_serial_median_seconds": median(
+            float(sample["strategy_serial_elapsed_seconds"]) for sample in measured_samples
+        ),
+    }
+    assert performance["factor_batch_median_seconds"] < (
+        performance["factor_serial_median_seconds"] * BATCH_PERFORMANCE_MAXIMUM_MEDIAN_RATIO
+    ), {"performance": performance, "samples": samples}
+    assert performance["strategy_batch_median_seconds"] < (
+        performance["strategy_serial_median_seconds"] * BATCH_PERFORMANCE_MAXIMUM_MEDIAN_RATIO
+    ), {"performance": performance, "samples": samples}
+
+    cancellation_command = {
+        "request_id": "production-image-batch-qualification-cancel-admission",
+        "batch_kind": "factor_evaluation",
+        "start_date": "2010-01-04",
+        "end_date": "2026-08-05",
+        "universe": "top300",
+        "neutralization": "none",
+        "factors": [
+            {"item_key": "long-positive", "formula": "rank(pct_change(close, 20))"},
+            {"item_key": "long-negative", "formula": "-rank(pct_change(close, 20))"},
+        ],
+    }
+    cancelling_batch = _request_json(
+        api_origin,
+        "POST",
+        "/api/research-batches",
+        cancellation_command,
+    )
+    running = _wait_for_running_batch_attempt(
+        api_origin,
+        str(cancelling_batch["id"]),
+        timeout=60,
+    )
+    cancel_response = _request_json(
+        api_origin,
+        "POST",
+        f"/api/research-batches/{cancelling_batch['id']}/cancel",
+        {"request_id": "production-image-batch-qualification-cancel"},
+    )
+    assert cancel_response["status"] in {"cancelling", "cancelled"}
+    cancelled = _wait_for_batch_status(
+        api_origin,
+        str(cancelling_batch["id"]),
+        "cancelled",
+        timeout=10,
+    )
+    assert cancelled["execution_timing"]["is_final"] is True
+    assert all(item["outcome"] == "cancelled" for item in cancelled["items"])
+
+    return {
+        "schema_version": "production-batch-qualification-v1",
+        "image_identity": image_identity,
+        "scope": scope,
+        "factor_requests": list(factor_specs),
+        "strategy_requests": list(strategy_specs),
+        "samples": samples,
+        "performance": performance,
+        "determinism_controls": {
+            "fixed_scope": scope,
+            "fixed_factor_requests": list(factor_specs),
+            "fixed_strategy_requests": list(strategy_specs),
+            "fixed_request_ids": [
+                str(record["request"]["request_id"])
+                for sample in samples
+                for record in sample["request_response_records"]
+            ]
+            + [
+                str(cancellation_command["request_id"]),
+                "production-image-batch-qualification-cancel",
+            ],
+            "random_source_used": False,
+            "recorded_dynamic_fields": [
+                "resource_ids",
+                "attempt_ids",
+                "timestamps",
+                "elapsed_seconds",
+            ],
+            "semantic_comparison_excludes_dynamic_fields": True,
+        },
+        "completed_batch_ids": completed_batch_ids,
+        "completed_run_ids": completed_run_ids,
+        "cancel_request": cancellation_command,
+        "cancel_admission_response": cancelling_batch,
+        "cancel_batch_id": cancelled["id"],
+        "cancel_running_attempt_id": running["attempt"]["id"],
+        "cancel_response_status": cancel_response["status"],
+        "cancel_terminal_status": cancelled["status"],
+        "cancel_terminal_response": cancelled,
+        "execution_memory_bytes": settings.research_execution_memory_bytes,
+    }
+
+
+def _result_qualification_evidence(
+    api_origin: str,
+    settings: CoreSettings,
+    run_id: str,
+    *,
+    research_kind: str,
+) -> dict[str, object]:
+    detail = _request_json(api_origin, "GET", f"/api/research-runs/{run_id}")
+    assert detail["status"] == "succeeded"
+    result = dict(detail["result"])
+    provenance = dict(result.pop("provenance"))
+    assert provenance["research_run_id"] == run_id
+    durable = _durable_result(settings, run_id, research_kind=research_kind)
+    stored_provenance = durable["provenance"]
+    assert stored_provenance["research_run_id"] == run_id
+    return {
+        "run_id": run_id,
+        "data_generation_id": stored_provenance["data_generation_id"],
+        "calculation_contracts": stored_provenance["calculation_contracts"],
+        "semantic_versions": stored_provenance["semantic_versions"],
+        "manifest_sha256": durable["manifest_sha256"],
+        "object_references": durable["object_references"],
+        "calculation_payload_checksum": hashlib.sha256(
+            canonical_json_bytes(durable["stored_result"])
+        ).hexdigest(),
+        "semantic_result_checksum": hashlib.sha256(canonical_json_bytes(result)).hexdigest(),
+        "object_bytes": durable["object_bytes"],
+        "stored_result": durable["stored_result"],
+        "public_result": result,
+    }
+
+
+def _assert_equivalent_result_pairs(
+    batch_results: list[dict[str, object]],
+    serial_results: list[dict[str, object]],
+) -> None:
+    assert len(batch_results) == len(serial_results)
+    generations: set[str] = set()
+    for batch, serial in zip(batch_results, serial_results, strict=True):
+        assert batch["calculation_payload_checksum"] == serial["calculation_payload_checksum"]
+        assert batch["semantic_result_checksum"] == serial["semantic_result_checksum"]
+        assert batch["calculation_contracts"] == serial["calculation_contracts"]
+        assert batch["semantic_versions"] == serial["semantic_versions"]
+        assert batch["data_generation_id"] == serial["data_generation_id"]
+        assert batch["object_references"] == serial["object_references"]
+        assert batch["manifest_sha256"] != serial["manifest_sha256"]
+        generations.add(str(batch["data_generation_id"]))
+    assert len(generations) == 1
+
+
+def _assert_factor_negation_and_coverage(results: list[dict[str, object]]) -> None:
+    assert len(results) == 2
+    positive = results[0]["stored_result"]["factor_summary"]["horizons"]
+    negative = results[1]["stored_result"]["factor_summary"]["horizons"]
+    for horizon in ("1", "5", "20"):
+        positive_horizon = positive[horizon]
+        negative_horizon = negative[horizon]
+        assert positive_horizon["alpha_checksum"] != negative_horizon["alpha_checksum"]
+        positive_coverage = positive_horizon["coverage"]
+        assert int(positive_coverage["signal_session_count"]) > 0
+        assert int(positive_coverage["ic_valid_session_count"]) > 0
+        assert int(positive_coverage["rank_ic_valid_session_count"]) > 0
+        assert int(positive_coverage["quantile_valid_session_count"]) > 0
+        assert positive_horizon["coverage"] == negative_horizon["coverage"]
+        for correlation in ("ic", "rank_ic"):
+            positive_mean = positive_horizon["summary"][correlation]["mean"]
+            negative_mean = negative_horizon["summary"][correlation]["mean"]
+            assert positive_mean is not None
+            assert negative_mean is not None
+            assert Decimal(str(negative_mean)) == -Decimal(str(positive_mean))
+    assert results[0]["calculation_payload_checksum"] != results[1]["calculation_payload_checksum"]
+
+
+def _assert_strategy_science(results: list[dict[str, object]]) -> None:
+    assert len(results) == 3
+    baseline, holdings_only, rebalance_only = results
+    assert baseline["semantic_result_checksum"] != holdings_only["semantic_result_checksum"]
+    assert baseline["semantic_result_checksum"] != rebalance_only["semantic_result_checksum"]
+    for result in results:
+        stored = result["stored_result"]
+        observations = stored["strategy_daily_observations"]
+        assert observations
+        summary = stored["strategy_summary"]
+        metrics = summary["metrics"]
+        assert summary["source_checksum"] == _independent_observation_checksum(observations)
+        for observation in observations:
+            for name in ("gross_nav", "net_nav", "benchmark_nav", "net_cash"):
+                assert Decimal(str(observation[name])).is_finite()
+            assert Decimal(str(observation["gross_nav"])) > 0
+            assert Decimal(str(observation["net_nav"])) > 0
+            assert Decimal(str(observation["benchmark_nav"])) > 0
+        first = observations[0]
+        last = observations[-1]
+        assert metrics["gross_cumulative_return"] == float(
+            Decimal(str(last["gross_nav"])) / Decimal(str(first["gross_nav"])) - 1
+        )
+        assert metrics["net_cumulative_return"] == float(
+            Decimal(str(last["net_nav"])) / Decimal(str(first["net_nav"])) - 1
+        )
+        assert metrics["benchmark_cumulative_return"] == float(
+            Decimal(str(last["benchmark_nav"])) / Decimal(str(first["benchmark_nav"])) - 1
+        )
+        cumulative_cost = sum(
+            (Decimal(str(observation["transaction_cost_cny"])) for observation in observations),
+            start=Decimal(0),
+        )
+        terminal = stored["terminal_strategy_state"]
+        assert Decimal(str(terminal["cumulative_transaction_cost"])) == cumulative_cost
+        assert metrics["transaction_costs"]["cumulative_amount"] == float(cumulative_cost)
+        assert {
+            name: str(terminal[name])
+            for name in ("session", "gross_nav", "net_nav", "benchmark_nav", "net_cash")
+        } == {
+            name: str(last[name])
+            for name in ("session", "gross_nav", "net_nav", "benchmark_nav", "net_cash")
+        }
+        independently_recomputed_drawdown = _independent_maximum_drawdown(observations)
+        assert metrics["maximum_drawdown"] == independently_recomputed_drawdown, {
+            "reported": metrics["maximum_drawdown"],
+            "independently_recomputed": independently_recomputed_drawdown,
+            "run_id": result["run_id"],
+        }
+        drawdown = Decimal(str(metrics["maximum_drawdown"]["value"]))
+        assert drawdown.is_finite()
+        assert Decimal(0) <= drawdown <= Decimal(1)
+
+
+def _independent_observation_checksum(observations: list[dict[str, object]]) -> str:
+    prior: bytes | None = None
+    for observation in observations:
+        digest = hashlib.sha256()
+        if prior is not None:
+            digest.update(prior)
+        digest.update(canonical_json_bytes(observation))
+        prior = digest.digest()
+    assert prior is not None
+    return prior.hex()
+
+
+def _independent_maximum_drawdown(
+    observations: list[dict[str, object]],
+) -> dict[str, object]:
+    net_nav = [Decimal(str(observation["net_nav"])) for observation in observations]
+    peak_index = 0
+    worst_value = Decimal(0)
+    worst_peak = 0
+    worst_trough = 0
+    for index, value in enumerate(net_nav):
+        if value > net_nav[peak_index]:
+            peak_index = index
+        drawdown = Decimal(1) - value / net_nav[peak_index]
+        if drawdown > worst_value:
+            worst_value = drawdown
+            worst_peak = peak_index
+            worst_trough = index
+    recovery = (
+        None
+        if worst_value == 0
+        else next(
+            (
+                index
+                for index in range(worst_trough + 1, len(net_nav))
+                if net_nav[index] >= net_nav[worst_peak]
+            ),
+            None,
+        )
+    )
+    return {
+        "value": float(worst_value),
+        "peak_session": observations[worst_peak]["session"],
+        "trough_session": observations[worst_trough]["session"],
+        "recovery_session": (observations[recovery]["session"] if recovery is not None else None),
+        "unrecovered": recovery is None and worst_value > 0,
+    }
+
+
+def _final_elapsed_seconds(value: object) -> float:
+    assert isinstance(value, dict)
+    assert value["is_final"] is True
+    elapsed = value["elapsed_seconds"]
+    assert isinstance(elapsed, int | float) and elapsed > 0
+    return float(elapsed)
+
+
+def _queue_wait_seconds(detail: dict[str, object]) -> float:
+    timing = detail["execution_timing"]
+    assert isinstance(timing, dict)
+    started_at = timing["started_at"]
+    created_at = detail["created_at"]
+    assert isinstance(started_at, str) and isinstance(created_at, str)
+    return max(
+        0.0,
+        (datetime.fromisoformat(started_at) - datetime.fromisoformat(created_at)).total_seconds(),
+    )
+
+
+def _batch_attempt_evidence(settings: CoreSettings, batch_id: str) -> dict[str, object]:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT to_jsonb(attempt.*) AS attempt,
+                       coalesce((
+                           SELECT jsonb_agg(to_jsonb(task.*) ORDER BY task.started_at, task.id)
+                           FROM research_batches.task_attempts AS task
+                           WHERE task.batch_id = attempt.batch_id
+                       ), '[]'::jsonb) AS task_attempts
+                FROM research_batches.attempts AS attempt
+                WHERE attempt.batch_id = %s
+                ORDER BY attempt.ordinal DESC
+                LIMIT 1
+                """,
+                (batch_id,),
+            ).fetchone()
+        assert row is not None
+        return {"attempt": row["attempt"], "task_attempts": row["task_attempts"]}
+    finally:
+        database.close()
 
 
 def _expire_worker_loss(settings: CoreSettings, expected: dict[str, object]) -> dict[str, object]:
@@ -661,6 +1356,10 @@ def _after_restart(
     assert product_state_before_reset["research_runs"] >= 1
     assert product_state_before_reset["research_attempts"] >= 1
     assert product_state_before_reset["research_checkpoints"] >= 1
+    assert product_state_before_reset["research_batches"] >= 1
+    assert product_state_before_reset["research_batch_items"] >= 1
+    assert product_state_before_reset["research_batch_attempts"] >= 1
+    assert product_state_before_reset["research_batch_task_attempts"] >= 1
     assert product_state_before_reset["daily_tracks"] >= 1
     assert product_state_before_reset["publication_manifests"] >= 1
     assert product_state_before_reset["rustfs_product_objects"] >= 1
@@ -752,6 +1451,47 @@ def _verify_persisted_state(
     assert recovery_durable["attempt_count"] == expected["recovery_attempt_count"] == 2
     assert recovery_durable["active_pin_count"] == 0
 
+    qualification = expected["batch_qualification"]
+    assert isinstance(qualification, dict)
+    for sample in qualification["samples"]:
+        factor_batch = _request_json(
+            api_origin,
+            "GET",
+            f"/api/research-batches/{sample['factor_batch_id']}",
+        )
+        strategy_batch = _request_json(
+            api_origin,
+            "GET",
+            f"/api/research-batches/{sample['strategy_batch_id']}",
+        )
+        assert factor_batch["status"] == strategy_batch["status"] == "succeeded"
+        factor_checksums = [
+            _result_qualification_evidence(
+                api_origin,
+                settings,
+                str(item["research_run_id"]),
+                research_kind="factor_evaluation",
+            )["calculation_payload_checksum"]
+            for item in factor_batch["items"]
+        ]
+        strategy_checksums = [
+            _result_qualification_evidence(
+                api_origin,
+                settings,
+                str(item["research_run_id"]),
+                research_kind="strategy_backtest",
+            )["calculation_payload_checksum"]
+            for item in strategy_batch["items"]
+        ]
+        assert factor_checksums == sample["factor_calculation_payload_checksums"]
+        assert strategy_checksums == sample["strategy_calculation_payload_checksums"]
+    cancelled_batch = _request_json(
+        api_origin,
+        "GET",
+        f"/api/research-batches/{qualification['cancel_batch_id']}",
+    )
+    assert cancelled_batch["status"] == "cancelled"
+
     cancelled = _request_json(
         api_origin,
         "GET",
@@ -773,6 +1513,7 @@ def _verify_persisted_state(
         "factor_result_manifest_preserved": factor_durable["manifest_sha256"],
         "recovered_factor_result_manifest_preserved": recovery_durable["manifest_sha256"],
         "persisted_result_manifest_sha256": durable["manifest_sha256"],
+        "batch_qualification_restart_verified": True,
     }
 
 
@@ -929,12 +1670,21 @@ def _after_product_state_reset(
     }
     for run_id in stale_run_ids:
         assert _request_status(api_origin, "GET", f"/api/research-runs/{run_id}") == 404
+    qualification = expected["batch_qualification"]
+    assert isinstance(qualification, dict)
+    stale_batch_ids = {
+        *(str(batch_id) for batch_id in qualification["completed_batch_ids"]),
+        str(qualification["cancel_batch_id"]),
+    }
+    for batch_id in stale_batch_ids:
+        assert _request_status(api_origin, "GET", f"/api/research-batches/{batch_id}") == 404
     stale_track_ids = {
         str(expected[key]) for key in ("track_id", "market_track_id", "stop_track_id")
     }
     for track_id in stale_track_ids:
         assert _request_status(api_origin, "GET", f"/api/daily-tracks/{track_id}") == 404
     assert _request_json(api_origin, "GET", "/api/research-runs")["items"] == []
+    assert _request_json(api_origin, "GET", "/api/research-batches")["items"] == []
     assert _request_json(api_origin, "GET", "/api/daily-tracks")["items"] == []
     product_state_after_reset = _product_state_counts(settings)
     assert product_state_after_reset == {key: 0 for key in product_state_after_reset}
@@ -944,6 +1694,7 @@ def _after_product_state_reset(
         "product_state_after_reset": product_state_after_reset,
         "product_state_reset_verified": True,
         "stale_research_reference_count": len(stale_run_ids),
+        "stale_batch_reference_count": len(stale_batch_ids),
         "stale_tracking_reference_count": len(stale_track_ids),
     }
 
@@ -965,7 +1716,12 @@ def _verify_reset_ready(
     }
 
 
-def _verify_worker_events(path: Path) -> dict[str, object]:
+def _verify_worker_events(
+    path: Path,
+    expected: dict[str, object],
+    *,
+    execution_memory_bytes: int,
+) -> dict[str, object]:
     events: list[dict[str, object]] = []
     for line in path.read_text().splitlines():
         payload = line.partition("|")[2].strip()
@@ -974,6 +1730,14 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
         value = json.loads(payload)
         if isinstance(value, dict):
             events.append(value)
+
+    worker_started = [event for event in events if event.get("event") == "worker_started"]
+    assert {event["role"] for event in worker_started} == {
+        "research",
+        "batch-research",
+        "tracking",
+    }
+    assert all(event["slot"] == 1 and event["slot_count"] == 1 for event in worker_started)
 
     lifecycle_names = {
         "research_execution_child_started",
@@ -1007,22 +1771,98 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
         assert event["resource_type"] == "ResearchBatch"
         assert str(event["resource_id"]).startswith("batch_")
         assert str(event["attempt_id"]).startswith("batch_attempt_")
-    shared = [
+    qualification = expected["batch_qualification"]
+    assert isinstance(qualification, dict)
+    samples = qualification["samples"]
+    assert isinstance(samples, list) and len(samples) == (
+        BATCH_PERFORMANCE_WARMUP_SAMPLES + BATCH_PERFORMANCE_MEASURED_SAMPLES
+    )
+    qualified_batch_ids = {
+        str(sample[key]) for sample in samples for key in ("factor_batch_id", "strategy_batch_id")
+    }
+    qualified_events = [
+        event for event in batch_lifecycle if str(event["resource_id"]) in qualified_batch_ids
+    ]
+    assert qualified_events
+    for sample in samples:
+        factor_batch_id = str(sample["factor_batch_id"])
+        strategy_batch_id = str(sample["strategy_batch_id"])
+        factor_events = [
+            event for event in qualified_events if event["resource_id"] == factor_batch_id
+        ]
+        strategy_events = [
+            event for event in qualified_events if event["resource_id"] == strategy_batch_id
+        ]
+        factor_prepared = [
+            event
+            for event in factor_events
+            if event["event"] == "research_batch_execution_batch_prepared"
+        ]
+        assert len(factor_prepared) == 1
+        factor_items = [
+            event
+            for event in factor_events
+            if event["event"] == "research_batch_execution_item_chunk_succeeded"
+            and event.get("alpha_factor_task_completed") is True
+        ]
+        assert [event["item_ordinal"] for event in factor_items] == list(
+            range(1, len(qualification["factor_requests"]) + 1)
+        )
+        assert all(event["alpha_factor_task_started"] is True for event in factor_items)
+        assert all(event["data_io"] == factor_prepared[0]["data_io"] for event in factor_items)
+
+        strategy_prepared = [
+            event
+            for event in strategy_events
+            if event["event"] == "research_batch_execution_batch_prepared"
+        ]
+        shared = [
+            event
+            for event in strategy_events
+            if event["event"] == "research_batch_execution_shared_alpha_factor_succeeded"
+        ]
+        strategy_items = [
+            event
+            for event in strategy_events
+            if event["event"] == "research_batch_execution_item_succeeded"
+        ]
+        assert len(strategy_prepared) == 1
+        assert len(shared) == 1
+        assert shared[0]["alpha_factor_task_started"] is True
+        assert shared[0]["alpha_factor_task_completed"] is True
+        assert [event["item_ordinal"] for event in strategy_items] == list(
+            range(1, len(qualification["strategy_requests"]) + 1)
+        )
+        assert all(event["strategy_task_completed"] is True for event in strategy_items)
+        assert all(event["alpha_factor_task_started"] is False for event in strategy_items)
+        assert all(event["data_io"] == strategy_prepared[0]["data_io"] for event in strategy_items)
+
+    qualified_peak_rss = max(
+        int(event["child_peak_rss_bytes"])
+        for event in qualified_events
+        if "child_peak_rss_bytes" in event
+    )
+    assert qualified_peak_rss <= execution_memory_bytes
+    calculation_phase_timings = [
+        event["child_calculation_phase_seconds"]
+        for event in qualified_events
+        if "child_calculation_phase_seconds" in event
+    ]
+    assert calculation_phase_timings
+    assert all(
+        isinstance(value, int | float) and value >= 0
+        for phase in calculation_phase_timings
+        for value in phase.values()
+    )
+    cancelled_batch_id = str(qualification["cancel_batch_id"])
+    cancelled_exits = [
         event
         for event in batch_lifecycle
-        if event["event"] == "research_batch_execution_shared_alpha_factor_succeeded"
+        if event["resource_id"] == cancelled_batch_id
+        and event["event"] == "research_batch_execution_child_exited"
     ]
-    assert len(shared) == 1
-    assert shared[0]["alpha_factor_task_started"] is True
-    assert shared[0]["alpha_factor_task_completed"] is True
-    strategy_items = [
-        event
-        for event in batch_lifecycle
-        if event["event"] == "research_batch_execution_item_succeeded"
-    ]
-    assert [event["item_ordinal"] for event in strategy_items] == [1, 2]
-    assert all(event["strategy_task_completed"] is True for event in strategy_items)
-    assert all(event["alpha_factor_task_started"] is False for event in strategy_items)
+    assert len(cancelled_exits) == 1
+    assert cancelled_exits[0]["acknowledged"] is False
 
     started = [event for event in lifecycle if event["event"] == "research_execution_child_started"]
     assert {event["research_kind"] for event in started} == {
@@ -1062,8 +1902,12 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
         assert float(event["supervisor_commit_seconds"]) >= 0
     return {
         "worker_event_contract_verified": True,
+        "worker_roles": sorted({str(event["role"]) for event in worker_started}),
         "worker_lifecycle_event_count": len(lifecycle),
         "batch_worker_lifecycle_event_count": len(batch_lifecycle),
+        "batch_qualification_event_count": len(qualified_events),
+        "batch_qualification_peak_rss_bytes": qualified_peak_rss,
+        "batch_qualification_phase_timing_count": len(calculation_phase_timings),
     }
 
 
@@ -1129,6 +1973,65 @@ def _wait_for_batch(
             raise AssertionError(last)
         poll_interval.wait(0.1)
     raise AssertionError({"timeout": True, "last_batch": last})
+
+
+def _wait_for_batch_status(
+    api_origin: str,
+    batch_id: str,
+    expected_status: str,
+    *,
+    timeout: float,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    last: dict[str, object] | None = None
+    poll_interval = Event()
+    while time.monotonic() < deadline:
+        last = _request_json(api_origin, "GET", f"/api/research-batches/{batch_id}")
+        if last["status"] == expected_status:
+            return last
+        if last["status"] in {
+            "succeeded",
+            "completed_with_failures",
+            "failed",
+            "cancelled",
+        }:
+            raise AssertionError(last)
+        poll_interval.wait(0.01)
+    raise AssertionError(
+        {
+            "batch_status_timeout": expected_status,
+            "last_batch": last,
+        }
+    )
+
+
+def _wait_for_running_batch_attempt(
+    api_origin: str,
+    batch_id: str,
+    *,
+    timeout: float,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    last: dict[str, object] | None = None
+    poll_interval = Event()
+    while time.monotonic() < deadline:
+        last = _request_json(api_origin, "GET", f"/api/research-batches/{batch_id}")
+        if last["status"] == "running" and last["attempt"] is not None:
+            return last
+        if last["status"] in {
+            "succeeded",
+            "completed_with_failures",
+            "failed",
+            "cancelled",
+        }:
+            raise AssertionError(last)
+        poll_interval.wait(0.01)
+    raise AssertionError(
+        {
+            "running_batch_attempt_timeout": True,
+            "last_batch": last,
+        }
+    )
 
 
 def _wait_for_run_status(
@@ -1287,7 +2190,31 @@ def _durable_result(
                         JOIN research_runs.attempts AS attempt
                           ON attempt.generation_pin_id = pin.id
                         WHERE attempt.run_id = run.id
-                          AND pin.status = 'active') AS active_pin_count
+                          AND pin.status = 'active') AS active_pin_count,
+                       (
+                           SELECT octet_length(manifest.manifest_bytes)
+                                  + coalesce(sum(object.byte_size), 0)
+                           FROM publication.manifests AS manifest
+                           LEFT JOIN publication.manifest_objects AS manifest_object
+                             ON manifest_object.manifest_sha256 = manifest.sha256
+                           LEFT JOIN publication.objects AS object
+                             ON object.sha256 = manifest_object.object_sha256
+                           WHERE manifest.sha256 = run.result_manifest_sha256
+                           GROUP BY manifest.manifest_bytes
+                       ) AS object_bytes,
+                       coalesce((
+                           SELECT jsonb_agg(
+                               jsonb_build_object(
+                                   'logical_name', manifest_object.logical_name,
+                                   'object_sha256', manifest_object.object_sha256,
+                                   'byte_size', object.byte_size
+                               ) ORDER BY manifest_object.ordinal
+                           )
+                           FROM publication.manifest_objects AS manifest_object
+                           JOIN publication.objects AS object
+                             ON object.sha256 = manifest_object.object_sha256
+                           WHERE manifest_object.manifest_sha256 = run.result_manifest_sha256
+                       ), '[]'::jsonb) AS object_references
                 FROM research_runs.runs AS run WHERE run.id = %s
                 """,
                 (run_id,),
@@ -1303,7 +2230,8 @@ def _durable_result(
                 provenance=provenance,
             )
         )
-        result_object_names = sorted(read_result_bundle(bundle, research_kind=research_kind))
+        stored_result = read_result_bundle(bundle, research_kind=research_kind)
+        result_object_names = sorted(stored_result)
         payload_names = sorted(bundle.payloads)
         if research_kind == "factor_evaluation":
             assert result_object_names == ["factor_summary"]
@@ -1324,9 +2252,13 @@ def _durable_result(
         return {
             "active_pin_count": int(row["active_pin_count"]),
             "manifest_sha256": manifest_sha256,
+            "object_references": row["object_references"],
+            "object_bytes": int(row["object_bytes"]),
             "attempt_count": len(row["attempt_snapshots"]),
             "payload_names": payload_names,
+            "provenance": provenance,
             "result_object_names": result_object_names,
+            "stored_result": stored_result,
             "execution_snapshot": {
                 "run": row["run_snapshot"],
                 "attempts": row["attempt_snapshots"],

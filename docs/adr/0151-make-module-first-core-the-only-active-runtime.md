@@ -9,7 +9,7 @@ Folders, ResearchRuns, Results, and DailyTracks. PostgreSQL is authoritative for
 Product State and claims, a mounted Canonical Data Store holds the current Data
 Generation graph, RustFS holds immutable Product artifacts, a pure Research
 Kernel performs calculations, and one Web/API surface is served by fixed-role
-Research and Tracking Workers.
+ordinary Research, Batch Research, and Tracking Workers.
 
 A Browser Draft is compiled and admitted directly as an immutable ResearchRun
 that freezes the current Data Generation; successful publication produces the

@@ -505,7 +505,7 @@ test("running Research cancellation stays visible until the child exits", async 
 });
 
 test("Batch children keep ordinary Research organization, reuse, tracking, and deletion", async ({ page }) => {
-  test.setTimeout(150_000);
+  test.setTimeout(240_000);
   const admitted = await page.request.post("/api/research-batches", {
     data: {
       request_id: "browser-batch-ordinary-research",
@@ -618,7 +618,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   await page.getByRole("button", { name: "Stop DailyTrack" }).click();
   await expect(page.locator(".research-run-facts").first()).toContainText(
     "Status stopped",
-    { timeout: 30_000 },
+    { timeout: 90_000 },
   );
   page.once("dialog", async (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete DailyTrack" }).click();

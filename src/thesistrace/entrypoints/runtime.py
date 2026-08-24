@@ -43,7 +43,15 @@ CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_S3_BUCKET",
     "THESISTRACE_DATA_MOUNT",
 )
-PUBLICATION_REQUEST_TIMEOUT_SECONDS = 1.0
+PUBLICATION_REQUEST_TIMEOUT_SECONDS = 5.0
+
+
+def publication_request_config() -> Config:
+    return Config(
+        connect_timeout=PUBLICATION_REQUEST_TIMEOUT_SECONDS,
+        read_timeout=PUBLICATION_REQUEST_TIMEOUT_SECONDS,
+        retries={"total_max_attempts": 1, "mode": "standard"},
+    )
 
 
 @dataclass(frozen=True)
@@ -145,11 +153,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             aws_access_key_id=settings.s3_access_key_id,
             aws_secret_access_key=settings.s3_secret_access_key,
             region_name=settings.s3_region,
-            config=Config(
-                connect_timeout=PUBLICATION_REQUEST_TIMEOUT_SECONDS,
-                read_timeout=PUBLICATION_REQUEST_TIMEOUT_SECONDS,
-                retries={"total_max_attempts": 1, "mode": "standard"},
-            ),
+            config=publication_request_config(),
         )
         s3.list_buckets()
         publication = Publication(database, s3, bucket=settings.s3_bucket)
