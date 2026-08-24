@@ -8,7 +8,7 @@ from contextlib import nullcontext
 from threading import Thread
 
 from thesistrace.data.io_metrics import cold_file_reads, measure_data_io
-from thesistrace.research_batch.execution import execute_factor_batch_messages
+from thesistrace.research_batch.execution import execute_research_batch_messages
 
 
 def main() -> None:
@@ -37,7 +37,7 @@ def main() -> None:
     cold_reads = os.environ.get("THESISTRACE_QUALIFICATION_COLD_DATA_READS") == "1"
     read_context = cold_file_reads() if cold_reads else nullcontext()
     with measure_data_io() as measurement, read_context:
-        for response in execute_factor_batch_messages(request):
+        for response in execute_research_batch_messages(request):
             response["data_io"] = measurement.snapshot()
             print(json.dumps(response, sort_keys=True, separators=(",", ":")), flush=True)
             status = response.get("status")
@@ -53,6 +53,10 @@ def _expected_command(response: dict[str, object]) -> str:
     if status == "batch_prepared":
         return "acknowledge_preparation"
     if status == "item_failed":
+        return "acknowledge_item"
+    if status in {"shared_alpha_factor_succeeded", "shared_alpha_factor_failed"}:
+        return "acknowledge_shared"
+    if status == "item_succeeded":
         return "acknowledge_item"
     if status == "batch_succeeded":
         return "acknowledge_batch"

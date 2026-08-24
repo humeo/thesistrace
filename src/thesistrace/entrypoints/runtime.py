@@ -24,7 +24,7 @@ from thesistrace.data import (
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.publication import Publication
 from thesistrace.research_batch import ResearchBatchService
-from thesistrace.research_batch.execution import SupervisedFactorBatchExecutor
+from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
 from thesistrace.research_folder import ResearchFolderService
 from thesistrace.research_run import (
     ResearchRunService,
@@ -191,7 +191,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             database,
             research_runs=research_runs,
             dataset_lifecycle=dataset_lifecycle,
-            execution=SupervisedFactorBatchExecutor(
+            execution=SupervisedResearchBatchExecutor(
                 settings.data_mount,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             ),

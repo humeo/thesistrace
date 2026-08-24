@@ -219,6 +219,51 @@ def _before_restart(
         )
         assert batch_run["result"]["provenance"]["research_run_id"] == batch_run_id
         _assert_batch_owned_durable_result(settings, batch_run_id)
+    strategy_batch = _request_json(
+        api_origin,
+        "POST",
+        "/api/research-batches",
+        {
+            "request_id": "production-image-smoke-strategy-batch",
+            "batch_kind": "strategy_sweep",
+            "start_date": "2026-08-03",
+            "end_date": "2026-08-05",
+            "universe": "top300",
+            "neutralization": "none",
+            "alpha": {
+                "formula": "rank(close) + rank(revenue)",
+                "hypothesis": "One shared Alpha supports ordered Strategy variants.",
+            },
+            "strategies": [
+                {
+                    "item_key": "focused",
+                    "holdings_count": 1,
+                    "rebalance_every_sessions": 1,
+                },
+                {
+                    "item_key": "broad",
+                    "holdings_count": 2,
+                    "rebalance_every_sessions": 2,
+                },
+            ],
+        },
+    )
+    strategy_batch_detail = _wait_for_batch(api_origin, str(strategy_batch["id"]))
+    assert [item["status"] for item in strategy_batch_detail["items"]] == [
+        "succeeded",
+        "succeeded",
+    ]
+    strategy_batch_run_ids = [
+        str(item["research_run_id"]) for item in strategy_batch_detail["items"]
+    ]
+    for batch_run_id in strategy_batch_run_ids:
+        batch_run = _wait_for_run(
+            api_origin,
+            batch_run_id,
+            research_kind="strategy_backtest",
+        )
+        assert batch_run["result"]["provenance"]["research_run_id"] == batch_run_id
+        _assert_batch_owned_durable_result(settings, batch_run_id)
     factor_tracking_error = _request_error_json(
         api_origin,
         "POST",
@@ -377,6 +422,8 @@ def _before_restart(
         "factor_run_id": factor_run_id,
         "factor_batch_id": factor_batch_detail["id"],
         "factor_batch_run_ids": factor_batch_run_ids,
+        "strategy_batch_id": strategy_batch_detail["id"],
+        "strategy_batch_run_ids": strategy_batch_run_ids,
         "factor_research_kind": factor_detail["research_kind"],
         "factor_public_result_sha256": hashlib.sha256(
             canonical_json_bytes(factor_detail)
@@ -955,11 +1002,29 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
         "research_batch_execution_batch_succeeded",
         "research_batch_execution_child_acknowledged",
         "research_batch_execution_child_exited",
+        "research_batch_execution_shared_alpha_factor_succeeded",
+        "research_batch_execution_item_succeeded",
     } <= {str(event["event"]) for event in batch_lifecycle}
     for event in batch_lifecycle:
         assert event["resource_type"] == "ResearchBatch"
         assert str(event["resource_id"]).startswith("batch_")
         assert str(event["attempt_id"]).startswith("batch_attempt_")
+    shared = [
+        event
+        for event in batch_lifecycle
+        if event["event"] == "research_batch_execution_shared_alpha_factor_succeeded"
+    ]
+    assert len(shared) == 1
+    assert shared[0]["alpha_factor_task_started"] is True
+    assert shared[0]["alpha_factor_task_completed"] is True
+    strategy_items = [
+        event
+        for event in batch_lifecycle
+        if event["event"] == "research_batch_execution_item_succeeded"
+    ]
+    assert [event["item_ordinal"] for event in strategy_items] == [1, 2]
+    assert all(event["strategy_task_completed"] is True for event in strategy_items)
+    assert all(event["alpha_factor_task_started"] is False for event in strategy_items)
 
     started = [
         event

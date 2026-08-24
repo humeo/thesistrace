@@ -168,6 +168,92 @@ class AlphaFactorChunkOutcome:
     def factor_summary_snapshot(self) -> dict[str, object] | None:
         return deepcopy(self._factor_summary)
 
+    def compact_for_reuse(self) -> bytes:
+        """Return a canonical immutable representation for bounded in-process reuse."""
+
+        return canonical_json_bytes(
+            {
+                "schema_version": "alpha-factor-chunk-outcome-v1",
+                "binding_checksum": self.binding_checksum,
+                "continuation": self._continuation,
+                "alpha_matrix": self._alpha_matrix,
+                "factor_summary": self._factor_summary,
+                "phase_seconds": dict(self._phase_seconds),
+            }
+        )
+
+    @classmethod
+    def from_compact_for_reuse(
+        cls,
+        value: bytes,
+        *,
+        binding: AlphaFactorExecutionBinding,
+    ) -> AlphaFactorChunkOutcome:
+        try:
+            compact = _json_mapping(value, "Alpha-and-Factor compact outcome")
+            continuation_value = compact.get("continuation")
+            alpha_matrix = compact.get("alpha_matrix")
+            factor_summary_value = compact.get("factor_summary")
+            phase_seconds = compact.get("phase_seconds")
+            if (
+                set(compact)
+                != {
+                    "schema_version",
+                    "binding_checksum",
+                    "continuation",
+                    "alpha_matrix",
+                    "factor_summary",
+                    "phase_seconds",
+                }
+                or compact.get("schema_version") != "alpha-factor-chunk-outcome-v1"
+                or compact.get("binding_checksum") != binding.checksum
+                or not isinstance(continuation_value, Mapping)
+                or not isinstance(alpha_matrix, dict)
+                or not isinstance(phase_seconds, Mapping)
+                or (
+                    factor_summary_value is not None
+                    and not isinstance(factor_summary_value, Mapping)
+                )
+            ):
+                raise ValueError
+            continuation = validated_alpha_factor_continuation(continuation_value)
+            if continuation["binding_checksum"] != binding.checksum:
+                raise ValueError
+            alpha_checksum = continuation.get("alpha_checksum")
+            if (
+                set(alpha_matrix)
+                != {
+                    "expression",
+                    "effective_lookback",
+                    "neutralization",
+                    "sessions",
+                    "checksum",
+                }
+                or alpha_matrix.get("checksum") != alpha_checksum
+                or not isinstance(alpha_matrix.get("sessions"), list)
+            ):
+                raise ValueError
+            factor_summary = (
+                None
+                if factor_summary_value is None
+                else _validated_factor_summary(
+                    factor_summary_value,
+                    alpha_checksum=str(alpha_checksum),
+                )
+            )
+            return cls._from_validated(
+                binding=binding,
+                continuation=continuation,
+                alpha_matrix=alpha_matrix,
+                factor_summary=factor_summary,
+                phase_seconds={
+                    str(name): float(seconds)
+                    for name, seconds in phase_seconds.items()
+                },
+            )
+        except (ArithmeticError, TypeError, ValueError):
+            raise ValueError("Alpha-and-Factor compact outcome is invalid") from None
+
     def _continuation_for_current_process(self) -> dict[str, object]:
         return self._continuation
 

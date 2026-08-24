@@ -164,6 +164,10 @@ def test_batch_schema_keeps_membership_separate_and_claims_structural() -> None:
     assert "run.execution_owner = 'ordinary'" in run_service
     assert "execution_owner=\"research_batch\"" in batch_service
     assert "project_child_statuses_in_transaction" in batch_service
+    assert 'elif batch_kind == "strategy_sweep"' in batch_service
+    assert 'raise RuntimeError("Research Batch Kind is invalid")' in batch_service
+    assert 'elif batch_kind == "strategy_sweep"' in run_service
+    assert 'raise ResearchRunInputInvalid("Batch Kind is invalid")' in run_service
 
 
 def test_factor_batch_execution_has_one_supervised_child_and_owned_publication_seam() -> None:
@@ -181,9 +185,9 @@ def test_factor_batch_execution_has_one_supervised_child_and_owned_publication_s
     assert "CREATE TABLE research_batches.attempts" in batch_schema
     assert "execution_fence" in batch_schema
     assert 'BATCH_RESEARCH = "batch-research"' in worker
-    assert "runtime.research_batches.process_next_factor(" in worker
+    assert "runtime.research_batches.process_next(" in worker
     assert "thesistrace.entrypoints.batch_research_child" in batch_execution
-    assert "execute_factor_batch_messages" in batch_child
+    assert "execute_research_batch_messages" in batch_child
     assert "read_columnar_slice(" in batch_execution
     assert "execute_research_chunk(" in batch_execution
     assert "begin_batch_owned_execution_in_transaction" in run_service

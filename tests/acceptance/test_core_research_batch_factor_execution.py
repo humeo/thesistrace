@@ -19,12 +19,12 @@ from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_co
 from thesistrace.publication import PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_batch import ResearchBatchService
-from thesistrace.research_batch.execution import SupervisedFactorBatchExecutor
+from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
 from thesistrace.research_run.result import read_result_bundle
 
 
 class _PreparationBarrierExecutor:
-    def __init__(self, delegate: SupervisedFactorBatchExecutor) -> None:
+    def __init__(self, delegate: SupervisedResearchBatchExecutor) -> None:
         self._delegate = delegate
         self.prepared = Event()
         self.release = Event()
@@ -72,7 +72,7 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
             for ordinal, formula in enumerate(("close", "rank(close)"), start=1)
         ]
         barrier = _PreparationBarrierExecutor(
-            SupervisedFactorBatchExecutor(
+            SupervisedResearchBatchExecutor(
                 settings.data_mount,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             )
@@ -85,7 +85,7 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(
-                processor.process_next_factor,
+                processor.process_next,
                 on_execution_event=events.append,
             )
             assert barrier.prepared.wait(timeout=10)
@@ -207,7 +207,7 @@ def test_factor_batch_isolates_one_deterministic_item_failure_and_continues(
         events: list[dict[str, object]] = []
 
         assert (
-            client.app.state.core_runtime.research_batches.process_next_factor(
+            client.app.state.core_runtime.research_batches.process_next(
                 on_execution_event=events.append
             )
             is True
@@ -245,7 +245,7 @@ def test_factor_batch_isolates_one_deterministic_item_failure_and_continues(
             },
         ).json()
         _invalidate_item_binding(settings, no_success["id"], ordinal=1)
-        assert client.app.state.core_runtime.research_batches.process_next_factor() is True
+        assert client.app.state.core_runtime.research_batches.process_next() is True
         failed_batch = client.get(
             f"/api/research-batches/{no_success['id']}"
         ).json()
@@ -288,7 +288,7 @@ def test_partial_failure_cleanup_keeps_attempt_and_generation_pin_active(
         )
 
         try:
-            assert processor.process_next_factor() is True
+            assert processor.process_next() is True
         finally:
             _remove_cleanup_failure_constraint(settings)
 
@@ -339,7 +339,7 @@ def test_widest_admitted_shared_slice_stays_inside_child_memory_budget(
         )
         assert response.status_code == 202
 
-        assert client.app.state.core_runtime.research_batches.process_next_factor(
+        assert client.app.state.core_runtime.research_batches.process_next(
             on_execution_event=events.append
         )
         completed = client.get(
@@ -397,13 +397,13 @@ def test_one_and_twenty_factor_items_use_the_same_ordered_execution_contract(
         twenty_events: list[dict[str, object]] = []
 
         assert (
-            client.app.state.core_runtime.research_batches.process_next_factor(
+            client.app.state.core_runtime.research_batches.process_next(
                 on_execution_event=one_events.append
             )
             is True
         )
         assert (
-            client.app.state.core_runtime.research_batches.process_next_factor(
+            client.app.state.core_runtime.research_batches.process_next(
                 on_execution_event=twenty_events.append
             )
             is True

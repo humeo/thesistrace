@@ -34,11 +34,7 @@ class _ProductQueue:
 
 @dataclass
 class _BatchQueue(_ProductQueue):
-    def process_next_factor(self, *, on_claim=None, on_execution_event=None) -> bool:
-        return self.process_next(
-            on_claim=on_claim,
-            on_execution_event=on_execution_event,
-        )
+    pass
 
 
 @dataclass

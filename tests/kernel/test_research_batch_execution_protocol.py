@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from thesistrace.research_batch.execution import (
-    FactorBatchExecutionRequest,
-    SupervisedFactorBatchExecutor,
+    ResearchBatchExecutionRequest,
+    SupervisedResearchBatchExecutor,
 )
 from thesistrace.research_run.execution import (
     ResearchExecutionInputInvalid,
@@ -21,14 +21,14 @@ from thesistrace.research_run.supervised_child import SupervisedChildTransport
 def test_supervised_child_reports_invalid_input_without_losing_its_category(
     tmp_path: Path,
 ) -> None:
-    executor = SupervisedFactorBatchExecutor(
+    executor = SupervisedResearchBatchExecutor(
         tmp_path,
         execution_memory_bytes=512 * 1024**2,
     )
 
     with pytest.raises(
         ResearchExecutionInputInvalid,
-        match="Factor Batch items are invalid",
+        match="Research Batch items are invalid",
     ):
         executor.execute(_empty_request(), emit=lambda _event: None)
 
@@ -43,7 +43,7 @@ def test_supervisor_preserves_resource_exhausted_child_category(
         "spawn",
         classmethod(lambda _cls, _module: transport),
     )
-    executor = SupervisedFactorBatchExecutor(
+    executor = SupervisedResearchBatchExecutor(
         tmp_path,
         execution_memory_bytes=512 * 1024**2,
     )
@@ -55,8 +55,26 @@ def test_supervisor_preserves_resource_exhausted_child_category(
         executor.execute(_empty_request(), emit=lambda _event: None)
 
 
-def _empty_request() -> FactorBatchExecutionRequest:
-    return FactorBatchExecutionRequest(
+def test_supervised_child_rejects_an_unknown_batch_kind(tmp_path: Path) -> None:
+    executor = SupervisedResearchBatchExecutor(
+        tmp_path,
+        execution_memory_bytes=512 * 1024**2,
+    )
+    request = ResearchBatchExecutionRequest(
+        batch_kind="unknown",  # type: ignore[arg-type]
+        batch_id="batch_protocol",
+        attempt_id="attempt_protocol",
+        data_generation_id="generation_protocol",
+        items=(),
+    )
+
+    with pytest.raises(ResearchExecutionInputInvalid, match="Batch Kind is invalid"):
+        executor.execute(request, emit=lambda _event: None)
+
+
+def _empty_request() -> ResearchBatchExecutionRequest:
+    return ResearchBatchExecutionRequest(
+        batch_kind="factor_evaluation",
         batch_id="batch_protocol",
         attempt_id="attempt_protocol",
         data_generation_id="generation_protocol",

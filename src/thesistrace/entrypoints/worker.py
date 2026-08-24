@@ -158,7 +158,7 @@ def process_one_poll(
             raise WorkerCapacityError(
                 "Batch Research Worker execution memory cannot fit planning capacity"
             )
-        product_worked = runtime.research_batches.process_next_factor(
+        product_worked = runtime.research_batches.process_next(
             on_claim=claim,
             on_execution_event=emit,
         )

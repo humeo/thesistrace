@@ -94,6 +94,7 @@ from thesistrace.research_run.planning import (
     plan_research_chunks,
 )
 from thesistrace.research_run.result import (
+    RESULT_DAILY_PARTITION_SESSION_COUNT,
     STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
     ResearchResultError,
     enforce_result_bundle_budget,
@@ -289,6 +290,7 @@ class ResearchRunService:
         batch_attempt_id: str,
         generation_pin_id: str,
         generation: MountedFamilyGenerationDescriptor,
+        batch_kind: str,
     ) -> ResearchRunExecutionClaim:
         """Fence one queued Batch-owned Run under its Batch Attempt authority."""
         row = transaction.execute(
@@ -305,8 +307,14 @@ class ResearchRunService:
         if row["status"] != "queued":
             raise ResearchRunFenced
         immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
-        if immutable_input.research_kind != "factor_evaluation":
-            raise ResearchRunInputInvalid("Batch Run is not a Factor Evaluation")
+        if batch_kind == "factor_evaluation":
+            expected_kind = "factor_evaluation"
+        elif batch_kind == "strategy_sweep":
+            expected_kind = "strategy_backtest"
+        else:
+            raise ResearchRunInputInvalid("Batch Kind is invalid")
+        if immutable_input.research_kind != expected_kind:
+            raise ResearchRunInputInvalid("Batch Run Kind does not match its Batch")
         fence = int(row["execution_fence"]) + 1
         if not _generation_matches_frozen_facts(generation, immutable_input):
             raise ResearchRunInputInvalid("selected Data Generation facts changed")
@@ -448,6 +456,166 @@ class ResearchRunService:
                 (claim.run_id,),
             )
         return True
+
+    def complete_batch_owned_strategy_item(
+        self,
+        claim: ResearchRunExecutionClaim,
+        final_chunk: Mapping[str, object],
+        *,
+        authorize_batch: BatchExecutionAuthorization,
+    ) -> None:
+        if self._publication is None:
+            raise RuntimeError("ResearchRun Result publication is not configured")
+        final_values, observations = self._validate_batch_strategy_final_chunk(
+            claim,
+            final_chunk,
+        )
+        provenance = _result_provenance(claim)
+        key_metrics = _result_key_metrics(final_values, "strategy_backtest")
+        partitions: list[tuple[StagedPayload, int, str, str]] = []
+        observation_offset = 0
+        for plan_chunk in claim.immutable_input.execution_plan.chunks:
+            row_count = plan_chunk.research_session_count
+            if row_count == 0:
+                continue
+            partition_rows = observations[
+                observation_offset : observation_offset + row_count
+            ]
+            observation_offset += row_count
+            if row_count > RESULT_DAILY_PARTITION_SESSION_COUNT:
+                raise ResearchResultError(
+                    "Strategy Sweep observation partition exceeds the Result contract"
+                )
+            observation_payload = self._publication.stage(
+                ParquetRowsPayload(
+                    rows=tuple(dict(value) for value in partition_rows),
+                    contract=STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
+                ),
+                staging_authority=lambda: self._authorize_batch_result_staging(
+                    claim,
+                    authorize_batch,
+                ),
+            )
+            partitions.append(
+                (
+                    observation_payload,
+                    row_count,
+                    str(partition_rows[0]["session"]),
+                    str(partition_rows[-1]["session"]),
+                )
+            )
+        if observation_offset != len(observations):
+            raise ResearchResultError(
+                "Strategy Sweep observation partitions are incomplete"
+            )
+        prepared = self._publication.prepare(
+            kind="research.result",
+            payloads=result_publication_payloads_from_staged(
+                final_values,
+                partitions,
+                research_kind="strategy_backtest",
+            ),
+            provenance=provenance,
+            staging_authority=lambda: self._authorize_batch_result_staging(
+                claim,
+                authorize_batch,
+            ),
+        )
+        completed_sessions = claim.immutable_input.execution_plan.research_session_count
+        enforce_result_bundle_budget(prepared.exact_bytes, completed_sessions)
+        with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
+            authorize_batch(transaction)
+            self._validate_batch_owned_run_in_transaction(transaction, claim)
+            published = self._publication.record(transaction, prepared)
+            updated = transaction.execute(
+                """
+                UPDATE research_runs.runs
+                SET status = 'succeeded', result_manifest_sha256 = %s,
+                    result_provenance = %s, key_metrics = %s,
+                    failure_reason = NULL, updated_at = now()
+                WHERE id = %s AND status = 'running'
+                  AND execution_owner = 'research_batch' AND execution_fence = %s
+                """,
+                (
+                    published.manifest_sha256,
+                    Jsonb(provenance),
+                    Jsonb(key_metrics.model_dump(mode="json")),
+                    claim.run_id,
+                    claim.fence,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise ResearchRunFenced
+            transaction.execute(
+                """
+                UPDATE research_runs.progress
+                SET phase = 'succeeded',
+                    completed_warmup_sessions = total_warmup_sessions,
+                    completed_research_sessions = total_research_sessions,
+                    committed_chunk_count = %s,
+                    last_completed_warmup_session = %s,
+                    last_completed_research_session = %s,
+                    remaining_duration_estimate_seconds = NULL,
+                    updated_at = now()
+                WHERE run_id = %s
+                """,
+                (
+                    len(claim.immutable_input.execution_plan.chunks),
+                    (
+                        claim.immutable_input.execution_plan.calculation_sessions[
+                            claim.immutable_input.execution_plan.research_session_offset - 1
+                        ]
+                        if claim.immutable_input.execution_plan.research_session_offset
+                        else None
+                    ),
+                    claim.immutable_input.data_admission.last_research_session,
+                    claim.run_id,
+                ),
+            )
+
+    def _validate_batch_strategy_final_chunk(
+        self,
+        claim: ResearchRunExecutionClaim,
+        chunk: Mapping[str, object],
+    ) -> tuple[Mapping[str, object], list[Mapping[str, object]]]:
+        immutable_input = claim.immutable_input
+        plan = immutable_input.execution_plan
+        continuation = chunk.get("continuation")
+        final_values = chunk.get("final_values")
+        observations = chunk.get("strategy_daily_observations")
+        if (
+            immutable_input.research_kind != "strategy_backtest"
+            or chunk.get("final") is not True
+            or int(chunk.get("ordinal", 0)) != len(plan.chunks)
+            or str(chunk.get("boundary_session"))
+            != plan.chunks[-1].last_session.isoformat()
+            or int(chunk.get("completed_warmup_sessions", -1))
+            != plan.research_session_offset
+            or int(chunk.get("completed_research_sessions", -1))
+            != plan.research_session_count
+            or not isinstance(continuation, Mapping)
+            or not isinstance(final_values, Mapping)
+            or not isinstance(observations, list)
+            or len(observations) != plan.research_session_count
+            or any(not isinstance(value, Mapping) for value in observations)
+            or not observations
+            or str(observations[0].get("session"))
+            != immutable_input.data_admission.first_research_session.isoformat()
+            or str(observations[-1].get("session"))
+            != immutable_input.data_admission.last_research_session.isoformat()
+        ):
+            raise ResearchResultError("Strategy Sweep final task boundary is invalid")
+        try:
+            validated_research_continuation(
+                continuation,
+                research_kind="strategy_backtest",
+            )
+        except ValueError as error:
+            raise ResearchResultError(
+                "Strategy Sweep final continuation is invalid"
+            ) from error
+        return final_values, observations
 
     def _validate_batch_factor_final_chunk(
         self,

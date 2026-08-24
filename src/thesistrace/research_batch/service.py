@@ -19,10 +19,10 @@ from thesistrace.data import DatasetLifecycle
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_batch.execution import (
     ExecutionEvent,
-    FactorBatchExecutionItem,
-    FactorBatchExecutionRequest,
-    SupervisedFactorBatchExecution,
-    SupervisedFactorBatchExecutor,
+    ResearchBatchExecutionItem,
+    ResearchBatchExecutionRequest,
+    SupervisedResearchBatchExecution,
+    SupervisedResearchBatchExecutor,
     item_failure_error,
 )
 from thesistrace.research_batch.models import (
@@ -60,8 +60,9 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class _FactorBatchClaim:
+class _ResearchBatchClaim:
     batch_id: str
+    batch_kind: str
     attempt_id: str
     fence: int
     generation_pin_id: str
@@ -86,7 +87,7 @@ class ResearchBatchService:
         *,
         research_runs: ResearchRunService,
         dataset_lifecycle: DatasetLifecycle,
-        execution: SupervisedFactorBatchExecutor | None = None,
+        execution: SupervisedResearchBatchExecutor | None = None,
         retention_seconds: float = BATCH_ADMISSION_RETENTION_SECONDS,
         lease_seconds: float = BATCH_ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = BATCH_ATTEMPT_HEARTBEAT_SECONDS,
@@ -105,7 +106,7 @@ class ResearchBatchService:
     def execution_memory_bytes(self) -> int:
         return self._research_runs.execution_memory_bytes
 
-    def process_next_factor(
+    def process_next(
         self,
         *,
         on_claim: Callable[[str, str], None] | None = None,
@@ -113,22 +114,23 @@ class ResearchBatchService:
     ) -> bool:
         if self._execution is None:
             raise RuntimeError("Research Batch execution is not configured")
-        claim = self._claim_next_factor()
+        claim = self._claim_next()
         if claim is None:
             return False
         if on_claim is not None:
             on_claim(claim.batch_id, claim.attempt_id)
         emit = on_execution_event or (lambda _event: None)
-        execution: SupervisedFactorBatchExecution | None = None
+        execution: SupervisedResearchBatchExecution | None = None
         try:
             with self._maintain_claim(claim):
                 execution = self._execution.execute(
-                    FactorBatchExecutionRequest(
+                    ResearchBatchExecutionRequest(
+                        batch_kind=claim.batch_kind,
                         batch_id=claim.batch_id,
                         attempt_id=claim.attempt_id,
                         data_generation_id=claim.data_generation_id,
                         items=tuple(
-                            FactorBatchExecutionItem(
+                            ResearchBatchExecutionItem(
                                 ordinal=ordinal,
                                 item_key=item_key,
                                 run_id=run_claim.run_id,
@@ -140,8 +142,19 @@ class ResearchBatchService:
                     emit=emit,
                 )
                 if execution.message.get("status") != "batch_prepared":
-                    raise RuntimeError("Factor Batch child did not prepare shared data")
+                    raise RuntimeError("Research Batch child did not prepare shared data")
                 execution.advance("acknowledge_preparation")
+                if claim.batch_kind == "strategy_sweep":
+                    shared = execution.message
+                    if shared.get("status") == "shared_alpha_factor_failed":
+                        self._fail_running_items(claim, item_failure_error(shared))
+                        execution.advance("acknowledge_shared")
+                    elif shared.get("status") == "shared_alpha_factor_succeeded":
+                        execution.advance("acknowledge_shared")
+                    else:
+                        raise RuntimeError(
+                            "Strategy Sweep child did not complete its shared prerequisite"
+                        )
                 claims_by_ordinal = {
                     ordinal: (item_key, run_claim)
                     for ordinal, item_key, run_claim in claim.items
@@ -170,8 +183,24 @@ class ResearchBatchService:
                         self._complete_item(claim.batch_id)
                         execution.advance("acknowledge_item")
                         continue
+                    if message.get("status") == "item_succeeded":
+                        if claim.batch_kind != "strategy_sweep":
+                            raise RuntimeError("Research Batch item response Kind is invalid")
+                        chunk = message.get("chunk")
+                        if not isinstance(chunk, Mapping):
+                            raise RuntimeError("Strategy Sweep child task is invalid")
+                        self._research_runs.complete_batch_owned_strategy_item(
+                            run_claim,
+                            chunk,
+                            authorize_batch=lambda transaction: (
+                                self._authorize_claim_in_transaction(transaction, claim)
+                            ),
+                        )
+                        self._complete_item(claim.batch_id)
+                        execution.advance("acknowledge_item")
+                        continue
                     if message.get("status") != "item_chunk_succeeded":
-                        raise RuntimeError("Factor Batch child response is invalid")
+                        raise RuntimeError("Research Batch child response is invalid")
                     chunk = message.get("chunk")
                     if not isinstance(chunk, Mapping):
                         raise RuntimeError("Factor Batch child Chunk is invalid")
@@ -402,13 +431,13 @@ class ResearchBatchService:
                 research_runs=self._research_runs,
             )
 
-    def _claim_next_factor(self) -> _FactorBatchClaim | None:
+    def _claim_next(self) -> _ResearchBatchClaim | None:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT id, execution_fence, scope
+                SELECT id, batch_kind, execution_fence, scope
                 FROM research_batches.batches
-                WHERE batch_kind = 'factor_evaluation' AND status = 'queued'
+                WHERE status = 'queued'
                 ORDER BY created_at, id
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
@@ -417,6 +446,13 @@ class ResearchBatchService:
             if row is None:
                 return None
             batch_id = str(row["id"])
+            batch_kind = str(row["batch_kind"])
+            if batch_kind == "factor_evaluation":
+                dependency_role = "factor"
+            elif batch_kind == "strategy_sweep":
+                dependency_role = "strategy"
+            else:
+                raise RuntimeError("Research Batch Kind is invalid")
             fence = int(row["execution_fence"]) + 1
             ordinal_row = transaction.execute(
                 """
@@ -446,14 +482,14 @@ class ResearchBatchService:
                 """
                 SELECT ordinal, item_key, research_run_id
                 FROM research_batches.items
-                WHERE batch_id = %s AND dependency_role = 'factor'
+                WHERE batch_id = %s AND dependency_role = %s
                 ORDER BY ordinal
                 FOR UPDATE
                 """,
-                (batch_id,),
+                (batch_id, dependency_role),
             ).fetchall()
             if not item_rows:
-                raise RuntimeError("Factor Batch has no items")
+                raise RuntimeError("Research Batch has no items")
             claimed_items = tuple(
                 (
                     int(item["ordinal"]),
@@ -464,6 +500,7 @@ class ResearchBatchService:
                         batch_attempt_id=attempt_id,
                         generation_pin_id=pinned.pin.id,
                         generation=pinned.descriptor,
+                        batch_kind=batch_kind,
                     ),
                 )
                 for item in item_rows
@@ -507,8 +544,9 @@ class ResearchBatchService:
                 transaction,
                 retention_id=f"research-batch:{batch_id}",
             )
-        return _FactorBatchClaim(
+        return _ResearchBatchClaim(
             batch_id=batch_id,
+            batch_kind=batch_kind,
             attempt_id=attempt_id,
             fence=fence,
             generation_pin_id=pinned.pin.id,
@@ -517,7 +555,7 @@ class ResearchBatchService:
         )
 
     @contextmanager
-    def _maintain_claim(self, claim: _FactorBatchClaim) -> Iterator[None]:
+    def _maintain_claim(self, claim: _ResearchBatchClaim) -> Iterator[None]:
         stopped = Event()
         heartbeat = Thread(
             target=self._heartbeat_claim,
@@ -532,7 +570,7 @@ class ResearchBatchService:
             stopped.set()
             heartbeat.join(timeout=5)
 
-    def _heartbeat_claim(self, claim: _FactorBatchClaim, stopped: Event) -> None:
+    def _heartbeat_claim(self, claim: _ResearchBatchClaim, stopped: Event) -> None:
         while not stopped.wait(self._heartbeat_seconds):
             try:
                 with self._database.transaction() as transaction:
@@ -577,14 +615,14 @@ class ResearchBatchService:
             if renewed.rowcount != 1:
                 return
 
-    def _validate_claim(self, claim: _FactorBatchClaim) -> None:
+    def _validate_claim(self, claim: _ResearchBatchClaim) -> None:
         with self._database.transaction() as transaction:
             self._authorize_claim_in_transaction(transaction, claim)
 
     def _authorize_claim_in_transaction(
         self,
         transaction: PostgresTransaction,
-        claim: _FactorBatchClaim,
+        claim: _ResearchBatchClaim,
     ) -> None:
         current = transaction.execute(
             """
@@ -614,7 +652,7 @@ class ResearchBatchService:
                 research_runs=self._research_runs,
             )
 
-    def _fail_running_items(self, claim: _FactorBatchClaim, error: Exception) -> None:
+    def _fail_running_items(self, claim: _ResearchBatchClaim, error: Exception) -> None:
         for _ordinal, _item_key, run_claim in claim.items:
             self._research_runs.fail_batch_owned_item(
                 run_claim,
@@ -632,7 +670,7 @@ class ResearchBatchService:
 
     def _finish_attempt(
         self,
-        claim: _FactorBatchClaim,
+        claim: _ResearchBatchClaim,
         *,
         failed: bool,
         error: Exception | None = None,

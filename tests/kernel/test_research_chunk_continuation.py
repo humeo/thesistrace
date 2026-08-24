@@ -26,6 +26,7 @@ from thesistrace.research_kernel.kernel_run import (
 )
 from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
 from thesistrace.research_kernel.research_chunks import (
+    AlphaFactorChunkOutcome,
     AlphaFactorExecutionBinding,
     advance_factor_state,
     empty_alpha_factor_continuation,
@@ -649,6 +650,39 @@ def test_one_alpha_factor_outcome_produces_independent_strategy_outcomes() -> No
     exposed = concentrated.final_values_snapshot()
     exposed["factor_summary"]["horizons"] = {}
     assert concentrated.final_values_snapshot()["factor_summary"] == factor_before
+
+
+def test_alpha_factor_outcome_compact_reuse_is_exact_and_binding_scoped() -> None:
+    fixture, factor_input = _minimal_alpha_factor_case()
+    binding = _alpha_factor_binding(factor_input)
+    shared = execute_alpha_factor_chunk(
+        run_input=factor_input,
+        binding=binding,
+        research_data=fixture,
+        forward_labels=_forward_labels(fixture),
+        research_sessions=fixture.sessions,
+        final_chunk=True,
+        continuation=empty_alpha_factor_continuation(),
+        cancellation_check=lambda: None,
+    )
+
+    restored = AlphaFactorChunkOutcome.from_compact_for_reuse(
+        shared.compact_for_reuse(),
+        binding=binding,
+    )
+
+    assert restored.binding_snapshot() == shared.binding_snapshot()
+    assert restored.continuation_snapshot() == shared.continuation_snapshot()
+    assert restored.alpha_matrix_snapshot() == shared.alpha_matrix_snapshot()
+    assert restored.factor_summary_snapshot() == shared.factor_summary_snapshot()
+    with pytest.raises(ValueError, match="compact outcome is invalid"):
+        AlphaFactorChunkOutcome.from_compact_for_reuse(
+            shared.compact_for_reuse(),
+            binding=_alpha_factor_binding(
+                factor_input,
+                data_generation_id="f" * 64,
+            ),
+        )
 
 
 def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None:
