@@ -70,6 +70,7 @@ logger = logging.getLogger(__name__)
 class _ResearchBatchClaim:
     batch_id: str
     batch_kind: str
+    admitted_at: datetime
     attempt_id: str
     fence: int
     generation_pin_id: str
@@ -116,7 +117,7 @@ class ResearchBatchService:
     def process_next(
         self,
         *,
-        on_claim: Callable[[str, str], None] | None = None,
+        on_claim: Callable[[str, str, Mapping[str, object]], None] | None = None,
         on_execution_event: ExecutionEvent | None = None,
     ) -> bool:
         if self._execution is None:
@@ -125,7 +126,20 @@ class ResearchBatchService:
         if claim is None:
             return False
         if on_claim is not None:
-            on_claim(claim.batch_id, claim.attempt_id)
+            on_claim(
+                claim.batch_id,
+                claim.attempt_id,
+                {
+                    "batch_kind": claim.batch_kind,
+                    "claim_order": {
+                        "admitted_at": claim.admitted_at.isoformat(),
+                        "batch_id": claim.batch_id,
+                    },
+                    "owner_kind": "research_batch_attempt",
+                    "owner_id": claim.attempt_id,
+                    "item_count": len(claim.items),
+                },
+            )
         external_emit = on_execution_event or (lambda _event: None)
 
         def emit(event: dict[str, object]) -> None:
@@ -513,9 +527,13 @@ class ResearchBatchService:
 
     def _claim_next(self) -> _ResearchBatchClaim | None:
         with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                ("research_batches.claim_fifo",),
+            ).fetchone()
             row = transaction.execute(
                 """
-                SELECT id, batch_kind, execution_fence, scope
+                SELECT id, batch_kind, created_at, execution_fence, scope
                 FROM research_batches.batches
                 WHERE status = 'queued'
                 ORDER BY created_at, id
@@ -626,6 +644,7 @@ class ResearchBatchService:
         return _ResearchBatchClaim(
             batch_id=batch_id,
             batch_kind=batch_kind,
+            admitted_at=row["created_at"],
             attempt_id=attempt_id,
             fence=fence,
             generation_pin_id=pinned.pin.id,

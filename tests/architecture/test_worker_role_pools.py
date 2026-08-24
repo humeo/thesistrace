@@ -38,6 +38,37 @@ class _BatchQueue(_ProductQueue):
 
 
 @dataclass
+class _ObservedBatchQueue(_ProductQueue):
+    def process_next(self, *, on_claim=None, on_execution_event=None) -> bool:
+        self.calls += 1
+        if self.has_work and on_claim is not None:
+            on_claim(
+                self.resource_id,
+                f"attempt-{self.resource_id}",
+                {
+                    "batch_kind": "factor_evaluation",
+                    "claim_order": {
+                        "admitted_at": "2026-08-24T00:00:00+00:00",
+                        "batch_id": self.resource_id,
+                    },
+                    "owner_kind": "research_batch_attempt",
+                    "owner_id": f"attempt-{self.resource_id}",
+                    "item_count": 2,
+                },
+            )
+        if self.has_work and on_execution_event is not None:
+            on_execution_event(
+                {
+                    "event": "research_batch_execution_child_exited",
+                    "resource_type": "ResearchBatch",
+                    "resource_id": self.resource_id,
+                    "attempt_id": f"attempt-{self.resource_id}",
+                }
+            )
+        return self.has_work
+
+
+@dataclass
 class _PublicationMaintenance:
     calls: int = 0
 
@@ -76,6 +107,15 @@ def test_worker_role_is_required_and_frozen_by_argument_parsing(role: WorkerRole
 
     assert parsed.configuration.role is role
     assert parsed.once is True
+
+
+def test_worker_startup_rejects_unknown_role_and_multi_slot_configuration() -> None:
+    with pytest.raises(SystemExit):
+        parse_worker_arguments(["--role", "unknown", "--once"])
+    with pytest.raises(SystemExit):
+        parse_worker_arguments(
+            ["--role", "batch-research", "--slot-count", "2", "--once"]
+        )
 
 
 def test_research_worker_claims_only_one_research_run_and_skips_maintenance() -> None:
@@ -159,6 +199,49 @@ def test_batch_research_worker_claims_only_one_factor_batch() -> None:
             "resource_id": "batch-1",
             "attempt_id": "attempt-batch-1",
         }
+    ]
+
+
+def test_batch_worker_events_bind_fifo_order_attempt_owner_role_and_exit() -> None:
+    events: list[dict[str, object]] = []
+    runtime = SimpleNamespace(
+        research_runs=_ProductQueue("run-1", True),
+        research_batches=_ObservedBatchQueue("batch-1", True),
+        daily_tracks=_TrackingQueue("track-1", True),
+        publication=_PublicationMaintenance(),
+    )
+
+    process_one_poll(
+        runtime,
+        _configuration(WorkerRole.BATCH_RESEARCH),
+        emit=events.append,
+    )
+
+    assert events == [
+        {
+            "event": "worker_claim",
+            "role": "batch-research",
+            "slot": 1,
+            "resource_type": "ResearchBatch",
+            "resource_id": "batch-1",
+            "attempt_id": "attempt-batch-1",
+            "batch_kind": "factor_evaluation",
+            "claim_order": {
+                "admitted_at": "2026-08-24T00:00:00+00:00",
+                "batch_id": "batch-1",
+            },
+            "owner_kind": "research_batch_attempt",
+            "owner_id": "attempt-batch-1",
+            "item_count": 2,
+        },
+        {
+            "event": "research_batch_execution_child_exited",
+            "role": "batch-research",
+            "slot": 1,
+            "resource_type": "ResearchBatch",
+            "resource_id": "batch-1",
+            "attempt_id": "attempt-batch-1",
+        },
     ]
 
 
