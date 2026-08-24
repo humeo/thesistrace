@@ -70,6 +70,7 @@ class ResearchBatchExecutionRequest:
 class _SharedStrategyChunk:
     research_data: _SharedFactorResearchData
     outcome_payload: bytes
+    completed_research_sessions: int
     final: bool
 
 
@@ -213,6 +214,7 @@ class SupervisedResearchBatchExecution:
     ) -> None:
         if command not in {
             "acknowledge_preparation",
+            "acknowledge_progress",
             "acknowledge_shared",
             "acknowledge_chunk",
             "acknowledge_item",
@@ -289,6 +291,10 @@ class SupervisedResearchBatchExecution:
             "strategy_task_started",
             "strategy_task_completed",
             "strategy_task_failed",
+            "task_role",
+            "phase",
+            "completed_research_sessions",
+            "total_research_sessions",
         ):
             if name in self.message:
                 event[name] = self.message[name]
@@ -468,6 +474,7 @@ def execute_research_batch_messages(
             }
             return
         for item in items:
+            yield _task_started_message(item, task_role="factor", phase="research")
             try:
                 yield from _execute_item_messages(
                     item,
@@ -708,6 +715,12 @@ def _execute_item_messages(
             "child_calculation_phase_seconds": phase_seconds,
             "alpha_factor_task_started": chunk.ordinal == 1,
             "alpha_factor_task_completed": chunk.ordinal == len(plan.chunks),
+            "task_role": "factor",
+            "phase": "research" if research_sessions else "warmup",
+            "completed_research_sessions": int(
+                continuation["completed_research_session_count"]
+            ),
+            "total_research_sessions": plan.research_session_count,
             "chunk": {
                 "ordinal": chunk.ordinal,
                 "boundary_session": chunk.last_session.isoformat(),
@@ -764,6 +777,14 @@ def _execute_strategy_sweep_messages(
         "finalize": 0.0,
     }
     shared_started = monotonic()
+    yield {
+        "status": "shared_alpha_factor_started",
+        "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+        "task_role": "shared_alpha_factor",
+        "phase": "research",
+        "completed_research_sessions": 0,
+        "total_research_sessions": plan.research_session_count,
+    }
     try:
         _validate_strategy_shared_contract(items)
         for chunk in plan.chunks:
@@ -818,10 +839,24 @@ def _execute_strategy_sweep_messages(
                 _SharedStrategyChunk(
                     research_data=item_data,
                     outcome_payload=outcome_payload,
+                    completed_research_sessions=int(
+                        alpha_continuation["completed_research_session_count"]
+                    ),
                     final=final_chunk,
                 )
             )
             del outcome
+            if not final_chunk:
+                yield {
+                    "status": "shared_alpha_factor_chunk_succeeded",
+                    "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+                    "task_role": "shared_alpha_factor",
+                    "phase": "research",
+                    "completed_research_sessions": int(
+                        alpha_continuation["completed_research_session_count"]
+                    ),
+                    "total_research_sessions": plan.research_session_count,
+                }
         if binding is None or not shared_chunks or not shared_chunks[-1].final:
             raise ResearchExecutionInputInvalid(
                 "Strategy Sweep shared Alpha-and-Factor task is incomplete"
@@ -837,6 +872,10 @@ def _execute_strategy_sweep_messages(
             "shared_artifact_capacity_bytes": shared_artifact_capacity_bytes,
             "alpha_factor_task_started": True,
             "alpha_factor_task_completed": True,
+            "task_role": "shared_alpha_factor",
+            "phase": "finalizing",
+            "completed_research_sessions": plan.research_session_count,
+            "total_research_sessions": plan.research_session_count,
         }
     except MemoryError:
         raise
@@ -855,7 +894,8 @@ def _execute_strategy_sweep_messages(
 
     assert binding is not None and final_alpha_continuation is not None
     for item in items:
-        yield _execute_strategy_item_message(
+        yield _task_started_message(item, task_role="strategy", phase="strategy")
+        yield from _execute_strategy_item_messages(
             item,
             binding=binding,
             shared_chunks=shared_chunks,
@@ -881,7 +921,7 @@ def _validate_strategy_shared_contract(
             )
 
 
-def _execute_strategy_item_message(
+def _execute_strategy_item_messages(
     item: ResearchBatchExecutionItem,
     *,
     binding: AlphaFactorExecutionBinding,
@@ -889,7 +929,7 @@ def _execute_strategy_item_message(
     final_alpha_continuation: Mapping[str, object],
     research_start: str,
     research_end: str,
-) -> dict[str, object]:
+) -> Iterator[dict[str, object]]:
     started = monotonic()
     strategy_continuation = empty_strategy_continuation()
     observations: list[dict[str, object]] = []
@@ -923,10 +963,24 @@ def _execute_strategy_item_message(
             final_values = outcome.final_values_snapshot()
             strategy_seconds += outcome.phase_seconds["strategy"]
             finalize_seconds += outcome.phase_seconds["finalize"]
+            if not shared.final:
+                yield {
+                    "status": "item_strategy_chunk_succeeded",
+                    "item_ordinal": item.ordinal,
+                    "item_key": item.item_key,
+                    "run_id": item.run_id,
+                    "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+                    "task_role": "strategy",
+                    "phase": "strategy",
+                    "completed_research_sessions": shared.completed_research_sessions,
+                    "total_research_sessions": (
+                        item.immutable_input.execution_plan.research_session_count
+                    ),
+                }
         if final_values is None:
             raise ValueError("Final Strategy Sweep outcome is incomplete")
         plan = item.immutable_input.execution_plan
-        return {
+        yield {
             "status": "item_succeeded",
             "item_ordinal": item.ordinal,
             "item_key": item.item_key,
@@ -944,6 +998,10 @@ def _execute_strategy_item_message(
             "alpha_factor_task_started": False,
             "strategy_task_started": True,
             "strategy_task_completed": True,
+            "task_role": "strategy",
+            "phase": "finalizing",
+            "completed_research_sessions": plan.research_session_count,
+            "total_research_sessions": plan.research_session_count,
             "chunk": {
                 "ordinal": len(plan.chunks),
                 "boundary_session": plan.chunks[-1].last_session.isoformat(),
@@ -967,7 +1025,7 @@ def _execute_strategy_item_message(
     except MemoryError:
         raise
     except Exception as error:
-        return {
+        yield {
             "status": "item_failed",
             "category": "calculation",
             "message": "Strategy item calculation failed.",
@@ -1075,15 +1133,38 @@ def _read_message(
         raise ResearchExecutionInputInvalid(str(message.get("message")))
     if status not in {
         "batch_prepared",
+        "shared_alpha_factor_started",
+        "shared_alpha_factor_chunk_succeeded",
         "shared_alpha_factor_succeeded",
         "shared_alpha_factor_failed",
         "item_succeeded",
+        "item_started",
+        "item_strategy_chunk_succeeded",
         "item_chunk_succeeded",
         "item_failed",
         "batch_succeeded",
     }:
         raise ResearchExecutionError("Research Batch child response is invalid")
     return message
+
+
+def _task_started_message(
+    item: ResearchBatchExecutionItem,
+    *,
+    task_role: str,
+    phase: str,
+) -> dict[str, object]:
+    return {
+        "status": "item_started",
+        "item_ordinal": item.ordinal,
+        "item_key": item.item_key,
+        "run_id": item.run_id,
+        "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+        "task_role": task_role,
+        "phase": phase,
+        "completed_research_sessions": 0,
+        "total_research_sessions": item.immutable_input.execution_plan.research_session_count,
+    }
 
 
 def _current_process_peak_rss_bytes() -> int:

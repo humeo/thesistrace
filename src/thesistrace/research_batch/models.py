@@ -142,13 +142,74 @@ class ResearchBatchItemSummary(BaseModel):
     status: Literal[
         "queued", "running", "cancelling", "succeeded", "failed", "cancelled"
     ]
+    outcome: Literal["succeeded", "failed", "cancelled"] | None = None
+    run_availability: Literal["available", "deleted"]
+    diagnostic: ResearchBatchDiagnostic | None = None
+    deleted_at: datetime | None = None
 
 
-class ResearchBatchProgress(BaseModel):
+class ResearchBatchDiagnostic(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    completed_items: int
-    total_items: int
+    code: str
+    category: str
+    message: str
+
+
+class FactorEvaluationBatchProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    completed_factor_tasks: int
+    total_factor_tasks: int
+
+
+class StrategySweepBatchProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    shared_alpha_factor_status: Literal[
+        "pending", "running", "succeeded", "failed"
+    ]
+    completed_strategy_tasks: int
+    total_strategy_tasks: int
+
+
+type ResearchBatchProgress = FactorEvaluationBatchProgress | StrategySweepBatchProgress
+
+
+class ResearchBatchExecutionTiming(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    started_at: datetime | None
+    finished_at: datetime | None
+    elapsed_seconds: float | None
+    is_final: bool
+
+
+class ResearchBatchAttemptSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    number: int
+    status: Literal["running", "succeeded", "failed", "cancelled"]
+    started_at: datetime
+    finished_at: datetime | None
+    diagnostic: ResearchBatchDiagnostic | None = None
+
+
+class ResearchBatchLiveProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    attempt_number: int
+    task_role: Literal["preparation", "factor", "shared_alpha_factor", "strategy"]
+    item_key: str | None
+    phase: Literal["preparing_data", "warmup", "research", "strategy", "finalizing"]
+    completed_research_sessions: int | None
+    total_research_sessions: int | None
+    estimated_percentage: float = Field(ge=0, le=100)
+    elapsed_seconds: float = Field(ge=0)
+    remaining_duration_estimate_seconds: int | None = Field(default=None, ge=1)
+    is_estimate: Literal[True] = True
+    observed_at: datetime
 
 
 class ResearchBatchSummary(BaseModel):
@@ -160,6 +221,12 @@ class ResearchBatchSummary(BaseModel):
     created_at: datetime
     scope: ResearchBatchScope
     progress: ResearchBatchProgress
+    execution_timing: ResearchBatchExecutionTiming
+
+
+class ResearchBatchDetail(ResearchBatchSummary):
+    attempt: ResearchBatchAttemptSummary | None
+    live_progress: ResearchBatchLiveProgress | None
     items: list[ResearchBatchItemSummary]
 
 

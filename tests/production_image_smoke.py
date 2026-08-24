@@ -208,9 +208,7 @@ def _before_restart(
         "succeeded",
         "succeeded",
     ]
-    factor_batch_run_ids = [
-        str(item["research_run_id"]) for item in factor_batch_detail["items"]
-    ]
+    factor_batch_run_ids = [str(item["research_run_id"]) for item in factor_batch_detail["items"]]
     for batch_run_id in factor_batch_run_ids:
         batch_run = _wait_for_run(
             api_origin,
@@ -1026,11 +1024,7 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
     assert all(event["strategy_task_completed"] is True for event in strategy_items)
     assert all(event["alpha_factor_task_started"] is False for event in strategy_items)
 
-    started = [
-        event
-        for event in lifecycle
-        if event["event"] == "research_execution_child_started"
-    ]
+    started = [event for event in lifecycle if event["event"] == "research_execution_child_started"]
     assert {event["research_kind"] for event in started} == {
         "factor_evaluation",
         "strategy_backtest",
@@ -1044,16 +1038,11 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
         if resumed_ordinal is not None:
             assert int(resumed_ordinal) >= 1
     assert any(
-        event["research_kind"] == "factor_evaluation"
-        and event["resumed_from_checkpoint"] is True
+        event["research_kind"] == "factor_evaluation" and event["resumed_from_checkpoint"] is True
         for event in started
     )
 
-    exited = [
-        event
-        for event in lifecycle
-        if event["event"] == "research_execution_child_exited"
-    ]
+    exited = [event for event in lifecycle if event["event"] == "research_execution_child_exited"]
     assert exited
     for event in exited:
         assert int(event["child_pid"]) > 0
@@ -1061,9 +1050,7 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
         assert isinstance(event["acknowledged"], bool)
 
     committed = [
-        event
-        for event in lifecycle
-        if event["event"] == "research_execution_chunk_committed"
+        event for event in lifecycle if event["event"] == "research_execution_chunk_committed"
     ]
     assert {event["research_kind"] for event in committed} == {
         "factor_evaluation",
@@ -1126,10 +1113,17 @@ def _wait_for_batch(
     while time.monotonic() < deadline:
         last = _request_json(api_origin, "GET", f"/api/research-batches/{batch_id}")
         if last["status"] == "succeeded":
-            assert last["progress"] == {
-                "completed_items": len(last["items"]),
-                "total_items": len(last["items"]),
-            }
+            if last["batch_kind"] == "factor_evaluation":
+                assert last["progress"] == {
+                    "completed_factor_tasks": len(last["items"]),
+                    "total_factor_tasks": len(last["items"]),
+                }
+            else:
+                assert last["progress"] == {
+                    "shared_alpha_factor_status": "succeeded",
+                    "completed_strategy_tasks": len(last["items"]),
+                    "total_strategy_tasks": len(last["items"]),
+                }
             return last
         if last["status"] in {"completed_with_failures", "failed", "cancelled"}:
             raise AssertionError(last)

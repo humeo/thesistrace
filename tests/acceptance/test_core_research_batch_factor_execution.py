@@ -92,6 +92,15 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
             active = client.get(f"/api/research-batches/{batch['id']}").json()
             assert active["status"] == "running"
             assert all(item["status"] == "running" for item in active["items"])
+            assert active["progress"] == {
+                "completed_factor_tasks": 0,
+                "total_factor_tasks": 2,
+            }
+            assert active["attempt"]["number"] == 1
+            assert active["attempt"]["status"] == "running"
+            assert active["live_progress"]["task_role"] == "preparation"
+            assert active["live_progress"]["phase"] == "preparing_data"
+            assert active["live_progress"]["is_estimate"] is True
             assert _batch_pin_state(settings, batch["id"]) == (1, 0)
 
             replacement_generation = _publish_current_data(
@@ -103,53 +112,55 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
             assert replacement_generation != frozen_generation
             for ordinary_run in ordinary:
                 assert runtime.research_runs.process_next() is True
-                assert client.get(
-                    f"/api/research-runs/{ordinary_run['id']}"
-                ).json()["status"] == "succeeded"
+                assert (
+                    client.get(f"/api/research-runs/{ordinary_run['id']}").json()["status"]
+                    == "succeeded"
+                )
             barrier.release.set()
             assert future.result(timeout=20) is True
 
         completed = client.get(f"/api/research-batches/{batch['id']}").json()
         assert completed["status"] == "succeeded"
-        assert completed["progress"] == {"completed_items": 2, "total_items": 2}
+        assert completed["progress"] == {
+            "completed_factor_tasks": 2,
+            "total_factor_tasks": 2,
+        }
+        assert completed["live_progress"] is None
+        assert completed["execution_timing"]["is_final"] is True
+        assert completed["attempt"]["status"] == "succeeded"
         assert [item["status"] for item in completed["items"]] == [
             "succeeded",
             "succeeded",
         ]
+        assert [item["outcome"] for item in completed["items"]] == [
+            "succeeded",
+            "succeeded",
+        ]
         for item, ordinary_run in zip(completed["items"], ordinary, strict=True):
-            batch_detail = client.get(
-                f"/api/research-runs/{item['research_run_id']}"
-            ).json()
-            ordinary_detail = client.get(
-                f"/api/research-runs/{ordinary_run['id']}"
-            ).json()
+            batch_detail = client.get(f"/api/research-runs/{item['research_run_id']}").json()
+            ordinary_detail = client.get(f"/api/research-runs/{ordinary_run['id']}").json()
             assert canonical_json_bytes(batch_detail["result"]["factor"]) == (
                 canonical_json_bytes(ordinary_detail["result"]["factor"])
             )
             batch_stored = _stored_run(settings, batch_detail["id"])
             ordinary_stored = _stored_run(settings, ordinary_detail["id"])
-            assert (
-                batch_stored["result_provenance"]["data_generation_id"]
-                == frozen_generation
-            )
+            assert batch_stored["result_provenance"]["data_generation_id"] == frozen_generation
             assert batch_stored["result_provenance"]["research_run_id"] == batch_detail["id"]
-            assert batch_stored["result_provenance"]["semantic_versions"] == (
-                ordinary_stored["result_provenance"]["semantic_versions"]
+            assert (
+                batch_stored["result_provenance"]["semantic_versions"]
+                == (ordinary_stored["result_provenance"]["semantic_versions"])
             )
-            assert batch_stored["result_provenance"]["calculation_contracts"] == (
-                ordinary_stored["result_provenance"]["calculation_contracts"]
+            assert (
+                batch_stored["result_provenance"]["calculation_contracts"]
+                == (ordinary_stored["result_provenance"]["calculation_contracts"])
             )
             assert canonical_json_bytes(
                 _stored_factor_summary(runtime, batch_stored)
-            ) == canonical_json_bytes(
-                _stored_factor_summary(runtime, ordinary_stored)
-            )
+            ) == canonical_json_bytes(_stored_factor_summary(runtime, ordinary_stored))
         assert _batch_pin_state(settings, batch["id"]) == (0, 1)
 
     prepared = [
-        event
-        for event in events
-        if event["event"] == "research_batch_execution_batch_prepared"
+        event for event in events if event["event"] == "research_batch_execution_batch_prepared"
     ]
     assert len(prepared) == 1
     assert int(prepared[0]["data_io"]["parquet_object_opens"]) > 0
@@ -165,7 +176,8 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
     assert [
         int(event["item_ordinal"])
         for event in item_events
-        if int(event["chunk_ordinal"]) == max(
+        if int(event["chunk_ordinal"])
+        == max(
             int(candidate["chunk_ordinal"])
             for candidate in item_events
             if candidate["item_ordinal"] == event["item_ordinal"]
@@ -173,11 +185,14 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
     ] == [1, 2]
     assert all(float(event["child_data_read_seconds"]) == 0 for event in item_events)
     assert all(event["data_io"] == prepared[0]["data_io"] for event in item_events)
-    assert max(
-        int(event["child_peak_rss_bytes"])
-        for event in events
-        if "child_peak_rss_bytes" in event
-    ) <= settings.research_execution_memory_bytes
+    assert (
+        max(
+            int(event["child_peak_rss_bytes"])
+            for event in events
+            if "child_peak_rss_bytes" in event
+        )
+        <= settings.research_execution_memory_bytes
+    )
 
 
 @pytest.mark.skipif(
@@ -215,20 +230,31 @@ def test_factor_batch_isolates_one_deterministic_item_failure_and_continues(
 
         completed = client.get(f"/api/research-batches/{admitted['id']}").json()
         assert completed["status"] == "completed_with_failures"
-        assert completed["progress"] == {"completed_items": 3, "total_items": 3}
+        assert completed["progress"] == {
+            "completed_factor_tasks": 3,
+            "total_factor_tasks": 3,
+        }
         assert [item["status"] for item in completed["items"]] == [
             "succeeded",
             "failed",
             "succeeded",
         ]
-        failed = client.get(
-            f"/api/research-runs/{completed['items'][1]['research_run_id']}"
-        ).json()
+        assert completed["items"][1]["outcome"] == "failed"
+        assert completed["items"][1]["diagnostic"] == {
+            "code": "RESEARCH_ITEM_CALCULATION_FAILED",
+            "category": "calculation",
+            "message": "Factor item calculation failed.",
+        }
+        assert "traceback" not in str(completed["items"][1]["diagnostic"]).lower()
+        failed = client.get(f"/api/research-runs/{completed['items'][1]['research_run_id']}").json()
         assert failed["failure_reason"] == "Research calculation failed."
         assert _stored_run(settings, failed["id"])["result_manifest_sha256"] is None
-        assert client.get(
-            f"/api/research-runs/{completed['items'][2]['research_run_id']}"
-        ).json()["result"] is not None
+        assert (
+            client.get(f"/api/research-runs/{completed['items'][2]['research_run_id']}").json()[
+                "result"
+            ]
+            is not None
+        )
         assert any(
             event["event"] == "research_batch_execution_item_failed"
             and event["item_ordinal"] == 2
@@ -246,12 +272,14 @@ def test_factor_batch_isolates_one_deterministic_item_failure_and_continues(
         ).json()
         _invalidate_item_binding(settings, no_success["id"], ordinal=1)
         assert client.app.state.core_runtime.research_batches.process_next() is True
-        failed_batch = client.get(
-            f"/api/research-batches/{no_success['id']}"
-        ).json()
+        failed_batch = client.get(f"/api/research-batches/{no_success['id']}").json()
         assert failed_batch["status"] == "failed"
-        assert failed_batch["progress"] == {"completed_items": 1, "total_items": 1}
+        assert failed_batch["progress"] == {
+            "completed_factor_tasks": 1,
+            "total_factor_tasks": 1,
+        }
         assert failed_batch["items"][0]["status"] == "failed"
+        assert failed_batch["items"][0]["outcome"] == "failed"
 
 
 @pytest.mark.skipif(
@@ -299,6 +327,11 @@ def test_partial_failure_cleanup_keeps_attempt_and_generation_pin_active(
             "running",
             "running",
         ]
+        assert current["items"][0]["outcome"] == "failed"
+        assert current["items"][0]["diagnostic"] is not None
+        assert [
+            (item["outcome"], item["diagnostic"]) for item in current["items"][1:]
+        ] == [(None, None), (None, None)]
         assert _batch_attempt_status(settings, admitted["id"]) == "running"
         assert _batch_pin_state(settings, admitted["id"]) == (1, 0)
 
@@ -342,23 +375,22 @@ def test_widest_admitted_shared_slice_stays_inside_child_memory_budget(
         assert client.app.state.core_runtime.research_batches.process_next(
             on_execution_event=events.append
         )
-        completed = client.get(
-            f"/api/research-batches/{response.json()['id']}"
-        ).json()
+        completed = client.get(f"/api/research-batches/{response.json()['id']}").json()
         assert completed["status"] == "succeeded"
 
     prepared = next(
-        event
-        for event in events
-        if event["event"] == "research_batch_execution_batch_prepared"
+        event for event in events if event["event"] == "research_batch_execution_batch_prepared"
     )
     assert prepared["shared_session_count"] == 58
     assert int(prepared["data_io"]["rows_scanned"]) >= 58 * 512
-    assert max(
-        int(event["child_peak_rss_bytes"])
-        for event in events
-        if "child_peak_rss_bytes" in event
-    ) <= memory_bytes
+    assert (
+        max(
+            int(event["child_peak_rss_bytes"])
+            for event in events
+            if "child_peak_rss_bytes" in event
+        )
+        <= memory_bytes
+    )
 
 
 @pytest.mark.skipif(
@@ -409,16 +441,12 @@ def test_one_and_twenty_factor_items_use_the_same_ordered_execution_contract(
             is True
         )
 
-        assert client.get(f"/api/research-batches/{one['id']}").json()["status"] == (
-            "succeeded"
-        )
-        twenty_completed = client.get(
-            f"/api/research-batches/{twenty['id']}"
-        ).json()
+        assert client.get(f"/api/research-batches/{one['id']}").json()["status"] == ("succeeded")
+        twenty_completed = client.get(f"/api/research-batches/{twenty['id']}").json()
         assert twenty_completed["status"] == "succeeded"
         assert twenty_completed["progress"] == {
-            "completed_items": 20,
-            "total_items": 20,
+            "completed_factor_tasks": 20,
+            "total_factor_tasks": 20,
         }
         final_ordinals = [
             int(event["item_ordinal"])
@@ -428,28 +456,32 @@ def test_one_and_twenty_factor_items_use_the_same_ordered_execution_contract(
         ]
         assert final_ordinals == list(range(1, 21))
         for events, expected_items in ((one_events, 1), (twenty_events, 20)):
-            assert sum(
-                event["event"] == "research_batch_execution_child_started"
-                for event in events
-            ) == 1
-            assert sum(
-                event["event"] == "research_batch_execution_batch_prepared"
-                for event in events
-            ) == 1
-            assert len(
-                {
-                    int(event["item_ordinal"])
-                    for event in events
-                    if event["event"]
-                    == "research_batch_execution_item_chunk_succeeded"
-                }
-            ) == expected_items
-            assert sum(
-                event.get("alpha_factor_task_started") is True for event in events
-            ) == expected_items
-            assert sum(
-                event.get("alpha_factor_task_completed") is True for event in events
-            ) == expected_items
+            assert (
+                sum(event["event"] == "research_batch_execution_child_started" for event in events)
+                == 1
+            )
+            assert (
+                sum(event["event"] == "research_batch_execution_batch_prepared" for event in events)
+                == 1
+            )
+            assert (
+                len(
+                    {
+                        int(event["item_ordinal"])
+                        for event in events
+                        if event["event"] == "research_batch_execution_item_chunk_succeeded"
+                    }
+                )
+                == expected_items
+            )
+            assert (
+                sum(event.get("alpha_factor_task_started") is True for event in events)
+                == expected_items
+            )
+            assert (
+                sum(event.get("alpha_factor_task_completed") is True for event in events)
+                == expected_items
+            )
 
 
 def _ordinary_factor_command(request_id: str, *, formula: str) -> dict[str, object]:
@@ -532,9 +564,7 @@ def _stored_factor_summary(runtime, stored: dict[str, object]) -> object:
             provenance=stored["result_provenance"],
         )
     )
-    return read_result_bundle(bundle, research_kind="factor_evaluation")[
-        "factor_summary"
-    ]
+    return read_result_bundle(bundle, research_kind="factor_evaluation")["factor_summary"]
 
 
 def _batch_attempt_status(settings: CoreSettings, batch_id: str) -> str:

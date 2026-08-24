@@ -33,8 +33,8 @@ from thesistrace.research_batch import (
     ResearchBatchAdmissionIssue,
     ResearchBatchAdmissionRejected,
     ResearchBatchAdmissionRejection,
+    ResearchBatchDetail,
     ResearchBatchList,
-    ResearchBatchSummary,
 )
 from thesistrace.research_folder import (
     CreateResearchFolder,
@@ -150,13 +150,13 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
 
     @app.post(
         "/api/research-batches",
-        response_model=ResearchBatchSummary,
+        response_model=ResearchBatchDetail,
         status_code=status.HTTP_202_ACCEPTED,
     )
     def admit_research_batch(
         request: Request,
         command: ResearchBatchAdmissionCommand,
-    ) -> ResearchBatchSummary | JSONResponse:
+    ) -> ResearchBatchDetail | JSONResponse:
         try:
             return _runtime(request).research_batches.admit(command)
         except ResearchBatchAdmissionConflict as error:
@@ -181,9 +181,9 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
 
     @app.get(
         "/api/research-batches/{batch_id}",
-        response_model=ResearchBatchSummary,
+        response_model=ResearchBatchDetail,
     )
-    def get_research_batch(request: Request, batch_id: str) -> ResearchBatchSummary:
+    def get_research_batch(request: Request, batch_id: str) -> ResearchBatchDetail:
         batch = _runtime(request).research_batches.get(batch_id)
         if batch is None:
             raise HTTPException(status_code=404, detail="Research Batch not found")

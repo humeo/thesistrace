@@ -51,34 +51,33 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         runtime = client.app.state.core_runtime
         for run in ordinary:
             assert runtime.research_runs.process_next() is True
-            assert client.get(f"/api/research-runs/{run['id']}").json()["status"] == (
-                "succeeded"
-            )
+            assert client.get(f"/api/research-runs/{run['id']}").json()["status"] == ("succeeded")
 
-        assert runtime.research_batches.process_next(
-            on_execution_event=events.append
-        ) is True
+        assert runtime.research_batches.process_next(on_execution_event=events.append) is True
 
         completed = client.get(f"/api/research-batches/{batch['id']}").json()
         assert completed["status"] == "succeeded"
-        assert completed["progress"] == {"completed_items": 2, "total_items": 2}
+        assert completed["progress"] == {
+            "shared_alpha_factor_status": "succeeded",
+            "completed_strategy_tasks": 2,
+            "total_strategy_tasks": 2,
+        }
+        assert completed["live_progress"] is None
         for item, ordinary_run in zip(completed["items"], ordinary, strict=True):
             batch_stored = _stored_run(settings, str(item["research_run_id"]))
             ordinary_stored = _stored_run(settings, str(ordinary_run["id"]))
             assert canonical_json_bytes(
                 _stored_result(runtime, batch_stored)
             ) == canonical_json_bytes(_stored_result(runtime, ordinary_stored))
-            assert batch_stored["result_provenance"]["data_generation_id"] == (
-                generation_id
+            assert batch_stored["result_provenance"]["data_generation_id"] == (generation_id)
+            assert batch_stored["result_provenance"]["research_run_id"] == (item["research_run_id"])
+            assert (
+                batch_stored["result_provenance"]["calculation_contracts"]
+                == (ordinary_stored["result_provenance"]["calculation_contracts"])
             )
-            assert batch_stored["result_provenance"]["research_run_id"] == (
-                item["research_run_id"]
-            )
-            assert batch_stored["result_provenance"]["calculation_contracts"] == (
-                ordinary_stored["result_provenance"]["calculation_contracts"]
-            )
-            assert batch_stored["result_provenance"]["semantic_versions"] == (
-                ordinary_stored["result_provenance"]["semantic_versions"]
+            assert (
+                batch_stored["result_provenance"]["semantic_versions"]
+                == (ordinary_stored["result_provenance"]["semantic_versions"])
             )
 
         track = client.post(
@@ -89,20 +88,15 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         assert track.json()["status"] == "active"
 
     prepared = [
-        event
-        for event in events
-        if event["event"] == "research_batch_execution_batch_prepared"
+        event for event in events if event["event"] == "research_batch_execution_batch_prepared"
     ]
     shared = [
         event
         for event in events
-        if event["event"]
-        == "research_batch_execution_shared_alpha_factor_succeeded"
+        if event["event"] == "research_batch_execution_shared_alpha_factor_succeeded"
     ]
     strategies = [
-        event
-        for event in events
-        if event["event"] == "research_batch_execution_item_succeeded"
+        event for event in events if event["event"] == "research_batch_execution_item_succeeded"
     ]
     assert len(prepared) == 1
     assert len(shared) == 1
@@ -113,11 +107,14 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
     assert all(event["strategy_task_started"] is True for event in strategies)
     assert all(event["strategy_task_completed"] is True for event in strategies)
     assert all(event["data_io"] == prepared[0]["data_io"] for event in strategies)
-    assert max(
-        int(event["child_peak_rss_bytes"])
-        for event in events
-        if "child_peak_rss_bytes" in event
-    ) <= settings.research_execution_memory_bytes
+    assert (
+        max(
+            int(event["child_peak_rss_bytes"])
+            for event in events
+            if "child_peak_rss_bytes" in event
+        )
+        <= settings.research_execution_memory_bytes
+    )
 
 
 @pytest.mark.skipif(
@@ -138,17 +135,29 @@ def test_strategy_sweep_shared_failure_fails_all_dependants_before_strategy(
         ).json()
         _replace_item_json(settings, admitted["id"], 1, "field_bindings", {})
 
-        assert client.app.state.core_runtime.research_batches.process_next(
-            on_execution_event=events.append
-        ) is True
+        assert (
+            client.app.state.core_runtime.research_batches.process_next(
+                on_execution_event=events.append
+            )
+            is True
+        )
 
         failed = client.get(f"/api/research-batches/{admitted['id']}").json()
         assert failed["status"] == "failed"
+        assert failed["progress"]["shared_alpha_factor_status"] == "failed"
         assert [item["status"] for item in failed["items"]] == ["failed", "failed"]
+        assert all(item["outcome"] == "failed" for item in failed["items"])
         assert all(
-            client.get(f"/api/research-runs/{item['research_run_id']}").json()[
-                "failure_reason"
-            ]
+            item["diagnostic"]
+            == {
+                "code": "RESEARCH_ITEM_CALCULATION_FAILED",
+                "category": "calculation",
+                "message": "Shared Alpha-and-Factor calculation failed.",
+            }
+            for item in failed["items"]
+        )
+        assert all(
+            client.get(f"/api/research-runs/{item['research_run_id']}").json()["failure_reason"]
             == "Research calculation failed."
             for item in failed["items"]
         )
@@ -193,9 +202,12 @@ def test_strategy_sweep_isolates_one_strategy_failure_and_keeps_order(
         ).json()
         _replace_nested_strategy_holdings(settings, admitted["id"], 2, 0)
 
-        assert client.app.state.core_runtime.research_batches.process_next(
-            on_execution_event=events.append
-        ) is True
+        assert (
+            client.app.state.core_runtime.research_batches.process_next(
+                on_execution_event=events.append
+            )
+            is True
+        )
 
         completed = client.get(f"/api/research-batches/{admitted['id']}").json()
         assert completed["status"] == "completed_with_failures"
@@ -204,9 +216,17 @@ def test_strategy_sweep_isolates_one_strategy_failure_and_keeps_order(
             "failed",
             "succeeded",
         ]
-        assert client.get(
-            f"/api/research-runs/{completed['items'][2]['research_run_id']}"
-        ).json()["result"] is not None
+        assert [item["outcome"] for item in completed["items"]] == [
+            "succeeded",
+            "failed",
+            "succeeded",
+        ]
+        assert (
+            client.get(f"/api/research-runs/{completed['items'][2]['research_run_id']}").json()[
+                "result"
+            ]
+            is not None
+        )
 
     item_events = [
         event
@@ -250,15 +270,19 @@ def test_strategy_sweep_one_and_twenty_items_use_the_same_ordered_contract(
             json={**command, "strategies": strategies},
         ).json()
 
-        assert client.app.state.core_runtime.research_batches.process_next(
-            on_execution_event=events.append
-        ) is True
+        assert (
+            client.app.state.core_runtime.research_batches.process_next(
+                on_execution_event=events.append
+            )
+            is True
+        )
 
         completed = client.get(f"/api/research-batches/{admitted['id']}").json()
         assert completed["status"] == "succeeded"
         assert completed["progress"] == {
-            "completed_items": item_count,
-            "total_items": item_count,
+            "shared_alpha_factor_status": "succeeded",
+            "completed_strategy_tasks": item_count,
+            "total_strategy_tasks": item_count,
         }
         assert [item["item_key"] for item in completed["items"]] == [
             strategy["item_key"] for strategy in strategies
@@ -267,18 +291,13 @@ def test_strategy_sweep_one_and_twenty_items_use_the_same_ordered_contract(
     shared_events = [
         event
         for event in events
-        if event["event"]
-        == "research_batch_execution_shared_alpha_factor_succeeded"
+        if event["event"] == "research_batch_execution_shared_alpha_factor_succeeded"
     ]
     strategy_events = [
-        event
-        for event in events
-        if event["event"] == "research_batch_execution_item_succeeded"
+        event for event in events if event["event"] == "research_batch_execution_item_succeeded"
     ]
     assert len(shared_events) == 1
-    assert [event["item_ordinal"] for event in strategy_events] == list(
-        range(1, item_count + 1)
-    )
+    assert [event["item_ordinal"] for event in strategy_events] == list(range(1, item_count + 1))
     assert all(event["alpha_factor_task_started"] is False for event in strategy_events)
 
 
@@ -443,33 +462,32 @@ def _assert_widest_strategy_capacity_boundary(
             },
         )
         assert rejected.status_code == 422
-        assert rejected.json()["issues"][0]["code"] == (
-            "RESEARCH_BATCH_EXCEEDS_WORKER_CAPACITY"
-        )
+        assert rejected.json()["issues"][0]["code"] == ("RESEARCH_BATCH_EXCEEDS_WORKER_CAPACITY")
 
-        assert client.app.state.core_runtime.research_batches.process_next(
-            on_execution_event=events.append
-        ) is True
-        completed = client.get(
-            f"/api/research-batches/{admitted.json()['id']}"
-        ).json()
+        assert (
+            client.app.state.core_runtime.research_batches.process_next(
+                on_execution_event=events.append
+            )
+            is True
+        )
+        completed = client.get(f"/api/research-batches/{admitted.json()['id']}").json()
         assert completed["status"] == "succeeded"
 
     shared = next(
         event
         for event in events
-        if event["event"]
-        == "research_batch_execution_shared_alpha_factor_succeeded"
+        if event["event"] == "research_batch_execution_shared_alpha_factor_succeeded"
     )
     assert int(shared["shared_chunk_count"]) > 1
-    assert int(shared["shared_artifact_bytes"]) <= int(
-        shared["shared_artifact_capacity_bytes"]
+    assert int(shared["shared_artifact_bytes"]) <= int(shared["shared_artifact_capacity_bytes"])
+    assert (
+        max(
+            int(event["child_peak_rss_bytes"])
+            for event in events
+            if "child_peak_rss_bytes" in event
+        )
+        <= memory_bytes
     )
-    assert max(
-        int(event["child_peak_rss_bytes"])
-        for event in events
-        if "child_peak_rss_bytes" in event
-    ) <= memory_bytes
 
 
 def _ordinary_strategy_command(

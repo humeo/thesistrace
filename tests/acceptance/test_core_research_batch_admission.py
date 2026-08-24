@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from base64 import urlsafe_b64encode
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -44,47 +46,56 @@ def test_batch_admission_rejects_all_invalid_computation_before_product_state(
         _publish_current_data(settings)
         structurally_invalid = (
             ({**_factor_command("batch-empty"), "factors": []}, None),
-            ({
-                **_factor_command("batch-too-large"),
-                "factors": [
-                    {
-                        "item_key": f"factor-{ordinal}",
-                        "formula": f"close + {ordinal}",
-                    }
-                    for ordinal in range(21)
-                ],
-            }, "factor-20"),
-            ({
-                **_strategy_command("batch-mixed"),
-                "factors": [{"item_key": "mixed", "formula": "close"}],
-            }, None),
-            ({
-                **_strategy_command("batch-invalid-strategy"),
-                "strategies": [
-                    {
-                        "item_key": "invalid",
-                        "holdings_count": 0,
-                        "rebalance_every_sessions": 1,
-                    }
-                ],
-            }, "invalid"),
-            ({
-                **_factor_command("batch-invalid-key"),
-                "factors": [{"item_key": "   ", "formula": "close"}],
-            }, None),
+            (
+                {
+                    **_factor_command("batch-too-large"),
+                    "factors": [
+                        {
+                            "item_key": f"factor-{ordinal}",
+                            "formula": f"close + {ordinal}",
+                        }
+                        for ordinal in range(21)
+                    ],
+                },
+                "factor-20",
+            ),
+            (
+                {
+                    **_strategy_command("batch-mixed"),
+                    "factors": [{"item_key": "mixed", "formula": "close"}],
+                },
+                None,
+            ),
+            (
+                {
+                    **_strategy_command("batch-invalid-strategy"),
+                    "strategies": [
+                        {
+                            "item_key": "invalid",
+                            "holdings_count": 0,
+                            "rebalance_every_sessions": 1,
+                        }
+                    ],
+                },
+                "invalid",
+            ),
+            (
+                {
+                    **_factor_command("batch-invalid-key"),
+                    "factors": [{"item_key": "   ", "formula": "close"}],
+                },
+                None,
+            ),
         )
         for command, expected_item_key in structurally_invalid:
             response = client.post("/api/research-batches", json=command)
             assert response.status_code == 422
             assert set(response.json()) == {"issues"}
             assert response.json()["issues"]
-            assert {
-                issue["code"] for issue in response.json()["issues"]
-            } == {"INVALID_BATCH_INPUT"}
+            assert {issue["code"] for issue in response.json()["issues"]} == {"INVALID_BATCH_INPUT"}
             if expected_item_key is not None:
                 assert any(
-                    issue["item_key"] == expected_item_key
-                    for issue in response.json()["issues"]
+                    issue["item_key"] == expected_item_key for issue in response.json()["issues"]
                 )
             assert _counts(settings) == _empty_counts()
 
@@ -134,9 +145,7 @@ def test_batch_admission_rejects_all_invalid_computation_before_product_state(
             {
                 "code": "DUPLICATE_FACTOR_EXPRESSION",
                 "field": "factors",
-                "message": (
-                    "Canonical Factor Expression duplicates item_key first and second"
-                ),
+                "message": ("Canonical Factor Expression duplicates item_key first and second"),
                 "item_key": "second",
                 "severity": "error",
                 "range": None,
@@ -190,9 +199,7 @@ def test_strategy_sweep_capacity_rejection_creates_no_product_state(
         )
 
         assert response.status_code == 422
-        assert response.json()["issues"][0]["code"] == (
-            "RESEARCH_BATCH_EXCEEDS_WORKER_CAPACITY"
-        )
+        assert response.json()["issues"][0]["code"] == ("RESEARCH_BATCH_EXCEEDS_WORKER_CAPACITY")
         assert _counts(settings) == _empty_counts()
 
 
@@ -225,13 +232,31 @@ def test_factor_and_strategy_batch_admission_is_atomic_idempotent_and_queryable(
         factor = responses[0].json()
         assert factor["batch_kind"] == "factor_evaluation"
         assert factor["status"] == "queued"
-        assert factor["progress"] == {"completed_items": 0, "total_items": 2}
+        assert factor["progress"] == {
+            "completed_factor_tasks": 0,
+            "total_factor_tasks": 2,
+        }
+        assert factor["execution_timing"] == {
+            "started_at": None,
+            "finished_at": None,
+            "elapsed_seconds": None,
+            "is_final": False,
+        }
+        assert factor["attempt"] is None
+        assert factor["live_progress"] is None
         assert [(item["ordinal"], item["item_key"]) for item in factor["items"]] == [
             (1, "value"),
             (2, "rank"),
         ]
         assert len({item["research_run_id"] for item in factor["items"]}) == 2
         assert {item["dependency_role"] for item in factor["items"]} == {"factor"}
+        assert all(
+            item["outcome"] is None
+            and item["run_availability"] == "available"
+            and item["diagnostic"] is None
+            and item["deleted_at"] is None
+            for item in factor["items"]
+        )
         assert client.app.state.core_runtime.research_runs.process_next() is False
         child_cancel = client.post(
             f"/api/research-runs/{factor['items'][0]['research_run_id']}/cancel",
@@ -250,6 +275,11 @@ def test_factor_and_strategy_batch_admission_is_atomic_idempotent_and_queryable(
         assert strategy_response.status_code == 202
         strategy = strategy_response.json()
         assert strategy["batch_kind"] == "strategy_sweep"
+        assert strategy["progress"] == {
+            "shared_alpha_factor_status": "pending",
+            "completed_strategy_tasks": 0,
+            "total_strategy_tasks": 2,
+        }
         assert [item["item_key"] for item in strategy["items"]] == ["focused", "broad"]
         assert {item["dependency_role"] for item in strategy["items"]} == {"strategy"}
         assert strategy["scope"] == factor["scope"]
@@ -257,6 +287,9 @@ def test_factor_and_strategy_batch_admission_is_atomic_idempotent_and_queryable(
         first_page = client.get("/api/research-batches", params={"limit": 1})
         assert first_page.status_code == 200
         assert [item["id"] for item in first_page.json()["items"]] == [strategy["id"]]
+        assert "items" not in first_page.json()["items"][0]
+        assert "attempt" not in first_page.json()["items"][0]
+        assert "live_progress" not in first_page.json()["items"][0]
         second_page = client.get(
             "/api/research-batches",
             params={"limit": 1, "cursor": first_page.json()["next_cursor"]},
@@ -265,12 +298,23 @@ def test_factor_and_strategy_batch_admission_is_atomic_idempotent_and_queryable(
         assert client.get(f"/api/research-batches/{factor['id']}").json() == factor
         assert client.get("/api/research-batches/batch_missing").status_code == 404
         assert client.get("/api/research-batches", params={"cursor": "bad"}).status_code == 422
+        empty_id_cursor = urlsafe_b64encode(
+            json.dumps(
+                {"created_at": datetime.now(UTC).isoformat(), "id": ""}
+            ).encode()
+        ).decode().rstrip("=")
+        assert (
+            client.get(
+                "/api/research-batches",
+                params={"cursor": empty_id_cursor},
+            ).status_code
+            == 422
+        )
         assert client.delete(f"/api/research-batches/{factor['id']}").status_code == 405
 
         folders = client.get("/api/research-folders").json()["items"]
         assert any(
-            folder["id"] == "folder_batch_research"
-            and folder["name"] == "Batch Research"
+            folder["id"] == "folder_batch_research" and folder["name"] == "Batch Research"
             for folder in folders
         )
         protected = client.delete("/api/research-folders/folder_batch_research")
@@ -439,8 +483,7 @@ def _publish_current_data(
             for instrument_id in instrument_ids
         ],
         "industry_membership": [
-            {**industry, "instrument_id": instrument_id}
-            for instrument_id in instrument_ids
+            {**industry, "instrument_id": instrument_id} for instrument_id in instrument_ids
         ],
         "base_pool": [
             {"session": session, "instrument_ids": instrument_ids} for session in sessions

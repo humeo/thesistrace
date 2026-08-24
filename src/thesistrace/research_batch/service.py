@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64DecodeError
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -27,14 +28,20 @@ from thesistrace.research_batch.execution import (
 )
 from thesistrace.research_batch.models import (
     FactorEvaluationBatchAdmissionCommand,
+    FactorEvaluationBatchProgress,
     ResearchBatchAdmissionCommand,
     ResearchBatchAdmissionIssue,
+    ResearchBatchAttemptSummary,
+    ResearchBatchDetail,
+    ResearchBatchDiagnostic,
+    ResearchBatchExecutionTiming,
     ResearchBatchItemSummary,
     ResearchBatchList,
-    ResearchBatchProgress,
+    ResearchBatchLiveProgress,
     ResearchBatchScope,
     ResearchBatchSummary,
     StrategySweepBatchAdmissionCommand,
+    StrategySweepBatchProgress,
 )
 from thesistrace.research_batch.planning import (
     ResearchBatchCapacityError,
@@ -119,7 +126,12 @@ class ResearchBatchService:
             return False
         if on_claim is not None:
             on_claim(claim.batch_id, claim.attempt_id)
-        emit = on_execution_event or (lambda _event: None)
+        external_emit = on_execution_event or (lambda _event: None)
+
+        def emit(event: dict[str, object]) -> None:
+            self._record_live_execution_event(claim, event)
+            external_emit(event)
+
         execution: SupervisedResearchBatchExecution | None = None
         try:
             with self._maintain_claim(claim):
@@ -145,19 +157,33 @@ class ResearchBatchService:
                     raise RuntimeError("Research Batch child did not prepare shared data")
                 execution.advance("acknowledge_preparation")
                 if claim.batch_kind == "strategy_sweep":
+                    if execution.message.get("status") != "shared_alpha_factor_started":
+                        raise RuntimeError(
+                            "Strategy Sweep child did not start its shared prerequisite"
+                        )
+                    execution.advance("acknowledge_progress")
                     shared = execution.message
+                    while shared.get("status") == "shared_alpha_factor_chunk_succeeded":
+                        execution.advance("acknowledge_progress")
+                        shared = execution.message
                     if shared.get("status") == "shared_alpha_factor_failed":
-                        self._fail_running_items(claim, item_failure_error(shared))
+                        diagnostic = _message_diagnostic(shared)
+                        self._fail_running_items(
+                            claim,
+                            item_failure_error(shared),
+                            diagnostic=diagnostic,
+                        )
+                        self._set_shared_alpha_factor_status(claim, "failed")
                         execution.advance("acknowledge_shared")
                     elif shared.get("status") == "shared_alpha_factor_succeeded":
+                        self._set_shared_alpha_factor_status(claim, "succeeded")
                         execution.advance("acknowledge_shared")
                     else:
                         raise RuntimeError(
                             "Strategy Sweep child did not complete its shared prerequisite"
                         )
                 claims_by_ordinal = {
-                    ordinal: (item_key, run_claim)
-                    for ordinal, item_key, run_claim in claim.items
+                    ordinal: (item_key, run_claim) for ordinal, item_key, run_claim in claim.items
                 }
                 while execution.message.get("status") != "batch_succeeded":
                     message = execution.message
@@ -172,15 +198,37 @@ class ResearchBatchService:
                         or message.get("run_id") != run_claim.run_id
                     ):
                         raise RuntimeError("Factor Batch child item identity is invalid")
+                    if message.get("status") in {
+                        "item_started",
+                        "item_strategy_chunk_succeeded",
+                    }:
+                        execution.advance("acknowledge_progress")
+                        continue
                     if message.get("status") == "item_failed":
+                        diagnostic = _message_diagnostic(message)
                         self._research_runs.fail_batch_owned_item(
                             run_claim,
                             item_failure_error(message),
                             authorize_batch=lambda transaction: (
                                 self._authorize_claim_in_transaction(transaction, claim)
                             ),
+                            complete_batch_item=(
+                                lambda transaction,
+                                outcome,
+                                reason,
+                                ordinal=ordinal,
+                                diagnostic=diagnostic: (
+                                    self._complete_item_in_transaction(
+                                        transaction,
+                                        claim,
+                                        ordinal,
+                                        outcome,
+                                        reason,
+                                        diagnostic,
+                                    )
+                                )
+                            ),
                         )
-                        self._complete_item(claim.batch_id)
                         execution.advance("acknowledge_item")
                         continue
                     if message.get("status") == "item_succeeded":
@@ -195,8 +243,19 @@ class ResearchBatchService:
                             authorize_batch=lambda transaction: (
                                 self._authorize_claim_in_transaction(transaction, claim)
                             ),
+                            complete_batch_item=(
+                                lambda transaction, outcome, reason, ordinal=ordinal: (
+                                    self._complete_item_in_transaction(
+                                        transaction,
+                                        claim,
+                                        ordinal,
+                                        outcome,
+                                        reason,
+                                        None,
+                                    )
+                                )
+                            ),
                         )
-                        self._complete_item(claim.batch_id)
                         execution.advance("acknowledge_item")
                         continue
                     if message.get("status") != "item_chunk_succeeded":
@@ -211,8 +270,19 @@ class ResearchBatchService:
                             authorize_batch=lambda transaction: (
                                 self._authorize_claim_in_transaction(transaction, claim)
                             ),
+                            complete_batch_item=(
+                                lambda transaction, outcome, reason, ordinal=ordinal: (
+                                    self._complete_item_in_transaction(
+                                        transaction,
+                                        claim,
+                                        ordinal,
+                                        outcome,
+                                        reason,
+                                        None,
+                                    )
+                                )
+                            ),
                         )
-                        self._complete_item(claim.batch_id)
                         command = "acknowledge_item"
                     else:
                         command = "acknowledge_chunk"
@@ -253,7 +323,7 @@ class ResearchBatchService:
                 execution.close()
         return True
 
-    def admit(self, command: ResearchBatchAdmissionCommand) -> ResearchBatchSummary:
+    def admit(self, command: ResearchBatchAdmissionCommand) -> ResearchBatchDetail:
         fingerprint = _admission_fingerprint(command)
         replay = self._locked_receipt(command.request_id, fingerprint)
         if replay is not None:
@@ -271,9 +341,7 @@ class ResearchBatchService:
                     dataset=dataset,
                 )
             except ResearchRunAdmissionRejected as error:
-                issues.extend(
-                    _child_issues(command, ordinal, item_key, error)
-                )
+                issues.extend(_child_issues(command, ordinal, item_key, error))
             else:
                 prepared.append(child)
         if issues:
@@ -347,10 +415,15 @@ class ResearchBatchService:
             transaction.execute(
                 """
                 INSERT INTO research_batches.progress (
-                    batch_id, completed_items, total_items
-                ) VALUES (%s, 0, %s)
+                    batch_id, completed_items, total_items,
+                    shared_alpha_factor_status
+                ) VALUES (%s, 0, %s, %s)
                 """,
-                (batch_id, len(prepared)),
+                (
+                    batch_id,
+                    len(prepared),
+                    "pending" if command.batch_kind == "strategy_sweep" else None,
+                ),
             )
             self._dataset_lifecycle.retain_generation_in_transaction(
                 transaction,
@@ -358,7 +431,7 @@ class ResearchBatchService:
                 generation_manifest_sha256=scope.data_generation_id,
                 lease_seconds=self._retention_seconds,
             )
-            outcome = _summary_in_transaction(
+            outcome = _detail_in_transaction(
                 transaction,
                 batch_id,
                 research_runs=self._research_runs,
@@ -383,14 +456,31 @@ class ResearchBatchService:
         with self._database.transaction() as transaction:
             rows = transaction.execute(
                 """
-                SELECT id
-                FROM research_batches.batches
+                SELECT batch.id, batch.batch_kind, batch.status, batch.scope,
+                       batch.created_at, progress.completed_items,
+                       progress.total_items,
+                       progress.shared_alpha_factor_status,
+                       timing.execution_started_at,
+                       timing.execution_finished_at,
+                       CURRENT_TIMESTAMP AS execution_observed_at
+                FROM research_batches.batches AS batch
+                JOIN research_batches.progress AS progress
+                  ON progress.batch_id = batch.id
+                LEFT JOIN LATERAL (
+                    SELECT min(attempt.started_at) AS execution_started_at,
+                           max(attempt.finished_at) AS execution_finished_at
+                    FROM research_batches.attempts AS attempt
+                    WHERE attempt.batch_id = batch.id
+                ) AS timing ON true
                 WHERE (
                     %s::timestamptz IS NULL
-                    OR created_at < %s::timestamptz
-                    OR (created_at = %s::timestamptz AND id > %s::text)
+                    OR batch.created_at < %s::timestamptz
+                    OR (
+                        batch.created_at = %s::timestamptz
+                        AND batch.id > %s::text
+                    )
                 )
-                ORDER BY created_at DESC, id
+                ORDER BY batch.created_at DESC, batch.id
                 LIMIT %s::integer
                 """,
                 (
@@ -401,23 +491,13 @@ class ResearchBatchService:
                     limit + 1,
                 ),
             ).fetchall()
-            selected = rows[:limit]
-            summaries = [
-                _summary_in_transaction(
-                    transaction,
-                    str(row["id"]),
-                    research_runs=self._research_runs,
-                )
-                for row in selected
-            ]
+            summaries = [_summary_from_row(row) for row in rows[:limit]]
         return ResearchBatchList(
             items=summaries,
-            next_cursor=(
-                _encode_cursor(summaries[-1]) if len(rows) > limit else None
-            ),
+            next_cursor=(_encode_cursor(summaries[-1]) if len(rows) > limit else None),
         )
 
-    def get(self, batch_id: str) -> ResearchBatchSummary | None:
+    def get(self, batch_id: str) -> ResearchBatchDetail | None:
         with self._database.transaction() as transaction:
             exists = transaction.execute(
                 "SELECT id FROM research_batches.batches WHERE id = %s",
@@ -425,7 +505,7 @@ class ResearchBatchService:
             ).fetchone()
             if exists is None:
                 return None
-            return _summary_in_transaction(
+            return _detail_in_transaction(
                 transaction,
                 batch_id,
                 research_runs=self._research_runs,
@@ -474,8 +554,7 @@ class ResearchBatchService:
             )
             if (
                 pinned.descriptor.manifest_sha256 != scope.data_generation_id
-                or pinned.descriptor.data_through_session
-                != scope.data_through_session.isoformat()
+                or pinned.descriptor.data_through_session != scope.data_through_session.isoformat()
             ):
                 raise RuntimeError("Factor Batch Generation facts changed")
             item_rows = transaction.execute(
@@ -578,7 +657,11 @@ class ResearchBatchService:
                         """
                         UPDATE research_batches.attempts AS attempt
                         SET heartbeat_at = now(),
-                            lease_expires_at = now() + make_interval(secs => %s)
+                            lease_expires_at = now() + make_interval(secs => %s),
+                            live_progress_updated_at = CASE
+                                WHEN current_task_role IS NOT NULL THEN now()
+                                ELSE live_progress_updated_at
+                            END
                         WHERE attempt.id = %s AND attempt.batch_id = %s
                           AND attempt.fence = %s AND attempt.status = 'running'
                           AND EXISTS (
@@ -644,28 +727,224 @@ class ResearchBatchService:
         }:
             raise RuntimeError("Factor Batch execution was fenced")
 
-    def _complete_item(self, batch_id: str) -> None:
+    def _record_live_execution_event(
+        self,
+        claim: _ResearchBatchClaim,
+        event: Mapping[str, object],
+    ) -> None:
+        name = str(event.get("event"))
+        task_role: str | None = None
+        item_key: str | None = None
+        phase: str | None = None
+        completed: int | None = None
+        total: int | None = None
+        reset_started_at = False
+        if name == "research_batch_execution_child_started":
+            task_role = "preparation"
+            phase = "preparing_data"
+            reset_started_at = True
+        elif name in {
+            "research_batch_execution_shared_alpha_factor_started",
+            "research_batch_execution_item_started",
+        }:
+            task_role = str(event.get("task_role"))
+            item_key = str(event["item_key"]) if isinstance(event.get("item_key"), str) else None
+            phase = str(event.get("phase"))
+            completed, total = _live_session_counts(event)
+            reset_started_at = True
+        elif name in {
+            "research_batch_execution_shared_alpha_factor_succeeded",
+            "research_batch_execution_shared_alpha_factor_failed",
+            "research_batch_execution_shared_alpha_factor_chunk_succeeded",
+            "research_batch_execution_item_strategy_chunk_succeeded",
+            "research_batch_execution_item_chunk_succeeded",
+            "research_batch_execution_item_succeeded",
+            "research_batch_execution_item_failed",
+        }:
+            task_role = str(event["task_role"]) if isinstance(event.get("task_role"), str) else None
+            item_key = str(event["item_key"]) if isinstance(event.get("item_key"), str) else None
+            phase = str(event["phase"]) if isinstance(event.get("phase"), str) else None
+            completed, total = _live_session_counts(event)
+        else:
+            return
         with self._database.transaction() as transaction:
-            _refresh_progress_in_transaction(
-                transaction,
-                batch_id,
-                research_runs=self._research_runs,
+            current = transaction.execute(
+                """
+                SELECT current_task_role, current_item_key, current_phase,
+                       completed_research_sessions, total_research_sessions
+                FROM research_batches.attempts
+                WHERE id = %s AND batch_id = %s AND fence = %s
+                  AND status = 'running'
+                FOR UPDATE
+                """,
+                (claim.attempt_id, claim.batch_id, claim.fence),
+            ).fetchone()
+            if current is None:
+                raise RuntimeError("Research Batch live progress was fenced")
+            if task_role is None:
+                task_role = str(current["current_task_role"])
+            if item_key is None and task_role not in {"preparation", "shared_alpha_factor"}:
+                item_key = (
+                    str(current["current_item_key"])
+                    if current["current_item_key"] is not None
+                    else None
+                )
+            if phase is None:
+                phase = str(current["current_phase"])
+            if completed is None and total is None:
+                completed = (
+                    int(current["completed_research_sessions"])
+                    if current["completed_research_sessions"] is not None
+                    else None
+                )
+                total = (
+                    int(current["total_research_sessions"])
+                    if current["total_research_sessions"] is not None
+                    else None
+                )
+            updated = transaction.execute(
+                """
+                UPDATE research_batches.attempts AS attempt
+                SET current_task_role = %s,
+                    current_item_key = %s,
+                    current_phase = %s,
+                    completed_research_sessions = %s,
+                    total_research_sessions = %s,
+                    task_started_at = CASE WHEN %s THEN now() ELSE task_started_at END,
+                    live_progress_updated_at = now()
+                FROM research_batches.batches AS batch
+                WHERE attempt.id = %s AND attempt.batch_id = %s
+                  AND attempt.fence = %s AND attempt.status = 'running'
+                  AND batch.id = attempt.batch_id AND batch.status = 'running'
+                  AND batch.execution_fence = attempt.fence
+                """,
+                (
+                    task_role,
+                    item_key,
+                    phase,
+                    completed,
+                    total,
+                    reset_started_at,
+                    claim.attempt_id,
+                    claim.batch_id,
+                    claim.fence,
+                ),
             )
+            if updated.rowcount != 1:
+                raise RuntimeError("Research Batch live progress was fenced")
+            if name == "research_batch_execution_shared_alpha_factor_started":
+                shared = transaction.execute(
+                    """
+                    UPDATE research_batches.progress
+                    SET shared_alpha_factor_status = 'running', updated_at = now()
+                    WHERE batch_id = %s AND shared_alpha_factor_status = 'pending'
+                    """,
+                    (claim.batch_id,),
+                )
+                if shared.rowcount != 1:
+                    raise RuntimeError("Shared Alpha-and-Factor live progress did not start")
 
-    def _fail_running_items(self, claim: _ResearchBatchClaim, error: Exception) -> None:
-        for _ordinal, _item_key, run_claim in claim.items:
+    def _set_shared_alpha_factor_status(
+        self,
+        claim: _ResearchBatchClaim,
+        status: str,
+    ) -> None:
+        if status not in {"succeeded", "failed"}:
+            raise ValueError("Shared Alpha-and-Factor status is invalid")
+        with self._database.transaction() as transaction:
+            self._authorize_claim_in_transaction(transaction, claim)
+            updated = transaction.execute(
+                """
+                UPDATE research_batches.progress
+                SET shared_alpha_factor_status = %s, updated_at = now()
+                WHERE batch_id = %s AND shared_alpha_factor_status = 'running'
+                """,
+                (status, claim.batch_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("Shared Alpha-and-Factor progress did not advance")
+
+    def _complete_item_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        claim: _ResearchBatchClaim,
+        ordinal: int,
+        outcome: str,
+        public_reason: str | None,
+        diagnostic: ResearchBatchDiagnostic | None,
+    ) -> None:
+        if outcome not in {"succeeded", "failed", "cancelled"}:
+            raise ValueError("Research Batch item outcome is invalid")
+        self._authorize_claim_in_transaction(transaction, claim)
+        if diagnostic is None and public_reason is not None:
+            diagnostic = ResearchBatchDiagnostic(
+                code="RESEARCH_ITEM_FAILED",
+                category="execution",
+                message=public_reason,
+            )
+        updated = transaction.execute(
+            """
+            UPDATE research_batches.items
+            SET outcome = %s,
+                diagnostic = %s
+            WHERE batch_id = %s AND ordinal = %s AND outcome IS NULL
+            """,
+            (
+                outcome,
+                (None if diagnostic is None else Jsonb(diagnostic.model_dump(mode="json"))),
+                claim.batch_id,
+                ordinal,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError("Research Batch item task was already complete")
+        progress = transaction.execute(
+            """
+            SELECT completed_items, total_items
+            FROM research_batches.progress
+            WHERE batch_id = %s
+            FOR UPDATE
+            """,
+            (claim.batch_id,),
+        ).fetchone()
+        if progress is None:
+            raise RuntimeError("Research Batch durable progress is missing")
+        completed = int(progress["completed_items"]) + 1
+        if completed > int(progress["total_items"]):
+            raise RuntimeError("Research Batch durable progress exceeded its total")
+        transaction.execute(
+            """
+            UPDATE research_batches.progress
+            SET completed_items = %s, updated_at = now()
+            WHERE batch_id = %s
+            """,
+            (completed, claim.batch_id),
+        )
+
+    def _fail_running_items(
+        self,
+        claim: _ResearchBatchClaim,
+        error: Exception,
+        *,
+        diagnostic: ResearchBatchDiagnostic | None = None,
+    ) -> None:
+        for ordinal, _item_key, run_claim in claim.items:
             self._research_runs.fail_batch_owned_item(
                 run_claim,
                 error,
-                authorize_batch=lambda transaction: (
-                    self._authorize_claim_in_transaction(transaction, claim)
+                authorize_batch=lambda transaction: self._authorize_claim_in_transaction(
+                    transaction, claim
                 ),
-            )
-        with self._database.transaction() as transaction:
-            _refresh_progress_in_transaction(
-                transaction,
-                claim.batch_id,
-                research_runs=self._research_runs,
+                complete_batch_item=lambda transaction, outcome, reason, ordinal=ordinal: (
+                    self._complete_item_in_transaction(
+                        transaction,
+                        claim,
+                        ordinal,
+                        outcome,
+                        reason,
+                        diagnostic,
+                    )
+                ),
             )
 
     def _finish_attempt(
@@ -692,9 +971,7 @@ class ResearchBatchService:
             )
             statuses = [child_statuses[run_id] for run_id in run_ids]
             succeeded = sum(status == "succeeded" for status in statuses)
-            terminal = sum(
-                status in {"succeeded", "failed", "cancelled"} for status in statuses
-            )
+            terminal = sum(status in {"succeeded", "failed", "cancelled"} for status in statuses)
             if terminal != len(statuses):
                 raise RuntimeError(
                     "Research Batch Attempt cannot finish before every child is terminal"
@@ -709,13 +986,23 @@ class ResearchBatchService:
                 """
                 UPDATE research_batches.attempts
                 SET status = %s, heartbeat_at = now(), lease_expires_at = now(),
-                    finished_at = now(), failure_reason = %s
+                    finished_at = now(), failure_reason = %s,
+                    failure_diagnostic = %s,
+                    current_task_role = NULL, current_item_key = NULL,
+                    current_phase = NULL, completed_research_sessions = NULL,
+                    total_research_sessions = NULL, task_started_at = NULL,
+                    live_progress_updated_at = NULL
                 WHERE id = %s AND batch_id = %s AND fence = %s
                   AND status = 'running'
                 """,
                 (
                     "failed" if failed else "succeeded",
                     None if error is None else type(error).__name__,
+                    (
+                        None
+                        if error is None
+                        else Jsonb(_exception_diagnostic(error).model_dump(mode="json"))
+                    ),
                     claim.attempt_id,
                     claim.batch_id,
                     claim.fence,
@@ -741,14 +1028,13 @@ class ResearchBatchService:
             _refresh_progress_in_transaction(
                 transaction,
                 claim.batch_id,
-                research_runs=self._research_runs,
             )
 
     def _locked_receipt(
         self,
         request_id: str,
         fingerprint: str,
-    ) -> ResearchBatchSummary | None:
+    ) -> ResearchBatchDetail | None:
         with self._database.transaction() as transaction:
             _lock_admission(transaction, request_id)
             receipt = _receipt(transaction, request_id)
@@ -815,9 +1101,7 @@ def _validate_unique_item_keys(command: ResearchBatchAdmissionCommand) -> None:
                         code="DUPLICATE_ITEM_KEY",
                         field=f"items[{ordinal - 1}].item_key",
                         item_key=item.item_key,
-                        message=(
-                            f"item_key conflicts with ordinal {previous}: {item.item_key}"
-                        ),
+                        message=(f"item_key conflicts with ordinal {previous}: {item.item_key}"),
                     )
                 ]
             )
@@ -955,34 +1239,48 @@ def _receipt(
 def _replayed_receipt(
     receipt: Mapping[str, object],
     fingerprint: str,
-) -> ResearchBatchSummary:
+) -> ResearchBatchDetail:
     if receipt["request_fingerprint"] != fingerprint:
         raise ResearchBatchAdmissionConflict("Research Batch request_id conflicts")
-    return ResearchBatchSummary.model_validate(receipt["outcome"])
+    return ResearchBatchDetail.model_validate(receipt["outcome"])
 
 
 def _summary_in_transaction(
     transaction: PostgresTransaction,
     batch_id: str,
+) -> ResearchBatchSummary:
+    row = _batch_projection_row(transaction, batch_id)
+    if row is None:
+        raise RuntimeError("Research Batch projection is missing")
+    return _summary_from_row(row)
+
+
+def _summary_from_row(row: Mapping[str, object]) -> ResearchBatchSummary:
+    return ResearchBatchSummary(
+        id=str(row["id"]),
+        batch_kind=str(row["batch_kind"]),
+        status=str(row["status"]),
+        created_at=row["created_at"],
+        scope=ResearchBatchScope.model_validate(row["scope"]),
+        progress=_public_progress(row),
+        execution_timing=_execution_timing(row),
+    )
+
+
+def _detail_in_transaction(
+    transaction: PostgresTransaction,
+    batch_id: str,
     *,
     research_runs: ResearchRunService,
-) -> ResearchBatchSummary:
-    row = transaction.execute(
-        """
-        SELECT batch.id, batch.batch_kind, batch.status, batch.scope,
-               batch.created_at, progress.completed_items, progress.total_items
-        FROM research_batches.batches AS batch
-        JOIN research_batches.progress AS progress ON progress.batch_id = batch.id
-        WHERE batch.id = %s
-        """,
-        (batch_id,),
-    ).fetchone()
+) -> ResearchBatchDetail:
+    row = _batch_projection_row(transaction, batch_id)
     if row is None:
         raise RuntimeError("Research Batch projection is missing")
     item_rows = transaction.execute(
         """
         SELECT item.ordinal, item.item_key, item.research_run_id,
-               item.dependency_role
+               item.dependency_role, item.outcome, item.diagnostic,
+               item.run_deleted_at AS deleted_at
         FROM research_batches.items AS item
         WHERE item.batch_id = %s
         ORDER BY item.ordinal
@@ -994,53 +1292,259 @@ def _summary_in_transaction(
         transaction,
         run_ids,
     )
-    return ResearchBatchSummary(
-        id=str(row["id"]),
-        batch_kind=str(row["batch_kind"]),
-        status=str(row["status"]),
-        created_at=row["created_at"],
-        scope=ResearchBatchScope.model_validate(row["scope"]),
-        progress=ResearchBatchProgress(
-            completed_items=int(row["completed_items"]),
-            total_items=int(row["total_items"]),
-        ),
+    attempt_row = transaction.execute(
+        """
+        SELECT id, ordinal, status, started_at, heartbeat_at, lease_expires_at,
+               finished_at,
+               failure_diagnostic, current_task_role, current_item_key,
+               current_phase, completed_research_sessions,
+               total_research_sessions, task_started_at,
+               live_progress_updated_at,
+               CURRENT_TIMESTAMP AS observed_at
+        FROM research_batches.attempts
+        WHERE batch_id = %s
+        ORDER BY ordinal DESC
+        LIMIT 1
+        """,
+        (batch_id,),
+    ).fetchone()
+    summary = _summary_in_transaction(transaction, batch_id)
+    return ResearchBatchDetail(
+        **summary.model_dump(),
+        attempt=_attempt_summary(attempt_row),
+        live_progress=_live_progress(attempt_row, str(row["status"])),
         items=[
             ResearchBatchItemSummary.model_validate(
-                {**item, "status": child_statuses[str(item["research_run_id"])]}
+                {
+                    **item,
+                    "status": child_statuses[str(item["research_run_id"])],
+                    "run_availability": (
+                        "deleted" if item["deleted_at"] is not None else "available"
+                    ),
+                }
             )
             for item in item_rows
         ],
     )
 
 
+def _batch_projection_row(
+    transaction: PostgresTransaction,
+    batch_id: str,
+) -> Mapping[str, object] | None:
+    return transaction.execute(
+        """
+        SELECT batch.id, batch.batch_kind, batch.status, batch.scope,
+               batch.created_at, progress.completed_items, progress.total_items,
+               progress.shared_alpha_factor_status,
+               timing.execution_started_at, timing.execution_finished_at,
+               CURRENT_TIMESTAMP AS execution_observed_at
+        FROM research_batches.batches AS batch
+        JOIN research_batches.progress AS progress ON progress.batch_id = batch.id
+        LEFT JOIN LATERAL (
+            SELECT min(attempt.started_at) AS execution_started_at,
+                   max(attempt.finished_at) AS execution_finished_at
+            FROM research_batches.attempts AS attempt
+            WHERE attempt.batch_id = batch.id
+        ) AS timing ON true
+        WHERE batch.id = %s
+        """,
+        (batch_id,),
+    ).fetchone()
+
+
+def _public_progress(
+    row: Mapping[str, object],
+) -> FactorEvaluationBatchProgress | StrategySweepBatchProgress:
+    if row["batch_kind"] == "factor_evaluation":
+        return FactorEvaluationBatchProgress(
+            completed_factor_tasks=int(row["completed_items"]),
+            total_factor_tasks=int(row["total_items"]),
+        )
+    if row["batch_kind"] == "strategy_sweep":
+        return StrategySweepBatchProgress(
+            shared_alpha_factor_status=str(row["shared_alpha_factor_status"]),
+            completed_strategy_tasks=int(row["completed_items"]),
+            total_strategy_tasks=int(row["total_items"]),
+        )
+    raise RuntimeError("Research Batch Kind is invalid")
+
+
+def _execution_timing(row: Mapping[str, object]) -> ResearchBatchExecutionTiming:
+    started = row["execution_started_at"]
+    status = str(row["status"])
+    terminal = status in {"succeeded", "completed_with_failures", "failed", "cancelled"}
+    finished = row["execution_finished_at"] if terminal else None
+    observed = row["execution_observed_at"]
+    elapsed = None
+    if isinstance(started, datetime):
+        boundary = finished if isinstance(finished, datetime) else observed
+        if isinstance(boundary, datetime):
+            elapsed = max(0.0, (boundary - started).total_seconds())
+    return ResearchBatchExecutionTiming(
+        started_at=started if isinstance(started, datetime) else None,
+        finished_at=finished if isinstance(finished, datetime) else None,
+        elapsed_seconds=elapsed,
+        is_final=terminal,
+    )
+
+
+def _attempt_summary(
+    row: Mapping[str, object] | None,
+) -> ResearchBatchAttemptSummary | None:
+    if row is None:
+        return None
+    diagnostic = row["failure_diagnostic"]
+    return ResearchBatchAttemptSummary(
+        id=str(row["id"]),
+        number=int(row["ordinal"]),
+        status=str(row["status"]),
+        started_at=row["started_at"],
+        finished_at=(row["finished_at"] if isinstance(row["finished_at"], datetime) else None),
+        diagnostic=(
+            ResearchBatchDiagnostic.model_validate(diagnostic)
+            if isinstance(diagnostic, Mapping)
+            else None
+        ),
+    )
+
+
+def _live_progress(
+    row: Mapping[str, object] | None,
+    batch_status: str,
+) -> ResearchBatchLiveProgress | None:
+    if (
+        row is None
+        or batch_status not in {"running", "cancelling"}
+        or row["status"] != "running"
+        or not isinstance(row["current_task_role"], str)
+        or not isinstance(row["current_phase"], str)
+        or not isinstance(row["task_started_at"], datetime)
+        or not isinstance(row["live_progress_updated_at"], datetime)
+        or not isinstance(row["observed_at"], datetime)
+        or not isinstance(row["lease_expires_at"], datetime)
+        or row["lease_expires_at"] <= row["observed_at"]
+    ):
+        return None
+    completed = row["completed_research_sessions"]
+    total = row["total_research_sessions"]
+    elapsed = max(0.0, (row["observed_at"] - row["task_started_at"]).total_seconds())
+    percentage = 0.0
+    remaining: int | None = None
+    if isinstance(completed, int) and isinstance(total, int) and total > 0:
+        percentage = min(100.0, max(0.0, completed / total * 100.0))
+        if 0 < completed < total and elapsed > 0:
+            remaining = max(1, math.ceil(elapsed / completed * (total - completed)))
+    elif row["current_phase"] == "finalizing":
+        percentage = 100.0
+    return ResearchBatchLiveProgress(
+        attempt_number=int(row["ordinal"]),
+        task_role=str(row["current_task_role"]),
+        item_key=(
+            str(row["current_item_key"]) if isinstance(row["current_item_key"], str) else None
+        ),
+        phase=str(row["current_phase"]),
+        completed_research_sessions=(completed if isinstance(completed, int) else None),
+        total_research_sessions=total if isinstance(total, int) else None,
+        estimated_percentage=percentage,
+        elapsed_seconds=elapsed,
+        remaining_duration_estimate_seconds=remaining,
+        observed_at=row["live_progress_updated_at"],
+    )
+
+
 def _refresh_progress_in_transaction(
     transaction: PostgresTransaction,
     batch_id: str,
-    *,
-    research_runs: ResearchRunService,
 ) -> None:
     rows = transaction.execute(
         """
-        SELECT research_run_id
+        SELECT outcome
         FROM research_batches.items
         WHERE batch_id = %s
         ORDER BY ordinal
         """,
         (batch_id,),
     ).fetchall()
-    run_ids = [str(row["research_run_id"]) for row in rows]
-    statuses = research_runs.project_child_statuses_in_transaction(transaction, run_ids)
-    completed = sum(
-        status in {"succeeded", "failed", "cancelled"}
-        for status in statuses.values()
-    )
+    completed = sum(row["outcome"] is not None for row in rows)
+    progress = transaction.execute(
+        """
+        SELECT completed_items, total_items
+        FROM research_batches.progress
+        WHERE batch_id = %s
+        FOR UPDATE
+        """,
+        (batch_id,),
+    ).fetchone()
+    if (
+        progress is None
+        or completed != int(progress["completed_items"])
+        or len(rows) != int(progress["total_items"])
+    ):
+        raise RuntimeError("Research Batch durable progress is inconsistent")
     transaction.execute(
         """
         UPDATE research_batches.progress
-        SET completed_items = %s, updated_at = now()
+        SET updated_at = now()
         WHERE batch_id = %s
         """,
-        (completed, batch_id),
+        (batch_id,),
+    )
+
+
+def _live_session_counts(
+    event: Mapping[str, object],
+) -> tuple[int | None, int | None]:
+    completed = event.get("completed_research_sessions")
+    total = event.get("total_research_sessions")
+    if completed is None and total is None:
+        return None, None
+    if (
+        not isinstance(completed, int)
+        or isinstance(completed, bool)
+        or not isinstance(total, int)
+        or isinstance(total, bool)
+        or total <= 0
+        or completed < 0
+        or completed > total
+    ):
+        raise RuntimeError("Research Batch live session progress is invalid")
+    return completed, total
+
+
+def _message_diagnostic(message: Mapping[str, object]) -> ResearchBatchDiagnostic:
+    category = str(message.get("category"))
+    public_messages = {
+        "Factor item calculation failed.",
+        "Strategy item calculation failed.",
+        "Shared Alpha-and-Factor calculation failed.",
+    }
+    candidate = str(message.get("message"))
+    public_message = (
+        candidate if candidate in public_messages else "Research Batch item execution failed."
+    )
+    return ResearchBatchDiagnostic(
+        code=(
+            "RESEARCH_ITEM_CALCULATION_FAILED"
+            if category == "calculation"
+            else "RESEARCH_ITEM_EXECUTION_FAILED"
+        ),
+        category="calculation" if category == "calculation" else "execution",
+        message=public_message,
+    )
+
+
+def _exception_diagnostic(error: Exception) -> ResearchBatchDiagnostic:
+    if isinstance(error, MemoryError):
+        return ResearchBatchDiagnostic(
+            code="RESEARCH_BATCH_RESOURCE_EXHAUSTED",
+            category="resource_exhausted",
+            message="Research Batch execution exceeded its resource limit.",
+        )
+    return ResearchBatchDiagnostic(
+        code="RESEARCH_BATCH_EXECUTION_FAILED",
+        category="execution",
+        message="Research Batch execution failed.",
     )
 
 
@@ -1059,7 +1563,11 @@ def _decode_cursor(cursor: str | None) -> tuple[datetime | None, str | None]:
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
         value = json.loads(urlsafe_b64decode(padded).decode())
-        if set(value) != {"created_at", "id"} or not isinstance(value["id"], str):
+        if (
+            set(value) != {"created_at", "id"}
+            or not isinstance(value["id"], str)
+            or not value["id"]
+        ):
             raise ValueError
         created_at = datetime.fromisoformat(value["created_at"])
         if created_at.tzinfo is None:

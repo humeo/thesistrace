@@ -132,6 +132,7 @@ CompileFormula = Callable[[str], CompiledAlpha]
 CurrentDataset = Callable[[], DatasetAdmissionSnapshot | None]
 TrackReferencesResult = Callable[[PostgresTransaction, str], bool]
 BatchExecutionAuthorization = Callable[[PostgresTransaction], None]
+BatchItemCompletion = Callable[[PostgresTransaction, str, str | None], None]
 ActivateTrack = Callable[
     [PostgresTransaction, TrackingOrigin],
     DailyTrackSummary,
@@ -345,6 +346,7 @@ class ResearchRunService:
         final_chunk: Mapping[str, object],
         *,
         authorize_batch: BatchExecutionAuthorization,
+        complete_batch_item: BatchItemCompletion,
     ) -> None:
         if self._publication is None:
             raise RuntimeError("ResearchRun Result publication is not configured")
@@ -410,6 +412,7 @@ class ResearchRunService:
                     claim.run_id,
                 ),
             )
+            complete_batch_item(transaction, "succeeded", None)
 
     def fail_batch_owned_item(
         self,
@@ -417,6 +420,7 @@ class ResearchRunService:
         error: Exception,
         *,
         authorize_batch: BatchExecutionAuthorization,
+        complete_batch_item: BatchItemCompletion,
     ) -> bool:
         policy = _failure_policy(error)
         with self._database.transaction() as transaction:
@@ -455,6 +459,7 @@ class ResearchRunService:
                 """,
                 (claim.run_id,),
             )
+            complete_batch_item(transaction, "failed", policy.public_reason)
         return True
 
     def complete_batch_owned_strategy_item(
@@ -463,6 +468,7 @@ class ResearchRunService:
         final_chunk: Mapping[str, object],
         *,
         authorize_batch: BatchExecutionAuthorization,
+        complete_batch_item: BatchItemCompletion,
     ) -> None:
         if self._publication is None:
             raise RuntimeError("ResearchRun Result publication is not configured")
@@ -573,6 +579,7 @@ class ResearchRunService:
                     claim.run_id,
                 ),
             )
+            complete_batch_item(transaction, "succeeded", None)
 
     def _validate_batch_strategy_final_chunk(
         self,
