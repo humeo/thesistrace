@@ -23,7 +23,7 @@ from thesistrace.data import (
 )
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.publication import Publication
-from thesistrace.research_batch import ResearchBatchService
+from thesistrace.research_batch import ResearchBatchService, preserve_deleted_run_history
 from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
 from thesistrace.research_folder import ResearchFolderService
 from thesistrace.research_run import (
@@ -181,6 +181,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             compile_formula=alpha_language.compile,
             current_dataset=dataset_admission.current,
             track_references_result=daily_tracks.references_result_manifest,
+            preserve_dependent_run_history=preserve_deleted_run_history,
             execution=SupervisedResearchExecutor(
                 settings.data_mount,
                 execution_memory_bytes=settings.research_execution_memory_bytes,

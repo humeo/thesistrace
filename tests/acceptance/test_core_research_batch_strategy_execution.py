@@ -43,10 +43,15 @@ from thesistrace.research_batch.private_artifact import (
     decode_private_alpha_factor_artifact,
     encode_private_alpha_factor_artifact,
 )
-from thesistrace.research_batch.service import ResearchBatchService
+from thesistrace.research_batch.service import (
+    ResearchBatchService,
+    preserve_deleted_run_history,
+)
+from thesistrace.research_folder import BATCH_RESEARCH_FOLDER_ID
 from thesistrace.research_kernel.research_chunks import AlphaFactorExecutionBinding
 from thesistrace.research_run.models import StrategyBacktestAdmissionCommand
 from thesistrace.research_run.result import read_result_bundle
+from thesistrace.research_run.service import ResearchRunService
 
 
 class _StrategyTransportFailureExecutor:
@@ -480,6 +485,39 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         generation_id = _publish_current_data(settings)
         command = _strategy_command("strategy-sweep-equivalence")
         batch = client.post("/api/research-batches", json=command).json()
+        child_ids = [str(item["research_run_id"]) for item in batch["items"]]
+        assert (
+            client.delete(f"/api/research-runs/{child_ids[0]}").status_code
+            == 409
+        )
+        batch_folder_runs = client.get(
+            "/api/research-runs",
+            params={"folder_id": BATCH_RESEARCH_FOLDER_ID},
+        ).json()["items"]
+        assert {run["id"] for run in batch_folder_runs} == set(child_ids)
+        target_folder = client.post(
+            "/api/research-folders",
+            json={"name": "Organized Batch Result"},
+        ).json()
+        renamed_and_moved = client.patch(
+            f"/api/research-runs/{child_ids[0]}",
+            json={"name": "Reviewed Sweep", "folder_id": target_folder["id"]},
+        )
+        assert renamed_and_moved.status_code == 200
+        assert renamed_and_moved.json()["name"] == "Reviewed Sweep"
+        assert renamed_and_moved.json()["folder_id"] == target_folder["id"]
+        organized_batch = client.get(f"/api/research-batches/{batch['id']}").json()
+        assert [
+            (item["ordinal"], item["item_key"], item["research_run_id"])
+            for item in organized_batch["items"]
+        ] == [
+            (item["ordinal"], item["item_key"], item["research_run_id"])
+            for item in batch["items"]
+        ]
+        assert (
+            client.delete(f"/api/research-folders/{BATCH_RESEARCH_FOLDER_ID}").status_code
+            == 409
+        )
         ordinary = [
             client.post(
                 "/api/research-runs",
@@ -523,12 +561,113 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                 == (ordinary_stored["result_provenance"]["semantic_versions"])
             )
 
+        ordinary_in_batch_folder = client.post(
+            "/api/research-runs",
+            json={
+                **_ordinary_strategy_command(
+                    "ordinary-in-batch-folder",
+                    holdings_count=1,
+                    rebalance_every_sessions=1,
+                ),
+                "folder_id": BATCH_RESEARCH_FOLDER_ID,
+            },
+        ).json()
+
         track = client.post(
             f"/api/research-runs/{completed['items'][0]['research_run_id']}/daily-tracks",
             json={"request_id": "batch-strategy-seed-track"},
         )
         assert track.status_code == 201
         assert track.json()["status"] == "active"
+        track_id = str(track.json()["id"])
+        untracked_manifest = str(
+            _stored_run(settings, child_ids[1])["result_manifest_sha256"]
+        )
+
+        projection_entered = Event()
+        release_projection = Event()
+        deletion_hook_entered = Event()
+
+        class _ProjectionBarrier:
+            def project_child_statuses_in_transaction(self, transaction, run_ids):
+                projection_entered.set()
+                if not release_projection.wait(timeout=10):
+                    raise TimeoutError("Batch detail projection barrier timed out")
+                return runtime.research_runs.project_child_statuses_in_transaction(
+                    transaction,
+                    run_ids,
+                )
+
+        consistent_reader = ResearchBatchService(
+            runtime.database,
+            research_runs=_ProjectionBarrier(),  # type: ignore[arg-type]
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            publication=runtime.publication,
+            attempt_control_directory=settings.data_mount / ".batch-attempts",
+        )
+
+        def preserve_history(transaction, run_id):
+            deletion_hook_entered.set()
+            preserve_deleted_run_history(transaction, run_id)
+
+        concurrent_deleter = ResearchRunService(
+            runtime.database,
+            publication=runtime.publication,
+            track_references_result=runtime.daily_tracks.references_result_manifest,
+            preserve_dependent_run_history=preserve_history,
+        )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            detail_future = executor.submit(consistent_reader.get, batch["id"])
+            assert projection_entered.wait(timeout=10)
+            delete_future = executor.submit(concurrent_deleter.delete, child_ids[0])
+            assert deletion_hook_entered.wait(timeout=10)
+            assert delete_future.done() is False
+            release_projection.set()
+            detail_during_delete = detail_future.result(timeout=10)
+            assert detail_during_delete is not None
+            assert detail_during_delete.items[0].run_availability == "available"
+            assert delete_future.result(timeout=10) is True
+
+        assert client.get(f"/api/research-runs/{child_ids[0]}").status_code == 404
+        first_deleted = client.get(f"/api/research-batches/{batch['id']}").json()
+        assert first_deleted["status"] == completed["status"]
+        assert first_deleted["progress"] == completed["progress"]
+        assert first_deleted["items"][0] == {
+            **completed["items"][0],
+            "run_availability": "deleted",
+            "deleted_at": first_deleted["items"][0]["deleted_at"],
+        }
+        assert first_deleted["items"][0]["deleted_at"] is not None
+        assert first_deleted["items"][1] == completed["items"][1]
+        assert client.get(f"/api/research-runs/{child_ids[1]}").status_code == 200
+        surviving_track = client.get(f"/api/daily-tracks/{track_id}")
+        assert surviving_track.status_code == 200
+        assert surviving_track.json()["origin"]["seed_run_id"] == child_ids[0]
+        assert surviving_track.json()["origin"]["seed_research_available"] is False
+
+        assert client.delete(f"/api/research-runs/{child_ids[1]}").status_code == 204
+        final_history = client.get(f"/api/research-batches/{batch['id']}").json()
+        assert final_history["status"] == completed["status"]
+        assert final_history["progress"] == completed["progress"]
+        assert [item["run_availability"] for item in final_history["items"]] == [
+            "deleted",
+            "deleted",
+        ]
+        assert [item["status"] for item in final_history["items"]] == [
+            "succeeded",
+            "succeeded",
+        ]
+        assert [item["outcome"] for item in final_history["items"]] == [
+            "succeeded",
+            "succeeded",
+        ]
+        assert client.get(f"/api/research-runs/{ordinary_in_batch_folder['id']}").status_code == 200
+        assert client.delete(f"/api/research-batches/{batch['id']}").status_code == 405
+        with runtime.database.transaction() as transaction:
+            assert transaction.execute(
+                "SELECT 1 FROM publication.manifests WHERE sha256 = %s",
+                (untracked_manifest,),
+            ).fetchone() is None
 
     prepared = [
         event for event in events if event["event"] == "research_batch_execution_batch_prepared"

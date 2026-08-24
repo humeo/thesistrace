@@ -131,6 +131,7 @@ Progress = Callable[[str, str], None]
 CompileFormula = Callable[[str], CompiledAlpha]
 CurrentDataset = Callable[[], DatasetAdmissionSnapshot | None]
 TrackReferencesResult = Callable[[PostgresTransaction, str], bool]
+PreserveDependentRunHistory = Callable[[PostgresTransaction, str], None]
 BatchExecutionAuthorization = Callable[[PostgresTransaction], None]
 BatchItemCompletion = Callable[[PostgresTransaction, str, str | None], None]
 ActivateTrack = Callable[
@@ -255,6 +256,7 @@ class ResearchRunService:
         compile_formula: CompileFormula | None = None,
         current_dataset: CurrentDataset | None = None,
         track_references_result: TrackReferencesResult | None = None,
+        preserve_dependent_run_history: PreserveDependentRunHistory | None = None,
         execution: SupervisedResearchExecutor | None = None,
         execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
     ) -> None:
@@ -271,6 +273,7 @@ class ResearchRunService:
         self._compile_formula = compile_formula
         self._current_dataset = current_dataset
         self._track_references_result = track_references_result
+        self._preserve_dependent_run_history = preserve_dependent_run_history
         self._execution = execution
         self._execution_memory_bytes = execution_memory_bytes
 
@@ -1176,6 +1179,8 @@ class ResearchRunService:
                 "DELETE FROM research_runs.attempts WHERE run_id = %s",
                 (run_id,),
             )
+            if self._preserve_dependent_run_history is not None:
+                self._preserve_dependent_run_history(transaction, run_id)
             transaction.execute(
                 "DELETE FROM research_runs.runs WHERE id = %s",
                 (run_id,),

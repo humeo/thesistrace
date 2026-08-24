@@ -24,6 +24,7 @@ from thesistrace.research_batch.service import (
     ResearchBatchAdmissionConflict,
     ResearchBatchAdmissionRejected,
     ResearchBatchService,
+    preserve_deleted_run_history,
 )
 
 __all__ = (
@@ -47,6 +48,7 @@ __all__ = (
     "ResearchBatchStatus",
     "ResearchBatchSummary",
     "ResearchBatchService",
+    "preserve_deleted_run_history",
     "StrategySweepAlpha",
     "StrategySweepBatchAdmissionCommand",
     "StrategySweepItem",

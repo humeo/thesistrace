@@ -96,6 +96,35 @@ FACTOR_TASK_PERMANENT_PUBLIC_REASON = "Research execution failed."
 logger = logging.getLogger(__name__)
 
 
+def preserve_deleted_run_history(
+    transaction: PostgresTransaction,
+    run_id: str,
+) -> None:
+    item = transaction.execute(
+        """
+        SELECT outcome, run_deleted_at
+        FROM research_batches.items
+        WHERE research_run_id = %s
+        FOR UPDATE
+        """,
+        (run_id,),
+    ).fetchone()
+    if item is None:
+        return
+    if item["outcome"] is None:
+        raise RuntimeError("Batch child Run cannot be deleted before its final outcome")
+    if item["run_deleted_at"] is not None:
+        raise RuntimeError("Batch child Run deletion history is already recorded")
+    transaction.execute(
+        """
+        UPDATE research_batches.items
+        SET run_deleted_at = now()
+        WHERE research_run_id = %s
+        """,
+        (run_id,),
+    )
+
+
 def _confirm_child_exited(value: str) -> bool:
     path = Path(value)
     if not path.is_absolute() or path.parent.name != ".batch-attempts":
@@ -2800,10 +2829,15 @@ def _detail_in_transaction(
         FROM research_batches.items AS item
         WHERE item.batch_id = %s
         ORDER BY item.ordinal
+        FOR SHARE OF item
         """,
         (batch_id,),
     ).fetchall()
-    run_ids = [str(item["research_run_id"]) for item in item_rows]
+    run_ids = [
+        str(item["research_run_id"])
+        for item in item_rows
+        if item["deleted_at"] is None
+    ]
     child_statuses = research_runs.project_child_statuses_in_transaction(
         transaction,
         run_ids,
@@ -2833,7 +2867,11 @@ def _detail_in_transaction(
             ResearchBatchItemSummary.model_validate(
                 {
                     **item,
-                    "status": child_statuses[str(item["research_run_id"])],
+                    "status": (
+                        item["outcome"]
+                        if item["deleted_at"] is not None
+                        else child_statuses[str(item["research_run_id"])]
+                    ),
                     "run_availability": (
                         "deleted" if item["deleted_at"] is not None else "available"
                     ),
