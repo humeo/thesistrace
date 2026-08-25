@@ -2168,18 +2168,24 @@ def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
     assert submitted.stderr == ""
     assert json.loads(processed.stdout) == {"status": "processed"}
     events = [json.loads(line) for line in processed.stderr.splitlines()]
+    expected_phases = [
+        "current_head",
+        "market",
+        "validation",
+        "materialization",
+        "candidate_validation",
+        "publication",
+    ]
     assert [event["event"] for event in events] == [
         "data_refresh_started",
-        "data_refresh_phase_completed",
-        "data_refresh_phase_completed",
-        "data_refresh_phase_completed",
+        *("data_refresh_phase_completed" for _phase in expected_phases),
         "data_refresh_succeeded",
     ]
-    assert {
+    assert [
         event["phase"]
         for event in events
         if event["event"] == "data_refresh_phase_completed"
-    } == {"current_head", "market", "validation"}
+    ] == expected_phases
     return {"data_refresh_event_count": len(events), "data_refresh_stdout_verified": True}
 
 
