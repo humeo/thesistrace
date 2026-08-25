@@ -36,6 +36,16 @@ services:
       - ${THESISTRACE_TEST_EVIDENCE_DIR}:/qualification-evidence
       - ../../scripts:/qualification:ro
       - ../../benchmarks:/benchmarks:ro
+  batch-research-worker:
+    environment:
+      THESISTRACE_S3_ACCESS_KEY_ID: observability-access-canary
+      THESISTRACE_S3_SECRET_ACCESS_KEY: observability-secret-canary
+      THESISTRACE_DATA_MOUNT: /smoke-data/canonical-data
+    volumes:
+      - ${THESISTRACE_TEST_RUN_ROOT}:/smoke-data:ro
+      - ${THESISTRACE_TEST_EVIDENCE_DIR}:/qualification-evidence
+      - ../../scripts:/qualification:ro
+      - ../../benchmarks:/benchmarks:ro
   tracking-worker:
     environment:
       THESISTRACE_S3_ACCESS_KEY_ID: observability-access-canary

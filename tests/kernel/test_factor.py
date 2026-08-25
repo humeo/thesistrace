@@ -12,10 +12,11 @@ from thesistrace.research_kernel.equivalence import equivalence_bytes
 from thesistrace.research_kernel.factor import (
     FactorDataError,
     build_forward_labels,
-    columnar_forward_factor_days_by_horizon,
     evaluate_factor,
     factor_day,
     pearson,
+    prepare_columnar_forward_labels,
+    prepared_forward_factor_days_by_horizon,
 )
 from thesistrace.research_series import (
     AlignedResearchData,
@@ -119,8 +120,8 @@ def test_columnar_factor_days_are_binary64_equal_to_row_reference() -> None:
         trading_states=states,
     )
 
-    actual = columnar_forward_factor_days_by_horizon(
-        fixture,
+    actual = prepared_forward_factor_days_by_horizon(
+        prepare_columnar_forward_labels(fixture, cancellation_check=lambda: None),
         alpha_matrix,
         signal_sessions_by_horizon={1: (sessions[0],)},
         cancellation_check=lambda: None,
@@ -192,8 +193,8 @@ def test_columnar_factor_days_preserve_multi_horizon_ties_and_order() -> None:
         trading_states={},
     )
 
-    actual = columnar_forward_factor_days_by_horizon(
-        fixture,
+    actual = prepared_forward_factor_days_by_horizon(
+        prepare_columnar_forward_labels(fixture, cancellation_check=lambda: None),
         alpha_matrix,
         signal_sessions_by_horizon={
             1: signal_sessions,

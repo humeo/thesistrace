@@ -43,6 +43,13 @@ services:
     volumes:
       - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data:ro
 
+  batch-research-worker:
+    environment:
+      <<: *test-environment
+    volumes:
+      - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data:ro
+      - ${THESISTRACE_TEST_DATA_MOUNT}/.batch-attempts:/var/lib/thesistrace/canonical-data/.batch-attempts
+
   tracking-worker:
     environment:
       <<: *test-environment

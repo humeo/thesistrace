@@ -11,6 +11,7 @@ from thesistrace.research_folder.models import (
 )
 
 DEFAULT_FOLDER_ID = "folder_default"
+BATCH_RESEARCH_FOLDER_ID = "folder_batch_research"
 
 
 class ResearchFolderConflict(RuntimeError):
@@ -68,8 +69,8 @@ class ResearchFolderService:
         return None if row is None else ResearchFolderSummary.model_validate(row)
 
     def delete(self, folder_id: str) -> bool:
-        if folder_id == DEFAULT_FOLDER_ID:
-            raise ResearchFolderConflict("Default Folder cannot be deleted")
+        if folder_id in {DEFAULT_FOLDER_ID, BATCH_RESEARCH_FOLDER_ID}:
+            raise ResearchFolderConflict("System Research Folder cannot be deleted")
         try:
             with self._database.transaction() as transaction:
                 row = transaction.execute(

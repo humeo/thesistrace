@@ -49,6 +49,17 @@ class StrategyRunInput:
     stamp_duty_sell_rate: str
     transfer_fee_rate: str
 
+    def contract_snapshot(self) -> dict[str, object]:
+        return {
+            "holdings_count": self.holdings_count,
+            "rebalance_interval": self.rebalance_interval,
+            "initial_cash_cny": self.initial_cash_cny,
+            "commission_rate_all_in": self.commission_rate_all_in,
+            "commission_min_cny": self.commission_min_cny,
+            "stamp_duty_sell_rate": self.stamp_duty_sell_rate,
+            "transfer_fee_rate": self.transfer_fee_rate,
+        }
+
 
 @dataclass(frozen=True, init=False)
 class RunInput:
@@ -131,6 +142,43 @@ class RunInput:
 
     def alpha_execution_plan(self) -> SeriesExecutionPlan:
         return build_series_execution_plan(self.compiled_alpha_snapshot())
+
+    def alpha_factor_contract_snapshot(self) -> dict[str, object]:
+        """Return the Run-owned inputs that define Alpha-and-Factor computation."""
+        if self.research_start_session is None or self.research_end_session is None:
+            raise KernelRunError("Alpha-and-Factor Research Period is incomplete")
+        plan = self.alpha_execution_plan()
+        return {
+            "alpha": {
+                "expression": self.alpha_expression_snapshot(),
+                "field_bindings": self.field_bindings_snapshot(),
+                "execution_plan": {
+                    "nodes": [
+                        {
+                            "kind": node.kind,
+                            "identifier": node.identifier,
+                            "inputs": list(node.inputs),
+                            "value": node.value,
+                        }
+                        for node in plan.nodes
+                    ],
+                    "root": plan.root,
+                    "field_names": list(plan.field_names),
+                    "effective_lookback": plan.effective_lookback,
+                },
+            },
+            "research_period": {
+                "first_session": self.research_start_session,
+                "last_session": self.research_end_session,
+            },
+            "universe": self.universe,
+            "neutralization": self.neutralization,
+        }
+
+    def strategy_contract_snapshot(self) -> dict[str, object]:
+        if self.research_kind != "strategy_backtest" or self.strategy is None:
+            raise KernelRunError("Strategy Backtest input is incomplete")
+        return self.strategy.contract_snapshot()
 
     def with_research_data(
         self,

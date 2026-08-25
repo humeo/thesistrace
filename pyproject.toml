@@ -39,6 +39,7 @@ packages = ["src/thesistrace"]
 testpaths = ["tests"]
 markers = [
   "database_restart: isolated final-phase acceptance that restarts its owned PostgreSQL",
+  "dependency_restart: isolated final-phase acceptance that stops and restarts owned dependencies",
 ]
 
 [tool.ruff]

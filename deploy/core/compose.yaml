@@ -112,6 +112,37 @@ services:
       MKL_NUM_THREADS: ${THESISTRACE_RESEARCH_WORKER_CALCULATION_THREADS:-2}
       NUMEXPR_NUM_THREADS: ${THESISTRACE_RESEARCH_WORKER_CALCULATION_THREADS:-2}
 
+  batch-research-worker:
+    <<: *backend
+    volumes:
+      - canonical-data:/var/lib/thesistrace/canonical-data:ro
+      - batch-attempt-control:/var/lib/thesistrace/canonical-data/.batch-attempts
+    command:
+      - thesistrace-core-worker
+      - --role
+      - batch-research
+      - --cpu-count
+      - ${THESISTRACE_BATCH_RESEARCH_WORKER_CPU_COUNT:-2}
+      - --memory-bytes
+      - ${THESISTRACE_BATCH_RESEARCH_WORKER_MEMORY_BYTES:-2147483648}
+      - --execution-memory-bytes
+      - ${THESISTRACE_BATCH_RESEARCH_WORKER_EXECUTION_MEMORY_BYTES:-1610612736}
+      - --calculation-threads
+      - ${THESISTRACE_BATCH_RESEARCH_WORKER_CALCULATION_THREADS:-2}
+    cpus: ${THESISTRACE_BATCH_RESEARCH_WORKER_CPU_COUNT:-2}
+    mem_limit: ${THESISTRACE_BATCH_RESEARCH_WORKER_MEMORY_BYTES:-2147483648}
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+      rustfs:
+        condition: service_healthy
+    environment:
+      <<: *core-environment
+      OMP_NUM_THREADS: ${THESISTRACE_BATCH_RESEARCH_WORKER_CALCULATION_THREADS:-2}
+      OPENBLAS_NUM_THREADS: ${THESISTRACE_BATCH_RESEARCH_WORKER_CALCULATION_THREADS:-2}
+      MKL_NUM_THREADS: ${THESISTRACE_BATCH_RESEARCH_WORKER_CALCULATION_THREADS:-2}
+      NUMEXPR_NUM_THREADS: ${THESISTRACE_BATCH_RESEARCH_WORKER_CALCULATION_THREADS:-2}
+
   tracking-worker:
     <<: *backend
     logging: *bounded-logging
@@ -158,6 +189,7 @@ services:
       retries: 60
 
 volumes:
+  batch-attempt-control:
   canonical-data:
   postgres-data:
   rustfs-data:

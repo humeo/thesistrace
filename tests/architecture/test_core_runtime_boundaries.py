@@ -3,10 +3,21 @@ import json
 import subprocess
 import sys
 import tomllib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
+
+import boto3
+import pytest
+from botocore.exceptions import ClientError
 
 from thesistrace.entrypoints.http import create_app
-from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings
+from thesistrace.entrypoints.runtime import (
+    PUBLICATION_REQUEST_TIMEOUT_SECONDS,
+    CoreRuntime,
+    CoreSettings,
+    publication_request_config,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 CORE_PACKAGES = (
@@ -16,6 +27,7 @@ CORE_PACKAGES = (
     "entrypoints",
     "operational_events",
     "publication",
+    "research_batch",
     "research_folder",
     "research_run",
 )
@@ -31,8 +43,12 @@ PRODUCT_SCHEMAS = {
     "daily_track": "daily_tracks",
     "publication": "publication",
     "research_folder": "research_folders",
+    "research_batch": "research_batches",
 }
-ALLOWED_SCHEMA_REFERENCES = {("research_run", "research_folders")}
+ALLOWED_SCHEMA_REFERENCES = {
+    ("research_batch", "research_folders"),
+    ("research_run", "research_folders"),
+}
 
 
 def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
@@ -90,6 +106,16 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_kernel",
             "research_series",
         },
+        "research_batch": {
+            "_postgres",
+            "alpha_language",
+            "data",
+            "publication",
+            "research_folder",
+                "research_kernel",
+                "research_run",
+                "research_series",
+            },
         "fixture": {"data"},
         "adapters": {"data", "fixture"},
         "entrypoints": {
@@ -100,6 +126,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "data",
             "operational_events",
             "publication",
+            "research_batch",
             "research_folder",
             "research_kernel",
             "research_run",
@@ -146,6 +173,13 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "research_runs.attempts",
             "research_runs.cancel_receipts",
             "research_runs.start_tracking_receipts",
+        ),
+        "research_batch": (
+            "research_batches.batches",
+            "research_batches.items",
+            "research_batches.progress",
+            "research_batches.admission_receipts",
+            "research_batches.cancel_receipts",
         ),
         "daily_track": (
             "daily_tracks.tracks",
@@ -237,8 +271,11 @@ def test_current_runtime_initializes_before_starting_long_running_processes() ->
         "  research-worker:\n", maxsplit=1
     )[0]
     research_worker = compose.split("  research-worker:\n", maxsplit=1)[1].split(
-        "  tracking-worker:\n", maxsplit=1
+        "  batch-research-worker:\n", maxsplit=1
     )[0]
+    batch_research_worker = compose.split(
+        "  batch-research-worker:\n", maxsplit=1
+    )[1].split("  tracking-worker:\n", maxsplit=1)[0]
     tracking_worker = compose.split("  tracking-worker:\n", maxsplit=1)[1].split(
         "  web:\n", maxsplit=1
     )[0]
@@ -246,6 +283,7 @@ def test_current_runtime_initializes_before_starting_long_running_processes() ->
     assert 'command: ["thesistrace-initialize"]' in initialize_service
     assert "condition: service_completed_successfully" in api_service
     assert "condition: service_completed_successfully" in research_worker
+    assert "condition: service_completed_successfully" in batch_research_worker
     assert "condition: service_completed_successfully" in tracking_worker
 
     script = """
@@ -362,7 +400,7 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
         assert not (ROOT / "web" / removed_path).exists()
 
 
-def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() -> None:
+def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None:
     assert _http_routes() == {
         ("get", "/api/alpha/catalog"),
         ("post", "/api/alpha/diagnostics"),
@@ -371,6 +409,10 @@ def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() ->
         ("post", "/api/research-folders"),
         ("patch", "/api/research-folders/{folder_id}"),
         ("delete", "/api/research-folders/{folder_id}"),
+        ("get", "/api/research-batches"),
+        ("post", "/api/research-batches"),
+        ("get", "/api/research-batches/{batch_id}"),
+        ("post", "/api/research-batches/{batch_id}/cancel"),
         ("get", "/api/research-runs"),
         ("post", "/api/research-runs"),
         ("patch", "/api/research-runs/{run_id}"),
@@ -571,6 +613,49 @@ def test_publication_hides_physical_s3_keys_and_uses_the_standard_client() -> No
         assert forbidden not in source.lower()
 
 
+def test_publication_runtime_has_one_bounded_request_attempt() -> None:
+    class FailingS3Handler(BaseHTTPRequestHandler):
+        request_count = 0
+
+        def do_GET(self) -> None:
+            type(self).request_count += 1
+            payload = b"<Error><Code>InternalError</Code><Message>failed</Message></Error>"
+            self.send_response(500)
+            self.send_header("Content-Type", "application/xml")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FailingS3Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    config = publication_request_config()
+    client = boto3.client(
+        "s3",
+        endpoint_url=f"http://127.0.0.1:{server.server_port}",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        region_name="us-east-1",
+        config=config,
+    )
+    try:
+        with pytest.raises(ClientError):
+            client.list_buckets()
+    finally:
+        client.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert PUBLICATION_REQUEST_TIMEOUT_SECONDS == 5.0
+    assert config.connect_timeout == config.read_timeout == 5.0
+    assert FailingS3Handler.request_count == 1
+    assert not thread.is_alive()
+
+
 def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> None:
     service = (ROOT / "src" / "thesistrace" / "publication" / "service.py").read_text()
     schema = (ROOT / "src" / "thesistrace" / "publication" / "schema.sql").read_text()
@@ -581,7 +666,13 @@ def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> No
     assert "def record(" in service
     assert "def read_in_transaction(" in service
     assert ".commit(" not in service
-    for product_schema in ("data.", "definitions.", "research_runs.", "daily_tracks."):
+    for product_schema in (
+        "data.",
+        "definitions.",
+        "research_runs.",
+        "research_batches.",
+        "daily_tracks.",
+    ):
         assert product_schema not in service
         assert product_schema not in schema
 
@@ -669,6 +760,9 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     execution_source = (
         ROOT / "src" / "thesistrace" / "research_run" / "execution.py"
     ).read_text()
+    transport_source = (
+        ROOT / "src" / "thesistrace" / "research_run" / "supervised_child.py"
+    ).read_text()
     service_source = (
         ROOT / "src" / "thesistrace" / "research_run" / "service.py"
     ).read_text()
@@ -684,10 +778,17 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     assert "deepcopy(" not in execution_source
     assert "run_kernel(" not in service_source
     assert "canonical-data:/var/lib/thesistrace/canonical-data:ro" in compose_source
+    assert (
+        "batch-attempt-control:/var/lib/thesistrace/canonical-data/.batch-attempts"
+        in compose_source
+    )
     assert ":/var/lib/thesistrace/canonical-data:ro" in test_compose_source
-    child_environment = execution_source[
-        execution_source.index("def _child_environment(") : execution_source.index(
-            "def _read_message("
+    assert (
+        ":/var/lib/thesistrace/canonical-data/.batch-attempts" in test_compose_source
+    )
+    child_environment = transport_source[
+        transport_source.index("def child_environment(") : transport_source.index(
+            "def enforce_cancellation_deadline("
         )
     ]
     for authority in (

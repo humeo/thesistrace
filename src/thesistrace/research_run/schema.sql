@@ -58,6 +58,7 @@ CREATE TABLE research_runs.runs (
     requested_start_date date NOT NULL,
     requested_end_date date NOT NULL,
     status text NOT NULL,
+    execution_owner text DEFAULT 'ordinary' NOT NULL,
     immutable_input jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -69,6 +70,9 @@ CREATE TABLE research_runs.runs (
     CONSTRAINT runs_check CHECK ((requested_start_date <= requested_end_date)),
     CONSTRAINT runs_name_check CHECK (name = btrim(name) AND name <> ''),
     CONSTRAINT runs_execution_fence_check CHECK ((execution_fence >= 0)),
+    CONSTRAINT runs_execution_owner_check CHECK (
+        execution_owner = ANY (ARRAY['ordinary'::text, 'research_batch'::text])
+    ),
     CONSTRAINT runs_immutable_input_check CHECK (
         jsonb_typeof(immutable_input) = 'object'::text
         AND immutable_input ? 'research_kind'

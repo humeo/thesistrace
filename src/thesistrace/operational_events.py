@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -30,7 +31,14 @@ _SAFE_METHOD_PATTERN = re.compile(r"^[A-Z]{3,16}$")
 _SAFE_ROUTE_PATTERN = re.compile(r"^/[A-Za-z0-9_./{}:-]{0,255}$")
 _SAFE_EXCEPTION_TYPE_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,127}$")
 _ID_FIELDS = frozenset(
-    {"operation_id", "run_id", "track_id", "attempt_id", "http_request_id"}
+    {
+        "operation_id",
+        "run_id",
+        "batch_id",
+        "track_id",
+        "attempt_id",
+        "http_request_id",
+    }
 )
 _ENUM_FIELDS = frozenset(
     {"worker_role", "phase", "previous_status", "status", "outcome"}
@@ -40,6 +48,7 @@ _STRING_FIELDS = frozenset(
     {
         "operation_id",
         "run_id",
+        "batch_id",
         "track_id",
         "attempt_id",
         "http_request_id",
@@ -56,7 +65,29 @@ _STRING_FIELDS = frozenset(
         "exception_type",
     }
 )
-_INTEGER_FIELDS = frozenset({"attempt_number", "duration_ms", "status_code"})
+_INTEGER_FIELDS = frozenset(
+    {
+        "attempt_number",
+        "duration_ms",
+        "status_code",
+        "slot",
+        "slot_count",
+        "item_ordinal",
+        "child_peak_rss_bytes",
+    }
+)
+_BOOLEAN_FIELDS = frozenset(
+    {
+        "acknowledged",
+        "alpha_factor_task_started",
+        "alpha_factor_task_completed",
+        "strategy_task_started",
+        "strategy_task_completed",
+    }
+)
+_NUMERIC_MAPPING_FIELDS = frozenset(
+    {"data_io", "child_calculation_phase_seconds"}
+)
 _MAX_STRING_LENGTH = 512
 _MAX_STACK_FRAMES = 20
 
@@ -154,9 +185,35 @@ def _allowlisted_context(context: Mapping[str, object]) -> dict[str, object]:
         value = context.get(name)
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             safe[name] = value
+    for name in _BOOLEAN_FIELDS:
+        value = context.get(name)
+        if isinstance(value, bool):
+            safe[name] = value
+    for name in _NUMERIC_MAPPING_FIELDS:
+        value = _safe_numeric_mapping(context.get(name))
+        if value is not None:
+            safe[name] = value
     frames = _safe_stack_frames(context.get("stack_frames"))
     if frames:
         safe["stack_frames"] = frames
+    return safe
+
+
+def _safe_numeric_mapping(value: object) -> dict[str, int | float] | None:
+    if not isinstance(value, Mapping) or not value:
+        return None
+    safe: dict[str, int | float] = {}
+    for name, candidate in value.items():
+        if not isinstance(name, str) or _NAME_PATTERN.fullmatch(name) is None:
+            return None
+        if (
+            not isinstance(candidate, int | float)
+            or isinstance(candidate, bool)
+            or not math.isfinite(candidate)
+            or candidate < 0
+        ):
+            return None
+        safe[name] = candidate
     return safe
 
 
@@ -171,6 +228,8 @@ def _is_safe_string(name: str, value: object) -> bool:
         return _SAFE_OPERATION_ID_PATTERN.fullmatch(value) is not None
     if name in _ID_FIELDS:
         return _SAFE_ID_PATTERN.fullmatch(value) is not None
+    if name == "worker_role":
+        return value in {"research", "batch-research", "tracking"}
     if name in _ENUM_FIELDS:
         return _SAFE_ENUM_PATTERN.fullmatch(value) is not None
     if name in _TIMESTAMP_FIELDS:

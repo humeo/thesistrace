@@ -12,6 +12,15 @@ PRODUCT_STATE_COUNT_NAMES = (
     "research_admission_receipts",
     "research_cancel_receipts",
     "research_tracking_receipts",
+    "research_batches",
+    "research_batch_items",
+    "research_batch_attempts",
+    "research_batch_starting_claims",
+    "research_batch_task_attempts",
+    "research_batch_private_artifacts",
+    "research_batch_progress",
+    "research_batch_admission_receipts",
+    "research_batch_cancel_receipts",
     "daily_tracks",
     "tracking_checkpoints",
     "tracking_progressions",
@@ -49,6 +58,24 @@ def product_state_counts(
                     AS research_cancel_receipts,
                 (SELECT count(*) FROM research_runs.start_tracking_receipts)
                     AS research_tracking_receipts,
+                (SELECT count(*) FROM research_batches.batches)
+                    AS research_batches,
+                (SELECT count(*) FROM research_batches.items)
+                    AS research_batch_items,
+                (SELECT count(*) FROM research_batches.attempts)
+                    AS research_batch_attempts,
+                (SELECT count(*) FROM research_batches.starting_claims)
+                    AS research_batch_starting_claims,
+                (SELECT count(*) FROM research_batches.task_attempts)
+                    AS research_batch_task_attempts,
+                (SELECT count(*) FROM research_batches.private_alpha_factor_artifacts)
+                    AS research_batch_private_artifacts,
+                (SELECT count(*) FROM research_batches.progress)
+                    AS research_batch_progress,
+                (SELECT count(*) FROM research_batches.admission_receipts)
+                    AS research_batch_admission_receipts,
+                (SELECT count(*) FROM research_batches.cancel_receipts)
+                    AS research_batch_cancel_receipts,
                 (SELECT count(*) FROM daily_tracks.tracks) AS daily_tracks,
                 (SELECT count(*) FROM daily_tracks.session_checkpoints)
                     AS tracking_checkpoints,

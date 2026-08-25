@@ -20,9 +20,11 @@ Data Operator prepares the current Dataset Head
     -> later market sessions advance that Track
 ```
 
-The user-visible resources are Data Overview, Research Folders, Research
-(ResearchRuns), and DailyTracks. Browser Draft is local authoring state rather
-than a server resource. Data Generation, execution Attempt, Tracking Checkpoint,
+The browser-visible resources are Data Overview, Research Folders, Research
+(ResearchRuns), and DailyTracks. Research Batches are a backend API resource in
+V1 and their child ResearchRuns appear in the Batch Research Folder; there is no
+Batch browser surface. Browser Draft is local authoring state rather than a
+server resource. Data Generation, execution Attempt, Tracking Checkpoint,
 Working Cache, publication manifest, and schema fingerprint are implementation
 concepts, not additional product resources.
 
@@ -31,18 +33,20 @@ not part of the active system. There is no Local/Hosted product mode.
 
 ## Runtime topology
 
-One Compose topology contains Web, API, fixed-role Research and Tracking Worker
-pools, PostgreSQL, RustFS, and a one-shot schema initializer. Both Worker roles
-start from the same Production Image and executable. Persistent Development and
-disposable Test use the same product implementation with different Compose
-identities, ports, volumes, and data mounts.
+One Compose topology contains Web, API, three fixed-role Worker pools,
+PostgreSQL, RustFS, and a one-shot schema initializer. The ordinary Research,
+Batch Research, and Tracking roles start from the same Production Image and
+executable. Persistent Development and disposable Test use the same product
+implementation with different Compose identities, ports, volumes, and data
+mounts.
 
 ```mermaid
 flowchart LR
     B["Browser"] --> W["Web"]
     W --> H["HTTP adapter"]
     H --> M["Core modules"]
-    R["Research Worker pool"] --> M
+    R["Ordinary Research Worker pool"] --> M
+    Q["Batch Research Worker pool"] --> M
     T["Tracking Worker pool"] --> M
     O["Private Data Operator"] --> D["Data module"]
     M --> P["PostgreSQL"]
@@ -351,18 +355,25 @@ administration, authentication, or deployment modes.
 ## Workers
 
 Durable PostgreSQL state is work acceptance. Each Worker process freezes one
-role at startup and has exactly one execution slot. A Research Worker claims
-only the strict-FIFO ResearchRun Queue and supervises at most one execution child
-that runs one ResearchRun's Chunks sequentially. A Tracking Worker claims only
-Tracking Advance work and supervises at most one execution child. The two pools
-scale independently; a Worker never changes roles, executes both work types, or
-selects an execution mode according to work size.
+role at startup and has exactly one execution slot. An ordinary Research Worker
+claims only the strict-FIFO ordinary ResearchRun Queue. A Batch Research Worker
+claims one complete Research Batch and executes its ordered tasks through one
+supervised child. A Tracking Worker claims only Tracking Advance work. The three
+pools scale independently; a Worker never changes roles or falls back to a
+different claim set.
 
 The Research Worker supervisor owns the Attempt lease, fence, Data Generation
 Pin, Checkpoints, and publication. Its execution child can read only the frozen
 mounted Canonical Data Generation and return bounded Chunk data; it has no
 PostgreSQL or RustFS write authority. The supervisor validates every child result
 against current ownership before committing it.
+
+The Batch Research supervisor owns the Batch Attempt, fence, Data Generation
+Pin, complete-task acknowledgements, private shared artifact, cancellation, and
+per-child-Run Result publication. Factor Batches prepare common Data, Universe,
+and Labels once before independent Alpha-and-Factor tasks. Strategy Sweeps
+prepare Data and calculate their single shared Alpha and Factor once before one
+Strategy task per ordered parameter item. A Batch has no Batch-level Result.
 
 The Tracking Worker uses the same authority boundary: its supervisor owns the
 Advance, Pin, Working Cache, Tracking Checkpoint, and publication, while its
@@ -384,17 +395,18 @@ Tracking Head and returns one all-or-nothing Advance result without a private
 checkpoint. Attempt end or supervisor-connection loss ends the child; a child
 never crosses into another Attempt.
 
-When idle, either role may reclaim at most one pending shared Publication object
+When idle, any role may reclaim at most one pending shared Publication object
 per poll under the Publication mutation fence. Only the Tracking Worker
-reconciles Tracking Working Caches. Shared maintenance never creates another
-execution slot or a third Worker role.
+reconciles Tracking Working Caches, and only the Batch Research Worker
+reconciles inactive Batch Attempt files. Shared maintenance never creates
+another execution slot or role.
 
-Development runs one 2-vCPU, 2-GiB replica in each pool. Each pool has its own
-deployment capacity declaration, and both planners reserve 25 percent of the
-container memory outside their execution budget. Production owns each pool's
-capacity and replica count. ResearchRuns and DailyTracks claim and fence their
-own Attempts; there is no Temporal, outbox relay, event bus, global job table,
-or generic dispatch interface.
+Development runs one 2-vCPU, 2-GiB replica in each of the three pools. Each pool
+has its own deployment capacity declaration, and every execution supervisor
+reserves 25 percent of container memory outside its child budget. Production
+owns each pool's capacity and replica count. ResearchRuns, Research Batches, and
+DailyTracks claim and fence their own Attempts; there is no Temporal, outbox
+relay, event bus, global job table, or generic dispatch interface.
 
 ## Verification
 

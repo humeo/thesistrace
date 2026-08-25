@@ -19,7 +19,11 @@ from thesistrace.data.head_store import DatasetHeadPointer, MountedDatasetHeadSt
 _LIFECYCLE_LOCK = "thesistrace-mounted-data-lifecycle"
 CURRENT_DATA_CUTOVER_LOCK = "thesistrace-current-data-cutover"
 MOUNTED_DATA_MUTATION_LOCK = "thesistrace-mounted-data-mutation"
-_OWNER_KINDS = {"research_run_attempt", "tracking_advance_attempt"}
+_OWNER_KINDS = {
+    "research_batch_attempt",
+    "research_run_attempt",
+    "tracking_advance_attempt",
+}
 
 
 class DataLifecycleError(RuntimeError):

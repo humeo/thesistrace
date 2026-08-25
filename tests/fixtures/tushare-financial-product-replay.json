@@ -779,6 +779,34 @@
             "0"
           ]
         ]
+      },
+      "000002.SZ": {
+        "fields": [
+          "ts_code",
+          "ann_date",
+          "f_ann_date",
+          "end_date",
+          "report_type",
+          "comp_type",
+          "end_type",
+          "total_revenue",
+          "n_income_attr_p",
+          "update_flag"
+        ],
+        "items": [
+          [
+            "000002.SZ",
+            "20260425",
+            "",
+            "20251231",
+            "1",
+            "1",
+            "4",
+            "80000000",
+            "8000000",
+            "0"
+          ]
+        ]
       }
     },
     "balancesheet": {
@@ -811,6 +839,36 @@
             "0"
           ]
         ]
+      },
+      "000002.SZ": {
+        "fields": [
+          "ts_code",
+          "ann_date",
+          "f_ann_date",
+          "end_date",
+          "report_type",
+          "comp_type",
+          "end_type",
+          "total_assets",
+          "total_liab",
+          "total_hldr_eqy_exc_min_int",
+          "update_flag"
+        ],
+        "items": [
+          [
+            "000002.SZ",
+            "20260425",
+            "",
+            "20251231",
+            "1",
+            "1",
+            "4",
+            "800000000",
+            "300000000",
+            "500000000",
+            "0"
+          ]
+        ]
       }
     },
     "cashflow": {
@@ -836,6 +894,32 @@
             "1",
             "4",
             "30000000",
+            "0"
+          ]
+        ]
+      },
+      "000002.SZ": {
+        "fields": [
+          "ts_code",
+          "ann_date",
+          "f_ann_date",
+          "end_date",
+          "report_type",
+          "comp_type",
+          "end_type",
+          "n_cashflow_act",
+          "update_flag"
+        ],
+        "items": [
+          [
+            "000002.SZ",
+            "20260425",
+            "",
+            "20251231",
+            "1",
+            "1",
+            "4",
+            "25000000",
             "0"
           ]
         ]

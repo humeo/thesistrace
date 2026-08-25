@@ -102,6 +102,55 @@ def test_decimal_fields_follow_the_numeric_execution_contract_bit_exactly() -> N
     )
 
 
+def test_decimal_fields_keep_correct_rounding_when_arrow_cast_selects_adjacent_float() -> None:
+    session = "2026-08-13"
+    instrument_id = "equity:000001.SZ"
+    value = Decimal("3944830730744934695645.63507900")
+    series = ColumnarResearchData(
+        sessions=(session,),
+        _instruments=pa.table(
+            {
+                "instrument_id": [instrument_id],
+                "board": ["main"],
+                "listed_to": [""],
+            }
+        ),
+        _eod_prices=pa.table(
+            {
+                "session_date": [session],
+                "instrument_id": [instrument_id],
+                "open_raw": [value],
+                "open_adj": [value],
+                "close_adj": [value],
+                "turnover_amount_cny": [Decimal("1")],
+            }
+        ),
+        _universes=pa.table(
+            {
+                "session": [session],
+                "instrument_ids": [[instrument_id]],
+            }
+        ),
+        _trading_states=_empty_table(),
+        _price_limits=_empty_table(),
+        _industries=_empty_table(),
+        _financial_values=None,
+        _field_columns={"price.close.adjusted": "close_adj"},
+    )
+
+    field_value = float(
+        series.numeric_field_matrices(
+            ("price.close.adjusted",),
+            (instrument_id,),
+        )["price.close.adjusted"][0, 0]
+    )
+    adjusted_open = float(series.adjusted_open_matrix((instrument_id,))[0, 0])
+
+    expected = canonical_binary64_bytes(decimal_to_binary64(value))
+    assert canonical_binary64_bytes(field_value) == expected
+    assert canonical_binary64_bytes(adjusted_open) == expected
+
+
 def test_zero_turnover_member_cannot_fail_the_columnar_benchmark() -> None:
     signal, entry, exit_session = ("2010-02-09", "2010-02-10", "2010-02-11")
     active = "equity:000001.SZ"

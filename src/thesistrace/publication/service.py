@@ -269,6 +269,37 @@ class Publication:
             serialization=serialization,
         )
 
+    def stage_bytes(
+        self,
+        content: bytes,
+        *,
+        media_type: str,
+        serialization: Mapping[str, object],
+        staging_authority: StagingAuthority | None = None,
+    ) -> StagedPayload:
+        if not content or not media_type:
+            raise PublicationPreparationError("staged bytes require content and media type")
+        canonical_serialization = _canonical_json_value(
+            serialization,
+            subject="serialization",
+        )
+        if not isinstance(canonical_serialization, dict):
+            raise PublicationPreparationError("staged bytes serialization must be an object")
+        self._ensure_bucket(staging_authority=staging_authority)
+        digest = hashlib.sha256(content).hexdigest()
+        self._put_immutable(
+            digest,
+            content,
+            media_type=media_type,
+            staging_authority=staging_authority,
+        )
+        return StagedPayload(
+            sha256=digest,
+            byte_size=len(content),
+            media_type=media_type,
+            serialization=canonical_serialization,
+        )
+
     def verify_prepared(self, prepared: PreparedPublication) -> VerifiedBundle:
         manifest = _load_manifest(prepared._manifest_bytes, prepared.manifest_sha256)
         objects = _manifest_objects(manifest)
@@ -414,19 +445,31 @@ class Publication:
         if uploaded_before.tzinfo is None or uploaded_before.utcoffset() is None:
             raise ValueError("orphan cutoff must be timezone-aware")
         uploaded: set[str] = set()
-        paginator = self._s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=self._bucket, Prefix="publication/v1/sha256/"):
-            for item in page.get("Contents", []):
-                last_modified = item.get("LastModified")
-                if not isinstance(last_modified, datetime):
-                    raise PublicationVerificationError(
-                        "Publication object listing has no modification time"
-                    )
-                if last_modified > uploaded_before:
-                    continue
-                digest = _digest_from_object_key(str(item["Key"]))
-                if digest is not None:
-                    uploaded.add(digest)
+        try:
+            paginator = self._s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(
+                Bucket=self._bucket,
+                Prefix="publication/v1/sha256/",
+            ):
+                for item in page.get("Contents", []):
+                    last_modified = item.get("LastModified")
+                    if not isinstance(last_modified, datetime):
+                        raise PublicationVerificationError(
+                            "Publication object listing has no modification time"
+                        )
+                    if last_modified > uploaded_before:
+                        continue
+                    digest = _digest_from_object_key(str(item["Key"]))
+                    if digest is not None:
+                        uploaded.add(digest)
+        except ClientError as error:
+            raise PublicationUnavailableError(
+                "Publication object listing is temporarily unavailable"
+            ) from error
+        except TRANSIENT_S3_ERRORS as error:
+            raise PublicationUnavailableError(
+                "Publication object listing is temporarily unavailable"
+            ) from error
         # Read committed truth after the object snapshot to narrow the race with
         # a concurrent record. Cleanup must still use an aged cutoff and recheck.
         with self._database.transaction() as transaction:
@@ -478,6 +521,23 @@ class Publication:
                 """,
                 (digest, digest),
             )
+
+    def collect_one_orphan(self, *, uploaded_before: datetime) -> bool:
+        """Delete one aged upload that still has no committed Publication record."""
+
+        orphan_sha256s = self.find_orphan_sha256s(uploaded_before=uploaded_before)
+        for digest in orphan_sha256s:
+            with self._database.transaction() as transaction:
+                lock_publication_mutation(transaction)
+                recorded = transaction.execute(
+                    "SELECT 1 FROM publication.objects WHERE sha256 = %s",
+                    (digest,),
+                ).fetchone()
+                if recorded is not None:
+                    continue
+                self._delete_immutable(digest)
+                return True
+        return False
 
     def collect_one_pending_deletion(self) -> bool:
         """Delete one unreferenced immutable object with a durable retry record."""

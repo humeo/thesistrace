@@ -37,10 +37,12 @@ remove_volume_if_present() {
 
 case "$command" in
   reset)
+    remove_volume_if_present "${project_name}_batch-attempt-control"
     remove_volume_if_present "${project_name}_postgres-data"
     remove_volume_if_present "${project_name}_rustfs-data"
     ;;
   erase)
+    remove_volume_if_present "${project_name}_batch-attempt-control"
     remove_volume_if_present "${project_name}_postgres-data"
     remove_volume_if_present "${project_name}_rustfs-data"
     remove_volume_if_present "${project_name}_canonical-data"

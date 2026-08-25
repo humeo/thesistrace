@@ -147,6 +147,64 @@ def test_operational_event_accepts_canonical_data_refresh_operation_ids() -> Non
     ]
 
 
+def test_operational_event_keeps_safe_batch_qualification_evidence_only() -> None:
+    output = StringIO()
+    sink = _sink(output)
+
+    sink(
+        OperationalEvent(
+            level="INFO",
+            component="batch_research_worker",
+            event="research_batch_execution_item_succeeded",
+            context={
+                "batch_id": "batch_0123456789abcdef",
+                "attempt_id": "batch_attempt_0123456789abcdef",
+                "worker_role": "batch-research",
+                "slot": 1,
+                "slot_count": 1,
+                "item_ordinal": 2,
+                "child_peak_rss_bytes": 1024,
+                "acknowledged": True,
+                "alpha_factor_task_started": False,
+                "alpha_factor_task_completed": True,
+                "strategy_task_started": True,
+                "strategy_task_completed": True,
+                "data_io": {"bytes_read": 2048, "rows_scanned": 16},
+                "child_calculation_phase_seconds": {
+                    "factor": 0.25,
+                    "strategy": 0.5,
+                },
+                "item_key": "private-user-item",
+                "message": "canary-secret",
+            },
+        )
+    )
+
+    event = json.loads(output.getvalue())
+    assert event == {
+        "acknowledged": True,
+        "alpha_factor_task_completed": True,
+        "alpha_factor_task_started": False,
+        "attempt_id": "batch_attempt_0123456789abcdef",
+        "batch_id": "batch_0123456789abcdef",
+        "child_calculation_phase_seconds": {"factor": 0.25, "strategy": 0.5},
+        "child_peak_rss_bytes": 1024,
+        "component": "batch_research_worker",
+        "data_io": {"bytes_read": 2048, "rows_scanned": 16},
+        "event": "research_batch_execution_item_succeeded",
+        "item_ordinal": 2,
+        "level": "INFO",
+        "slot": 1,
+        "slot_count": 1,
+        "strategy_task_completed": True,
+        "strategy_task_started": True,
+        "timestamp": "2026-08-24T00:00:00.000Z",
+        "worker_role": "batch-research",
+    }
+    assert "private-user-item" not in output.getvalue()
+    assert "canary-secret" not in output.getvalue()
+
+
 def test_http_default_sink_emits_json_to_process_stderr() -> None:
     completed = subprocess.run(
         [

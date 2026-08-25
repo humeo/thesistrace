@@ -10,6 +10,24 @@ from thesistrace.data.market_series import (
     market_field_column_bindings,
     market_field_columns,
 )
+from thesistrace.fixture import build_minimal_canonical_fixture
+
+
+def test_minimal_fixture_exposes_the_authorable_adjusted_close_field() -> None:
+    catalog = build_minimal_canonical_fixture()["field_catalog"]
+
+    assert catalog == [
+        {
+            "name": "close",
+            "field_id": "price.close.adjusted",
+            "definition": "causal cumulative-adjusted close",
+            "unit": "CNY/share",
+            "time_semantics": "post-close",
+            "alpha_authorable": True,
+            "release_available_from": "2026-08-07",
+            "coverage": "canonical EOD price rows",
+        }
+    ]
 
 
 def test_market_alpha_names_resolve_to_the_existing_physical_columns() -> None:

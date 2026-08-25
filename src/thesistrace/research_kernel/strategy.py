@@ -50,6 +50,15 @@ class StrategyTransition:
     ledger: tuple[dict[str, object], ...]
 
 
+@dataclass(frozen=True)
+class _StrategyExecution:
+    payload: dict[str, object]
+    prior_metric_state: dict[str, object] | None
+    prior_daily_count: int
+    turnover_events: tuple[dict[str, object], ...]
+    cumulative_cost: Decimal
+
+
 def transition_strategy(
     research_data: AlignedResearchData,
     alpha_matrix: dict[str, object],
@@ -231,6 +240,63 @@ def run_strategy(
     ledger: list[dict[str, object]] | None = None,
     cancellation_check: Callable[[], None] | None = None,
 ) -> dict[str, object]:
+    execution = _execute_strategy(
+        research_data,
+        alpha_matrix,
+        definition,
+        origin_session=origin_session,
+        terminal_cutoff=terminal_cutoff,
+        continuation=continuation,
+        skip_execution_sessions=skip_execution_sessions,
+        ledger=ledger,
+        cancellation_check=cancellation_check,
+    )
+    return (
+        _strategy_continuation_result(execution)
+        if continuation is not None
+        and isinstance(continuation.get("metric_state"), Mapping)
+        else _strategy_publication_result(execution)
+    )
+
+
+def run_strategy_with_metric_state(
+    research_data: AlignedResearchData | ColumnarResearchSeries,
+    alpha_matrix: dict[str, object],
+    definition: dict[str, object],
+    *,
+    origin_session: str | None = None,
+    terminal_cutoff: bool = True,
+    continuation: dict[str, object] | None = None,
+    skip_execution_sessions: set[str] | None = None,
+    ledger: list[dict[str, object]] | None = None,
+    cancellation_check: Callable[[], None] | None = None,
+) -> dict[str, object]:
+    execution = _execute_strategy(
+        research_data,
+        alpha_matrix,
+        definition,
+        origin_session=origin_session,
+        terminal_cutoff=terminal_cutoff,
+        continuation=continuation,
+        skip_execution_sessions=skip_execution_sessions,
+        ledger=ledger,
+        cancellation_check=cancellation_check,
+    )
+    return _strategy_continuation_result(execution)
+
+
+def _execute_strategy(
+    research_data: AlignedResearchData | ColumnarResearchSeries,
+    alpha_matrix: dict[str, object],
+    definition: dict[str, object],
+    *,
+    origin_session: str | None = None,
+    terminal_cutoff: bool = True,
+    continuation: dict[str, object] | None = None,
+    skip_execution_sessions: set[str] | None = None,
+    ledger: list[dict[str, object]] | None = None,
+    cancellation_check: Callable[[], None] | None = None,
+) -> _StrategyExecution:
     calendar = list(research_data.sessions)
     if continuation is None:
         if origin_session is None:
@@ -309,6 +375,7 @@ def run_strategy(
         diagnostics: list[dict[str, object]] = []
         rebalance_events: list[dict[str, object]] = []
         turnover_events: list[dict[str, object]] = []
+        prior_turnover_events: list[dict[str, object]] = []
         prior_metric_state: dict[str, object] | None = None
         prior_daily_count = 0
     else:
@@ -336,13 +403,31 @@ def run_strategy(
         rejections = [dict(item) for item in continuation.get("rejections", [])]
         diagnostics = [dict(item) for item in continuation.get("diagnostics", [])]
         rebalance_events = [dict(item) for item in continuation.get("rebalance_events", [])]
+        prior_metrics = continuation.get("metrics", {})
+        prior_turnover = (
+            prior_metrics.get("turnover", {})
+            if isinstance(prior_metrics, Mapping)
+            else {}
+        )
+        prior_turnover_values = (
+            prior_turnover.get("events", [])
+            if isinstance(prior_turnover, Mapping)
+            else []
+        )
+        if not isinstance(prior_turnover_values, list) or any(
+            not isinstance(item, Mapping) for item in prior_turnover_values
+        ):
+            raise StrategyCalculationError("continuation turnover history is invalid")
+        prior_turnover_events = [dict(item) for item in prior_turnover_values]
         metric_state = continuation.get("metric_state")
-        prior_metric_state = dict(metric_state) if isinstance(metric_state, Mapping) else None
-        if prior_metric_state is None:
-            prior_turnover = continuation.get("metrics", {}).get("turnover", {}).get("events", [])
-            turnover_events = [dict(item) for item in prior_turnover]
-        else:
+        if metric_state is None:
+            prior_metric_state = None
+            turnover_events = list(prior_turnover_events)
+        elif isinstance(metric_state, Mapping):
+            prior_metric_state = dict(metric_state)
             turnover_events = []
+        else:
+            raise StrategyCalculationError("continuation metric state is invalid")
 
     for session in report_calendar:
         if cancellation_check is not None:
@@ -727,23 +812,6 @@ def run_strategy(
         if cancellation_check is not None:
             cancellation_check()
 
-    if prior_metric_state is None:
-        metrics = strategy_metrics(
-            daily=daily,
-            turnover_events=turnover_events,
-            cumulative_cost=cumulative_cost,
-            rejections=rejections,
-        )
-        metric_state = None
-    else:
-        metric_state = advance_strategy_metric_state(
-            prior_metric_state,
-            daily=daily[prior_daily_count:],
-            turnover_events=turnover_events,
-            cumulative_cost=cumulative_cost,
-            rejections=rejections,
-        )
-        metrics = strategy_metrics_from_state(metric_state)
     positions_payload = _position_payload(positions)
     payload = {
         "alpha_checksum": alpha_matrix["checksum"],
@@ -756,14 +824,62 @@ def run_strategy(
         "rebalance_events": rebalance_events,
         "rejections": rejections,
         "diagnostics": diagnostics,
-        "metrics": metrics,
     }
-    if metric_state is not None:
-        payload["metric_state"] = metric_state
+    return _StrategyExecution(
+        payload=payload,
+        prior_metric_state=prior_metric_state,
+        prior_daily_count=prior_daily_count,
+        turnover_events=tuple(turnover_events),
+        cumulative_cost=cumulative_cost,
+    )
+
+
+def _strategy_publication_result(execution: _StrategyExecution) -> dict[str, object]:
+    if execution.prior_metric_state is None:
+        daily = execution.payload["daily"]
+        rejections = execution.payload["rejections"]
+        assert isinstance(daily, list)
+        assert isinstance(rejections, list)
+        metrics = strategy_metrics(
+            daily=daily,
+            turnover_events=list(execution.turnover_events),
+            cumulative_cost=execution.cumulative_cost,
+            rejections=rejections,
+        )
+    else:
+        metrics = strategy_metrics_from_state(_strategy_metric_state(execution))
+    payload = {**execution.payload, "metrics": metrics}
     return {
         **payload,
         "checksum": hashlib.sha256(canonical_json_bytes(payload)).hexdigest(),
     }
+
+
+def _strategy_continuation_result(execution: _StrategyExecution) -> dict[str, object]:
+    metric_state = _strategy_metric_state(execution)
+    payload = {
+        **execution.payload,
+        "metrics": strategy_metrics_from_state(metric_state),
+        "metric_state": metric_state,
+    }
+    return {
+        **payload,
+        "checksum": hashlib.sha256(canonical_json_bytes(payload)).hexdigest(),
+    }
+
+
+def _strategy_metric_state(execution: _StrategyExecution) -> dict[str, object]:
+    daily = execution.payload["daily"]
+    rejections = execution.payload["rejections"]
+    assert isinstance(daily, list)
+    assert isinstance(rejections, list)
+    return advance_strategy_metric_state(
+        execution.prior_metric_state,
+        daily=daily[execution.prior_daily_count :],
+        turnover_events=list(execution.turnover_events),
+        cumulative_cost=execution.cumulative_cost,
+        rejections=rejections,
+    )
 
 
 def _position_payload(positions: Mapping[str, Position]) -> list[dict[str, object]]:

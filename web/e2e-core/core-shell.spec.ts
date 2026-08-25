@@ -228,6 +228,11 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     expect(folderRead.ok()).toBeTruthy();
     expect((await folderRead.json()).items).toMatchObject([
       { id: "folder_default", name: "Default", is_default: true },
+      {
+        id: "folder_batch_research",
+        name: "Batch Research",
+        is_default: false,
+      },
     ]);
     expect(responses.some((entry) => entry.includes("/api/definitions"))).toBe(false);
     expect(externalRequests, "browser journey must remain local-only").toEqual([]);
@@ -497,6 +502,127 @@ test("running Research cancellation stays visible until the child exits", async 
     }
     if (workerPaused) controlWorker("unpause");
   }
+});
+
+test("Batch children keep ordinary Research organization, reuse, tracking, and deletion", async ({ page }) => {
+  test.setTimeout(240_000);
+  const admitted = await page.request.post("/api/research-batches", {
+    data: {
+      request_id: "browser-batch-ordinary-research",
+      batch_kind: "strategy_sweep",
+      start_date: "2026-08-04",
+      end_date: "2026-08-05",
+      universe: "top300",
+      neutralization: "none",
+      alpha: { formula: "close", hypothesis: "Browser Batch hypothesis" },
+      strategies: [
+        {
+          item_key: "browser-focused",
+          name: "Browser Batch Focused",
+          holdings_count: 10,
+          rebalance_every_sessions: 1,
+        },
+        {
+          item_key: "browser-broad",
+          name: "Browser Batch Broad",
+          holdings_count: 20,
+          rebalance_every_sessions: 2,
+        },
+      ],
+    },
+  });
+  expect(admitted.status()).toBe(202);
+  const admittedBatch = await admitted.json() as {
+    id: string;
+    items: Array<{ research_run_id: string }>;
+  };
+  const [firstRunId, siblingRunId] = admittedBatch.items.map((item) => item.research_run_id);
+  if (firstRunId === undefined || siblingRunId === undefined) {
+    throw new Error("Browser Batch did not admit two child Runs");
+  }
+
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/research-batches/${admittedBatch.id}`);
+    return ((await response.json()) as { status: string }).status;
+  }, { timeout: 90_000 }).toBe("succeeded");
+
+  await page.goto("/research-runs");
+  await expect(page.getByRole("link", { name: "Browser Batch Focused" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Browser Batch Broad" })).toBeVisible();
+  await page.getByRole("link", { name: "Browser Batch Focused" }).click();
+  await expect(page).toHaveURL(new RegExp(`/research-runs/${firstRunId}$`));
+  await expect(page.locator(".research-run-facts")).toContainText("Status succeeded");
+  await expect(page.getByRole("button", { name: "Create draft" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Batch/, exact: true })).toHaveCount(0);
+
+  const folderResponse = await page.request.post("/api/research-folders", {
+    data: { name: "Browser Batch Review" },
+  });
+  expect(folderResponse.status()).toBe(201);
+  const folderId = ((await folderResponse.json()) as { id: string }).id;
+  await page.reload();
+  await page.getByLabel("Research name", { exact: true }).fill("Reviewed Batch Child");
+  await page.getByLabel("Folder", { exact: true }).selectOption(folderId);
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.locator(".research-run-facts")).toContainText("Reviewed Batch Child");
+
+  const organizedBatch = await page.request.get(`/api/research-batches/${admittedBatch.id}`);
+  expect(((await organizedBatch.json()) as {
+    items: Array<{ research_run_id: string }>;
+  }).items.map((item) => item.research_run_id)).toEqual([firstRunId, siblingRunId]);
+
+  await page.getByLabel("Target Folder").selectOption(folderId);
+  await page.getByRole("button", { name: "Create draft" }).click();
+  await expect(page).toHaveURL(new RegExp(`/research\\?folder=${folderId}$`));
+  await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked();
+  await expect(page.locator(".cm-content")).toHaveText("close");
+  await expect(page.getByLabel("Notes")).toHaveValue("Browser Batch hypothesis");
+  await expect(page.getByLabel("Holdings count")).toHaveValue("10");
+  await expect(page.getByLabel("Rebalance sessions")).toHaveValue("1");
+  expect((await page.request.get(`/api/research-runs/${firstRunId}`)).status()).toBe(200);
+
+  await page.goto(`/research-runs/${firstRunId}`);
+  await page.getByRole("button", { name: "Start Tracking" }).click();
+  await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
+  const trackId = page.url().split("/").at(-1);
+  if (trackId === undefined) throw new Error("Batch child DailyTrack route has no identity");
+
+  await page.goto(`/research-runs/${firstRunId}`);
+  page.once("dialog", async (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Delete Research" }).click();
+  await expect(page).toHaveURL(/\/research-runs$/);
+  const firstDeleted = await page.request.get(`/api/research-batches/${admittedBatch.id}`);
+  const firstDeletedBatch = await firstDeleted.json() as {
+    status: string;
+    items: Array<{ research_run_id: string; run_availability: string; outcome: string }>;
+  };
+  expect(firstDeletedBatch.status).toBe("succeeded");
+  expect(firstDeletedBatch.items).toMatchObject([
+    { research_run_id: firstRunId, run_availability: "deleted", outcome: "succeeded" },
+    { research_run_id: siblingRunId, run_availability: "available", outcome: "succeeded" },
+  ]);
+  expect((await page.request.get(`/api/research-runs/${siblingRunId}`)).status()).toBe(200);
+  expect((await page.request.get(`/api/daily-tracks/${trackId}`)).status()).toBe(200);
+
+  await page.goto(`/research-runs/${siblingRunId}`);
+  page.once("dialog", async (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Delete Research" }).click();
+  await expect(page).toHaveURL(/\/research-runs$/);
+  const finalBatch = await page.request.get(`/api/research-batches/${admittedBatch.id}`);
+  expect(((await finalBatch.json()) as {
+    items: Array<{ run_availability: string }>;
+  }).items.map((item) => item.run_availability)).toEqual(["deleted", "deleted"]);
+
+  await page.goto(`/daily-tracks/${trackId}`);
+  await expect(page.getByText(`${firstRunId} (deleted)`, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Stop DailyTrack" }).click();
+  await expect(page.locator(".research-run-facts").first()).toContainText(
+    "Status stopped",
+    { timeout: 90_000 },
+  );
+  page.once("dialog", async (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Delete DailyTrack" }).click();
+  expect((await page.request.delete(`/api/research-folders/${folderId}`)).status()).toBe(204);
 });
 
 test("Default and custom Folder Drafts run once, retain edits, reject safely, and publish results", async ({ page }, testInfo) => {

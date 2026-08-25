@@ -6,8 +6,8 @@ status: accepted
 
 Local Development and Test use the same complete Compose service graph.
 Web, API, Worker, PostgreSQL, RustFS, mounted Canonical Data, and
-one-shot schema initialization all belong to it; Worker runs as fixed-role Research and
-Tracking pools. Persistent Development and
+one-shot schema initialization all belong to it; Workers run as the fixed-role
+ordinary Research, Batch Research, and Tracking pools. Persistent Development and
 disposable Test use different overlays, project identities, ports, credentials,
 volumes, and data lifecycles without selecting different product runtimes.
 

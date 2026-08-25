@@ -1745,17 +1745,15 @@ def test_tracking_heartbeat_pool_timeout_enters_the_transient_cycle(
 
         constrained = _InspectableTrackingPostgresDatabase(
             settings.database_url,
-            pool_max_size=2,
-            pool_timeout_seconds=0.05,
+            pool_max_size=3,
+            pool_timeout_seconds=0.2,
         )
         constrained.open()
-        holder: Thread | None = None
-        holder_errors: list[BaseException] = []
         injected = Event()
         tracking_events: list[dict[str, object]] = []
+        heartbeat_timed_out = Event()
 
         def exhaust_pool_during_calculation(event: dict[str, object]) -> None:
-            nonlocal holder
             tracking_events.append(event)
             if (
                 injected.is_set()
@@ -1764,26 +1762,15 @@ def test_tracking_heartbeat_pool_timeout_enters_the_transient_cycle(
             ):
                 return
             injected.set()
-            holder_finished = Event()
-
-            def hold_until_heartbeat_timeout() -> None:
-                try:
-                    poll = Event()
-                    with constrained.transaction():
-                        failed_requests = constrained.failed_request_count()
-                        for _ in range(500):
-                            if constrained.failed_request_count() > failed_requests:
-                                return
-                            poll.wait(0.01)
-                        raise AssertionError("Tracking heartbeat pool request did not time out")
-                except BaseException as error:
-                    holder_errors.append(error)
-                finally:
-                    holder_finished.set()
-
-            holder = Thread(target=hold_until_heartbeat_timeout, daemon=True)
-            holder.start()
-            assert holder_finished.wait(timeout=10)
+            poll = Event()
+            with constrained.transaction(), constrained.transaction():
+                failed_requests = constrained.failed_request_count()
+                for _ in range(500):
+                    if constrained.failed_request_count() > failed_requests:
+                        heartbeat_timed_out.set()
+                        return
+                    poll.wait(0.01)
+                raise AssertionError("Tracking heartbeat pool request did not time out")
 
         processor = DailyTrackService(
             constrained,
@@ -1797,10 +1784,8 @@ def test_tracking_heartbeat_pool_timeout_enters_the_transient_cycle(
         try:
             with pytest.raises(DailyTrackProgressionFailed):
                 processor.process_next(on_execution_event=exhaust_pool_during_calculation)
-            assert holder is not None
-            holder.join(timeout=5)
-            assert not holder.is_alive()
-            assert holder_errors == []
+            assert injected.is_set()
+            assert heartbeat_timed_out.is_set()
         finally:
             constrained.close()
 
@@ -3687,8 +3672,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         assert correction_head.generation_manifest_sha256 != seed_head
         assert correction_head.data_through_session == seed_sessions[-1]
 
-        completed = _run_worker_once(settings, "tracking")
-        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert runtime.daily_tracks.process_next() is False
         assert _tracking_checkpoint_history(settings, track_id) == before_history
         unchanged_state = _stored_tracking_activation(settings, track_id)
         assert (
@@ -3724,8 +3708,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         )
         assert impact_outcome["status"] == "succeeded"
         assert impact_outcome["outcome"] == "published"
-        completed = _run_worker_once(settings, "tracking")
-        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert runtime.daily_tracks.process_next() is True
 
         impact_detail = client.get(f"/api/daily-tracks/{track_id}")
         assert impact_detail.status_code == 200

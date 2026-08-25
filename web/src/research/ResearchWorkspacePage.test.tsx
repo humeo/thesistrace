@@ -259,6 +259,35 @@ describe("browser Research Draft", () => {
     });
   });
 
+  it("copies a Batch Research child into an ordinary browser Draft", () => {
+    const storage = new MemoryStorage();
+
+    expect(useResearchAsDraft(storage, "folder_batch_research", {
+      formula: "rank(close)",
+      hypothesis: "Batch hypothesis",
+      start_date: "2026-08-03",
+      end_date: "2026-08-05",
+      universe: "top1000",
+      neutralization: "industry",
+      research_kind: "strategy_backtest",
+      holdings_count: 25,
+      rebalance_every_sessions: 5,
+    }, () => true)).toBe(true);
+
+    expect(loadResearchDraft(storage, "folder_batch_research")).toMatchObject({
+      researchKind: "strategy_backtest",
+      formula: "rank(close)",
+      hypothesis: "Batch hypothesis",
+      startDate: "2026-08-03",
+      endDate: "2026-08-05",
+      universe: "top1000",
+      neutralization: "industry",
+      holdingsCount: "25",
+      rebalanceEverySessions: "5",
+      pendingAdmission: null,
+    });
+  });
+
   it("requires confirmation only before overwriting unexecuted local values", () => {
     const storage = new MemoryStorage();
     const target = {

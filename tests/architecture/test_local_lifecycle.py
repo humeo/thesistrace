@@ -19,6 +19,7 @@ def _fake_development_docker(tmp_path: Path) -> tuple[Path, Path, dict[str, str]
     volume_root = tmp_path / "volumes"
     volume_root.mkdir()
     for volume in (
+        "thesistrace-dev_batch-attempt-control",
         "thesistrace-dev_canonical-data",
         "thesistrace-dev_postgres-data",
         "thesistrace-dev_rustfs-data",
@@ -52,6 +53,7 @@ if "down" in arguments and "--volumes" in arguments:
         shutil.rmtree(volume)
 if "up" in arguments:
     for volume in (
+        "thesistrace-dev_batch-attempt-control",
         "thesistrace-dev_canonical-data",
         "thesistrace-dev_postgres-data",
         "thesistrace-dev_rustfs-data",
@@ -320,7 +322,7 @@ def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) 
     assert (
         volume_root / "thesistrace-dev_canonical-data" / "preserved-marker"
     ).exists()
-    for volume in ("postgres-data", "rustfs-data"):
+    for volume in ("batch-attempt-control", "postgres-data", "rustfs-data"):
         recreated = volume_root / f"thesistrace-dev_{volume}"
         assert recreated.is_dir()
         assert not (recreated / "preserved-marker").exists()
@@ -329,6 +331,7 @@ def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) 
     assert "down --volumes" not in commands
     assert "volume rm thesistrace-dev_postgres-data" in commands
     assert "volume rm thesistrace-dev_rustfs-data" in commands
+    assert "volume rm thesistrace-dev_batch-attempt-control" in commands
     assert "volume rm thesistrace-dev_canonical-data" not in commands
     assert "up --detach --build --wait --wait-timeout 300" in commands
 
@@ -352,6 +355,7 @@ def test_development_erase_removes_every_development_volume(tmp_path: Path) -> N
     assert "down --volumes" not in commands
     assert "volume rm thesistrace-dev_postgres-data" in commands
     assert "volume rm thesistrace-dev_rustfs-data" in commands
+    assert "volume rm thesistrace-dev_batch-attempt-control" in commands
     assert "volume rm thesistrace-dev_canonical-data" in commands
     assert "up --detach" not in commands
 
@@ -365,6 +369,7 @@ def test_development_topology_declares_every_core_service_and_pinned_infrastruct
         "initialize",
         "api",
         "research-worker",
+        "batch-research-worker",
         "tracking-worker",
         "web",
     ):
@@ -374,14 +379,20 @@ def test_development_topology_declares_every_core_service_and_pinned_infrastruct
     assert ":latest" not in compose
     assert "service_completed_successfully" in compose
     research_worker = compose.split("  research-worker:\n", maxsplit=1)[1].split(
-        "  tracking-worker:\n", maxsplit=1
+        "  batch-research-worker:\n", maxsplit=1
     )[0]
+    batch_research_worker = compose.split(
+        "  batch-research-worker:\n", maxsplit=1
+    )[1].split("  tracking-worker:\n", maxsplit=1)[0]
     tracking_worker = compose.split("  tracking-worker:\n", maxsplit=1)[1].split(
         "  web:\n", maxsplit=1
     )[0]
-    for role, service in (("research", research_worker), ("tracking", tracking_worker)):
+    for role, variable_role, service in (
+        ("research", "RESEARCH", research_worker),
+        ("batch-research", "BATCH_RESEARCH", batch_research_worker),
+        ("tracking", "TRACKING", tracking_worker),
+    ):
         assert f"      - {role}\n" in service
-        variable_role = role.upper()
         assert f"THESISTRACE_{variable_role}_WORKER_CPU_COUNT:-2" in service
         assert f"THESISTRACE_{variable_role}_WORKER_MEMORY_BYTES:-2147483648" in service
         assert (
@@ -438,6 +449,7 @@ def test_core_has_one_operational_output_schema_and_no_log_files() -> None:
     }
 
     assert direct_print_files == {
+        "entrypoints/batch_research_child.py",
         "entrypoints/data_operator.py",
         "entrypoints/diagnose.py",
         "entrypoints/live_tushare.py",
@@ -674,6 +686,7 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
     assert "synchronous_commit=off" not in overlay
     assert "postgres-data:" in base
     assert "rustfs-data:" in base
+    assert "batch-attempt-control:" in base
     assert "name:" not in base.split("volumes:", maxsplit=1)[1]
 
 
@@ -824,7 +837,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
-    for role in ("research-worker", "tracking-worker"):
+    for role in ("research-worker", "batch-research-worker", "tracking-worker"):
         assert (
             f"docker image tag {project_name}-initialize {project_name}-{role}\n"
             in commands
@@ -836,7 +849,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert "wait initialize\n" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 300 "
-        "api research-worker tracking-worker web\n" in commands
+        "api research-worker batch-research-worker tracking-worker web\n" in commands
     )
     assert "--build" not in commands
     assert "uv run thesistrace-initialize" not in commands
@@ -892,7 +905,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
-    for role in ("research-worker", "tracking-worker"):
+    for role in ("research-worker", "batch-research-worker", "tracking-worker"):
         assert (
             f"docker image tag {project_name}-initialize {project_name}-{role}\n"
             in commands
@@ -908,11 +921,11 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     )
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
-        "research-worker tracking-worker\n" in commands
+        "research-worker batch-research-worker tracking-worker\n" in commands
     )
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
-        "api research-worker tracking-worker\n" in commands
+        "api research-worker batch-research-worker tracking-worker\n" in commands
     )
     assert "--build" not in commands
 

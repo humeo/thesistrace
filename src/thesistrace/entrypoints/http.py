@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from time import perf_counter_ns
 from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request, status
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from thesistrace.daily_track import (
@@ -32,6 +34,17 @@ from thesistrace.operational_events import (
     OperationalEventWriter,
     emit_operational_event,
     sanitized_exception_context,
+)
+from thesistrace.research_batch import (
+    ResearchBatchAdmissionCommand,
+    ResearchBatchAdmissionConflict,
+    ResearchBatchAdmissionIssue,
+    ResearchBatchAdmissionRejected,
+    ResearchBatchAdmissionRejection,
+    ResearchBatchCancelCommand,
+    ResearchBatchCancelConflict,
+    ResearchBatchDetail,
+    ResearchBatchList,
 )
 from thesistrace.research_folder import (
     CreateResearchFolder,
@@ -87,7 +100,6 @@ def create_app(
             yield
 
     app = FastAPI(title="ThesisTrace Core", lifespan=lifespan)
-
     @app.middleware("http")
     async def observe_http_request(request: Request, call_next):  # type: ignore[no-untyped-def]
         if request.url.path in _HEALTH_PATHS:
@@ -134,6 +146,21 @@ def create_app(
             )
         )
         return response
+
+    @app.exception_handler(RequestValidationError)
+    async def admission_validation_error(
+        request: Request,
+        error: RequestValidationError,
+    ):
+        if request.method == "POST" and request.url.path == "/api/research-batches":
+            rejection = ResearchBatchAdmissionRejection(
+                issues=_batch_admission_validation_issues(error)
+            )
+            return JSONResponse(
+                status_code=422,
+                content=rejection.model_dump(mode="json"),
+            )
+        return await request_validation_exception_handler(request, error)
 
     install_alpha_http(
         app,
@@ -205,6 +232,64 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
         if not deleted:
             raise HTTPException(status_code=404, detail="Research Folder not found")
+
+    @app.post(
+        "/api/research-batches",
+        response_model=ResearchBatchDetail,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def admit_research_batch(
+        request: Request,
+        command: ResearchBatchAdmissionCommand,
+    ) -> ResearchBatchDetail | JSONResponse:
+        try:
+            return _runtime(request).research_batches.admit(command)
+        except ResearchBatchAdmissionConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ResearchBatchAdmissionRejected as error:
+            rejection = ResearchBatchAdmissionRejection(issues=error.issues)
+            return JSONResponse(
+                status_code=422,
+                content=rejection.model_dump(mode="json"),
+            )
+
+    @app.get("/api/research-batches", response_model=ResearchBatchList)
+    def list_research_batches(
+        request: Request,
+        cursor: str | None = None,
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> ResearchBatchList:
+        try:
+            return _runtime(request).research_batches.list(cursor=cursor, limit=limit)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get(
+        "/api/research-batches/{batch_id}",
+        response_model=ResearchBatchDetail,
+    )
+    def get_research_batch(request: Request, batch_id: str) -> ResearchBatchDetail:
+        batch = _runtime(request).research_batches.get(batch_id)
+        if batch is None:
+            raise HTTPException(status_code=404, detail="Research Batch not found")
+        return batch
+
+    @app.post(
+        "/api/research-batches/{batch_id}/cancel",
+        response_model=ResearchBatchDetail,
+    )
+    def cancel_research_batch(
+        request: Request,
+        batch_id: str,
+        command: ResearchBatchCancelCommand,
+    ) -> ResearchBatchDetail:
+        try:
+            batch = _runtime(request).research_batches.cancel(batch_id, command)
+        except ResearchBatchCancelConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if batch is None:
+            raise HTTPException(status_code=404, detail="Research Batch not found")
+        return batch
 
     @app.post(
         "/api/research-runs",
@@ -408,6 +493,70 @@ def create_app(
         return track
 
     return app
+
+
+def _batch_admission_validation_issues(
+    error: RequestValidationError,
+) -> list[ResearchBatchAdmissionIssue]:
+    body = error.body if isinstance(error.body, Mapping) else {}
+    return [
+        ResearchBatchAdmissionIssue(
+            code="INVALID_BATCH_INPUT",
+            field=_batch_validation_field(issue.get("loc", ())),
+            item_key=_batch_validation_item_key(body, issue.get("loc", ())),
+            message=str(issue.get("msg", "Research Batch input is invalid")),
+        )
+        for issue in error.errors()
+    ]
+
+
+def _batch_validation_field(location: object) -> str:
+    components = _batch_validation_components(location)
+    field = ""
+    for component in components:
+        if isinstance(component, int):
+            field = f"{field}[{component}]"
+        elif isinstance(component, str):
+            field = f"{field}.{component}" if field else component
+    return field or "batch"
+
+
+def _batch_validation_item_key(
+    body: Mapping[object, object],
+    location: object,
+) -> str | None:
+    components = _batch_validation_components(location)
+    for array_name in ("factors", "strategies"):
+        if array_name not in components:
+            continue
+        position = components.index(array_name)
+        ordinal = (
+            components[position + 1]
+            if position + 1 < len(components) and isinstance(components[position + 1], int)
+            else 20
+        )
+        items = body.get(array_name)
+        if not isinstance(items, list) or not 0 <= ordinal < len(items):
+            return None
+        item = items[ordinal]
+        if not isinstance(item, Mapping):
+            return None
+        item_key = item.get("item_key")
+        if not isinstance(item_key, str) or not item_key.strip():
+            return None
+        return item_key.strip()
+    return None
+
+
+def _batch_validation_components(location: object) -> list[str | int]:
+    if not isinstance(location, Sequence) or isinstance(location, (str, bytes)):
+        return []
+    return [
+        component
+        for component in location
+        if isinstance(component, (str, int))
+        and component not in {"body", "factor_evaluation", "strategy_sweep"}
+    ]
 
 
 def _runtime(request: Request) -> CoreRuntime:

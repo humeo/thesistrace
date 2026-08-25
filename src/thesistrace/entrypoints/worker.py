@@ -3,8 +3,9 @@ from __future__ import annotations
 import argparse
 import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -31,6 +32,7 @@ _THREAD_ENVIRONMENT_NAMES = (
 
 class WorkerRole(StrEnum):
     RESEARCH = "research"
+    BATCH_RESEARCH = "batch-research"
     TRACKING = "tracking"
 
 
@@ -67,6 +69,15 @@ class WorkerCapacityError(RuntimeError):
 
 class WorkerEventSink(Protocol):
     def __call__(self, event: dict[str, object]) -> None: ...
+
+
+class WorkerClaimSink(Protocol):
+    def __call__(
+        self,
+        resource_id: str,
+        attempt_id: str,
+        claim_context: Mapping[str, object] | None = None,
+    ) -> None: ...
 
 
 def parse_worker_arguments(arguments: Sequence[str] | None = None) -> ParsedWorkerArguments:
@@ -137,6 +148,7 @@ def process_one_poll(
     emit: WorkerEventSink,
 ) -> None:
     claim = _claim_event(configuration, emit)
+    execution_event = _execution_event(configuration, emit)
     if configuration.role is WorkerRole.RESEARCH:
         if (
             runtime.research_runs.execution_memory_bytes
@@ -147,7 +159,19 @@ def process_one_poll(
             )
         product_worked = runtime.research_runs.process_next(
             on_claim=claim,
-            on_execution_event=emit,
+            on_execution_event=execution_event,
+        )
+    elif configuration.role is WorkerRole.BATCH_RESEARCH:
+        if (
+            runtime.research_batches.execution_memory_bytes
+            > configuration.capacity.execution_memory_bytes
+        ):
+            raise WorkerCapacityError(
+                "Batch Research Worker execution memory cannot fit planning capacity"
+            )
+        product_worked = runtime.research_batches.process_next(
+            on_claim=claim,
+            on_execution_event=execution_event,
         )
     else:
         if (
@@ -157,7 +181,7 @@ def process_one_poll(
             raise WorkerCapacityError(
                 "Tracking Worker execution memory cannot fit planning capacity"
             )
-        product_worked = _process_tracking(runtime, claim, emit)
+        product_worked = _process_tracking(runtime, claim, execution_event)
     if configuration.role is WorkerRole.TRACKING:
         removed_caches = runtime.daily_tracks.reconcile_working_cache(
             lifecycle_event=non_blocking_operational_event_sink(
@@ -173,6 +197,17 @@ def process_one_poll(
                     "role": configuration.role.value,
                     "slot": configuration.slot,
                     "removed_cache_count": removed_caches,
+                }
+            )
+    elif configuration.role is WorkerRole.BATCH_RESEARCH:
+        removed_attempt_files = runtime.research_batches.reconcile_attempt_files()
+        if removed_attempt_files:
+            emit(
+                {
+                    "event": "worker_batch_attempt_file_reconciliation",
+                    "role": configuration.role.value,
+                    "slot": configuration.slot,
+                    "removed_file_count": removed_attempt_files,
                 }
             )
     if product_worked:
@@ -216,6 +251,14 @@ def main(arguments: Sequence[str] | None = None) -> None:
     with open_core_runtime(settings) as runtime:
         process_one_poll(runtime, configuration, emit=_emit_event)
         if parsed.once:
+            _emit_event(
+                {
+                    "event": "worker_stopped",
+                    "role": configuration.role.value,
+                    "slot": configuration.slot,
+                    "reason": "once_completed",
+                }
+            )
             return
         while True:
             time.sleep(5)
@@ -269,8 +312,12 @@ def _configure_calculation_threads(calculation_threads: int) -> None:
 def _claim_event(
     configuration: WorkerConfiguration,
     emit: WorkerEventSink,
-) -> Callable[[str, str], None]:
-    def claimed(resource_id: str, attempt_id: str) -> None:
+) -> WorkerClaimSink:
+    def claimed(
+        resource_id: str,
+        attempt_id: str,
+        claim_context: Mapping[str, object] | None = None,
+    ) -> None:
         if configuration.role is WorkerRole.RESEARCH:
             emit(
                 {
@@ -283,18 +330,55 @@ def _claim_event(
                 }
             )
             return
+        if configuration.role is WorkerRole.TRACKING:
+            emit(
+                {
+                    "event": "tracking_advance_claimed",
+                    "level": "INFO",
+                    "component": "tracking_worker",
+                    "worker_role": "tracking",
+                    "track_id": resource_id,
+                    "attempt_id": attempt_id,
+                }
+            )
+            return
+        event: dict[str, object] = {
+            "event": "worker_claim",
+            "role": configuration.role.value,
+            "slot": configuration.slot,
+            "resource_type": "ResearchBatch",
+            "resource_id": resource_id,
+            "attempt_id": attempt_id,
+        }
+        if claim_context is not None:
+            for name in (
+                "batch_kind",
+                "claim_order",
+                "owner_kind",
+                "owner_id",
+                "item_count",
+            ):
+                if name in claim_context:
+                    event[name] = claim_context[name]
+        emit(event)
+
+    return claimed
+
+
+def _execution_event(
+    configuration: WorkerConfiguration,
+    emit: WorkerEventSink,
+) -> WorkerEventSink:
+    def enriched(event: dict[str, object]) -> None:
         emit(
             {
-                "event": "tracking_advance_claimed",
-                "level": "INFO",
-                "component": "tracking_worker",
-                "worker_role": "tracking",
-                "track_id": resource_id,
-                "attempt_id": attempt_id,
+                **event,
+                "role": configuration.role.value,
+                "slot": configuration.slot,
             }
         )
 
-    return claimed
+    return enriched
 
 
 def _process_tracking(
@@ -338,6 +422,23 @@ def _collect_one_publication(
         return
     if removed:
         emit({"event": "publication_object_deleted", "role": role.value})
+        return
+    try:
+        orphan_removed = runtime.publication.collect_one_orphan(
+            uploaded_before=datetime.now(UTC) - timedelta(hours=1)
+        )
+    except (PublicationPreparationError, PublicationUnavailableError):
+        emit(
+            {
+                "event": "publication_orphan_deletion_deferred",
+                "level": "WARNING",
+                "role": role.value,
+                "failure_code": "PUBLICATION_UNAVAILABLE",
+            }
+        )
+        return
+    if orphan_removed:
+        emit({"event": "publication_orphan_deleted", "role": role.value})
 
 
 def _emit_event(event: dict[str, object]) -> None:
@@ -346,15 +447,24 @@ def _emit_event(event: dict[str, object]) -> None:
     role = event.get("worker_role", event.get("role"))
     if role is None and resource_type == "ResearchRun":
         role = "research"
+    elif role is None and resource_type == "ResearchBatch":
+        role = "batch-research"
     elif role is None and resource_type == "TrackingAdvance":
         role = "tracking"
     component = event.get("component")
     if not isinstance(component, str):
-        component = "tracking_worker" if role == "tracking" else "research_worker"
+        if role == "tracking":
+            component = "tracking_worker"
+        elif role == "batch-research":
+            component = "batch_research_worker"
+        else:
+            component = "research_worker"
     context = dict(event)
     context["worker_role"] = role
     if resource_type == "ResearchRun":
         context["run_id"] = resource_id
+    elif resource_type == "ResearchBatch":
+        context["batch_id"] = resource_id
     elif resource_type == "TrackingAdvance":
         context["track_id"] = resource_id
     emit_operational_event_data(

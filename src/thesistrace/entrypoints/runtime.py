@@ -25,6 +25,8 @@ from thesistrace.entrypoints.readiness import CoreReadiness
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.operational_events import emit_operational_event_data
 from thesistrace.publication import Publication
+from thesistrace.research_batch import ResearchBatchService, preserve_deleted_run_history
+from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
 from thesistrace.research_folder import ResearchFolderService
 from thesistrace.research_run import (
     ResearchRunService,
@@ -43,7 +45,15 @@ CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_S3_BUCKET",
     "THESISTRACE_DATA_MOUNT",
 )
-PUBLICATION_REQUEST_TIMEOUT_SECONDS = 1.0
+PUBLICATION_REQUEST_TIMEOUT_SECONDS = 5.0
+
+
+def publication_request_config() -> Config:
+    return Config(
+        connect_timeout=PUBLICATION_REQUEST_TIMEOUT_SECONDS,
+        read_timeout=PUBLICATION_REQUEST_TIMEOUT_SECONDS,
+        retries={"total_max_attempts": 1, "mode": "standard"},
+    )
 
 
 @dataclass(frozen=True)
@@ -125,6 +135,7 @@ class CoreRuntime:
     database: PostgresDatabase
     data_overview: DatasetOverviewService
     research_folders: ResearchFolderService
+    research_batches: ResearchBatchService
     research_runs: ResearchRunService
     daily_tracks: DailyTrackService
     daily_track_sessions: SessionCoordinateRepository
@@ -145,11 +156,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             aws_access_key_id=settings.s3_access_key_id,
             aws_secret_access_key=settings.s3_secret_access_key,
             region_name=settings.s3_region,
-            config=Config(
-                connect_timeout=PUBLICATION_REQUEST_TIMEOUT_SECONDS,
-                read_timeout=PUBLICATION_REQUEST_TIMEOUT_SECONDS,
-                retries={"total_max_attempts": 1, "mode": "standard"},
-            ),
+            config=publication_request_config(),
         )
         s3.list_buckets()
         publication = Publication(database, s3, bucket=settings.s3_bucket)
@@ -182,6 +189,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             compile_formula=alpha_language.compile,
             current_dataset=dataset_admission.current,
             track_references_result=daily_tracks.references_result_manifest,
+            preserve_dependent_run_history=preserve_deleted_run_history,
             execution=SupervisedResearchExecutor(
                 settings.data_mount,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
@@ -189,10 +197,22 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             execution_memory_bytes=settings.research_execution_memory_bytes,
             lifecycle_event=emit_operational_event_data,
         )
+        research_batches = ResearchBatchService(
+            database,
+            research_runs=research_runs,
+            dataset_lifecycle=dataset_lifecycle,
+            publication=publication,
+            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            execution=SupervisedResearchBatchExecutor(
+                settings.data_mount,
+                execution_memory_bytes=settings.research_execution_memory_bytes,
+            ),
+        )
         yield CoreRuntime(
             database=database,
             data_overview=data_overview,
             research_folders=ResearchFolderService(database),
+            research_batches=research_batches,
             research_runs=research_runs,
             daily_tracks=daily_tracks,
             daily_track_sessions=SessionCoordinateRepository(database),

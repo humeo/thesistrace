@@ -16,7 +16,6 @@ from thesistrace.research_series import (
     ExecutionPrice,
     InstrumentProfile,
     PriceLimit,
-    decimal_to_binary64,
 )
 
 T = TypeVar("T")
@@ -395,30 +394,41 @@ class ColumnarResearchData:
         return matrices
 
     def adjusted_open_matrix(self, instruments: tuple[str, ...]) -> np.ndarray:
-        axis, matrix, _decimal_matrix = self._adjusted_open_axes
+        axis = self._adjusted_open_axis
+        matrix = self._adjusted_open_numeric_matrix
         if instruments != axis:
             positions = [axis.index(instrument_id) for instrument_id in instruments]
             return matrix[positions]
         return matrix
 
     def adjusted_open_decimal_matrix(self, instruments: tuple[str, ...]) -> np.ndarray:
-        axis, _numeric_matrix_value, matrix = self._adjusted_open_axes
+        axis = self._adjusted_open_axis
+        matrix = self._adjusted_open_decimal_matrix
         if instruments != axis:
             positions = [axis.index(instrument_id) for instrument_id in instruments]
             return matrix[positions]
         return matrix
 
     @cached_property
-    def _adjusted_open_axes(
-        self,
-    ) -> tuple[tuple[str, ...], np.ndarray, np.ndarray]:
-        instruments = tuple(sorted(self.instruments))
-        numeric_matrix, decimal_matrix = _decimal_and_numeric_matrices(
+    def _adjusted_open_axis(self) -> tuple[str, ...]:
+        return tuple(sorted(self.instruments))
+
+    @cached_property
+    def _adjusted_open_numeric_matrix(self) -> np.ndarray:
+        return _numeric_matrix(
             self._eod_index,
             value_column="open_adj",
-            instruments=instruments,
+            instruments=self._adjusted_open_axis,
+            shape=(len(self._adjusted_open_axis), len(self.sessions)),
         )
-        return instruments, numeric_matrix, decimal_matrix
+
+    @cached_property
+    def _adjusted_open_decimal_matrix(self) -> np.ndarray:
+        return _decimal_matrix(
+            self._eod_index,
+            value_column="open_adj",
+            instruments=self._adjusted_open_axis,
+        )
 
     def slice_sessions(self, sessions: tuple[str, ...]) -> ColumnarResearchData:
         if not sessions or any(session not in self.sessions for session in sessions):
@@ -454,14 +464,7 @@ def _numeric_matrix(
     translated_positions, included = _translated_instrument_positions(index, instruments)
     values_column = index.table[value_column].combine_chunks()
     if pa.types.is_decimal(values_column.type):
-        values = np.fromiter(
-            (
-                np.nan if value is None else decimal_to_binary64(value)
-                for value in values_column.to_pylist()
-            ),
-            dtype=np.float64,
-            count=len(values_column),
-        )
+        values = _decimal_binary64_values(values_column)
     else:
         values = pc.cast(values_column, pa.float64()).to_numpy(zero_copy_only=False)
     matrix[
@@ -471,34 +474,38 @@ def _numeric_matrix(
     return matrix
 
 
-def _decimal_and_numeric_matrices(
+def _decimal_binary64_values(values: pa.Array) -> np.ndarray:
+    # ADR-0083 forbids Arrow's direct decimal-to-float cast because it can
+    # select the adjacent binary64 value. Arrow renders the exact decimal
+    # strings, then Python's string-to-float operation supplies the same
+    # correctly rounded result as float(Decimal) without materializing Python
+    # Decimal objects for every Canonical value.
+    strings = pc.cast(values, pa.string()).to_numpy(zero_copy_only=False)
+    return np.fromiter(
+        (np.nan if value is None else float(value) for value in strings),
+        dtype=np.float64,
+        count=len(strings),
+    )
+
+
+def _decimal_matrix(
     index: _CoordinateIndex,
     *,
     value_column: str,
     instruments: tuple[str, ...],
-) -> tuple[np.ndarray, np.ndarray]:
+) -> np.ndarray:
     shape = (len(instruments), len(index.sessions))
-    numeric_matrix = np.full(shape, np.nan, dtype=np.float64)
     decimal_matrix = np.full(shape, None, dtype=object)
     translated_positions, included = _translated_instrument_positions(index, instruments)
     decimal_values = np.asarray(
         index.table[value_column].combine_chunks().to_pylist(), dtype=object
     )
-    numeric_values = np.fromiter(
-        (
-            np.nan if value is None else decimal_to_binary64(value)
-            for value in decimal_values
-        ),
-        dtype=np.float64,
-        count=len(decimal_values),
-    )
     coordinates = (
         translated_positions[included],
         index.row_session_indices[included],
     )
-    numeric_matrix[coordinates] = numeric_values[included]
     decimal_matrix[coordinates] = decimal_values[included]
-    return numeric_matrix, decimal_matrix
+    return decimal_matrix
 
 
 def _translated_instrument_positions(
