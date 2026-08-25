@@ -114,7 +114,6 @@ def main() -> None:
             api_origin,
             settings,
             image_identity=_required_environment("THESISTRACE_TEST_IMAGE_ID"),
-            mounted_data_sha256=_directory_sha256(settings.data_mount),
             evidence_dir=state_path.parent,
         )
         state_path.write_text(json.dumps(result, sort_keys=True))
@@ -152,10 +151,10 @@ def _before_restart(
     settings: CoreSettings,
     *,
     image_identity: str,
-    mounted_data_sha256: str,
     evidence_dir: Path,
 ) -> dict[str, object]:
     refresh_evidence = _verify_data_refresh_events(evidence_dir)
+    mounted_data_sha256 = _directory_sha256(settings.data_mount)
     overview = _request_json(api_origin, "GET", "/api/data")
     _assert_expected_overview(overview)
     _request_with_secret_canary(api_origin)
