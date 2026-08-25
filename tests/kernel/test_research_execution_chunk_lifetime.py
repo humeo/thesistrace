@@ -63,6 +63,9 @@ def test_completed_chunk_releases_large_calculation_inputs_before_yield(monkeypa
             chunk_session_count=1,
         ),
         alpha_admission=SimpleNamespace(effective_lookback=0),
+        numeric_execution_contract="thesistrace-numeric-v1",
+        research_kind="strategy_backtest",
+        semantic_versions={"kernel": "test-kernel"},
         universe="top3000",
         neutralization="none",
         field_bindings={"close_adj": "close_adj"},
@@ -78,6 +81,16 @@ def test_completed_chunk_releases_large_calculation_inputs_before_yield(monkeypa
         execution,
         "_kernel_input",
         lambda _immutable_input, research_data, **_kwargs: _KernelInput(research_data),
+    )
+    monkeypatch.setattr(
+        execution.AlphaFactorExecutionBinding,
+        "from_run_input",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        execution,
+        "prepare_columnar_forward_labels",
+        lambda *_args, **_kwargs: object(),
     )
     monkeypatch.setattr(
         execution,
