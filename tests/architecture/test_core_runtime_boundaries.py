@@ -770,6 +770,9 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     test_compose_source = (
         ROOT / "deploy" / "core" / "compose.test-run.yaml"
     ).read_text()
+    image_smoke_compose_source = (
+        ROOT / "deploy" / "core" / "compose.image-smoke.yaml"
+    ).read_text()
 
     assert "read_columnar_slice(" in execution_source
     assert "read_composite_slice(" not in execution_source
@@ -785,6 +788,12 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     assert ":/var/lib/thesistrace/canonical-data:ro" in test_compose_source
     assert (
         ":/var/lib/thesistrace/canonical-data/.batch-attempts" in test_compose_source
+    )
+    assert "${THESISTRACE_TEST_RUN_ROOT}:/smoke-data:ro" in image_smoke_compose_source
+    assert (
+        "${THESISTRACE_TEST_RUN_ROOT}/canonical-data/.batch-attempts:"
+        "/smoke-data/canonical-data/.batch-attempts"
+        in image_smoke_compose_source
     )
     child_environment = transport_source[
         transport_source.index("def child_environment(") : transport_source.index(
