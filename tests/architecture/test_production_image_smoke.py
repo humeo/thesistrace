@@ -67,7 +67,7 @@ def test_mounted_data_hash_ignores_batch_attempt_control_files(tmp_path: Path) -
 
 
 def _load_smoke_module() -> ModuleType:
-    path = Path(__file__).with_name("production_image_smoke.py")
+    path = Path(__file__).parents[1] / "production_image_smoke.py"
     spec = spec_from_file_location("thesistrace_production_image_smoke", path)
     assert spec is not None
     assert spec.loader is not None
