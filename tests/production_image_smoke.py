@@ -2863,7 +2863,10 @@ def _assert_web_image(web_origin: str) -> None:
 def _directory_sha256(root: Path) -> str:
     digest = hashlib.sha256()
     for path in sorted(candidate for candidate in root.rglob("*") if candidate.is_file()):
-        digest.update(path.relative_to(root).as_posix().encode())
+        relative_path = path.relative_to(root)
+        if relative_path.parts[0] == ".batch-attempts":
+            continue
+        digest.update(relative_path.as_posix().encode())
         digest.update(b"\0")
         digest.update(path.read_bytes())
         digest.update(b"\0")

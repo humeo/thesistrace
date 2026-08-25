@@ -50,6 +50,22 @@ def test_outage_polling_ignores_transient_fail_closed_snapshot(
     assert smoke._wait_for_readiness("http://api:8100", unavailable="postgresql") == expected
 
 
+def test_mounted_data_hash_ignores_batch_attempt_control_files(tmp_path: Path) -> None:
+    smoke = _load_smoke_module()
+    dataset_file = tmp_path / "generations" / "generation-id" / "manifest.json"
+    dataset_file.parent.mkdir(parents=True)
+    dataset_file.write_text("immutable dataset", encoding="utf-8")
+    expected = smoke._directory_sha256(tmp_path)
+
+    control_file = tmp_path / ".batch-attempts" / "batch_attempt_id.lock"
+    control_file.parent.mkdir()
+    control_file.write_text("runtime state", encoding="utf-8")
+
+    assert smoke._directory_sha256(tmp_path) == expected
+    dataset_file.write_text("changed dataset", encoding="utf-8")
+    assert smoke._directory_sha256(tmp_path) != expected
+
+
 def _load_smoke_module() -> ModuleType:
     path = Path(__file__).with_name("production_image_smoke.py")
     spec = spec_from_file_location("thesistrace_production_image_smoke", path)
