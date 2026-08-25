@@ -74,6 +74,16 @@ _INTEGER_FIELDS = frozenset(
         "slot_count",
         "item_ordinal",
         "child_peak_rss_bytes",
+        "strategy_observation_count",
+    }
+)
+_SIGNED_INTEGER_FIELDS = frozenset({"exit_code"})
+_NONNEGATIVE_NUMBER_FIELDS = frozenset(
+    {
+        "child_chunk_seconds",
+        "child_data_read_seconds",
+        "child_calculation_seconds",
+        "supervisor_commit_seconds",
     }
 )
 _BOOLEAN_FIELDS = frozenset(
@@ -83,6 +93,7 @@ _BOOLEAN_FIELDS = frozenset(
         "alpha_factor_task_completed",
         "strategy_task_started",
         "strategy_task_completed",
+        "strategy_continuation_present",
     }
 )
 _NUMERIC_MAPPING_FIELDS = frozenset(
@@ -184,6 +195,19 @@ def _allowlisted_context(context: Mapping[str, object]) -> dict[str, object]:
     for name in _INTEGER_FIELDS:
         value = context.get(name)
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            safe[name] = value
+    for name in _SIGNED_INTEGER_FIELDS:
+        value = context.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            safe[name] = value
+    for name in _NONNEGATIVE_NUMBER_FIELDS:
+        value = context.get(name)
+        if (
+            isinstance(value, int | float)
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and value >= 0
+        ):
             safe[name] = value
     for name in _BOOLEAN_FIELDS:
         value = context.get(name)

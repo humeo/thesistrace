@@ -205,6 +205,50 @@ def test_operational_event_keeps_safe_batch_qualification_evidence_only() -> Non
     assert "canary-secret" not in output.getvalue()
 
 
+def test_operational_event_keeps_safe_long_research_qualification_evidence() -> None:
+    output = StringIO()
+    sink = _sink(output)
+
+    sink(
+        OperationalEvent(
+            level="INFO",
+            component="research_worker",
+            event="research_execution_chunk_received",
+            context={
+                "run_id": "run_0123456789abcdef",
+                "attempt_id": "attempt_0123456789abcdef",
+                "worker_role": "research",
+                "exit_code": -15,
+                "child_chunk_seconds": 1.5,
+                "child_data_read_seconds": 0.25,
+                "child_calculation_seconds": 1.0,
+                "supervisor_commit_seconds": 0.125,
+                "strategy_continuation_present": True,
+                "strategy_observation_count": 32,
+                "formula": "rank(close)",
+            },
+        )
+    )
+
+    assert json.loads(output.getvalue()) == {
+        "attempt_id": "attempt_0123456789abcdef",
+        "child_calculation_seconds": 1.0,
+        "child_chunk_seconds": 1.5,
+        "child_data_read_seconds": 0.25,
+        "component": "research_worker",
+        "event": "research_execution_chunk_received",
+        "exit_code": -15,
+        "level": "INFO",
+        "run_id": "run_0123456789abcdef",
+        "strategy_continuation_present": True,
+        "strategy_observation_count": 32,
+        "supervisor_commit_seconds": 0.125,
+        "timestamp": "2026-08-24T00:00:00.000Z",
+        "worker_role": "research",
+    }
+    assert "rank(close)" not in output.getvalue()
+
+
 def test_http_default_sink_emits_json_to_process_stderr() -> None:
     completed = subprocess.run(
         [
