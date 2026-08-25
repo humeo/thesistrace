@@ -530,10 +530,6 @@ def _pearson_arrays(left: np.ndarray, right: np.ndarray) -> float | None:
     return result if math.isfinite(result) else None
 
 
-def average_ranks(values: list[float]) -> list[float]:
-    return _average_ranks_array(np.asarray(values, dtype=np.float64)).tolist()
-
-
 def _average_ranks_array(array: np.ndarray) -> np.ndarray:
     if not np.all(np.isfinite(array)):
         raise FactorDataError("Factor rank values must be finite")

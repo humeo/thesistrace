@@ -413,16 +413,17 @@ relay, event bus, global job table, or generic dispatch interface.
 The active local gates are documented in the
 [local lifecycle guide](../runbook/local-lifecycle.md):
 
-1. `bun run test` runs fast host checks.
-2. `bun run test:integration` exercises real PostgreSQL and RustFS in
+1. `mise exec -- pnpm test` runs fast host checks.
+2. `mise exec -- pnpm test:integration` exercises real PostgreSQL and RustFS in
    a fresh isolated Compose Test project.
-3. `bun run test:e2e` drives the complete browser loop against a fresh
+3. `mise exec -- pnpm test:e2e` drives the complete browser loop against a fresh
    topology.
-4. `bun run test:image-smoke` qualifies the built application images.
-5. `bun run test:benchmark` qualifies both long Research Kinds in the final
-   image under the declared Worker envelope.
-6. `bun run check` is the ordinary merge gate; `bun run check:release` adds
-   image smoke and long-Research qualification.
+4. `mise exec -- pnpm test:image-smoke` qualifies the built application images.
+5. `mise exec -- pnpm test:benchmark` qualifies both long Research Kinds in the
+   final image under the declared Worker envelope.
+6. `mise exec -- pnpm check` is the ordinary merge gate;
+   `mise exec -- pnpm check:release` adds image smoke and long-Research
+   qualification.
 
 Live Tushare credential verification is a separate explicit gate. Local checks
 are not Production readiness.

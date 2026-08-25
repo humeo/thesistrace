@@ -47,33 +47,6 @@ def accounting_divide(left: Decimal, right: Decimal) -> Decimal:
     return require_finite_decimal(result)
 
 
-def accounting_add(left: Decimal, right: Decimal) -> Decimal:
-    try:
-        with localcontext(ACCOUNTING_CONTEXT):
-            result = left + right
-    except DecimalException as error:
-        raise NumericContractError("invalid accounting addition") from error
-    return require_finite_decimal(result)
-
-
-def accounting_subtract(left: Decimal, right: Decimal) -> Decimal:
-    try:
-        with localcontext(ACCOUNTING_CONTEXT):
-            result = left - right
-    except DecimalException as error:
-        raise NumericContractError("invalid accounting subtraction") from error
-    return require_finite_decimal(result)
-
-
-def accounting_multiply(left: Decimal, right: Decimal) -> Decimal:
-    try:
-        with localcontext(ACCOUNTING_CONTEXT):
-            result = left * right
-    except DecimalException as error:
-        raise NumericContractError("invalid accounting multiplication") from error
-    return require_finite_decimal(result)
-
-
 def canonical_integer(value: int) -> str:
     if isinstance(value, bool) or not isinstance(value, int):
         raise NumericContractError("canonical integer requires an exact integer")

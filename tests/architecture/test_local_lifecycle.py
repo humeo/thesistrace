@@ -1289,9 +1289,10 @@ def _release_fake_pytest_workers(
 
 def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None:
     readme = (ROOT / "README.md").read_text()
+    architecture = (ROOT / "docs" / "architecture" / "core.md").read_text()
     guide = (ROOT / "docs" / "runbook" / "local-lifecycle.md").read_text()
     tushare = (ROOT / "docs" / "runbook" / "tushare-live-bootstrap.md").read_text()
-    active_docs = "\n".join((readme, guide, tushare))
+    active_docs = "\n".join((readme, architecture, guide, tushare))
 
     for command in (
         "mise exec -- pnpm bootstrap",
@@ -1318,6 +1319,17 @@ def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None
     assert " -- --keep-environment" not in guide
     assert "only local Development and local Test" in guide
     assert "not Production readiness" in active_docs
+    for command in (
+        "mise exec -- pnpm test",
+        "mise exec -- pnpm test:integration",
+        "mise exec -- pnpm test:e2e",
+        "mise exec -- pnpm test:image-smoke",
+        "mise exec -- pnpm test:benchmark",
+        "mise exec -- pnpm check",
+        "mise exec -- pnpm check:release",
+    ):
+        assert f"`{command}`" in architecture
+    assert "`bun run " not in architecture
     for retired in (
         "Makefile",
         "make dev",
