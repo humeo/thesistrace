@@ -115,6 +115,7 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
             research_sessions=sessions,
             available_field_ids=frozenset({"price.close.adjusted"}),
             maximum_universe_cardinality=lambda _universe, _start, _end: 1,
+            financial_research_readiness="not_ready",
         )
         admitted = ResearchRunService(
             client.app.state.core_runtime.database,

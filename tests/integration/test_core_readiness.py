@@ -36,7 +36,7 @@ def test_core_readiness_fails_and_recovers_each_real_dependency_independently(
     events: list[object] = []
 
     with TestClient(create_app(settings, event_sink=events.append)) as client:
-        assert _await_readiness(client, expected_status=200).json() == READY
+        assert _await_readiness(client, expected=READY).json() == READY
         assert client.get("/health/live").json() == {"status": "ok"}
 
         _assert_dependency_outage(
@@ -55,15 +55,16 @@ def test_core_readiness_fails_and_recovers_each_real_dependency_independently(
         unavailable_root = tmp_path.with_name(f"{tmp_path.name}-offline")
         tmp_path.rename(unavailable_root)
         try:
-            response = _await_readiness(client, expected_status=503)
-            assert response.json() == _unavailable(
+            expected = _unavailable(
                 "dataset_store",
                 "DATASET_STORE_UNAVAILABLE",
             )
+            response = _await_readiness(client, expected=expected)
+            assert response.json() == expected
             assert client.get("/health/live").status_code == 200
         finally:
             unavailable_root.rename(tmp_path)
-        assert _await_readiness(client, expected_status=200).json() == READY
+        assert _await_readiness(client, expected=READY).json() == READY
 
         assert events == []
         assert "thesistrace-test" not in json.dumps(READY)
@@ -106,30 +107,32 @@ def _assert_dependency_outage(
 ) -> None:
     subprocess.run(["docker", "pause", container], check=True, capture_output=True)
     try:
-        response = _await_readiness(client, expected_status=503)
-        assert response.json() == _unavailable(name, code)
+        expected = _unavailable(name, code)
+        response = _await_readiness(client, expected=expected)
+        assert response.json() == expected
         assert client.get("/health/live").status_code == 200
     finally:
         subprocess.run(["docker", "unpause", container], check=True, capture_output=True)
-    assert _await_readiness(client, expected_status=200, timeout_seconds=15).json() == READY
+    assert _await_readiness(client, expected=READY, timeout_seconds=15).json() == READY
 
 
 def _await_readiness(
     client: TestClient,
     *,
-    expected_status: int,
+    expected: dict[str, object],
     timeout_seconds: float = 5,
 ):  # type: ignore[no-untyped-def]
+    expected_status = 200 if expected["status"] == "ready" else 503
     deadline = monotonic() + timeout_seconds
     while True:
         started = monotonic()
         response = client.get("/health/ready")
         assert monotonic() - started < 3
-        if response.status_code == expected_status:
+        if response.status_code == expected_status and response.json() == expected:
             return response
         if monotonic() >= deadline:
             raise AssertionError(
-                f"readiness did not reach HTTP {expected_status}: "
+                f"readiness did not reach HTTP {expected_status} with {expected}: "
                 f"HTTP {response.status_code} {response.text}"
             )
         Event().wait(0.05)

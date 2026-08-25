@@ -274,10 +274,10 @@ def test_degraded_financial_readiness_is_admitted_and_frozen() -> None:
         financial_coverage_end=sessions[-1],
         financial_research_readiness="ready_with_pending",
     )
-    command = ResearchRunAdmissionCommand.model_validate(
+    command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(
         {
             **_valid_command("degraded-financial-readiness"),
-            "formula": "total_revenue_latest_fy",
+            "formula": "revenue",
             "start_date": sessions[0],
             "end_date": sessions[-1],
         }
