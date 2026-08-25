@@ -32,7 +32,7 @@ fail candidate Data Generation validation. Adjacent intervals may meet at one
 
 A source-history gap remains an absent Industry Classification. V1 does not
 extend the preceding interval, move the following interval backward, create an
-`UNKNOWN` industry, or backfill the current classification. If a Research
-Definition selects industry neutralization, ADR-0011 excludes that instrument
+`UNKNOWN` industry, or backfill the current classification. If a ResearchRun
+selects industry neutralization, ADR-0011 excludes that instrument
 from the affected session's Final Alpha Cross-Section and reports
 missing-industry coverage.

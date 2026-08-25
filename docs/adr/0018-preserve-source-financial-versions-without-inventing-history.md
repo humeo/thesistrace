@@ -4,10 +4,10 @@ status: accepted
 
 # Preserve source financial versions without inventing history
 
-ThesisTrace V1 does not build an independent financial-revision engine. Dataset
-Publication immutably retains the Tushare responses it actually accepts and
-preserves source version metadata such as announcement dates, report type, and
-update marker.
+ThesisTrace V1 does not build an independent financial-revision engine. Each
+published Data Generation immutably retains the Tushare responses it actually
+accepts and preserves source version metadata such as announcement dates,
+report type, and update marker.
 
 When Tushare exposes both original and adjusted rows, Canonical Market Data
 uses those source-provided versions with the derived point-in-time availability

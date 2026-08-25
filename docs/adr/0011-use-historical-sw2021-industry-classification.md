@@ -5,8 +5,8 @@ status: accepted
 # Use historical SW2021 industry classification
 
 ThesisTrace V1 publishes the complete SW2021 L1, L2, and L3 hierarchy and each
-stock's historical industry membership as Canonical Market Data. Every Dataset
-Release identifies the classification version and retains the membership
+stock's historical industry membership as Canonical Market Data. Every Data
+Generation identifies the classification version and retains the membership
 history needed to resolve an instrument's industry for each market session.
 Research never substitutes a stock's current industry for its historical one.
 ADR-0087 represents each historical membership as a left-closed,

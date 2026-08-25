@@ -49,7 +49,7 @@ scaled to zero without adding a Maintenance Worker role.
 
 Both roles call the same Core data access, calculation, checkpoint, supervisor,
 and publication modules. This is one engine and one deployment artifact, not a
-V2 executor or two implementations. The split isolates scheduling and capacity;
+second executor or implementation. The split isolates scheduling and capacity;
 it does not duplicate business rules.
 
 Each pool has its own homogeneous deployment-declared CPU, hard-memory, and
