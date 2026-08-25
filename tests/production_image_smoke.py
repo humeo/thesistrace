@@ -2055,7 +2055,8 @@ def _wait_for_readiness(
     *,
     unavailable: str | None,
 ) -> tuple[int, dict[str, object], float]:
-    deadline = time.monotonic() + 20
+    timeout_seconds = 60 if unavailable is not None else 20
+    deadline = time.monotonic() + timeout_seconds
     interval = Event()
     last: tuple[int, dict[str, object], float] | None = None
     expected_status = 200 if unavailable is None else 503
