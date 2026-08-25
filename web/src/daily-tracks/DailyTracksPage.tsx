@@ -52,6 +52,12 @@ type LoadState = "loading" | "refreshing" | null;
 type RetryState = "submitting" | "accepted" | null;
 type StopState = "submitting" | "accepted" | null;
 
+export function dailyTrackNeedsPolling(
+  status: DailyTrackDetail["status"],
+): boolean {
+  return status === "stopping";
+}
+
 export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const [track, setTrack] = useState<DailyTrackDetail | null>(null);
   const [items, setItems] = useState<DailyTrackSummary[] | null>(null);
@@ -80,10 +86,11 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   useEffect(() => {
     const controller = new AbortController();
     const generation = ++loadGeneration.current;
+    let timeout: number | undefined;
     setError(false);
     const path = trackId ? `/api/daily-tracks/${trackId}` : "/api/daily-tracks";
 
-    async function load() {
+    async function load(polling = false) {
       try {
         const response = await fetch(path, { signal: controller.signal });
         if (!response.ok) throw new Error("DailyTrack unavailable");
@@ -91,12 +98,15 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
           const nextTrack = (await response.json()) as DailyTrackDetail;
           if (generation !== loadGeneration.current) return;
           setTrack(nextTrack);
+          if (dailyTrackNeedsPolling(nextTrack.status)) {
+            timeout = window.setTimeout(() => void load(true), 500);
+          }
         } else {
           const nextItems = ((await response.json()) as DailyTrackList).items;
           if (generation !== loadGeneration.current) return;
           setItems(nextItems);
         }
-        setLoadState(null);
+        if (!polling) setLoadState(null);
       } catch (reason: unknown) {
         if (reason instanceof DOMException && reason.name === "AbortError") return;
         if (generation === loadGeneration.current) {
@@ -109,6 +119,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     void load();
     return () => {
       if (generation === loadGeneration.current) loadGeneration.current += 1;
+      if (timeout !== undefined) window.clearTimeout(timeout);
       controller.abort();
     };
   }, [refreshGeneration, trackId]);

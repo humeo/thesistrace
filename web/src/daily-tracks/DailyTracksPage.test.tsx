@@ -2,11 +2,19 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  dailyTrackNeedsPolling,
   TrackingOriginView,
   TrackingProgressView,
   type DailyTrackDetail,
 } from "./DailyTracksPage";
 import { DailyTrackAnalysisView } from "./DailyTrackAnalysisView";
+
+describe("DailyTrack detail polling", () => {
+  it("keeps loading while Stop is waiting for child-exit confirmation", () => {
+    expect(dailyTrackNeedsPolling("stopping")).toBe(true);
+    expect(dailyTrackNeedsPolling("stopped")).toBe(false);
+  });
+});
 
 describe("DailyTrackAnalysisView", () => {
   it("uses the shared concise result language", () => {
