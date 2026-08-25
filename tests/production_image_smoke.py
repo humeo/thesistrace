@@ -60,6 +60,11 @@ READY_DEPENDENCIES = {
     "rustfs": {"status": "ready", "code": "RUSTFS_READY"},
     "dataset_store": {"status": "ready", "code": "DATASET_STORE_READY"},
 }
+UNAVAILABLE_DEPENDENCY_CODES = {
+    "postgresql": "POSTGRESQL_UNAVAILABLE",
+    "rustfs": "RUSTFS_UNAVAILABLE",
+    "dataset_store": "DATASET_STORE_UNAVAILABLE",
+}
 
 BATCH_PERFORMANCE_WARMUP_SAMPLES = 1
 BATCH_PERFORMANCE_MEASURED_SAMPLES = 4
@@ -2030,11 +2035,7 @@ def _verify_readiness_outage(
     expected_dependencies = json.loads(json.dumps(READY_DEPENDENCIES))
     expected_dependencies[unavailable] = {
         "status": "unavailable",
-        "code": {
-            "postgresql": "POSTGRESQL_UNAVAILABLE",
-            "rustfs": "RUSTFS_UNAVAILABLE",
-            "dataset_store": "DATASET_STORE_UNAVAILABLE",
-        }[unavailable],
+        "code": UNAVAILABLE_DEPENDENCY_CODES[unavailable],
     }
     assert status == 503
     assert payload == {"status": "unavailable", "dependencies": expected_dependencies}
@@ -2058,20 +2059,20 @@ def _wait_for_readiness(
     interval = Event()
     last: tuple[int, dict[str, object], float] | None = None
     expected_status = 200 if unavailable is None else 503
+    expected_dependencies = json.loads(json.dumps(READY_DEPENDENCIES))
+    if unavailable is not None:
+        expected_dependencies[unavailable] = {
+            "status": "unavailable",
+            "code": UNAVAILABLE_DEPENDENCY_CODES[unavailable],
+        }
+    expected_payload = {
+        "status": "ready" if unavailable is None else "unavailable",
+        "dependencies": expected_dependencies,
+    }
     while time.monotonic() < deadline:
         last = _request_health(api_origin, "/health/ready")
-        if last[0] == expected_status:
-            if unavailable is None:
-                if last[1].get("status") == "ready":
-                    return last
-            else:
-                dependencies = last[1].get("dependencies")
-                if (
-                    isinstance(dependencies, dict)
-                    and isinstance(dependencies.get(unavailable), dict)
-                    and dependencies[unavailable].get("status") == "unavailable"
-                ):
-                    return last
+        if last[0] == expected_status and last[1] == expected_payload:
+            return last
         interval.wait(0.05)
     raise AssertionError({"readiness_timeout": unavailable, "last": last})
 
