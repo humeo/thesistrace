@@ -199,6 +199,40 @@ class StartDailyTrackOutcome(BaseModel):
     retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)]
 
 
+class RetryDailyTrackInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    track_id: DailyTrackId
+    request_id: RequestId
+
+
+class RetryDailyTrackOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    track_id: DailyTrackId
+    status: Literal["active", "blocked"]
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
+class StopDailyTrackInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    track_id: DailyTrackId
+    request_id: RequestId
+
+
+class StopDailyTrackOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    track_id: DailyTrackId
+    status: Literal["stopping", "stopped"]
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
 class SubmitResearchBatchAccepted(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 

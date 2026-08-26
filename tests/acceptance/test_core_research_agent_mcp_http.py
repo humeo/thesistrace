@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from functools import partial
 from hashlib import sha256
 from itertools import count
 from multiprocessing import get_context
 from pathlib import Path
+from threading import Event
 
 import anyio
 import httpx2
@@ -18,6 +24,10 @@ from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.server.auth.provider import AccessToken
 from mcp_types.version import LATEST_HANDSHAKE_VERSION
+from test_core_research_agent_mcp_runs import (
+    _assert_worker_succeeded,
+    _core_environment,
+)
 from test_core_research_batch_fifo import (
     _release_claim_barrier_worker,
     _start_claim_barrier_worker,
@@ -26,11 +36,12 @@ from test_core_research_batch_fifo import (
 )
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.daily_track import DailyTrackService
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.entrypoints.schema import initialize_core
-from thesistrace.fixture import build_minimal_canonical_fixture
+from thesistrace.fixture import build_minimal_canonical_fixture, field_catalog
 from thesistrace.operational_events import OperationalEvent
 from thesistrace.research_agent import (
     RESEARCH_AGENT_TOOL_NAMES,
@@ -39,6 +50,7 @@ from thesistrace.research_agent import (
 )
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.execution import SupervisedResearchExecutor
+from thesistrace.research_run.result import read_result_bundle
 
 _ISSUER_URL = "https://issuer.test/"
 _RESOURCE_URL = "https://core.test/mcp"
@@ -219,6 +231,7 @@ async def _exercise_http_contract(
         ResearchAgentScope.TRACKING_EXECUTE.value,
     )
     action_token = issuer.issue(scopes=action_scopes)
+    stop_token = issuer.issue(scopes=(*action_scopes, ResearchAgentScope.TRACKING_STOP.value))
     no_grant_token = issuer.issue(scopes=())
     async with app.router.lifespan_context(app):
         await _assert_protected_resource_and_authentication_boundaries(
@@ -239,6 +252,8 @@ async def _exercise_http_contract(
                 "list_daily_tracks",
                 "get_daily_track",
                 "start_daily_track",
+                "retry_daily_track",
+                "stop_daily_track",
             }
 
             context = await client.call_tool("get_research_context", {})
@@ -276,7 +291,7 @@ async def _exercise_http_contract(
 
         async with _mcp_client(app, action_token) as client:
             tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-            assert set(tools) == RESEARCH_AGENT_TOOL_NAMES
+            assert set(tools) == RESEARCH_AGENT_TOOL_NAMES - {"stop_daily_track"}
             cancel_tool = tools["cancel_research_run"]
             assert cancel_tool.annotations is not None
             assert cancel_tool.annotations.destructive_hint is True
@@ -656,6 +671,56 @@ async def _exercise_http_contract(
             assert duplicate_origin.is_error is True
             assert duplicate_origin.structured_content["code"] == "STATE_CONFLICT"
 
+            _advance_current_data(settings)
+            blocked_worker = await anyio.to_thread.run_sync(
+                _run_tracking_worker_once,
+                settings,
+                1,
+            )
+            _assert_worker_succeeded(blocked_worker)
+            blocked_track = await client.call_tool(
+                "get_daily_track",
+                {"track_id": daily_track.structured_content["track_id"]},
+            )
+            assert blocked_track.structured_content["progress"]["phase"] == "blocked"
+            concurrent_retries = await _concurrent_track_retries(
+                app,
+                action_token,
+                track_id=str(daily_track.structured_content["track_id"]),
+                request_id="http-track-retry",
+            )
+            assert all(not result.is_error for result in concurrent_retries), [
+                (result.is_error, result.structured_content)
+                for result in concurrent_retries
+            ]
+            assert all(
+                result.structured_content["status"] == "active" for result in concurrent_retries
+            )
+            assert all(
+                result.structured_content["retry_after_seconds"] == 2
+                for result in concurrent_retries
+            )
+            assert (
+                sum(result.structured_content["replayed"] is False for result in concurrent_retries)
+                == 1
+            )
+            retry_state_conflict = await client.call_tool(
+                "retry_daily_track",
+                {
+                    "track_id": daily_track.structured_content["track_id"],
+                    "request_id": "http-track-retry-active",
+                },
+            )
+            assert retry_state_conflict.is_error is True
+            assert retry_state_conflict.structured_content["code"] == "STATE_CONFLICT"
+            await _exercise_http_live_tracking_stop(
+                app,
+                client,
+                stop_token,
+                settings=settings,
+                track_id=str(daily_track.structured_content["track_id"]),
+            )
+
             concurrent_strategy = await client.call_tool(
                 "submit_research_run",
                 _strategy_command("http-track-concurrent-origin"),
@@ -704,6 +769,84 @@ async def _exercise_http_contract(
                 },
             )
             assert unchanged_after_conflict.is_error is False
+            retry_fingerprint_conflict = await client.call_tool(
+                "retry_daily_track",
+                {
+                    "track_id": unchanged_after_conflict.structured_content["track_id"],
+                    "request_id": "http-track-retry",
+                },
+            )
+            assert retry_fingerprint_conflict.is_error is True
+            assert retry_fingerprint_conflict.structured_content["code"] == ("IDEMPOTENCY_CONFLICT")
+            denied_stop = await client.call_tool(
+                "stop_daily_track",
+                {
+                    "track_id": unchanged_after_conflict.structured_content["track_id"],
+                    "request_id": "http-stop-track",
+                },
+            )
+            assert denied_stop.is_error is True
+            assert denied_stop.structured_content["code"] == "FORBIDDEN"
+
+        async with _mcp_client(app, stop_token) as stopper:
+            stop_tools = {tool.name: tool for tool in (await stopper.list_tools()).tools}
+            assert set(stop_tools) == RESEARCH_AGENT_TOOL_NAMES
+            assert stop_tools["stop_daily_track"].annotations.destructive_hint is True
+            rejected_confirmation = await stopper.call_tool(
+                "stop_daily_track",
+                {
+                    "track_id": unchanged_after_conflict.structured_content["track_id"],
+                    "request_id": "http-stop-track",
+                    "confirmation_token": "host-confirmation-is-not-authority",
+                },
+            )
+            assert rejected_confirmation.is_error is True
+            assert rejected_confirmation.structured_content["code"] == "INVALID_INPUT"
+            concurrent_stops = await _concurrent_track_stops(
+                app,
+                stop_token,
+                track_id=str(unchanged_after_conflict.structured_content["track_id"]),
+                request_id="http-stop-track",
+            )
+            assert all(not result.is_error for result in concurrent_stops)
+            assert all(
+                result.structured_content["status"] == "stopped" for result in concurrent_stops
+            )
+            assert (
+                sum(result.structured_content["replayed"] is False for result in concurrent_stops)
+                == 1
+            )
+            stopped_track = concurrent_stops[0]
+            stopped_replay = await stopper.call_tool(
+                "stop_daily_track",
+                {
+                    "track_id": unchanged_after_conflict.structured_content["track_id"],
+                    "request_id": "http-stop-track",
+                },
+            )
+            assert (
+                stopped_replay.structured_content["track_id"]
+                == (stopped_track.structured_content["track_id"])
+            )
+            assert stopped_replay.structured_content["replayed"] is True
+            stop_fingerprint_conflict = await stopper.call_tool(
+                "stop_daily_track",
+                {
+                    "track_id": daily_track.structured_content["track_id"],
+                    "request_id": "http-stop-track",
+                },
+            )
+            assert stop_fingerprint_conflict.is_error is True
+            assert stop_fingerprint_conflict.structured_content["code"] == ("IDEMPOTENCY_CONFLICT")
+            stop_state_conflict = await stopper.call_tool(
+                "stop_daily_track",
+                {
+                    "track_id": unchanged_after_conflict.structured_content["track_id"],
+                    "request_id": "http-stop-track-terminal",
+                },
+            )
+            assert stop_state_conflict.is_error is True
+            assert stop_state_conflict.structured_content["code"] == "STATE_CONFLICT"
 
         async with _mcp_client(app, no_grant_token) as client:
             assert (await client.list_tools()).tools == []
@@ -711,7 +854,13 @@ async def _exercise_http_contract(
         async with _mcp_client(app, read_token) as reconnected:
             second_context = await reconnected.call_tool("get_research_context", {})
             assert second_context.is_error is False
-            assert second_context.structured_content == first_context
+            assert second_context.structured_content["data_overview"][
+                "data_through_session"
+            ] == "2026-08-10"
+            assert second_context.structured_content["folders"] == first_context["folders"]
+            assert second_context.structured_content["authoring_constraints"] == first_context[
+                "authoring_constraints"
+            ]
 
     restarted_app = _app(settings, issuer)
     async with restarted_app.router.lifespan_context(restarted_app):
@@ -739,6 +888,15 @@ async def _exercise_http_contract(
             assert concurrent_track_replay.is_error is False
             assert concurrent_track_replay.structured_content["track_id"] == concurrent_track_id
             assert concurrent_track_replay.structured_content["replayed"] is True
+            retry_replay_after_restart = await restarted.call_tool(
+                "retry_daily_track",
+                {
+                    "track_id": daily_track.structured_content["track_id"],
+                    "request_id": "http-track-retry",
+                },
+            )
+            assert retry_replay_after_restart.is_error is False
+            assert retry_replay_after_restart.structured_content["replayed"] is True
             reopened_track = await restarted.call_tool(
                 "get_daily_track",
                 {"track_id": daily_track.structured_content["track_id"]},
@@ -795,6 +953,27 @@ async def _exercise_http_contract(
             assert restarted_batch_submit.structured_content["replayed"] is True
             assert restarted_rejected_submit.structured_content["outcome"] == "rejected"
             assert restarted_rejected_submit.structured_content["replayed"] is True
+        async with _mcp_client(restarted_app, stop_token) as restarted_stopper:
+            live_stop_replay_after_restart = await restarted_stopper.call_tool(
+                "stop_daily_track",
+                {
+                    "track_id": daily_track.structured_content["track_id"],
+                    "request_id": "http-live-stop",
+                },
+            )
+            assert live_stop_replay_after_restart.is_error is False
+            assert live_stop_replay_after_restart.structured_content["status"] == "stopping"
+            assert live_stop_replay_after_restart.structured_content["replayed"] is True
+            assert live_stop_replay_after_restart.structured_content["retry_after_seconds"] == 2
+            stop_replay_after_restart = await restarted_stopper.call_tool(
+                "stop_daily_track",
+                {
+                    "track_id": unchanged_after_conflict.structured_content["track_id"],
+                    "request_id": "http-stop-track",
+                },
+            )
+            assert stop_replay_after_restart.is_error is False
+            assert stop_replay_after_restart.structured_content == stopped_replay.structured_content
 
 
 def _run_barrier_worker(settings: CoreSettings, prepared, release_worker) -> None:
@@ -914,6 +1093,185 @@ async def _concurrent_track_starts(
     return results
 
 
+async def _concurrent_track_retries(
+    app,
+    token: str,
+    *,
+    track_id: str,
+    request_id: str,
+) -> list[object]:
+    results: list[object] = []
+
+    async def retry() -> None:
+        async with _mcp_client(app, token) as client:
+            results.append(
+                await client.call_tool(
+                    "retry_daily_track",
+                    {"track_id": track_id, "request_id": request_id},
+                )
+            )
+
+    async with anyio.create_task_group() as task_group:
+        for _index in range(2):
+            task_group.start_soon(retry)
+    return results
+
+
+async def _concurrent_track_stops(
+    app,
+    token: str,
+    *,
+    track_id: str,
+    request_id: str,
+) -> list[object]:
+    results: list[object] = []
+
+    async def stop() -> None:
+        async with _mcp_client(app, token) as client:
+            results.append(
+                await client.call_tool(
+                    "stop_daily_track",
+                    {"track_id": track_id, "request_id": request_id},
+                )
+            )
+
+    async with anyio.create_task_group() as task_group:
+        for _index in range(2):
+            task_group.start_soon(stop)
+    return results
+
+
+async def _exercise_http_live_tracking_stop(
+    app,
+    action_client,
+    stop_token: str,
+    *,
+    settings: CoreSettings,
+    track_id: str,
+) -> None:
+    prepared = Event()
+    release_prepared = Event()
+    cooperative_stop_requested = Event()
+    release_cooperative_stop = Event()
+    execution_events: list[dict[str, object]] = []
+    runtime = app.state.core_runtime
+
+    def progress(stage: str, selected_track_id: str, _target: str) -> None:
+        if stage == "prepared" and selected_track_id == track_id:
+            prepared.set()
+            assert release_prepared.wait(timeout=10)
+
+    def capture_execution_event(event: dict[str, object]) -> None:
+        execution_events.append(event)
+        if event.get("event") == "tracking_execution_child_stop_requested":
+            cooperative_stop_requested.set()
+            assert release_cooperative_stop.wait(timeout=10)
+
+    processor = DailyTrackService(
+        runtime.database,
+        publication=runtime.publication,
+        dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+        generation_store=MountedGenerationStore(settings.data_mount),
+        read_result_bundle=partial(
+            read_result_bundle,
+            research_kind="strategy_backtest",
+        ),
+        progress=progress,
+    )
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            processor.process_next,
+            on_execution_event=capture_execution_event,
+        )
+        assert await anyio.to_thread.run_sync(prepared.wait, 10)
+        retry_during_claim = await action_client.call_tool(
+            "retry_daily_track",
+            {"track_id": track_id, "request_id": "http-retry-during-claim"},
+        )
+        assert retry_during_claim.is_error is True
+        assert retry_during_claim.structured_content["code"] == "STATE_CONFLICT"
+
+        async with _mcp_client(app, stop_token) as stopper:
+            stopping = await stopper.call_tool(
+                "stop_daily_track",
+                {"track_id": track_id, "request_id": "http-live-stop"},
+            )
+            assert stopping.is_error is False
+            assert stopping.structured_content == {
+                "outcome": "accepted",
+                "track_id": track_id,
+                "status": "stopping",
+                "replayed": False,
+                "retry_after_seconds": 2,
+            }
+            fresh_stop_while_stopping = await stopper.call_tool(
+                "stop_daily_track",
+                {"track_id": track_id, "request_id": "http-stop-while-stopping"},
+            )
+            assert fresh_stop_while_stopping.is_error is True
+            assert fresh_stop_while_stopping.structured_content["code"] == "STATE_CONFLICT"
+
+        retry_while_stopping = await action_client.call_tool(
+            "retry_daily_track",
+            {"track_id": track_id, "request_id": "http-retry-while-stopping"},
+        )
+        assert retry_while_stopping.is_error is True
+        assert retry_while_stopping.structured_content["code"] == "STATE_CONFLICT"
+        stopping_detail = await action_client.call_tool(
+            "get_daily_track",
+            {"track_id": track_id},
+        )
+        assert stopping_detail.is_error is False
+        assert stopping_detail.structured_content["status"] == "stopping"
+        assert stopping_detail.structured_content["progress"]["phase"] == "stopping"
+        assert stopping_detail.structured_content["retry_after_seconds"] == 2
+
+        assert await anyio.to_thread.run_sync(cooperative_stop_requested.wait, 5)
+        release_cooperative_stop.set()
+        release_prepared.set()
+        assert await anyio.to_thread.run_sync(future.result, 20) is True
+
+    assert any(
+        event.get("event") == "tracking_execution_child_exited"
+        for event in execution_events
+    )
+    terminal = await action_client.call_tool("get_daily_track", {"track_id": track_id})
+    assert terminal.is_error is False
+    assert terminal.structured_content["status"] == "stopped"
+    assert terminal.structured_content["progress"]["phase"] == "stopped"
+    assert terminal.structured_content["retry_after_seconds"] is None
+    retry_stopped = await action_client.call_tool(
+        "retry_daily_track",
+        {"track_id": track_id, "request_id": "http-retry-stopped"},
+    )
+    assert retry_stopped.is_error is True
+    assert retry_stopped.structured_content["code"] == "STATE_CONFLICT"
+
+
+def _run_tracking_worker_once(
+    settings: CoreSettings,
+    execution_memory_bytes: int,
+) -> subprocess.CompletedProcess[str]:
+    environment = _core_environment(settings)
+    environment["THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES"] = str(execution_memory_bytes)
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "thesistrace.entrypoints.worker",
+            "--role",
+            "tracking",
+            "--once",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=Path.cwd(),
+        env={**os.environ, **environment},
+    )
+
+
 async def _exercise_allowlist_intersection(app, token: str) -> None:
     async with app.router.lifespan_context(app):
         async with _mcp_client(app, token) as client:
@@ -1016,6 +1374,67 @@ def _publish_current_data(settings: CoreSettings) -> None:
             expected_generation_manifest_sha256=None,
             candidate_generation_manifest_sha256=generation.manifest_sha256,
             operation_id="research-agent-http-cancel-head",
+        )
+    finally:
+        database.close()
+
+
+def _advance_current_data(settings: CoreSettings) -> None:
+    sessions = ("2026-08-07", "2026-08-10")
+    template = build_minimal_canonical_fixture(price_offset=1)
+    instrument_id = str(template["instruments"][0]["instrument_id"])
+    price = template["prices"][0]
+    state = template["trading_states"][0]
+    limit = template["price_limits"][0]
+    canonical = {
+        **template,
+        "research_calendar": list(sessions),
+        "field_catalog": [
+            next(
+                row
+                for row in field_catalog(sessions[-1])
+                if row["field_id"] == "price.close.adjusted"
+            )
+        ],
+        "prices": [{**price, "session": session} for session in sessions],
+        "trading_states": [{**state, "session": session} for session in sessions],
+        "price_limits": [{**limit, "session": session} for session in sessions],
+        "base_pool": [
+            {"session": session, "instrument_ids": [instrument_id]} for session in sessions
+        ],
+        "liquidity_universes": {
+            name: [
+                {
+                    "session": session,
+                    "instrument_ids": [instrument_id],
+                    "status": "available",
+                }
+                for session in sessions
+            ]
+            for name in ("top300", "top1000", "top2000", "top3000")
+        },
+    }
+    generation = MountedGenerationStore(settings.data_mount).materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
+        source_name="research-agent-http-tracking-head",
+        source_lineage={"contract": "research-agent-http-tracking"},
+    )
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        lifecycle = DatasetLifecycle(database, settings.data_mount)
+        current = lifecycle.current_pointer()
+        assert current is not None
+        lifecycle.protect_candidate(
+            operation_id="research-agent-http-tracking-head",
+            generation_manifest_sha256=generation.manifest_sha256,
+            lease_seconds=60,
+        )
+        lifecycle.compare_and_swap_head(
+            expected_generation_manifest_sha256=current.generation_manifest_sha256,
+            candidate_generation_manifest_sha256=generation.manifest_sha256,
+            operation_id="research-agent-http-tracking-head",
         )
     finally:
         database.close()

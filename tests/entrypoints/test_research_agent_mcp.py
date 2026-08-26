@@ -27,6 +27,16 @@ def test_stdio_dangerous_scope_requires_exact_explicit_process_configuration(
         with pytest.raises(ValueError, match="must be exactly true"):
             research_agent_mcp._research_cancel_is_enabled()
 
+    tracking_name = research_agent_mcp.TRACKING_STOP_ENABLE_ENVIRONMENT
+    monkeypatch.delenv(tracking_name, raising=False)
+    assert research_agent_mcp._tracking_stop_is_enabled() is False
+    monkeypatch.setenv(tracking_name, "true")
+    assert research_agent_mcp._tracking_stop_is_enabled() is True
+    for value in ("1", "TRUE", "false", " true ", "tracking:stop"):
+        monkeypatch.setenv(tracking_name, value)
+        with pytest.raises(ValueError, match="must be exactly true"):
+            research_agent_mcp._tracking_stop_is_enabled()
+
 
 def test_packaged_stdio_entrypoint_fails_cleanly_without_core_context() -> None:
     executable = Path(os.sys.executable).with_name("thesistrace-research-agent-mcp")

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 type DailyTrackResultSection = Literal[
@@ -84,6 +84,63 @@ class DailyTrackSummary(BaseModel):
     result_checksum_sha256: str
     origin_session: str
     strategy_session: str
+
+
+class DailyTrackRetryOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    track: DailyTrackSummary
+    replayed: bool
+    retry_after_seconds: Literal[2] | None
+
+    @model_validator(mode="after")
+    def validate_polling_guidance(self) -> DailyTrackRetryOutcome:
+        if self.track.status not in {"active", "blocked"}:
+            raise ValueError("DailyTrack Retry outcome has an illegal status")
+        expected = daily_track_polling_retry_after_seconds(
+            status=self.track.status,
+            phase="queued" if self.track.status == "active" else "blocked",
+        )
+        if self.retry_after_seconds != expected:
+            raise ValueError("DailyTrack Retry polling guidance does not match its outcome")
+        return self
+
+
+class DailyTrackStopOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    track: DailyTrackSummary
+    replayed: bool
+    retry_after_seconds: Literal[2] | None
+
+    @model_validator(mode="after")
+    def validate_polling_guidance(self) -> DailyTrackStopOutcome:
+        if self.track.status not in {"stopping", "stopped"}:
+            raise ValueError("DailyTrack Stop outcome has an illegal status")
+        expected = daily_track_polling_retry_after_seconds(
+            status=self.track.status,
+            phase=self.track.status,
+        )
+        if self.retry_after_seconds != expected:
+            raise ValueError("DailyTrack Stop polling guidance does not match its outcome")
+        return self
+
+
+def daily_track_polling_retry_after_seconds(*, status: str, phase: str) -> int | None:
+    """Return the one public polling cadence for a DailyTrack lifecycle state."""
+
+    if status in {"blocked", "stopped"}:
+        return None
+    if status == "stopping" or phase in {
+        "queued",
+        "retry_wait",
+        "starting",
+        "calculating",
+        "result_ready",
+        "staging",
+    }:
+        return 2
+    return 30
 
 
 class DailyTrackList(BaseModel):

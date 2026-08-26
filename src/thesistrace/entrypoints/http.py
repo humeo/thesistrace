@@ -559,6 +559,8 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DailyTrackRetryUnavailable as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except DailyTrackTemporarilyUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         if track is None:
@@ -581,6 +583,8 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DailyTrackStopUnavailable as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except DailyTrackTemporarilyUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         if track is None:

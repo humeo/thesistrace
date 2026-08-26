@@ -12,7 +12,19 @@ from thesistrace.daily_track import (
     DailyTrackInvalidCursor,
     DailyTrackList,
     DailyTrackPollingDetail,
+    DailyTrackRetryConflict,
+    DailyTrackRetryUnavailable,
+    DailyTrackStopConflict,
+    DailyTrackStopUnavailable,
     DailyTrackTemporarilyUnavailable,
+    RetryDailyTrackCommand,
+    StopDailyTrackCommand,
+)
+from thesistrace.daily_track import (
+    DailyTrackRetryOutcome as DomainDailyTrackRetryOutcome,
+)
+from thesistrace.daily_track import (
+    DailyTrackStopOutcome as DomainDailyTrackStopOutcome,
 )
 from thesistrace.data.models import DataOverview
 from thesistrace.research_agent.models import (
@@ -36,8 +48,12 @@ from thesistrace.research_agent.models import (
     ResearchAgentScope,
     ResearchAgentToolError,
     ResearchContext,
+    RetryDailyTrackInput,
+    RetryDailyTrackOutcome,
     StartDailyTrackInput,
     StartDailyTrackOutcome,
+    StopDailyTrackInput,
+    StopDailyTrackOutcome,
     SubmitResearchBatchAccepted,
     SubmitResearchBatchOutcome,
     SubmitResearchBatchRejected,
@@ -165,6 +181,18 @@ class DailyTrackReader(Protocol):
 
     def get_polling_detail(self, track_id: str) -> DailyTrackPollingDetail | None: ...
 
+    def retry_with_outcome(
+        self,
+        track_id: str,
+        command: RetryDailyTrackCommand,
+    ) -> DomainDailyTrackRetryOutcome | None: ...
+
+    def stop_with_outcome(
+        self,
+        track_id: str,
+        command: StopDailyTrackCommand,
+    ) -> DomainDailyTrackStopOutcome | None: ...
+
 
 @dataclass(frozen=True)
 class ResearchAgentModules:
@@ -265,6 +293,8 @@ RESEARCH_AGENT_TOOL_NAMES = frozenset(
         "list_daily_tracks",
         "get_daily_track",
         "start_daily_track",
+        "retry_daily_track",
+        "stop_daily_track",
     }
 )
 
@@ -394,6 +424,34 @@ class ResearchAgentCapabilityRegistry:
                 output_model=StartDailyTrackOutcome,
                 annotations=EFFECTFUL_TOOL_ANNOTATIONS,
                 handler=self.start_daily_track,
+            ),
+            ResearchAgentCapability(
+                name="retry_daily_track",
+                description=(
+                    "Retry one blocked DailyTrack; requires tracking:execute, is "
+                    "non-destructive and idempotent by request_id, and may remain blocked "
+                    "when the frozen target still cannot fit. Poll get_daily_track after "
+                    "retry_after_seconds when status becomes active."
+                ),
+                required_scope=ResearchAgentScope.TRACKING_EXECUTE,
+                input_model=RetryDailyTrackInput,
+                output_model=RetryDailyTrackOutcome,
+                annotations=EFFECTFUL_TOOL_ANNOTATIONS,
+                handler=self.retry_daily_track,
+            ),
+            ResearchAgentCapability(
+                name="stop_daily_track",
+                description=(
+                    "Irreversibly stop one active or blocked DailyTrack; requires the "
+                    "independent tracking:stop scope, is destructive and idempotent by "
+                    "request_id, and does not accept a confirmation token. Poll "
+                    "get_daily_track after retry_after_seconds while status is stopping."
+                ),
+                required_scope=ResearchAgentScope.TRACKING_STOP,
+                input_model=StopDailyTrackInput,
+                output_model=StopDailyTrackOutcome,
+                annotations=DESTRUCTIVE_TOOL_ANNOTATIONS,
+                handler=self.stop_daily_track,
             ),
             ResearchAgentCapability(
                 name="list_research_batches",
@@ -731,6 +789,62 @@ class ResearchAgentCapabilityRegistry:
             retry_after_seconds=outcome.retry_after_seconds,
         )
 
+    def retry_daily_track(
+        self,
+        track_id: str,
+        request_id: str,
+    ) -> RetryDailyTrackOutcome:
+        self._require(ResearchAgentScope.TRACKING_EXECUTE)
+        try:
+            outcome = self._modules.daily_tracks.retry_with_outcome(
+                track_id,
+                RetryDailyTrackCommand(request_id=request_id),
+            )
+        except DailyTrackRetryConflict as error:
+            raise ResearchAgentExpectedFailure(
+                ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT
+            ) from error
+        except DailyTrackRetryUnavailable as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.STATE_CONFLICT) from error
+        except DailyTrackTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if outcome is None:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
+        return RetryDailyTrackOutcome(
+            track_id=outcome.track.id,
+            status=outcome.track.status,
+            replayed=outcome.replayed,
+            retry_after_seconds=outcome.retry_after_seconds,
+        )
+
+    def stop_daily_track(
+        self,
+        track_id: str,
+        request_id: str,
+    ) -> StopDailyTrackOutcome:
+        self._require(ResearchAgentScope.TRACKING_STOP)
+        try:
+            outcome = self._modules.daily_tracks.stop_with_outcome(
+                track_id,
+                StopDailyTrackCommand(request_id=request_id),
+            )
+        except DailyTrackStopConflict as error:
+            raise ResearchAgentExpectedFailure(
+                ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT
+            ) from error
+        except DailyTrackStopUnavailable as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.STATE_CONFLICT) from error
+        except DailyTrackTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if outcome is None:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
+        return StopDailyTrackOutcome(
+            track_id=outcome.track.id,
+            status=outcome.track.status,
+            replayed=outcome.replayed,
+            retry_after_seconds=outcome.retry_after_seconds,
+        )
+
     def cancel_research_run(
         self,
         run_id: str,
@@ -860,6 +974,7 @@ class ResearchAgentCapabilityRegistry:
 def local_operator_authority(
     *,
     enable_research_cancel: bool = False,
+    enable_tracking_stop: bool = False,
 ) -> ResearchAgentAuthority:
     scopes = {
         ResearchAgentScope.RESEARCH_READ,
@@ -869,6 +984,8 @@ def local_operator_authority(
     }
     if enable_research_cancel:
         scopes.add(ResearchAgentScope.RESEARCH_CANCEL)
+    if enable_tracking_stop:
+        scopes.add(ResearchAgentScope.TRACKING_STOP)
     return ResearchAgentAuthority(
         subject="local_operator",
         scopes=frozenset(scopes),

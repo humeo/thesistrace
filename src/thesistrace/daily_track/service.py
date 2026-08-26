@@ -42,11 +42,14 @@ from thesistrace.daily_track.models import (
     DailyTrackDetail,
     DailyTrackList,
     DailyTrackPollingDetail,
+    DailyTrackRetryOutcome,
+    DailyTrackStopOutcome,
     DailyTrackSummary,
     KernelStateCheckpoint,
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
     TrackingOrigin,
+    daily_track_polling_retry_after_seconds,
 )
 from thesistrace.daily_track.planning import (
     DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES,
@@ -515,9 +518,7 @@ class DailyTrackService:
                 def observe_stop_pending() -> None:
                     nonlocal failure, stopping_pending
                     try:
-                        stopping_pending = (
-                            stopping_pending or self._stop_is_pending(current_claim)
-                        )
+                        stopping_pending = stopping_pending or self._stop_is_pending(current_claim)
                     except Exception as error:
                         if failure is None:
                             failure = error
@@ -740,6 +741,26 @@ class DailyTrackService:
         track_id: str,
         command: RetryDailyTrackCommand,
     ) -> DailyTrackSummary | None:
+        outcome = self.retry_with_outcome(track_id, command)
+        return None if outcome is None else outcome.track
+
+    def retry_with_outcome(
+        self,
+        track_id: str,
+        command: RetryDailyTrackCommand,
+    ) -> DailyTrackRetryOutcome | None:
+        try:
+            return self._retry_with_outcome(track_id, command)
+        except (OperationalError, PoolTimeout) as error:
+            raise DailyTrackTemporarilyUnavailable(
+                "DailyTrack Retry is temporarily unavailable"
+            ) from error
+
+    def _retry_with_outcome(
+        self,
+        track_id: str,
+        command: RetryDailyTrackCommand,
+    ) -> DailyTrackRetryOutcome | None:
         request_id = command.request_id.strip()
         if not request_id:
             raise ValueError("DailyTrack Retry request_id is required")
@@ -761,7 +782,15 @@ class DailyTrackService:
             if receipt is not None:
                 if receipt["request_fingerprint"] != fingerprint:
                     raise DailyTrackRetryConflict("DailyTrack Retry request_id conflicts")
-                return DailyTrackSummary.model_validate(receipt["outcome"])
+                track = DailyTrackSummary.model_validate(receipt["outcome"])
+                return DailyTrackRetryOutcome(
+                    track=track,
+                    replayed=True,
+                    retry_after_seconds=daily_track_polling_retry_after_seconds(
+                        status=track.status,
+                        phase="queued" if track.status == "active" else "blocked",
+                    ),
+                )
 
             track = transaction.execute(
                 f"""
@@ -859,7 +888,14 @@ class DailyTrackService:
                     "status": "active",
                 }
             )
-        return outcome
+        return DailyTrackRetryOutcome(
+            track=outcome,
+            replayed=False,
+            retry_after_seconds=daily_track_polling_retry_after_seconds(
+                status=outcome.status,
+                phase="queued" if outcome.status == "active" else "blocked",
+            ),
+        )
 
     def _retry_target_fits(
         self,
@@ -896,6 +932,26 @@ class DailyTrackService:
         track_id: str,
         command: StopDailyTrackCommand,
     ) -> DailyTrackSummary | None:
+        outcome = self.stop_with_outcome(track_id, command)
+        return None if outcome is None else outcome.track
+
+    def stop_with_outcome(
+        self,
+        track_id: str,
+        command: StopDailyTrackCommand,
+    ) -> DailyTrackStopOutcome | None:
+        try:
+            return self._stop_with_outcome(track_id, command)
+        except (OperationalError, PoolTimeout) as error:
+            raise DailyTrackTemporarilyUnavailable(
+                "DailyTrack Stop is temporarily unavailable"
+            ) from error
+
+    def _stop_with_outcome(
+        self,
+        track_id: str,
+        command: StopDailyTrackCommand,
+    ) -> DailyTrackStopOutcome | None:
         request_id = command.request_id.strip()
         if not request_id:
             raise ValueError("DailyTrack Stop request_id is required")
@@ -918,6 +974,7 @@ class DailyTrackService:
                 if receipt["request_fingerprint"] != fingerprint:
                     raise DailyTrackStopConflict("DailyTrack Stop request_id conflicts")
                 outcome = DailyTrackSummary.model_validate(receipt["outcome"])
+                replayed = True
             else:
                 track = transaction.execute(
                     f"""
@@ -1017,6 +1074,7 @@ class DailyTrackService:
                         Jsonb(outcome.model_dump(mode="json")),
                     ),
                 )
+                replayed = False
         if outcome.status == "stopped" and self._working_cache is not None:
             self._working_cache.delete(track_id)
         if stopped_after_commit:
@@ -1027,7 +1085,14 @@ class DailyTrackService:
                     "status": "stopped",
                 }
             )
-        return outcome
+        return DailyTrackStopOutcome(
+            track=outcome,
+            replayed=replayed,
+            retry_after_seconds=daily_track_polling_retry_after_seconds(
+                status=outcome.status,
+                phase=outcome.status,
+            ),
+        )
 
     def delete(self, track_id: str) -> bool:
         if self._publication is None:
@@ -1247,7 +1312,7 @@ class DailyTrackService:
                         "stop": row["status"] in {"active", "blocked"},
                     },
                     "available_result_sections": list(DAILY_TRACK_RESULT_SECTIONS),
-                    "retry_after_seconds": _polling_retry_after_seconds(
+                    "retry_after_seconds": daily_track_polling_retry_after_seconds(
                         status=str(row["status"]),
                         phase=phase,
                     ),
@@ -1713,8 +1778,7 @@ class DailyTrackService:
                         target_sessions = (target_sessions[0],)
                         financial_coverage_unavailable = dependencies.financial and (
                             admission.financial_observation_through_session is None
-                            or target_sessions[-1]
-                            > admission.financial_observation_through_session
+                            or target_sessions[-1] > admission.financial_observation_through_session
                         )
                         industry_coverage_unavailable = dependencies.industry and (
                             admission.industry_observation_through_session is None
@@ -1786,9 +1850,7 @@ class DailyTrackService:
                     "estimated_peak_bytes": plan.estimated_peak_bytes,
                     "estimated_target_work": plan.estimated_target_work,
                     "time_target_exceeded": plan.time_target_exceeded,
-                    "financial_research_readiness": _generation_financial_readiness(
-                        generation
-                    ),
+                    "financial_research_readiness": _generation_financial_readiness(generation),
                 }
                 if existing is None:
                     progression_id = f"track_progression_{uuid4().hex[:20]}"
@@ -2688,10 +2750,7 @@ class DailyTrackService:
             attempt_id=claim.attempt_id,
             attempt_number=claim.cycle_attempt_ordinal,
             retry=retry_wait,
-            failure_code=(
-                tracking_attempt_failure_code(failure_reason)
-                or "UNCLASSIFIED_FAILURE"
-            ),
+            failure_code=(tracking_attempt_failure_code(failure_reason) or "UNCLASSIFIED_FAILURE"),
             attempt_level=(
                 "WARNING"
                 if retry_wait or isinstance(error, FinancialCoverageUnavailable)
@@ -2892,21 +2951,6 @@ def _polling_phase(
     if unresolved["retry_wait"]:
         return "retry_wait"
     return "queued"
-
-
-def _polling_retry_after_seconds(*, status: str, phase: str) -> int | None:
-    if status in {"blocked", "stopped"}:
-        return None
-    if status == "stopping" or phase in {
-        "queued",
-        "retry_wait",
-        "starting",
-        "calculating",
-        "result_ready",
-        "staging",
-    }:
-        return 2
-    return 30
 
 
 def _retry_fingerprint(track_id: str) -> str:

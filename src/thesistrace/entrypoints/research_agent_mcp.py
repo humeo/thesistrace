@@ -22,9 +22,8 @@ from thesistrace.research_agent import (
     local_operator_authority,
 )
 
-RESEARCH_CANCEL_ENABLE_ENVIRONMENT = (
-    "THESISTRACE_RESEARCH_AGENT_ENABLE_RESEARCH_CANCEL"
-)
+RESEARCH_CANCEL_ENABLE_ENVIRONMENT = "THESISTRACE_RESEARCH_AGENT_ENABLE_RESEARCH_CANCEL"
+TRACKING_STOP_ENABLE_ENVIRONMENT = "THESISTRACE_RESEARCH_AGENT_ENABLE_TRACKING_STOP"
 
 
 def main() -> None:
@@ -47,6 +46,7 @@ def main() -> None:
             )
             authority = local_operator_authority(
                 enable_research_cancel=_research_cancel_is_enabled(),
+                enable_tracking_stop=_tracking_stop_is_enabled(),
             )
 
             def registry_factory(
@@ -117,14 +117,20 @@ def _new_trace_id() -> str:
 
 
 def _research_cancel_is_enabled() -> bool:
-    value = os.environ.get(RESEARCH_CANCEL_ENABLE_ENVIRONMENT)
+    return _dangerous_scope_is_enabled(RESEARCH_CANCEL_ENABLE_ENVIRONMENT)
+
+
+def _tracking_stop_is_enabled() -> bool:
+    return _dangerous_scope_is_enabled(TRACKING_STOP_ENABLE_ENVIRONMENT)
+
+
+def _dangerous_scope_is_enabled(name: str) -> bool:
+    value = os.environ.get(name)
     if value in {None, ""}:
         return False
     if value == "true":
         return True
-    raise ValueError(
-        f"{RESEARCH_CANCEL_ENABLE_ENVIRONMENT} must be exactly true when enabled"
-    )
+    raise ValueError(f"{name} must be exactly true when enabled")
 
 
 if __name__ == "__main__":

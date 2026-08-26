@@ -20,8 +20,16 @@ from thesistrace.daily_track import (
     DailyTrackInvalidCursor,
     DailyTrackList,
     DailyTrackPollingDetail,
+    DailyTrackRetryConflict,
+    DailyTrackRetryOutcome,
+    DailyTrackRetryUnavailable,
+    DailyTrackStopConflict,
+    DailyTrackStopOutcome,
+    DailyTrackStopUnavailable,
     DailyTrackSummary,
     DailyTrackTemporarilyUnavailable,
+    RetryDailyTrackCommand,
+    StopDailyTrackCommand,
 )
 from thesistrace.data.models import DataOverview, DatasetCoverage
 from thesistrace.operational_events import OperationalEvent
@@ -266,6 +274,20 @@ class _DailyTrackReader:
     def __init__(self) -> None:
         self.list_filters: dict[str, object] | None = None
         self.polling_detail: DailyTrackPollingDetail | None = _daily_track_polling_detail()
+        self.retry_outcome: DailyTrackRetryOutcome | None = DailyTrackRetryOutcome(
+            track=_daily_track_summary(),
+            replayed=False,
+            retry_after_seconds=2,
+        )
+        self.stop_outcome: DailyTrackStopOutcome | None = DailyTrackStopOutcome(
+            track=DailyTrackSummary.model_validate(
+                {**_daily_track_summary().model_dump(mode="python"), "status": "stopped"}
+            ),
+            replayed=False,
+            retry_after_seconds=None,
+        )
+        self.retry_commands: list[tuple[str, RetryDailyTrackCommand]] = []
+        self.stop_commands: list[tuple[str, StopDailyTrackCommand]] = []
         self.failure: Exception | None = None
 
     def list(self, *, cursor: str | None, limit: int) -> DailyTrackList:
@@ -278,6 +300,26 @@ class _DailyTrackReader:
         if self.failure is not None:
             raise self.failure
         return self.polling_detail
+
+    def retry_with_outcome(
+        self,
+        track_id: str,
+        command: RetryDailyTrackCommand,
+    ) -> DailyTrackRetryOutcome | None:
+        if self.failure is not None:
+            raise self.failure
+        self.retry_commands.append((track_id, command))
+        return self.retry_outcome
+
+    def stop_with_outcome(
+        self,
+        track_id: str,
+        command: StopDailyTrackCommand,
+    ) -> DailyTrackStopOutcome | None:
+        if self.failure is not None:
+            raise self.failure
+        self.stop_commands.append((track_id, command))
+        return self.stop_outcome
 
 
 class _BlockingDataOverviewReader(_DataOverviewReader):
@@ -547,6 +589,9 @@ def test_local_operator_has_only_safe_default_scopes() -> None:
 
     cancel_authority = local_operator_authority(enable_research_cancel=True)
     assert cancel_authority.scopes == authority.scopes | {ResearchAgentScope.RESEARCH_CANCEL}
+
+    stop_authority = local_operator_authority(enable_tracking_stop=True)
+    assert stop_authority.scopes == authority.scopes | {ResearchAgentScope.TRACKING_STOP}
 
 
 def test_registry_filters_discovery_and_rechecks_scope_at_invocation() -> None:
@@ -1131,7 +1176,144 @@ def test_registry_projects_daily_track_history_detail_start_and_expected_errors(
     assert missing.error.code == "NOT_FOUND"
 
 
-def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delete() -> None:
+def test_registry_maps_daily_track_retry_stop_outcomes_authority_and_errors() -> None:
+    reader = _DailyTrackReader()
+    default = _registry(daily_tracks=reader)
+
+    retried = default.invoke(
+        "retry_daily_track",
+        {"track_id": "track_test", "request_id": " retry_request "},
+        trace_id="trace_track_retry",
+    )
+    assert retried.result is not None
+    assert retried.result.model_dump(mode="json") == {
+        "outcome": "accepted",
+        "track_id": "track_test",
+        "status": "active",
+        "replayed": False,
+        "retry_after_seconds": 2,
+    }
+    assert reader.retry_commands == [
+        ("track_test", RetryDailyTrackCommand(request_id="retry_request"))
+    ]
+
+    denied = default.invoke(
+        "stop_daily_track",
+        {"track_id": "track_test", "request_id": "stop_request"},
+        trace_id="trace_track_stop_denied",
+    )
+    assert denied.error is not None
+    assert denied.error.code == "FORBIDDEN"
+    assert reader.stop_commands == []
+
+    stopper = _registry(
+        local_operator_authority(enable_tracking_stop=True),
+        daily_tracks=reader,
+    )
+    stopped = stopper.invoke(
+        "stop_daily_track",
+        {"track_id": "track_test", "request_id": " stop_request "},
+        trace_id="trace_track_stop",
+    )
+    assert stopped.result is not None
+    assert stopped.result.model_dump(mode="json") == {
+        "outcome": "accepted",
+        "track_id": "track_test",
+        "status": "stopped",
+        "replayed": False,
+        "retry_after_seconds": None,
+    }
+    assert reader.stop_commands == [
+        ("track_test", StopDailyTrackCommand(request_id="stop_request"))
+    ]
+
+    confirmation = stopper.invoke(
+        "stop_daily_track",
+        {
+            "track_id": "track_test",
+            "request_id": "stop_request",
+            "confirmation_token": "host-confirmation-is-not-authority",
+        },
+        trace_id="trace_track_stop_confirmation",
+    )
+    assert confirmation.error is not None
+    assert confirmation.error.code == "INVALID_INPUT"
+
+    for action, failure, code in (
+        ("retry_daily_track", DailyTrackRetryConflict("conflict"), "IDEMPOTENCY_CONFLICT"),
+        ("retry_daily_track", DailyTrackRetryUnavailable("state"), "STATE_CONFLICT"),
+        ("stop_daily_track", DailyTrackStopConflict("conflict"), "IDEMPOTENCY_CONFLICT"),
+        ("stop_daily_track", DailyTrackStopUnavailable("state"), "STATE_CONFLICT"),
+        (
+            "retry_daily_track",
+            DailyTrackTemporarilyUnavailable("database"),
+            "TEMPORARILY_UNAVAILABLE",
+        ),
+        (
+            "stop_daily_track",
+            DailyTrackTemporarilyUnavailable("database"),
+            "TEMPORARILY_UNAVAILABLE",
+        ),
+    ):
+        reader.failure = failure
+        selected = default if action == "retry_daily_track" else stopper
+        failed = selected.invoke(
+            action,
+            {"track_id": "track_test", "request_id": f"{action}_failure"},
+            trace_id=f"trace_{action}_{code.lower()}",
+        )
+        assert failed.error is not None
+        assert failed.error.code == code
+
+    reader.failure = None
+    reader.retry_outcome = None
+    retry_missing = default.invoke(
+        "retry_daily_track",
+        {"track_id": "track_missing", "request_id": "retry_missing"},
+        trace_id="trace_retry_missing",
+    )
+    assert retry_missing.error is not None
+    assert retry_missing.error.code == "NOT_FOUND"
+    reader.stop_outcome = None
+    stop_missing = stopper.invoke(
+        "stop_daily_track",
+        {"track_id": "track_missing", "request_id": "stop_missing"},
+        trace_id="trace_stop_missing",
+    )
+    assert stop_missing.error is not None
+    assert stop_missing.error.code == "NOT_FOUND"
+
+
+def test_daily_track_action_outcomes_enforce_authoritative_polling_guidance() -> None:
+    active = _daily_track_summary()
+    blocked = DailyTrackSummary.model_validate(
+        {**active.model_dump(mode="python"), "status": "blocked"}
+    )
+    stopping = DailyTrackSummary.model_validate(
+        {**active.model_dump(mode="python"), "status": "stopping"}
+    )
+    stopped = DailyTrackSummary.model_validate(
+        {**active.model_dump(mode="python"), "status": "stopped"}
+    )
+
+    DailyTrackRetryOutcome(track=active, replayed=False, retry_after_seconds=2)
+    DailyTrackRetryOutcome(track=blocked, replayed=False, retry_after_seconds=None)
+    DailyTrackStopOutcome(track=stopping, replayed=False, retry_after_seconds=2)
+    DailyTrackStopOutcome(track=stopped, replayed=False, retry_after_seconds=None)
+
+    for model, track, retry_after_seconds in (
+        (DailyTrackRetryOutcome, active, None),
+        (DailyTrackRetryOutcome, blocked, 2),
+        (DailyTrackRetryOutcome, stopped, None),
+        (DailyTrackStopOutcome, stopping, None),
+        (DailyTrackStopOutcome, stopped, 2),
+        (DailyTrackStopOutcome, blocked, None),
+    ):
+        with pytest.raises(ValidationError):
+            model(track=track, replayed=False, retry_after_seconds=retry_after_seconds)
+
+
+def test_registry_separates_read_execute_and_destructive_tracking_discovery() -> None:
     reader = ResearchAgentAuthority(
         subject="reader",
         scopes=frozenset({ResearchAgentScope.RESEARCH_READ}),
@@ -1152,6 +1334,10 @@ def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delet
         subject="tracking-executor",
         scopes=frozenset({ResearchAgentScope.TRACKING_EXECUTE}),
     )
+    tracking_stopper = ResearchAgentAuthority(
+        subject="tracking-stopper",
+        scopes=frozenset({ResearchAgentScope.TRACKING_STOP}),
+    )
 
     reader_tools = {capability.name for capability in _registry(reader).accessible_capabilities()}
     executor_tools = {
@@ -1166,16 +1352,37 @@ def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delet
     tracking_executor_tools = {
         capability.name for capability in _registry(tracking_executor).accessible_capabilities()
     }
+    tracking_stopper_tools = {
+        capability.name for capability in _registry(tracking_stopper).accessible_capabilities()
+    }
 
     assert "submit_research_run" not in reader_tools
     assert {"list_research_runs", "get_research_run"} <= reader_tools
     assert executor_tools == {"submit_research_batch", "submit_research_run"}
     assert cancel_tools == {"cancel_research_batch", "cancel_research_run"}
     assert tracking_reader_tools == {"get_daily_track", "list_daily_tracks"}
-    assert tracking_executor_tools == {"start_daily_track"}
+    assert tracking_executor_tools == {"retry_daily_track", "start_daily_track"}
+    assert tracking_stopper_tools == {"stop_daily_track"}
     assert all("retry" not in name and "delete" not in name for name in reader_tools)
     assert all("retry" not in name and "delete" not in name for name in executor_tools)
     assert "delete_daily_track" not in RESEARCH_AGENT_TOOL_NAMES
+
+
+def test_stop_daily_track_is_destructive_closed_world_and_has_no_confirmation_field() -> None:
+    registry = _registry(local_operator_authority(enable_tracking_stop=True))
+    tool = next(
+        capability
+        for capability in registry.accessible_capabilities()
+        if capability.name == "stop_daily_track"
+    )
+
+    assert tool.annotations.read_only_hint is False
+    assert tool.annotations.destructive_hint is True
+    assert tool.annotations.idempotent_hint is True
+    assert tool.annotations.open_world_hint is False
+    assert tool.input_schema()["additionalProperties"] is False
+    assert "confirmation_token" not in str(tool.input_schema())
+    assert "tracking:stop" in tool.description
 
 
 def test_in_memory_protocol_sanitizes_unexpected_tool_failures() -> None:
@@ -1218,6 +1425,7 @@ async def _exercise_in_memory_protocol() -> None:
             "list_daily_tracks",
             "get_daily_track",
             "start_daily_track",
+            "retry_daily_track",
             "list_research_batches",
             "get_research_batch",
             "submit_research_batch",
@@ -1238,15 +1446,19 @@ async def _exercise_in_memory_protocol() -> None:
             assert tool.annotations.open_world_hint is False
             if tool.name in {
                 "start_daily_track",
+                "retry_daily_track",
                 "submit_research_batch",
                 "submit_research_run",
             }:
                 assert tool.annotations.read_only_hint is False
-                if tool.name == "start_daily_track":
+                if tool.name in {"start_daily_track", "retry_daily_track"}:
                     assert tool.input_schema["additionalProperties"] is False
-                    assert "non-succeeded" in tool.description
-                    assert "duplicate origins" in tool.description
-                    assert "active capacity" in tool.description
+                    if tool.name == "start_daily_track":
+                        assert "non-succeeded" in tool.description
+                        assert "duplicate origins" in tool.description
+                        assert "active capacity" in tool.description
+                    else:
+                        assert "blocked" in tool.description
                     assert "get_daily_track" in tool.description
                     assert "retry_after_seconds" in tool.description
                     continue

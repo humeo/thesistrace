@@ -5,12 +5,15 @@ import os
 import subprocess
 import sys
 from base64 import urlsafe_b64decode
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
+from threading import Event
 
 import anyio
 import pytest
 from core_runtime import drop_product_schemas, isolated_core_settings
-from psycopg.errors import CheckViolation
+from psycopg.errors import CheckViolation, ForeignKeyViolation
 from psycopg.types.json import Jsonb
 from test_core_research_agent_mcp_runs import (
     _assert_worker_succeeded,
@@ -22,8 +25,16 @@ from test_core_research_agent_mcp_runs import (
 )
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
+from thesistrace.daily_track import DailyTrackService
+from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.entrypoints.research_agent_mcp import TRACKING_STOP_ENABLE_ENVIRONMENT
+from thesistrace.entrypoints.runtime import (
+    CoreSettings,
+    core_environment_is_configured,
+    open_core_runtime,
+)
 from thesistrace.entrypoints.schema import initialize_core
+from thesistrace.research_run.result import read_result_bundle
 
 pytestmark = pytest.mark.skipif(
     not core_environment_is_configured(),
@@ -46,7 +57,7 @@ def test_stdio_daily_tracks_survive_disconnect_progress_and_enforce_capacity(
         drop_product_schemas(settings)
 
 
-def test_start_tracking_receipt_rejects_malformed_durable_outcomes(tmp_path: Path) -> None:
+def test_daily_track_action_receipts_reject_malformed_durable_outcomes(tmp_path: Path) -> None:
     settings = isolated_core_settings(tmp_path / "receipt-data")
     settings.data_mount.mkdir(parents=True)
     settings.batch_attempt_control_directory.mkdir(parents=True)
@@ -89,6 +100,49 @@ def test_start_tracking_receipt_rejects_malformed_durable_outcomes(tmp_path: Pat
                             Jsonb(outcome),
                         ),
                     )
+        for table, allowed_status in (
+            ("retry_receipts", "active"),
+            ("stop_receipts", "stopped"),
+        ):
+            malformed_actions = (
+                {**valid, "status": None},
+                {**valid, "status": "invalid"},
+                {**valid, "status": allowed_status, "result_checksum_sha256": {}},
+                {**valid, "status": allowed_status, "origin_session": "invalid"},
+            )
+            for index, outcome in enumerate(malformed_actions):
+                with pytest.raises(CheckViolation):
+                    with database.transaction() as transaction:
+                        if table == "retry_receipts":
+                            transaction.execute(
+                                """
+                                INSERT INTO daily_tracks.retry_receipts (
+                                    request_id, request_fingerprint, track_id,
+                                    progression_id, outcome
+                                ) VALUES (%s, %s, %s, %s, %s)
+                                """,
+                                (
+                                    f"malformed_retry_{index}",
+                                    "f" * 64,
+                                    "track_missing",
+                                    "progression_missing",
+                                    Jsonb(outcome),
+                                ),
+                            )
+                        else:
+                            transaction.execute(
+                                """
+                                INSERT INTO daily_tracks.stop_receipts (
+                                    request_id, request_fingerprint, track_id, outcome
+                                ) VALUES (%s, %s, %s, %s)
+                                """,
+                                (
+                                    f"malformed_stop_{index}",
+                                    "f" * 64,
+                                    "track_missing",
+                                    Jsonb(outcome),
+                                ),
+                            )
     finally:
         database.close()
         drop_product_schemas(settings)
@@ -135,6 +189,8 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
         assert {"list_daily_tracks", "get_daily_track", "start_daily_track"} <= set(tools)
         assert "delete_daily_track" not in tools
+        assert "retry_daily_track" in tools
+        assert "stop_daily_track" not in tools
         assert tools["start_daily_track"].annotations.read_only_hint is False
         assert tools["start_daily_track"].annotations.destructive_hint is False
 
@@ -253,6 +309,12 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         1,
     )
     _assert_worker_succeeded(blocked_worker)
+    second_blocked_worker = await anyio.to_thread.run_sync(
+        _run_tracking_worker_once,
+        settings,
+        1,
+    )
+    _assert_worker_succeeded(second_blocked_worker)
     async with _mcp_client(settings, tmp_path / "track-blocked.stderr.log") as client:
         blocked = await client.call_tool(
             "get_daily_track",
@@ -269,8 +331,166 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         }
         assert blocked.structured_content["retry_after_seconds"] is None
         _assert_compact_track(blocked.structured_content, retry=True)
+        second_blocked = await client.call_tool(
+            "get_daily_track",
+            {"track_id": track_id},
+        )
+        assert second_blocked.structured_content["progress"]["phase"] == "blocked"
+        _assert_retry_receipt_rejects_cross_track_progression(
+            settings,
+            track_id=track_id,
+            other_track_id=concurrent_track_id,
+        )
+        denied_stop = await client.call_tool(
+            "stop_daily_track",
+            {"track_id": track_id, "request_id": "track-stop"},
+        )
+        assert denied_stop.is_error is True
+        assert denied_stop.structured_content["code"] == "FORBIDDEN"
+        retry_storage_before = _daily_track_action_storage(
+            settings,
+            concurrent_track_id,
+            request_id="track-retry-transient",
+            action="retry",
+        )
+        assert retry_storage_before["receipt_count"] == 0
+        _install_transient_retry_failure(settings)
+        try:
+            transient_retry = await client.call_tool(
+                "retry_daily_track",
+                {
+                    "track_id": concurrent_track_id,
+                    "request_id": "track-retry-transient",
+                },
+            )
+        finally:
+            _remove_transient_retry_failure(settings)
+        assert transient_retry.is_error is True
+        assert transient_retry.structured_content["code"] == "TEMPORARILY_UNAVAILABLE"
+        assert _daily_track_action_storage(
+            settings,
+            concurrent_track_id,
+            request_id="track-retry-transient",
+            action="retry",
+        ) == retry_storage_before
+        retry_rollback = await client.call_tool(
+            "get_daily_track",
+            {"track_id": concurrent_track_id},
+        )
+        assert retry_rollback.structured_content["progress"]["phase"] == "blocked"
 
-    for _ in range(4):
+    async with _mcp_client(
+        settings,
+        tmp_path / "track-retry-still-blocked.stderr.log",
+        environment={"THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES": "1"},
+    ) as client:
+        unchanged_retry = await client.call_tool(
+            "retry_daily_track",
+            {"track_id": concurrent_track_id, "request_id": "track-retry-transient"},
+        )
+        assert unchanged_retry.is_error is False
+        assert unchanged_retry.structured_content == {
+            "outcome": "accepted",
+            "track_id": concurrent_track_id,
+            "status": "blocked",
+            "replayed": False,
+            "retry_after_seconds": None,
+        }
+
+    async with _mcp_client(
+        settings,
+        tmp_path / "track-retry-still-blocked-restart.stderr.log",
+        environment={"THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES": "1"},
+    ) as client:
+        unchanged_retry_replay = await client.call_tool(
+            "retry_daily_track",
+            {"track_id": concurrent_track_id, "request_id": "track-retry-transient"},
+        )
+        assert unchanged_retry_replay.structured_content == {
+            **unchanged_retry.structured_content,
+            "replayed": True,
+        }
+    assert _daily_track_action_storage(
+        settings,
+        concurrent_track_id,
+        request_id="track-retry-transient",
+        action="retry",
+    )["receipt_count"] == 1
+
+    retried = await _concurrent_retry(
+        settings,
+        tmp_path,
+        track_id=concurrent_track_id,
+        request_id="track-retry-scheduled",
+    )
+    assert all(not result.is_error for result in retried)
+    assert all(result.structured_content["status"] == "active" for result in retried)
+    assert all(result.structured_content["retry_after_seconds"] == 2 for result in retried)
+    assert sum(result.structured_content["replayed"] is False for result in retried) == 1
+    await _exercise_live_tracking_stop(
+        settings,
+        tmp_path,
+        track_id=concurrent_track_id,
+    )
+    async with _mcp_client(settings, tmp_path / "track-retry-conflict.stderr.log") as client:
+        retry_conflict = await client.call_tool(
+            "retry_daily_track",
+            {"track_id": track_id, "request_id": "track-retry-scheduled"},
+        )
+        assert retry_conflict.is_error is True
+        assert retry_conflict.structured_content["code"] == "IDEMPOTENCY_CONFLICT"
+        still_blocked = await client.call_tool("get_daily_track", {"track_id": track_id})
+        assert still_blocked.structured_content["progress"]["phase"] == "blocked"
+
+    _install_transient_stop_failure(settings)
+    stop_storage_before = _daily_track_action_storage(
+        settings,
+        track_id,
+        request_id="track-stop-transient",
+        action="stop",
+    )
+    assert stop_storage_before["receipt_count"] == 0
+    try:
+        async with _mcp_client(
+            settings,
+            tmp_path / "track-stop-transient.stderr.log",
+            environment={TRACKING_STOP_ENABLE_ENVIRONMENT: "true"},
+        ) as client:
+            transient_stop = await client.call_tool(
+                "stop_daily_track",
+                {"track_id": track_id, "request_id": "track-stop-transient"},
+            )
+    finally:
+        _remove_transient_stop_failure(settings)
+    assert transient_stop.is_error is True
+    assert transient_stop.structured_content["code"] == "TEMPORARILY_UNAVAILABLE"
+    assert _daily_track_action_storage(
+        settings,
+        track_id,
+        request_id="track-stop-transient",
+        action="stop",
+    ) == stop_storage_before
+    async with _mcp_client(settings, tmp_path / "track-stop-rollback.stderr.log") as client:
+        stop_rollback = await client.call_tool("get_daily_track", {"track_id": track_id})
+        assert stop_rollback.structured_content["progress"]["phase"] == "blocked"
+
+    stopped = await _concurrent_stop(
+        settings,
+        tmp_path,
+        track_id=track_id,
+        request_id="track-stop-transient",
+    )
+    assert all(not result.is_error for result in stopped)
+    assert all(result.structured_content["status"] == "stopped" for result in stopped)
+    assert sum(result.structured_content["replayed"] is False for result in stopped) == 1
+    assert _daily_track_action_storage(
+        settings,
+        track_id,
+        request_id="track-stop-transient",
+        action="stop",
+    )["receipt_count"] == 1
+
+    for _ in range(6):
         completed = await anyio.to_thread.run_sync(_run_tracking_worker_once, settings)
         _assert_worker_succeeded(completed)
 
@@ -287,17 +507,43 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         assert advanced.is_error is False
         assert blocked_after_restart.is_error is False
         assert transient_advanced.is_error is False
-        assert advanced.structured_content["progress"]["phase"] == "up_to_date"
-        assert advanced.structured_content["progress"]["lag_sessions"] == 0
-        assert blocked_after_restart.structured_content["progress"]["phase"] == "blocked"
-        assert blocked_after_restart.structured_content["blocked_reason"] == (
-            "DailyTrack target exceeds Tracking Worker capacity."
-        )
+        assert advanced.structured_content["progress"]["phase"] == "stopped"
+        assert blocked_after_restart.structured_content["progress"]["phase"] == "stopped"
+        assert blocked_after_restart.structured_content["progress"]["lag_sessions"] > 0
         assert transient_advanced.structured_content["progress"]["phase"] == "up_to_date"
         assert advanced.structured_content["origin"]["research_run_id"] == strategy_runs[0]
-        _assert_compact_track(advanced.structured_content)
+        assert advanced.structured_content["action_eligibility"] == {
+            "retry": False,
+            "stop": False,
+        }
 
-    _seed_active_capacity_clones(settings, source_track_id=track_id, count=6)
+        retry_replay_after_restart = await client.call_tool(
+            "retry_daily_track",
+            {"track_id": concurrent_track_id, "request_id": "track-retry-scheduled"},
+        )
+        assert retry_replay_after_restart.is_error is False
+        assert retry_replay_after_restart.structured_content["replayed"] is True
+
+    async with _mcp_client(
+        settings,
+        tmp_path / "track-stop-replay.stderr.log",
+        environment={TRACKING_STOP_ENABLE_ENVIRONMENT: "true"},
+    ) as client:
+        stop_replay_after_restart = await client.call_tool(
+            "stop_daily_track",
+            {"track_id": track_id, "request_id": "track-stop-transient"},
+        )
+        assert stop_replay_after_restart.is_error is False
+        assert stop_replay_after_restart.structured_content["status"] == "stopped"
+        assert stop_replay_after_restart.structured_content["replayed"] is True
+        stop_conflict = await client.call_tool(
+            "stop_daily_track",
+            {"track_id": transient_track_id, "request_id": "track-stop-transient"},
+        )
+        assert stop_conflict.is_error is True
+        assert stop_conflict.structured_content["code"] == "IDEMPOTENCY_CONFLICT"
+
+    _seed_active_capacity_clones(settings, source_track_id=track_id, count=8)
     capacity = await _concurrent_capacity_start(
         settings,
         tmp_path,
@@ -394,6 +640,211 @@ async def _concurrent_capacity_start(
         for index in range(2):
             task_group.start_soon(start, index)
     return results
+
+
+async def _concurrent_retry(
+    settings: CoreSettings,
+    tmp_path: Path,
+    *,
+    track_id: str,
+    request_id: str,
+) -> list[object]:
+    results: list[object] = []
+
+    async def retry(index: int) -> None:
+        async with _mcp_client(
+            settings,
+            tmp_path / f"track-concurrent-retry-{index}.stderr.log",
+        ) as client:
+            results.append(
+                await client.call_tool(
+                    "retry_daily_track",
+                    {"track_id": track_id, "request_id": request_id},
+                )
+            )
+
+    async with anyio.create_task_group() as task_group:
+        for index in range(4):
+            task_group.start_soon(retry, index)
+    return results
+
+
+async def _concurrent_stop(
+    settings: CoreSettings,
+    tmp_path: Path,
+    *,
+    track_id: str,
+    request_id: str,
+) -> list[object]:
+    results: list[object] = []
+
+    async def stop(index: int) -> None:
+        async with _mcp_client(
+            settings,
+            tmp_path / f"track-concurrent-stop-{index}.stderr.log",
+            environment={TRACKING_STOP_ENABLE_ENVIRONMENT: "true"},
+        ) as client:
+            results.append(
+                await client.call_tool(
+                    "stop_daily_track",
+                    {"track_id": track_id, "request_id": request_id},
+                )
+            )
+
+    async with anyio.create_task_group() as task_group:
+        for index in range(4):
+            task_group.start_soon(stop, index)
+    return results
+
+
+async def _exercise_live_tracking_stop(
+    settings: CoreSettings,
+    tmp_path: Path,
+    *,
+    track_id: str,
+) -> None:
+    _prioritize_daily_track(settings, track_id)
+    prepared = Event()
+    release_prepared = Event()
+    cooperative_stop_requested = Event()
+    release_cooperative_stop = Event()
+    execution_events: list[dict[str, object]] = []
+
+    def progress(stage: str, selected_track_id: str, _target: str) -> None:
+        if stage == "prepared" and selected_track_id == track_id:
+            prepared.set()
+            assert release_prepared.wait(timeout=10)
+
+    def capture_execution_event(event: dict[str, object]) -> None:
+        execution_events.append(event)
+        if event.get("event") == "tracking_execution_child_stop_requested":
+            cooperative_stop_requested.set()
+            assert release_cooperative_stop.wait(timeout=10)
+
+    with open_core_runtime(settings) as runtime:
+        processor = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            read_result_bundle=partial(
+                read_result_bundle,
+                research_kind="strategy_backtest",
+            ),
+            progress=progress,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                processor.process_next,
+                on_execution_event=capture_execution_event,
+            )
+            assert await anyio.to_thread.run_sync(prepared.wait, 10)
+            async with _mcp_client(
+                settings,
+                tmp_path / "track-live-stop.stderr.log",
+                environment={TRACKING_STOP_ENABLE_ENVIRONMENT: "true"},
+            ) as client:
+                retry_during_claim = await client.call_tool(
+                    "retry_daily_track",
+                    {"track_id": track_id, "request_id": "track-retry-during-claim"},
+                )
+                assert retry_during_claim.is_error is True
+                assert retry_during_claim.structured_content["code"] == "STATE_CONFLICT"
+
+                stopping = await client.call_tool(
+                    "stop_daily_track",
+                    {"track_id": track_id, "request_id": "track-live-stop"},
+                )
+                assert stopping.is_error is False
+                assert stopping.structured_content == {
+                    "outcome": "accepted",
+                    "track_id": track_id,
+                    "status": "stopping",
+                    "replayed": False,
+                    "retry_after_seconds": 2,
+                }
+                retry_while_stopping = await client.call_tool(
+                    "retry_daily_track",
+                    {"track_id": track_id, "request_id": "track-retry-while-stopping"},
+                )
+                assert retry_while_stopping.is_error is True
+                assert retry_while_stopping.structured_content["code"] == "STATE_CONFLICT"
+                fresh_stop_while_stopping = await client.call_tool(
+                    "stop_daily_track",
+                    {"track_id": track_id, "request_id": "track-stop-while-stopping"},
+                )
+                assert fresh_stop_while_stopping.is_error is True
+                assert fresh_stop_while_stopping.structured_content["code"] == "STATE_CONFLICT"
+                stopping_detail = await client.call_tool(
+                    "get_daily_track",
+                    {"track_id": track_id},
+                )
+                assert stopping_detail.is_error is False
+                assert stopping_detail.structured_content["status"] == "stopping"
+                assert stopping_detail.structured_content["progress"]["phase"] == "stopping"
+                assert stopping_detail.structured_content["retry_after_seconds"] == 2
+
+            assert await anyio.to_thread.run_sync(cooperative_stop_requested.wait, 5)
+            release_cooperative_stop.set()
+            release_prepared.set()
+            assert await anyio.to_thread.run_sync(future.result, 20) is True
+
+    assert any(
+        event.get("event") == "tracking_execution_child_exited"
+        for event in execution_events
+    )
+    async with _mcp_client(
+        settings,
+        tmp_path / "track-live-stop-restart.stderr.log",
+        environment={TRACKING_STOP_ENABLE_ENVIRONMENT: "true"},
+    ) as client:
+        terminal = await client.call_tool("get_daily_track", {"track_id": track_id})
+        assert terminal.is_error is False
+        assert terminal.structured_content["status"] == "stopped"
+        assert terminal.structured_content["progress"]["phase"] == "stopped"
+        assert terminal.structured_content["retry_after_seconds"] is None
+        retry_stopped = await client.call_tool(
+            "retry_daily_track",
+            {"track_id": track_id, "request_id": "track-retry-stopped"},
+        )
+        assert retry_stopped.is_error is True
+        assert retry_stopped.structured_content["code"] == "STATE_CONFLICT"
+        replay = await client.call_tool(
+            "stop_daily_track",
+            {"track_id": track_id, "request_id": "track-live-stop"},
+        )
+        assert replay.is_error is False
+        assert replay.structured_content == {
+            **stopping.structured_content,
+            "replayed": True,
+        }
+
+
+def _prioritize_daily_track(settings: CoreSettings, track_id: str) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            track = transaction.execute(
+                """
+                UPDATE daily_tracks.tracks
+                SET queue_position = 0
+                WHERE id = %s AND status = 'active'
+                """,
+                (track_id,),
+            )
+            progression = transaction.execute(
+                """
+                UPDATE daily_tracks.session_progressions
+                SET queue_position = 0, next_attempt_eligible_at = now()
+                WHERE track_id = %s AND status = 'running'
+                """,
+                (track_id,),
+            )
+        assert track.rowcount == 1
+        assert progression.rowcount == 1
+    finally:
+        database.close()
 
 
 def _run_tracking_worker_once(
@@ -494,6 +945,86 @@ def _remove_transient_start_failure(settings: CoreSettings) -> None:
         database.close()
 
 
+def _install_transient_retry_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION daily_tracks.reject_mcp_retry_transiently()
+                RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    RAISE EXCEPTION 'injected DailyTrack Retry dependency failure'
+                        USING ERRCODE = '08006';
+                END
+                $$;
+                CREATE TRIGGER reject_mcp_retry_transiently
+                BEFORE INSERT ON daily_tracks.retry_receipts
+                FOR EACH ROW
+                EXECUTE FUNCTION daily_tracks.reject_mcp_retry_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _remove_transient_retry_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_mcp_retry_transiently ON daily_tracks.retry_receipts;
+                DROP FUNCTION daily_tracks.reject_mcp_retry_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _install_transient_stop_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION daily_tracks.reject_mcp_stop_transiently()
+                RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    RAISE EXCEPTION 'injected DailyTrack Stop dependency failure'
+                        USING ERRCODE = '08006';
+                END
+                $$;
+                CREATE TRIGGER reject_mcp_stop_transiently
+                BEFORE INSERT ON daily_tracks.stop_receipts
+                FOR EACH ROW
+                EXECUTE FUNCTION daily_tracks.reject_mcp_stop_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _remove_transient_stop_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_mcp_stop_transiently ON daily_tracks.stop_receipts;
+                DROP FUNCTION daily_tracks.reject_mcp_stop_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
 def _start_tracking_storage(
     settings: CoreSettings,
     run_id: str,
@@ -518,6 +1049,135 @@ def _start_tracking_storage(
         assert tracks is not None
         assert receipts is not None
         return int(tracks["count"]), int(receipts["count"])
+    finally:
+        database.close()
+
+
+def _daily_track_action_storage(
+    settings: CoreSettings,
+    track_id: str,
+    *,
+    request_id: str,
+    action: str,
+) -> dict[str, object]:
+    assert action in {"retry", "stop"}
+    receipt_table = (
+        "daily_tracks.retry_receipts"
+        if action == "retry"
+        else "daily_tracks.stop_receipts"
+    )
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            track = transaction.execute(
+                """
+                SELECT status, execution_fence, blocked_progression_id,
+                       blocked_reason, queue_position
+                FROM daily_tracks.tracks
+                WHERE id = %s
+                """,
+                (track_id,),
+            ).fetchone()
+            progressions = transaction.execute(
+                """
+                SELECT id, status, current_cycle_ordinal,
+                       next_attempt_eligible_at, queue_position, finished_at
+                FROM daily_tracks.session_progressions
+                WHERE track_id = %s
+                ORDER BY id
+                """,
+                (track_id,),
+            ).fetchall()
+            attempts = transaction.execute(
+                """
+                SELECT id, status, fence, heartbeat_at, finished_at, failure_reason
+                FROM daily_tracks.session_progression_attempts
+                WHERE track_id = %s
+                ORDER BY id
+                """,
+                (track_id,),
+            ).fetchall()
+            receipt = transaction.execute(
+                f"SELECT count(*) AS count FROM {receipt_table} WHERE request_id = %s",
+                (request_id,),
+            ).fetchone()
+        assert track is not None
+        assert receipt is not None
+        return {
+            "track": dict(track),
+            "progressions": [dict(row) for row in progressions],
+            "attempts": [dict(row) for row in attempts],
+            "receipt_count": int(receipt["count"]),
+        }
+    finally:
+        database.close()
+
+
+def _assert_retry_receipt_rejects_cross_track_progression(
+    settings: CoreSettings,
+    *,
+    track_id: str,
+    other_track_id: str,
+) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            track = transaction.execute(
+                """
+                SELECT track.id, track.status, track.seed_run_id,
+                       track.origin -> 'verified_result' ->> 'result_checksum_sha256'
+                           AS result_checksum_sha256,
+                       state.origin_session,
+                       checkpoint.boundary_session AS strategy_session
+                FROM daily_tracks.tracks AS track
+                JOIN daily_tracks.session_tracking_states AS state
+                  ON state.track_id = track.id
+                JOIN daily_tracks.session_checkpoints AS checkpoint
+                  ON checkpoint.track_id = state.track_id
+                 AND checkpoint.manifest_sha256 = state.current_checkpoint_manifest_sha256
+                WHERE track.id = %s
+                """,
+                (track_id,),
+            ).fetchone()
+            other_progression = transaction.execute(
+                """
+                SELECT id
+                FROM daily_tracks.session_progressions
+                WHERE track_id = %s
+                ORDER BY id
+                LIMIT 1
+                """,
+                (other_track_id,),
+            ).fetchone()
+        assert track is not None
+        assert other_progression is not None
+        outcome = {
+            "id": str(track["id"]),
+            "status": str(track["status"]),
+            "seed_run_id": str(track["seed_run_id"]),
+            "result_checksum_sha256": str(track["result_checksum_sha256"]),
+            "origin_session": track["origin_session"].isoformat(),
+            "strategy_session": track["strategy_session"].isoformat(),
+        }
+        with pytest.raises(ForeignKeyViolation):
+            with database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    INSERT INTO daily_tracks.retry_receipts (
+                        request_id, request_fingerprint, track_id,
+                        progression_id, outcome
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        "cross-track-progression",
+                        "f" * 64,
+                        track_id,
+                        other_progression["id"],
+                        Jsonb(outcome),
+                    ),
+                )
     finally:
         database.close()
 

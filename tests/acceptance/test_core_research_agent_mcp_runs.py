@@ -84,7 +84,8 @@ async def _exercise_research_runs(
             tool_names
         )
         assert "cancel_research_run" not in tool_names
-        assert all("retry" not in name and "delete" not in name for name in tool_names)
+        assert "retry_research_run" not in tool_names
+        assert all("delete" not in name for name in tool_names)
 
         factor = await client.call_tool("submit_research_run", factor_command)
         strategy = await client.call_tool("submit_research_run", strategy_command)

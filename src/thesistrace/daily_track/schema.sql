@@ -32,7 +32,28 @@ CREATE TABLE daily_tracks.retry_receipts (
     outcome jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     progression_id text NOT NULL,
-    CONSTRAINT retry_receipts_outcome_check CHECK ((jsonb_typeof(outcome) = 'object'::text))
+    CONSTRAINT retry_receipts_outcome_check CHECK (
+        jsonb_typeof(outcome) = 'object'::text
+        AND outcome ?& ARRAY[
+            'id', 'status', 'seed_run_id', 'result_checksum_sha256',
+            'origin_session', 'strategy_session'
+        ]
+        AND outcome - ARRAY[
+            'id', 'status', 'seed_run_id', 'result_checksum_sha256',
+            'origin_session', 'strategy_session'
+        ] = '{}'::jsonb
+        AND jsonb_typeof(outcome -> 'id') = 'string'
+        AND outcome ->> 'id' = track_id
+        AND jsonb_typeof(outcome -> 'status') = 'string'
+        AND outcome ->> 'status' IN ('active', 'blocked')
+        AND jsonb_typeof(outcome -> 'seed_run_id') = 'string'
+        AND jsonb_typeof(outcome -> 'result_checksum_sha256') = 'string'
+        AND outcome ->> 'result_checksum_sha256' ~ '^[0-9a-f]{64}$'
+        AND jsonb_typeof(outcome -> 'origin_session') = 'string'
+        AND outcome ->> 'origin_session' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+        AND jsonb_typeof(outcome -> 'strategy_session') = 'string'
+        AND outcome ->> 'strategy_session' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    )
 );
 
 
@@ -141,7 +162,28 @@ CREATE TABLE daily_tracks.stop_receipts (
     track_id text NOT NULL,
     outcome jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT stop_receipts_outcome_check CHECK ((jsonb_typeof(outcome) = 'object'::text))
+    CONSTRAINT stop_receipts_outcome_check CHECK (
+        jsonb_typeof(outcome) = 'object'::text
+        AND outcome ?& ARRAY[
+            'id', 'status', 'seed_run_id', 'result_checksum_sha256',
+            'origin_session', 'strategy_session'
+        ]
+        AND outcome - ARRAY[
+            'id', 'status', 'seed_run_id', 'result_checksum_sha256',
+            'origin_session', 'strategy_session'
+        ] = '{}'::jsonb
+        AND jsonb_typeof(outcome -> 'id') = 'string'
+        AND outcome ->> 'id' = track_id
+        AND jsonb_typeof(outcome -> 'status') = 'string'
+        AND outcome ->> 'status' IN ('stopping', 'stopped')
+        AND jsonb_typeof(outcome -> 'seed_run_id') = 'string'
+        AND jsonb_typeof(outcome -> 'result_checksum_sha256') = 'string'
+        AND outcome ->> 'result_checksum_sha256' ~ '^[0-9a-f]{64}$'
+        AND jsonb_typeof(outcome -> 'origin_session') = 'string'
+        AND outcome ->> 'origin_session' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+        AND jsonb_typeof(outcome -> 'strategy_session') = 'string'
+        AND outcome ->> 'strategy_session' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    )
 );
 
 
@@ -331,19 +373,11 @@ CREATE UNIQUE INDEX daily_tracks_one_unresolved_session_progression_idx ON daily
 
 
 --
--- Name: retry_receipts retry_receipts_progression_id_fkey; Type: FK CONSTRAINT; Schema: daily_tracks; Owner: -
+-- Name: retry_receipts retry_receipts_track_id_progression_id_fkey; Type: FK CONSTRAINT; Schema: daily_tracks; Owner: -
 --
 
 ALTER TABLE ONLY daily_tracks.retry_receipts
-    ADD CONSTRAINT retry_receipts_progression_id_fkey FOREIGN KEY (progression_id) REFERENCES daily_tracks.session_progressions(id) ON DELETE CASCADE;
-
-
---
--- Name: retry_receipts retry_receipts_track_id_fkey; Type: FK CONSTRAINT; Schema: daily_tracks; Owner: -
---
-
-ALTER TABLE ONLY daily_tracks.retry_receipts
-    ADD CONSTRAINT retry_receipts_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id) ON DELETE CASCADE;
+    ADD CONSTRAINT retry_receipts_track_id_progression_id_fkey FOREIGN KEY (track_id, progression_id) REFERENCES daily_tracks.session_progressions(track_id, id) ON DELETE CASCADE;
 
 
 --
