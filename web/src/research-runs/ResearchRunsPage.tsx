@@ -12,6 +12,7 @@ import {
   useResearchAsDraft,
   type FrozenResearchAuthorableInput,
 } from "../research/draft";
+import { followCoreLink } from "../shell/navigation";
 
 type CorrelationSummary = {
   mean: number | null;
@@ -498,13 +499,13 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       </section>
     );
   }
-  if (runId && run === null) {
+  if (runId && run?.id !== runId) {
     return <section aria-label="Research Runs" className="state-section"><p>Loading ResearchRun…</p></section>;
   }
   if (!runId && items === null) {
     return <section aria-label="Research Runs" className="state-section"><p>Loading Research Runs…</p></section>;
   }
-  if (run) {
+  if (runId && run?.id === runId) {
     const terminal = isTerminalResearch(run.status);
     const progressView = run.progress ? (
       <ResearchRunProgressView
@@ -521,6 +522,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
             <h1>ResearchRun</h1>
           </div>
           <div>
+            <ResearchRunBackLink />
             {run.status === "queued" || run.status === "running" ? (
               <button disabled={canceling} onClick={() => void cancel()}>
                 {canceling ? "Cancelling…" : "Cancel"}
@@ -635,6 +637,15 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
         pageIndex={pageIndex}
       />
     </section>
+  );
+}
+
+export function ResearchRunBackLink() {
+  return (
+    <a className="button button-quiet" href="/research-runs" onClick={followCoreLink}>
+      <CaretLeft aria-hidden="true" size={13} weight="bold" />
+      Back to Research Runs
+    </a>
   );
 }
 
@@ -1123,7 +1134,7 @@ export function ResearchRunHistory({
           {sortedItems.map((item) => (
             <tr key={item.id}>
               <th scope="row">
-                <a href={`/research-runs/${item.id}`}>{item.name}</a>
+                <a href={`/research-runs/${item.id}`} onClick={followCoreLink}>{item.name}</a>
               </th>
               <td data-label="Type">{researchKindLabel(item.research_kind)}</td>
               <td data-label="Created (UTC)">

@@ -2822,6 +2822,7 @@ def _request_error_json(
 def _assert_web_image(web_origin: str) -> None:
     with urllib.request.urlopen(f"{web_origin}/data", timeout=5) as response:
         assert response.status == 200
+        assert response.headers.get("Cache-Control") == "no-cache"
         body = response.read().decode()
     assert '<div id="root"></div>' in body
 

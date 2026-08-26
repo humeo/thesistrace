@@ -5,6 +5,7 @@ import {
   ResearchFolderLoadFailure,
   ResearchOrganizationPanel,
   ResearchResultView,
+  ResearchRunBackLink,
   ResearchRunFacts,
   ResearchRunProgressView,
   ResearchRunHistory,
@@ -18,6 +19,15 @@ import {
   type ResearchRun,
   type TerminalStrategyState,
 } from "./ResearchRunsPage";
+
+describe("ResearchRunBackLink", () => {
+  it("returns a ResearchRun detail to the Research Runs list", () => {
+    const markup = renderToStaticMarkup(<ResearchRunBackLink />);
+
+    expect(markup).toContain('href="/research-runs"');
+    expect(markup).toContain("Back to Research Runs");
+  });
+});
 
 const STRATEGY_RUN: ResearchRun = {
   id: "run_conditions",

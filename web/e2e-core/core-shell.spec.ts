@@ -1,6 +1,72 @@
 import { expect, test, type Page, type Route, type TestInfo } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 
+test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
+  const documentRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.resourceType() === "document") documentRequests.push(request.url());
+  });
+  await page.route("**/api/research-folders", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [{
+          id: "folder_default",
+          name: "Default",
+          is_default: true,
+          created_at: "2026-08-13T00:00:00Z",
+        }],
+        next_cursor: null,
+      },
+    });
+  });
+  await page.route("**/api/research-runs?*", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [{
+          id: "run_feedface1234abcd9876",
+          status: "succeeded",
+          name: "Filtered Factor",
+          folder_id: "folder_default",
+          created_at: "2026-08-13T01:02:03Z",
+          start_date: "2026-08-01",
+          end_date: "2026-08-05",
+          formula_summary: "rank(close)",
+          research_kind: "factor_evaluation",
+        }],
+        next_cursor: null,
+      },
+    });
+  });
+  await page.route("**/api/research-runs/run_feedface1234abcd9876", async (route) => {
+    await route.fulfill({
+      json: {
+        id: "run_feedface1234abcd9876",
+        status: "succeeded",
+        name: "Filtered Factor",
+        folder_id: "folder_default",
+        created_at: "2026-08-13T01:02:03Z",
+        start_date: "2026-08-01",
+        end_date: "2026-08-05",
+        formula_summary: "rank(close)",
+        research_kind: "factor_evaluation",
+      },
+    });
+  });
+
+  await page.goto("/research-runs");
+  await page.getByLabel("Filter by Type").selectOption("factor_evaluation");
+  await page.getByRole("link", { name: "Filtered Factor", exact: true }).click();
+  await expect(page).toHaveURL(/\/research-runs\/run_feedface1234abcd9876$/);
+  await expect(page.getByRole("heading", { name: "ResearchRun", exact: true })).toBeVisible();
+  documentRequests.length = 0;
+
+  await page.getByRole("link", { name: "Back to Research Runs", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/research-runs$/);
+  await expect(page.getByLabel("Filter by Type")).toHaveValue("factor_evaluation");
+  expect(documentRequests).toEqual([]);
+});
+
 test("Notes keeps multiline research context visible", async ({ page }) => {
   await page.setViewportSize({ width: 956, height: 958 });
   await page.goto("/research");
