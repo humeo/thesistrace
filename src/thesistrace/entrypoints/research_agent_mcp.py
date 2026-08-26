@@ -1,4 +1,5 @@
 import logging
+import os
 from time import perf_counter_ns
 from uuid import uuid4
 
@@ -21,6 +22,10 @@ from thesistrace.research_agent import (
     local_operator_authority,
 )
 
+RESEARCH_CANCEL_ENABLE_ENVIRONMENT = (
+    "THESISTRACE_RESEARCH_AGENT_ENABLE_RESEARCH_CANCEL"
+)
+
 
 def main() -> None:
     logging.getLogger("psycopg.pool").disabled = True
@@ -38,12 +43,15 @@ def main() -> None:
                 research_authoring=runtime.research_authoring,
                 research_runs=runtime.research_runs,
             )
+            authority = local_operator_authority(
+                enable_research_cancel=_research_cancel_is_enabled(),
+            )
 
             def registry_factory(
                 _context: ServerRequestContext[object],
             ) -> ResearchAgentCapabilityRegistry:
                 return ResearchAgentCapabilityRegistry(
-                    authority=local_operator_authority(),
+                    authority=authority,
                     modules=modules,
                 )
 
@@ -104,6 +112,17 @@ async def _serve_stdio(server: Server[object]) -> None:
 
 def _new_trace_id() -> str:
     return f"trace_{uuid4().hex}"
+
+
+def _research_cancel_is_enabled() -> bool:
+    value = os.environ.get(RESEARCH_CANCEL_ENABLE_ENVIRONMENT)
+    if value in {None, ""}:
+        return False
+    if value == "true":
+        return True
+    raise ValueError(
+        f"{RESEARCH_CANCEL_ENABLE_ENVIRONMENT} must be exactly true when enabled"
+    )
 
 
 if __name__ == "__main__":

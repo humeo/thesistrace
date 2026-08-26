@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from hashlib import sha256
 from itertools import count
+from multiprocessing import get_context
 from pathlib import Path
 
 import anyio
@@ -17,15 +19,20 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.auth.provider import AccessToken
 from mcp_types.version import LATEST_HANDSHAKE_VERSION
 
+from thesistrace._postgres import PostgresDatabase
+from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.entrypoints.http import create_app
-from thesistrace.entrypoints.runtime import CoreSettings
+from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.entrypoints.schema import initialize_core
+from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.operational_events import OperationalEvent
 from thesistrace.research_agent import (
     RESEARCH_AGENT_TOOL_NAMES,
     ResearchAgentHTTPConfiguration,
     ResearchAgentScope,
 )
+from thesistrace.research_run import ResearchRunService
+from thesistrace.research_run.execution import SupervisedResearchExecutor
 
 _ISSUER_URL = "https://issuer.test/"
 _RESOURCE_URL = "https://core.test/mcp"
@@ -124,11 +131,12 @@ def test_mounted_oauth_streamable_http_read_loop_and_fail_closed_boundaries(
     settings.batch_attempt_control_directory.mkdir(parents=True)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
+    _publish_current_data(settings)
     issuer = _DeterministicOAuthIssuer()
     events: list[OperationalEvent] = []
     app = _app(settings, issuer, events=events)
     try:
-        anyio.run(_exercise_http_contract, app, issuer)
+        anyio.run(_exercise_http_contract, app, issuer, settings)
         serialized_events = str(events)
         mcp_events = [event for event in events if event.component == "research_agent_mcp"]
         assert mcp_events
@@ -157,7 +165,16 @@ def test_http_discovery_intersects_deployment_allowlist_with_grant(tmp_path: Pat
         deployment_tool_allowlist=frozenset({"get_research_context"}),
     )
     try:
-        anyio.run(_exercise_allowlist_intersection, app, issuer.issue())
+        anyio.run(
+            _exercise_allowlist_intersection,
+            app,
+            issuer.issue(
+                scopes=(
+                    ResearchAgentScope.RESEARCH_READ.value,
+                    ResearchAgentScope.RESEARCH_CANCEL.value,
+                )
+            ),
+        )
     finally:
         drop_product_schemas(settings)
 
@@ -184,8 +201,18 @@ def _app(
     )
 
 
-async def _exercise_http_contract(app, issuer: _DeterministicOAuthIssuer) -> None:
+async def _exercise_http_contract(
+    app,
+    issuer: _DeterministicOAuthIssuer,
+    settings: CoreSettings,
+) -> None:
     read_token = issuer.issue()
+    action_scopes = (
+        ResearchAgentScope.RESEARCH_READ.value,
+        ResearchAgentScope.RESEARCH_EXECUTE.value,
+        ResearchAgentScope.RESEARCH_CANCEL.value,
+    )
+    action_token = issuer.issue(scopes=action_scopes)
     no_grant_token = issuer.issue(scopes=())
     async with app.router.lifespan_context(app):
         await _assert_protected_resource_and_authentication_boundaries(
@@ -199,7 +226,8 @@ async def _exercise_http_contract(app, issuer: _DeterministicOAuthIssuer) -> Non
             tools = await client.list_tools()
             tools_by_name = {tool.name: tool for tool in tools.tools}
             assert set(tools_by_name) == RESEARCH_AGENT_TOOL_NAMES - {
-                "submit_research_run"
+                "submit_research_run",
+                "cancel_research_run",
             }
 
             context = await client.call_tool("get_research_context", {})
@@ -235,6 +263,158 @@ async def _exercise_http_contract(app, issuer: _DeterministicOAuthIssuer) -> Non
             assert denied_after_discovery.structured_content["code"] == "FORBIDDEN"
             issuer.replace_grant(read_token, (ResearchAgentScope.RESEARCH_READ.value,))
 
+        async with _mcp_client(app, action_token) as client:
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+            assert set(tools) == RESEARCH_AGENT_TOOL_NAMES
+            cancel_tool = tools["cancel_research_run"]
+            assert cancel_tool.annotations is not None
+            assert cancel_tool.annotations.destructive_hint is True
+            assert cancel_tool.annotations.idempotent_hint is True
+
+            cancel_target = await client.call_tool(
+                "submit_research_run",
+                _research_command("http-cancel-target"),
+            )
+            conflict_target = await client.call_tool(
+                "submit_research_run",
+                _research_command("http-cancel-conflict-target"),
+            )
+            assert cancel_target.is_error is False
+            assert conflict_target.is_error is False
+
+            process_context = get_context("spawn")
+            prepared = process_context.Event()
+            release_worker = process_context.Event()
+            worker_process = process_context.Process(
+                target=_run_barrier_worker,
+                args=(settings, prepared, release_worker),
+            )
+            worker_process.start()
+            try:
+                assert await anyio.to_thread.run_sync(prepared.wait, 20)
+                issuer.replace_grant(
+                    action_token,
+                    (
+                        ResearchAgentScope.RESEARCH_READ.value,
+                        ResearchAgentScope.RESEARCH_EXECUTE.value,
+                    ),
+                )
+                denied_after_discovery = await client.call_tool(
+                    "cancel_research_run",
+                    {
+                        "run_id": cancel_target.structured_content["run_id"],
+                        "request_id": "http-cancel-request",
+                    },
+                )
+                assert denied_after_discovery.is_error is True
+                assert denied_after_discovery.structured_content["code"] == "FORBIDDEN"
+                issuer.replace_grant(action_token, action_scopes)
+
+                rejected_confirmation = await client.call_tool(
+                    "cancel_research_run",
+                    {
+                        "run_id": cancel_target.structured_content["run_id"],
+                        "request_id": "http-cancel-request",
+                        "confirmation_token": "host-confirmation-is-not-authority",
+                    },
+                )
+                assert rejected_confirmation.is_error is True
+                assert rejected_confirmation.structured_content["code"] == "INVALID_INPUT"
+
+                cancelled = await client.call_tool(
+                    "cancel_research_run",
+                    {
+                        "run_id": cancel_target.structured_content["run_id"],
+                        "request_id": "http-cancel-request",
+                    },
+                )
+                assert cancelled.is_error is False
+                assert cancelled.structured_content["run"]["status"] == "cancelling"
+                assert cancelled.structured_content["replayed"] is False
+                assert cancelled.structured_content["retry_after_seconds"] == 2
+
+                concurrent_replays = await _concurrent_cancel_replays(
+                    app,
+                    action_token,
+                    run_id=str(cancel_target.structured_content["run_id"]),
+                    request_id="http-cancel-request",
+                )
+                assert all(not result.is_error for result in concurrent_replays)
+                assert all(
+                    result.structured_content["run"]
+                    == cancelled.structured_content["run"]
+                    for result in concurrent_replays
+                )
+                assert all(
+                    result.structured_content["replayed"] is True
+                    for result in concurrent_replays
+                )
+
+                idempotency_conflict = await client.call_tool(
+                    "cancel_research_run",
+                    {
+                        "run_id": conflict_target.structured_content["run_id"],
+                        "request_id": "http-cancel-request",
+                    },
+                )
+                assert idempotency_conflict.is_error is True
+                assert idempotency_conflict.structured_content["code"] == (
+                    "IDEMPOTENCY_CONFLICT"
+                )
+
+                _install_transient_cancel_failure(settings)
+                try:
+                    temporarily_unavailable = await client.call_tool(
+                        "cancel_research_run",
+                        {
+                            "run_id": conflict_target.structured_content["run_id"],
+                            "request_id": "http-cancel-temporary",
+                        },
+                    )
+                finally:
+                    _remove_transient_cancel_failure(settings)
+                assert temporarily_unavailable.is_error is True
+                assert temporarily_unavailable.structured_content["code"] == (
+                    "TEMPORARILY_UNAVAILABLE"
+                )
+                assert temporarily_unavailable.structured_content["retryable"] is True
+                assert temporarily_unavailable.structured_content[
+                    "retry_after_seconds"
+                ] == 2
+                assert temporarily_unavailable.structured_content["trace_id"]
+
+                conflict_state = await client.call_tool(
+                    "get_research_run",
+                    {"run_id": conflict_target.structured_content["run_id"]},
+                )
+                assert conflict_state.structured_content["status"] == "queued"
+
+                missing = await client.call_tool(
+                    "cancel_research_run",
+                    {"run_id": "run_missing", "request_id": "http-cancel-missing"},
+                )
+                assert missing.is_error is True
+                assert missing.structured_content["code"] == "NOT_FOUND"
+            finally:
+                release_worker.set()
+                await _join_or_stop_worker_process(worker_process)
+            assert worker_process.exitcode == 0
+
+            stable_cancelled = await client.call_tool(
+                "get_research_run",
+                {"run_id": cancel_target.structured_content["run_id"]},
+            )
+            assert stable_cancelled.structured_content["status"] == "cancelled"
+            terminal_conflict = await client.call_tool(
+                "cancel_research_run",
+                {
+                    "run_id": cancel_target.structured_content["run_id"],
+                    "request_id": "http-cancel-terminal",
+                },
+            )
+            assert terminal_conflict.is_error is True
+            assert terminal_conflict.structured_content["code"] == "STATE_CONFLICT"
+
         async with _mcp_client(app, no_grant_token) as client:
             assert (await client.list_tools()).tools == []
 
@@ -242,6 +422,78 @@ async def _exercise_http_contract(app, issuer: _DeterministicOAuthIssuer) -> Non
             second_context = await reconnected.call_tool("get_research_context", {})
             assert second_context.is_error is False
             assert second_context.structured_content == first_context
+
+    restarted_app = _app(settings, issuer)
+    async with restarted_app.router.lifespan_context(restarted_app):
+        async with _mcp_client(restarted_app, action_token) as restarted:
+            replay = await restarted.call_tool(
+                "cancel_research_run",
+                {
+                    "run_id": cancel_target.structured_content["run_id"],
+                    "request_id": "http-cancel-request",
+                },
+            )
+            assert replay.is_error is False
+            assert replay.structured_content["run"] == cancelled.structured_content["run"]
+            assert replay.structured_content["replayed"] is True
+            assert replay.structured_content["retry_after_seconds"] == 2
+            stable_after_restart = await restarted.call_tool(
+                "get_research_run",
+                {"run_id": cancel_target.structured_content["run_id"]},
+            )
+            assert stable_after_restart.structured_content["status"] == "cancelled"
+
+
+def _run_barrier_worker(settings: CoreSettings, prepared, release_worker) -> None:
+    def pause_after_prepare(stage: str, _run_id: str) -> None:
+        if stage == "prepared":
+            prepared.set()
+            assert release_worker.wait(timeout=30)
+
+    with open_core_runtime(settings) as runtime:
+        worker = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
+            progress=pause_after_prepare,
+        )
+        assert worker.process_next() is True
+
+
+async def _join_or_stop_worker_process(process) -> None:
+    await anyio.to_thread.run_sync(process.join, 30)
+    if process.is_alive():
+        process.terminate()
+        await anyio.to_thread.run_sync(process.join, 5)
+    if process.is_alive():
+        process.kill()
+        await anyio.to_thread.run_sync(process.join, 5)
+
+
+async def _concurrent_cancel_replays(
+    app,
+    token: str,
+    *,
+    run_id: str,
+    request_id: str,
+) -> list[object]:
+    results: list[object] = []
+
+    async def replay() -> None:
+        async with _mcp_client(app, token) as client:
+            results.append(
+                await client.call_tool(
+                    "cancel_research_run",
+                    {"run_id": run_id, "request_id": request_id},
+                )
+            )
+
+    async with anyio.create_task_group() as task_group:
+        for _index in range(4):
+            task_group.start_soon(replay)
+    return results
 
 
 async def _exercise_allowlist_intersection(app, token: str) -> None:
@@ -252,6 +504,95 @@ async def _exercise_allowlist_intersection(app, token: str) -> None:
             denied = await client.call_tool("get_alpha_catalog", {})
             assert denied.is_error is True
             assert denied.structured_content["code"] == "FORBIDDEN"
+            denied_cancel = await client.call_tool(
+                "cancel_research_run",
+                {"run_id": "run_missing", "request_id": "allowlist-cancel"},
+            )
+            assert denied_cancel.is_error is True
+            assert denied_cancel.structured_content["code"] == "FORBIDDEN"
+
+
+def _research_command(request_id: str) -> dict[str, object]:
+    return {
+        "request_id": request_id,
+        "folder_id": "folder_default",
+        "name": "HTTP MCP Cancellation",
+        "formula": "close",
+        "hypothesis": "Close prices preserve a stable cross-sectional signal.",
+        "start_date": "2026-08-07",
+        "end_date": "2026-08-07",
+        "universe": "top300",
+        "neutralization": "none",
+        "research_kind": "factor_evaluation",
+    }
+
+
+def _publish_current_data(settings: CoreSettings) -> None:
+    generation = MountedGenerationStore(settings.data_mount).materialize(
+        build_minimal_canonical_fixture(),
+        prepared_at=datetime(2026, 8, 7, 12, tzinfo=UTC),
+        source_name="research-agent-http-cancel-acceptance",
+        source_lineage={"contract": "research-agent-http-cancel"},
+    )
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        lifecycle = DatasetLifecycle(database, settings.data_mount)
+        lifecycle.protect_candidate(
+            operation_id="research-agent-http-cancel-head",
+            generation_manifest_sha256=generation.manifest_sha256,
+            lease_seconds=60,
+        )
+        lifecycle.compare_and_swap_head(
+            expected_generation_manifest_sha256=None,
+            candidate_generation_manifest_sha256=generation.manifest_sha256,
+            operation_id="research-agent-http-cancel-head",
+        )
+    finally:
+        database.close()
+
+
+def _install_transient_cancel_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION research_runs.reject_mcp_cancel_transiently()
+                RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    IF OLD.status = 'queued' AND NEW.status = 'cancelled' THEN
+                        RAISE EXCEPTION 'injected MCP cancellation dependency failure'
+                            USING ERRCODE = '08006';
+                    END IF;
+                    RETURN NEW;
+                END
+                $$;
+                CREATE TRIGGER reject_mcp_cancel_transiently
+                BEFORE UPDATE ON research_runs.runs
+                FOR EACH ROW
+                EXECUTE FUNCTION research_runs.reject_mcp_cancel_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _remove_transient_cancel_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_mcp_cancel_transiently ON research_runs.runs;
+                DROP FUNCTION research_runs.reject_mcp_cancel_transiently();
+                """
+            )
+    finally:
+        database.close()
 
 
 async def _assert_protected_resource_and_authentication_boundaries(

@@ -12,6 +12,7 @@ from thesistrace.data.models import DataOverview
 from thesistrace.research_agent.models import (
     AlphaCatalogIdentifiers,
     AlphaCatalogView,
+    CancelResearchRunInput,
     DiagnoseAlphaFormulaInput,
     FormulaSource,
     GetAlphaCatalogInput,
@@ -34,6 +35,10 @@ from thesistrace.research_run import (
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionConflict,
     ResearchRunAdmissionOutcome,
+    ResearchRunCancelCommand,
+    ResearchRunCancelIdempotencyConflict,
+    ResearchRunCancelOutcome,
+    ResearchRunCancelStateConflict,
     ResearchRunInvalidCursor,
     ResearchRunList,
     ResearchRunPollingDetail,
@@ -75,6 +80,12 @@ class ResearchRunReader(Protocol):
     ) -> ResearchRunList: ...
 
     def get_polling_detail(self, run_id: str) -> ResearchRunPollingDetail | None: ...
+
+    def cancel(
+        self,
+        run_id: str,
+        command: ResearchRunCancelCommand,
+    ) -> ResearchRunCancelOutcome | None: ...
 
     def get_result_section(
         self,
@@ -160,6 +171,12 @@ EFFECTFUL_TOOL_ANNOTATIONS = ToolAnnotations(
     idempotent_hint=True,
     open_world_hint=False,
 )
+DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=True,
+    idempotent_hint=True,
+    open_world_hint=False,
+)
 
 RESEARCH_AGENT_TOOL_NAMES = frozenset(
     {
@@ -169,6 +186,7 @@ RESEARCH_AGENT_TOOL_NAMES = frozenset(
         "list_research_runs",
         "get_research_run",
         "get_research_run_result",
+        "cancel_research_run",
         "submit_research_run",
     }
 )
@@ -258,6 +276,20 @@ class ResearchAgentCapabilityRegistry:
                 output_model=ResearchRunResultSectionResponse,
                 annotations=READ_ONLY_TOOL_ANNOTATIONS,
                 handler=self.get_research_run_result,
+            ),
+            ResearchAgentCapability(
+                name="cancel_research_run",
+                description=(
+                    "Cancel one queued or running ordinary ResearchRun; requires "
+                    "research:cancel, irreversibly prevents a Result, is idempotent by "
+                    "request_id, and when status is cancelling requires calling "
+                    "get_research_run after retry_after_seconds until terminal cancelled."
+                ),
+                required_scope=ResearchAgentScope.RESEARCH_CANCEL,
+                input_model=CancelResearchRunInput,
+                output_model=ResearchRunCancelOutcome,
+                annotations=DESTRUCTIVE_TOOL_ANNOTATIONS,
+                handler=self.cancel_research_run,
             ),
             ResearchAgentCapability(
                 name="submit_research_run",
@@ -476,6 +508,31 @@ class ResearchAgentCapabilityRegistry:
             raise TypeError("ResearchRun Result module returned an invalid section")
         return result
 
+    def cancel_research_run(
+        self,
+        run_id: str,
+        request_id: str,
+    ) -> ResearchRunCancelOutcome:
+        self._require(ResearchAgentScope.RESEARCH_CANCEL)
+        try:
+            outcome = self._modules.research_runs.cancel(
+                run_id,
+                ResearchRunCancelCommand(request_id=request_id),
+            )
+        except ResearchRunCancelIdempotencyConflict as error:
+            raise ResearchAgentExpectedFailure(
+                ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT
+            ) from error
+        except ResearchRunCancelStateConflict as error:
+            raise ResearchAgentExpectedFailure(
+                ResearchAgentErrorCode.STATE_CONFLICT
+            ) from error
+        except ResearchRunTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if outcome is None:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
+        return outcome
+
     def submit_research_run(self, **command_fields: object) -> BaseModel:
         self._require(ResearchAgentScope.RESEARCH_EXECUTE)
         command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(command_fields)
@@ -506,17 +563,21 @@ class ResearchAgentCapabilityRegistry:
             )
 
 
-def local_operator_authority() -> ResearchAgentAuthority:
+def local_operator_authority(
+    *,
+    enable_research_cancel: bool = False,
+) -> ResearchAgentAuthority:
+    scopes = {
+        ResearchAgentScope.RESEARCH_READ,
+        ResearchAgentScope.RESEARCH_EXECUTE,
+        ResearchAgentScope.TRACKING_READ,
+        ResearchAgentScope.TRACKING_EXECUTE,
+    }
+    if enable_research_cancel:
+        scopes.add(ResearchAgentScope.RESEARCH_CANCEL)
     return ResearchAgentAuthority(
         subject="local_operator",
-        scopes=frozenset(
-            {
-                ResearchAgentScope.RESEARCH_READ,
-                ResearchAgentScope.RESEARCH_EXECUTE,
-                ResearchAgentScope.TRACKING_READ,
-                ResearchAgentScope.TRACKING_EXECUTE,
-            }
-        ),
+        scopes=frozenset(scopes),
     )
 
 

@@ -13,6 +13,7 @@ from thesistrace.data.models import DataOverview
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
 from thesistrace.research_folder.models import ResearchFolderList
 from thesistrace.research_run.models import (
+    RequestId,
     ResearchKind,
     ResearchRunAdmissionIssue,
     ResearchRunStatus,
@@ -121,6 +122,13 @@ class GetResearchRunInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     run_id: ResearchRunId
+
+
+class CancelResearchRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    run_id: ResearchRunId
+    request_id: RequestId
 
 
 class SubmitResearchRunAccepted(BaseModel):

@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from multiprocessing import get_context
 from pathlib import Path
 
 import anyio
@@ -24,6 +25,9 @@ from pydantic import TypeAdapter
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.data.canonical_mapping import field_catalog
+from thesistrace.entrypoints.research_agent_mcp import (
+    RESEARCH_CANCEL_ENABLE_ENVIRONMENT,
+)
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
     core_environment_is_configured,
@@ -31,6 +35,7 @@ from thesistrace.entrypoints.runtime import (
 )
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
+from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.models import (
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionRejectedOutcome,
@@ -78,6 +83,7 @@ async def _exercise_research_runs(
         assert {"list_research_runs", "get_research_run", "submit_research_run"} <= (
             tool_names
         )
+        assert "cancel_research_run" not in tool_names
         assert all("retry" not in name and "delete" not in name for name in tool_names)
 
         factor = await client.call_tool("submit_research_run", factor_command)
@@ -384,6 +390,181 @@ async def _exercise_research_runs(
         assert wrong_filter_after_restart.is_error is True
         assert wrong_filter_after_restart.structured_content["code"] == "INVALID_INPUT"
 
+        cancel_target = await client.call_tool(
+            "submit_research_run",
+            _command("mcp-cancel-target", research_kind="factor_evaluation"),
+        )
+        conflict_target = await client.call_tool(
+            "submit_research_run",
+            _command("mcp-cancel-conflict-target", research_kind="factor_evaluation"),
+        )
+        denied_cancel = await client.call_tool(
+            "cancel_research_run",
+            {
+                "run_id": cancel_target.structured_content["run_id"],
+                "request_id": "mcp-cancel-request",
+            },
+        )
+        assert denied_cancel.is_error is True
+        assert denied_cancel.structured_content["code"] == "FORBIDDEN"
+        still_queued = await client.call_tool(
+            "get_research_run",
+            {"run_id": cancel_target.structured_content["run_id"]},
+        )
+        assert still_queued.structured_content["status"] == "queued"
+
+    _prioritize_run_for_worker(
+        settings,
+        str(cancel_target.structured_content["run_id"]),
+    )
+    process_context = get_context("spawn")
+    prepared = process_context.Event()
+    release_worker = process_context.Event()
+    worker_process = process_context.Process(
+        target=_run_barrier_worker,
+        args=(settings, prepared, release_worker),
+    )
+    worker_process.start()
+    try:
+        assert await anyio.to_thread.run_sync(prepared.wait, 20)
+
+        fifth_log = tmp_path / "mcp-fifth-cancel-enabled.stderr.log"
+        async with _mcp_client(
+            settings,
+            fifth_log,
+            enable_research_cancel=True,
+        ) as client:
+            tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+            cancel_tool = tools["cancel_research_run"]
+            assert cancel_tool.annotations is not None
+            assert cancel_tool.annotations.read_only_hint is False
+            assert cancel_tool.annotations.destructive_hint is True
+            assert cancel_tool.annotations.idempotent_hint is True
+            assert cancel_tool.annotations.open_world_hint is False
+
+            rejected_confirmation = await client.call_tool(
+                "cancel_research_run",
+                {
+                    "run_id": cancel_target.structured_content["run_id"],
+                    "request_id": "mcp-cancel-request",
+                    "confirmation_token": "host-confirmation-is-not-authority",
+                },
+            )
+            assert rejected_confirmation.is_error is True
+            assert rejected_confirmation.structured_content["code"] == "INVALID_INPUT"
+
+            missing_cancel = await client.call_tool(
+                "cancel_research_run",
+                {"run_id": "run_missing", "request_id": "mcp-cancel-missing"},
+            )
+            assert missing_cancel.is_error is True
+            assert missing_cancel.structured_content["code"] == "NOT_FOUND"
+
+            cancelled = await client.call_tool(
+                "cancel_research_run",
+                {
+                    "run_id": cancel_target.structured_content["run_id"],
+                    "request_id": "mcp-cancel-request",
+                },
+            )
+            assert cancelled.is_error is False
+            assert cancelled.structured_content["outcome"] == "accepted"
+            assert cancelled.structured_content["run"]["status"] == "cancelling"
+            assert cancelled.structured_content["replayed"] is False
+            assert cancelled.structured_content["retry_after_seconds"] == 2
+
+            concurrent_replays = await _concurrent_stdio_cancel_replays(
+                settings,
+                tmp_path,
+                run_id=str(cancel_target.structured_content["run_id"]),
+                request_id="mcp-cancel-request",
+            )
+            assert all(not result.is_error for result in concurrent_replays)
+            assert all(
+                result.structured_content["run"] == cancelled.structured_content["run"]
+                for result in concurrent_replays
+            )
+            assert all(
+                result.structured_content["replayed"] is True
+                for result in concurrent_replays
+            )
+
+            idempotency_conflict = await client.call_tool(
+                "cancel_research_run",
+                {
+                    "run_id": conflict_target.structured_content["run_id"],
+                    "request_id": "mcp-cancel-request",
+                },
+            )
+            assert idempotency_conflict.is_error is True
+            assert idempotency_conflict.structured_content["code"] == (
+                "IDEMPOTENCY_CONFLICT"
+            )
+
+            _install_transient_cancel_failure(settings)
+            try:
+                temporarily_unavailable = await client.call_tool(
+                    "cancel_research_run",
+                    {
+                        "run_id": conflict_target.structured_content["run_id"],
+                        "request_id": "mcp-cancel-temporary",
+                    },
+                )
+            finally:
+                _remove_transient_cancel_failure(settings)
+            assert temporarily_unavailable.is_error is True
+            assert temporarily_unavailable.structured_content["code"] == (
+                "TEMPORARILY_UNAVAILABLE"
+            )
+            assert temporarily_unavailable.structured_content["retryable"] is True
+            assert temporarily_unavailable.structured_content[
+                "retry_after_seconds"
+            ] == 2
+            assert temporarily_unavailable.structured_content["trace_id"]
+
+            conflict_target_detail = await client.call_tool(
+                "get_research_run",
+                {"run_id": conflict_target.structured_content["run_id"]},
+            )
+            assert conflict_target_detail.structured_content["status"] == "queued"
+
+            terminal_conflict = await client.call_tool(
+                "cancel_research_run",
+                {
+                    "run_id": factor.structured_content["run_id"],
+                    "request_id": "mcp-cancel-terminal",
+                },
+            )
+            assert terminal_conflict.is_error is True
+            assert terminal_conflict.structured_content["code"] == "STATE_CONFLICT"
+    finally:
+        release_worker.set()
+        await _join_or_stop_worker_process(worker_process)
+    assert worker_process.exitcode == 0
+
+    sixth_log = tmp_path / "mcp-sixth-cancel-replay.stderr.log"
+    async with _mcp_client(
+        settings,
+        sixth_log,
+        enable_research_cancel=True,
+    ) as client:
+        replay = await client.call_tool(
+            "cancel_research_run",
+            {
+                "run_id": cancel_target.structured_content["run_id"],
+                "request_id": "mcp-cancel-request",
+            },
+        )
+        assert replay.is_error is False
+        assert replay.structured_content["run"] == cancelled.structured_content["run"]
+        assert replay.structured_content["replayed"] is True
+        assert replay.structured_content["retry_after_seconds"] == 2
+        stable_cancelled = await client.call_tool(
+            "get_research_run",
+            {"run_id": cancel_target.structured_content["run_id"]},
+        )
+        assert stable_cancelled.structured_content["status"] == "cancelled"
+
 
 async def _assert_first_semantic_result_pages(
     client: Client,
@@ -673,6 +854,24 @@ def _tamper_cursor(cursor: str) -> str:
     return f"{cursor[:index]}{replacement}{cursor[index + 1:]}"
 
 
+def _prioritize_run_for_worker(settings: CoreSettings, run_id: str) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            updated = transaction.execute(
+                """
+                UPDATE research_runs.runs
+                SET created_at = '2026-08-25T00:00:00+00'::timestamptz
+                WHERE id = %s AND status = 'queued'
+                """,
+                (run_id,),
+            )
+        assert updated.rowcount == 1
+    finally:
+        database.close()
+
+
 def _assert_concurrent_rejection_receipt(settings: CoreSettings) -> None:
     command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(
         {**_command("mcp-concurrent-rejection"), "formula": "unknown_alpha"}
@@ -705,10 +904,68 @@ def _assert_concurrent_rejection_receipt(settings: CoreSettings) -> None:
         database.close()
 
 
+def _run_barrier_worker(settings: CoreSettings, prepared, release_worker) -> None:
+    def pause_after_prepare(stage: str, _run_id: str) -> None:
+        if stage == "prepared":
+            prepared.set()
+            assert release_worker.wait(timeout=30)
+
+    with open_core_runtime(settings) as runtime:
+        worker = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
+            progress=pause_after_prepare,
+        )
+        assert worker.process_next() is True
+
+
+async def _join_or_stop_worker_process(process) -> None:
+    await anyio.to_thread.run_sync(process.join, 30)
+    if process.is_alive():
+        process.terminate()
+        await anyio.to_thread.run_sync(process.join, 5)
+    if process.is_alive():
+        process.kill()
+        await anyio.to_thread.run_sync(process.join, 5)
+
+
+async def _concurrent_stdio_cancel_replays(
+    settings: CoreSettings,
+    tmp_path: Path,
+    *,
+    run_id: str,
+    request_id: str,
+) -> list[object]:
+    results: list[object] = []
+
+    async def replay(index: int) -> None:
+        async with _mcp_client(
+            settings,
+            tmp_path / f"mcp-concurrent-cancel-{index}.stderr.log",
+            enable_research_cancel=True,
+        ) as client:
+            results.append(
+                await client.call_tool(
+                    "cancel_research_run",
+                    {"run_id": run_id, "request_id": request_id},
+                )
+            )
+
+    async with anyio.create_task_group() as task_group:
+        for index in range(4):
+            task_group.start_soon(replay, index)
+    return results
+
+
 @asynccontextmanager
 async def _mcp_client(
     settings: CoreSettings,
     stderr_path: Path,
+    *,
+    enable_research_cancel: bool = False,
 ) -> AsyncIterator[Client]:
     executable = Path(sys.executable).with_name("thesistrace-research-agent-mcp")
     stderr_path.parent.mkdir(parents=True, exist_ok=True)
@@ -718,12 +975,62 @@ async def _mcp_client(
                 StdioServerParameters(
                     command=str(executable),
                     cwd=Path.cwd(),
-                    env=_core_environment(settings),
+                    env={
+                        **_core_environment(settings),
+                        **(
+                            {RESEARCH_CANCEL_ENABLE_ENVIRONMENT: "true"}
+                            if enable_research_cancel
+                            else {}
+                        ),
+                    },
                 ),
                 errlog=errlog,
             )
         ) as client:
             yield client
+
+
+def _install_transient_cancel_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION research_runs.reject_stdio_cancel_transiently()
+                RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    IF OLD.status = 'queued' AND NEW.status = 'cancelled' THEN
+                        RAISE EXCEPTION 'injected stdio cancellation dependency failure'
+                            USING ERRCODE = '08006';
+                    END IF;
+                    RETURN NEW;
+                END
+                $$;
+                CREATE TRIGGER reject_stdio_cancel_transiently
+                BEFORE UPDATE ON research_runs.runs
+                FOR EACH ROW
+                EXECUTE FUNCTION research_runs.reject_stdio_cancel_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _remove_transient_cancel_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_stdio_cancel_transiently ON research_runs.runs;
+                DROP FUNCTION research_runs.reject_stdio_cancel_transiently();
+                """
+            )
+    finally:
+        database.close()
 
 
 def _command(request_id: str, *, research_kind: str = "strategy_backtest") -> dict[str, object]:

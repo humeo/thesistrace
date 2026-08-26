@@ -354,6 +354,15 @@ class ResearchRunSummary(BaseModel):
         return self
 
 
+class ResearchRunCancelOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    run: ResearchRunSummary
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
 class ResearchRunAdmissionAccepted(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

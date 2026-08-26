@@ -565,7 +565,7 @@ def test_immediate_research_cancellation_event_follows_commit_without_attempt(
         )
 
         assert outcome is not None
-        assert outcome.status == "cancelled"
+        assert outcome.run.status == "cancelled"
         assert events == [
             {
                 "component": "core_api",

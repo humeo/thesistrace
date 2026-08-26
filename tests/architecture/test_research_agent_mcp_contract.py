@@ -40,6 +40,8 @@ from thesistrace.research_run.models import (
     ResearchRunAdmissionOutcome,
     ResearchRunAdmissionRejectedOutcome,
     ResearchRunAuthorableInput,
+    ResearchRunCancelCommand,
+    ResearchRunCancelOutcome,
     ResearchRunExecutionTiming,
     ResearchRunList,
     ResearchRunPollingDetail,
@@ -52,6 +54,8 @@ from thesistrace.research_run.models import (
 )
 from thesistrace.research_run.service import (
     ResearchRunAdmissionConflict,
+    ResearchRunCancelIdempotencyConflict,
+    ResearchRunCancelStateConflict,
     ResearchRunInvalidCursor,
     ResearchRunResultReadFailed,
     ResearchRunResultSectionIncompatible,
@@ -105,6 +109,14 @@ class _ResearchRunReader:
         )
         self.polling_detail: ResearchRunPollingDetail | None = _polling_detail()
         self.result_section: ResearchRunResultSectionResponse | None = _factor_result_section()
+        self.cancel_outcome: ResearchRunCancelOutcome | None = ResearchRunCancelOutcome(
+            run=ResearchRunSummary.model_validate(
+                {**_run_summary().model_dump(mode="json"), "status": "cancelled"}
+            ),
+            replayed=False,
+            retry_after_seconds=None,
+        )
+        self.cancel_commands: list[tuple[str, ResearchRunCancelCommand]] = []
         self.failure: Exception | None = None
 
     def list(self, **filters: object) -> ResearchRunList:
@@ -125,6 +137,16 @@ class _ResearchRunReader:
         if self.failure is not None:
             raise self.failure
         return self.result_section
+
+    def cancel(
+        self,
+        run_id: str,
+        command: ResearchRunCancelCommand,
+    ) -> ResearchRunCancelOutcome | None:
+        if self.failure is not None:
+            raise self.failure
+        self.cancel_commands.append((run_id, command))
+        return self.cancel_outcome
 
     def admit_with_outcome(
         self,
@@ -297,6 +319,11 @@ def test_local_operator_has_only_safe_default_scopes() -> None:
     assert ResearchAgentScope.RESEARCH_CANCEL not in authority.scopes
     assert ResearchAgentScope.TRACKING_STOP not in authority.scopes
 
+    cancel_authority = local_operator_authority(enable_research_cancel=True)
+    assert cancel_authority.scopes == authority.scopes | {
+        ResearchAgentScope.RESEARCH_CANCEL
+    }
+
 
 def test_registry_filters_discovery_and_rechecks_scope_at_invocation() -> None:
     denied = _registry(ResearchAgentAuthority(subject="reader", scopes=frozenset()))
@@ -370,6 +397,10 @@ def test_registry_intersects_deployment_allowlist_and_rechecks_it_on_invocation(
 
 def test_in_memory_protocol_exposes_exact_tool_contract() -> None:
     anyio.run(_exercise_in_memory_protocol)
+
+
+def test_in_memory_protocol_exposes_destructive_cancel_only_with_scope() -> None:
+    anyio.run(_exercise_destructive_cancel_protocol)
 
 
 def test_registry_projects_research_run_outcomes_and_expected_errors() -> None:
@@ -520,6 +551,81 @@ def test_registry_projects_research_run_outcomes_and_expected_errors() -> None:
     assert "private-object-key-canary" not in read_failure.error.message
 
 
+def test_registry_maps_cancel_outcomes_authority_and_conflicts() -> None:
+    reader = _ResearchRunReader()
+    default_registry = _registry(research_runs=reader)
+    denied = default_registry.invoke(
+        "cancel_research_run",
+        {"run_id": "run_test", "request_id": "cancel_request"},
+        trace_id="trace_cancel_denied",
+    )
+    assert denied.error is not None
+    assert denied.error.code == "FORBIDDEN"
+    assert reader.cancel_commands == []
+
+    authority = local_operator_authority(enable_research_cancel=True)
+    registry = _registry(authority, research_runs=reader)
+    accepted = registry.invoke(
+        "cancel_research_run",
+        {"run_id": "run_test", "request_id": " cancel_request "},
+        trace_id="trace_cancel",
+    )
+    assert accepted.result is not None
+    assert accepted.result.model_dump(mode="json") == {
+        "outcome": "accepted",
+        "run": {
+            **_run_summary().model_dump(mode="json"),
+            "status": "cancelled",
+        },
+        "replayed": False,
+        "retry_after_seconds": None,
+    }
+    assert reader.cancel_commands == [
+        ("run_test", ResearchRunCancelCommand(request_id="cancel_request"))
+    ]
+
+    extra_confirmation = registry.invoke(
+        "cancel_research_run",
+        {
+            "run_id": "run_test",
+            "request_id": "cancel_request",
+            "confirmation_token": "host-approval-is-not-authority",
+        },
+        trace_id="trace_confirmation_rejected",
+    )
+    assert extra_confirmation.error is not None
+    assert extra_confirmation.error.code == "INVALID_INPUT"
+
+    for failure, code in (
+        (
+            ResearchRunCancelIdempotencyConflict("conflicting request"),
+            "IDEMPOTENCY_CONFLICT",
+        ),
+        (ResearchRunCancelStateConflict("terminal run"), "STATE_CONFLICT"),
+        (
+            ResearchRunTemporarilyUnavailable("database unavailable"),
+            "TEMPORARILY_UNAVAILABLE",
+        ),
+    ):
+        reader.failure = failure
+        failed = registry.invoke(
+            "cancel_research_run",
+            {"run_id": "run_test", "request_id": "another_request"},
+            trace_id=f"trace_{code.lower()}",
+        )
+        assert failed.error is not None
+        assert failed.error.code == code
+    reader.failure = None
+    reader.cancel_outcome = None
+    missing = registry.invoke(
+        "cancel_research_run",
+        {"run_id": "run_missing", "request_id": "missing_request"},
+        trace_id="trace_cancel_missing",
+    )
+    assert missing.error is not None
+    assert missing.error.code == "NOT_FOUND"
+
+
 def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delete() -> None:
     reader = ResearchAgentAuthority(
         subject="reader",
@@ -529,15 +635,23 @@ def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delet
         subject="executor",
         scopes=frozenset({ResearchAgentScope.RESEARCH_EXECUTE}),
     )
+    canceller = ResearchAgentAuthority(
+        subject="canceller",
+        scopes=frozenset({ResearchAgentScope.RESEARCH_CANCEL}),
+    )
 
     reader_tools = {capability.name for capability in _registry(reader).accessible_capabilities()}
     executor_tools = {
         capability.name for capability in _registry(executor).accessible_capabilities()
     }
+    cancel_tools = {
+        capability.name for capability in _registry(canceller).accessible_capabilities()
+    }
 
     assert "submit_research_run" not in reader_tools
     assert {"list_research_runs", "get_research_run"} <= reader_tools
     assert executor_tools == {"submit_research_run"}
+    assert cancel_tools == {"cancel_research_run"}
     assert all("retry" not in name and "delete" not in name for name in reader_tools)
     assert all("retry" not in name and "delete" not in name for name in executor_tools)
 
@@ -746,6 +860,57 @@ async def _exercise_in_memory_protocol() -> None:
     assert events[3].context["failure_code"] == "INVALID_INPUT"
     assert events[4].context["failure_code"] == "INVALID_INPUT"
     assert events[6].context["failure_code"] == "INVALID_INPUT"
+
+
+async def _exercise_destructive_cancel_protocol() -> None:
+    reader = _ResearchRunReader()
+    registry = _registry(
+        local_operator_authority(enable_research_cancel=True),
+        research_runs=reader,
+    )
+    events: list[OperationalEvent] = []
+    async with Client(_server(registry, events=events)) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+        cancel = tools["cancel_research_run"]
+        assert cancel.annotations is not None
+        assert cancel.annotations.read_only_hint is False
+        assert cancel.annotations.destructive_hint is True
+        assert cancel.annotations.idempotent_hint is True
+        assert cancel.annotations.open_world_hint is False
+        assert cancel.input_schema["additionalProperties"] is False
+        assert set(cancel.input_schema["required"]) == {"run_id", "request_id"}
+        assert "confirmation_token" not in cancel.input_schema["properties"]
+        assert "queued or running" in (cancel.description or "")
+        assert "research:cancel" in (cancel.description or "")
+        assert "irreversibly" in (cancel.description or "")
+        assert "get_research_run after retry_after_seconds" in (
+            cancel.description or ""
+        )
+        assert "until terminal cancelled" in (cancel.description or "")
+
+        result = await client.call_tool(
+            "cancel_research_run",
+            {"run_id": "run_test", "request_id": "cancel_request"},
+        )
+        assert result.is_error is False
+        validate(result.structured_content, cancel.output_schema)
+        assert result.structured_content["run"]["status"] == "cancelled"
+
+        rejected_confirmation = await client.call_tool(
+            "cancel_research_run",
+            {
+                "run_id": "run_test",
+                "request_id": "cancel_request",
+                "confirmation_token": "not-authority",
+            },
+        )
+        assert rejected_confirmation.is_error is True
+        assert rejected_confirmation.structured_content["code"] == "INVALID_INPUT"
+
+    assert [event.context["outcome"] for event in events] == [
+        "succeeded",
+        "failed",
+    ]
 
 
 async def _exercise_sanitized_failure() -> None:

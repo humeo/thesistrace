@@ -442,14 +442,16 @@ def create_app(
         command: ResearchRunCancelCommand,
     ) -> ResearchRunSummary:
         try:
-            run = _runtime(request).research_runs.cancel(run_id, command)
+            outcome = _runtime(request).research_runs.cancel(run_id, command)
         except ResearchRunCancelConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except ResearchRunTemporarilyUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        if run is None:
+        if outcome is None:
             raise HTTPException(status_code=404, detail="ResearchRun not found")
-        return run
+        return outcome.run
 
     @app.post(
         "/api/research-runs/{run_id}/daily-tracks",

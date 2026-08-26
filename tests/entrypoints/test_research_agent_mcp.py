@@ -14,6 +14,20 @@ from thesistrace.entrypoints import research_agent_mcp
 from thesistrace.entrypoints.runtime import CORE_ENVIRONMENT_NAMES
 
 
+def test_stdio_dangerous_scope_requires_exact_explicit_process_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    name = research_agent_mcp.RESEARCH_CANCEL_ENABLE_ENVIRONMENT
+    monkeypatch.delenv(name, raising=False)
+    assert research_agent_mcp._research_cancel_is_enabled() is False
+    monkeypatch.setenv(name, "true")
+    assert research_agent_mcp._research_cancel_is_enabled() is True
+    for value in ("1", "TRUE", "false", " true ", "research:cancel"):
+        monkeypatch.setenv(name, value)
+        with pytest.raises(ValueError, match="must be exactly true"):
+            research_agent_mcp._research_cancel_is_enabled()
+
+
 def test_packaged_stdio_entrypoint_fails_cleanly_without_core_context() -> None:
     executable = Path(os.sys.executable).with_name("thesistrace-research-agent-mcp")
     environment = {

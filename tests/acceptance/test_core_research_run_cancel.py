@@ -64,11 +64,19 @@ def test_queued_cancel_replays_and_conflicts_without_malformed_receipt(
             research_kind=research_kind,
         )
 
-        cancelled = client.post(
-            f"/api/research-runs/{run_id}/cancel",
-            json={"request_id": f"current-data-cancel-{research_kind}"},
-        )
-        assert cancelled.status_code == 200
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            concurrent = list(
+                executor.map(
+                    lambda _index: client.post(
+                        f"/api/research-runs/{run_id}/cancel",
+                        json={"request_id": f"current-data-cancel-{research_kind}"},
+                    ),
+                    range(8),
+                )
+            )
+        cancelled = concurrent[0]
+        assert all(response.status_code == 200 for response in concurrent)
+        assert all(response.json() == cancelled.json() for response in concurrent)
         assert cancelled.json()["status"] == "cancelled"
         cancelled_detail = client.get(f"/api/research-runs/{run_id}").json()
         assert cancelled_detail["execution_timing"] == {
@@ -108,6 +116,37 @@ def test_queued_cancel_replays_and_conflicts_without_malformed_receipt(
             json={"request_id": "current-data-missing"},
         )
         assert missing.status_code == 404
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_temporary_database_cancel_failure_rolls_back_product_state(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(client, request_id="temporary-cancel-target")
+        before = _run_storage(runtime.database, run_id)
+        _install_transient_cancel_failure(settings)
+        try:
+            unavailable = client.post(
+                f"/api/research-runs/{run_id}/cancel",
+                json={"request_id": "temporary-cancel-request"},
+            )
+        finally:
+            _remove_transient_cancel_failure(settings)
+
+        assert unavailable.status_code == 503
+        assert unavailable.json()["detail"] == (
+            "ResearchRun cancellation is temporarily unavailable"
+        )
+        assert _run_storage(runtime.database, run_id) == before
+        assert _cancel_receipt_count(runtime.database) == 0
 
 
 @pytest.mark.skipif(
@@ -165,6 +204,18 @@ def test_running_cancel_fences_a_stale_prepared_worker_and_survives_restart(
                 assert cancelled.json()["status"] == "cancelling"
                 assert _attempt_status(runtime.database, run_id) == "cancelling"
                 assert _active_pin_count(runtime.database) == 1
+                receipt_count = _cancel_receipt_count(runtime.database)
+                conflicting_transition = client.post(
+                    f"/api/research-runs/{run_id}/cancel",
+                    json={
+                        "request_id": (
+                            f"current-data-running-second-cancel-{research_kind}"
+                        )
+                    },
+                )
+                assert conflicting_transition.status_code == 409
+                assert _attempt_status(runtime.database, run_id) == "cancelling"
+                assert _cancel_receipt_count(runtime.database) == receipt_count
             finally:
                 release_stale.set()
             assert future.result(timeout=30) is True
@@ -654,22 +705,52 @@ def test_terminal_run_wins_over_late_cancel(tmp_path: Path) -> None:
             f"/api/research-runs/{run_id}/cancel",
             json={"request_id": "current-data-after-success"},
         )
-        assert outcome.status_code == 200
-        assert outcome.json() == {
-            key: before[key]
-            for key in (
-                "id",
-                "status",
-                "name",
-                "folder_id",
-                "created_at",
-                "start_date",
-                "end_date",
-                "formula_summary",
-                "research_kind",
-            )
-        }
+        assert outcome.status_code == 409
+        assert outcome.json()["detail"] == (
+            "ResearchRun state does not allow cancellation"
+        )
         assert client.get(f"/api/research-runs/{run_id}").json() == before
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_failed_run_rejects_cancel_without_mutating_state_or_receipts(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, price_offset=0)
+
+    class ResourceExhaustedExecutor:
+        def execute(self, _request, *, emit, cancel_requested):
+            del emit, cancel_requested
+            raise MemoryError("deterministic resource exhaustion")
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(client, request_id="failed-terminal-cancel")
+        worker = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+            execution=ResourceExhaustedExecutor(),
+        )
+        assert worker.process_next() is True
+        before = _run_storage(runtime.database, run_id)
+        assert before["status"] == "failed"
+        receipt_count = _cancel_receipt_count(runtime.database)
+
+        outcome = client.post(
+            f"/api/research-runs/{run_id}/cancel",
+            json={"request_id": "failed-terminal-cancel-request"},
+        )
+        assert outcome.status_code == 409
+        assert _run_storage(runtime.database, run_id) == before
+        assert _cancel_receipt_count(runtime.database) == receipt_count
 
 
 @pytest.mark.skipif(
@@ -738,6 +819,49 @@ def _remove_transient_publication_failure(settings: CoreSettings) -> None:
                 """
                 DROP TRIGGER reject_ticket06_transiently ON publication.manifests;
                 DROP FUNCTION publication.reject_ticket06_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _install_transient_cancel_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION research_runs.reject_cancel_transiently()
+                RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    IF OLD.status = 'queued' AND NEW.status = 'cancelled' THEN
+                        RAISE EXCEPTION 'injected transient cancellation failure'
+                            USING ERRCODE = '08006';
+                    END IF;
+                    RETURN NEW;
+                END
+                $$;
+                CREATE TRIGGER reject_cancel_transiently
+                BEFORE UPDATE ON research_runs.runs
+                FOR EACH ROW
+                EXECUTE FUNCTION research_runs.reject_cancel_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _remove_transient_cancel_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_cancel_transiently ON research_runs.runs;
+                DROP FUNCTION research_runs.reject_cancel_transiently();
                 """
             )
     finally:

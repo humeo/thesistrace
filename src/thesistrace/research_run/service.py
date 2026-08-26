@@ -89,6 +89,7 @@ from thesistrace.research_run.models import (
     ResearchRunAdmissionRejectedOutcome,
     ResearchRunAuthorableInput,
     ResearchRunCancelCommand,
+    ResearchRunCancelOutcome,
     ResearchRunDetail,
     ResearchRunExecutionTiming,
     ResearchRunKeyMetrics,
@@ -178,6 +179,14 @@ class ResearchRunContractMismatch(RuntimeError):
 
 
 class ResearchRunCancelConflict(RuntimeError):
+    pass
+
+
+class ResearchRunCancelIdempotencyConflict(ResearchRunCancelConflict):
+    pass
+
+
+class ResearchRunCancelStateConflict(ResearchRunCancelConflict):
     pass
 
 
@@ -1542,7 +1551,19 @@ class ResearchRunService:
         self,
         run_id: str,
         command: ResearchRunCancelCommand,
-    ) -> ResearchRunSummary | None:
+    ) -> ResearchRunCancelOutcome | None:
+        try:
+            return self._cancel(run_id, command)
+        except (OperationalError, PoolTimeout) as error:
+            raise ResearchRunTemporarilyUnavailable(
+                "ResearchRun cancellation is temporarily unavailable"
+            ) from error
+
+    def _cancel(
+        self,
+        run_id: str,
+        command: ResearchRunCancelCommand,
+    ) -> ResearchRunCancelOutcome | None:
         request_id = command.request_id.strip()
         if not request_id:
             raise ValueError("ResearchRun Cancel request_id is required")
@@ -1564,8 +1585,17 @@ class ResearchRunService:
             ).fetchone()
             if receipt is not None:
                 if receipt["request_fingerprint"] != fingerprint:
-                    raise ResearchRunCancelConflict("ResearchRun Cancel request_id conflicts")
-                return ResearchRunSummary.model_validate(receipt["outcome"])
+                    raise ResearchRunCancelIdempotencyConflict(
+                        "ResearchRun Cancel request_id conflicts"
+                    )
+                replayed_run = ResearchRunSummary.model_validate(receipt["outcome"])
+                return ResearchRunCancelOutcome(
+                    run=replayed_run,
+                    replayed=True,
+                    retry_after_seconds=research_run_retry_after_seconds(
+                        replayed_run.status
+                    ),
+                )
 
             self._lock_result_staging(transaction, run_id)
             row = transaction.execute(
@@ -1583,7 +1613,7 @@ class ResearchRunService:
             if row is None:
                 return None
             if row["execution_owner"] != "ordinary":
-                raise ResearchRunCancelConflict(
+                raise ResearchRunCancelStateConflict(
                     "Batch-owned ResearchRun cancellation is controlled by its Research Batch"
                 )
             if row["status"] == "running":
@@ -1658,6 +1688,10 @@ class ResearchRunService:
                         transaction,
                         retention_id=f"queued-research-run:{run_id}",
                     )
+            else:
+                raise ResearchRunCancelStateConflict(
+                    "ResearchRun state does not allow cancellation"
+                )
             outcome = _summary(row)
             transaction.execute(
                 """
@@ -1685,7 +1719,11 @@ class ResearchRunService:
                     **event_context,
                 }
             )
-        return outcome
+        return ResearchRunCancelOutcome(
+            run=outcome,
+            replayed=False,
+            retry_after_seconds=research_run_retry_after_seconds(outcome.status),
+        )
 
     def _cancellation_is_pending(self, claim: ResearchRunExecutionClaim) -> bool:
         with self._database.transaction() as transaction:
