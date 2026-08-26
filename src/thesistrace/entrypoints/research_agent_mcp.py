@@ -36,6 +36,7 @@ def main() -> None:
                 research_folders=runtime.research_folders,
                 alpha_language=alpha_language,
                 research_authoring=runtime.research_authoring,
+                research_runs=runtime.research_runs,
             )
 
             def registry_factory(

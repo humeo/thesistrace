@@ -3,8 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from base64 import urlsafe_b64decode, urlsafe_b64encode
-from binascii import Error as Base64DecodeError
+from base64 import urlsafe_b64encode
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -14,6 +13,7 @@ from time import monotonic
 from typing import Literal
 from uuid import uuid4
 
+from cryptography.fernet import Fernet, InvalidToken
 from psycopg import OperationalError
 from psycopg.errors import OutOfMemory
 from psycopg.types.json import Jsonb
@@ -78,14 +78,18 @@ from thesistrace.research_run.models import (
     ImmutableRunInput,
     OrganizeResearchRunCommand,
     ResearchKind,
+    ResearchRunAdmissionAccepted,
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionIssue,
+    ResearchRunAdmissionOutcome,
+    ResearchRunAdmissionRejectedOutcome,
     ResearchRunAuthorableInput,
     ResearchRunCancelCommand,
     ResearchRunDetail,
     ResearchRunExecutionTiming,
     ResearchRunKeyMetrics,
     ResearchRunList,
+    ResearchRunPollingDetail,
     ResearchRunProgress,
     ResearchRunResult,
     ResearchRunSummary,
@@ -93,6 +97,8 @@ from thesistrace.research_run.models import (
     StrategyBacktestAdmissionCommand,
     StrategyBacktestResearchRunKeyMetrics,
     StrategyBacktestResearchRunResult,
+    research_run_result_sections,
+    research_run_retry_after_seconds,
 )
 from thesistrace.research_run.planning import (
     DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
@@ -169,6 +175,14 @@ class ResearchRunTrackingUnavailable(RuntimeError):
 
 
 class ResearchRunTrackingTemporarilyUnavailable(RuntimeError):
+    pass
+
+
+class ResearchRunTemporarilyUnavailable(RuntimeError):
+    pass
+
+
+class ResearchRunInvalidCursor(ValueError):
     pass
 
 
@@ -848,11 +862,10 @@ class ResearchRunService:
             execution_memory_bytes=self._execution_memory_bytes,
         )
         run_id = f"run_{uuid4().hex[:20]}"
-        submitted_name = (command.name or "").strip()
         return PreparedResearchRunAdmission(
             run_id=run_id,
             folder_id=command.folder_id,
-            name=submitted_name or f"Research {run_id[-8:].upper()}",
+            name=command.name or f"Research {run_id[-8:].upper()}",
             immutable_input=immutable_input,
         )
 
@@ -939,6 +952,26 @@ class ResearchRunService:
         self,
         command: ResearchRunAdmissionCommand,
     ) -> ResearchRunSummary:
+        outcome = self.admit_with_outcome(command)
+        if isinstance(outcome, ResearchRunAdmissionRejectedOutcome):
+            raise ResearchRunAdmissionRejected(outcome.issues)
+        return outcome.run
+
+    def admit_with_outcome(
+        self,
+        command: ResearchRunAdmissionCommand,
+    ) -> ResearchRunAdmissionOutcome:
+        try:
+            return self._admit_with_outcome(command)
+        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+            raise ResearchRunTemporarilyUnavailable(
+                "ResearchRun admission is temporarily unavailable"
+            ) from error
+
+    def _admit_with_outcome(
+        self,
+        command: ResearchRunAdmissionCommand,
+    ) -> ResearchRunAdmissionOutcome:
         if self._compile_formula is None or self._current_dataset is None:
             raise RuntimeError("ResearchRun admission dependencies are not configured")
         fingerprint = _admission_fingerprint(command)
@@ -949,12 +982,83 @@ class ResearchRunService:
             ).fetchone()
             receipt = _admission_receipt(transaction, command.request_id)
             if receipt is not None:
-                if receipt["request_fingerprint"] != fingerprint:
-                    raise ResearchRunAdmissionConflict("ResearchRun request_id conflicts")
-                return _summary(receipt)
-        prepared = self.prepare_child_admission(
-            command,
-            dataset=self.current_admission_dataset(),
+                return _admission_outcome(
+                    receipt,
+                    request_fingerprint=fingerprint,
+                    replayed=True,
+                )
+        try:
+            prepared = self.prepare_child_admission(
+                command,
+                dataset=self.current_admission_dataset(),
+            )
+        except ResearchRunAdmissionRejected as error:
+            return self._record_admission_rejection(
+                command,
+                request_fingerprint=fingerprint,
+                issues=error.issues,
+            )
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"research_runs.admit:{command.request_id}",),
+            ).fetchone()
+            receipt = _admission_receipt(transaction, command.request_id)
+            if receipt is not None:
+                return _admission_outcome(
+                    receipt,
+                    request_fingerprint=fingerprint,
+                    replayed=True,
+                )
+            folder = transaction.execute(
+                "SELECT id FROM research_folders.folders WHERE id = %s FOR KEY SHARE",
+                (command.folder_id,),
+            ).fetchone()
+            if folder is None:
+                rejection = ResearchRunAdmissionRejectedOutcome(
+                    issues=[
+                        ResearchRunAdmissionIssue(
+                            code="FOLDER_NOT_FOUND",
+                            field="folder_id",
+                            message="Research Folder does not exist",
+                        )
+                    ],
+                    replayed=False,
+                )
+                _insert_admission_receipt(
+                    transaction,
+                    request_id=command.request_id,
+                    request_fingerprint=fingerprint,
+                    run_id=None,
+                    outcome=rejection.model_dump(mode="json", exclude={"replayed"}),
+                )
+                return rejection
+            row = self.admit_prepared_child_in_transaction(
+                transaction,
+                prepared,
+                execution_owner="ordinary",
+                retain_generation=self._dataset_lifecycle is not None,
+            )
+            _insert_admission_receipt(
+                transaction,
+                request_id=command.request_id,
+                request_fingerprint=fingerprint,
+                run_id=prepared.run_id,
+                outcome={"outcome": "accepted"},
+            )
+        assert row is not None
+        return _accepted_admission_outcome(row, replayed=False)
+
+    def _record_admission_rejection(
+        self,
+        command: ResearchRunAdmissionCommand,
+        *,
+        request_fingerprint: str,
+        issues: list[ResearchRunAdmissionIssue],
+    ) -> ResearchRunAdmissionOutcome:
+        rejection = ResearchRunAdmissionRejectedOutcome(
+            issues=issues,
+            replayed=False,
         )
         with self._database.transaction() as transaction:
             transaction.execute(
@@ -963,39 +1067,19 @@ class ResearchRunService:
             ).fetchone()
             receipt = _admission_receipt(transaction, command.request_id)
             if receipt is not None:
-                if receipt["request_fingerprint"] != fingerprint:
-                    raise ResearchRunAdmissionConflict("ResearchRun request_id conflicts")
-                return _summary(receipt)
-            folder = transaction.execute(
-                "SELECT id FROM research_folders.folders WHERE id = %s FOR KEY SHARE",
-                (command.folder_id,),
-            ).fetchone()
-            if folder is None:
-                raise ResearchRunAdmissionRejected(
-                    [
-                        ResearchRunAdmissionIssue(
-                            code="FOLDER_NOT_FOUND",
-                            field="folder_id",
-                            message="Research Folder does not exist",
-                        )
-                    ]
+                return _admission_outcome(
+                    receipt,
+                    request_fingerprint=request_fingerprint,
+                    replayed=True,
                 )
-            row = self.admit_prepared_child_in_transaction(
+            _insert_admission_receipt(
                 transaction,
-                prepared,
-                execution_owner="ordinary",
-                retain_generation=self._dataset_lifecycle is not None,
+                request_id=command.request_id,
+                request_fingerprint=request_fingerprint,
+                run_id=None,
+                outcome=rejection.model_dump(mode="json", exclude={"replayed"}),
             )
-            transaction.execute(
-                """
-                INSERT INTO research_runs.admission_requests (
-                    request_id, request_fingerprint, run_id
-                ) VALUES (%s, %s, %s)
-                """,
-                (command.request_id, fingerprint, prepared.run_id),
-            )
-        assert row is not None
-        return _summary(row)
+        return rejection
 
     def process_next(
         self,
@@ -1236,8 +1320,34 @@ class ResearchRunService:
         cursor: str | None = None,
         limit: int = 50,
     ) -> ResearchRunList:
-        cursor_created_at, cursor_id = _decode_list_cursor(cursor)
+        try:
+            return self._list(
+                folder_id=folder_id,
+                research_kind=research_kind,
+                cursor=cursor,
+                limit=limit,
+            )
+        except (OperationalError, PoolTimeout) as error:
+            raise ResearchRunTemporarilyUnavailable(
+                "ResearchRun history is temporarily unavailable"
+            ) from error
+
+    def _list(
+        self,
+        *,
+        folder_id: str | None = None,
+        research_kind: ResearchKind | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> ResearchRunList:
         with self._database.transaction() as transaction:
+            cursor_secret = _cursor_secret(transaction)
+            cursor_created_at, cursor_id = _decode_list_cursor(
+                cursor,
+                secret=cursor_secret,
+                folder_id=folder_id,
+                research_kind=research_kind,
+            )
             rows = transaction.execute(
                 """
                 SELECT id, name, folder_id, status, requested_start_date,
@@ -1268,7 +1378,16 @@ class ResearchRunService:
             ).fetchall()
         has_more = len(rows) > limit
         selected = rows[:limit]
-        next_cursor = _encode_list_cursor(selected[-1]) if has_more else None
+        next_cursor = (
+            _encode_list_cursor(
+                selected[-1],
+                secret=cursor_secret,
+                folder_id=folder_id,
+                research_kind=research_kind,
+            )
+            if has_more
+            else None
+        )
         return ResearchRunList(
             items=[_summary(row) for row in selected],
             next_cursor=next_cursor,
@@ -1737,38 +1856,7 @@ class ResearchRunService:
             ) from error
 
     def get_detail(self, run_id: str) -> ResearchRunDetail | None:
-        with self._database.transaction() as transaction:
-            row = transaction.execute(
-                """
-                SELECT run.id, run.name, run.folder_id, run.status,
-                       run.requested_start_date, run.requested_end_date,
-                       run.created_at, run.immutable_input,
-                       run.result_manifest_sha256, run.result_provenance,
-                       run.key_metrics, run.failure_reason,
-                       progress.phase AS progress_phase,
-                       progress.completed_warmup_sessions,
-                       progress.total_warmup_sessions,
-                       progress.completed_research_sessions,
-                       progress.total_research_sessions,
-                       progress.committed_chunk_count,
-                       progress.last_completed_warmup_session,
-                       progress.last_completed_research_session,
-                       progress.remaining_duration_estimate_seconds,
-                       timing.execution_started_at,
-                       timing.execution_finished_at,
-                       CURRENT_TIMESTAMP AS execution_observed_at
-                FROM research_runs.runs AS run
-                JOIN research_runs.progress AS progress ON progress.run_id = run.id
-                LEFT JOIN LATERAL (
-                    SELECT min(attempt.started_at) AS execution_started_at,
-                           max(attempt.finished_at) AS execution_finished_at
-                    FROM research_runs.attempts AS attempt
-                    WHERE attempt.run_id = run.id
-                ) AS timing ON true
-                WHERE run.id = %s
-                """,
-                (run_id,),
-            ).fetchone()
+        row = self._detail_row(run_id)
         if row is None:
             return None
         summary = _summary(row)
@@ -1810,6 +1898,80 @@ class ResearchRunService:
             progress=_research_progress(row),
             execution_timing=_research_execution_timing(row, summary.status),
             result=result,
+        )
+
+    def _detail_row(self, run_id: str) -> dict[str, object] | None:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT run.id, run.name, run.folder_id, run.status,
+                       run.requested_start_date, run.requested_end_date,
+                       run.created_at, run.immutable_input,
+                       run.result_manifest_sha256, run.result_provenance,
+                       run.key_metrics, run.failure_reason,
+                       progress.phase AS progress_phase,
+                       progress.completed_warmup_sessions,
+                       progress.total_warmup_sessions,
+                       progress.completed_research_sessions,
+                       progress.total_research_sessions,
+                       progress.committed_chunk_count,
+                       progress.last_completed_warmup_session,
+                       progress.last_completed_research_session,
+                       progress.remaining_duration_estimate_seconds,
+                       timing.execution_started_at,
+                       timing.execution_finished_at,
+                       CURRENT_TIMESTAMP AS execution_observed_at
+                FROM research_runs.runs AS run
+                JOIN research_runs.progress AS progress ON progress.run_id = run.id
+                LEFT JOIN LATERAL (
+                    SELECT min(attempt.started_at) AS execution_started_at,
+                           max(attempt.finished_at) AS execution_finished_at
+                    FROM research_runs.attempts AS attempt
+                    WHERE attempt.run_id = run.id
+                ) AS timing ON true
+                WHERE run.id = %s
+                """,
+                (run_id,),
+            ).fetchone()
+        return row
+
+    def get_polling_detail(self, run_id: str) -> ResearchRunPollingDetail | None:
+        try:
+            return self._get_polling_detail(run_id)
+        except (OperationalError, PoolTimeout) as error:
+            raise ResearchRunTemporarilyUnavailable(
+                "ResearchRun detail is temporarily unavailable"
+            ) from error
+
+    def _get_polling_detail(self, run_id: str) -> ResearchRunPollingDetail | None:
+        row = self._detail_row(run_id)
+        if row is None:
+            return None
+        summary = _summary(row)
+        manifest_sha256 = row.get("result_manifest_sha256")
+        provenance = row.get("result_provenance")
+        result_available = summary.status == "succeeded"
+        if result_available and (
+            not isinstance(manifest_sha256, str) or not isinstance(provenance, Mapping)
+        ):
+            raise ResearchRunResultUnavailable("succeeded ResearchRun Result is incomplete")
+        if not result_available and (manifest_sha256 is not None or provenance is not None):
+            raise ResearchRunResultUnavailable("unfinished ResearchRun exposes Result metadata")
+        sections = research_run_result_sections(summary.status, summary.research_kind)
+        retry_after_seconds = research_run_retry_after_seconds(summary.status)
+        return ResearchRunPollingDetail.model_validate(
+            {
+                **summary.model_dump(mode="json"),
+                "input": _authorable_input(row).model_dump(mode="json"),
+                "progress": _research_progress(row).model_dump(mode="json"),
+                "execution_timing": _research_execution_timing(
+                    row,
+                    summary.status,
+                ).model_dump(mode="json"),
+                "result_available": result_available,
+                "available_result_sections": sections,
+                "retry_after_seconds": retry_after_seconds,
+            }
         )
 
     def _tracking_origin(
@@ -2922,44 +3084,145 @@ def _admission_receipt(
 ) -> dict[str, object] | None:
     return transaction.execute(
         """
-        SELECT request.request_fingerprint,
+        SELECT request.request_fingerprint, request.outcome,
                run.id, run.name, run.folder_id, run.status,
                run.requested_start_date, run.requested_end_date,
                run.created_at, run.immutable_input, run.failure_reason
         FROM research_runs.admission_requests AS request
-        JOIN research_runs.runs AS run ON run.id = request.run_id
+        LEFT JOIN research_runs.runs AS run ON run.id = request.run_id
         WHERE request.request_id = %s
         """,
         (request_id,),
     ).fetchone()
 
 
-def _encode_list_cursor(row: Mapping[str, object]) -> str:
+def _insert_admission_receipt(
+    transaction: PostgresTransaction,
+    *,
+    request_id: str,
+    request_fingerprint: str,
+    run_id: str | None,
+    outcome: Mapping[str, object],
+) -> None:
+    transaction.execute(
+        """
+        INSERT INTO research_runs.admission_requests (
+            request_id, request_fingerprint, run_id, outcome
+        ) VALUES (%s, %s, %s, %s)
+        """,
+        (request_id, request_fingerprint, run_id, Jsonb(dict(outcome))),
+    )
+
+
+def _admission_outcome(
+    receipt: Mapping[str, object],
+    *,
+    request_fingerprint: str,
+    replayed: bool,
+) -> ResearchRunAdmissionOutcome:
+    if receipt["request_fingerprint"] != request_fingerprint:
+        raise ResearchRunAdmissionConflict("ResearchRun request_id conflicts")
+    stored_outcome = receipt.get("outcome")
+    if not isinstance(stored_outcome, Mapping):
+        raise RuntimeError("ResearchRun admission receipt outcome is invalid")
+    if stored_outcome.get("outcome") == "rejected":
+        return ResearchRunAdmissionRejectedOutcome.model_validate(
+            {**stored_outcome, "replayed": replayed}
+        )
+    if stored_outcome.get("outcome") != "accepted" or receipt.get("id") is None:
+        raise RuntimeError("ResearchRun accepted receipt is incomplete")
+    return _accepted_admission_outcome(
+        receipt,
+        replayed=replayed,
+    )
+
+
+def _accepted_admission_outcome(
+    row: Mapping[str, object],
+    *,
+    replayed: bool,
+) -> ResearchRunAdmissionAccepted:
+    run = _summary(row)
+    return ResearchRunAdmissionAccepted(
+        run=run,
+        replayed=replayed,
+        retry_after_seconds=research_run_retry_after_seconds(run.status),
+    )
+
+
+def _cursor_secret(transaction: PostgresTransaction) -> bytes:
+    row = transaction.execute(
+        "SELECT secret FROM research_runs.cursor_secrets WHERE singleton = 1"
+    ).fetchone()
+    if row is None or not isinstance(row.get("secret"), str):
+        raise RuntimeError("ResearchRun cursor secret is unavailable")
+    try:
+        secret = bytes.fromhex(str(row["secret"]))
+    except ValueError as error:
+        raise RuntimeError("ResearchRun cursor secret is invalid") from error
+    if len(secret) != 32:
+        raise RuntimeError("ResearchRun cursor secret is invalid")
+    return secret
+
+
+def _cursor_fernet(secret: bytes) -> Fernet:
+    return Fernet(urlsafe_b64encode(secret))
+
+
+def _encode_list_cursor(
+    row: Mapping[str, object],
+    *,
+    secret: bytes,
+    folder_id: str | None,
+    research_kind: ResearchKind | None,
+) -> str:
     created_at = row["created_at"]
     if not isinstance(created_at, datetime):
         raise TypeError("ResearchRun created_at must be a datetime")
     payload = json.dumps(
-        {"created_at": created_at.isoformat(), "id": row["id"]},
+        {
+            "created_at": created_at.isoformat(),
+            "folder_id": folder_id,
+            "id": row["id"],
+            "research_kind": research_kind,
+        },
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    return urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    return _cursor_fernet(secret).encrypt(payload).decode("ascii")
 
 
-def _decode_list_cursor(cursor: str | None) -> tuple[datetime | None, str | None]:
+def _decode_list_cursor(
+    cursor: str | None,
+    *,
+    secret: bytes,
+    folder_id: str | None,
+    research_kind: ResearchKind | None,
+) -> tuple[datetime | None, str | None]:
     if cursor is None:
         return None, None
     try:
-        padded = cursor + "=" * (-len(cursor) % 4)
-        decoded: object = json.loads(urlsafe_b64decode(padded).decode("utf-8"))
-        if not isinstance(decoded, dict) or set(decoded) != {"created_at", "id"}:
+        plaintext = _cursor_fernet(secret).decrypt(cursor.encode("ascii"))
+        decoded: object = json.loads(plaintext.decode("utf-8"))
+        if not isinstance(decoded, dict) or set(decoded) != {
+            "created_at",
+            "folder_id",
+            "id",
+            "research_kind",
+        }:
             raise ValueError
         created_at = datetime.fromisoformat(str(decoded["created_at"]))
         run_id = decoded["id"]
-        if created_at.tzinfo is None or not isinstance(run_id, str) or not run_id:
+        if (
+            created_at.tzinfo is None
+            or not isinstance(run_id, str)
+            or not run_id
+            or decoded["folder_id"] != folder_id
+            or decoded["research_kind"] != research_kind
+        ):
             raise ValueError
-    except (ValueError, UnicodeDecodeError, Base64DecodeError) as error:
-        raise ValueError("ResearchRun cursor is invalid") from error
+    except (InvalidToken, ValueError, UnicodeDecodeError, UnicodeEncodeError) as error:
+        raise ResearchRunInvalidCursor("ResearchRun cursor is invalid") from error
     return created_at, run_id
 
 

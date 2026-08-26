@@ -160,6 +160,7 @@ def _runtime_stub() -> SimpleNamespace:
         data_overview=object(),
         research_folders=object(),
         research_authoring=object(),
+        research_runs=object(),
     )
 
 

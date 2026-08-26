@@ -66,6 +66,9 @@ async def _exercise_stdio(settings: CoreSettings, stderr_path: Path) -> None:
                 "get_research_context",
                 "get_alpha_catalog",
                 "diagnose_alpha_formula",
+                "list_research_runs",
+                "get_research_run",
+                "submit_research_run",
             ]
 
             context = await client.call_tool("get_research_context", {})
@@ -190,6 +193,9 @@ def _assert_raw_stdio_process_exits_cleanly(settings: CoreSettings) -> None:
             "get_research_context",
             "get_alpha_catalog",
             "diagnose_alpha_formula",
+            "list_research_runs",
+            "get_research_run",
+            "submit_research_run",
         ]
         assert stdout_tail == ""
         assert stderr == ""

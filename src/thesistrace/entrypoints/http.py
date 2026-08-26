@@ -71,11 +71,13 @@ from thesistrace.research_run import (
     ResearchRunCancelConflict,
     ResearchRunDeleteConflict,
     ResearchRunDetail,
+    ResearchRunInvalidCursor,
     ResearchRunList,
     ResearchRunOrganizationConflict,
     ResearchRunResultUnavailable,
     ResearchRunStartTrackingConflict,
     ResearchRunSummary,
+    ResearchRunTemporarilyUnavailable,
     ResearchRunTrackingTemporarilyUnavailable,
     ResearchRunTrackingUnavailable,
     StartTrackingCommand,
@@ -127,6 +129,7 @@ def create_app(
                 research_folders=runtime.research_folders,
                 alpha_language=alpha_language,
                 research_authoring=runtime.research_authoring,
+                research_runs=runtime.research_runs,
             )
 
         research_agent_transport = create_research_agent_http_transport(
@@ -355,6 +358,11 @@ def create_app(
                 status_code=422,
                 content=rejection.model_dump(mode="json"),
             )
+        except ResearchRunTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="ResearchRun admission temporarily unavailable",
+            ) from error
 
     @app.get("/api/research-runs", response_model=ResearchRunList)
     def list_research_runs(
@@ -371,8 +379,13 @@ def create_app(
                 cursor=cursor,
                 limit=limit,
             )
-        except ValueError as error:
+        except ResearchRunInvalidCursor as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        except ResearchRunTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="ResearchRun history temporarily unavailable",
+            ) from error
 
     @app.patch(
         "/api/research-runs/{run_id}",

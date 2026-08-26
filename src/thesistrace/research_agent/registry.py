@@ -16,14 +16,30 @@ from thesistrace.research_agent.models import (
     FormulaSource,
     GetAlphaCatalogInput,
     GetResearchContextInput,
+    GetResearchRunInput,
+    ListResearchRunsInput,
     ResearchAgentAuthority,
     ResearchAgentErrorCode,
     ResearchAgentScope,
     ResearchAgentToolError,
     ResearchContext,
+    SubmitResearchRunAccepted,
+    SubmitResearchRunOutcome,
+    SubmitResearchRunRejected,
 )
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
 from thesistrace.research_folder.models import ResearchFolderList
+from thesistrace.research_run import (
+    ResearchRunAdmissionAccepted,
+    ResearchRunAdmissionCommand,
+    ResearchRunAdmissionConflict,
+    ResearchRunAdmissionOutcome,
+    ResearchRunInvalidCursor,
+    ResearchRunList,
+    ResearchRunPollingDetail,
+    ResearchRunTemporarilyUnavailable,
+)
+from thesistrace.research_run.models import ResearchKind
 
 
 class DataOverviewReader(Protocol):
@@ -44,12 +60,31 @@ class ResearchAuthoringReader(Protocol):
     def constraints(self) -> ResearchAuthoringConstraints: ...
 
 
+class ResearchRunReader(Protocol):
+    def list(
+        self,
+        *,
+        folder_id: str | None = None,
+        research_kind: ResearchKind | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> ResearchRunList: ...
+
+    def get_polling_detail(self, run_id: str) -> ResearchRunPollingDetail | None: ...
+
+    def admit_with_outcome(
+        self,
+        command: ResearchRunAdmissionCommand,
+    ) -> ResearchRunAdmissionOutcome: ...
+
+
 @dataclass(frozen=True)
 class ResearchAgentModules:
     data_overview: DataOverviewReader
     research_folders: ResearchFolderReader
     alpha_language: AlphaAuthoringLanguage
     research_authoring: ResearchAuthoringReader
+    research_runs: ResearchRunReader
 
 
 @dataclass(frozen=True)
@@ -57,16 +92,18 @@ class ResearchAgentCapability:
     name: str
     description: str
     required_scope: ResearchAgentScope
-    input_model: type[BaseModel]
-    output_model: type[BaseModel]
+    input_model: object
+    output_model: object
     annotations: ToolAnnotations
     handler: Callable[..., BaseModel]
 
     def input_schema(self) -> dict[str, object]:
-        return self.input_model.model_json_schema()
+        schema = TypeAdapter(self.input_model).json_schema()
+        schema["type"] = "object"
+        return schema
 
     def output_schema(self) -> dict[str, object]:
-        schema = TypeAdapter(self.output_model | ResearchAgentToolError).json_schema()
+        schema = TypeAdapter(self.output_model | ResearchAgentToolError).json_schema()  # type: ignore[operator]
         schema["type"] = "object"
         return schema
 
@@ -88,8 +125,28 @@ class ResearchAgentForbidden(PermissionError):
     pass
 
 
+class ResearchAgentExpectedFailure(RuntimeError):
+    def __init__(
+        self,
+        code: ResearchAgentErrorCode,
+        *,
+        retryable: bool = False,
+        retry_after_seconds: int | None = None,
+    ) -> None:
+        super().__init__(code.value)
+        self.code = code
+        self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
+
+
 READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
     read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
+)
+EFFECTFUL_TOOL_ANNOTATIONS = ToolAnnotations(
+    read_only_hint=False,
     destructive_hint=False,
     idempotent_hint=True,
     open_world_hint=False,
@@ -100,6 +157,9 @@ RESEARCH_AGENT_TOOL_NAMES = frozenset(
         "get_research_context",
         "get_alpha_catalog",
         "diagnose_alpha_formula",
+        "list_research_runs",
+        "get_research_run",
+        "submit_research_run",
     }
 )
 
@@ -154,6 +214,41 @@ class ResearchAgentCapabilityRegistry:
                 annotations=READ_ONLY_TOOL_ANNOTATIONS,
                 handler=self.diagnose_alpha_formula,
             ),
+            ResearchAgentCapability(
+                name="list_research_runs",
+                description=(
+                    "List durable ResearchRuns with stable pagination; requires research:read."
+                ),
+                required_scope=ResearchAgentScope.RESEARCH_READ,
+                input_model=ListResearchRunsInput,
+                output_model=ResearchRunList,
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                handler=self.list_research_runs,
+            ),
+            ResearchAgentCapability(
+                name="get_research_run",
+                description=(
+                    "Poll one durable ResearchRun without embedding its Result; requires "
+                    "research:read and may recommend a retry delay while work is active."
+                ),
+                required_scope=ResearchAgentScope.RESEARCH_READ,
+                input_model=GetResearchRunInput,
+                output_model=ResearchRunPollingDetail,
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                handler=self.get_research_run,
+            ),
+            ResearchAgentCapability(
+                name="submit_research_run",
+                description=(
+                    "Submit a fully specified Factor Evaluation or Strategy Backtest; requires "
+                    "research:execute, is non-destructive, and is idempotent by request_id."
+                ),
+                required_scope=ResearchAgentScope.RESEARCH_EXECUTE,
+                input_model=ResearchRunAdmissionCommand,
+                output_model=SubmitResearchRunOutcome,
+                annotations=EFFECTFUL_TOOL_ANNOTATIONS,
+                handler=self.submit_research_run,
+            ),
         )
 
     def accessible_capabilities(self) -> tuple[ResearchAgentCapability, ...]:
@@ -205,7 +300,7 @@ class ResearchAgentCapabilityRegistry:
                 )
             )
         try:
-            validated = capability.input_model.model_validate(arguments)
+            validated = TypeAdapter(capability.input_model).validate_python(arguments)
         except ValidationError:
             return ResearchAgentInvocation(
                 error=self._tool_error(
@@ -214,8 +309,22 @@ class ResearchAgentCapabilityRegistry:
                 )
             )
         try:
+            if not isinstance(validated, BaseModel):
+                raise TypeError("Research Agent input contract must produce a model")
             result = capability.handler(**validated.model_dump())
-            return ResearchAgentInvocation(result=capability.output_model.model_validate(result))
+            validated_result = TypeAdapter(capability.output_model).validate_python(result)
+            if not isinstance(validated_result, BaseModel):
+                raise TypeError("Research Agent output contract must produce a model")
+            return ResearchAgentInvocation(result=validated_result)
+        except ResearchAgentExpectedFailure as error:
+            return ResearchAgentInvocation(
+                error=self._tool_error(
+                    error.code,
+                    trace_id=trace_id,
+                    retryable=error.retryable,
+                    retry_after_seconds=error.retry_after_seconds,
+                )
+            )
         except Exception as exception:
             return ResearchAgentInvocation(
                 error=self._tool_error(
@@ -230,10 +339,15 @@ class ResearchAgentCapabilityRegistry:
         code: ResearchAgentErrorCode,
         *,
         trace_id: str,
+        retryable: bool = False,
+        retry_after_seconds: int | None = None,
     ) -> ResearchAgentToolError:
         messages = {
             ResearchAgentErrorCode.INVALID_INPUT: "Tool input is invalid",
             ResearchAgentErrorCode.FORBIDDEN: "Tool authority is insufficient",
+            ResearchAgentErrorCode.NOT_FOUND: "Requested resource was not found",
+            ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT: "Request identifier conflicts",
+            ResearchAgentErrorCode.TEMPORARILY_UNAVAILABLE: "Tool is temporarily unavailable",
             ResearchAgentErrorCode.INTERNAL: "Tool execution failed",
         }
         message = messages.get(code)
@@ -242,8 +356,9 @@ class ResearchAgentCapabilityRegistry:
         return ResearchAgentToolError(
             code=code,
             message=message,
-            retryable=False,
+            retryable=retryable,
             trace_id=trace_id,
+            retry_after_seconds=retry_after_seconds,
         )
 
     def get_research_context(self) -> ResearchContext:
@@ -288,6 +403,59 @@ class ResearchAgentCapabilityRegistry:
         request = DiagnoseAlphaFormulaInput(source=source)
         return self._modules.alpha_language.diagnose(request.source)
 
+    def list_research_runs(
+        self,
+        folder_id: str | None = None,
+        research_kind: ResearchKind | None = None,
+        cursor: str | None = None,
+        limit: int = 20,
+    ) -> ResearchRunList:
+        self._require(ResearchAgentScope.RESEARCH_READ)
+        try:
+            return self._modules.research_runs.list(
+                folder_id=folder_id,
+                research_kind=research_kind,
+                cursor=cursor,
+                limit=limit,
+            )
+        except ResearchRunInvalidCursor as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.INVALID_INPUT) from error
+        except ResearchRunTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+
+    def get_research_run(self, run_id: str) -> ResearchRunPollingDetail:
+        self._require(ResearchAgentScope.RESEARCH_READ)
+        try:
+            detail = self._modules.research_runs.get_polling_detail(run_id)
+        except ResearchRunTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if detail is None:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
+        return detail
+
+    def submit_research_run(self, **command_fields: object) -> BaseModel:
+        self._require(ResearchAgentScope.RESEARCH_EXECUTE)
+        command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(command_fields)
+        try:
+            outcome = self._modules.research_runs.admit_with_outcome(command)
+        except ResearchRunAdmissionConflict as error:
+            raise ResearchAgentExpectedFailure(
+                ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT
+            ) from error
+        except ResearchRunTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if isinstance(outcome, ResearchRunAdmissionAccepted):
+            return SubmitResearchRunAccepted(
+                run_id=outcome.run.id,
+                status=outcome.run.status,
+                replayed=outcome.replayed,
+                retry_after_seconds=outcome.retry_after_seconds,
+            )
+        return SubmitResearchRunRejected(
+            issues=outcome.issues,
+            replayed=outcome.replayed,
+        )
+
     def _require(self, scope: ResearchAgentScope) -> None:
         if not self._authority.permits(scope):
             raise ResearchAgentForbidden(
@@ -306,4 +474,12 @@ def local_operator_authority() -> ResearchAgentAuthority:
                 ResearchAgentScope.TRACKING_EXECUTE,
             }
         ),
+    )
+
+
+def _temporarily_unavailable() -> ResearchAgentExpectedFailure:
+    return ResearchAgentExpectedFailure(
+        ResearchAgentErrorCode.TEMPORARILY_UNAVAILABLE,
+        retryable=True,
+        retry_after_seconds=2,
     )

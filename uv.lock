@@ -1593,6 +1593,7 @@ source = { editable = "." }
 dependencies = [
     { name = "akshare" },
     { name = "boto3" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "mcp" },
@@ -1615,6 +1616,7 @@ dev = [
 requires-dist = [
     { name = "akshare", specifier = "==1.18.94" },
     { name = "boto3", specifier = ">=1.40,<2" },
+    { name = "cryptography", specifier = ">=50,<51" },
     { name = "fastapi", specifier = ">=0.116.0,<1" },
     { name = "httpx", specifier = ">=0.28.1,<1" },
     { name = "mcp", specifier = ">=2,<3" },

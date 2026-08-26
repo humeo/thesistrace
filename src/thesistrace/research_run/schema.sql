@@ -196,9 +196,40 @@ CREATE TABLE research_runs.execution_checkpoints (
 CREATE TABLE research_runs.admission_requests (
     request_id text NOT NULL,
     request_fingerprint text NOT NULL,
-    run_id text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    run_id text,
+    outcome jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT admission_requests_outcome_check CHECK (
+        COALESCE(
+            jsonb_typeof(outcome) = 'object'
+            AND (
+                (outcome = '{"outcome":"accepted"}'::jsonb AND run_id IS NOT NULL)
+                OR (
+                    outcome->>'outcome' = 'rejected'
+                    AND run_id IS NULL
+                    AND outcome ?& ARRAY['outcome', 'issues']
+                    AND jsonb_typeof(outcome->'issues') = 'array'
+                    AND jsonb_array_length(outcome->'issues') > 0
+                    AND outcome - ARRAY['outcome', 'issues'] = '{}'::jsonb
+                )
+            ),
+            false
+        )
+    )
 );
+
+
+CREATE TABLE research_runs.cursor_secrets (
+    singleton smallint NOT NULL,
+    secret text DEFAULT (
+        replace(gen_random_uuid()::text, '-', '')
+        || replace(gen_random_uuid()::text, '-', '')
+    ) NOT NULL,
+    CONSTRAINT cursor_secrets_singleton_check CHECK (singleton = 1),
+    CONSTRAINT cursor_secrets_secret_check CHECK (secret ~ '^[0-9a-f]{64}$')
+);
+
+INSERT INTO research_runs.cursor_secrets (singleton) VALUES (1);
 
 
 --
@@ -253,6 +284,9 @@ ALTER TABLE ONLY research_runs.admission_requests
 
 ALTER TABLE ONLY research_runs.admission_requests
     ADD CONSTRAINT admission_requests_run_id_key UNIQUE (run_id);
+
+ALTER TABLE ONLY research_runs.cursor_secrets
+    ADD CONSTRAINT cursor_secrets_pkey PRIMARY KEY (singleton);
 
 
 --

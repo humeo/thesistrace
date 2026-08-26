@@ -198,7 +198,9 @@ async def _exercise_http_contract(app, issuer: _DeterministicOAuthIssuer) -> Non
         async with _mcp_client(app, read_token) as client:
             tools = await client.list_tools()
             tools_by_name = {tool.name: tool for tool in tools.tools}
-            assert set(tools_by_name) == RESEARCH_AGENT_TOOL_NAMES
+            assert set(tools_by_name) == RESEARCH_AGENT_TOOL_NAMES - {
+                "submit_research_run"
+            }
 
             context = await client.call_tool("get_research_context", {})
             assert context.is_error is False

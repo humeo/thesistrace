@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,6 +12,11 @@ from thesistrace.alpha_language.models import (
 from thesistrace.data.models import DataOverview
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
 from thesistrace.research_folder.models import ResearchFolderList
+from thesistrace.research_run.models import (
+    ResearchKind,
+    ResearchRunAdmissionIssue,
+    ResearchRunStatus,
+)
 
 
 class ResearchAgentScope(StrEnum):
@@ -97,3 +102,46 @@ class AlphaCatalogView(BaseModel):
     fields: list[AlphaFieldCatalogEntry]
     builtins: list[AlphaBuiltinCatalogEntry]
     unknown_identifiers: list[str]
+
+
+ResearchRunId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
+ResearchRunCursor = Annotated[str, Field(strict=True, min_length=1, max_length=1024)]
+
+
+class ListResearchRunsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    folder_id: Annotated[str, Field(strict=True, min_length=1, max_length=200)] | None = None
+    research_kind: ResearchKind | None = None
+    cursor: ResearchRunCursor | None = None
+    limit: Annotated[int, Field(strict=True, ge=1, le=50)] = 20
+
+
+class GetResearchRunInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    run_id: ResearchRunId
+
+
+class SubmitResearchRunAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    run_id: ResearchRunId
+    status: ResearchRunStatus
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
+class SubmitResearchRunRejected(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    outcome: Literal["rejected"] = "rejected"
+    issues: Annotated[list[ResearchRunAdmissionIssue], Field(min_length=1)]
+    replayed: bool
+
+
+type SubmitResearchRunOutcome = Annotated[
+    SubmitResearchRunAccepted | SubmitResearchRunRejected,
+    Field(discriminator="outcome"),
+]

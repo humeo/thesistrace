@@ -129,6 +129,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "operational_events",
             "research_authoring",
             "research_folder",
+            "research_run",
         },
         "fixture": {"data"},
         "adapters": {"data", "fixture"},
@@ -188,6 +189,7 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "research_runs.admission_requests",
             "research_runs.attempts",
             "research_runs.cancel_receipts",
+            "research_runs.cursor_secrets",
             "research_runs.start_tracking_receipts",
         ),
         "research_batch": (

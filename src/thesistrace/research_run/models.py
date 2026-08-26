@@ -4,6 +4,7 @@ from datetime import date, datetime
 from typing import Annotated, Literal
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -17,7 +18,19 @@ from pydantic import (
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
 from thesistrace.data.models import FinancialResearchReadiness
 
-RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
+
+def _normalized_request_id(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("request_id must not be blank")
+    return normalized
+
+
+RequestId = Annotated[
+    str,
+    Field(strict=True, min_length=1, max_length=200),
+    AfterValidator(_normalized_request_id),
+]
 FolderId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 ResearchName = Annotated[str, Field(strict=True, max_length=200)]
 Formula = Annotated[str, Field(strict=True)]
@@ -34,8 +47,33 @@ RebalanceInterval = Annotated[
     Field(strict=True, ge=MIN_REBALANCE_INTERVAL, le=MAX_REBALANCE_INTERVAL),
 ]
 type ResearchKind = Literal["factor_evaluation", "strategy_backtest"]
+type ResearchRunStatus = Literal[
+    "queued", "running", "cancelling", "succeeded", "failed", "cancelled"
+]
+type ResearchRunResultSection = Literal[
+    "factor",
+    "strategy_summary",
+    "strategy_observations",
+    "terminal_strategy_state",
+    "terminal_positions",
+    "provenance",
+]
 type ResearchUniverse = Literal["top300", "top1000", "top2000", "top3000"]
 type ResearchNeutralization = Literal["none", "industry"]
+RESEARCH_RUN_ACTIVE_STATUSES = frozenset({"queued", "running", "cancelling"})
+RESEARCH_RUN_POLL_RETRY_SECONDS = 2
+FACTOR_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
+    "factor",
+    "provenance",
+)
+STRATEGY_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
+    "factor",
+    "strategy_summary",
+    "strategy_observations",
+    "terminal_strategy_state",
+    "terminal_positions",
+    "provenance",
+)
 RESEARCH_KINDS: tuple[ResearchKind, ...] = (
     "factor_evaluation",
     "strategy_backtest",
@@ -50,6 +88,21 @@ RESEARCH_NEUTRALIZATIONS: tuple[ResearchNeutralization, ...] = (
     "none",
     "industry",
 )
+
+
+def research_run_retry_after_seconds(status: ResearchRunStatus) -> int | None:
+    return RESEARCH_RUN_POLL_RETRY_SECONDS if status in RESEARCH_RUN_ACTIVE_STATUSES else None
+
+
+def research_run_result_sections(
+    status: ResearchRunStatus,
+    research_kind: ResearchKind,
+) -> tuple[ResearchRunResultSection, ...]:
+    if status != "succeeded":
+        return ()
+    if research_kind == "factor_evaluation":
+        return FACTOR_RESULT_SECTIONS
+    return STRATEGY_RESULT_SECTIONS
 
 
 def _natural_date(value: object) -> date:
@@ -81,6 +134,14 @@ class _ResearchRunAdmissionBase(BaseModel):
     end_date: NaturalDate
     universe: ResearchUniverse
     neutralization: ResearchNeutralization
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     @model_validator(mode="after")
     def validate_research_period(self) -> _ResearchRunAdmissionBase:
@@ -268,9 +329,7 @@ class ResearchRunSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
-    status: Literal[
-        "queued", "running", "cancelling", "succeeded", "failed", "cancelled"
-    ]
+    status: ResearchRunStatus
     name: str
     folder_id: str
     created_at: datetime
@@ -292,6 +351,29 @@ class ResearchRunSummary(BaseModel):
         if self.key_metrics is not None and self.key_metrics.research_kind != self.research_kind:
             raise ValueError("ResearchRun key metrics must match its Research Kind")
         return self
+
+
+class ResearchRunAdmissionAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    run: ResearchRunSummary
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
+class ResearchRunAdmissionRejectedOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["rejected"] = "rejected"
+    issues: Annotated[list[ResearchRunAdmissionIssue], Field(min_length=1)]
+    replayed: bool
+
+
+type ResearchRunAdmissionOutcome = Annotated[
+    ResearchRunAdmissionAccepted | ResearchRunAdmissionRejectedOutcome,
+    Field(discriminator="outcome"),
+]
 
 
 class ResearchRunAuthorableInput(BaseModel):
@@ -529,6 +611,27 @@ class ResearchRunExecutionTiming(BaseModel):
     finished_at: datetime | None
     elapsed_seconds: float | None
     is_final: bool
+
+
+class ResearchRunPollingDetail(ResearchRunSummary):
+    input: ResearchRunAuthorableInput
+    progress: ResearchRunProgress
+    execution_timing: ResearchRunExecutionTiming
+    result_available: bool
+    available_result_sections: tuple[ResearchRunResultSection, ...]
+    retry_after_seconds: int | None
+
+    @model_validator(mode="after")
+    def validate_polling_projection(self) -> ResearchRunPollingDetail:
+        expected_retry = research_run_retry_after_seconds(self.status)
+        if self.retry_after_seconds != expected_retry:
+            raise ValueError("ResearchRun retry guidance must match active lifecycle state")
+        expected_sections = research_run_result_sections(self.status, self.research_kind)
+        if self.available_result_sections != expected_sections:
+            raise ValueError("ResearchRun Result sections must match lifecycle and Research Kind")
+        if self.result_available != bool(expected_sections):
+            raise ValueError("ResearchRun Result availability must match its public sections")
+        return self
 
 
 class ResearchRunDetail(ResearchRunSummary):

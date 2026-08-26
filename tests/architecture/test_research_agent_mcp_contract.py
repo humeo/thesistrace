@@ -30,6 +30,24 @@ from thesistrace.research_agent.registry import (
 )
 from thesistrace.research_authoring import ResearchAuthoringService
 from thesistrace.research_folder.models import ResearchFolderList, ResearchFolderSummary
+from thesistrace.research_run.models import (
+    ResearchRunAdmissionAccepted,
+    ResearchRunAdmissionCommand,
+    ResearchRunAdmissionIssue,
+    ResearchRunAdmissionOutcome,
+    ResearchRunAdmissionRejectedOutcome,
+    ResearchRunAuthorableInput,
+    ResearchRunExecutionTiming,
+    ResearchRunList,
+    ResearchRunPollingDetail,
+    ResearchRunProgress,
+    ResearchRunSummary,
+)
+from thesistrace.research_run.service import (
+    ResearchRunAdmissionConflict,
+    ResearchRunInvalidCursor,
+    ResearchRunTemporarilyUnavailable,
+)
 
 
 class _DataOverviewReader:
@@ -67,6 +85,37 @@ class _ResearchFolderReader:
         )
 
 
+class _ResearchRunReader:
+    def __init__(self) -> None:
+        self.list_filters: dict[str, object] | None = None
+        self.admission_outcome: ResearchRunAdmissionOutcome = ResearchRunAdmissionAccepted(
+            run=_run_summary(),
+            replayed=False,
+            retry_after_seconds=2,
+        )
+        self.polling_detail: ResearchRunPollingDetail | None = _polling_detail()
+        self.failure: Exception | None = None
+
+    def list(self, **filters: object) -> ResearchRunList:
+        if self.failure is not None:
+            raise self.failure
+        self.list_filters = filters
+        return ResearchRunList(items=[_run_summary()], next_cursor="cursor_next")
+
+    def get_polling_detail(self, _run_id: str) -> ResearchRunPollingDetail | None:
+        if self.failure is not None:
+            raise self.failure
+        return self.polling_detail
+
+    def admit_with_outcome(
+        self,
+        _command: ResearchRunAdmissionCommand,
+    ) -> ResearchRunAdmissionOutcome:
+        if self.failure is not None:
+            raise self.failure
+        return self.admission_outcome
+
+
 class _BlockingDataOverviewReader(_DataOverviewReader):
     def __init__(self) -> None:
         self.started = Event()
@@ -97,12 +146,74 @@ class _ExplodingAlphaLanguage:
         raise RuntimeError("private-formula-canary")
 
 
+def _run_summary() -> ResearchRunSummary:
+    return ResearchRunSummary(
+        id="run_test",
+        status="queued",
+        name="Test Research",
+        folder_id="folder_default",
+        created_at=datetime(2024, 2, 1, tzinfo=UTC),
+        start_date=date(2024, 1, 2),
+        end_date=date(2024, 1, 31),
+        formula_summary="close",
+        research_kind="factor_evaluation",
+    )
+
+
+def _polling_detail() -> ResearchRunPollingDetail:
+    return ResearchRunPollingDetail(
+        **_run_summary().model_dump(),
+        input=ResearchRunAuthorableInput(
+            formula="close",
+            hypothesis="Prices preserve a stable cross-sectional signal.",
+            start_date=date(2024, 1, 2),
+            end_date=date(2024, 1, 31),
+            universe="top300",
+            neutralization="none",
+            research_kind="factor_evaluation",
+        ),
+        progress=ResearchRunProgress(
+            phase="queued",
+            completed_warmup_sessions=0,
+            total_warmup_sessions=0,
+            completed_research_sessions=0,
+            total_research_sessions=22,
+            committed_chunk_count=0,
+        ),
+        execution_timing=ResearchRunExecutionTiming(
+            started_at=None,
+            finished_at=None,
+            elapsed_seconds=None,
+            is_final=False,
+        ),
+        result_available=False,
+        available_result_sections=(),
+        retry_after_seconds=2,
+    )
+
+
+def _factor_command(request_id: str) -> dict[str, object]:
+    return {
+        "request_id": request_id,
+        "folder_id": "folder_default",
+        "name": "Factor Test",
+        "formula": "close",
+        "hypothesis": "Prices preserve a stable cross-sectional signal.",
+        "start_date": "2024-01-02",
+        "end_date": "2024-01-31",
+        "universe": "top300",
+        "neutralization": "none",
+        "research_kind": "factor_evaluation",
+    }
+
+
 def _registry(
     authority: ResearchAgentAuthority | None = None,
     *,
     allowed_tools: frozenset[str] | None = None,
     data_overview: _DataOverviewReader | None = None,
     selected_alpha_language: AlphaAuthoringLanguage = alpha_language,
+    research_runs: _ResearchRunReader | None = None,
 ) -> ResearchAgentCapabilityRegistry:
     return ResearchAgentCapabilityRegistry(
         authority=authority or local_operator_authority(),
@@ -111,6 +222,7 @@ def _registry(
             research_folders=_ResearchFolderReader(),
             alpha_language=selected_alpha_language,
             research_authoring=ResearchAuthoringService(),
+            research_runs=research_runs or _ResearchRunReader(),
         ),
         **({} if allowed_tools is None else {"allowed_tools": allowed_tools}),
     )
@@ -200,8 +312,154 @@ def test_registry_intersects_deployment_allowlist_and_rechecks_it_on_invocation(
     assert denied.error.code == "FORBIDDEN"
 
 
-def test_in_memory_protocol_exposes_exact_read_only_tool_contract() -> None:
+def test_in_memory_protocol_exposes_exact_tool_contract() -> None:
     anyio.run(_exercise_in_memory_protocol)
+
+
+def test_registry_projects_research_run_outcomes_and_expected_errors() -> None:
+    reader = _ResearchRunReader()
+    registry = _registry(research_runs=reader)
+
+    listed = registry.invoke(
+        "list_research_runs",
+        {"folder_id": "folder_default", "research_kind": "factor_evaluation"},
+        trace_id="trace_list",
+    )
+    assert listed.result is not None
+    assert listed.result.model_dump(mode="json")["next_cursor"] == "cursor_next"
+    assert reader.list_filters == {
+        "folder_id": "folder_default",
+        "research_kind": "factor_evaluation",
+        "cursor": None,
+        "limit": 20,
+    }
+
+    accepted = registry.invoke(
+        "submit_research_run",
+        _factor_command("request_accepted"),
+        trace_id="trace_accepted",
+    )
+    assert accepted.result is not None
+    assert accepted.result.model_dump(mode="json") == {
+        "outcome": "accepted",
+        "run_id": "run_test",
+        "status": "queued",
+        "replayed": False,
+        "retry_after_seconds": 2,
+    }
+
+    reader.admission_outcome = ResearchRunAdmissionRejectedOutcome(
+        issues=[
+            ResearchRunAdmissionIssue(
+                code="UNKNOWN_IDENTIFIER",
+                field="formula",
+                message="Unknown Alpha identifier",
+            )
+        ],
+        replayed=True,
+    )
+    rejected = registry.invoke(
+        "submit_research_run",
+        _factor_command("request_rejected"),
+        trace_id="trace_rejected",
+    )
+    assert rejected.result is not None
+    assert rejected.result.model_dump(mode="json")["outcome"] == "rejected"
+    assert rejected.result.model_dump(mode="json")["issues"][0]["code"] == (
+        "UNKNOWN_IDENTIFIER"
+    )
+    assert rejected.result.model_dump(mode="json")["replayed"] is True
+
+    reader.failure = ResearchRunAdmissionConflict("conflicting command")
+    conflict = registry.invoke(
+        "submit_research_run",
+        _factor_command("request_conflict"),
+        trace_id="trace_conflict",
+    )
+    assert conflict.error is not None
+    assert conflict.error.code == "IDEMPOTENCY_CONFLICT"
+    assert conflict.error.retryable is False
+
+    reader.failure = ResearchRunTemporarilyUnavailable("database unavailable")
+    unavailable = registry.invoke(
+        "get_research_run",
+        {"run_id": "run_test"},
+        trace_id="trace_unavailable",
+    )
+    assert unavailable.error is not None
+    assert unavailable.error.code == "TEMPORARILY_UNAVAILABLE"
+    assert unavailable.error.retryable is True
+    assert unavailable.error.retry_after_seconds == 2
+
+    reader.failure = ResearchRunInvalidCursor("invalid cursor")
+    invalid_cursor = registry.invoke(
+        "list_research_runs",
+        {"cursor": "invalid"},
+        trace_id="trace_invalid_cursor",
+    )
+    assert invalid_cursor.error is not None
+    assert invalid_cursor.error.code == "INVALID_INPUT"
+
+    reader.failure = ValueError("corrupt Product State")
+    internal = registry.invoke(
+        "list_research_runs",
+        {},
+        trace_id="trace_internal",
+    )
+    assert internal.error is not None
+    assert internal.error.code == "INTERNAL"
+
+    reader.failure = None
+    reader.polling_detail = ResearchRunPollingDetail.model_validate(
+        {
+            **_polling_detail().model_dump(mode="json"),
+            "status": "failed",
+            "failure_reason": "Research execution failed.",
+            "retry_after_seconds": None,
+        }
+    )
+    failed = registry.invoke(
+        "get_research_run",
+        {"run_id": "run_failed"},
+        trace_id="trace_failed",
+    )
+    assert failed.result is not None
+    assert failed.result.model_dump(mode="json")["status"] == "failed"
+    assert failed.result.model_dump(mode="json")["failure_reason"] == (
+        "Research execution failed."
+    )
+    assert failed.result.model_dump(mode="json")["retry_after_seconds"] is None
+
+    reader.polling_detail = None
+    missing = registry.invoke(
+        "get_research_run",
+        {"run_id": "run_missing"},
+        trace_id="trace_missing",
+    )
+    assert missing.error is not None
+    assert missing.error.code == "NOT_FOUND"
+
+
+def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delete() -> None:
+    reader = ResearchAgentAuthority(
+        subject="reader",
+        scopes=frozenset({ResearchAgentScope.RESEARCH_READ}),
+    )
+    executor = ResearchAgentAuthority(
+        subject="executor",
+        scopes=frozenset({ResearchAgentScope.RESEARCH_EXECUTE}),
+    )
+
+    reader_tools = {capability.name for capability in _registry(reader).accessible_capabilities()}
+    executor_tools = {
+        capability.name for capability in _registry(executor).accessible_capabilities()
+    }
+
+    assert "submit_research_run" not in reader_tools
+    assert {"list_research_runs", "get_research_run"} <= reader_tools
+    assert executor_tools == {"submit_research_run"}
+    assert all("retry" not in name and "delete" not in name for name in reader_tools)
+    assert all("retry" not in name and "delete" not in name for name in executor_tools)
 
 
 def test_in_memory_protocol_sanitizes_unexpected_tool_failures() -> None:
@@ -234,6 +492,9 @@ async def _exercise_in_memory_protocol() -> None:
             "get_research_context",
             "get_alpha_catalog",
             "diagnose_alpha_formula",
+            "list_research_runs",
+            "get_research_run",
+            "submit_research_run",
         }
         assert client.server_capabilities is not None
         assert client.server_capabilities.prompts is None
@@ -241,15 +502,23 @@ async def _exercise_in_memory_protocol() -> None:
         assert client.server_capabilities.completions is None
         assert client.server_capabilities.tasks is None
         for tool in tools.values():
-            assert tool.input_schema["additionalProperties"] is False
             assert tool.output_schema is not None
             assert tool.output_schema["type"] == "object"
             assert len(tool.output_schema["anyOf"]) == 2
             assert tool.annotations is not None
-            assert tool.annotations.read_only_hint is True
             assert tool.annotations.destructive_hint is False
             assert tool.annotations.idempotent_hint is True
             assert tool.annotations.open_world_hint is False
+            if tool.name == "submit_research_run":
+                assert tool.annotations.read_only_hint is False
+                assert tool.input_schema["discriminator"]["propertyName"] == "research_kind"
+                assert len(tool.input_schema["oneOf"]) == 2
+                for branch in tool.input_schema["oneOf"]:
+                    definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
+                    assert definition["additionalProperties"] is False
+            else:
+                assert tool.annotations.read_only_hint is True
+                assert tool.input_schema["additionalProperties"] is False
         assert tools["get_research_context"].input_schema["properties"] == {}
         assert (
             tools["get_alpha_catalog"].input_schema["properties"]["identifiers"]["anyOf"][0][
@@ -260,6 +529,20 @@ async def _exercise_in_memory_protocol() -> None:
         assert (
             tools["diagnose_alpha_formula"].input_schema["properties"]["source"]["maxLength"]
             == 4096
+        )
+        list_schema = tools["list_research_runs"].input_schema
+        assert list_schema["properties"]["limit"]["default"] == 20
+        assert list_schema["properties"]["limit"]["maximum"] == 50
+        assert list_schema["properties"]["cursor"]["anyOf"][0]["maxLength"] == 1024
+        submit_schema = tools["submit_research_run"].input_schema
+        strategy_ref = next(
+            branch["$ref"]
+            for branch in submit_schema["oneOf"]
+            if "StrategyBacktest" in branch["$ref"]
+        )
+        strategy_schema = submit_schema["$defs"][strategy_ref.rsplit("/", 1)[-1]]
+        assert {"holdings_count", "rebalance_every_sessions"} <= set(
+            strategy_schema["required"]
         )
         serialize_server_result(
             "tools/list",
@@ -309,14 +592,26 @@ async def _exercise_in_memory_protocol() -> None:
             tools["get_research_context"].output_schema,
         )
 
+        incomplete_strategy = await client.call_tool(
+            "submit_research_run",
+            {
+                **_factor_command("request_incomplete_strategy"),
+                "research_kind": "strategy_backtest",
+            },
+        )
+        assert incomplete_strategy.is_error is True
+        assert incomplete_strategy.structured_content["code"] == "INVALID_INPUT"
+
     assert [event.context["outcome"] for event in events] == [
         "succeeded",
         "succeeded",
         "failed",
         "failed",
+        "failed",
     ]
     assert events[2].context["failure_code"] == "INVALID_INPUT"
     assert events[3].context["failure_code"] == "INVALID_INPUT"
+    assert events[4].context["failure_code"] == "INVALID_INPUT"
 
 
 async def _exercise_sanitized_failure() -> None:
