@@ -44,6 +44,7 @@ CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_S3_SECRET_ACCESS_KEY",
     "THESISTRACE_S3_BUCKET",
     "THESISTRACE_DATA_MOUNT",
+    "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY",
 )
 PUBLICATION_REQUEST_TIMEOUT_SECONDS = 5.0
 
@@ -64,6 +65,7 @@ class CoreSettings:
     s3_secret_access_key: str
     s3_bucket: str
     data_mount: Path
+    batch_attempt_control_directory: Path
     s3_region: str = "us-east-1"
     research_execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES
     tracking_execution_memory_bytes: int = DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES
@@ -79,6 +81,7 @@ class CoreSettings:
                     "s3_secret_access_key",
                     "s3_bucket",
                     "data_mount",
+                    "batch_attempt_control_directory",
                 ),
                 CORE_ENVIRONMENT_NAMES,
                 strict=True,
@@ -110,13 +113,25 @@ class CoreSettings:
         )
         if tracking_execution_memory_bytes <= 0:
             raise RuntimeError("Tracking execution memory must be positive")
+        data_mount = Path(values["data_mount"])
+        batch_attempt_control_directory = Path(
+            values["batch_attempt_control_directory"]
+        )
+        if batch_attempt_control_directory.resolve().is_relative_to(
+            data_mount.resolve()
+        ):
+            raise RuntimeError(
+                "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY must be outside "
+                "THESISTRACE_DATA_MOUNT"
+            )
         return cls(
             database_url=values["database_url"],
             s3_endpoint_url=values["s3_endpoint_url"],
             s3_access_key_id=values["s3_access_key_id"],
             s3_secret_access_key=values["s3_secret_access_key"],
             s3_bucket=values["s3_bucket"],
-            data_mount=Path(values["data_mount"]),
+            data_mount=data_mount,
+            batch_attempt_control_directory=batch_attempt_control_directory,
             s3_region=os.environ.get("THESISTRACE_S3_REGION", "us-east-1"),
             research_execution_memory_bytes=research_execution_memory_bytes,
             tracking_execution_memory_bytes=tracking_execution_memory_bytes,
@@ -202,9 +217,10 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             research_runs=research_runs,
             dataset_lifecycle=dataset_lifecycle,
             publication=publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=SupervisedResearchBatchExecutor(
                 settings.data_mount,
+                attempt_control_directory=settings.batch_attempt_control_directory,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             ),
         )

@@ -49,6 +49,7 @@ compose() {
     COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
       THESISTRACE_TEST_BUCKET="$bucket_name" \
       THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
+      THESISTRACE_TEST_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
       THESISTRACE_TEST_RUN_ROOT="$run_root" \
       THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
       docker compose \
@@ -61,12 +62,22 @@ compose() {
     COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
       THESISTRACE_TEST_BUCKET="$bucket_name" \
       THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
+      THESISTRACE_TEST_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
       docker compose \
       --project-name "$project_name" \
       --file "$base_file" \
       --file "$test_file" \
       "$@"
   fi
+}
+
+base_compose() {
+  validate_test_project
+  COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
+    docker compose \
+    --project-name "$project_name" \
+    --file "$base_file" \
+    "$@"
 }
 
 runtime_image_name() {
@@ -105,6 +116,7 @@ run_with_environment() {
   THESISTRACE_S3_BUCKET="$bucket_name" \
   THESISTRACE_S3_REGION=us-east-1 \
   THESISTRACE_DATA_MOUNT="$data_mount" \
+  THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
   THESISTRACE_TEST_PROJECT_NAME="$project_name" \
     "$@"
 }
@@ -120,6 +132,7 @@ run_playwright() {
   THESISTRACE_S3_BUCKET="$bucket_name" \
   THESISTRACE_S3_REGION=us-east-1 \
   THESISTRACE_DATA_MOUNT="$data_mount" \
+  THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
     "$@"
 }
 
@@ -356,10 +369,17 @@ cleanup_project() {
   validate_cleanup_target
   compose_status=0
   compose down --volumes --remove-orphans || compose_status=$?
+  product_state_status=0
+  "$repo_root/scripts/product-state-volumes" reset "$project_name" \
+    || product_state_status=$?
   mount_status=0
   rm -rf -- "$state_root/$run_id/canonical-data" || mount_status=$?
+  rm -rf -- "$state_root/$run_id/batch-attempt-control" || mount_status=$?
   if [ "$compose_status" -ne 0 ]; then
     return "$compose_status"
+  fi
+  if [ "$product_state_status" -ne 0 ]; then
+    return "$product_state_status"
   fi
   return "$mount_status"
 }
@@ -458,6 +478,7 @@ case "$command" in
     bucket_name=${project_name#"$canonical_prefix"}
     run_id=${project_name#"$canonical_prefix"}
     data_mount="$state_root/$run_id/canonical-data"
+    batch_attempt_control_directory="$state_root/$run_id/batch-attempt-control/.batch-attempts"
     cleanup_project
     exit 0
     ;;
@@ -466,6 +487,7 @@ case "$command" in
     bucket_name=${project_name#"$canonical_prefix"}
     run_id=${project_name#"$canonical_prefix"}
     data_mount="$state_root/$run_id/canonical-data"
+    batch_attempt_control_directory="$state_root/$run_id/batch-attempt-control/.batch-attempts"
     validate_cleanup_target
     service=postgres
     if [ "$command" = stop-rustfs ] || [ "$command" = restart-rustfs ]; then
@@ -529,13 +551,14 @@ project_name="$canonical_prefix$run_id"
 bucket_name="$canonical_prefix$run_id"
 run_root="$state_root/$run_id"
 data_mount="$run_root/canonical-data"
+batch_attempt_control_directory="$run_root/batch-attempt-control/.batch-attempts"
 evidence_dir="$run_root/evidence"
 pytest_report="$evidence_dir/pytest.xml"
 database_restart_report="$evidence_dir/pytest-database-restart.xml"
 dependency_restart_report="$evidence_dir/pytest-dependency-restart.xml"
 run_metadata="$run_root/run.txt"
 validate_test_project
-mkdir -p "$evidence_dir" "$data_mount" "$data_mount/.batch-attempts"
+mkdir -p "$evidence_dir" "$data_mount" "$batch_attempt_control_directory"
 git_revision=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf unknown)
 git_worktree_dirty=false
 if [ -n "$(git -C "$repo_root" status --short 2>/dev/null)" ]; then
@@ -728,6 +751,9 @@ case "$command" in
   image-smoke)
     smoke_state=/smoke-evidence/image-smoke-state.json
     run_phase image-smoke-images build_runtime_images
+    run_phase image-smoke-fresh-named-volume-mount \
+      base_compose run --rm --no-deps -T \
+      --entrypoint /bin/true batch-research-worker
     run_phase image-smoke-worker-capacity-rejection verify_worker_capacity_rejection
     run_phase image-smoke-research-child-cgroup-oom \
       verify_research_child_cgroup_oom_detection

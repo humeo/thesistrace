@@ -224,6 +224,52 @@ def test_runtime_configuration_has_no_deployment_mode() -> None:
     assert "mode" not in CoreSettings.__dataclass_fields__
 
 
+def test_runtime_requires_independent_batch_attempt_control_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    data_mount = tmp_path / "canonical-data"
+    attempt_control_directory = tmp_path / "batch-control" / ".batch-attempts"
+    environment = {
+        "THESISTRACE_DATABASE_URL": "postgresql://unused",
+        "THESISTRACE_S3_ENDPOINT_URL": "http://unused",
+        "THESISTRACE_S3_ACCESS_KEY_ID": "unused",
+        "THESISTRACE_S3_SECRET_ACCESS_KEY": "unused",
+        "THESISTRACE_S3_BUCKET": "unused",
+        "THESISTRACE_DATA_MOUNT": str(data_mount),
+        "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
+            attempt_control_directory
+        ),
+    }
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+
+    settings = CoreSettings.from_environment()
+
+    assert settings.data_mount == data_mount
+    assert settings.batch_attempt_control_directory == attempt_control_directory
+    assert not settings.batch_attempt_control_directory.is_relative_to(
+        settings.data_mount
+    )
+
+    monkeypatch.delenv("THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY")
+    with pytest.raises(
+        RuntimeError,
+        match="THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY",
+    ):
+        CoreSettings.from_environment()
+
+    monkeypatch.setenv(
+        "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY",
+        str(data_mount / ".batch-attempts"),
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="must be outside THESISTRACE_DATA_MOUNT",
+    ):
+        CoreSettings.from_environment()
+
+
 def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     scripts = project["project"]["scripts"]
@@ -782,19 +828,17 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     assert "run_kernel(" not in service_source
     assert "canonical-data:/var/lib/thesistrace/canonical-data:ro" in compose_source
     assert (
-        "batch-attempt-control:/var/lib/thesistrace/canonical-data/.batch-attempts"
+        "batch-attempt-control:/var/lib/thesistrace/.batch-attempts"
         in compose_source
     )
+    assert "/canonical-data/.batch-attempts" not in compose_source
     assert ":/var/lib/thesistrace/canonical-data:ro" in test_compose_source
     assert (
-        ":/var/lib/thesistrace/canonical-data/.batch-attempts" in test_compose_source
+        ":/var/lib/thesistrace/.batch-attempts" in test_compose_source
     )
+    assert "/canonical-data/.batch-attempts" not in test_compose_source
     assert "${THESISTRACE_TEST_RUN_ROOT}:/smoke-data:ro" in image_smoke_compose_source
-    assert (
-        "${THESISTRACE_TEST_RUN_ROOT}/canonical-data/.batch-attempts:"
-        "/smoke-data/canonical-data/.batch-attempts"
-        in image_smoke_compose_source
-    )
+    assert "/canonical-data/.batch-attempts" not in image_smoke_compose_source
     child_environment = transport_source[
         transport_source.index("def child_environment(") : transport_source.index(
             "def enforce_cancellation_deadline("

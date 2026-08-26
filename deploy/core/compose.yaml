@@ -12,6 +12,7 @@ x-core-environment: &core-environment
   THESISTRACE_S3_BUCKET: thesistrace-local
   THESISTRACE_S3_REGION: us-east-1
   THESISTRACE_DATA_MOUNT: /var/lib/thesistrace/canonical-data
+  THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY: /var/lib/thesistrace/.batch-attempts
   THESISTRACE_RESEARCH_WORKER_EXECUTION_MEMORY_BYTES: ${THESISTRACE_RESEARCH_WORKER_EXECUTION_MEMORY_BYTES:-1610612736}
   THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES: ${THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES:-1610612736}
 
@@ -116,7 +117,7 @@ services:
     <<: *backend
     volumes:
       - canonical-data:/var/lib/thesistrace/canonical-data:ro
-      - batch-attempt-control:/var/lib/thesistrace/canonical-data/.batch-attempts
+      - batch-attempt-control:/var/lib/thesistrace/.batch-attempts
     command:
       - thesistrace-core-worker
       - --role

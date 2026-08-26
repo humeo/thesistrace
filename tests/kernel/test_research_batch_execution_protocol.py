@@ -18,11 +18,29 @@ from thesistrace.research_run.execution import (
 from thesistrace.research_run.supervised_child import SupervisedChildTransport
 
 
+def test_batch_attempt_control_is_independent_from_read_only_canonical_data(
+    tmp_path: Path,
+) -> None:
+    data_mount = tmp_path / "canonical-data"
+    attempt_control_directory = tmp_path / "batch-control" / ".batch-attempts"
+    executor = SupervisedResearchBatchExecutor(
+        data_mount,
+        attempt_control_directory=attempt_control_directory,
+        execution_memory_bytes=512 * 1024**2,
+    )
+
+    control_path = executor.attempt_control_path("batch_attempt_contract")
+
+    assert control_path == attempt_control_directory / "batch_attempt_contract.lock"
+    assert not control_path.is_relative_to(data_mount)
+
+
 def test_supervised_child_reports_invalid_input_without_losing_its_category(
     tmp_path: Path,
 ) -> None:
     executor = SupervisedResearchBatchExecutor(
         tmp_path,
+        attempt_control_directory=tmp_path / ".batch-attempts",
         execution_memory_bytes=512 * 1024**2,
     )
 
@@ -47,6 +65,7 @@ def test_supervisor_preserves_resource_exhausted_child_category(
     )
     executor = SupervisedResearchBatchExecutor(
         tmp_path,
+        attempt_control_directory=tmp_path / ".batch-attempts",
         execution_memory_bytes=512 * 1024**2,
     )
 
@@ -62,6 +81,7 @@ def test_supervisor_preserves_resource_exhausted_child_category(
 def test_supervised_child_rejects_an_unknown_batch_kind(tmp_path: Path) -> None:
     executor = SupervisedResearchBatchExecutor(
         tmp_path,
+        attempt_control_directory=tmp_path / ".batch-attempts",
         execution_memory_bytes=512 * 1024**2,
     )
     request = ResearchBatchExecutionRequest(

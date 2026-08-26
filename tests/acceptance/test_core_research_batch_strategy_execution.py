@@ -12,7 +12,7 @@ from threading import Event
 import boto3
 import pytest
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
+from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 from test_core_research_batch_admission import _publish_current_data, _strategy_command
@@ -305,7 +305,7 @@ def _replace_compact_binding_checksum(content: bytes, checksum: str) -> bytes:
 )
 @pytest.mark.dependency_restart
 def test_real_rustfs_loss_retries_shared_strategy_prerequisite(tmp_path: Path) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     restarted_s3_port: int | None = None
     with TestClient(create_app(settings)) as client:
@@ -359,7 +359,7 @@ def test_real_rustfs_loss_retries_shared_strategy_prerequisite(tmp_path: Path) -
 def test_real_postgres_loss_reuses_acknowledged_private_artifact(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     restarted_postgres_port: int | None = None
     attempt_id: str | None = None
@@ -373,6 +373,7 @@ def test_real_postgres_loss_reuses_acknowledged_private_artifact(
         barrier = _FirstStrategyStartedBarrierExecutor(
             SupervisedResearchBatchExecutor(
                 settings.data_mount,
+                attempt_control_directory=settings.batch_attempt_control_directory,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             )
         )
@@ -381,7 +382,7 @@ def test_real_postgres_loss_reuses_acknowledged_private_artifact(
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=barrier,
             heartbeat_seconds=60,
         )
@@ -445,7 +446,7 @@ def test_real_postgres_loss_reuses_acknowledged_private_artifact(
 def test_strategy_transport_failure_before_child_ready_requeues_without_an_attempt(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -459,7 +460,7 @@ def test_strategy_transport_failure_before_child_ready_requeues_without_an_attem
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=_StrategyTransportFailureExecutor(),
         )
 
@@ -478,7 +479,7 @@ def test_strategy_transport_failure_before_child_ready_requeues_without_an_attem
 def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     events: list[dict[str, object]] = []
     with TestClient(create_app(settings)) as client:
@@ -594,7 +595,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
             research_runs=_ProjectionBarrier(),  # type: ignore[arg-type]
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
         )
 
         def preserve_history(transaction, run_id):
@@ -700,7 +701,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
 def test_strategy_sweep_reuses_private_artifact_after_worker_loss(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     first_events: list[dict[str, object]] = []
     recovered_events: list[dict[str, object]] = []
@@ -785,7 +786,7 @@ def test_invalid_new_private_artifact_evidence_is_permanent_without_retry(
     tmp_path: Path,
     invalid_evidence: str,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -799,10 +800,11 @@ def test_invalid_new_private_artifact_evidence_is_permanent_without_retry(
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=_InvalidSharedEvidenceExecutor(
                 SupervisedResearchBatchExecutor(
                     settings.data_mount,
+                    attempt_control_directory=settings.batch_attempt_control_directory,
                     execution_memory_bytes=settings.research_execution_memory_bytes,
                 ),
                 invalid_evidence,
@@ -852,7 +854,7 @@ def test_invalid_new_private_artifact_evidence_is_permanent_without_retry(
 def test_expired_strategy_fence_rejects_private_artifact_before_acknowledgement(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -864,6 +866,7 @@ def test_expired_strategy_fence_rejects_private_artifact_before_acknowledgement(
         barrier = _SharedArtifactReadyBarrierExecutor(
             SupervisedResearchBatchExecutor(
                 settings.data_mount,
+                attempt_control_directory=settings.batch_attempt_control_directory,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             )
         )
@@ -872,7 +875,7 @@ def test_expired_strategy_fence_rejects_private_artifact_before_acknowledgement(
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=barrier,
         )
         with ThreadPoolExecutor(max_workers=1) as pool:
@@ -882,7 +885,7 @@ def test_expired_strategy_fence_rejects_private_artifact_before_acknowledgement(
                 "id"
             ]
             active_artifact = (
-                settings.data_mount / ".batch-attempts" / f"{attempt_id}.alpha-factor.artifact"
+                settings.batch_attempt_control_directory / f"{attempt_id}.alpha-factor.artifact"
             )
             assert active_artifact.is_file()
             aged_at = (datetime.now(UTC) - timedelta(days=1)).timestamp()
@@ -918,7 +921,7 @@ def test_expired_strategy_fence_rejects_private_artifact_before_acknowledgement(
         )
         assert _lost_attempt_evidence(runtime, [attempt_id]) == [("failed", "WorkerLost")]
         orphan = (
-            settings.data_mount / ".batch-attempts" / "batch_attempt_orphan.alpha-factor.artifact"
+            settings.batch_attempt_control_directory / "batch_attempt_orphan.alpha-factor.artifact"
         )
         orphan.write_bytes(b"unchecked orphan attempt bytes")
         os.utime(orphan, (aged_at, aged_at))
@@ -933,7 +936,7 @@ def test_expired_strategy_fence_rejects_private_artifact_before_acknowledgement(
 def test_three_shared_worker_losses_fail_every_strategy_dependency(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
 
     def lose_shared_worker(event: dict[str, object]) -> None:
@@ -983,7 +986,7 @@ def test_three_shared_worker_losses_fail_every_strategy_dependency(
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
 def test_recovery_rejects_a_corrupt_private_artifact_binding(tmp_path: Path) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     interrupted = False
 
@@ -1050,7 +1053,7 @@ def test_recovery_rejects_every_invalid_private_artifact_case(
     tmp_path: Path,
     invalid_case: str,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     interrupted = False
 
@@ -1161,7 +1164,7 @@ def test_recovery_rejects_every_invalid_private_artifact_case(
 def test_three_strategy_worker_losses_fail_only_that_strategy_and_continue(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
 
     def lose_first_strategy_worker(event: dict[str, object]) -> None:
@@ -1206,7 +1209,7 @@ def test_three_strategy_worker_losses_fail_only_that_strategy_and_continue(
 def test_strategy_sweep_shared_failure_fails_all_dependants_before_strategy(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     events: list[dict[str, object]] = []
     with TestClient(create_app(settings)) as client:
@@ -1261,7 +1264,7 @@ def test_strategy_sweep_shared_failure_fails_all_dependants_before_strategy(
 def test_strategy_sweep_isolates_one_strategy_failure_and_keeps_order(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     events: list[dict[str, object]] = []
     with TestClient(create_app(settings)) as client:
@@ -1333,7 +1336,7 @@ def test_strategy_sweep_one_and_twenty_items_use_the_same_ordered_contract(
     tmp_path: Path,
     item_count: int,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     events: list[dict[str, object]] = []
     with TestClient(create_app(settings)) as client:
@@ -1390,7 +1393,7 @@ def test_strategy_sweep_one_and_twenty_items_use_the_same_ordered_contract(
 def test_long_strategy_sweep_preserves_ordinary_result_partitions_and_equivalence(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     sessions = _business_sessions(505, ending=date(2026, 8, 4))
     with TestClient(create_app(settings)) as client:

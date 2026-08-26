@@ -10,7 +10,7 @@ from threading import Event
 
 import pytest
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
+from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
 from test_core_research_batch_admission import _factor_command, _publish_current_data
 from test_core_research_batch_factor_execution import _PreparationBarrierExecutor
@@ -21,7 +21,7 @@ from test_core_research_batch_fifo import (
 )
 
 from thesistrace.data import DatasetLifecycle
-from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
+from thesistrace.entrypoints.runtime import core_environment_is_configured
 from thesistrace.research_batch import ResearchBatchService
 from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
 
@@ -117,7 +117,7 @@ class _FinalFactorChunkBarrierExecutor:
 )
 @pytest.mark.dependency_restart
 def test_real_rustfs_loss_retries_the_complete_factor_task(tmp_path: Path) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     restarted_s3_port: int | None = None
     with TestClient(create_app(settings)) as client:
@@ -165,7 +165,7 @@ def test_real_rustfs_loss_retries_the_complete_factor_task(tmp_path: Path) -> No
 )
 @pytest.mark.dependency_restart
 def test_real_postgres_loss_recovers_after_child_exit(tmp_path: Path) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     restarted_postgres_port: int | None = None
     attempt_id: str | None = None
@@ -182,6 +182,7 @@ def test_real_postgres_loss_recovers_after_child_exit(tmp_path: Path) -> None:
         barrier = _FinalFactorChunkBarrierExecutor(
             SupervisedResearchBatchExecutor(
                 settings.data_mount,
+                attempt_control_directory=settings.batch_attempt_control_directory,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             )
         )
@@ -190,7 +191,7 @@ def test_real_postgres_loss_recovers_after_child_exit(tmp_path: Path) -> None:
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=barrier,
             heartbeat_seconds=60,
         )
@@ -235,7 +236,7 @@ def test_real_postgres_loss_recovers_after_child_exit(tmp_path: Path) -> None:
 def test_expired_lease_rejects_stale_child_output_before_publication(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -247,6 +248,7 @@ def test_expired_lease_rejects_stale_child_output_before_publication(
         barrier = _PreparationBarrierExecutor(
             SupervisedResearchBatchExecutor(
                 settings.data_mount,
+                attempt_control_directory=settings.batch_attempt_control_directory,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             )
         )
@@ -255,7 +257,7 @@ def test_expired_lease_rejects_stale_child_output_before_publication(
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=barrier,
         )
         with ThreadPoolExecutor(max_workers=1) as pool:
@@ -289,7 +291,7 @@ def test_expired_lease_rejects_stale_child_output_before_publication(
 def test_factor_child_loss_restarts_only_the_unacknowledged_whole_task(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         frozen_generation = _publish_current_data(settings)
@@ -301,6 +303,7 @@ def test_factor_child_loss_restarts_only_the_unacknowledged_whole_task(
         executor = _KillSecondFactorOnceExecutor(
             SupervisedResearchBatchExecutor(
                 settings.data_mount,
+                attempt_control_directory=settings.batch_attempt_control_directory,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             )
         )
@@ -309,7 +312,7 @@ def test_factor_child_loss_restarts_only_the_unacknowledged_whole_task(
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=executor,
         )
 
@@ -360,7 +363,7 @@ def test_factor_child_loss_restarts_only_the_unacknowledged_whole_task(
 def test_three_lost_workers_exhaust_only_the_current_factor_and_continue(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         frozen_generation = _publish_current_data(settings)

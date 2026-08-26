@@ -8,7 +8,7 @@ from threading import Event
 
 import pytest
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
+from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
 from test_core_research_batch_admission import _factor_command, _publish_current_data
 
@@ -49,7 +49,7 @@ class _TransportFailureExecutor:
 def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches_ordinary(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     events: list[dict[str, object]] = []
 
@@ -73,6 +73,7 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
         barrier = _PreparationBarrierExecutor(
             SupervisedResearchBatchExecutor(
                 settings.data_mount,
+                attempt_control_directory=settings.batch_attempt_control_directory,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             )
         )
@@ -81,7 +82,7 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=barrier,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -205,7 +206,7 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
 def test_factor_batch_isolates_one_deterministic_item_failure_and_continues(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -292,7 +293,7 @@ def test_factor_batch_isolates_one_deterministic_item_failure_and_continues(
 def test_transport_failure_before_child_ready_does_not_charge_a_task_attempt(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -314,7 +315,7 @@ def test_transport_failure_before_child_ready_does_not_charge_a_task_attempt(
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=_TransportFailureExecutor(),
         )
 
@@ -337,9 +338,10 @@ def test_transport_failure_before_child_ready_does_not_charge_a_task_attempt(
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=SupervisedResearchBatchExecutor(
                 settings.data_mount,
+                attempt_control_directory=settings.batch_attempt_control_directory,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             ),
         )
@@ -415,7 +417,7 @@ def test_widest_admitted_shared_slice_stays_inside_child_memory_budget(
 def test_one_and_twenty_factor_items_use_the_same_ordered_execution_contract(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)

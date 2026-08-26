@@ -11,7 +11,7 @@ from time import monotonic
 
 import pytest
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
+from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
 from test_core_research_batch_admission import (
     _factor_command,
@@ -29,7 +29,7 @@ from test_core_research_batch_fifo import (
 from test_core_research_batch_history import _TaskStartBarrierExecutor
 
 from thesistrace.data import DatasetLifecycle
-from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
+from thesistrace.entrypoints.runtime import core_environment_is_configured
 from thesistrace.publication import PublicationUnavailableError
 from thesistrace.research_batch import ResearchBatchService
 from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
@@ -82,7 +82,7 @@ def _wait_for_worker_stderr(process, pattern: str) -> None:
 def test_queued_cancel_is_atomic_idempotent_conflict_safe_and_terminal(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -190,7 +190,7 @@ def test_queued_cancel_is_atomic_idempotent_conflict_safe_and_terminal(
 def test_running_strategy_cancel_preserves_acknowledged_result_and_daily_track(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     cancelled = Event()
     cancel_response: list[dict[str, object]] = []
@@ -289,7 +289,7 @@ def test_running_strategy_cancel_preserves_acknowledged_result_and_daily_track(
 
 
 def test_cancel_receipt_and_terminal_state_survive_api_restart(tmp_path: Path) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -317,7 +317,7 @@ def test_cancel_receipt_and_terminal_state_survive_api_restart(tmp_path: Path) -
 def test_cancel_does_not_finalize_while_claim_owner_can_still_start_child(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -329,6 +329,7 @@ def test_cancel_does_not_finalize_while_claim_owner_can_still_start_child(
         barrier = _StartingClaimBarrierExecutor(
             SupervisedResearchBatchExecutor(
                 settings.data_mount,
+                attempt_control_directory=settings.batch_attempt_control_directory,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             )
         )
@@ -337,7 +338,7 @@ def test_cancel_does_not_finalize_while_claim_owner_can_still_start_child(
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=barrier,
         )
 
@@ -368,7 +369,7 @@ def test_cancel_does_not_finalize_while_claim_owner_can_still_start_child(
 def test_cancel_fence_rejects_unacknowledged_factor_result_publication(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -380,6 +381,7 @@ def test_cancel_fence_rejects_unacknowledged_factor_result_publication(
         barrier = _TaskStartBarrierExecutor(
             SupervisedResearchBatchExecutor(
                 settings.data_mount,
+                attempt_control_directory=settings.batch_attempt_control_directory,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             ),
             target_status="item_chunk_succeeded",
@@ -389,7 +391,7 @@ def test_cancel_fence_rejects_unacknowledged_factor_result_publication(
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=barrier,
         )
 
@@ -438,7 +440,7 @@ def test_cancel_fence_rejects_unacknowledged_factor_result_publication(
 def test_cancellation_wins_before_final_batch_ack_and_preserves_completed_results(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -450,6 +452,7 @@ def test_cancellation_wins_before_final_batch_ack_and_preserves_completed_result
         barrier = _TaskStartBarrierExecutor(
             SupervisedResearchBatchExecutor(
                 settings.data_mount,
+                attempt_control_directory=settings.batch_attempt_control_directory,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             ),
             target_status="batch_succeeded",
@@ -459,7 +462,7 @@ def test_cancellation_wins_before_final_batch_ack_and_preserves_completed_result
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=barrier,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -495,7 +498,7 @@ def test_cancellation_wins_before_final_batch_ack_and_preserves_completed_result
 def test_unresponsive_real_child_is_forced_out_before_terminal_cancel(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     worker = None
     child_pid = 0
@@ -557,7 +560,7 @@ def test_unresponsive_real_child_is_forced_out_before_terminal_cancel(
 def test_cancel_is_terminal_while_object_cleanup_retries_after_rustfs_restart(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     interrupted = False
     restarted_s3_port: int | None = None
@@ -624,7 +627,7 @@ def test_cancel_is_terminal_while_object_cleanup_retries_after_rustfs_restart(
 
 
 def test_cancel_converges_after_supervisor_loss_and_worker_restart(tmp_path: Path) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     worker = None
     try:
@@ -665,7 +668,7 @@ def test_cancel_converges_after_supervisor_loss_and_worker_restart(tmp_path: Pat
 def test_cancel_check_fails_closed_during_postgres_outage_and_reconciles_after_restart(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     worker = None
     restarted_postgres_port: int | None = None

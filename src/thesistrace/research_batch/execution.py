@@ -354,14 +354,21 @@ class SupervisedResearchBatchExecution:
 
 
 class SupervisedResearchBatchExecutor:
-    def __init__(self, data_mount: Path, *, execution_memory_bytes: int) -> None:
+    def __init__(
+        self,
+        data_mount: Path,
+        *,
+        attempt_control_directory: Path,
+        execution_memory_bytes: int,
+    ) -> None:
         if execution_memory_bytes <= 0:
             raise ValueError("Research Batch execution memory must be positive")
         self._data_mount = data_mount.resolve()
+        self._attempt_control_directory = attempt_control_directory.resolve()
         self._execution_memory_bytes = execution_memory_bytes
 
     def attempt_control_path(self, attempt_id: str) -> Path:
-        return self._data_mount / ".batch-attempts" / f"{attempt_id}.lock"
+        return self._attempt_control_directory / f"{attempt_id}.lock"
 
     def execute(
         self,
@@ -370,8 +377,7 @@ class SupervisedResearchBatchExecutor:
         emit: ExecutionEvent,
         cancel_requested: CancellationCheck,
     ) -> SupervisedResearchBatchExecution:
-        control_directory = self._data_mount / ".batch-attempts"
-        control_directory.mkdir(parents=True, exist_ok=True)
+        self._attempt_control_directory.mkdir(parents=True, exist_ok=True)
         control_path = self.attempt_control_path(request.attempt_id)
         transport = SupervisedChildTransport.spawn("thesistrace.entrypoints.batch_research_child")
         process = transport.process

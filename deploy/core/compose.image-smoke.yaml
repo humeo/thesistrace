@@ -43,7 +43,6 @@ services:
       THESISTRACE_DATA_MOUNT: /smoke-data/canonical-data
     volumes:
       - ${THESISTRACE_TEST_RUN_ROOT}:/smoke-data:ro
-      - ${THESISTRACE_TEST_RUN_ROOT}/canonical-data/.batch-attempts:/smoke-data/canonical-data/.batch-attempts
       - ${THESISTRACE_TEST_EVIDENCE_DIR}:/qualification-evidence
       - ../../scripts:/qualification:ro
       - ../../benchmarks:/benchmarks:ro

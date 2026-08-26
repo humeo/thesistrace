@@ -128,11 +128,11 @@ mise exec -- pnpm dev:reset
 ```
 
 Reset accepts only the canonical `thesistrace-dev` project, deletes and recreates
-its PostgreSQL and RustFS Product State volumes, preserves the canonical-data
-volume and exact Dataset Head, runs the one-shot schema initializer, and waits
-for health. It does not contact Tushare, migrate old Product State, or publish
-Fixture data. The initialized runtime validates and immediately reuses the
-preserved mounted Canonical Data Store.
+its PostgreSQL, RustFS, and Batch Attempt Control runtime volumes, preserves the
+canonical-data volume and exact Dataset Head, runs the one-shot schema
+initializer, and waits for health. It does not contact Tushare, migrate old
+Product State, or publish Fixture data. The initialized runtime validates and
+immediately reuses the preserved mounted Canonical Data Store.
 
 Complete deletion of Product State and downloaded Canonical Data is a separate
 explicit operation:
@@ -142,7 +142,7 @@ mise exec -- pnpm dev:erase
 ```
 
 `dev:erase` accepts only the canonical `thesistrace-dev` project, stops it, and
-removes all three Development volumes without restarting the runtime. Research
+removes all four Development volumes without restarting the runtime. Research
 cannot run again until Canonical Data is bootstrapped or restored.
 
 ## Test gates

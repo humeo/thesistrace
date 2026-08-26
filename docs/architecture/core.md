@@ -378,6 +378,9 @@ per-child-Run Result publication. Factor Batches prepare common Data, Universe,
 and Labels once before independent Alpha-and-Factor tasks. Strategy Sweeps
 prepare Data and calculate their single shared Alpha and Factor once before one
 Strategy task per ordered parameter item. A Batch has no Batch-level Result.
+Batch Attempt control files live in their own writable runtime volume outside
+the read-only mounted Canonical Data tree. Runtime configuration rejects any
+Attempt Control Directory nested under the Canonical Data Mount.
 
 The Tracking Worker uses the same authority boundary: its supervisor owns the
 Advance, Pin, Working Cache, Tracking Checkpoint, and publication, while its

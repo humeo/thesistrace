@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from threading import Event
 
 import pytest
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
+from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
 from psycopg.errors import CheckViolation, ForeignKeyViolation
 from psycopg.types.json import Jsonb
@@ -19,7 +18,7 @@ from test_core_research_batch_admission import (
 )
 
 from thesistrace.data import DatasetLifecycle
-from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
+from thesistrace.entrypoints.runtime import core_environment_is_configured
 from thesistrace.research_batch import ResearchBatchService
 from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
 
@@ -80,7 +79,7 @@ class _TaskStartBarrierExecutor:
 def test_batch_history_schema_rejects_contradictory_attempts_and_item_outcomes(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -286,7 +285,7 @@ def test_batch_detail_separates_durable_and_live_progress_and_survives_restart(
     task_role: str,
     item_key: str | None,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     request_id = f"batch-history-{batch_kind}"
     final_detail: dict[str, object]
@@ -303,6 +302,7 @@ def test_batch_detail_separates_durable_and_live_progress_and_survives_restart(
         barrier = _TaskStartBarrierExecutor(
             SupervisedResearchBatchExecutor(
                 settings.data_mount,
+                attempt_control_directory=settings.batch_attempt_control_directory,
                 execution_memory_bytes=settings.research_execution_memory_bytes,
             ),
             target_status=target_status,
@@ -312,7 +312,7 @@ def test_batch_detail_separates_durable_and_live_progress_and_survives_restart(
             research_runs=runtime.research_runs,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             publication=runtime.publication,
-            attempt_control_directory=settings.data_mount / ".batch-attempts",
+            attempt_control_directory=settings.batch_attempt_control_directory,
             execution=barrier,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -390,7 +390,7 @@ def test_batch_detail_separates_durable_and_live_progress_and_survives_restart(
 def test_incomplete_factor_chunk_estimate_never_advances_durable_task_progress(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     sessions = _business_sessions(120, ending=date(2026, 8, 4))
     chunk_observed = Event()
@@ -465,7 +465,7 @@ def test_incomplete_factor_chunk_estimate_never_advances_durable_task_progress(
 def test_strategy_sweep_reports_intermediate_shared_and_item_progress(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     sessions = _business_sessions(120, ending=date(2026, 8, 4))
     shared_observed = Event()

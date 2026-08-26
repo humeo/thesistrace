@@ -6,6 +6,7 @@ x-test-environment: &test-environment
   THESISTRACE_S3_BUCKET: ${THESISTRACE_TEST_BUCKET:-thesistrace-test}
   THESISTRACE_S3_REGION: us-east-1
   THESISTRACE_DATA_MOUNT: /var/lib/thesistrace/canonical-data
+  THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY: /var/lib/thesistrace/.batch-attempts
 
 services:
   postgres:
@@ -48,7 +49,7 @@ services:
       <<: *test-environment
     volumes:
       - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data:ro
-      - ${THESISTRACE_TEST_DATA_MOUNT}/.batch-attempts:/var/lib/thesistrace/canonical-data/.batch-attempts
+      - ${THESISTRACE_TEST_BATCH_ATTEMPT_CONTROL_DIRECTORY}:/var/lib/thesistrace/.batch-attempts
 
   tracking-worker:
     environment:

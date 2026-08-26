@@ -85,6 +85,9 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
     environment = {
         **os.environ,
         "THESISTRACE_DATA_MOUNT": str(tmp_path),
+        "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
+            settings.batch_attempt_control_directory
+        ),
         "THESISTRACE_LOG_LEVEL": "warning",
     }
     environment.pop("THESISTRACE_TUSHARE_TOKEN", None)

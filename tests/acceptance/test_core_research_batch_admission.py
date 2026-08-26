@@ -10,7 +10,7 @@ from pathlib import Path
 import boto3
 import pytest
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
+from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
@@ -40,7 +40,7 @@ SESSIONS = (
 def test_batch_admission_rejects_all_invalid_computation_before_product_state(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -210,7 +210,7 @@ def test_strategy_sweep_capacity_rejection_creates_no_product_state(
 def test_factor_and_strategy_batch_admission_is_atomic_idempotent_and_queryable(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     factor_command = _factor_command("batch-factor-success")
     strategy_command = _strategy_command("batch-strategy-success")
@@ -370,7 +370,7 @@ def test_factor_and_strategy_batch_admission_is_atomic_idempotent_and_queryable(
 def test_injected_second_item_failure_rolls_back_complete_batch_admission(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)):
         _publish_current_data(settings)

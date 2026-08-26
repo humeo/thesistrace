@@ -1548,4 +1548,7 @@ def _worker_environment(settings: CoreSettings) -> dict[str, str]:
         "THESISTRACE_S3_BUCKET": settings.s3_bucket,
         "THESISTRACE_S3_REGION": settings.s3_region,
         "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
+        "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
+            settings.batch_attempt_control_directory
+        ),
     }

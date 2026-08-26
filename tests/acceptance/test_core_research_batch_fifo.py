@@ -5,14 +5,13 @@ import os
 import selectors
 import subprocess
 import sys
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 
 import pytest
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
+from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
 from test_core_research_batch_admission import _factor_command, _publish_current_data
 
@@ -28,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_batch_worker_replicas_claim_distinct_fifo_batches_without_blocking_research(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     workers: list[subprocess.Popen[str]] = []
     try:
@@ -194,6 +193,9 @@ def _worker_environment(settings: CoreSettings) -> dict[str, str]:
         "THESISTRACE_S3_BUCKET": settings.s3_bucket,
         "THESISTRACE_S3_REGION": settings.s3_region,
         "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
+        "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
+            settings.batch_attempt_control_directory
+        ),
     }
 
 
