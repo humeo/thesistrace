@@ -110,6 +110,18 @@ _Avoid_: Alpha, Strategy signal, persisted factor table
 
 ### Research Lifecycle and Factor Evaluation
 
+**Research Agent**:
+An external actor that performs explicitly authorized Research and Daily Tracking
+actions on behalf of a person using ThesisTrace. It does not own product
+resources or receive Data Operator authority.
+_Avoid_: Research Worker, Data Operator, autonomous trader, User account
+
+**Research Agent Authority**:
+The explicitly granted set of product actions a Research Agent may invoke.
+Authority to admit or observe Research does not imply authority to cancel it or
+irreversibly stop a DailyTrack.
+_Avoid_: Human confirmation, Tool visibility, Data Operator authority
+
 **Research Folder**:
 A durable, one-level container that organizes ResearchRuns without owning their
 inputs or results.

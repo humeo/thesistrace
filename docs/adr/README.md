@@ -74,6 +74,20 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0154 — Use a mounted current Dataset Head and temporary Data Generations](0154-use-a-mounted-current-dataset-head-and-temporary-data-generations.md)
 - [ADR-0155 — Refresh market data through a private operator overlap merge](0155-refresh-market-data-through-a-private-operator-overlap-merge.md)
 
+## Agent access
+
+- [ADR-0220 — Expose Research Agent access through a native Core MCP adapter](0220-expose-research-agent-access-through-a-native-core-mcp-adapter.md)
+- [ADR-0221 — Authenticate remote Research Agent access with OAuth](0221-authenticate-remote-research-agent-access-with-oauth.md)
+- [ADR-0222 — Keep Research Agent execution stateless and resource-addressed](0222-keep-research-agent-execution-stateless-and-resource-addressed.md)
+- [ADR-0223 — Separate dangerous Research Agent authority from human confirmation](0223-separate-dangerous-research-agent-authority-from-human-confirmation.md)
+- [ADR-0224 — Hard-cut the MCP tool contract](0224-hard-cut-the-mcp-tool-contract.md)
+- [ADR-0225 — Publish one OAuth-scope-filtered MCP endpoint](0225-publish-one-oauth-scope-filtered-mcp-endpoint.md)
+- [ADR-0226 — Expose semantic Research results through bounded MCP views](0226-expose-semantic-research-results-through-bounded-mcp-views.md)
+- [ADR-0227 — Return correctable Research rejection as a structured MCP outcome](0227-return-correctable-research-rejection-as-a-structured-mcp-outcome.md)
+- [ADR-0228 — Separate local, test, and production Research Agent authentication adapters](0228-separate-local-test-and-production-research-agent-authentication-adapters.md)
+- [ADR-0229 — Mount HTTP MCP in the Core API process](0229-mount-http-mcp-in-the-core-api-process.md)
+- [ADR-0230 — Keep MCP ingress protection outside Product quotas](0230-keep-mcp-ingress-protection-outside-product-quotas.md)
+
 ## Alpha language and authoring
 
 - [ADR-0157 — Compile Alpha Formulas when a Run is admitted](0157-compile-alpha-formulas-when-a-run-is-admitted.md)
