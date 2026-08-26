@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    model_validator,
+)
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 type DailyTrackResultSection = Literal[
@@ -20,6 +28,48 @@ DAILY_TRACK_RESULT_SECTIONS: tuple[DailyTrackResultSection, ...] = (
     "origin",
     "provenance",
 )
+DailyTrackResultCursor = Annotated[str, Field(strict=True, min_length=1, max_length=1024)]
+DailyTrackResultPageLimit = Annotated[int, Field(strict=True, ge=1, le=50)]
+
+
+class _DailyTrackResultSectionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    track_id: Annotated[str, Field(strict=True, min_length=1, max_length=200)]
+
+
+class DailyTrackFactorResultSectionInput(_DailyTrackResultSectionInput):
+    section: Literal["factor"]
+
+
+class DailyTrackStrategySummaryResultSectionInput(_DailyTrackResultSectionInput):
+    section: Literal["strategy_summary"]
+
+
+class DailyTrackStrategyObservationsResultSectionInput(_DailyTrackResultSectionInput):
+    section: Literal["strategy_observations"]
+    cursor: DailyTrackResultCursor | None = None
+    limit: DailyTrackResultPageLimit = 20
+
+
+class DailyTrackOriginResultSectionInput(_DailyTrackResultSectionInput):
+    section: Literal["origin"]
+    cursor: DailyTrackResultCursor | None = None
+    limit: DailyTrackResultPageLimit = 20
+
+
+class DailyTrackProvenanceResultSectionInput(_DailyTrackResultSectionInput):
+    section: Literal["provenance"]
+
+
+type DailyTrackResultSectionInput = Annotated[
+    DailyTrackFactorResultSectionInput
+    | DailyTrackStrategySummaryResultSectionInput
+    | DailyTrackStrategyObservationsResultSectionInput
+    | DailyTrackOriginResultSectionInput
+    | DailyTrackProvenanceResultSectionInput,
+    Field(discriminator="section"),
+]
 
 
 class RetryDailyTrackCommand(BaseModel):
@@ -279,11 +329,44 @@ class DailyTrackFactorCoverage(BaseModel):
     quantile_valid_session_count: int
 
 
+type DailyTrackStrictNumber = StrictInt | StrictFloat
+type DailyTrackOptionalNumber = DailyTrackStrictNumber | None
+
+
+class DailyTrackFactorCorrelation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    icir: DailyTrackOptionalNumber
+    mean: DailyTrackOptionalNumber
+    positive_fraction: DailyTrackOptionalNumber
+    sample_deviation: DailyTrackOptionalNumber
+    valid_session_count: StrictInt
+
+
+class DailyTrackFactorQuantileReturns(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    q1: DailyTrackOptionalNumber
+    q2: DailyTrackOptionalNumber
+    q3: DailyTrackOptionalNumber
+    q4: DailyTrackOptionalNumber
+    q5: DailyTrackOptionalNumber
+
+
+class DailyTrackFactorMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    ic: DailyTrackFactorCorrelation
+    quantile_returns: DailyTrackFactorQuantileReturns
+    rank_ic: DailyTrackFactorCorrelation
+    top_bottom_return: DailyTrackOptionalNumber
+
+
 class DailyTrackFactorHorizon(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     horizon: Literal[1, 5, 20]
-    summary: dict[str, object]
+    summary: DailyTrackFactorMetrics
     coverage: DailyTrackFactorCoverage
 
 
@@ -322,6 +405,227 @@ class DailyTrackStrategyResult(BaseModel):
     summary: dict[str, object]
     benchmark: DailyTrackBenchmark
     observations: list[DailyTrackStrategyObservation]
+
+
+class DailyTrackFactorMetricUnits(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    horizon: Literal["research_sessions"] = "research_sessions"
+    ic: Literal["correlation"] = "correlation"
+    rank_ic: Literal["rank_correlation"] = "rank_correlation"
+    quantile_returns: Literal["decimal_return"] = "decimal_return"
+    top_bottom_return: Literal["decimal_return"] = "decimal_return"
+
+
+class DailyTrackMissingValueSemantics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    unavailable_optional_metric: Literal["null"] = "null"
+    observed_zero_is_missing: Literal[False] = False
+
+
+class DailyTrackFactorResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    section: Literal["factor"] = "factor"
+    track_id: str
+    strategy_session: date
+    factor: DailyTrackFactorResult
+    units: DailyTrackFactorMetricUnits = DailyTrackFactorMetricUnits()
+    missing_values: DailyTrackMissingValueSemantics = DailyTrackMissingValueSemantics()
+
+
+class DailyTrackStrategyMetricUnits(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    nav: Literal["normalized_value"] = "normalized_value"
+    cash: Literal["cny"] = "cny"
+    transaction_cost: Literal["cny"] = "cny"
+    return_value: Literal["decimal_return"] = "decimal_return"
+    drawdown: Literal["fraction"] = "fraction"
+    weight: Literal["fraction"] = "fraction"
+
+
+class DailyTrackCashRatioMaximum(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    session: str
+    value: DailyTrackStrictNumber
+
+
+class DailyTrackCashRatio(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    ending: DailyTrackStrictNumber
+    maximum: DailyTrackCashRatioMaximum
+    mean: DailyTrackStrictNumber
+
+
+class DailyTrackHoldingsCount(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    ending: StrictInt
+    maximum: StrictInt
+    mean: DailyTrackStrictNumber
+    minimum: StrictInt
+
+
+class DailyTrackMarketRejections(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    lower_limit_sell: StrictInt
+    suspension: StrictInt
+    upper_limit_buy: StrictInt
+
+
+class DailyTrackMaximumDrawdown(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    peak_session: str
+    recovery_session: str | None
+    trough_session: str
+    unrecovered: StrictBool
+    value: DailyTrackStrictNumber
+
+
+class DailyTrackMaximumWeightPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    session: str
+    value: DailyTrackStrictNumber
+
+
+class DailyTrackMaximumSingleNameWeight(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    ending: DailyTrackStrictNumber
+    period_maximum: DailyTrackMaximumWeightPoint
+
+
+class DailyTrackTransactionCosts(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    cumulative_amount: DailyTrackStrictNumber
+    ratio: DailyTrackStrictNumber
+    return_drag: DailyTrackStrictNumber
+
+
+class DailyTrackTurnover(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    annualized: DailyTrackOptionalNumber
+    average_rebalance: DailyTrackOptionalNumber
+
+
+class DailyTrackStrategyMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    annualized_excess_return: DailyTrackOptionalNumber
+    annualized_volatility: DailyTrackOptionalNumber
+    benchmark_cagr: DailyTrackOptionalNumber
+    benchmark_cumulative_return: DailyTrackOptionalNumber
+    calmar: DailyTrackOptionalNumber
+    cash_ratio: DailyTrackCashRatio
+    gross_cagr: DailyTrackOptionalNumber
+    gross_cumulative_return: DailyTrackOptionalNumber
+    holdings_count: DailyTrackHoldingsCount
+    market_rejections: DailyTrackMarketRejections
+    maximum_drawdown: DailyTrackMaximumDrawdown
+    maximum_single_name_weight: DailyTrackMaximumSingleNameWeight
+    net_cagr: DailyTrackOptionalNumber
+    net_cumulative_return: DailyTrackOptionalNumber
+    risk_free_rate: DailyTrackOptionalNumber
+    sharpe: DailyTrackOptionalNumber
+    transaction_costs: DailyTrackTransactionCosts
+    turnover: DailyTrackTurnover
+
+
+class DailyTrackStrategySummaryResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["strategy_summary"] = "strategy_summary"
+    track_id: str
+    origin_session: date
+    strategy_session: date
+    summary: DailyTrackStrategyMetrics
+    benchmark: DailyTrackBenchmark
+    units: DailyTrackStrategyMetricUnits = DailyTrackStrategyMetricUnits()
+    missing_values: DailyTrackMissingValueSemantics = DailyTrackMissingValueSemantics()
+
+
+class DailyTrackStrategyObservationsResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["strategy_observations"] = "strategy_observations"
+    track_id: str
+    items: list[DailyTrackStrategyObservation]
+    next_cursor: str | None
+
+
+class DailyTrackOriginAccountSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session: date
+    gross_cash: str
+    net_cash: str
+    gross_nav: str
+    net_nav: str
+    benchmark_nav: str
+    cumulative_transaction_cost: str
+    rebalance_phase: DailyTrackOriginRebalancePhase
+    pending_signal: DailyTrackOriginPendingSignal | None
+
+
+class DailyTrackOriginResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["origin"] = "origin"
+    track_id: str
+    seed_run_id: str
+    seed_research_available: bool
+    result_checksum_sha256: str
+    terminal_account: DailyTrackOriginAccountSummary
+    positions: list[DailyTrackOriginPosition]
+    next_cursor: str | None
+
+
+class DailyTrackFrozenResearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    formula: str
+    hypothesis: str | None
+    start_date: date
+    end_date: date
+    universe: str
+    neutralization: str
+    holdings_count: int
+    rebalance_every_sessions: int
+
+
+class DailyTrackProvenanceResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["provenance"] = "provenance"
+    track_id: str
+    origin_research_run_id: str
+    origin_result_checksum_sha256: str
+    origin_result_schema_version: str
+    immutable_input_sha256: str
+    frozen_research_input: DailyTrackFrozenResearchInput
+    origin_data_through_session: date
+    tracking_strategy_session: date
+    calculation_contracts: dict[str, object]
+    semantic_versions: dict[str, str]
+
+
+type DailyTrackResultSectionResponse = Annotated[
+    DailyTrackFactorResultSection
+    | DailyTrackStrategySummaryResultSection
+    | DailyTrackStrategyObservationsResultSection
+    | DailyTrackOriginResultSection
+    | DailyTrackProvenanceResultSection,
+    Field(discriminator="section"),
+]
 
 
 class DailyTrackProgress(BaseModel):

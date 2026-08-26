@@ -17,9 +17,14 @@ from thesistrace.alpha_language import AlphaAuthoringCatalog, FormulaDiagnostics
 from thesistrace.daily_track import (
     DAILY_TRACK_RESULT_SECTIONS,
     DailyTrackDetailUnavailable,
+    DailyTrackFactorResultSection,
     DailyTrackInvalidCursor,
     DailyTrackList,
     DailyTrackPollingDetail,
+    DailyTrackProvenanceResultSection,
+    DailyTrackResultSectionInput,
+    DailyTrackResultSectionResponse,
+    DailyTrackResultUnavailable,
     DailyTrackRetryConflict,
     DailyTrackRetryOutcome,
     DailyTrackRetryUnavailable,
@@ -274,6 +279,10 @@ class _DailyTrackReader:
     def __init__(self) -> None:
         self.list_filters: dict[str, object] | None = None
         self.polling_detail: DailyTrackPollingDetail | None = _daily_track_polling_detail()
+        self.result_section: DailyTrackResultSectionResponse | None = (
+            _daily_track_factor_result_section()
+        )
+        self.result_query: DailyTrackResultSectionInput | None = None
         self.retry_outcome: DailyTrackRetryOutcome | None = DailyTrackRetryOutcome(
             track=_daily_track_summary(),
             replayed=False,
@@ -300,6 +309,15 @@ class _DailyTrackReader:
         if self.failure is not None:
             raise self.failure
         return self.polling_detail
+
+    def get_result_section(
+        self,
+        query: DailyTrackResultSectionInput,
+    ) -> DailyTrackResultSectionResponse | None:
+        if self.failure is not None:
+            raise self.failure
+        self.result_query = query
+        return self.result_section
 
     def retry_with_outcome(
         self,
@@ -512,6 +530,14 @@ def _factor_result_section() -> FactorResultSection:
                 }
             },
         }
+    )
+
+
+def _daily_track_factor_result_section() -> DailyTrackFactorResultSection:
+    return DailyTrackFactorResultSection(
+        track_id="track_test",
+        strategy_session=date(2024, 1, 31),
+        factor=_factor_result_section().factor.model_dump(mode="python"),
     )
 
 
@@ -1180,6 +1206,43 @@ def test_registry_maps_daily_track_retry_stop_outcomes_authority_and_errors() ->
     reader = _DailyTrackReader()
     default = _registry(daily_tracks=reader)
 
+    result = default.invoke(
+        "get_daily_track_result",
+        {"track_id": "track_test", "section": "factor"},
+        trace_id="trace_track_result",
+    )
+    assert result.result == _daily_track_factor_result_section()
+    assert reader.result_query is not None
+    assert reader.result_query.model_dump(mode="json") == {
+        "track_id": "track_test",
+        "section": "factor",
+    }
+
+    for failure, code in (
+        (DailyTrackInvalidCursor("cursor"), "INVALID_INPUT"),
+        (DailyTrackResultUnavailable("state"), "STATE_CONFLICT"),
+        (DailyTrackTemporarilyUnavailable("database"), "TEMPORARILY_UNAVAILABLE"),
+    ):
+        reader.failure = failure
+        failed_result = default.invoke(
+            "get_daily_track_result",
+            {"track_id": "track_test", "section": "factor"},
+            trace_id=f"trace_track_result_{code.lower()}",
+        )
+        assert failed_result.error is not None
+        assert failed_result.error.code == code
+
+    reader.failure = None
+    reader.result_section = None
+    missing_result = default.invoke(
+        "get_daily_track_result",
+        {"track_id": "track_missing", "section": "factor"},
+        trace_id="trace_track_result_missing",
+    )
+    assert missing_result.error is not None
+    assert missing_result.error.code == "NOT_FOUND"
+    reader.result_section = _daily_track_factor_result_section()
+
     retried = default.invoke(
         "retry_daily_track",
         {"track_id": "track_test", "request_id": " retry_request "},
@@ -1360,7 +1423,11 @@ def test_registry_separates_read_execute_and_destructive_tracking_discovery() ->
     assert {"list_research_runs", "get_research_run"} <= reader_tools
     assert executor_tools == {"submit_research_batch", "submit_research_run"}
     assert cancel_tools == {"cancel_research_batch", "cancel_research_run"}
-    assert tracking_reader_tools == {"get_daily_track", "list_daily_tracks"}
+    assert tracking_reader_tools == {
+        "get_daily_track",
+        "get_daily_track_result",
+        "list_daily_tracks",
+    }
     assert tracking_executor_tools == {"retry_daily_track", "start_daily_track"}
     assert tracking_stopper_tools == {"stop_daily_track"}
     assert all("retry" not in name and "delete" not in name for name in reader_tools)
@@ -1424,6 +1491,7 @@ async def _exercise_in_memory_protocol() -> None:
             "get_research_run_result",
             "list_daily_tracks",
             "get_daily_track",
+            "get_daily_track_result",
             "start_daily_track",
             "retry_daily_track",
             "list_research_batches",
@@ -1470,10 +1538,11 @@ async def _exercise_in_memory_protocol() -> None:
                 for branch in tool.input_schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
                     assert definition["additionalProperties"] is False
-            elif tool.name == "get_research_run_result":
+            elif tool.name in {"get_research_run_result", "get_daily_track_result"}:
                 assert tool.annotations.read_only_hint is True
                 assert tool.input_schema["discriminator"]["propertyName"] == "section"
-                assert len(tool.input_schema["oneOf"]) == 6
+                expected_section_count = 6 if tool.name == "get_research_run_result" else 5
+                assert len(tool.input_schema["oneOf"]) == expected_section_count
                 for branch in tool.input_schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
                     assert definition["additionalProperties"] is False
@@ -1545,6 +1614,41 @@ async def _exercise_in_memory_protocol() -> None:
         assert len(collection_schemas) == 2
         assert all(schema["properties"]["limit"]["default"] == 20 for schema in collection_schemas)
         assert all(schema["properties"]["limit"]["maximum"] == 50 for schema in collection_schemas)
+        assert all(
+            schema["properties"]["cursor"]["anyOf"][0]["maxLength"] == 1024
+            for schema in collection_schemas
+        )
+        track_result_schema = tools["get_daily_track_result"].input_schema
+        track_collection_schemas = [
+            track_result_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
+            for branch in track_result_schema["oneOf"]
+            if "Observations" in branch["$ref"] or "Origin" in branch["$ref"]
+        ]
+        assert len(track_collection_schemas) == 2
+        for schema in track_collection_schemas:
+            assert schema["properties"]["limit"]["default"] == 20
+            assert schema["properties"]["limit"]["maximum"] == 50
+            assert schema["properties"]["cursor"]["anyOf"][0]["maxLength"] == 1024
+        track_result_output_schema = str(tools["get_daily_track_result"].output_schema).lower()
+        for private_name in (
+            "generation_id",
+            "manifest",
+            "object_key",
+            "working_cache",
+            "checkpoint",
+            "attempt",
+            "lease",
+            "sql",
+            "filesystem_path",
+        ):
+            assert private_name not in track_result_output_schema
+        track_result_definitions = tools["get_daily_track_result"].output_schema["$defs"]
+        assert track_result_definitions["DailyTrackFactorMetrics"][
+            "additionalProperties"
+        ] is False
+        assert track_result_definitions["DailyTrackStrategyMetrics"][
+            "additionalProperties"
+        ] is False
         result_output_schema = tools["get_research_run_result"].output_schema
         summary_definition = result_output_schema["$defs"]["StrategySummaryResultSection"]
         metrics_ref = summary_definition["properties"]["metrics"]["$ref"]
@@ -1631,6 +1735,23 @@ async def _exercise_in_memory_protocol() -> None:
         assert invalid_section_fields.is_error is True
         assert invalid_section_fields.structured_content["code"] == "INVALID_INPUT"
 
+        track_factor_result = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": "track_test", "section": "factor"},
+        )
+        assert track_factor_result.is_error is False
+        validate(
+            track_factor_result.structured_content,
+            tools["get_daily_track_result"].output_schema,
+        )
+        assert track_factor_result.structured_content["strategy_session"] == "2024-01-31"
+        invalid_track_section_fields = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": "track_test", "section": "factor", "limit": 20},
+        )
+        assert invalid_track_section_fields.is_error is True
+        assert invalid_track_section_fields.structured_content["code"] == "INVALID_INPUT"
+
     assert [event.context["outcome"] for event in events] == [
         "succeeded",
         "succeeded",
@@ -1639,11 +1760,14 @@ async def _exercise_in_memory_protocol() -> None:
         "failed",
         "succeeded",
         "failed",
+        "succeeded",
+        "failed",
     ]
     assert events[2].context["failure_code"] == "INVALID_INPUT"
     assert events[3].context["failure_code"] == "INVALID_INPUT"
     assert events[4].context["failure_code"] == "INVALID_INPUT"
     assert events[6].context["failure_code"] == "INVALID_INPUT"
+    assert events[8].context["failure_code"] == "INVALID_INPUT"
 
 
 async def _exercise_destructive_cancel_protocol() -> None:
@@ -1788,6 +1912,46 @@ async def _exercise_wire_response_ceiling() -> None:
     assert len(serialized.encode()) < RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
     assert canary not in serialized
     assert events[0].context["response_bytes"] < RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+
+    track_reader = _DailyTrackReader()
+    track_reader.result_section = DailyTrackProvenanceResultSection.model_validate(
+        {
+            "track_id": "track_test",
+            "origin_research_run_id": "run_strategy",
+            "origin_result_checksum_sha256": "a" * 64,
+            "origin_result_schema_version": "research-result-v1",
+            "immutable_input_sha256": "b" * 64,
+            "frozen_research_input": {
+                "formula": canary,
+                "hypothesis": None,
+                "start_date": "2024-01-02",
+                "end_date": "2024-01-31",
+                "universe": "top300",
+                "neutralization": "none",
+                "holdings_count": 20,
+                "rebalance_every_sessions": 5,
+            },
+            "origin_data_through_session": "2024-01-31",
+            "tracking_strategy_session": "2024-02-01",
+            "calculation_contracts": {"numeric_execution_contract": "decimal-v1"},
+            "semantic_versions": {"alpha": "v1"},
+        }
+    )
+    track_events: list[OperationalEvent] = []
+    async with Client(
+        _server(_registry(daily_tracks=track_reader), events=track_events)
+    ) as client:
+        track_result = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": "track_test", "section": "provenance"},
+        )
+
+    assert track_result.is_error is True
+    assert track_result.structured_content["code"] == "INTERNAL"
+    serialized_track = track_result.model_dump_json(by_alias=True, exclude_none=True)
+    assert len(serialized_track.encode()) < RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+    assert canary not in serialized_track
+    assert track_events[0].context["response_bytes"] < RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
 
 
 async def _exercise_stale_discovery_authority() -> None:

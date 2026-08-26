@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from threading import Event, Thread
+from typing import Protocol
 from uuid import uuid4
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -40,10 +41,22 @@ from thesistrace.daily_track.failure_policy import (
 from thesistrace.daily_track.models import (
     DAILY_TRACK_RESULT_SECTIONS,
     DailyTrackDetail,
+    DailyTrackFactorResultSection,
+    DailyTrackFactorResultSectionInput,
     DailyTrackList,
+    DailyTrackOriginResultSection,
+    DailyTrackOriginResultSectionInput,
     DailyTrackPollingDetail,
+    DailyTrackProvenanceResultSection,
+    DailyTrackProvenanceResultSectionInput,
+    DailyTrackResultSectionInput,
+    DailyTrackResultSectionResponse,
     DailyTrackRetryOutcome,
     DailyTrackStopOutcome,
+    DailyTrackStrategyObservationsResultSection,
+    DailyTrackStrategyObservationsResultSectionInput,
+    DailyTrackStrategySummaryResultSection,
+    DailyTrackStrategySummaryResultSectionInput,
     DailyTrackSummary,
     KernelStateCheckpoint,
     RetryDailyTrackCommand,
@@ -68,8 +81,10 @@ from thesistrace.publication import (
     JsonPayload,
     PreparedPublication,
     Publication,
+    PublicationNotFoundError,
     PublicationPreparationError,
     PublicationUnavailableError,
+    PublicationVerificationError,
     PublishedRef,
     VerifiedBundle,
     lock_publication_mutation,
@@ -86,6 +101,42 @@ from thesistrace.research_series import (
 
 Progress = Callable[[str, str, str], None]
 ResultBundleReader = Callable[[VerifiedBundle], dict[str, object]]
+
+
+class SemanticResultSectionRead(Protocol):
+    value: object
+    next_after: str | None
+
+
+class SemanticResultSectionReader(Protocol):
+    def __call__(
+        self,
+        publication: Publication,
+        published_ref: PublishedRef,
+        *,
+        research_kind: str,
+        section: str,
+        after: str | None = None,
+        limit: int = 20,
+    ) -> SemanticResultSectionRead: ...
+
+
+@dataclass(frozen=True)
+class DailyTrackResultCheckpointRef:
+    manifest_sha256: str
+    boundary_session: date
+    provenance: dict[str, object]
+
+
+@dataclass(frozen=True)
+class DailyTrackResultSnapshot:
+    current_checkpoint_manifest_sha256: str
+    current_strategy_session: date
+    current_checkpoint_is_seed: bool
+    current_checkpoint: DailyTrackResultCheckpointRef
+    observation_checkpoints: tuple[DailyTrackResultCheckpointRef, ...]
+
+
 SeedResearchExists = Callable[[PostgresTransaction, str], bool]
 ResearchReferencesResult = Callable[[PostgresTransaction, str], bool]
 ATTEMPT_LEASE_SECONDS = 15 * 60
@@ -169,6 +220,14 @@ class DailyTrackEquivalenceMismatch(RuntimeError):
 
 
 class DailyTrackDetailUnavailable(RuntimeError):
+    pass
+
+
+class DailyTrackResultUnavailable(RuntimeError):
+    pass
+
+
+class DailyTrackResultReadFailed(RuntimeError):
     pass
 
 
@@ -263,6 +322,7 @@ class DailyTrackService:
         dataset_lifecycle: DatasetLifecycle | None = None,
         generation_store: MountedGenerationStore | None = None,
         read_result_bundle: ResultBundleReader,
+        read_semantic_result_section: SemanticResultSectionReader | None = None,
         progress: Progress | None = None,
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
@@ -279,6 +339,7 @@ class DailyTrackService:
         self._dataset_lifecycle = dataset_lifecycle
         self._generation_store = generation_store
         self._read_result_bundle = read_result_bundle
+        self._read_semantic_result_section = read_semantic_result_section
         self._session_coordinates = SessionCoordinateRepository(database)
         self._executor = (
             None
@@ -1324,6 +1385,413 @@ class DailyTrackService:
             ) from error
         except DailyTrackTemporarilyUnavailable:
             raise
+
+    def get_result_section(
+        self,
+        query: DailyTrackResultSectionInput,
+    ) -> DailyTrackResultSectionResponse | None:
+        try:
+            return self._get_result_section(query)
+        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+            raise DailyTrackTemporarilyUnavailable(
+                "DailyTrack Result is temporarily unavailable"
+            ) from error
+
+    def _get_result_section(
+        self,
+        query: DailyTrackResultSectionInput,
+    ) -> DailyTrackResultSectionResponse | None:
+        if self._publication is None:
+            raise RuntimeError("DailyTrack Result is not configured")
+        after: str | None = None
+        cursor_snapshot_identity: str | None = None
+        limit = 20
+        order: str | None = None
+        with self._database.transaction() as transaction:
+            cursor_secret = _cursor_secret(transaction)
+            if isinstance(query, DailyTrackStrategyObservationsResultSectionInput):
+                limit = query.limit
+                order = "session_asc"
+                after, cursor_snapshot_identity = _decode_result_cursor(
+                    query.cursor,
+                    secret=cursor_secret,
+                    track_id=query.track_id,
+                    section=query.section,
+                    order=order,
+                )
+            elif isinstance(query, DailyTrackOriginResultSectionInput):
+                limit = query.limit
+                order = "instrument_asc"
+                after, cursor_snapshot_identity = _decode_result_cursor(
+                    query.cursor,
+                    secret=cursor_secret,
+                    track_id=query.track_id,
+                    section=query.section,
+                    order=order,
+                )
+            reads_observations = isinstance(
+                query,
+                DailyTrackStrategyObservationsResultSectionInput,
+            )
+            observation_after = after if reads_observations else None
+            row = transaction.execute(
+                """
+                SELECT track.id, track.origin,
+                       checkpoint.manifest_sha256 AS current_checkpoint_manifest_sha256,
+                       checkpoint.boundary_session AS current_strategy_session,
+                       checkpoint.progression_id IS NULL AS current_checkpoint_is_seed,
+                       checkpoint.provenance AS current_checkpoint_provenance,
+                       COALESCE((
+                           SELECT jsonb_agg(
+                               jsonb_build_object(
+                                   'manifest_sha256', page.manifest_sha256,
+                                   'boundary_session', page.boundary_session,
+                                   'provenance', page.provenance
+                               ) ORDER BY page.boundary_session, page.manifest_sha256
+                           )
+                           FROM (
+                               SELECT item.manifest_sha256,
+                                      item.boundary_session,
+                                      item.provenance
+                               FROM daily_tracks.session_checkpoints AS item
+                               WHERE %s
+                                 AND item.track_id = track.id
+                                 AND item.progression_id IS NOT NULL
+                                 AND (%s::date IS NULL OR item.boundary_session > %s::date)
+                                 AND item.boundary_session <= checkpoint.boundary_session
+                               ORDER BY item.boundary_session, item.manifest_sha256
+                               LIMIT %s
+                           ) AS page
+                       ), '[]'::jsonb) AS observation_checkpoints
+                FROM daily_tracks.tracks AS track
+                JOIN daily_tracks.session_tracking_states AS state
+                  ON state.track_id = track.id
+                JOIN daily_tracks.session_checkpoints AS checkpoint
+                  ON checkpoint.track_id = state.track_id
+                 AND checkpoint.manifest_sha256 = state.current_checkpoint_manifest_sha256
+                WHERE track.id = %s
+                """,
+                (
+                    reads_observations,
+                    observation_after,
+                    observation_after,
+                    limit + 1,
+                    query.track_id,
+                ),
+            ).fetchone()
+            seed_research_available = False
+            if row is not None and self._seed_research_exists is not None:
+                persisted_origin = TrackingOrigin.model_validate(row["origin"])
+                seed_research_available = self._seed_research_exists(
+                    transaction,
+                    persisted_origin.seed_run_id,
+                )
+        if row is None:
+            return None
+        origin = TrackingOrigin.model_validate(row["origin"])
+        try:
+            current_manifest = str(row["current_checkpoint_manifest_sha256"])
+            expected_cursor_identity = (
+                _origin_cursor_identity(origin)
+                if isinstance(query, DailyTrackOriginResultSectionInput)
+                else current_manifest
+            )
+            if (
+                cursor_snapshot_identity is not None
+                and cursor_snapshot_identity != expected_cursor_identity
+            ):
+                raise DailyTrackInvalidCursor("DailyTrack Result cursor is stale")
+            snapshot = DailyTrackResultSnapshot(
+                current_checkpoint_manifest_sha256=current_manifest,
+                current_strategy_session=row["current_strategy_session"],
+                current_checkpoint_is_seed=bool(row["current_checkpoint_is_seed"]),
+                current_checkpoint=DailyTrackResultCheckpointRef(
+                    manifest_sha256=current_manifest,
+                    boundary_session=row["current_strategy_session"],
+                    provenance=dict(row["current_checkpoint_provenance"]),
+                ),
+                observation_checkpoints=tuple(
+                    DailyTrackResultCheckpointRef(
+                        manifest_sha256=str(checkpoint["manifest_sha256"]),
+                        boundary_session=date.fromisoformat(checkpoint["boundary_session"]),
+                        provenance=dict(checkpoint["provenance"]),
+                    )
+                    for checkpoint in row["observation_checkpoints"]
+                ),
+            )
+            result = self._daily_track_result_section(
+                query,
+                origin=origin,
+                snapshot=snapshot,
+                seed_research_available=seed_research_available,
+                after=after,
+                limit=limit,
+                order=order,
+                cursor_secret=cursor_secret,
+            )
+        except PublicationUnavailableError:
+            raise
+        except DailyTrackInvalidCursor:
+            raise
+        except DailyTrackResultUnavailable:
+            raise
+        except (
+            KeyError,
+            PublicationNotFoundError,
+            PublicationVerificationError,
+            TypeError,
+            ValueError,
+        ) as error:
+            raise DailyTrackResultReadFailed("DailyTrack Result could not be verified") from error
+        return result
+
+    def _daily_track_result_section(
+        self,
+        query: DailyTrackResultSectionInput,
+        *,
+        origin: TrackingOrigin,
+        snapshot: DailyTrackResultSnapshot,
+        seed_research_available: bool,
+        after: str | None,
+        limit: int,
+        order: str | None,
+        cursor_secret: bytes,
+    ) -> DailyTrackResultSectionResponse:
+        assert self._publication is not None
+        if self._read_semantic_result_section is None:
+            raise DailyTrackResultUnavailable("DailyTrack semantic Result reader is unavailable")
+        track_snapshot = snapshot
+        current_session = track_snapshot.current_strategy_session
+        current_manifest = track_snapshot.current_checkpoint_manifest_sha256
+        if isinstance(query, DailyTrackFactorResultSectionInput):
+            factor_value = self._current_factor_value(origin, track_snapshot)
+            return DailyTrackFactorResultSection(
+                track_id=query.track_id,
+                strategy_session=current_session,
+                factor=_public_factor(factor_value),
+            )
+        if isinstance(query, DailyTrackStrategySummaryResultSectionInput):
+            summary = self._current_strategy_summary(origin, track_snapshot)
+            return DailyTrackStrategySummaryResultSection(
+                track_id=query.track_id,
+                origin_session=origin.initial_strategy_state.session,
+                strategy_session=current_session,
+                summary=dict(summary),
+                benchmark={
+                    "universe": origin_universe(origin),
+                    "methodology": "selected_universe_equal_weight",
+                },
+            )
+        if isinstance(query, DailyTrackStrategyObservationsResultSectionInput):
+            rows, next_after = self._bounded_strategy_observations(
+                origin,
+                track_snapshot,
+                after=after,
+                limit=limit,
+            )
+            return DailyTrackStrategyObservationsResultSection.model_validate(
+                {
+                    "track_id": query.track_id,
+                    "items": rows,
+                    "next_cursor": _next_daily_track_result_cursor(
+                        next_after,
+                        secret=cursor_secret,
+                        track_id=query.track_id,
+                        section=query.section,
+                        order=order,
+                        snapshot_identity=current_manifest,
+                    ),
+                }
+            )
+        if isinstance(query, DailyTrackOriginResultSectionInput):
+            positions = sorted(
+                (dict(position) for position in origin.initial_strategy_state.positions),
+                key=lambda item: str(item["instrument_id"]),
+            )
+            remaining = [
+                position
+                for position in positions
+                if after is None or str(position["instrument_id"]) > after
+            ]
+            selected = remaining[:limit]
+            next_after = str(selected[-1]["instrument_id"]) if len(remaining) > limit else None
+            account = origin.initial_strategy_state
+            return DailyTrackOriginResultSection.model_validate(
+                {
+                    "track_id": query.track_id,
+                    "seed_run_id": origin.seed_run_id,
+                    "seed_research_available": seed_research_available,
+                    "result_checksum_sha256": origin.verified_result.result_checksum_sha256,
+                    "terminal_account": {
+                        name: getattr(account, name)
+                        for name in (
+                            "session",
+                            "gross_cash",
+                            "net_cash",
+                            "gross_nav",
+                            "net_nav",
+                            "benchmark_nav",
+                            "cumulative_transaction_cost",
+                            "rebalance_phase",
+                            "pending_signal",
+                        )
+                    },
+                    "positions": selected,
+                    "next_cursor": _next_daily_track_result_cursor(
+                        next_after,
+                        secret=cursor_secret,
+                        track_id=query.track_id,
+                        section=query.section,
+                        order=order,
+                        snapshot_identity=_origin_cursor_identity(origin),
+                    ),
+                }
+            )
+        if isinstance(query, DailyTrackProvenanceResultSectionInput):
+            immutable = origin.immutable_input
+            strategy = _mapping_value(
+                immutable.get("strategy"),
+                "Tracking frozen Strategy input",
+            )
+            semantic_versions = _mapping_value(
+                immutable.get("semantic_versions"),
+                "Tracking semantic versions",
+            )
+            return DailyTrackProvenanceResultSection.model_validate(
+                {
+                    "track_id": query.track_id,
+                    "origin_research_run_id": origin.seed_run_id,
+                    "origin_result_checksum_sha256": (
+                        origin.verified_result.result_checksum_sha256
+                    ),
+                    "origin_result_schema_version": origin.verified_result.schema_version,
+                    "immutable_input_sha256": hashlib.sha256(
+                        canonical_json_bytes(immutable)
+                    ).hexdigest(),
+                    "frozen_research_input": {
+                        "formula": immutable["formula_source"],
+                        "hypothesis": immutable.get("hypothesis"),
+                        "start_date": immutable["requested_start_date"],
+                        "end_date": immutable["requested_end_date"],
+                        "universe": immutable["universe"],
+                        "neutralization": immutable["neutralization"],
+                        "holdings_count": strategy["holdings_count"],
+                        "rebalance_every_sessions": strategy["rebalance_every_sessions"],
+                    },
+                    "origin_data_through_session": origin.seed_data_through_session,
+                    "tracking_strategy_session": current_session,
+                    "calculation_contracts": origin.calculation_contracts,
+                    "semantic_versions": dict(semantic_versions),
+                }
+            )
+        raise DailyTrackResultUnavailable("DailyTrack Result section is unsupported")
+
+    def _current_factor_value(
+        self,
+        origin: TrackingOrigin,
+        snapshot: DailyTrackResultSnapshot,
+    ) -> Mapping[str, object]:
+        assert self._publication is not None
+        if snapshot.current_checkpoint_is_seed:
+            section = self._read_semantic_result_section(
+                self._publication,
+                _seed_result_ref(origin),
+                research_kind="strategy_backtest",
+                section="factor",
+            )
+            return _mapping_value(section.value, "Tracking Factor Result")
+        checkpoint = snapshot.current_checkpoint
+        value = _read_publication_json(
+            self._publication,
+            PublishedRef(
+                manifest_sha256=checkpoint.manifest_sha256,
+                kind="daily-track.checkpoint",
+                provenance=checkpoint.provenance,
+            ),
+            payload_name="checkpoint",
+        )
+        return _mapping_value(value.get("factor_summary"), "Checkpoint Factor Summary")
+
+    def _current_strategy_summary(
+        self,
+        origin: TrackingOrigin,
+        snapshot: DailyTrackResultSnapshot,
+    ) -> Mapping[str, object]:
+        assert self._publication is not None
+        if snapshot.current_checkpoint_is_seed:
+            section = self._read_semantic_result_section(
+                self._publication,
+                _seed_result_ref(origin),
+                research_kind="strategy_backtest",
+                section="strategy_summary",
+            )
+            stored = _mapping_value(section.value, "Tracking Strategy Summary")
+            return _mapping_value(stored.get("metrics"), "Tracking Strategy metrics")
+        checkpoint = snapshot.current_checkpoint
+        value = _read_publication_json(
+            self._publication,
+            PublishedRef(
+                manifest_sha256=checkpoint.manifest_sha256,
+                kind="daily-track.checkpoint",
+                provenance=checkpoint.provenance,
+            ),
+            payload_name="checkpoint",
+        )
+        state = _mapping_value(value.get("strategy_state"), "Checkpoint Strategy State")
+        return _mapping_value(state.get("summary"), "Checkpoint Strategy Summary")
+
+    def _bounded_strategy_observations(
+        self,
+        origin: TrackingOrigin,
+        snapshot: DailyTrackResultSnapshot,
+        *,
+        after: str | None,
+        limit: int,
+    ) -> tuple[list[Mapping[str, object]], str | None]:
+        assert self._publication is not None
+        if self._read_semantic_result_section is None:
+            raise DailyTrackResultUnavailable("DailyTrack semantic Result reader is unavailable")
+        seed = self._read_semantic_result_section(
+            self._publication,
+            _seed_result_ref(origin),
+            research_kind="strategy_backtest",
+            section="strategy_observations",
+            after=after,
+            limit=limit + 1,
+        )
+        rows = [dict(row) for row in _mapping_rows(seed.value, "Strategy observations")]
+        seen = {str(row["session"]) for row in rows}
+        if len(rows) <= limit and seed.next_after is None:
+            for checkpoint in snapshot.observation_checkpoints:
+                if after is not None and checkpoint.boundary_session.isoformat() <= after:
+                    continue
+                value = _read_publication_json(
+                    self._publication,
+                    PublishedRef(
+                        manifest_sha256=checkpoint.manifest_sha256,
+                        kind="daily-track.checkpoint",
+                        provenance=checkpoint.provenance,
+                    ),
+                    payload_name="checkpoint",
+                )
+                state = _mapping_value(
+                    value.get("strategy_state"),
+                    "Checkpoint Strategy State",
+                )
+                for observation in _mapping_rows(
+                    state.get("retained_delta"),
+                    "Checkpoint Strategy observations",
+                ):
+                    session = str(observation["session"])
+                    if (after is None or session > after) and session not in seen:
+                        rows.append(dict(observation))
+                        seen.add(session)
+                if len(rows) > limit:
+                    break
+        rows.sort(key=lambda item: str(item["session"]))
+        selected = rows[:limit]
+        next_after = str(selected[-1]["session"]) if len(rows) > limit else None
+        return selected, next_after
 
     def _get_current(self, track_id: str) -> DailyTrackDetail | None:
         if self._publication is None or self._dataset_lifecycle is None:
@@ -2932,6 +3400,78 @@ def _decode_cursor(
     return created_at, track_id
 
 
+def _next_daily_track_result_cursor(
+    after: str | None,
+    *,
+    secret: bytes,
+    track_id: str,
+    section: str,
+    order: str | None,
+    snapshot_identity: str,
+) -> str | None:
+    if after is None:
+        return None
+    if order is None:
+        raise TypeError("DailyTrack Result collection order is required")
+    payload = json.dumps(
+        {
+            "after": after,
+            "order": order,
+            "section": section,
+            "snapshot_identity": snapshot_identity,
+            "track_id": track_id,
+            "version": 1,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return _cursor_fernet(secret).encrypt(payload).decode("ascii")
+
+
+def _decode_result_cursor(
+    cursor: str | None,
+    *,
+    secret: bytes,
+    track_id: str,
+    section: str,
+    order: str,
+) -> tuple[str | None, str | None]:
+    if cursor is None:
+        return None, None
+    try:
+        plaintext = _cursor_fernet(secret).decrypt(cursor.encode("ascii"))
+        decoded: object = json.loads(plaintext.decode("utf-8"))
+        if not isinstance(decoded, dict) or set(decoded) != {
+            "after",
+            "order",
+            "section",
+            "snapshot_identity",
+            "track_id",
+            "version",
+        }:
+            raise ValueError
+        after = decoded["after"]
+        snapshot_identity = decoded["snapshot_identity"]
+        if (
+            not isinstance(after, str)
+            or not after
+            or not isinstance(snapshot_identity, str)
+            or not snapshot_identity
+            or decoded["order"] != order
+            or decoded["section"] != section
+            or decoded["track_id"] != track_id
+            or decoded["version"] != 1
+        ):
+            raise ValueError
+    except (InvalidToken, ValueError, UnicodeDecodeError, UnicodeEncodeError) as error:
+        raise DailyTrackInvalidCursor("DailyTrack Result cursor is invalid") from error
+    return after, snapshot_identity
+
+
+def _origin_cursor_identity(origin: TrackingOrigin) -> str:
+    return hashlib.sha256(canonical_json_bytes(origin.model_dump(mode="json"))).hexdigest()
+
+
 def _polling_phase(
     *,
     status: str,
@@ -3022,6 +3562,14 @@ def _seed_result_provenance(origin: TrackingOrigin) -> dict[str, object]:
         "calculation_contracts": origin.calculation_contracts,
         "semantic_versions": dict(semantic_versions),
     }
+
+
+def _seed_result_ref(origin: TrackingOrigin) -> PublishedRef:
+    return PublishedRef(
+        manifest_sha256=origin.verified_result.result_manifest_sha256,
+        kind=origin.verified_result.kind,
+        provenance=_seed_result_provenance(origin),
+    )
 
 
 def _generation_financial_readiness(generation: object) -> FinancialResearchReadiness:

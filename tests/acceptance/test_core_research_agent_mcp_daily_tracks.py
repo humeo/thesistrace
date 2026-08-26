@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import math
 import os
 import subprocess
 import sys
@@ -152,9 +154,14 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
     async with _mcp_client(settings, tmp_path / "track-submit.stderr.log") as client:
         strategy_runs = []
         for index in range(5):
+            command = _command(f"track-strategy-{index}")
+            if index in (0, 3):
+                command["holdings_count"] = 51
+            if index in (0, 3):
+                command["end_date"] = "2026-08-10"
             response = await client.call_tool(
                 "submit_research_run",
-                _command(f"track-strategy-{index}"),
+                command,
             )
             assert response.is_error is False
             strategy_runs.append(str(response.structured_content["run_id"]))
@@ -269,12 +276,17 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         original_origin = _corrupt_track_origin(settings, track_id)
         try:
             corrupted = await client.call_tool("get_daily_track", {"track_id": track_id})
+            corrupted_result = await client.call_tool(
+                "get_daily_track_result",
+                {"track_id": track_id, "section": "factor"},
+            )
         finally:
             _restore_track_origin(settings, track_id, original_origin)
-        assert corrupted.is_error is True
-        assert corrupted.structured_content["code"] == "INTERNAL"
-        assert corrupted.structured_content["retryable"] is False
-        assert "origin" not in corrupted.structured_content["message"].lower()
+        for corrupted_read in (corrupted, corrupted_result):
+            assert corrupted_read.is_error is True
+            assert corrupted_read.structured_content["code"] == "INTERNAL"
+            assert corrupted_read.structured_content["retryable"] is False
+            assert "origin" not in corrupted_read.structured_content["message"].lower()
 
         _install_transient_start_failure(settings)
         try:
@@ -302,6 +314,45 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         )
         assert recovered_start.is_error is False
         transient_track_id = str(recovered_start.structured_content["track_id"])
+        transient_origin_before = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": transient_track_id, "section": "origin", "limit": 50},
+        )
+        assert transient_origin_before.is_error is False
+        assert len(transient_origin_before.structured_content["positions"]) == 50
+        transient_origin_cursor = transient_origin_before.structured_content["next_cursor"]
+        assert isinstance(transient_origin_cursor, str)
+        transient_seed_summary = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": transient_track_id, "section": "strategy_summary"},
+        )
+        assert transient_seed_summary.is_error is False
+        transient_seed_summary_keys = set(
+            transient_seed_summary.structured_content["summary"]
+        )
+        transient_seed_observations = await client.call_tool(
+            "get_daily_track_result",
+            {
+                "track_id": transient_track_id,
+                "section": "strategy_observations",
+                "limit": 1,
+            },
+        )
+        assert transient_seed_observations.is_error is False
+        stale_observation_cursor = transient_seed_observations.structured_content["next_cursor"]
+        assert isinstance(stale_observation_cursor, str)
+        missing_result = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": "track_missing", "section": "factor"},
+        )
+        assert missing_result.is_error is True
+        assert missing_result.structured_content["code"] == "NOT_FOUND"
+        invalid_result_section = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": transient_track_id, "section": "checkpoint"},
+        )
+        assert invalid_result_section.is_error is True
+        assert invalid_result_section.structured_content["code"] == "INVALID_INPUT"
 
     blocked_worker = await anyio.to_thread.run_sync(
         _run_tracking_worker_once,
@@ -331,6 +382,11 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         }
         assert blocked.structured_content["retry_after_seconds"] is None
         _assert_compact_track(blocked.structured_content, retry=True)
+        blocked_factor = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": concurrent_track_id, "section": "factor"},
+        )
+        assert blocked_factor.is_error is False
         second_blocked = await client.call_tool(
             "get_daily_track",
             {"track_id": track_id},
@@ -367,12 +423,15 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
             _remove_transient_retry_failure(settings)
         assert transient_retry.is_error is True
         assert transient_retry.structured_content["code"] == "TEMPORARILY_UNAVAILABLE"
-        assert _daily_track_action_storage(
-            settings,
-            concurrent_track_id,
-            request_id="track-retry-transient",
-            action="retry",
-        ) == retry_storage_before
+        assert (
+            _daily_track_action_storage(
+                settings,
+                concurrent_track_id,
+                request_id="track-retry-transient",
+                action="retry",
+            )
+            == retry_storage_before
+        )
         retry_rollback = await client.call_tool(
             "get_daily_track",
             {"track_id": concurrent_track_id},
@@ -410,12 +469,15 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
             **unchanged_retry.structured_content,
             "replayed": True,
         }
-    assert _daily_track_action_storage(
-        settings,
-        concurrent_track_id,
-        request_id="track-retry-transient",
-        action="retry",
-    )["receipt_count"] == 1
+    assert (
+        _daily_track_action_storage(
+            settings,
+            concurrent_track_id,
+            request_id="track-retry-transient",
+            action="retry",
+        )["receipt_count"]
+        == 1
+    )
 
     retried = await _concurrent_retry(
         settings,
@@ -464,12 +526,15 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         _remove_transient_stop_failure(settings)
     assert transient_stop.is_error is True
     assert transient_stop.structured_content["code"] == "TEMPORARILY_UNAVAILABLE"
-    assert _daily_track_action_storage(
-        settings,
-        track_id,
-        request_id="track-stop-transient",
-        action="stop",
-    ) == stop_storage_before
+    assert (
+        _daily_track_action_storage(
+            settings,
+            track_id,
+            request_id="track-stop-transient",
+            action="stop",
+        )
+        == stop_storage_before
+    )
     async with _mcp_client(settings, tmp_path / "track-stop-rollback.stderr.log") as client:
         stop_rollback = await client.call_tool("get_daily_track", {"track_id": track_id})
         assert stop_rollback.structured_content["progress"]["phase"] == "blocked"
@@ -483,12 +548,15 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
     assert all(not result.is_error for result in stopped)
     assert all(result.structured_content["status"] == "stopped" for result in stopped)
     assert sum(result.structured_content["replayed"] is False for result in stopped) == 1
-    assert _daily_track_action_storage(
-        settings,
-        track_id,
-        request_id="track-stop-transient",
-        action="stop",
-    )["receipt_count"] == 1
+    assert (
+        _daily_track_action_storage(
+            settings,
+            track_id,
+            request_id="track-stop-transient",
+            action="stop",
+        )["receipt_count"]
+        == 1
+    )
 
     for _ in range(6):
         completed = await anyio.to_thread.run_sync(_run_tracking_worker_once, settings)
@@ -516,6 +584,184 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
             "retry": False,
             "stop": False,
         }
+
+        stale_cursor = await client.call_tool(
+            "get_daily_track_result",
+            {
+                "track_id": transient_track_id,
+                "section": "strategy_observations",
+                "cursor": stale_observation_cursor,
+                "limit": 1,
+            },
+        )
+        assert stale_cursor.is_error is True
+        assert stale_cursor.structured_content["code"] == "INVALID_INPUT"
+
+        factor_result = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": transient_track_id, "section": "factor"},
+        )
+        summary_result = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": transient_track_id, "section": "strategy_summary"},
+        )
+        provenance_result = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": transient_track_id, "section": "provenance"},
+        )
+        assert factor_result.is_error is False
+        assert summary_result.is_error is False
+        assert provenance_result.is_error is False
+        assert (
+            factor_result.structured_content["strategy_session"]
+            == (transient_advanced.structured_content["progress"]["head_session"])
+        )
+        assert summary_result.structured_content["origin_session"] == "2026-08-10"
+        assert (
+            summary_result.structured_content["strategy_session"]
+            == (transient_advanced.structured_content["progress"]["head_session"])
+        )
+        assert summary_result.structured_content["benchmark"] == {
+            "universe": "top300",
+            "methodology": "selected_universe_equal_weight",
+        }
+        assert set(summary_result.structured_content["summary"]) == (
+            transient_seed_summary_keys
+        )
+        _assert_finite_result(factor_result.structured_content)
+        _assert_finite_result(summary_result.structured_content)
+        serialized_provenance = json.dumps(
+            provenance_result.structured_content,
+            sort_keys=True,
+        ).lower()
+        for private_name in (
+            "generation_id",
+            "manifest",
+            "object_key",
+            "cache",
+            "checkpoint",
+            "attempt",
+            "lease",
+            "sql",
+            "path",
+        ):
+            assert private_name not in serialized_provenance
+        assert provenance_result.structured_content["origin_research_run_id"] == strategy_runs[3]
+        assert provenance_result.structured_content["frozen_research_input"]["formula"] == "close"
+
+        observation_pages = []
+        observation_cursor = None
+        while True:
+            page = await client.call_tool(
+                "get_daily_track_result",
+                {
+                    "track_id": transient_track_id,
+                    "section": "strategy_observations",
+                    "limit": 50,
+                    **({"cursor": observation_cursor} if observation_cursor else {}),
+                },
+            )
+            assert page.is_error is False
+            assert len(json.dumps(page.structured_content).encode()) < 64 * 1024
+            observation_pages.extend(page.structured_content["items"])
+            observation_cursor = page.structured_content["next_cursor"]
+            if observation_cursor is None:
+                break
+        observation_sessions = [item["session"] for item in observation_pages]
+        assert len(observation_sessions) == 75
+        assert observation_sessions == sorted(set(observation_sessions))
+        _assert_finite_result(observation_pages)
+
+        origin_first = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": track_id, "section": "origin", "limit": 50},
+        )
+        assert origin_first.is_error is False
+        assert len(origin_first.structured_content["positions"]) == 50
+        origin_cursor = origin_first.structured_content["next_cursor"]
+        assert isinstance(origin_cursor, str)
+        origin_second = await client.call_tool(
+            "get_daily_track_result",
+            {
+                "track_id": track_id,
+                "section": "origin",
+                "cursor": origin_cursor,
+                "limit": 50,
+            },
+        )
+        assert origin_second.is_error is False
+        assert len(origin_second.structured_content["positions"]) == 1
+        assert origin_second.structured_content["next_cursor"] is None
+        position_ids = [
+            position["instrument_id"]
+            for position in [
+                *origin_first.structured_content["positions"],
+                *origin_second.structured_content["positions"],
+            ]
+        ]
+        assert position_ids == sorted(set(position_ids))
+
+        wrong_section_cursor = await client.call_tool(
+            "get_daily_track_result",
+            {
+                "track_id": transient_track_id,
+                "section": "strategy_observations",
+                "cursor": origin_cursor,
+                "limit": 1,
+            },
+        )
+        wrong_resource_cursor = await client.call_tool(
+            "get_daily_track_result",
+            {
+                "track_id": concurrent_track_id,
+                "section": "origin",
+                "cursor": origin_cursor,
+                "limit": 1,
+            },
+        )
+        tampered_cursor = await client.call_tool(
+            "get_daily_track_result",
+            {
+                "track_id": track_id,
+                "section": "origin",
+                "cursor": origin_cursor[:-1] + ("A" if origin_cursor[-1] != "A" else "B"),
+                "limit": 1,
+            },
+        )
+        for invalid_cursor in (
+            wrong_section_cursor,
+            wrong_resource_cursor,
+            tampered_cursor,
+        ):
+            assert invalid_cursor.is_error is True
+            assert invalid_cursor.structured_content["code"] == "INVALID_INPUT"
+
+        transient_origin_after = await client.call_tool(
+            "get_daily_track_result",
+            {"track_id": transient_track_id, "section": "origin", "limit": 50},
+        )
+        assert {
+            name: value
+            for name, value in transient_origin_after.structured_content.items()
+            if name != "next_cursor"
+        } == {
+            name: value
+            for name, value in transient_origin_before.structured_content.items()
+            if name != "next_cursor"
+        }
+        assert isinstance(transient_origin_after.structured_content["next_cursor"], str)
+        transient_origin_continuation = await client.call_tool(
+            "get_daily_track_result",
+            {
+                "track_id": transient_track_id,
+                "section": "origin",
+                "cursor": transient_origin_cursor,
+                "limit": 50,
+            },
+        )
+        assert transient_origin_continuation.is_error is False
+        assert len(transient_origin_continuation.structured_content["positions"]) == 1
+        assert transient_origin_continuation.structured_content["next_cursor"] is None
 
         retry_replay_after_restart = await client.call_tool(
             "retry_daily_track",
@@ -790,8 +1036,7 @@ async def _exercise_live_tracking_stop(
             assert await anyio.to_thread.run_sync(future.result, 20) is True
 
     assert any(
-        event.get("event") == "tracking_execution_child_exited"
-        for event in execution_events
+        event.get("event") == "tracking_execution_child_exited" for event in execution_events
     )
     async with _mcp_client(
         settings,
@@ -894,7 +1139,11 @@ async def _assert_transient_daily_track_reads(
                     "get_daily_track",
                     {"track_id": track_id},
                 )
-            for transient in (transient_list, transient_get):
+                transient_result = await client.call_tool(
+                    "get_daily_track_result",
+                    {"track_id": track_id, "section": "factor"},
+                )
+            for transient in (transient_list, transient_get, transient_result):
                 assert transient.is_error is True
                 assert transient.structured_content["code"] == "TEMPORARILY_UNAVAILABLE"
                 assert transient.structured_content["retryable"] is True
@@ -1062,9 +1311,7 @@ def _daily_track_action_storage(
 ) -> dict[str, object]:
     assert action in {"retry", "stop"}
     receipt_table = (
-        "daily_tracks.retry_receipts"
-        if action == "retry"
-        else "daily_tracks.stop_receipts"
+        "daily_tracks.retry_receipts" if action == "retry" else "daily_tracks.stop_receipts"
     )
     database = PostgresDatabase(settings.database_url)
     database.open()
@@ -1363,3 +1610,16 @@ def _assert_compact_track(payload: dict[str, object], *, retry: bool = False) ->
         "path",
     ):
         assert private_name not in serialized
+
+
+def _assert_finite_result(value: object) -> None:
+    if isinstance(value, float):
+        assert math.isfinite(value)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _assert_finite_result(item)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _assert_finite_result(item)

@@ -36,7 +36,7 @@ from thesistrace.research_run import (
 )
 from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.planning import DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES
-from thesistrace.research_run.result import read_result_bundle
+from thesistrace.research_run.result import read_result_bundle, read_semantic_result_section
 
 CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_DATABASE_URL",
@@ -115,15 +115,10 @@ class CoreSettings:
         if tracking_execution_memory_bytes <= 0:
             raise RuntimeError("Tracking execution memory must be positive")
         data_mount = Path(values["data_mount"])
-        batch_attempt_control_directory = Path(
-            values["batch_attempt_control_directory"]
-        )
-        if batch_attempt_control_directory.resolve().is_relative_to(
-            data_mount.resolve()
-        ):
+        batch_attempt_control_directory = Path(values["batch_attempt_control_directory"])
+        if batch_attempt_control_directory.resolve().is_relative_to(data_mount.resolve()):
             raise RuntimeError(
-                "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY must be outside "
-                "THESISTRACE_DATA_MOUNT"
+                "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY must be outside THESISTRACE_DATA_MOUNT"
             )
         return cls(
             database_url=values["database_url"],
@@ -191,6 +186,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
                 read_result_bundle,
                 research_kind="strategy_backtest",
             ),
+            read_semantic_result_section=read_semantic_result_section,
             working_cache_root=Path(working_cache.name) / "daily-tracks",
             seed_research_exists=research_run_exists,
             research_references_result=research_result_manifest_is_referenced,

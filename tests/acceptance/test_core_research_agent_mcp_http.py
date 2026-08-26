@@ -251,6 +251,7 @@ async def _exercise_http_contract(
                 "cancel_research_run",
                 "list_daily_tracks",
                 "get_daily_track",
+                "get_daily_track_result",
                 "start_daily_track",
                 "retry_daily_track",
                 "stop_daily_track",
@@ -661,6 +662,19 @@ async def _exercise_http_contract(
                 == (strategy.structured_content["run_id"])
             )
             _assert_compact_track(track_detail.structured_content)
+            track_factor_result = await client.call_tool(
+                "get_daily_track_result",
+                {
+                    "track_id": daily_track.structured_content["track_id"],
+                    "section": "factor",
+                },
+            )
+            assert track_factor_result.is_error is False
+            assert track_factor_result.structured_content["section"] == "factor"
+            assert (
+                track_factor_result.structured_content["track_id"]
+                == (daily_track.structured_content["track_id"])
+            )
             duplicate_origin = await client.call_tool(
                 "start_daily_track",
                 {
@@ -690,8 +704,7 @@ async def _exercise_http_contract(
                 request_id="http-track-retry",
             )
             assert all(not result.is_error for result in concurrent_retries), [
-                (result.is_error, result.structured_content)
-                for result in concurrent_retries
+                (result.is_error, result.structured_content) for result in concurrent_retries
             ]
             assert all(
                 result.structured_content["status"] == "active" for result in concurrent_retries
@@ -854,13 +867,15 @@ async def _exercise_http_contract(
         async with _mcp_client(app, read_token) as reconnected:
             second_context = await reconnected.call_tool("get_research_context", {})
             assert second_context.is_error is False
-            assert second_context.structured_content["data_overview"][
-                "data_through_session"
-            ] == "2026-08-10"
+            assert (
+                second_context.structured_content["data_overview"]["data_through_session"]
+                == "2026-08-10"
+            )
             assert second_context.structured_content["folders"] == first_context["folders"]
-            assert second_context.structured_content["authoring_constraints"] == first_context[
-                "authoring_constraints"
-            ]
+            assert (
+                second_context.structured_content["authoring_constraints"]
+                == first_context["authoring_constraints"]
+            )
 
     restarted_app = _app(settings, issuer)
     async with restarted_app.router.lifespan_context(restarted_app):
@@ -1232,8 +1247,7 @@ async def _exercise_http_live_tracking_stop(
         assert await anyio.to_thread.run_sync(future.result, 20) is True
 
     assert any(
-        event.get("event") == "tracking_execution_child_exited"
-        for event in execution_events
+        event.get("event") == "tracking_execution_child_exited" for event in execution_events
     )
     terminal = await action_client.call_tool("get_daily_track", {"track_id": track_id})
     assert terminal.is_error is False

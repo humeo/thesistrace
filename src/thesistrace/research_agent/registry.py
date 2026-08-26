@@ -12,6 +12,9 @@ from thesistrace.daily_track import (
     DailyTrackInvalidCursor,
     DailyTrackList,
     DailyTrackPollingDetail,
+    DailyTrackResultSectionInput,
+    DailyTrackResultSectionResponse,
+    DailyTrackResultUnavailable,
     DailyTrackRetryConflict,
     DailyTrackRetryUnavailable,
     DailyTrackStopConflict,
@@ -181,6 +184,11 @@ class DailyTrackReader(Protocol):
 
     def get_polling_detail(self, track_id: str) -> DailyTrackPollingDetail | None: ...
 
+    def get_result_section(
+        self,
+        query: DailyTrackResultSectionInput,
+    ) -> DailyTrackResultSectionResponse | None: ...
+
     def retry_with_outcome(
         self,
         track_id: str,
@@ -292,6 +300,7 @@ RESEARCH_AGENT_TOOL_NAMES = frozenset(
         "submit_research_run",
         "list_daily_tracks",
         "get_daily_track",
+        "get_daily_track_result",
         "start_daily_track",
         "retry_daily_track",
         "stop_daily_track",
@@ -408,6 +417,19 @@ class ResearchAgentCapabilityRegistry:
                 output_model=DailyTrackPollingDetail,
                 annotations=READ_ONLY_TOOL_ANNOTATIONS,
                 handler=self.get_daily_track,
+            ),
+            ResearchAgentCapability(
+                name="get_daily_track_result",
+                description=(
+                    "Read one bounded semantic DailyTrack Result section from its current "
+                    "immutable checkpoint; observations and origin positions use stable "
+                    "opaque pagination and require tracking:read."
+                ),
+                required_scope=ResearchAgentScope.TRACKING_READ,
+                input_model=DailyTrackResultSectionInput,
+                output_model=DailyTrackResultSectionResponse,
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                handler=self.get_daily_track_result,
             ),
             ResearchAgentCapability(
                 name="start_daily_track",
@@ -760,6 +782,23 @@ class ResearchAgentCapabilityRegistry:
         if track is None:
             raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
         return track
+
+    def get_daily_track_result(self, **query_fields: object) -> BaseModel:
+        self._require(ResearchAgentScope.TRACKING_READ)
+        query = TypeAdapter(DailyTrackResultSectionInput).validate_python(query_fields)
+        try:
+            result = self._modules.daily_tracks.get_result_section(query)
+        except DailyTrackInvalidCursor as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.INVALID_INPUT) from error
+        except DailyTrackResultUnavailable as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.STATE_CONFLICT) from error
+        except DailyTrackTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if result is None:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
+        if not isinstance(result, BaseModel):
+            raise TypeError("DailyTrack Result module returned an invalid section")
+        return result
 
     def start_daily_track(
         self,
