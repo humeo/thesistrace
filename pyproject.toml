@@ -27,6 +27,7 @@ thesistrace-research-agent-mcp = "thesistrace.entrypoints.research_agent_mcp:mai
 [dependency-groups]
 dev = [
   "jsonschema>=4.26,<5",
+  "pyjwt>=2.13,<3",
   "pytest>=8.4.1,<9",
   "pytest-xdist>=3.8,<4",
   "ruff>=0.12.7,<1",

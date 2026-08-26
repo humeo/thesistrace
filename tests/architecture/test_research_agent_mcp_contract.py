@@ -100,6 +100,7 @@ class _ExplodingAlphaLanguage:
 def _registry(
     authority: ResearchAgentAuthority | None = None,
     *,
+    allowed_tools: frozenset[str] | None = None,
     data_overview: _DataOverviewReader | None = None,
     selected_alpha_language: AlphaAuthoringLanguage = alpha_language,
 ) -> ResearchAgentCapabilityRegistry:
@@ -111,6 +112,7 @@ def _registry(
             alpha_language=selected_alpha_language,
             research_authoring=ResearchAuthoringService(),
         ),
+        **({} if allowed_tools is None else {"allowed_tools": allowed_tools}),
     )
 
 
@@ -182,6 +184,22 @@ def test_registry_formula_diagnostics_are_structured_and_source_ranged() -> None
     assert invalid.diagnostics[0].range.end.offset == len("unknown_alpha")
 
 
+def test_registry_intersects_deployment_allowlist_and_rechecks_it_on_invocation() -> None:
+    registry = _registry(allowed_tools=frozenset({"get_research_context"}))
+
+    assert [capability.name for capability in registry.accessible_capabilities()] == [
+        "get_research_context"
+    ]
+    denied = registry.invoke(
+        "get_alpha_catalog",
+        {},
+        trace_id="trace_allowlist",
+    )
+
+    assert denied.error is not None
+    assert denied.error.code == "FORBIDDEN"
+
+
 def test_in_memory_protocol_exposes_exact_read_only_tool_contract() -> None:
     anyio.run(_exercise_in_memory_protocol)
 
@@ -192,6 +210,10 @@ def test_in_memory_protocol_sanitizes_unexpected_tool_failures() -> None:
 
 def test_in_memory_protocol_rechecks_request_authority_after_discovery() -> None:
     anyio.run(_exercise_stale_discovery_authority)
+
+
+def test_http_protocol_pseudonymizes_oauth_subject_in_operational_events() -> None:
+    anyio.run(_exercise_oauth_subject_event)
 
 
 def test_in_memory_protocol_keeps_event_loop_responsive_during_core_read() -> None:
@@ -341,6 +363,39 @@ async def _exercise_stale_discovery_authority() -> None:
 
     assert denied.is_error is True
     assert denied.structured_content["code"] == "FORBIDDEN"
+
+
+async def _exercise_oauth_subject_event() -> None:
+    raw_subject = f"auth0|{'a' * 194}"
+    events: list[OperationalEvent] = []
+    registry = _registry(
+        ResearchAgentAuthority(
+            subject=raw_subject,
+            scopes=frozenset({ResearchAgentScope.RESEARCH_READ}),
+        )
+    )
+    trace_ids = count()
+    server = create_research_agent_mcp_server(
+        lambda _context: registry,
+        event_sink=events.append,
+        monotonic_ns=lambda: 0,
+        trace_id_factory=lambda: f"trace_test_{next(trace_ids)}",
+        transport="streamable_http",
+    )
+
+    async with Client(server) as client:
+        first = await client.call_tool("get_research_context", {})
+        second = await client.call_tool("get_research_context", {})
+
+    assert first.is_error is False
+    assert second.is_error is False
+    assert len(events) == 2
+    event_subjects = [event.context["subject"] for event in events]
+    assert event_subjects[0] == event_subjects[1]
+    assert isinstance(event_subjects[0], str)
+    assert event_subjects[0].startswith("oauth_")
+    assert len(event_subjects[0]) == 38
+    assert raw_subject not in str(events)
 
 
 async def _exercise_non_blocking_core_read() -> None:

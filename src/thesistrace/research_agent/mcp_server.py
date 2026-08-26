@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from hashlib import sha256
 from typing import Literal
 
 import anyio
@@ -171,7 +172,10 @@ def _emit_completion(
         "duration_ms": duration_ms,
         "outcome": outcome,
         "response_bytes": len(response.model_dump_json(by_alias=True, exclude_none=True).encode()),
-        "subject": registry.authority.subject,
+        "subject": _operational_subject(
+            registry.authority.subject,
+            transport=transport,
+        ),
         "tool_name": tool_name,
         "trace_id": trace_id,
         "transport": transport,
@@ -191,3 +195,14 @@ def _emit_completion(
         )
     except Exception:
         pass
+
+
+def _operational_subject(
+    subject: str,
+    *,
+    transport: ResearchAgentTransport,
+) -> str:
+    if transport == "stdio":
+        return subject
+    digest = sha256(subject.encode()).hexdigest()[:32]
+    return f"oauth_{digest}"

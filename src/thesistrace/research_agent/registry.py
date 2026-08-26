@@ -95,6 +95,14 @@ READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
     open_world_hint=False,
 )
 
+RESEARCH_AGENT_TOOL_NAMES = frozenset(
+    {
+        "get_research_context",
+        "get_alpha_catalog",
+        "diagnose_alpha_formula",
+    }
+)
+
 
 class ResearchAgentCapabilityRegistry:
     """Request-local authority and the complete public Research Agent tool contract."""
@@ -104,9 +112,16 @@ class ResearchAgentCapabilityRegistry:
         *,
         authority: ResearchAgentAuthority,
         modules: ResearchAgentModules,
+        allowed_tools: frozenset[str] = RESEARCH_AGENT_TOOL_NAMES,
     ) -> None:
+        unknown_tools = allowed_tools - RESEARCH_AGENT_TOOL_NAMES
+        if unknown_tools:
+            raise ValueError(
+                f"unknown Research Agent deployment tools: {', '.join(sorted(unknown_tools))}"
+            )
         self._authority = authority
         self._modules = modules
+        self._allowed_tools = allowed_tools
         self._capabilities = (
             ResearchAgentCapability(
                 name="get_research_context",
@@ -145,7 +160,8 @@ class ResearchAgentCapabilityRegistry:
         return tuple(
             capability
             for capability in self._capabilities
-            if self._authority.permits(capability.required_scope)
+            if capability.name in self._allowed_tools
+            and self._authority.permits(capability.required_scope)
         )
 
     @property
@@ -169,6 +185,13 @@ class ResearchAgentCapabilityRegistry:
             return ResearchAgentInvocation(
                 error=self._tool_error(
                     ResearchAgentErrorCode.INVALID_INPUT,
+                    trace_id=trace_id,
+                )
+            )
+        if capability.name not in self._allowed_tools:
+            return ResearchAgentInvocation(
+                error=self._tool_error(
+                    ResearchAgentErrorCode.FORBIDDEN,
                     trace_id=trace_id,
                 )
             )

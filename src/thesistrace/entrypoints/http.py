@@ -11,7 +11,9 @@ from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
+from starlette.routing import Route
 
+from thesistrace.alpha_language import alpha_language
 from thesistrace.daily_track import (
     DailyTrackActivationLimitReached,
     DailyTrackDeleteConflict,
@@ -34,6 +36,11 @@ from thesistrace.operational_events import (
     OperationalEventWriter,
     emit_operational_event,
     sanitized_exception_context,
+)
+from thesistrace.research_agent import (
+    ResearchAgentHTTPConfiguration,
+    ResearchAgentModules,
+    create_research_agent_http_transport,
 )
 from thesistrace.research_batch import (
     ResearchBatchAdmissionCommand,
@@ -83,7 +90,13 @@ def create_app(
     event_sink: OperationalEventWriter | None = None,
     http_request_id_factory: Callable[[], str] | None = None,
     monotonic_ns: Callable[[], int] | None = None,
+    enable_research_agent_http: bool = False,
+    research_agent_http: ResearchAgentHTTPConfiguration | None = None,
 ) -> FastAPI:
+    if enable_research_agent_http != (research_agent_http is not None):
+        raise ValueError(
+            "Research Agent HTTP must be explicitly enabled with a token verifier configuration"
+        )
     selected_event_sink = emit_operational_event if event_sink is None else event_sink
     selected_request_id_factory = (
         _new_http_request_id
@@ -92,14 +105,45 @@ def create_app(
     )
     selected_monotonic_ns = perf_counter_ns if monotonic_ns is None else monotonic_ns
 
+    research_agent_transport = None
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         selected_settings = settings or CoreSettings.from_environment()
         with open_core_runtime(selected_settings) as runtime:
             app.state.core_runtime = runtime
-            yield
+            if research_agent_transport is None:
+                yield
+            else:
+                async with research_agent_transport.session_manager.run():
+                    yield
 
     app = FastAPI(title="ThesisTrace Core", lifespan=lifespan)
+    if research_agent_http is not None:
+        def research_agent_modules() -> ResearchAgentModules:
+            runtime = app.state.core_runtime
+            return ResearchAgentModules(
+                data_overview=runtime.data_overview,
+                research_folders=runtime.research_folders,
+                alpha_language=alpha_language,
+                research_authoring=runtime.research_authoring,
+            )
+
+        research_agent_transport = create_research_agent_http_transport(
+            research_agent_http,
+            modules=research_agent_modules,
+            event_sink=selected_event_sink,
+            monotonic_ns=selected_monotonic_ns,
+        )
+        app.router.routes.extend(research_agent_transport.metadata_routes)
+        app.router.routes.append(
+            Route(
+                "/mcp",
+                endpoint=research_agent_transport.app,
+                name="research_agent_mcp",
+                include_in_schema=False,
+            )
+        )
     @app.middleware("http")
     async def observe_http_request(request: Request, call_next):  # type: ignore[no-untyped-def]
         if request.url.path in _HEALTH_PATHS:

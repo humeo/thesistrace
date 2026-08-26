@@ -4,14 +4,21 @@
 
 **Blocked by:** 01 — 建立安全的 stdio Research Agent 上下文闭环
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] 将 stateless Streamable HTTP MCP 应用挂载到现有 Core ASGI 进程，并由父应用 lifespan 显式管理 MCP session manager；不得创建第二套 Core runtime、数据库连接 authority 或域服务。
-- [ ] HTTP 仅暴露一个 `/mcp` 端点，不存在 legacy HTTP-plus-SSE、版本化 MCP 端点、兼容 alias 或自定义 Tool-set header。
-- [ ] 确定性测试 OAuth issuer 可签发短期 bearer token，并验证 issuer、audience、signature、expiry、not-before 和 scopes；整个测试不依赖公网或真实账号。
-- [ ] Tool discovery 是 deployment allowlist 与已认证 grant 的交集，Tool invocation 会再次检查 scope；无 token、畸形 token、失效 token、错误 issuer/audience/signature 均失败关闭且不会降级成匿名 principal。
-- [ ] 生产 HTTP auth adapter 缺少真实 verifier/provider 时应用构造失败；不存在 `AUTH_DISABLED`、query token、可信自定义 scope header 或失败认证 fallback。
-- [ ] 未受信任的 Host/Origin 被拒绝，受信任部署值有确定性契约测试，以保留 Streamable HTTP 的 DNS rebinding 防护。
-- [ ] 相同的三个上下文 Tool 通过 HTTP 返回与 stdio 相同的 structured content、输出 Schema、错误语义和 scope 行为。
-- [ ] 客户端断线并重新初始化后可以再次读取上下文；MCP transport/session 不保存或恢复任何 Product State。
-- [ ] ASGI 集成、OAuth 负向路径、scope-filtered discovery、调用重授权、断线重连和优雅停机测试通过，并保留经净化的诊断证据。
+- [x] 将 stateless Streamable HTTP MCP 应用挂载到现有 Core ASGI 进程，并由父应用 lifespan 显式管理 MCP session manager；不得创建第二套 Core runtime、数据库连接 authority 或域服务。
+- [x] HTTP 仅暴露一个 `/mcp` 端点，不存在 legacy HTTP-plus-SSE、版本化 MCP 端点、兼容 alias 或自定义 Tool-set header。
+- [x] 确定性测试 OAuth issuer 可签发短期 bearer token，并验证 issuer、audience、signature、expiry、not-before 和 scopes；整个测试不依赖公网或真实账号。
+- [x] Tool discovery 是 deployment allowlist 与已认证 grant 的交集，Tool invocation 会再次检查 scope；无 token、畸形 token、失效 token、错误 issuer/audience/signature 均失败关闭且不会降级成匿名 principal。
+- [x] 生产 HTTP auth adapter 缺少真实 verifier/provider 时应用构造失败；不存在 `AUTH_DISABLED`、query token、可信自定义 scope header 或失败认证 fallback。
+- [x] 未受信任的 Host/Origin 被拒绝，受信任部署值有确定性契约测试，以保留 Streamable HTTP 的 DNS rebinding 防护。
+- [x] 相同的三个上下文 Tool 通过 HTTP 返回与 stdio 相同的 structured content、输出 Schema、错误语义和 scope 行为。
+- [x] 客户端断线并重新初始化后可以再次读取上下文；MCP transport/session 不保存或恢复任何 Product State。
+- [x] ASGI 集成、OAuth 负向路径、scope-filtered discovery、调用重授权、断线重连和优雅停机测试通过，并保留经净化的诊断证据。
+
+## Comments
+
+- 2026-08-26：三轮 Spec 与 Standards 双轴审查后无剩余 finding；审查中补强 HTTPS、RFC 8414 issuer URL 和 OAuth subject 事件脱敏边界。
+- 2026-08-26：`bun run test` 通过（668 Python、63 frontend）。
+- 2026-08-26：`bun run test:integration` 通过（主套件 288 passed、7 deselected；6 个独立 database/dependency restart 阶段全部通过），隔离 Compose 环境已清理。
+- 2026-08-26：审查修复后的架构合同 22 passed，真实 OAuth/ASGI acceptance 2 passed，聚焦隔离 Compose 环境已清理。
