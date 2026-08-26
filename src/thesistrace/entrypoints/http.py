@@ -15,16 +15,17 @@ from starlette.routing import Route
 
 from thesistrace.alpha_language import alpha_language
 from thesistrace.daily_track import (
-    DailyTrackActivationLimitReached,
     DailyTrackDeleteConflict,
     DailyTrackDetail,
     DailyTrackDetailUnavailable,
+    DailyTrackInvalidCursor,
     DailyTrackList,
     DailyTrackRetryConflict,
     DailyTrackRetryUnavailable,
     DailyTrackStopConflict,
     DailyTrackStopUnavailable,
     DailyTrackSummary,
+    DailyTrackTemporarilyUnavailable,
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
 )
@@ -132,6 +133,7 @@ def create_app(
                 research_authoring=runtime.research_authoring,
                 research_runs=runtime.research_runs,
                 research_batches=runtime.research_batches,
+                daily_tracks=runtime.daily_tracks,
             )
 
         research_agent_transport = create_research_agent_http_transport(
@@ -488,8 +490,6 @@ def create_app(
     ) -> DailyTrackSummary:
         try:
             track = _runtime(request).research_runs.start_tracking(run_id, command)
-        except DailyTrackActivationLimitReached as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
         except ResearchRunStartTrackingConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ResearchRunTrackingUnavailable as error:
@@ -503,8 +503,20 @@ def create_app(
         return track
 
     @app.get("/api/daily-tracks", response_model=DailyTrackList)
-    def list_daily_tracks(request: Request) -> DailyTrackList:
-        return _runtime(request).daily_tracks.list()
+    def list_daily_tracks(
+        request: Request,
+        cursor: str | None = Query(default=None, min_length=1, max_length=1024),
+        limit: int = Query(default=20, ge=1, le=50),
+    ) -> DailyTrackList:
+        try:
+            return _runtime(request).daily_tracks.list(cursor=cursor, limit=limit)
+        except DailyTrackInvalidCursor as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except DailyTrackTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="DailyTrack listing is temporarily unavailable",
+            ) from error
 
     @app.get("/api/daily-tracks/{track_id}", response_model=DailyTrackDetail)
     def get_daily_track(request: Request, track_id: str) -> DailyTrackDetail:

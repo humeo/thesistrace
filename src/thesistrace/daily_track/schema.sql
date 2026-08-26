@@ -11,6 +11,16 @@ SET default_table_access_method = heap;
 
 CREATE SEQUENCE daily_tracks.work_queue_sequence;
 
+CREATE TABLE daily_tracks.cursor_secrets (
+    singleton smallint PRIMARY KEY CHECK (singleton = 1),
+    secret text DEFAULT (
+        replace(gen_random_uuid()::text, '-', '')
+        || replace(gen_random_uuid()::text, '-', '')
+    ) NOT NULL CHECK (secret ~ '^[0-9a-f]{64}$')
+);
+
+INSERT INTO daily_tracks.cursor_secrets (singleton) VALUES (1);
+
 --
 -- Name: retry_receipts; Type: TABLE; Schema: daily_tracks; Owner: -
 --

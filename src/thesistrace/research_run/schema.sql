@@ -243,7 +243,29 @@ CREATE TABLE research_runs.start_tracking_receipts (
     track_id text NOT NULL,
     outcome jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT start_tracking_receipts_outcome_check CHECK ((jsonb_typeof(outcome) = 'object'::text))
+    CONSTRAINT start_tracking_receipts_outcome_check CHECK (
+        jsonb_typeof(outcome) = 'object'::text
+        AND outcome ?& ARRAY[
+            'id', 'status', 'seed_run_id', 'result_checksum_sha256',
+            'origin_session', 'strategy_session'
+        ]
+        AND outcome - ARRAY[
+            'id', 'status', 'seed_run_id', 'result_checksum_sha256',
+            'origin_session', 'strategy_session'
+        ] = '{}'::jsonb
+        AND outcome ->> 'id' = track_id
+        AND outcome ->> 'seed_run_id' = seed_run_id
+        AND outcome ->> 'status' = 'active'
+        AND jsonb_typeof(outcome -> 'id') = 'string'
+        AND jsonb_typeof(outcome -> 'status') = 'string'
+        AND jsonb_typeof(outcome -> 'seed_run_id') = 'string'
+        AND jsonb_typeof(outcome -> 'result_checksum_sha256') = 'string'
+        AND outcome ->> 'result_checksum_sha256' ~ '^[0-9a-f]{64}$'
+        AND jsonb_typeof(outcome -> 'origin_session') = 'string'
+        AND outcome ->> 'origin_session' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+        AND jsonb_typeof(outcome -> 'strategy_session') = 'string'
+        AND outcome ->> 'strategy_session' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    )
 );
 
 
@@ -316,6 +338,9 @@ ALTER TABLE ONLY research_runs.runs
 
 ALTER TABLE ONLY research_runs.start_tracking_receipts
     ADD CONSTRAINT start_tracking_receipts_pkey PRIMARY KEY (request_id);
+
+ALTER TABLE ONLY research_runs.start_tracking_receipts
+    ADD CONSTRAINT start_tracking_receipts_seed_run_id_key UNIQUE (seed_run_id);
 
 
 --

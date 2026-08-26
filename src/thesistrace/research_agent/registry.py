@@ -8,6 +8,12 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from thesistrace.alpha_language.models import AlphaAuthoringCatalog, FormulaDiagnostics
+from thesistrace.daily_track import (
+    DailyTrackInvalidCursor,
+    DailyTrackList,
+    DailyTrackPollingDetail,
+    DailyTrackTemporarilyUnavailable,
+)
 from thesistrace.data.models import DataOverview
 from thesistrace.research_agent.models import (
     AlphaCatalogIdentifiers,
@@ -18,9 +24,11 @@ from thesistrace.research_agent.models import (
     DiagnoseAlphaFormulaInput,
     FormulaSource,
     GetAlphaCatalogInput,
+    GetDailyTrackInput,
     GetResearchBatchInput,
     GetResearchContextInput,
     GetResearchRunInput,
+    ListDailyTracksInput,
     ListResearchBatchesInput,
     ListResearchRunsInput,
     ResearchAgentAuthority,
@@ -28,6 +36,8 @@ from thesistrace.research_agent.models import (
     ResearchAgentScope,
     ResearchAgentToolError,
     ResearchContext,
+    StartDailyTrackInput,
+    StartDailyTrackOutcome,
     SubmitResearchBatchAccepted,
     SubmitResearchBatchOutcome,
     SubmitResearchBatchRejected,
@@ -70,7 +80,12 @@ from thesistrace.research_run import (
     ResearchRunResultSectionInput,
     ResearchRunResultSectionResponse,
     ResearchRunResultUnavailable,
+    ResearchRunStartTrackingConflict,
+    ResearchRunStartTrackingOutcome,
     ResearchRunTemporarilyUnavailable,
+    ResearchRunTrackingTemporarilyUnavailable,
+    ResearchRunTrackingUnavailable,
+    StartTrackingCommand,
 )
 from thesistrace.research_run.models import ResearchKind
 
@@ -121,6 +136,12 @@ class ResearchRunReader(Protocol):
         command: ResearchRunAdmissionCommand,
     ) -> ResearchRunAdmissionOutcome: ...
 
+    def start_tracking_with_outcome(
+        self,
+        run_id: str,
+        command: StartTrackingCommand,
+    ) -> ResearchRunStartTrackingOutcome | None: ...
+
 
 class ResearchBatchReader(Protocol):
     def list(self, *, cursor: str | None, limit: int) -> ResearchBatchList: ...
@@ -139,6 +160,12 @@ class ResearchBatchReader(Protocol):
     ) -> DomainResearchBatchCancelOutcome | None: ...
 
 
+class DailyTrackReader(Protocol):
+    def list(self, *, cursor: str | None, limit: int) -> DailyTrackList: ...
+
+    def get_polling_detail(self, track_id: str) -> DailyTrackPollingDetail | None: ...
+
+
 @dataclass(frozen=True)
 class ResearchAgentModules:
     data_overview: DataOverviewReader
@@ -147,6 +174,7 @@ class ResearchAgentModules:
     research_authoring: ResearchAuthoringReader
     research_runs: ResearchRunReader
     research_batches: ResearchBatchReader
+    daily_tracks: DailyTrackReader
 
 
 @dataclass(frozen=True)
@@ -234,6 +262,9 @@ RESEARCH_AGENT_TOOL_NAMES = frozenset(
         "cancel_research_batch",
         "cancel_research_run",
         "submit_research_run",
+        "list_daily_tracks",
+        "get_daily_track",
+        "start_daily_track",
     }
 )
 
@@ -322,6 +353,47 @@ class ResearchAgentCapabilityRegistry:
                 output_model=ResearchRunResultSectionResponse,
                 annotations=READ_ONLY_TOOL_ANNOTATIONS,
                 handler=self.get_research_run_result,
+            ),
+            ResearchAgentCapability(
+                name="list_daily_tracks",
+                description=(
+                    "List durable DailyTracks newest first with stable opaque pagination; "
+                    "requires tracking:read and returns compact summaries only."
+                ),
+                required_scope=ResearchAgentScope.TRACKING_READ,
+                input_model=ListDailyTracksInput,
+                output_model=DailyTrackList,
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                handler=self.list_daily_tracks,
+            ),
+            ResearchAgentCapability(
+                name="get_daily_track",
+                description=(
+                    "Poll one durable DailyTrack lifecycle, progress, action eligibility, "
+                    "timing, block reason, and available result sections; requires "
+                    "tracking:read and embeds no observations, positions, or checkpoints."
+                ),
+                required_scope=ResearchAgentScope.TRACKING_READ,
+                input_model=GetDailyTrackInput,
+                output_model=DailyTrackPollingDetail,
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                handler=self.get_daily_track,
+            ),
+            ResearchAgentCapability(
+                name="start_daily_track",
+                description=(
+                    "Start one durable DailyTrack from a succeeded Strategy Backtest; "
+                    "requires tracking:execute, is non-destructive and idempotent by "
+                    "request_id, and continues after the MCP connection closes. Rejects "
+                    "non-succeeded or non-Strategy origins, duplicate origins, and full "
+                    "active capacity as state conflicts. After acceptance, poll "
+                    "get_daily_track after retry_after_seconds."
+                ),
+                required_scope=ResearchAgentScope.TRACKING_EXECUTE,
+                input_model=StartDailyTrackInput,
+                output_model=StartDailyTrackOutcome,
+                annotations=EFFECTFUL_TOOL_ANNOTATIONS,
+                handler=self.start_daily_track,
             ),
             ResearchAgentCapability(
                 name="list_research_batches",
@@ -607,6 +679,57 @@ class ResearchAgentCapabilityRegistry:
         if not isinstance(result, BaseModel):
             raise TypeError("ResearchRun Result module returned an invalid section")
         return result
+
+    def list_daily_tracks(
+        self,
+        cursor: str | None = None,
+        limit: int = 20,
+    ) -> DailyTrackList:
+        self._require(ResearchAgentScope.TRACKING_READ)
+        try:
+            return self._modules.daily_tracks.list(cursor=cursor, limit=limit)
+        except DailyTrackInvalidCursor as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.INVALID_INPUT) from error
+        except DailyTrackTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+
+    def get_daily_track(self, track_id: str) -> DailyTrackPollingDetail:
+        self._require(ResearchAgentScope.TRACKING_READ)
+        try:
+            track = self._modules.daily_tracks.get_polling_detail(track_id)
+        except DailyTrackTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if track is None:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
+        return track
+
+    def start_daily_track(
+        self,
+        run_id: str,
+        request_id: str,
+    ) -> StartDailyTrackOutcome:
+        self._require(ResearchAgentScope.TRACKING_EXECUTE)
+        try:
+            outcome = self._modules.research_runs.start_tracking_with_outcome(
+                run_id,
+                StartTrackingCommand(request_id=request_id),
+            )
+        except ResearchRunStartTrackingConflict as error:
+            raise ResearchAgentExpectedFailure(
+                ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT
+            ) from error
+        except ResearchRunTrackingUnavailable as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.STATE_CONFLICT) from error
+        except ResearchRunTrackingTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if outcome is None:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
+        return StartDailyTrackOutcome(
+            track_id=outcome.track.id,
+            status=outcome.status,
+            replayed=outcome.replayed,
+            retry_after_seconds=outcome.retry_after_seconds,
+        )
 
     def cancel_research_run(
         self,

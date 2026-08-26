@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+from base64 import urlsafe_b64encode
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from threading import Event, Thread
 from uuid import uuid4
 
+from cryptography.fernet import Fernet, InvalidToken
 from psycopg import OperationalError
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
@@ -36,8 +38,10 @@ from thesistrace.daily_track.failure_policy import (
     tracking_attempt_retry_eligible,
 )
 from thesistrace.daily_track.models import (
+    DAILY_TRACK_RESULT_SECTIONS,
     DailyTrackDetail,
     DailyTrackList,
+    DailyTrackPollingDetail,
     DailyTrackSummary,
     KernelStateCheckpoint,
     RetryDailyTrackCommand,
@@ -141,6 +145,10 @@ class DailyTrackActivationLimitReached(RuntimeError):
     pass
 
 
+class DailyTrackAlreadyExists(RuntimeError):
+    pass
+
+
 class DailyTrackProgressionFailed(RuntimeError):
     pass
 
@@ -158,6 +166,14 @@ class DailyTrackEquivalenceMismatch(RuntimeError):
 
 
 class DailyTrackDetailUnavailable(RuntimeError):
+    pass
+
+
+class DailyTrackTemporarilyUnavailable(RuntimeError):
+    pass
+
+
+class DailyTrackInvalidCursor(ValueError):
     pass
 
 
@@ -332,19 +348,20 @@ class DailyTrackService:
             """,
             (origin.seed_run_id,),
         ).fetchone()
-        if row is None:
-            capacity = transaction.execute(
-                """
-                SELECT count(*) AS count
-                FROM daily_tracks.tracks
-                WHERE status IN ('active', 'blocked', 'stopping')
-                """
-            ).fetchone()
-            assert capacity is not None
-            if int(capacity["count"]) >= ACTIVE_DAILY_TRACK_LIMIT:
-                raise DailyTrackActivationLimitReached("Active DailyTrack limit of 10 reached")
-            row = self._activate_current(transaction, origin)
-            assert row is not None
+        if row is not None:
+            raise DailyTrackAlreadyExists("ResearchRun already has a DailyTrack")
+        capacity = transaction.execute(
+            """
+            SELECT count(*) AS count
+            FROM daily_tracks.tracks
+            WHERE status IN ('active', 'blocked', 'stopping')
+            """
+        ).fetchone()
+        assert capacity is not None
+        if int(capacity["count"]) >= ACTIVE_DAILY_TRACK_LIMIT:
+            raise DailyTrackActivationLimitReached("Active DailyTrack limit of 10 reached")
+        row = self._activate_current(transaction, origin)
+        assert row is not None
         return _summary(row)
 
     def _activate_current(
@@ -674,15 +691,49 @@ class DailyTrackService:
             return True
         return False
 
-    def list(self) -> DailyTrackList:
-        with self._database.transaction() as transaction:
-            rows = transaction.execute(
-                f"""
-                {_TRACK_SELECT}
-                ORDER BY track.created_at DESC, track.id
-                """
-            ).fetchall()
-        return DailyTrackList(items=[_summary(row) for row in rows], next_cursor=None)
+    def list(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 20,
+    ) -> DailyTrackList:
+        if limit < 1 or limit > 50:
+            raise ValueError("DailyTrack list limit must be between 1 and 50")
+        try:
+            with self._database.transaction() as transaction:
+                secret = _cursor_secret(transaction)
+                cursor_created_at, cursor_id = _decode_cursor(cursor, secret=secret)
+                rows = transaction.execute(
+                    f"""
+                    {_TRACK_SELECT}
+                    WHERE (
+                        %s::timestamptz IS NULL
+                        OR track.created_at < %s::timestamptz
+                        OR (
+                            track.created_at = %s::timestamptz
+                            AND track.id > %s::text
+                        )
+                    )
+                    ORDER BY track.created_at DESC, track.id
+                    LIMIT %s::integer
+                    """,
+                    (
+                        cursor_created_at,
+                        cursor_created_at,
+                        cursor_created_at,
+                        cursor_id,
+                        limit + 1,
+                    ),
+                ).fetchall()
+                summaries = [_summary(row) for row in rows[:limit]]
+                next_cursor = (
+                    _encode_cursor(rows[limit - 1], secret=secret) if len(rows) > limit else None
+                )
+            return DailyTrackList(items=summaries, next_cursor=next_cursor)
+        except (OperationalError, PoolTimeout) as error:
+            raise DailyTrackTemporarilyUnavailable(
+                "DailyTrack listing is temporarily unavailable"
+            ) from error
 
     def retry(
         self,
@@ -1084,6 +1135,130 @@ class DailyTrackService:
 
     def get(self, track_id: str) -> DailyTrackDetail | None:
         return self._get_current(track_id)
+
+    def get_polling_detail(self, track_id: str) -> DailyTrackPollingDetail | None:
+        if self._dataset_lifecycle is None:
+            raise RuntimeError("current-data DailyTrack polling is not configured")
+        try:
+            with self._database.transaction() as transaction:
+                row = transaction.execute(
+                    f"""
+                    {_TRACK_SELECT}
+                    WHERE track.id = %s
+                    """,
+                    (track_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                row["unresolved_progression"] = transaction.execute(
+                    """
+                    SELECT progression.status,
+                           progression.target_start_session::text,
+                           progression.target_end_session::text,
+                           cardinality(progression.target_sessions) AS target_session_count,
+                           progression.next_attempt_eligible_at::text,
+                           progression.next_attempt_eligible_at > now() AS retry_wait,
+                           progression.finished_at,
+                           attempt.status AS attempt_status,
+                           attempt.execution_phase,
+                           attempt.current_session::text AS current_session,
+                           attempt.started_at
+                    FROM daily_tracks.session_progressions AS progression
+                    LEFT JOIN LATERAL (
+                        SELECT status, execution_phase, current_session, started_at
+                        FROM daily_tracks.session_progression_attempts
+                        WHERE progression_id = progression.id
+                        ORDER BY ordinal DESC
+                        LIMIT 1
+                    ) AS attempt ON true
+                    WHERE progression.track_id = %s
+                      AND progression.status IN ('running', 'stopping', 'blocked')
+                    """,
+                    (track_id,),
+                ).fetchone()
+                row["observed_at"] = transaction.execute(
+                    "SELECT CURRENT_TIMESTAMP AS observed_at"
+                ).fetchone()["observed_at"]
+            admission = self._dataset_lifecycle.current_admission()
+            if admission is None:
+                raise RuntimeError("Dataset Head is not ready")
+            calendar = list(admission.research_calendar)
+            current_session = str(row["current_strategy_session"])
+            current_index = calendar.index(current_session)
+            lag_sessions = len(calendar) - current_index - 1
+            unresolved = row["unresolved_progression"]
+            phase = _polling_phase(
+                status=str(row["status"]),
+                unresolved=unresolved,
+                lag_sessions=lag_sessions,
+            )
+            origin = TrackingOrigin.model_validate(row["origin"])
+            return DailyTrackPollingDetail.model_validate(
+                {
+                    "id": str(row["id"]),
+                    "status": row["status"],
+                    "origin": {
+                        "research_run_id": origin.seed_run_id,
+                        "origin_session": origin.initial_strategy_state.session,
+                        "result_checksum_sha256": (origin.verified_result.result_checksum_sha256),
+                    },
+                    "progress": {
+                        "head_session": current_session,
+                        "data_through_session": admission.generation.data_through_session,
+                        "lag_sessions": lag_sessions,
+                        "phase": phase,
+                        "target_start_session": (
+                            None if unresolved is None else unresolved["target_start_session"]
+                        ),
+                        "target_end_session": (
+                            None if unresolved is None else unresolved["target_end_session"]
+                        ),
+                        "target_session_count": (
+                            0 if unresolved is None else unresolved["target_session_count"]
+                        ),
+                        "current_session": (
+                            unresolved["current_session"]
+                            if unresolved is not None and unresolved["attempt_status"] == "running"
+                            else None
+                        ),
+                        "retry_wait": (
+                            False if unresolved is None else bool(unresolved["retry_wait"])
+                        ),
+                        "next_retry_eligible_at": (
+                            unresolved["next_attempt_eligible_at"]
+                            if unresolved is not None and unresolved["retry_wait"]
+                            else None
+                        ),
+                    },
+                    "timing": {
+                        "activated_at": row["created_at"],
+                        "state_updated_at": row["state_updated_at"],
+                        "current_action_started_at": (
+                            None if unresolved is None else unresolved["started_at"]
+                        ),
+                        "current_action_finished_at": (
+                            None if unresolved is None else unresolved["finished_at"]
+                        ),
+                        "observed_at": row["observed_at"],
+                    },
+                    "blocked_reason": row["blocked_reason"],
+                    "action_eligibility": {
+                        "retry": row["status"] == "blocked",
+                        "stop": row["status"] in {"active", "blocked"},
+                    },
+                    "available_result_sections": list(DAILY_TRACK_RESULT_SECTIONS),
+                    "retry_after_seconds": _polling_retry_after_seconds(
+                        status=str(row["status"]),
+                        phase=phase,
+                    ),
+                }
+            )
+        except (OperationalError, PoolTimeout) as error:
+            raise DailyTrackTemporarilyUnavailable(
+                "DailyTrack polling is temporarily unavailable"
+            ) from error
+        except DailyTrackTemporarilyUnavailable:
+            raise
 
     def _get_current(self, track_id: str) -> DailyTrackDetail | None:
         if self._publication is None or self._dataset_lifecycle is None:
@@ -2635,6 +2810,7 @@ def _origin_planning_facts(origin: TrackingOrigin) -> dict[str, int]:
 
 _TRACK_SELECT = """
 SELECT track.id, track.status, track.origin, track.blocked_reason,
+       track.created_at, state.updated_at AS state_updated_at,
        checkpoint.boundary_session::text AS current_strategy_session
 FROM daily_tracks.tracks AS track
 JOIN daily_tracks.session_tracking_states AS state
@@ -2643,6 +2819,94 @@ JOIN daily_tracks.session_checkpoints AS checkpoint
   ON checkpoint.track_id = state.track_id
  AND checkpoint.manifest_sha256 = state.current_checkpoint_manifest_sha256
 """
+
+
+def _cursor_secret(transaction: PostgresTransaction) -> bytes:
+    row = transaction.execute(
+        "SELECT secret FROM daily_tracks.cursor_secrets WHERE singleton = 1"
+    ).fetchone()
+    if row is None or not isinstance(row.get("secret"), str):
+        raise RuntimeError("DailyTrack cursor secret is unavailable")
+    try:
+        secret = bytes.fromhex(str(row["secret"]))
+    except ValueError as error:
+        raise RuntimeError("DailyTrack cursor secret is invalid") from error
+    if len(secret) != 32:
+        raise RuntimeError("DailyTrack cursor secret is invalid")
+    return secret
+
+
+def _cursor_fernet(secret: bytes) -> Fernet:
+    return Fernet(urlsafe_b64encode(secret))
+
+
+def _encode_cursor(row: Mapping[str, object], *, secret: bytes) -> str:
+    created_at = row["created_at"]
+    if not isinstance(created_at, datetime):
+        raise TypeError("DailyTrack created_at must be a datetime")
+    payload = json.dumps(
+        {"created_at": created_at.isoformat(), "id": row["id"]},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return _cursor_fernet(secret).encrypt(payload).decode("ascii")
+
+
+def _decode_cursor(
+    cursor: str | None,
+    *,
+    secret: bytes,
+) -> tuple[datetime | None, str | None]:
+    if cursor is None:
+        return None, None
+    try:
+        plaintext = _cursor_fernet(secret).decrypt(cursor.encode("ascii"))
+        decoded: object = json.loads(plaintext.decode("utf-8"))
+        if not isinstance(decoded, dict) or set(decoded) != {"created_at", "id"}:
+            raise ValueError
+        created_at = datetime.fromisoformat(str(decoded["created_at"]))
+        track_id = decoded["id"]
+        if created_at.tzinfo is None or not isinstance(track_id, str) or not track_id:
+            raise ValueError
+    except (InvalidToken, ValueError, UnicodeDecodeError, UnicodeEncodeError) as error:
+        raise DailyTrackInvalidCursor("DailyTrack cursor is invalid") from error
+    return created_at, track_id
+
+
+def _polling_phase(
+    *,
+    status: str,
+    unresolved: Mapping[str, object] | None,
+    lag_sessions: int,
+) -> str:
+    if status == "stopping":
+        return "stopping"
+    if status == "stopped":
+        return "stopped"
+    if unresolved is None:
+        return "up_to_date" if lag_sessions == 0 else "waiting"
+    if unresolved["status"] == "blocked":
+        return "blocked"
+    if unresolved["attempt_status"] == "running":
+        return str(unresolved["execution_phase"])
+    if unresolved["retry_wait"]:
+        return "retry_wait"
+    return "queued"
+
+
+def _polling_retry_after_seconds(*, status: str, phase: str) -> int | None:
+    if status in {"blocked", "stopped"}:
+        return None
+    if status == "stopping" or phase in {
+        "queued",
+        "retry_wait",
+        "starting",
+        "calculating",
+        "result_ready",
+        "staging",
+    }:
+        return 2
+    return 30
 
 
 def _retry_fingerprint(track_id: str) -> str:

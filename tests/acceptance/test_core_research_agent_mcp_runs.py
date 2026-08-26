@@ -966,6 +966,7 @@ async def _mcp_client(
     stderr_path: Path,
     *,
     enable_research_cancel: bool = False,
+    environment: dict[str, str] | None = None,
 ) -> AsyncIterator[Client]:
     executable = Path(sys.executable).with_name("thesistrace-research-agent-mcp")
     stderr_path.parent.mkdir(parents=True, exist_ok=True)
@@ -977,6 +978,7 @@ async def _mcp_client(
                     cwd=Path.cwd(),
                     env={
                         **_core_environment(settings),
+                        **({} if environment is None else environment),
                         **(
                             {RESEARCH_CANCEL_ENABLE_ENVIRONMENT: "true"}
                             if enable_research_cancel

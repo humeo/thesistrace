@@ -14,6 +14,15 @@ from mcp_types.version import LATEST_HANDSHAKE_VERSION
 from pydantic import ValidationError
 
 from thesistrace.alpha_language import AlphaAuthoringCatalog, FormulaDiagnostics, alpha_language
+from thesistrace.daily_track import (
+    DAILY_TRACK_RESULT_SECTIONS,
+    DailyTrackDetailUnavailable,
+    DailyTrackInvalidCursor,
+    DailyTrackList,
+    DailyTrackPollingDetail,
+    DailyTrackSummary,
+    DailyTrackTemporarilyUnavailable,
+)
 from thesistrace.data.models import DataOverview, DatasetCoverage
 from thesistrace.operational_events import OperationalEvent
 from thesistrace.research_agent import (
@@ -26,6 +35,7 @@ from thesistrace.research_agent import (
 )
 from thesistrace.research_agent.mcp_server import RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
 from thesistrace.research_agent.registry import (
+    RESEARCH_AGENT_TOOL_NAMES,
     AlphaAuthoringLanguage,
     ResearchAgentForbidden,
 )
@@ -73,9 +83,11 @@ from thesistrace.research_run.models import (
     ResearchRunProgress,
     ResearchRunResultSectionInput,
     ResearchRunResultSectionResponse,
+    ResearchRunStartTrackingOutcome,
     ResearchRunSummary,
     ResultDataProvenance,
     ResultExecutionProvenance,
+    StartTrackingCommand,
 )
 from thesistrace.research_run.service import (
     ResearchRunAdmissionConflict,
@@ -85,7 +97,10 @@ from thesistrace.research_run.service import (
     ResearchRunResultReadFailed,
     ResearchRunResultSectionIncompatible,
     ResearchRunResultUnavailable,
+    ResearchRunStartTrackingConflict,
     ResearchRunTemporarilyUnavailable,
+    ResearchRunTrackingTemporarilyUnavailable,
+    ResearchRunTrackingUnavailable,
 )
 
 
@@ -142,6 +157,13 @@ class _ResearchRunReader:
             retry_after_seconds=None,
         )
         self.cancel_commands: list[tuple[str, ResearchRunCancelCommand]] = []
+        self.start_outcome: ResearchRunStartTrackingOutcome | None = (
+            ResearchRunStartTrackingOutcome(
+                track=_daily_track_summary(),
+                replayed=False,
+            )
+        )
+        self.start_commands: list[tuple[str, StartTrackingCommand]] = []
         self.failure: Exception | None = None
 
     def list(self, **filters: object) -> ResearchRunList:
@@ -180,6 +202,16 @@ class _ResearchRunReader:
         if self.failure is not None:
             raise self.failure
         return self.admission_outcome
+
+    def start_tracking_with_outcome(
+        self,
+        run_id: str,
+        command: StartTrackingCommand,
+    ) -> ResearchRunStartTrackingOutcome | None:
+        if self.failure is not None:
+            raise self.failure
+        self.start_commands.append((run_id, command))
+        return self.start_outcome
 
 
 class _ResearchBatchReader:
@@ -228,6 +260,24 @@ class _ResearchBatchReader:
             raise self.failure
         self.cancel_commands.append((batch_id, command))
         return self.cancel_outcome
+
+
+class _DailyTrackReader:
+    def __init__(self) -> None:
+        self.list_filters: dict[str, object] | None = None
+        self.polling_detail: DailyTrackPollingDetail | None = _daily_track_polling_detail()
+        self.failure: Exception | None = None
+
+    def list(self, *, cursor: str | None, limit: int) -> DailyTrackList:
+        if self.failure is not None:
+            raise self.failure
+        self.list_filters = {"cursor": cursor, "limit": limit}
+        return DailyTrackList(items=[_daily_track_summary()], next_cursor="track_cursor_next")
+
+    def get_polling_detail(self, _track_id: str) -> DailyTrackPollingDetail | None:
+        if self.failure is not None:
+            raise self.failure
+        return self.polling_detail
 
 
 class _BlockingDataOverviewReader(_DataOverviewReader):
@@ -303,6 +353,54 @@ def _batch_detail() -> ResearchBatchDetail:
         attempt=None,
         live_progress=None,
         items=[],
+    )
+
+
+def _daily_track_summary() -> DailyTrackSummary:
+    return DailyTrackSummary(
+        id="track_test",
+        status="active",
+        seed_run_id="run_strategy",
+        result_checksum_sha256="a" * 64,
+        origin_session="2024-01-31",
+        strategy_session="2024-01-31",
+    )
+
+
+def _daily_track_polling_detail() -> DailyTrackPollingDetail:
+    return DailyTrackPollingDetail.model_validate(
+        {
+            "id": "track_test",
+            "status": "active",
+            "origin": {
+                "research_run_id": "run_strategy",
+                "origin_session": "2024-01-31",
+                "result_checksum_sha256": "a" * 64,
+            },
+            "progress": {
+                "head_session": "2024-01-31",
+                "data_through_session": "2024-01-31",
+                "lag_sessions": 0,
+                "phase": "up_to_date",
+                "target_start_session": None,
+                "target_end_session": None,
+                "target_session_count": 0,
+                "current_session": None,
+                "retry_wait": False,
+                "next_retry_eligible_at": None,
+            },
+            "timing": {
+                "activated_at": datetime(2024, 2, 1, tzinfo=UTC),
+                "state_updated_at": datetime(2024, 2, 1, tzinfo=UTC),
+                "current_action_started_at": None,
+                "current_action_finished_at": None,
+                "observed_at": datetime(2024, 2, 1, tzinfo=UTC),
+            },
+            "blocked_reason": None,
+            "action_eligibility": {"retry": False, "stop": True},
+            "available_result_sections": list(DAILY_TRACK_RESULT_SECTIONS),
+            "retry_after_seconds": 30,
+        }
     )
 
 
@@ -417,6 +515,7 @@ def _registry(
     selected_alpha_language: AlphaAuthoringLanguage = alpha_language,
     research_runs: _ResearchRunReader | None = None,
     research_batches: _ResearchBatchReader | None = None,
+    daily_tracks: _DailyTrackReader | None = None,
 ) -> ResearchAgentCapabilityRegistry:
     return ResearchAgentCapabilityRegistry(
         authority=authority or local_operator_authority(),
@@ -427,6 +526,7 @@ def _registry(
             research_authoring=ResearchAuthoringService(),
             research_runs=research_runs or _ResearchRunReader(),
             research_batches=research_batches or _ResearchBatchReader(),
+            daily_tracks=daily_tracks or _DailyTrackReader(),
         ),
         **({} if allowed_tools is None else {"allowed_tools": allowed_tools}),
     )
@@ -935,6 +1035,102 @@ def test_registry_maps_research_batch_cancel_authority_and_conflicts() -> None:
         assert failed.error.code == code
 
 
+def test_registry_projects_daily_track_history_detail_start_and_expected_errors() -> None:
+    run_reader = _ResearchRunReader()
+    track_reader = _DailyTrackReader()
+    registry = _registry(research_runs=run_reader, daily_tracks=track_reader)
+
+    listed = registry.invoke(
+        "list_daily_tracks",
+        {"cursor": "track_cursor"},
+        trace_id="trace_track_list",
+    )
+    assert listed.result is not None
+    assert listed.result.model_dump(mode="json")["next_cursor"] == "track_cursor_next"
+    assert track_reader.list_filters == {"cursor": "track_cursor", "limit": 20}
+
+    detail = registry.invoke(
+        "get_daily_track",
+        {"track_id": "track_test"},
+        trace_id="trace_track_get",
+    )
+    assert detail.result is not None
+    projected = detail.result.model_dump(mode="json")
+    assert projected["origin"]["research_run_id"] == "run_strategy"
+    assert projected["available_result_sections"] == list(DAILY_TRACK_RESULT_SECTIONS)
+    assert "positions" not in str(projected).lower()
+
+    started = registry.invoke(
+        "start_daily_track",
+        {"run_id": "run_strategy", "request_id": " start_track_request "},
+        trace_id="trace_track_start",
+    )
+    assert started.result is not None
+    assert started.result.model_dump(mode="json") == {
+        "outcome": "accepted",
+        "track_id": "track_test",
+        "status": "active",
+        "replayed": False,
+        "retry_after_seconds": 30,
+    }
+    assert run_reader.start_commands == [
+        ("run_strategy", StartTrackingCommand(request_id="start_track_request"))
+    ]
+
+    for failure, tool, arguments, code in (
+        (
+            DailyTrackInvalidCursor("invalid cursor"),
+            "list_daily_tracks",
+            {"cursor": "invalid"},
+            "INVALID_INPUT",
+        ),
+        (
+            DailyTrackTemporarilyUnavailable("database unavailable"),
+            "get_daily_track",
+            {"track_id": "track_test"},
+            "TEMPORARILY_UNAVAILABLE",
+        ),
+        (
+            DailyTrackDetailUnavailable("detail unavailable"),
+            "get_daily_track",
+            {"track_id": "track_test"},
+            "INTERNAL",
+        ),
+    ):
+        track_reader.failure = failure
+        failed = registry.invoke(tool, arguments, trace_id=f"trace_track_{code.lower()}")
+        assert failed.error is not None
+        assert failed.error.code == code
+
+    track_reader.failure = None
+    for failure, code in (
+        (ResearchRunStartTrackingConflict("request conflict"), "IDEMPOTENCY_CONFLICT"),
+        (ResearchRunTrackingUnavailable("origin unavailable"), "STATE_CONFLICT"),
+        (
+            ResearchRunTrackingTemporarilyUnavailable("database unavailable"),
+            "TEMPORARILY_UNAVAILABLE",
+        ),
+    ):
+        run_reader.failure = failure
+        failed = registry.invoke(
+            "start_daily_track",
+            {"run_id": "run_strategy", "request_id": "another_request"},
+            trace_id=f"trace_start_{code.lower()}",
+        )
+        assert failed.error is not None
+        assert failed.error.code == code
+
+    run_reader.failure = None
+    run_reader.start_outcome = None
+    missing = registry.invoke(
+        "start_daily_track",
+        {"run_id": "run_missing", "request_id": "missing_request"},
+        trace_id="trace_start_missing",
+    )
+    assert missing.error is not None
+    assert missing.error.code == "NOT_FOUND"
+
+
 def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delete() -> None:
     reader = ResearchAgentAuthority(
         subject="reader",
@@ -948,6 +1144,14 @@ def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delet
         subject="canceller",
         scopes=frozenset({ResearchAgentScope.RESEARCH_CANCEL}),
     )
+    tracking_reader = ResearchAgentAuthority(
+        subject="tracking-reader",
+        scopes=frozenset({ResearchAgentScope.TRACKING_READ}),
+    )
+    tracking_executor = ResearchAgentAuthority(
+        subject="tracking-executor",
+        scopes=frozenset({ResearchAgentScope.TRACKING_EXECUTE}),
+    )
 
     reader_tools = {capability.name for capability in _registry(reader).accessible_capabilities()}
     executor_tools = {
@@ -956,13 +1160,22 @@ def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delet
     cancel_tools = {
         capability.name for capability in _registry(canceller).accessible_capabilities()
     }
+    tracking_reader_tools = {
+        capability.name for capability in _registry(tracking_reader).accessible_capabilities()
+    }
+    tracking_executor_tools = {
+        capability.name for capability in _registry(tracking_executor).accessible_capabilities()
+    }
 
     assert "submit_research_run" not in reader_tools
     assert {"list_research_runs", "get_research_run"} <= reader_tools
     assert executor_tools == {"submit_research_batch", "submit_research_run"}
     assert cancel_tools == {"cancel_research_batch", "cancel_research_run"}
+    assert tracking_reader_tools == {"get_daily_track", "list_daily_tracks"}
+    assert tracking_executor_tools == {"start_daily_track"}
     assert all("retry" not in name and "delete" not in name for name in reader_tools)
     assert all("retry" not in name and "delete" not in name for name in executor_tools)
+    assert "delete_daily_track" not in RESEARCH_AGENT_TOOL_NAMES
 
 
 def test_in_memory_protocol_sanitizes_unexpected_tool_failures() -> None:
@@ -1002,6 +1215,9 @@ async def _exercise_in_memory_protocol() -> None:
             "list_research_runs",
             "get_research_run",
             "get_research_run_result",
+            "list_daily_tracks",
+            "get_daily_track",
+            "start_daily_track",
             "list_research_batches",
             "get_research_batch",
             "submit_research_batch",
@@ -1020,8 +1236,20 @@ async def _exercise_in_memory_protocol() -> None:
             assert tool.annotations.destructive_hint is False
             assert tool.annotations.idempotent_hint is True
             assert tool.annotations.open_world_hint is False
-            if tool.name in {"submit_research_batch", "submit_research_run"}:
+            if tool.name in {
+                "start_daily_track",
+                "submit_research_batch",
+                "submit_research_run",
+            }:
                 assert tool.annotations.read_only_hint is False
+                if tool.name == "start_daily_track":
+                    assert tool.input_schema["additionalProperties"] is False
+                    assert "non-succeeded" in tool.description
+                    assert "duplicate origins" in tool.description
+                    assert "active capacity" in tool.description
+                    assert "get_daily_track" in tool.description
+                    assert "retry_after_seconds" in tool.description
+                    continue
                 discriminator = (
                     "batch_kind" if tool.name == "submit_research_batch" else "research_kind"
                 )
@@ -1059,6 +1287,20 @@ async def _exercise_in_memory_protocol() -> None:
         assert batch_list_schema["properties"]["limit"]["default"] == 20
         assert batch_list_schema["properties"]["limit"]["maximum"] == 50
         assert batch_list_schema["properties"]["cursor"]["anyOf"][0]["maxLength"] == 1024
+        track_list_schema = tools["list_daily_tracks"].input_schema
+        assert track_list_schema["properties"]["limit"]["default"] == 20
+        assert track_list_schema["properties"]["limit"]["maximum"] == 50
+        assert track_list_schema["properties"]["cursor"]["anyOf"][0]["maxLength"] == 1024
+        track_output_schema = str(tools["get_daily_track"].output_schema)
+        for private_name in (
+            "positions",
+            "checkpoint",
+            "attempt",
+            "lease",
+            "fence",
+        ):
+            assert private_name not in track_output_schema.lower()
+        assert "available_result_sections" in track_output_schema
         batch_submit_schema = tools["submit_research_batch"].input_schema
         assert "structured rejected outcome" in (tools["submit_research_batch"].description or "")
         assert "get_research_batch" in (tools["submit_research_batch"].description or "")

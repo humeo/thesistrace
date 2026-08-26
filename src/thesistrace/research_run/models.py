@@ -16,6 +16,7 @@ from pydantic import (
 )
 
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
+from thesistrace.daily_track.models import DailyTrackSummary
 from thesistrace.data.models import FinancialResearchReadiness
 from thesistrace.research_run.result_schema import StrategyMetrics
 
@@ -428,6 +429,15 @@ class StartTrackingCommand(BaseModel):
     request_id: RequestId
 
 
+class ResearchRunStartTrackingOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    track: DailyTrackSummary
+    status: Literal["active"] = "active"
+    replayed: bool
+    retry_after_seconds: Literal[30] = 30
+
+
 class ResearchRunList(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -594,9 +604,7 @@ class StrategyBacktestResearchRunResult(BaseModel):
     provenance: StrategyBacktestResultProvenance
 
 
-type ResearchRunResult = (
-    FactorEvaluationResearchRunResult | StrategyBacktestResearchRunResult
-)
+type ResearchRunResult = FactorEvaluationResearchRunResult | StrategyBacktestResearchRunResult
 
 
 ResultCursor = Annotated[str, Field(strict=True, min_length=1, max_length=1024)]

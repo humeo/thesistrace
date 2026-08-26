@@ -1,10 +1,25 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
+type DailyTrackResultSection = Literal[
+    "factor",
+    "strategy_summary",
+    "strategy_observations",
+    "origin",
+    "provenance",
+]
+DAILY_TRACK_RESULT_SECTIONS: tuple[DailyTrackResultSection, ...] = (
+    "factor",
+    "strategy_summary",
+    "strategy_observations",
+    "origin",
+    "provenance",
+)
 
 
 class RetryDailyTrackCommand(BaseModel):
@@ -76,6 +91,74 @@ class DailyTrackList(BaseModel):
 
     items: list[DailyTrackSummary]
     next_cursor: str | None
+
+
+class DailyTrackPollingOrigin(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    research_run_id: str
+    origin_session: str
+    result_checksum_sha256: str
+
+
+class DailyTrackPollingProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    head_session: str
+    data_through_session: str
+    lag_sessions: int
+    phase: Literal[
+        "waiting",
+        "queued",
+        "retry_wait",
+        "starting",
+        "calculating",
+        "result_ready",
+        "staging",
+        "stopping",
+        "blocked",
+        "up_to_date",
+        "stopped",
+    ]
+    target_start_session: str | None
+    target_end_session: str | None
+    target_session_count: int
+    current_session: str | None
+    retry_wait: bool
+    next_retry_eligible_at: str | None
+
+
+class DailyTrackPollingTiming(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    activated_at: datetime
+    state_updated_at: datetime
+    current_action_started_at: datetime | None
+    current_action_finished_at: datetime | None
+    observed_at: datetime
+
+
+class DailyTrackActionEligibility(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    retry: bool
+    stop: bool
+
+
+class DailyTrackPollingDetail(BaseModel):
+    """Compact public lifecycle view."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    status: Literal["active", "blocked", "stopping", "stopped"]
+    origin: DailyTrackPollingOrigin
+    progress: DailyTrackPollingProgress
+    timing: DailyTrackPollingTiming
+    blocked_reason: str | None
+    action_eligibility: DailyTrackActionEligibility
+    available_result_sections: list[DailyTrackResultSection]
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
 
 
 class DailyTrackOriginPosition(BaseModel):

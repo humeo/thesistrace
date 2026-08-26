@@ -3176,9 +3176,20 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
         with ThreadPoolExecutor(max_workers=4) as executor:
             same_seed_futures = [executor.submit(start_same_seed, index) for index in range(4)]
             same_seed_responses = [future.result(timeout=30) for future in same_seed_futures]
-        assert [response.status_code for response in same_seed_responses] == [201] * 4
-        first_track = same_seed_responses[0].json()
-        assert [response.json() for response in same_seed_responses] == [first_track] * 4
+        assert sorted(response.status_code for response in same_seed_responses) == [
+            201,
+            409,
+            409,
+            409,
+        ]
+        first_track = next(
+            response.json() for response in same_seed_responses if response.status_code == 201
+        )
+        assert all(
+            response.json() == {"detail": "ResearchRun already has a DailyTrack"}
+            for response in same_seed_responses
+            if response.status_code == 409
+        )
         assert client.get("/api/daily-tracks").json()["items"] == [first_track]
 
         tracks: list[dict[str, object]] = [first_track]
@@ -3213,6 +3224,9 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             if response.status_code == 409
         )
         rejected_run_id = run_ids[9 + rejected_index]
+        assert capacity_responses[rejected_index].json() == {
+            "detail": "Active DailyTrack limit of 10 reached"
+        }
         assert (
             len(
                 [

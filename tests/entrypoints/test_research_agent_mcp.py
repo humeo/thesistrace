@@ -176,6 +176,7 @@ def _runtime_stub() -> SimpleNamespace:
         research_authoring=object(),
         research_batches=object(),
         research_runs=object(),
+        daily_tracks=object(),
     )
 
 

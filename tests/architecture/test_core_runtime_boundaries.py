@@ -126,6 +126,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "research_agent": {
             "alpha_language",
             "data",
+            "daily_track",
             "operational_events",
             "research_authoring",
             "research_batch",
@@ -202,6 +203,7 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "research_batches.cursor_secrets",
         ),
         "daily_track": (
+            "daily_tracks.cursor_secrets",
             "daily_tracks.tracks",
             "daily_tracks.session_progressions",
             "daily_tracks.session_progression_attempts",

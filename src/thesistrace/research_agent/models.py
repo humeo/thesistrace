@@ -114,6 +114,8 @@ ResearchRunId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 ResearchRunCursor = Annotated[str, Field(strict=True, min_length=1, max_length=1024)]
 ResearchBatchId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 ResearchBatchCursor = Annotated[str, Field(strict=True, min_length=1, max_length=1024)]
+DailyTrackId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
+DailyTrackCursor = Annotated[str, Field(strict=True, min_length=1, max_length=1024)]
 
 
 class ListResearchRunsInput(BaseModel):
@@ -165,6 +167,36 @@ class CancelResearchBatchOutcome(BaseModel):
     batch: ResearchBatchPollingDetail
     replayed: bool
     retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
+class ListDailyTracksInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    cursor: DailyTrackCursor | None = None
+    limit: Annotated[int, Field(strict=True, ge=1, le=50)] = 20
+
+
+class GetDailyTrackInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    track_id: DailyTrackId
+
+
+class StartDailyTrackInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    run_id: ResearchRunId
+    request_id: RequestId
+
+
+class StartDailyTrackOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    track_id: DailyTrackId
+    status: Literal["active"]
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)]
 
 
 class SubmitResearchBatchAccepted(BaseModel):

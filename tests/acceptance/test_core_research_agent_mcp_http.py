@@ -215,6 +215,8 @@ async def _exercise_http_contract(
         ResearchAgentScope.RESEARCH_READ.value,
         ResearchAgentScope.RESEARCH_EXECUTE.value,
         ResearchAgentScope.RESEARCH_CANCEL.value,
+        ResearchAgentScope.TRACKING_READ.value,
+        ResearchAgentScope.TRACKING_EXECUTE.value,
     )
     action_token = issuer.issue(scopes=action_scopes)
     no_grant_token = issuer.issue(scopes=())
@@ -234,6 +236,9 @@ async def _exercise_http_contract(
                 "submit_research_run",
                 "cancel_research_batch",
                 "cancel_research_run",
+                "list_daily_tracks",
+                "get_daily_track",
+                "start_daily_track",
             }
 
             context = await client.call_tool("get_research_context", {})
@@ -603,6 +608,103 @@ async def _exercise_http_contract(
             assert terminal_conflict.is_error is True
             assert terminal_conflict.structured_content["code"] == "STATE_CONFLICT"
 
+            strategy = await client.call_tool(
+                "submit_research_run",
+                _strategy_command("http-track-origin"),
+            )
+            assert strategy.is_error is False
+            assert (
+                await anyio.to_thread.run_sync(app.state.core_runtime.research_runs.process_next)
+                is True
+            )
+            assert (
+                await anyio.to_thread.run_sync(app.state.core_runtime.research_runs.process_next)
+                is True
+            )
+            daily_track = await client.call_tool(
+                "start_daily_track",
+                {
+                    "run_id": strategy.structured_content["run_id"],
+                    "request_id": "http-start-track",
+                },
+            )
+            assert daily_track.is_error is False
+            assert daily_track.structured_content == {
+                "outcome": "accepted",
+                "track_id": daily_track.structured_content["track_id"],
+                "status": "active",
+                "replayed": False,
+                "retry_after_seconds": 30,
+            }
+            track_detail = await client.call_tool(
+                "get_daily_track",
+                {"track_id": daily_track.structured_content["track_id"]},
+            )
+            assert track_detail.is_error is False
+            assert (
+                track_detail.structured_content["origin"]["research_run_id"]
+                == (strategy.structured_content["run_id"])
+            )
+            _assert_compact_track(track_detail.structured_content)
+            duplicate_origin = await client.call_tool(
+                "start_daily_track",
+                {
+                    "run_id": strategy.structured_content["run_id"],
+                    "request_id": "http-start-track-different-command",
+                },
+            )
+            assert duplicate_origin.is_error is True
+            assert duplicate_origin.structured_content["code"] == "STATE_CONFLICT"
+
+            concurrent_strategy = await client.call_tool(
+                "submit_research_run",
+                _strategy_command("http-track-concurrent-origin"),
+            )
+            changed_strategy = await client.call_tool(
+                "submit_research_run",
+                _strategy_command("http-track-changed-origin"),
+            )
+            assert concurrent_strategy.is_error is False
+            assert changed_strategy.is_error is False
+            assert (
+                await anyio.to_thread.run_sync(app.state.core_runtime.research_runs.process_next)
+                is True
+            )
+            assert (
+                await anyio.to_thread.run_sync(app.state.core_runtime.research_runs.process_next)
+                is True
+            )
+            concurrent_tracks = await _concurrent_track_starts(
+                app,
+                action_token,
+                run_id=str(concurrent_strategy.structured_content["run_id"]),
+                request_id="http-track-concurrent-start",
+            )
+            assert all(not result.is_error for result in concurrent_tracks)
+            assert len({result.structured_content["track_id"] for result in concurrent_tracks}) == 1
+            assert (
+                sum(result.structured_content["replayed"] is False for result in concurrent_tracks)
+                == 1
+            )
+            concurrent_track_id = str(concurrent_tracks[0].structured_content["track_id"])
+            changed_fingerprint = await client.call_tool(
+                "start_daily_track",
+                {
+                    "run_id": changed_strategy.structured_content["run_id"],
+                    "request_id": "http-track-concurrent-start",
+                },
+            )
+            assert changed_fingerprint.is_error is True
+            assert changed_fingerprint.structured_content["code"] == "IDEMPOTENCY_CONFLICT"
+            unchanged_after_conflict = await client.call_tool(
+                "start_daily_track",
+                {
+                    "run_id": changed_strategy.structured_content["run_id"],
+                    "request_id": "http-track-changed-fresh-start",
+                },
+            )
+            assert unchanged_after_conflict.is_error is False
+
         async with _mcp_client(app, no_grant_token) as client:
             assert (await client.list_tools()).tools == []
 
@@ -614,6 +716,41 @@ async def _exercise_http_contract(
     restarted_app = _app(settings, issuer)
     async with restarted_app.router.lifespan_context(restarted_app):
         async with _mcp_client(restarted_app, action_token) as restarted:
+            track_replay = await restarted.call_tool(
+                "start_daily_track",
+                {
+                    "run_id": strategy.structured_content["run_id"],
+                    "request_id": "http-start-track",
+                },
+            )
+            assert track_replay.is_error is False
+            assert (
+                track_replay.structured_content["track_id"]
+                == (daily_track.structured_content["track_id"])
+            )
+            assert track_replay.structured_content["replayed"] is True
+            concurrent_track_replay = await restarted.call_tool(
+                "start_daily_track",
+                {
+                    "run_id": concurrent_strategy.structured_content["run_id"],
+                    "request_id": "http-track-concurrent-start",
+                },
+            )
+            assert concurrent_track_replay.is_error is False
+            assert concurrent_track_replay.structured_content["track_id"] == concurrent_track_id
+            assert concurrent_track_replay.structured_content["replayed"] is True
+            reopened_track = await restarted.call_tool(
+                "get_daily_track",
+                {"track_id": daily_track.structured_content["track_id"]},
+            )
+            assert reopened_track.is_error is False
+            assert (
+                reopened_track.structured_content["id"] == (track_detail.structured_content["id"])
+            )
+            assert (
+                reopened_track.structured_content["origin"]
+                == (track_detail.structured_content["origin"])
+            )
             replay = await restarted.call_tool(
                 "cancel_research_run",
                 {
@@ -753,6 +890,30 @@ async def _concurrent_batch_submits(
     return results
 
 
+async def _concurrent_track_starts(
+    app,
+    token: str,
+    *,
+    run_id: str,
+    request_id: str,
+) -> list[object]:
+    results: list[object] = []
+
+    async def start() -> None:
+        async with _mcp_client(app, token) as client:
+            results.append(
+                await client.call_tool(
+                    "start_daily_track",
+                    {"run_id": run_id, "request_id": request_id},
+                )
+            )
+
+    async with anyio.create_task_group() as task_group:
+        for _index in range(4):
+            task_group.start_soon(start)
+    return results
+
+
 async def _exercise_allowlist_intersection(app, token: str) -> None:
     async with app.router.lifespan_context(app):
         async with _mcp_client(app, token) as client:
@@ -782,6 +943,38 @@ def _research_command(request_id: str) -> dict[str, object]:
         "neutralization": "none",
         "research_kind": "factor_evaluation",
     }
+
+
+def _strategy_command(request_id: str) -> dict[str, object]:
+    return {
+        **_research_command(request_id),
+        "research_kind": "strategy_backtest",
+        "holdings_count": 1,
+        "rebalance_every_sessions": 1,
+    }
+
+
+def _assert_compact_track(payload: dict[str, object]) -> None:
+    serialized = str(payload).lower()
+    assert payload["available_result_sections"] == [
+        "factor",
+        "strategy_summary",
+        "strategy_observations",
+        "origin",
+        "provenance",
+    ]
+    for private_name in (
+        "positions",
+        "checkpoint",
+        "attempt",
+        "lease",
+        "fence",
+        "manifest",
+        "object_key",
+        "sql",
+        "path",
+    ):
+        assert private_name not in serialized
 
 
 def _batch_command(request_id: str) -> dict[str, object]:

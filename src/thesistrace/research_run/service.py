@@ -15,14 +15,19 @@ from uuid import uuid4
 
 from cryptography.fernet import Fernet, InvalidToken
 from psycopg import OperationalError
-from psycopg.errors import OutOfMemory
+from psycopg.errors import OutOfMemory, UniqueViolation
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
 from pydantic import ValidationError
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.alpha_language import CompiledAlpha, FormulaCompilationError, alpha_language
-from thesistrace.daily_track import DailyTrackSummary, TrackingOrigin
+from thesistrace.daily_track import (
+    DailyTrackActivationLimitReached,
+    DailyTrackAlreadyExists,
+    DailyTrackSummary,
+    TrackingOrigin,
+)
 from thesistrace.data import (
     DatasetAdmissionSnapshot,
     DatasetLifecycle,
@@ -99,6 +104,7 @@ from thesistrace.research_run.models import (
     ResearchRunResult,
     ResearchRunResultSectionInput,
     ResearchRunResultSectionResponse,
+    ResearchRunStartTrackingOutcome,
     ResearchRunSummary,
     ResultDataProvenance,
     ResultExecutionProvenance,
@@ -1592,9 +1598,7 @@ class ResearchRunService:
                 return ResearchRunCancelOutcome(
                     run=replayed_run,
                     replayed=True,
-                    retry_after_seconds=research_run_retry_after_seconds(
-                        replayed_run.status
-                    ),
+                    retry_after_seconds=research_run_retry_after_seconds(replayed_run.status),
                 )
 
             self._lock_result_staging(transaction, run_id)
@@ -1832,6 +1836,14 @@ class ResearchRunService:
         run_id: str,
         command: StartTrackingCommand,
     ) -> DailyTrackSummary | None:
+        outcome = self.start_tracking_with_outcome(run_id, command)
+        return None if outcome is None else outcome.track
+
+    def start_tracking_with_outcome(
+        self,
+        run_id: str,
+        command: StartTrackingCommand,
+    ) -> ResearchRunStartTrackingOutcome | None:
         if self._activate_track is None or self._publication is None:
             raise RuntimeError("DailyTrack activation dependencies are not configured")
         request_id = command.request_id.strip()
@@ -1858,7 +1870,10 @@ class ResearchRunService:
                         raise ResearchRunStartTrackingConflict(
                             "Start Tracking request_id conflicts"
                         )
-                    return DailyTrackSummary.model_validate(receipt["outcome"])
+                    return ResearchRunStartTrackingOutcome(
+                        track=DailyTrackSummary.model_validate(receipt["outcome"]),
+                        replayed=True,
+                    )
                 row = transaction.execute(
                     """
                     SELECT id, name, folder_id, status,
@@ -1914,7 +1929,23 @@ class ResearchRunService:
                         Jsonb(outcome.model_dump(mode="json")),
                     ),
                 )
-                return outcome
+                return ResearchRunStartTrackingOutcome(
+                    track=outcome,
+                    replayed=False,
+                )
+        except DailyTrackActivationLimitReached as error:
+            raise ResearchRunTrackingUnavailable(
+                "Active DailyTrack limit of 10 reached"
+            ) from error
+        except DailyTrackAlreadyExists as error:
+            raise ResearchRunTrackingUnavailable("ResearchRun already has a DailyTrack") from error
+        except UniqueViolation as error:
+            if error.diag.constraint_name not in {
+                "start_tracking_receipts_seed_run_id_key",
+                "tracks_seed_run_id_key",
+            }:
+                raise
+            raise ResearchRunTrackingUnavailable("ResearchRun already has a DailyTrack") from error
         except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
             raise ResearchRunTrackingTemporarilyUnavailable(
                 "Start Tracking is temporarily unavailable"
@@ -2038,9 +2069,7 @@ class ResearchRunService:
             return None
         immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
         if row["status"] != "succeeded":
-            raise ResearchRunResultUnavailable(
-                "ResearchRun Result is available only after success"
-            )
+            raise ResearchRunResultUnavailable("ResearchRun Result is available only after success")
         if query.section not in research_run_result_sections(
             "succeeded",
             immutable_input.research_kind,
@@ -2122,9 +2151,7 @@ class ResearchRunService:
             ValidationError,
             ValueError,
         ) as error:
-            raise ResearchRunResultReadFailed(
-                "ResearchRun Result could not be verified"
-            ) from error
+            raise ResearchRunResultReadFailed("ResearchRun Result could not be verified") from error
         return result
 
     def _get_polling_detail(self, run_id: str) -> ResearchRunPollingDetail | None:
@@ -3230,8 +3257,7 @@ class ResearchRunService:
         return _RecordedFailure(
             retry=retry,
             attempt_number=attempt_number,
-            failure_code=attempt_failure_code(policy.attempt_reason)
-            or "UNCLASSIFIED_FAILURE",
+            failure_code=attempt_failure_code(policy.attempt_reason) or "UNCLASSIFIED_FAILURE",
         )
 
     def _release_execution_checkpoints(
@@ -3640,8 +3666,7 @@ def _generation_matches_frozen_facts(
         and generation.research_sessions[-1] == facts.coverage_end.isoformat()
         and set(immutable_input.field_bindings)
         <= set(getattr(generation, "field_availability", ()))
-        and _generation_financial_readiness(generation)
-        == facts.financial_research_readiness
+        and _generation_financial_readiness(generation) == facts.financial_research_readiness
     )
 
 
@@ -3665,9 +3690,7 @@ def _result_provenance(claim: ResearchRunExecutionClaim) -> dict[str, object]:
         "immutable_input_sha256": hashlib.sha256(canonical_json_bytes(value)).hexdigest(),
         "data_generation_id": claim.data_generation_id,
         "data_through_session": claim.data_through_session,
-        "financial_research_readiness": value["data_admission"][
-            "financial_research_readiness"
-        ],
+        "financial_research_readiness": value["data_admission"]["financial_research_readiness"],
         "calculation_contracts": calculation_contracts,
         "semantic_versions": value["semantic_versions"],
     }
@@ -4084,8 +4107,7 @@ def _result_section_response(
     if isinstance(query, ProvenanceResultSectionInput):
         if (
             section_read.value != provenance
-            or
-            provenance.get("research_run_id") != run_id
+            or provenance.get("research_run_id") != run_id
             or provenance.get("research_kind") != research_kind
         ):
             raise ResearchRunResultReadFailed("Result provenance does not match ResearchRun")
@@ -4098,9 +4120,7 @@ def _result_section_response(
             data=ResultDataProvenance(
                 generation_id=str(provenance["data_generation_id"]),
                 data_through_session=provenance["data_through_session"],
-                financial_research_readiness=provenance[
-                    "financial_research_readiness"
-                ],
+                financial_research_readiness=provenance["financial_research_readiness"],
             ),
             execution=ResultExecutionProvenance(
                 calculation_contracts=dict(provenance["calculation_contracts"]),
@@ -4123,12 +4143,8 @@ def _result_section_response(
                 "benchmark": benchmark,
                 "comparison": StrategyComparison(
                     net_cumulative_return=metrics.get("net_cumulative_return"),
-                    benchmark_cumulative_return=metrics.get(
-                        "benchmark_cumulative_return"
-                    ),
-                    annualized_excess_return=metrics.get(
-                        "annualized_excess_return"
-                    ),
+                    benchmark_cumulative_return=metrics.get("benchmark_cumulative_return"),
+                    annualized_excess_return=metrics.get("annualized_excess_return"),
                 ),
             }
         )
