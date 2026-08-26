@@ -25,10 +25,8 @@ expectation of higher future return.
 _Avoid_: Automatic reversal, absolute IC, inferred direction
 
 **Alpha Language**:
-The single current language for authoring and executing Alpha Formulas; a hard
-cut replaces obsolete syntax or meaning without aliases, migrations, or
-compatibility paths.
-_Avoid_: Selectable language version, compatibility alias
+The canonical language in which authors express executable Alpha Formulae.
+_Avoid_: Alpha Formula, Alpha Expression, general-purpose Python
 
 **Alpha Formula**:
 The author-editable expression submitted by a Browser Draft and frozen by a
@@ -66,8 +64,8 @@ within the selected Liquidity Universe for each Research Session.
 _Avoid_: Time-series rank, whole-market rank, Industry Neutralization
 
 **Alpha Authoring Catalog**:
-The read-only catalog of Alpha-authorable Fields and Alpha operations exposed to
-the Alpha Compiler and Alpha Editor.
+The read-only catalog of Alpha-authorable Fields and operations used to validate
+Alpha Formulae.
 _Avoid_: Editable registry, physical data catalog
 
 **Alpha Field Capability**:
@@ -78,7 +76,7 @@ _Avoid_: All-numeric exposure, frontend allowlist
 **Alpha Identifier**:
 The globally unique lowercase `snake_case` name used for a Field or operation in
 an Alpha Formula.
-_Avoid_: Display label, namespaced Field Reference, compatibility alias
+_Avoid_: Display label, namespaced Field Reference, legacy name
 
 **Alpha Numeric Semantics**:
 The fixed rules for numeric conversion, invalid values, rounding, and operator
@@ -95,19 +93,10 @@ The farthest preceding Research Session required to evaluate an Alpha
 Expression after nested lag and rolling operations are combined.
 _Avoid_: Largest individual Window, last valid observations
 
-**Alpha Admission Budget**:
-The deterministic safety limits an Alpha Formula must satisfy before a
-ResearchRun can be created.
-_Avoid_: Execution timeout, scheduling priority, Research Period limit
-
 **Alpha Diagnostic**:
 A structured finding that identifies an Alpha Formula problem and its exact
 source range.
 _Avoid_: Generic error string, frontend verdict
-
-**Alpha Editor**:
-The sole editable Alpha Formula surface for a Browser Draft.
-_Avoid_: General-purpose code editor, editable Alpha Expression
 
 **Missing Alpha Value**:
 The absence of a usable Alpha score because required input or calculation is
@@ -118,11 +107,6 @@ _Avoid_: Zero, imputed value, partial-window result
 The deterministic instrument-by-session scores produced by an Alpha Expression
 inside a ResearchRun or Tracking Advance.
 _Avoid_: Alpha, Strategy signal, persisted factor table
-
-**Alpha Matrix**:
-The transient collection of Final Alpha Cross-Sections used by one bounded
-Research calculation segment.
-_Avoid_: Result Bundle, durable signal table
 
 ### Research Lifecycle and Factor Evaluation
 
@@ -140,11 +124,6 @@ _Avoid_: Research Batch, immutable membership, folder-name lookup
 The browser-local, non-authoritative authoring state for prospective Research in
 one Research Folder.
 _Avoid_: ResearchRun, server Draft, latest Run
-
-**Run Action**:
-The action that validates a Browser Draft and either returns Diagnostics or
-atomically admits one immutable ResearchRun.
-_Avoid_: Save, Create draft, execution Attempt
 
 **Research Kind**:
 The immutable choice between `factor_evaluation` and `strategy_backtest` for one
@@ -184,11 +163,6 @@ terminal record and already-published Results while discarding incomplete
 calculation state.
 _Avoid_: Research Deletion, Result rollback, individual Run cancellation
 
-**Research Batch Attempt**:
-One infrastructure execution attempt for an existing Research Batch using its
-unchanged Runs, shared research scope, and Data Generation.
-_Avoid_: Research Batch, ResearchRun Attempt, modified submission
-
 **Research Batch Progress**:
 The user-visible combination of durably completed Batch tasks and estimated
 work within the current incomplete task.
@@ -213,30 +187,15 @@ The explicit permanent removal of one terminal ResearchRun without deleting a
 DailyTrack that originated from it.
 _Avoid_: Cancel, Folder deletion, cascading Track deletion
 
-**Create draft**:
-The action that copies one ResearchRun's authorable values into its Folder's
-Browser Draft without creating or executing another ResearchRun.
-_Avoid_: Rerun, Retry, automatic restore
-
-**ResearchRun Attempt**:
-One infrastructure execution attempt for an existing ResearchRun, using the
-Run's unchanged frozen input and Data Generation.
-_Avoid_: ResearchRun, Create draft, modified input
-
 **Result Bundle**:
 The immutable authoritative result of one successful ResearchRun, shaped by its
 Research Kind.
 _Avoid_: Alpha store, UI cache, partial report
 
-**Result Manifest**:
-The immutable index and provenance record that identifies every object in a
-Result Bundle and the successful execution that produced it.
-_Avoid_: Dataset manifest, HTML report, execution log
-
 **Factor Evaluation**:
 The Research Period summary of an Alpha's predictive ranking and correlation
 quality independently of a Strategy's portfolio outcome.
-_Avoid_: Strategy Backtest, Factor curve, Alpha Matrix
+_Avoid_: Strategy Backtest, Factor curve, durable signal table
 
 **Label Maturation**:
 The point when a signal-session Forward Return Label becomes resolvable because
@@ -289,10 +248,6 @@ _Avoid_: Same-close return, Alpha input, implicit horizon
 
 ### Daily Tracking
 
-**Active DailyTrack Limit**:
-The maximum number of non-stopped DailyTracks the current product permits.
-_Avoid_: Total Track history, execution concurrency
-
 **Daily Tracking**:
 The forward-only simulated-portfolio process that extends an explicitly active
 DailyTrack through later Research Sessions. It may use degraded-but-executable
@@ -332,11 +287,6 @@ _Avoid_: ResearchRun, Data Refresh, partial result
 The fixed contiguous set of oldest unpublished Research Sessions assigned to one
 Tracking Advance.
 _Avoid_: Current backlog, mutable target
-
-**Tracking Advance Attempt**:
-One execution attempt for a Tracking Advance, starting from the authoritative
-Tracking Head and retaining no failed unpublished state.
-_Avoid_: New Tracking Advance, ResearchRun Attempt
 
 **Tracking Checkpoint**:
 The immutable authoritative state published by a successful Tracking Advance.
@@ -757,10 +707,6 @@ The stable namespaced identity of one Canonical Field stored in an Alpha
 Expression.
 _Avoid_: Alpha Identifier, display label, vendor field name
 
-**Dataset Schema**:
-The versioned key-and-field contract of one Dataset Family.
-_Avoid_: Field Catalog, per-Run parameter
-
 **Dataset Family**:
 A Canonical Data contract whose Fields share an asset boundary, primary-key
 grain, and information-availability semantics.
@@ -812,7 +758,7 @@ The explicit company-type set for which a Session-Aligned Financial Field has a
 comparable meaning.
 _Avoid_: Hidden company filter, zero fill
 
-**V1 Dataset Scope**:
+**Dataset Scope**:
 The current ordinary-A-share end-of-day market, reference, industry, and
 Point-in-Time Financial Data needed by Alpha research, Factor Evaluation,
 Strategy Backtest, and Daily Tracking.
@@ -839,11 +785,6 @@ _Avoid_: Source order, independent Top-N rank
 The governed completed-session history used to calculate one instrument's
 Liquidity Rank.
 _Avoid_: Last non-missing observations, silent zero fill
-
-**Dataset Bootstrap Expansion**:
-The sole early-Coverage exception that permits a shorter Liquidity Observation
-Window while the first complete window is still forming.
-_Avoid_: New-listing grace period, Refresh reset
 
 **Universe Membership**:
 The ranked instruments selected by one Liquidity Universe for one Research

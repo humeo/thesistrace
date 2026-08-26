@@ -79,7 +79,7 @@ TuShare 官方 SDK 的 [`DataApi.query`](https://github.com/waditu/tushare/blob/
 1. 财务接口页面没有统一承诺 `limit/offset`；请求被接受不等于分页语义可靠。
 2. 如果 primary key 没包含公告日期、报表口径和内容版本，不同修订会被 `rows_by_key[key] = row` 静默覆盖。
 
-按照 [ADR-0180](../adr/0180-use-one-ordinary-per-instrument-tushare-financial-collector.md)，
+按照 [ADR-0180](../adr/0180-use-per-instrument-tushare-financial-collection.md)，
 首期财务 collector 固定按普通接口的 `endpoint × ts_code` 形成一个逻辑
 shard，不实现 VIP 或通用分页器。按照
 [ADR-0192](../adr/0192-paginate-the-ordinary-balance-sheet-inside-one-logical-shard.md)，
@@ -179,9 +179,7 @@ source contract，不是运行时 fallback。每 API 日限额应按物理分页
 
 ### 2.5 V1 Financial Refresh：每次完整重拉
 
-按照
-[ADR-0185](../adr/0185-rebuild-the-complete-financial-family-on-every-v1-refresh.md)，
-V1 不实现近期公告热窗口、历史轮转对账或自动调度。每次手动 Financial
+当时的完整重拉研究方案不实现近期公告热窗口、历史轮转对账或自动调度。每次手动 Financial
 Refresh 都对当时完整的 historical ordinary A-share Instrument Identity 集合
 重新请求 `income`、`balancesheet` 和 `cashflow` 全历史 shard。新增、退市和
 暂停上市标的都进入同一个 expected shard 计算，不能只按当前 active 股票抓取。
@@ -358,9 +356,8 @@ Pinned Generation + requested field IDs + sessions + instruments
 ResearchRun admission 先从表达式得到 requested field IDs；Execution 用已 pin Generation 一次性、向量化地解析这些字段；Kernel 只接收 caller-prepared `AlphaInputMatrix`，不认识 Head、Manifest、Parquet 或 PIT 存储。PIT resolver 对每个逻辑修订组做 `available_session <= cutoff` 的 as-of 选择，再只对本次 session、股票池、字段生成矩阵，禁止 Python 的“股票 × 日期 × 字段”逐格扫描。
 
 行情与财务以同一个 Numeric Series grain 进入 Formula，因此可以形成
-Composite Alpha，而不需要独立“多因子模型”资源。按照
-[ADR-0189](../adr/0189-add-one-cross-sectional-rank-builtin-for-composite-alpha.md)，
-首个财务切片同时加入显式 `rank(x)`，用于在每个 session 的已选 Liquidity
+Composite Alpha，而不需要独立“多因子模型”资源。该研究方案为首个财务切片
+加入显式 `rank(x)`，用于在每个 session 的已选 Liquidity
 Universe 内把异质量纲的子因子变成 0–1 横截面百分位。例如：
 
 ```text
@@ -375,11 +372,9 @@ Universe 内把异质量纲的子因子变成 0–1 横截面百分位。例如�
 
 字段目录至少增加 `family`、`time_semantics`、`unit`、`source_endpoint`、
 `authorable` 和 `applicable_company_types`。按照
-[ADR-0176](../adr/0176-ingest-all-financial-company-types-but-author-fields-with-explicit-applicability.md)，
+[ADR-0176](../adr/0176-ingest-all-financial-company-types-with-explicit-field-applicability.md)，
 四种 `comp_type` 的来源字段全部采集，但 Alpha Field 必须声明可比较的公司
-类型。按照
-[ADR-0186](../adr/0186-apply-the-six-financial-fields-to-all-company-types.md)，
-首批六个字段的 `applicable_company_types` 明确为 `{1, 2, 3, 4}`；这表示字段
+类型；首批六个字段的 `applicable_company_types` 明确为 `{1, 2, 3, 4}`。这表示字段
 合同适用，不保证来源非空，也不代表跨行业直接排名一定是合理策略。来源空值
 仍产生 missing，不回退到其他报表口径、行业专属字段或零，也不隐式改变
 Liquidity Universe。Phase 1 入库时财务字段全部 `authorable=false`；只有 PIT
@@ -444,9 +439,8 @@ Zipline 在缺少 timestamp 时允许复制 as-of date。对财务数据这会�
 - 实现 `rank` 的完整 cross-section plan node，并用一个行情 + 财务 Composite
   Alpha 证明 ResearchRun 与 DailyTrack 一致。
 - cold benchmark 达标后才决定是否需要 derived checkpoints。
-- 按
-  [ADR-0185](../adr/0185-rebuild-the-complete-financial-family-on-every-v1-refresh.md)
-  通过 ingestion、PIT、ResearchRun、DailyTrack 和性能 acceptance 后，才首次
+- 按当时的完整重拉研究方案通过 ingestion、PIT、ResearchRun、DailyTrack 和
+  性能 acceptance 后，才首次
   发布包含财务 family 的 Dataset Head，并将 Financial Research Readiness
   置为 ready；不存在 ingestion-only 的中间 Head。
 - 按

@@ -1350,12 +1350,13 @@ def test_full_compose_lifecycle_decision_is_recorded_without_glossary_drift() ->
     ).read_text()
     glossary = (ROOT / "CONTEXT.md").read_text()
 
-    assert "status: accepted" in adr
-    assert "Web, API, Worker, PostgreSQL, RustFS" in adr
-    assert "one-shot schema initialization" in adr
-    assert "hybrid" in adr
-    assert "host test runners" in adr
-    assert "not Production readiness" in adr
+    assert adr.startswith(
+        "# Use one full Compose topology for local Development and Test\n\n"
+    )
+    assert "same complete Compose product topology" in adr
+    assert "isolated identities, ports, credentials" in adr
+    assert "hybrid alternate runtime" in adr
+    assert "status: accepted" not in adr
     for engineering_term in (
         "Compose Watch",
         "Development environment",
