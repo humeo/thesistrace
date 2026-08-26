@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import math
 import os
 import subprocess
 import sys
@@ -8,6 +10,7 @@ from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import anyio
@@ -48,16 +51,24 @@ def test_stdio_research_runs_survive_disconnect_and_real_worker_restarts(
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     try:
-        _publish_current_data(settings)
+        sessions = _publish_current_data(settings)
         _assert_concurrent_rejection_receipt(settings)
-        anyio.run(_exercise_research_runs, settings, tmp_path)
+        anyio.run(_exercise_research_runs, settings, tmp_path, sessions[54])
     finally:
         drop_product_schemas(settings)
 
 
-async def _exercise_research_runs(settings: CoreSettings, tmp_path: Path) -> None:
+async def _exercise_research_runs(
+    settings: CoreSettings,
+    tmp_path: Path,
+    long_strategy_end: str,
+) -> None:
     factor_command = _command("mcp-factor", research_kind="factor_evaluation")
-    strategy_command = _command("mcp-strategy", research_kind="strategy_backtest")
+    strategy_command = {
+        **_command("mcp-strategy", research_kind="strategy_backtest"),
+        "end_date": long_strategy_end,
+        "holdings_count": 51,
+    }
     rejected_command = {**_command("mcp-rejected"), "formula": "unknown_alpha"}
 
     first_log = tmp_path / "mcp-first.stderr.log"
@@ -98,6 +109,12 @@ async def _exercise_research_runs(settings: CoreSettings, tmp_path: Path) -> Non
         assert queued.structured_content["result_available"] is False
         assert queued.structured_content["retry_after_seconds"] == 2
         _assert_compact_polling_payload(queued.structured_content)
+        unavailable_result = await client.call_tool(
+            "get_research_run_result",
+            {"run_id": factor.structured_content["run_id"], "section": "factor"},
+        )
+        assert unavailable_result.is_error is True
+        assert unavailable_result.structured_content["code"] == "STATE_CONFLICT"
 
     first_worker = await anyio.to_thread.run_sync(_run_worker_once, settings)
     second_worker = await anyio.to_thread.run_sync(_run_worker_once, settings)
@@ -153,6 +170,22 @@ async def _exercise_research_runs(settings: CoreSettings, tmp_path: Path) -> Non
         _assert_compact_polling_payload(factor_detail)
         _assert_compact_polling_payload(strategy_detail)
 
+        (
+            observation_page,
+            position_page,
+            strategy_summary,
+            terminal_state,
+        ) = await _assert_first_semantic_result_pages(
+            client,
+            factor_run_id=str(factor.structured_content["run_id"]),
+            strategy_run_id=str(strategy.structured_content["run_id"]),
+            strategy_command=strategy_command,
+        )
+        observation_cursor = observation_page["next_cursor"]
+        position_cursor = position_page["next_cursor"]
+        assert isinstance(observation_cursor, str)
+        assert isinstance(position_cursor, str)
+
         first_page = await client.call_tool("list_research_runs", {"limit": 1})
         assert first_page.is_error is False
         assert len(first_page.structured_content["items"]) == 1
@@ -186,7 +219,7 @@ async def _exercise_research_runs(settings: CoreSettings, tmp_path: Path) -> Non
 
         recovery = await client.call_tool(
             "submit_research_run",
-            _command("mcp-worker-recovery", research_kind="factor_evaluation"),
+            _command("mcp-worker-recovery", research_kind="strategy_backtest"),
         )
         assert recovery.is_error is False
         assert recovery.structured_content["status"] == "queued"
@@ -212,6 +245,92 @@ async def _exercise_research_runs(settings: CoreSettings, tmp_path: Path) -> Non
             str(recovery.structured_content["run_id"]),
         )
         assert recovered["status"] == "succeeded"
+
+        observation_tail = await client.call_tool(
+            "get_research_run_result",
+            {
+                "run_id": strategy.structured_content["run_id"],
+                "section": "strategy_observations",
+                "limit": 50,
+                "cursor": observation_cursor,
+            },
+        )
+        assert observation_tail.is_error is False
+        assert len(observation_tail.structured_content["items"]) == 5
+        assert observation_tail.structured_content["next_cursor"] is None
+        observation_sessions = [
+            item["session"]
+            for item in observation_page["items"] + observation_tail.structured_content["items"]
+        ]
+        assert len(observation_sessions) == len(set(observation_sessions)) == 55
+        assert observation_sessions == sorted(observation_sessions)
+        last_observation = observation_tail.structured_content["items"][-1]
+        assert terminal_state["session"] == last_observation["session"]
+        assert terminal_state["net_nav"] == last_observation["net_nav"]
+        assert terminal_state["benchmark_nav"] == last_observation["benchmark_nav"]
+        initial_cash = Decimal(strategy_summary["initial_cash_cny"])
+        assert math.isclose(
+            strategy_summary["comparison"]["net_cumulative_return"],
+            float(Decimal(last_observation["net_nav"]) / initial_cash - Decimal(1)),
+            rel_tol=0,
+            abs_tol=1e-12,
+        )
+        assert math.isclose(
+            strategy_summary["comparison"]["benchmark_cumulative_return"],
+            float(Decimal(last_observation["benchmark_nav"]) - Decimal(1)),
+            rel_tol=0,
+            abs_tol=1e-12,
+        )
+
+        position_tail = await client.call_tool(
+            "get_research_run_result",
+            {
+                "run_id": strategy.structured_content["run_id"],
+                "section": "terminal_positions",
+                "limit": 50,
+                "cursor": position_cursor,
+            },
+        )
+        assert position_tail.is_error is False
+        assert len(position_tail.structured_content["items"]) == 1
+        assert position_tail.structured_content["next_cursor"] is None
+        instrument_ids = [
+            item["instrument_id"]
+            for item in position_page["items"] + position_tail.structured_content["items"]
+        ]
+        assert len(instrument_ids) == len(set(instrument_ids)) == 51
+        assert instrument_ids == sorted(instrument_ids)
+
+        wrong_section_cursor = await client.call_tool(
+            "get_research_run_result",
+            {
+                "run_id": strategy.structured_content["run_id"],
+                "section": "terminal_positions",
+                "cursor": observation_cursor,
+            },
+        )
+        assert wrong_section_cursor.is_error is True
+        assert wrong_section_cursor.structured_content["code"] == "INVALID_INPUT"
+        wrong_run_cursor = await client.call_tool(
+            "get_research_run_result",
+            {
+                "run_id": recovery.structured_content["run_id"],
+                "section": "strategy_observations",
+                "cursor": observation_cursor,
+            },
+        )
+        assert wrong_run_cursor.is_error is True
+        assert wrong_run_cursor.structured_content["code"] == "INVALID_INPUT"
+        tampered_result_cursor = await client.call_tool(
+            "get_research_run_result",
+            {
+                "run_id": strategy.structured_content["run_id"],
+                "section": "strategy_observations",
+                "cursor": _tamper_cursor(observation_cursor),
+            },
+        )
+        assert tampered_result_cursor.is_error is True
+        assert tampered_result_cursor.structured_content["code"] == "INVALID_INPUT"
 
         default_page = await client.call_tool("list_research_runs", {})
         assert default_page.is_error is False
@@ -264,6 +383,177 @@ async def _exercise_research_runs(settings: CoreSettings, tmp_path: Path) -> Non
         )
         assert wrong_filter_after_restart.is_error is True
         assert wrong_filter_after_restart.structured_content["code"] == "INVALID_INPUT"
+
+
+async def _assert_first_semantic_result_pages(
+    client: Client,
+    *,
+    factor_run_id: str,
+    strategy_run_id: str,
+    strategy_command: dict[str, object],
+) -> tuple[
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+]:
+    factor = await client.call_tool(
+        "get_research_run_result",
+        {"run_id": factor_run_id, "section": "factor"},
+    )
+    assert factor.is_error is False
+    assert factor.structured_content["research_kind"] == "factor_evaluation"
+    assert factor.structured_content["units"] == {
+        "horizon": "research_sessions",
+        "ic": "correlation",
+        "rank_ic": "rank_correlation",
+        "quantile_returns": "decimal_return",
+        "top_bottom_return": "decimal_return",
+    }
+    assert factor.structured_content["missing_values"] == {
+        "unavailable_optional_metric": "null",
+        "observed_zero_is_missing": False,
+    }
+    horizons = factor.structured_content["factor"]["horizons"]
+    assert set(horizons) == {"1", "5", "20"}
+    assert [horizons[name]["horizon"] for name in ("1", "5", "20")] == [1, 5, 20]
+    assert all(horizons[name]["coverage"]["signal_session_count"] > 0 for name in horizons)
+    _assert_optional_numbers_are_finite(factor.structured_content)
+
+    factor_provenance = await client.call_tool(
+        "get_research_run_result",
+        {"run_id": factor_run_id, "section": "provenance"},
+    )
+    assert factor_provenance.is_error is False
+    assert factor_provenance.structured_content["authoring_input"]["formula"] == "close"
+    _assert_public_result_payload(factor_provenance.structured_content)
+
+    incompatible = await client.call_tool(
+        "get_research_run_result",
+        {"run_id": factor_run_id, "section": "strategy_summary"},
+    )
+    assert incompatible.is_error is True
+    assert incompatible.structured_content["code"] == "STATE_CONFLICT"
+
+    strategy_factor = await client.call_tool(
+        "get_research_run_result",
+        {"run_id": strategy_run_id, "section": "factor"},
+    )
+    assert strategy_factor.is_error is False
+    assert strategy_factor.structured_content["research_kind"] == "strategy_backtest"
+
+    summary = await client.call_tool(
+        "get_research_run_result",
+        {"run_id": strategy_run_id, "section": "strategy_summary"},
+    )
+    assert summary.is_error is False
+    assert summary.structured_content["benchmark"] == {
+        "universe": strategy_command["universe"],
+        "methodology": "selected_universe_equal_weight",
+    }
+    _assert_optional_numbers_are_finite(summary.structured_content)
+
+    observations = await client.call_tool(
+        "get_research_run_result",
+        {
+            "run_id": strategy_run_id,
+            "section": "strategy_observations",
+            "limit": 50,
+        },
+    )
+    assert observations.is_error is False
+    assert len(observations.structured_content["items"]) == 50
+    assert isinstance(observations.structured_content["next_cursor"], str)
+    decoded_observation_cursor = urlsafe_b64decode(
+        observations.structured_content["next_cursor"]
+    )
+    assert strategy_run_id.encode() not in decoded_observation_cursor
+    assert b"strategy_observations" not in decoded_observation_cursor
+    assert len(json.dumps(observations.structured_content).encode()) < 64 * 1024
+
+    terminal = await client.call_tool(
+        "get_research_run_result",
+        {"run_id": strategy_run_id, "section": "terminal_strategy_state"},
+    )
+    assert terminal.is_error is False
+    assert "positions" not in terminal.structured_content
+    assert terminal.structured_content["session"] == strategy_command["end_date"]
+
+    positions = await client.call_tool(
+        "get_research_run_result",
+        {"run_id": strategy_run_id, "section": "terminal_positions", "limit": 50},
+    )
+    assert positions.is_error is False
+    assert len(positions.structured_content["items"]) == 50
+    assert isinstance(positions.structured_content["next_cursor"], str)
+
+    provenance = await client.call_tool(
+        "get_research_run_result",
+        {"run_id": strategy_run_id, "section": "provenance"},
+    )
+    assert provenance.is_error is False
+    assert provenance.structured_content["authoring_input"] == {
+        "formula": strategy_command["formula"],
+        "hypothesis": strategy_command["hypothesis"],
+        "start_date": strategy_command["start_date"],
+        "end_date": strategy_command["end_date"],
+        "universe": strategy_command["universe"],
+        "neutralization": strategy_command["neutralization"],
+        "research_kind": "strategy_backtest",
+        "holdings_count": 51,
+        "rebalance_every_sessions": 1,
+    }
+    assert provenance.structured_content["data"]["data_through_session"] >= (
+        strategy_command["end_date"]
+    )
+    _assert_public_result_payload(provenance.structured_content)
+
+    malformed = await client.call_tool(
+        "get_research_run_result",
+        {"run_id": strategy_run_id, "section": "strategy_summary", "limit": 20},
+    )
+    assert malformed.is_error is True
+    assert malformed.structured_content["code"] == "INVALID_INPUT"
+    missing = await client.call_tool(
+        "get_research_run_result",
+        {"run_id": "run_missing", "section": "factor"},
+    )
+    assert missing.is_error is True
+    assert missing.structured_content["code"] == "NOT_FOUND"
+    return (
+        observations.structured_content,
+        positions.structured_content,
+        summary.structured_content,
+        terminal.structured_content,
+    )
+
+
+def _assert_public_result_payload(payload: dict[str, object]) -> None:
+    serialized = json.dumps(payload, sort_keys=True).lower()
+    for private_name in (
+        "manifest",
+        "partition",
+        "rustfs",
+        "object_key",
+        "checkpoint",
+        "attempt",
+        "lease",
+        "recovery",
+        "sql",
+        "path",
+    ):
+        assert private_name not in serialized
+
+
+def _assert_optional_numbers_are_finite(value: object) -> None:
+    if isinstance(value, dict):
+        for item in value.values():
+            _assert_optional_numbers_are_finite(item)
+    elif isinstance(value, list):
+        for item in value:
+            _assert_optional_numbers_are_finite(item)
+    elif isinstance(value, float):
+        assert math.isfinite(value)
 
 
 async def _poll_terminal(client: Client, run_id: str) -> dict[str, object]:
@@ -464,8 +754,8 @@ def _weekday_sessions(start: date, count: int) -> tuple[str, ...]:
     return tuple(sessions)
 
 
-def _publish_current_data(settings: CoreSettings) -> None:
-    sessions = _weekday_sessions(date(2026, 8, 3), 30)
+def _publish_current_data(settings: CoreSettings) -> tuple[str, ...]:
+    sessions = _weekday_sessions(date(2026, 8, 3), 75)
     s3 = boto3.client(
         "s3",
         endpoint_url=settings.s3_endpoint_url,
@@ -481,11 +771,25 @@ def _publish_current_data(settings: CoreSettings) -> None:
     finally:
         s3.close()
     template = build_minimal_canonical_fixture()
-    instrument_id = str(template["instruments"][0]["instrument_id"])
+    instrument_template = template["instruments"][0]
     price = template["prices"][0]
     state = template["trading_states"][0]
     limit = template["price_limits"][0]
-    universe = {"instrument_ids": [instrument_id], "status": "available"}
+    industry = template["industry_membership"][0]
+    instruments = []
+    instrument_ids = []
+    for index in range(1, 52):
+        ts_code = f"{index:06d}.SZ"
+        instrument_id = f"equity:{ts_code}"
+        instrument_ids.append(instrument_id)
+        instruments.append(
+            {
+                **instrument_template,
+                "instrument_id": instrument_id,
+                "ts_code": ts_code,
+            }
+        )
+    universe = {"instrument_ids": instrument_ids, "status": "available"}
     canonical = {
         **template,
         "field_catalog": [
@@ -496,16 +800,33 @@ def _publish_current_data(settings: CoreSettings) -> None:
             )
         ],
         "research_calendar": list(sessions),
-        "prices": [{**price, "session": session} for session in sessions],
-        "trading_states": [{**state, "session": session} for session in sessions],
-        "price_limits": [{**limit, "session": session} for session in sessions],
+        "instruments": instruments,
+        "prices": [
+            {**price, "instrument_id": instrument_id, "session": session}
+            for session in sessions
+            for instrument_id in instrument_ids
+        ],
+        "trading_states": [
+            {**state, "instrument_id": instrument_id, "session": session}
+            for session in sessions
+            for instrument_id in instrument_ids
+        ],
+        "price_limits": [
+            {**limit, "instrument_id": instrument_id, "session": session}
+            for session in sessions
+            for instrument_id in instrument_ids
+        ],
         "base_pool": [
-            {"session": session, "instrument_ids": [instrument_id]} for session in sessions
+            {"session": session, "instrument_ids": instrument_ids} for session in sessions
         ],
         "liquidity_universes": {
             name: [{"session": session, **universe} for session in sessions]
             for name in ("top300", "top1000", "top2000", "top3000")
         },
+        "industry_membership": [
+            {**industry, "instrument_id": instrument_id}
+            for instrument_id in instrument_ids
+        ],
     }
     generation = MountedGenerationStore(settings.data_mount).materialize(
         canonical,
@@ -529,6 +850,7 @@ def _publish_current_data(settings: CoreSettings) -> None:
         )
     finally:
         database.close()
+    return sessions
 
 
 def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]:

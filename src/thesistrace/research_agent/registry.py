@@ -37,6 +37,10 @@ from thesistrace.research_run import (
     ResearchRunInvalidCursor,
     ResearchRunList,
     ResearchRunPollingDetail,
+    ResearchRunResultSectionIncompatible,
+    ResearchRunResultSectionInput,
+    ResearchRunResultSectionResponse,
+    ResearchRunResultUnavailable,
     ResearchRunTemporarilyUnavailable,
 )
 from thesistrace.research_run.models import ResearchKind
@@ -71,6 +75,11 @@ class ResearchRunReader(Protocol):
     ) -> ResearchRunList: ...
 
     def get_polling_detail(self, run_id: str) -> ResearchRunPollingDetail | None: ...
+
+    def get_result_section(
+        self,
+        query: ResearchRunResultSectionInput,
+    ) -> ResearchRunResultSectionResponse | None: ...
 
     def admit_with_outcome(
         self,
@@ -159,6 +168,7 @@ RESEARCH_AGENT_TOOL_NAMES = frozenset(
         "diagnose_alpha_formula",
         "list_research_runs",
         "get_research_run",
+        "get_research_run_result",
         "submit_research_run",
     }
 )
@@ -236,6 +246,18 @@ class ResearchAgentCapabilityRegistry:
                 output_model=ResearchRunPollingDetail,
                 annotations=READ_ONLY_TOOL_ANNOTATIONS,
                 handler=self.get_research_run,
+            ),
+            ResearchAgentCapability(
+                name="get_research_run_result",
+                description=(
+                    "Read one bounded semantic Result section from a succeeded ResearchRun; "
+                    "collection sections use stable pagination and require research:read."
+                ),
+                required_scope=ResearchAgentScope.RESEARCH_READ,
+                input_model=ResearchRunResultSectionInput,
+                output_model=ResearchRunResultSectionResponse,
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                handler=self.get_research_run_result,
             ),
             ResearchAgentCapability(
                 name="submit_research_run",
@@ -346,6 +368,7 @@ class ResearchAgentCapabilityRegistry:
             ResearchAgentErrorCode.INVALID_INPUT: "Tool input is invalid",
             ResearchAgentErrorCode.FORBIDDEN: "Tool authority is insufficient",
             ResearchAgentErrorCode.NOT_FOUND: "Requested resource was not found",
+            ResearchAgentErrorCode.STATE_CONFLICT: "Resource state does not allow this operation",
             ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT: "Request identifier conflicts",
             ResearchAgentErrorCode.TEMPORARILY_UNAVAILABLE: "Tool is temporarily unavailable",
             ResearchAgentErrorCode.INTERNAL: "Tool execution failed",
@@ -432,6 +455,26 @@ class ResearchAgentCapabilityRegistry:
         if detail is None:
             raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
         return detail
+
+    def get_research_run_result(self, **query_fields: object) -> BaseModel:
+        self._require(ResearchAgentScope.RESEARCH_READ)
+        query = TypeAdapter(ResearchRunResultSectionInput).validate_python(query_fields)
+        try:
+            result = self._modules.research_runs.get_result_section(query)
+        except ResearchRunInvalidCursor as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.INVALID_INPUT) from error
+        except (
+            ResearchRunResultSectionIncompatible,
+            ResearchRunResultUnavailable,
+        ) as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.STATE_CONFLICT) from error
+        except ResearchRunTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if result is None:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
+        if not isinstance(result, BaseModel):
+            raise TypeError("ResearchRun Result module returned an invalid section")
+        return result
 
     def submit_research_run(self, **command_fields: object) -> BaseModel:
         self._require(ResearchAgentScope.RESEARCH_EXECUTE)

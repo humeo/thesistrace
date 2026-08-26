@@ -24,6 +24,7 @@ from thesistrace.research_agent import (
     create_research_agent_mcp_server,
     local_operator_authority,
 )
+from thesistrace.research_agent.mcp_server import RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
 from thesistrace.research_agent.registry import (
     AlphaAuthoringLanguage,
     ResearchAgentForbidden,
@@ -31,6 +32,8 @@ from thesistrace.research_agent.registry import (
 from thesistrace.research_authoring import ResearchAuthoringService
 from thesistrace.research_folder.models import ResearchFolderList, ResearchFolderSummary
 from thesistrace.research_run.models import (
+    FactorResultSection,
+    ProvenanceResultSection,
     ResearchRunAdmissionAccepted,
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionIssue,
@@ -41,11 +44,18 @@ from thesistrace.research_run.models import (
     ResearchRunList,
     ResearchRunPollingDetail,
     ResearchRunProgress,
+    ResearchRunResultSectionInput,
+    ResearchRunResultSectionResponse,
     ResearchRunSummary,
+    ResultDataProvenance,
+    ResultExecutionProvenance,
 )
 from thesistrace.research_run.service import (
     ResearchRunAdmissionConflict,
     ResearchRunInvalidCursor,
+    ResearchRunResultReadFailed,
+    ResearchRunResultSectionIncompatible,
+    ResearchRunResultUnavailable,
     ResearchRunTemporarilyUnavailable,
 )
 
@@ -94,6 +104,7 @@ class _ResearchRunReader:
             retry_after_seconds=2,
         )
         self.polling_detail: ResearchRunPollingDetail | None = _polling_detail()
+        self.result_section: ResearchRunResultSectionResponse | None = _factor_result_section()
         self.failure: Exception | None = None
 
     def list(self, **filters: object) -> ResearchRunList:
@@ -106,6 +117,14 @@ class _ResearchRunReader:
         if self.failure is not None:
             raise self.failure
         return self.polling_detail
+
+    def get_result_section(
+        self,
+        _query: ResearchRunResultSectionInput,
+    ) -> ResearchRunResultSectionResponse | None:
+        if self.failure is not None:
+            raise self.failure
+        return self.result_section
 
     def admit_with_outcome(
         self,
@@ -189,6 +208,43 @@ def _polling_detail() -> ResearchRunPollingDetail:
         result_available=False,
         available_result_sections=(),
         retry_after_seconds=2,
+    )
+
+
+def _factor_result_section() -> FactorResultSection:
+    correlation = {
+        "mean": 0.1,
+        "sample_deviation": 0.2,
+        "icir": 0.5,
+        "positive_fraction": 0.6,
+        "valid_session_count": 10,
+    }
+    horizon = {
+        "summary": {
+            "ic": correlation,
+            "rank_ic": correlation,
+            "quantile_returns": {"q1": -0.01, "q2": 0.0, "q3": 0.01, "q4": 0.02, "q5": 0.03},
+            "top_bottom_return": 0.04,
+        },
+        "coverage": {
+            "signal_session_count": 10,
+            "ic_valid_session_count": 10,
+            "rank_ic_valid_session_count": 10,
+            "quantile_valid_session_count": 10,
+        },
+    }
+    return FactorResultSection.model_validate(
+        {
+            "run_id": "run_test",
+            "research_kind": "factor_evaluation",
+            "factor": {
+                "horizons": {
+                    "1": {**horizon, "horizon": 1},
+                    "5": {**horizon, "horizon": 5},
+                    "20": {**horizon, "horizon": 20},
+                }
+            },
+        }
     )
 
 
@@ -439,6 +495,30 @@ def test_registry_projects_research_run_outcomes_and_expected_errors() -> None:
     assert missing.error is not None
     assert missing.error.code == "NOT_FOUND"
 
+    for failure in (
+        ResearchRunResultUnavailable("not succeeded"),
+        ResearchRunResultSectionIncompatible("wrong kind"),
+    ):
+        reader.failure = failure
+        state_conflict = registry.invoke(
+            "get_research_run_result",
+            {"run_id": "run_test", "section": "factor"},
+            trace_id="trace_result_state",
+        )
+        assert state_conflict.error is not None
+        assert state_conflict.error.code == "STATE_CONFLICT"
+        assert state_conflict.error.retryable is False
+
+    reader.failure = ResearchRunResultReadFailed("private-object-key-canary")
+    read_failure = registry.invoke(
+        "get_research_run_result",
+        {"run_id": "run_test", "section": "factor"},
+        trace_id="trace_result_internal",
+    )
+    assert read_failure.error is not None
+    assert read_failure.error.code == "INTERNAL"
+    assert "private-object-key-canary" not in read_failure.error.message
+
 
 def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delete() -> None:
     reader = ResearchAgentAuthority(
@@ -464,6 +544,10 @@ def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delet
 
 def test_in_memory_protocol_sanitizes_unexpected_tool_failures() -> None:
     anyio.run(_exercise_sanitized_failure)
+
+
+def test_in_memory_protocol_rejects_oversized_wire_response_without_truncation() -> None:
+    anyio.run(_exercise_wire_response_ceiling)
 
 
 def test_in_memory_protocol_rechecks_request_authority_after_discovery() -> None:
@@ -494,6 +578,7 @@ async def _exercise_in_memory_protocol() -> None:
             "diagnose_alpha_formula",
             "list_research_runs",
             "get_research_run",
+            "get_research_run_result",
             "submit_research_run",
         }
         assert client.server_capabilities is not None
@@ -513,6 +598,13 @@ async def _exercise_in_memory_protocol() -> None:
                 assert tool.annotations.read_only_hint is False
                 assert tool.input_schema["discriminator"]["propertyName"] == "research_kind"
                 assert len(tool.input_schema["oneOf"]) == 2
+                for branch in tool.input_schema["oneOf"]:
+                    definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
+                    assert definition["additionalProperties"] is False
+            elif tool.name == "get_research_run_result":
+                assert tool.annotations.read_only_hint is True
+                assert tool.input_schema["discriminator"]["propertyName"] == "section"
+                assert len(tool.input_schema["oneOf"]) == 6
                 for branch in tool.input_schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
                     assert definition["additionalProperties"] is False
@@ -544,6 +636,26 @@ async def _exercise_in_memory_protocol() -> None:
         assert {"holdings_count", "rebalance_every_sessions"} <= set(
             strategy_schema["required"]
         )
+        result_schema = tools["get_research_run_result"].input_schema
+        collection_schemas = [
+            result_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
+            for branch in result_schema["oneOf"]
+            if "Observations" in branch["$ref"] or "Positions" in branch["$ref"]
+        ]
+        assert len(collection_schemas) == 2
+        assert all(schema["properties"]["limit"]["default"] == 20 for schema in collection_schemas)
+        assert all(schema["properties"]["limit"]["maximum"] == 50 for schema in collection_schemas)
+        result_output_schema = tools["get_research_run_result"].output_schema
+        summary_definition = result_output_schema["$defs"]["StrategySummaryResultSection"]
+        metrics_ref = summary_definition["properties"]["metrics"]["$ref"]
+        metrics_definition = result_output_schema["$defs"][metrics_ref.rsplit("/", 1)[-1]]
+        assert metrics_definition["additionalProperties"] is False
+        assert {
+            "net_cumulative_return",
+            "benchmark_cumulative_return",
+            "annualized_excess_return",
+            "maximum_drawdown",
+        } <= set(metrics_definition["properties"])
         serialize_server_result(
             "tools/list",
             LATEST_HANDSHAKE_VERSION,
@@ -602,16 +714,38 @@ async def _exercise_in_memory_protocol() -> None:
         assert incomplete_strategy.is_error is True
         assert incomplete_strategy.structured_content["code"] == "INVALID_INPUT"
 
+        factor_result = await client.call_tool(
+            "get_research_run_result",
+            {"run_id": "run_test", "section": "factor"},
+        )
+        assert factor_result.is_error is False
+        validate(
+            factor_result.structured_content,
+            tools["get_research_run_result"].output_schema,
+        )
+        assert factor_result.structured_content["units"]["horizon"] == (
+            "research_sessions"
+        )
+        invalid_section_fields = await client.call_tool(
+            "get_research_run_result",
+            {"run_id": "run_test", "section": "factor", "limit": 20},
+        )
+        assert invalid_section_fields.is_error is True
+        assert invalid_section_fields.structured_content["code"] == "INVALID_INPUT"
+
     assert [event.context["outcome"] for event in events] == [
         "succeeded",
         "succeeded",
         "failed",
         "failed",
         "failed",
+        "succeeded",
+        "failed",
     ]
     assert events[2].context["failure_code"] == "INVALID_INPUT"
     assert events[3].context["failure_code"] == "INVALID_INPUT"
     assert events[4].context["failure_code"] == "INVALID_INPUT"
+    assert events[6].context["failure_code"] == "INVALID_INPUT"
 
 
 async def _exercise_sanitized_failure() -> None:
@@ -635,6 +769,48 @@ async def _exercise_sanitized_failure() -> None:
     assert events[0].context["failure_code"] == "INTERNAL"
     assert events[0].context["trace_id"] == "trace_test_0"
     assert "private-formula-canary" not in str(events[0].context)
+
+
+async def _exercise_wire_response_ceiling() -> None:
+    reader = _ResearchRunReader()
+    canary = "wire-response-canary-" * 4096
+    reader.result_section = ProvenanceResultSection(
+        run_id="run_test",
+        research_kind="factor_evaluation",
+        schema_version="research-result-v1",
+        immutable_input_sha256="0" * 64,
+        authoring_input=ResearchRunAuthorableInput(
+            formula=canary,
+            hypothesis=None,
+            start_date=date(2024, 1, 2),
+            end_date=date(2024, 1, 31),
+            universe="top300",
+            neutralization="none",
+            research_kind="factor_evaluation",
+        ),
+        data=ResultDataProvenance(
+            generation_id="generation_test",
+            data_through_session=date(2024, 1, 31),
+            financial_research_readiness="ready",
+        ),
+        execution=ResultExecutionProvenance(
+            calculation_contracts={"numeric_execution_contract": "decimal-v1"},
+            semantic_versions={"alpha": "v1"},
+        ),
+    )
+    events: list[OperationalEvent] = []
+    async with Client(_server(_registry(research_runs=reader), events=events)) as client:
+        result = await client.call_tool(
+            "get_research_run_result",
+            {"run_id": "run_test", "section": "provenance"},
+        )
+
+    assert result.is_error is True
+    assert result.structured_content["code"] == "INTERNAL"
+    serialized = result.model_dump_json(by_alias=True, exclude_none=True)
+    assert len(serialized.encode()) < RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+    assert canary not in serialized
+    assert events[0].context["response_bytes"] < RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
 
 
 async def _exercise_stale_discovery_authority() -> None:

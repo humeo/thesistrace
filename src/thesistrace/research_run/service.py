@@ -75,8 +75,12 @@ from thesistrace.research_run.models import (
     DataAdmissionFacts,
     FactorEvaluationResearchRunKeyMetrics,
     FactorEvaluationResearchRunResult,
+    FactorResultSection,
+    FactorResultSectionInput,
     ImmutableRunInput,
     OrganizeResearchRunCommand,
+    ProvenanceResultSection,
+    ProvenanceResultSectionInput,
     ResearchKind,
     ResearchRunAdmissionAccepted,
     ResearchRunAdmissionCommand,
@@ -92,11 +96,24 @@ from thesistrace.research_run.models import (
     ResearchRunPollingDetail,
     ResearchRunProgress,
     ResearchRunResult,
+    ResearchRunResultSectionInput,
+    ResearchRunResultSectionResponse,
     ResearchRunSummary,
+    ResultDataProvenance,
+    ResultExecutionProvenance,
     StartTrackingCommand,
     StrategyBacktestAdmissionCommand,
     StrategyBacktestResearchRunKeyMetrics,
     StrategyBacktestResearchRunResult,
+    StrategyComparison,
+    StrategyObservationsResultSection,
+    StrategyObservationsResultSectionInput,
+    StrategySummaryResultSection,
+    StrategySummaryResultSectionInput,
+    TerminalPositionsResultSection,
+    TerminalPositionsResultSectionInput,
+    TerminalStrategyStateResultSection,
+    TerminalStrategyStateResultSectionInput,
     research_run_result_sections,
     research_run_retry_after_seconds,
 )
@@ -109,8 +126,10 @@ from thesistrace.research_run.result import (
     RESULT_DAILY_PARTITION_SESSION_COUNT,
     STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
     ResearchResultError,
+    SemanticResultSectionRead,
     enforce_result_bundle_budget,
     read_result_bundle,
+    read_semantic_result_section,
     result_publication_payloads_from_staged,
 )
 
@@ -167,6 +186,14 @@ class ResearchRunStartTrackingConflict(RuntimeError):
 
 
 class ResearchRunResultUnavailable(RuntimeError):
+    pass
+
+
+class ResearchRunResultSectionIncompatible(RuntimeError):
+    pass
+
+
+class ResearchRunResultReadFailed(RuntimeError):
     pass
 
 
@@ -1942,6 +1969,125 @@ class ResearchRunService:
             raise ResearchRunTemporarilyUnavailable(
                 "ResearchRun detail is temporarily unavailable"
             ) from error
+
+    def get_result_section(
+        self,
+        query: ResearchRunResultSectionInput,
+    ) -> ResearchRunResultSectionResponse | None:
+        try:
+            return self._get_result_section(query)
+        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+            raise ResearchRunTemporarilyUnavailable(
+                "ResearchRun Result is temporarily unavailable"
+            ) from error
+
+    def _get_result_section(
+        self,
+        query: ResearchRunResultSectionInput,
+    ) -> ResearchRunResultSectionResponse | None:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT id, status, immutable_input, result_manifest_sha256,
+                       result_provenance
+                FROM research_runs.runs
+                WHERE id = %s
+                """,
+                (query.run_id,),
+            ).fetchone()
+            cursor_secret = _cursor_secret(transaction)
+        if row is None:
+            return None
+        immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
+        if row["status"] != "succeeded":
+            raise ResearchRunResultUnavailable(
+                "ResearchRun Result is available only after success"
+            )
+        if query.section not in research_run_result_sections(
+            "succeeded",
+            immutable_input.research_kind,
+        ):
+            raise ResearchRunResultSectionIncompatible(
+                "Result section is incompatible with Research Kind"
+            )
+        manifest_sha256 = row.get("result_manifest_sha256")
+        provenance = row.get("result_provenance")
+        if (
+            self._publication is None
+            or not isinstance(manifest_sha256, str)
+            or not isinstance(provenance, Mapping)
+        ):
+            raise ResearchRunResultUnavailable("succeeded ResearchRun Result is incomplete")
+        selected_provenance = dict(provenance)
+        expected_input_sha256 = hashlib.sha256(
+            canonical_json_bytes(immutable_input.canonical_value())
+        ).hexdigest()
+        if (
+            selected_provenance.get("research_run_id") != query.run_id
+            or selected_provenance.get("research_kind") != immutable_input.research_kind
+            or selected_provenance.get("immutable_input_sha256") != expected_input_sha256
+        ):
+            raise ResearchRunResultReadFailed(
+                "ResearchRun Result provenance does not match immutable input"
+            )
+        published_ref = PublishedRef(
+            manifest_sha256=manifest_sha256,
+            kind="research.result",
+            provenance=selected_provenance,
+        )
+        after: str | None = None
+        limit = 20
+        if isinstance(query, StrategyObservationsResultSectionInput):
+            limit = query.limit
+            after = _decode_result_cursor(
+                query.cursor,
+                secret=cursor_secret,
+                run_id=query.run_id,
+                section=query.section,
+                order="session_asc",
+                manifest_sha256=manifest_sha256,
+            )
+        elif isinstance(query, TerminalPositionsResultSectionInput):
+            limit = query.limit
+            after = _decode_result_cursor(
+                query.cursor,
+                secret=cursor_secret,
+                run_id=query.run_id,
+                section=query.section,
+                order="instrument_asc",
+                manifest_sha256=manifest_sha256,
+            )
+        try:
+            section_read = read_semantic_result_section(
+                self._publication,
+                published_ref,
+                research_kind=immutable_input.research_kind,
+                section=query.section,
+                after=after,
+                limit=limit,
+            )
+            result = _result_section_response(
+                query,
+                section_read=section_read,
+                provenance=selected_provenance,
+                authoring_input=_authorable_input(row),
+                manifest_sha256=manifest_sha256,
+                cursor_secret=cursor_secret,
+            )
+        except PublicationUnavailableError:
+            raise
+        except (
+            KeyError,
+            PublicationNotFoundError,
+            PublicationVerificationError,
+            ResearchResultError,
+            ValidationError,
+            ValueError,
+        ) as error:
+            raise ResearchRunResultReadFailed(
+                "ResearchRun Result could not be verified"
+            ) from error
+        return result
 
     def _get_polling_detail(self, run_id: str) -> ResearchRunPollingDetail | None:
         row = self._detail_row(run_id)
@@ -3857,6 +4003,207 @@ def _checkpoint_json_payload(payload: object, *, subject: str) -> dict[str, obje
     if not isinstance(value, dict):
         raise ResearchCheckpointIntegrityError(f"Research Checkpoint {subject} is invalid")
     return value
+
+
+def _result_section_response(
+    query: ResearchRunResultSectionInput,
+    *,
+    section_read: SemanticResultSectionRead,
+    provenance: dict[str, object],
+    authoring_input: ResearchRunAuthorableInput,
+    manifest_sha256: str,
+    cursor_secret: bytes,
+) -> ResearchRunResultSectionResponse:
+    run_id = query.run_id
+    research_kind = authoring_input.research_kind
+    if isinstance(query, FactorResultSectionInput):
+        stored = section_read.value
+        if not isinstance(stored, Mapping):
+            raise ResearchRunResultReadFailed("Factor Result section is invalid")
+        stored_horizons = stored.get("horizons")
+        if not isinstance(stored_horizons, Mapping) or set(stored_horizons) != {
+            "1",
+            "5",
+            "20",
+        }:
+            raise ResearchRunResultReadFailed("Factor Result horizons are invalid")
+        return FactorResultSection.model_validate(
+            {
+                "run_id": run_id,
+                "research_kind": research_kind,
+                "factor": {
+                    "horizons": {
+                        name: {
+                            key: value
+                            for key, value in dict(stored_horizons[name]).items()
+                            if key in {"horizon", "summary", "coverage"}
+                        }
+                        for name in ("1", "5", "20")
+                    }
+                },
+            }
+        )
+    if isinstance(query, ProvenanceResultSectionInput):
+        if (
+            section_read.value != provenance
+            or
+            provenance.get("research_run_id") != run_id
+            or provenance.get("research_kind") != research_kind
+        ):
+            raise ResearchRunResultReadFailed("Result provenance does not match ResearchRun")
+        return ProvenanceResultSection(
+            run_id=run_id,
+            research_kind=research_kind,
+            schema_version=str(provenance["schema_version"]),
+            immutable_input_sha256=str(provenance["immutable_input_sha256"]),
+            authoring_input=authoring_input,
+            data=ResultDataProvenance(
+                generation_id=str(provenance["data_generation_id"]),
+                data_through_session=provenance["data_through_session"],
+                financial_research_readiness=provenance[
+                    "financial_research_readiness"
+                ],
+            ),
+            execution=ResultExecutionProvenance(
+                calculation_contracts=dict(provenance["calculation_contracts"]),
+                semantic_versions=dict(provenance["semantic_versions"]),
+            ),
+        )
+    if isinstance(query, StrategySummaryResultSectionInput):
+        if not isinstance(section_read.value, Mapping):
+            raise ResearchRunResultReadFailed("Strategy Summary section is invalid")
+        summary = dict(section_read.value)
+        metrics = summary.get("metrics")
+        benchmark = summary.get("benchmark")
+        if not isinstance(metrics, Mapping) or not isinstance(benchmark, Mapping):
+            raise ResearchRunResultReadFailed("Strategy Result metrics are unavailable")
+        return StrategySummaryResultSection.model_validate(
+            {
+                "run_id": run_id,
+                "initial_cash_cny": summary["initial_cash_cny"],
+                "metrics": metrics,
+                "benchmark": benchmark,
+                "comparison": StrategyComparison(
+                    net_cumulative_return=metrics.get("net_cumulative_return"),
+                    benchmark_cumulative_return=metrics.get(
+                        "benchmark_cumulative_return"
+                    ),
+                    annualized_excess_return=metrics.get(
+                        "annualized_excess_return"
+                    ),
+                ),
+            }
+        )
+    if isinstance(query, StrategyObservationsResultSectionInput):
+        next_cursor = (
+            _encode_result_cursor(
+                section_read.next_after,
+                secret=cursor_secret,
+                run_id=run_id,
+                section=query.section,
+                order="session_asc",
+                manifest_sha256=manifest_sha256,
+            )
+            if section_read.next_after is not None
+            else None
+        )
+        return StrategyObservationsResultSection.model_validate(
+            {
+                "run_id": run_id,
+                "items": section_read.value,
+                "next_cursor": next_cursor,
+            }
+        )
+    if isinstance(query, TerminalStrategyStateResultSectionInput):
+        if not isinstance(section_read.value, Mapping):
+            raise ResearchRunResultReadFailed("Terminal Strategy State is invalid")
+        return TerminalStrategyStateResultSection.model_validate(
+            {"run_id": run_id, **section_read.value}
+        )
+    if isinstance(query, TerminalPositionsResultSectionInput):
+        next_cursor = (
+            _encode_result_cursor(
+                section_read.next_after,
+                secret=cursor_secret,
+                run_id=run_id,
+                section=query.section,
+                order="instrument_asc",
+                manifest_sha256=manifest_sha256,
+            )
+            if section_read.next_after is not None
+            else None
+        )
+        return TerminalPositionsResultSection.model_validate(
+            {
+                "run_id": run_id,
+                "items": section_read.value,
+                "next_cursor": next_cursor,
+            }
+        )
+    raise ResearchRunResultSectionIncompatible("Unsupported ResearchRun Result section")
+
+
+def _encode_result_cursor(
+    after: str,
+    *,
+    secret: bytes,
+    run_id: str,
+    section: str,
+    order: str,
+    manifest_sha256: str,
+) -> str:
+    payload = json.dumps(
+        {
+            "after": after,
+            "manifest_sha256": manifest_sha256,
+            "order": order,
+            "run_id": run_id,
+            "section": section,
+            "version": 1,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return _cursor_fernet(secret).encrypt(payload).decode("ascii")
+
+
+def _decode_result_cursor(
+    cursor: str | None,
+    *,
+    secret: bytes,
+    run_id: str,
+    section: str,
+    order: str,
+    manifest_sha256: str,
+) -> str | None:
+    if cursor is None:
+        return None
+    try:
+        plaintext = _cursor_fernet(secret).decrypt(cursor.encode("ascii"))
+        decoded: object = json.loads(plaintext.decode("utf-8"))
+        if not isinstance(decoded, dict) or set(decoded) != {
+            "after",
+            "manifest_sha256",
+            "order",
+            "run_id",
+            "section",
+            "version",
+        }:
+            raise ValueError
+        after = decoded["after"]
+        if (
+            not isinstance(after, str)
+            or not after
+            or decoded["manifest_sha256"] != manifest_sha256
+            or decoded["order"] != order
+            or decoded["run_id"] != run_id
+            or decoded["section"] != section
+            or decoded["version"] != 1
+        ):
+            raise ValueError
+    except (InvalidToken, ValueError, UnicodeDecodeError, UnicodeEncodeError) as error:
+        raise ResearchRunInvalidCursor("ResearchRun Result cursor is invalid") from error
+    return after
 
 
 def _public_result(

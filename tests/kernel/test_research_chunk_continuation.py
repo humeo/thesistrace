@@ -12,7 +12,7 @@ import pytest
 import thesistrace.research_kernel.research_chunks as research_chunks_module
 import thesistrace.research_kernel.strategy as strategy_module
 from thesistrace.alpha_language import alpha_language
-from thesistrace.publication import VerifiedBundle, VerifiedPayload
+from thesistrace.publication import JsonPayload, ParquetRowsPayload, VerifiedBundle, VerifiedPayload
 from thesistrace.publication.serialization import canonical_json_bytes, parquet_bytes
 from thesistrace.research_batch.private_artifact import (
     PrivateAlphaFactorChunk,
@@ -45,11 +45,9 @@ from thesistrace.research_kernel.research_chunks import (
     validated_research_continuation,
 )
 from thesistrace.research_run.result import (
-    RESULT_DAILY_PARTITION_PREFIX,
-    RESULT_DAILY_PARTITION_SESSION_COUNT,
-    STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
     build_result_payload,
     read_result_bundle,
+    result_publication_payloads,
 )
 from thesistrace.research_series import ExecutionPrice, InstrumentProfile, PriceLimit
 
@@ -1201,53 +1199,34 @@ def _read_staged_chunk_result(
     observation_partitions: list[list[dict[str, object]]],
 ) -> dict[str, object]:
     assert final_values is not None
-    payloads = {
-        name: VerifiedPayload(
-            media_type="application/json",
-            content=canonical_json_bytes(value),
-            serialization={"format": "canonical-json", "version": 1},
-        )
-        for name, value in final_values.items()
+    logical_result = {
+        **final_values,
+        "strategy_daily_observations": [
+            row for partition in observation_partitions for row in partition
+        ],
     }
-    descriptors = []
-    for index, rows in enumerate(observation_partitions):
-        name = f"{RESULT_DAILY_PARTITION_PREFIX}{index:06d}"
-        content = parquet_bytes(rows, STRATEGY_DAILY_OBSERVATIONS_CONTRACT)
-        assert content == parquet_bytes(rows, STRATEGY_DAILY_OBSERVATIONS_CONTRACT)
-        payloads[name] = VerifiedPayload(
-            media_type="application/vnd.apache.parquet",
-            content=content,
-            serialization={
-                "format": "canonical-parquet",
-                "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
-            },
-        )
-        descriptors.append(
-            {
-                "name": name,
-                "row_count": len(rows),
-                "first_session": rows[0]["session"],
-                "last_session": rows[-1]["session"],
-            }
-        )
-    descriptor = {
-        "format": "partitioned-parquet",
-        "version": 1,
-        "partition_session_count": RESULT_DAILY_PARTITION_SESSION_COUNT,
-        "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
-        "partitions": descriptors,
-    }
-    payloads["strategy_daily_observations"] = VerifiedPayload(
-        media_type="application/json",
-        content=json.dumps(
-            descriptor,
-            ensure_ascii=False,
-            allow_nan=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode(),
-        serialization={"format": "canonical-json", "version": 1},
+    encoded = result_publication_payloads(
+        logical_result,
+        research_kind="strategy_backtest",
     )
+    payloads: dict[str, VerifiedPayload] = {}
+    for name, payload in encoded.items():
+        if isinstance(payload, JsonPayload):
+            payloads[name] = VerifiedPayload(
+                media_type="application/json",
+                content=canonical_json_bytes(payload.value),
+                serialization={"format": "canonical-json", "version": 1},
+            )
+        else:
+            assert isinstance(payload, ParquetRowsPayload)
+            payloads[name] = VerifiedPayload(
+                media_type="application/vnd.apache.parquet",
+                content=parquet_bytes(payload.rows, payload.contract),
+                serialization={
+                    "format": "canonical-parquet",
+                    "writer_contract": payload.contract.descriptor(),
+                },
+            )
     return read_result_bundle(
         VerifiedBundle(
             kind="research.result",

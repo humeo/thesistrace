@@ -17,6 +17,7 @@ from pydantic import (
 
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
 from thesistrace.data.models import FinancialResearchReadiness
+from thesistrace.research_run.result_schema import StrategyMetrics
 
 
 def _normalized_request_id(value: str) -> str:
@@ -587,6 +588,179 @@ class StrategyBacktestResearchRunResult(BaseModel):
 type ResearchRunResult = (
     FactorEvaluationResearchRunResult | StrategyBacktestResearchRunResult
 )
+
+
+ResultCursor = Annotated[str, Field(strict=True, min_length=1, max_length=1024)]
+ResultPageLimit = Annotated[int, Field(strict=True, ge=1, le=50)]
+
+
+class _ResearchRunResultSectionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    run_id: Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class FactorResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["factor"]
+
+
+class StrategySummaryResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["strategy_summary"]
+
+
+class StrategyObservationsResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["strategy_observations"]
+    cursor: ResultCursor | None = None
+    limit: ResultPageLimit = 20
+
+
+class TerminalStrategyStateResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["terminal_strategy_state"]
+
+
+class TerminalPositionsResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["terminal_positions"]
+    cursor: ResultCursor | None = None
+    limit: ResultPageLimit = 20
+
+
+class ProvenanceResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["provenance"]
+
+
+type ResearchRunResultSectionInput = Annotated[
+    FactorResultSectionInput
+    | StrategySummaryResultSectionInput
+    | StrategyObservationsResultSectionInput
+    | TerminalStrategyStateResultSectionInput
+    | TerminalPositionsResultSectionInput
+    | ProvenanceResultSectionInput,
+    Field(discriminator="section"),
+]
+
+
+class FactorMetricUnits(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    horizon: Literal["research_sessions"] = "research_sessions"
+    ic: Literal["correlation"] = "correlation"
+    rank_ic: Literal["rank_correlation"] = "rank_correlation"
+    quantile_returns: Literal["decimal_return"] = "decimal_return"
+    top_bottom_return: Literal["decimal_return"] = "decimal_return"
+
+
+class FactorMissingValueSemantics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    unavailable_optional_metric: Literal["null"] = "null"
+    observed_zero_is_missing: Literal[False] = False
+
+
+class FactorResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    section: Literal["factor"] = "factor"
+    run_id: str
+    research_kind: ResearchKind
+    factor: FactorResult
+    units: FactorMetricUnits = FactorMetricUnits()
+    missing_values: FactorMissingValueSemantics = FactorMissingValueSemantics()
+
+
+class StrategyComparison(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    net_cumulative_return: float | None
+    benchmark_cumulative_return: float | None
+    annualized_excess_return: float | None
+
+
+class StrategySummaryResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["strategy_summary"] = "strategy_summary"
+    run_id: str
+    research_kind: Literal["strategy_backtest"] = "strategy_backtest"
+    initial_cash_cny: str
+    metrics: StrategyMetrics
+    benchmark: StrategyBenchmark
+    comparison: StrategyComparison
+
+
+class StrategyObservationsResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["strategy_observations"] = "strategy_observations"
+    run_id: str
+    research_kind: Literal["strategy_backtest"] = "strategy_backtest"
+    items: list[StrategyDailyObservation]
+    next_cursor: str | None
+
+
+class TerminalStrategyStateResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["terminal_strategy_state"] = "terminal_strategy_state"
+    run_id: str
+    research_kind: Literal["strategy_backtest"] = "strategy_backtest"
+    session: str
+    gross_cash: str
+    net_cash: str
+    gross_nav: str
+    net_nav: str
+    benchmark_nav: str
+    cumulative_transaction_cost: str
+    rebalance_phase: TerminalRebalancePhase
+    pending_signal: TerminalPendingSignal | None
+
+
+class TerminalPositionsResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["terminal_positions"] = "terminal_positions"
+    run_id: str
+    research_kind: Literal["strategy_backtest"] = "strategy_backtest"
+    items: list[TerminalStrategyPosition]
+    next_cursor: str | None
+
+
+class ResultDataProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    generation_id: str
+    data_through_session: date
+    financial_research_readiness: FinancialResearchReadiness
+
+
+class ResultExecutionProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    calculation_contracts: dict[str, object]
+    semantic_versions: dict[str, str]
+
+
+class ProvenanceResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["provenance"] = "provenance"
+    run_id: str
+    research_kind: ResearchKind
+    schema_version: str
+    immutable_input_sha256: str
+    authoring_input: ResearchRunAuthorableInput
+    data: ResultDataProvenance
+    execution: ResultExecutionProvenance
+
+
+type ResearchRunResultSectionResponse = Annotated[
+    FactorResultSection
+    | StrategySummaryResultSection
+    | StrategyObservationsResultSection
+    | TerminalStrategyStateResultSection
+    | TerminalPositionsResultSection
+    | ProvenanceResultSection,
+    Field(discriminator="section"),
+]
 
 
 class ResearchRunProgress(BaseModel):

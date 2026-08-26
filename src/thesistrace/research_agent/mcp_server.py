@@ -23,6 +23,7 @@ from thesistrace.operational_events import (
     sanitized_exception_context,
 )
 from thesistrace.research_agent.models import (
+    ResearchAgentErrorCode,
     ResearchAgentToolError,
 )
 from thesistrace.research_agent.registry import (
@@ -34,6 +35,11 @@ type ResearchAgentRegistryFactory = Callable[
     ResearchAgentCapabilityRegistry,
 ]
 type ResearchAgentTransport = Literal["stdio", "streamable_http"]
+RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES = 64 * 1024
+
+
+class ResearchAgentWireResponseTooLarge(RuntimeError):
+    pass
 
 
 def create_research_agent_mcp_server(
@@ -94,11 +100,31 @@ def create_research_agent_mcp_server(
             content=[
                 TextContent(
                     type="text",
-                    text=invocation.result.model_dump_json(),
+                    text="Structured result is available.",
                 )
             ],
             structured_content=invocation.result.model_dump(mode="json"),
         )
+        wire_bytes = len(result.model_dump_json(by_alias=True, exclude_none=True).encode())
+        if wire_bytes > RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES:
+            return _failure_result(
+                registry,
+                error=ResearchAgentToolError(
+                    code=ResearchAgentErrorCode.INTERNAL,
+                    message="Tool execution failed",
+                    retryable=False,
+                    trace_id=trace_id,
+                ),
+                event_sink=event_sink,
+                exception=ResearchAgentWireResponseTooLarge(
+                    "Research Agent wire response exceeds its byte limit"
+                ),
+                monotonic_ns=monotonic_ns,
+                params=params,
+                started=started,
+                trace_id=trace_id,
+                transport=transport,
+            )
         _emit_completion(
             event_sink,
             duration_ms=(monotonic_ns() - started) // 1_000_000,

@@ -68,6 +68,7 @@ async def _exercise_stdio(settings: CoreSettings, stderr_path: Path) -> None:
                 "diagnose_alpha_formula",
                 "list_research_runs",
                 "get_research_run",
+                "get_research_run_result",
                 "submit_research_run",
             ]
 
@@ -195,6 +196,7 @@ def _assert_raw_stdio_process_exits_cleanly(settings: CoreSettings) -> None:
             "diagnose_alpha_formula",
             "list_research_runs",
             "get_research_run",
+            "get_research_run_result",
             "submit_research_run",
         ]
         assert stdout_tail == ""
