@@ -13,6 +13,7 @@ dependencies = [
   "boto3>=1.40,<2",
   "numpy>=2.3,<3",
   "akshare==1.18.94",
+  "mcp>=2,<3",
 ]
 
 [project.scripts]
@@ -21,9 +22,11 @@ thesistrace-core-diagnose = "thesistrace.entrypoints.diagnose:main"
 thesistrace-core-worker = "thesistrace.entrypoints.worker:main"
 thesistrace-initialize = "thesistrace.entrypoints.initialize:main"
 thesistrace-data-operator = "thesistrace.entrypoints.data_operator:main"
+thesistrace-research-agent-mcp = "thesistrace.entrypoints.research_agent_mcp:main"
 
 [dependency-groups]
 dev = [
+  "jsonschema>=4.26,<5",
   "pytest>=8.4.1,<9",
   "pytest-xdist>=3.8,<4",
   "ruff>=0.12.7,<1",

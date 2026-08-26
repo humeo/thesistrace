@@ -38,10 +38,20 @@ _ID_FIELDS = frozenset(
         "track_id",
         "attempt_id",
         "http_request_id",
+        "subject",
+        "trace_id",
     }
 )
 _ENUM_FIELDS = frozenset(
-    {"worker_role", "phase", "previous_status", "status", "outcome"}
+    {
+        "worker_role",
+        "phase",
+        "previous_status",
+        "status",
+        "outcome",
+        "tool_name",
+        "transport",
+    }
 )
 _TIMESTAMP_FIELDS = frozenset({"retry_at", "lease_expires_at"})
 _STRING_FIELDS = frozenset(
@@ -52,6 +62,8 @@ _STRING_FIELDS = frozenset(
         "track_id",
         "attempt_id",
         "http_request_id",
+        "subject",
+        "trace_id",
         "worker_role",
         "phase",
         "previous_status",
@@ -63,6 +75,8 @@ _STRING_FIELDS = frozenset(
         "method",
         "route",
         "exception_type",
+        "tool_name",
+        "transport",
     }
 )
 _INTEGER_FIELDS = frozenset(
@@ -75,6 +89,7 @@ _INTEGER_FIELDS = frozenset(
         "item_ordinal",
         "child_peak_rss_bytes",
         "strategy_observation_count",
+        "response_bytes",
     }
 )
 _SIGNED_INTEGER_FIELDS = frozenset({"exit_code"})

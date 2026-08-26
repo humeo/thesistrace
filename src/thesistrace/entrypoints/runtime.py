@@ -25,6 +25,7 @@ from thesistrace.entrypoints.readiness import CoreReadiness
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.operational_events import emit_operational_event_data
 from thesistrace.publication import Publication
+from thesistrace.research_authoring import ResearchAuthoringService
 from thesistrace.research_batch import ResearchBatchService, preserve_deleted_run_history
 from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
 from thesistrace.research_folder import ResearchFolderService
@@ -149,6 +150,7 @@ def core_environment_is_configured(
 class CoreRuntime:
     database: PostgresDatabase
     data_overview: DatasetOverviewService
+    research_authoring: ResearchAuthoringService
     research_folders: ResearchFolderService
     research_batches: ResearchBatchService
     research_runs: ResearchRunService
@@ -227,6 +229,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         yield CoreRuntime(
             database=database,
             data_overview=data_overview,
+            research_authoring=ResearchAuthoringService(),
             research_folders=ResearchFolderService(database),
             research_batches=research_batches,
             research_runs=research_runs,

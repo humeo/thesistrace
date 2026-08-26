@@ -21,9 +21,35 @@ RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 FolderId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 ResearchName = Annotated[str, Field(strict=True, max_length=200)]
 Formula = Annotated[str, Field(strict=True)]
-HoldingsCount = Annotated[int, Field(strict=True, ge=1, le=100)]
-RebalanceInterval = Annotated[int, Field(strict=True, ge=1, le=20)]
+MIN_HOLDINGS_COUNT = 1
+MAX_HOLDINGS_COUNT = 100
+MIN_REBALANCE_INTERVAL = 1
+MAX_REBALANCE_INTERVAL = 20
+HoldingsCount = Annotated[
+    int,
+    Field(strict=True, ge=MIN_HOLDINGS_COUNT, le=MAX_HOLDINGS_COUNT),
+]
+RebalanceInterval = Annotated[
+    int,
+    Field(strict=True, ge=MIN_REBALANCE_INTERVAL, le=MAX_REBALANCE_INTERVAL),
+]
 type ResearchKind = Literal["factor_evaluation", "strategy_backtest"]
+type ResearchUniverse = Literal["top300", "top1000", "top2000", "top3000"]
+type ResearchNeutralization = Literal["none", "industry"]
+RESEARCH_KINDS: tuple[ResearchKind, ...] = (
+    "factor_evaluation",
+    "strategy_backtest",
+)
+RESEARCH_UNIVERSES: tuple[ResearchUniverse, ...] = (
+    "top300",
+    "top1000",
+    "top2000",
+    "top3000",
+)
+RESEARCH_NEUTRALIZATIONS: tuple[ResearchNeutralization, ...] = (
+    "none",
+    "industry",
+)
 
 
 def _natural_date(value: object) -> date:
@@ -53,8 +79,8 @@ class _ResearchRunAdmissionBase(BaseModel):
     hypothesis: str | None = None
     start_date: NaturalDate
     end_date: NaturalDate
-    universe: Literal["top300", "top1000", "top2000", "top3000"]
-    neutralization: Literal["none", "industry"]
+    universe: ResearchUniverse
+    neutralization: ResearchNeutralization
 
     @model_validator(mode="after")
     def validate_research_period(self) -> _ResearchRunAdmissionBase:
@@ -181,8 +207,8 @@ class ImmutableRunInput(BaseModel):
     requested_start_date: date
     requested_end_date: date
     field_bindings: dict[str, str]
-    universe: Literal["top300", "top1000", "top2000", "top3000"]
-    neutralization: Literal["none", "industry"]
+    universe: ResearchUniverse
+    neutralization: ResearchNeutralization
     research_kind: ResearchKind
     strategy: dict[str, object] | None = None
     costs: dict[str, str] | None = None
@@ -275,8 +301,8 @@ class ResearchRunAuthorableInput(BaseModel):
     hypothesis: str | None
     start_date: date
     end_date: date
-    universe: Literal["top300", "top1000", "top2000", "top3000"]
-    neutralization: Literal["none", "industry"]
+    universe: ResearchUniverse
+    neutralization: ResearchNeutralization
     research_kind: ResearchKind
     holdings_count: int | None = Field(default=None, exclude_if=lambda value: value is None)
     rebalance_every_sessions: int | None = Field(

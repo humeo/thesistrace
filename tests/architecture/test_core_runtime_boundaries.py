@@ -27,7 +27,9 @@ CORE_PACKAGES = (
     "entrypoints",
     "operational_events",
     "publication",
+    "research_authoring",
     "research_batch",
+    "research_agent",
     "research_folder",
     "research_run",
 )
@@ -116,6 +118,18 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
                 "research_run",
                 "research_series",
             },
+        "research_authoring": {
+            "alpha_language",
+            "research_batch",
+            "research_run",
+        },
+        "research_agent": {
+            "alpha_language",
+            "data",
+            "operational_events",
+            "research_authoring",
+            "research_folder",
+        },
         "fixture": {"data"},
         "adapters": {"data", "fixture"},
         "entrypoints": {
@@ -126,7 +140,9 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "data",
             "operational_events",
             "publication",
+            "research_authoring",
             "research_batch",
+            "research_agent",
             "research_folder",
             "research_kernel",
             "research_run",
@@ -280,6 +296,9 @@ def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> Non
         "thesistrace-core-worker": "thesistrace.entrypoints.worker:main",
         "thesistrace-initialize": "thesistrace.entrypoints.initialize:main",
         "thesistrace-data-operator": "thesistrace.entrypoints.data_operator:main",
+        "thesistrace-research-agent-mcp": (
+            "thesistrace.entrypoints.research_agent_mcp:main"
+        ),
     }
 
 
