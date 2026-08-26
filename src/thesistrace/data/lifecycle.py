@@ -17,7 +17,6 @@ from thesistrace.data.generation_store import (
 from thesistrace.data.head_store import DatasetHeadPointer, MountedDatasetHeadStore
 
 _LIFECYCLE_LOCK = "thesistrace-mounted-data-lifecycle"
-CURRENT_DATA_CUTOVER_LOCK = "thesistrace-current-data-cutover"
 MOUNTED_DATA_MUTATION_LOCK = "thesistrace-mounted-data-mutation"
 _OWNER_KINDS = {
     "research_batch_attempt",

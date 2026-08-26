@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 from bisect import bisect_left
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TypeVar
@@ -20,12 +19,6 @@ from thesistrace.research_series import (
 )
 
 T = TypeVar("T")
-
-
-def _sorted_table(table: pa.Table, columns: Sequence[str]) -> pa.Table:
-    if table.num_rows < 2:
-        return table.combine_chunks()
-    return table.take(pc.sort_indices(table, sort_keys=[(name, "ascending") for name in columns]))
 
 
 def _session_filter(table: pa.Table, column: str, sessions: tuple[str, ...]) -> pa.Table:
@@ -366,57 +359,6 @@ class ColumnarResearchData:
 
     def snapshot(self) -> ColumnarResearchData:
         return self
-
-    def identity_sha256(self) -> str:
-        """Hash one semantic Arrow slice without expanding it into Python rows."""
-        digest = hashlib.sha256()
-
-        def update_frame(name: str, content: bytes | memoryview) -> None:
-            name_bytes = name.encode("utf-8")
-            digest.update(len(name_bytes).to_bytes(4, "big"))
-            digest.update(name_bytes)
-            digest.update(len(content).to_bytes(8, "big"))
-            digest.update(content)
-
-        update_frame("sessions", "\n".join(self.sessions).encode("utf-8"))
-        update_frame(
-            "field_columns",
-            "\n".join(
-                f"{field_id}\0{column}"
-                for field_id, column in sorted(self._field_columns.items())
-            ).encode("utf-8"),
-        )
-        tables = (
-            ("instruments", self._instruments),
-            ("eod_prices", self._eod_prices),
-            ("universes", self._universes),
-            ("trading_states", self._trading_states),
-            ("price_limits", self._price_limits),
-            ("industries", self._industries),
-            ("financial_values", self._financial_values),
-        )
-        for table_name, table in tables:
-            if table is None:
-                update_frame(table_name, b"")
-                continue
-            combined = table.combine_chunks()
-            update_frame(f"{table_name}.schema", combined.schema.serialize().to_pybytes())
-            for column_name in combined.column_names:
-                values = combined[column_name].combine_chunks()
-                update_frame(
-                    f"{table_name}.{column_name}.type",
-                    str(values.type).encode("utf-8"),
-                )
-                update_frame(
-                    f"{table_name}.{column_name}.length",
-                    len(values).to_bytes(8, "big"),
-                )
-                for ordinal, buffer in enumerate(values.buffers()):
-                    update_frame(
-                        f"{table_name}.{column_name}.buffer.{ordinal}",
-                        b"" if buffer is None else memoryview(buffer),
-                    )
-        return digest.hexdigest()
 
     def numeric_field_matrices(
         self,

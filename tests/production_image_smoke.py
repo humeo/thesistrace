@@ -2484,39 +2484,6 @@ def _wait_for_track_status(
     raise AssertionError({"timeout": True, "last_track": last})
 
 
-def _wait_for_track_phase(
-    api_origin: str,
-    track_id: str,
-    expected_phase: str,
-) -> dict[str, object]:
-    deadline = time.monotonic() + 20
-    poll_interval = Event()
-    last: dict[str, object] | None = None
-    while time.monotonic() < deadline:
-        last = _request_json(api_origin, "GET", f"/api/daily-tracks/{track_id}")
-        if last["progress"]["phase"] == expected_phase:
-            return last
-        if last["status"] in {"blocked", "stopped"}:
-            raise AssertionError(last)
-        poll_interval.wait(0.02)
-    raise AssertionError({"phase_timeout": expected_phase, "last_track": last})
-
-
-def _wait_for_track_execution(api_origin: str, track_id: str) -> dict[str, object]:
-    deadline = time.monotonic() + 10
-    poll_interval = Event()
-    last: dict[str, object] | None = None
-    active_phases = {"starting", "calculating", "result_ready", "staging"}
-    while time.monotonic() < deadline:
-        last = _request_json(api_origin, "GET", f"/api/daily-tracks/{track_id}")
-        if last["status"] == "active" and last["progress"]["phase"] in active_phases:
-            return last
-        if last["status"] in {"blocked", "stopped"}:
-            raise AssertionError(last)
-        poll_interval.wait(0.01)
-    raise AssertionError({"execution_timeout": True, "last_track": last})
-
-
 def _assert_private_operator_installed() -> None:
     result = subprocess.run(
         ["thesistrace-data-operator", "--help"],

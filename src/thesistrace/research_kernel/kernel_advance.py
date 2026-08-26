@@ -35,7 +35,6 @@ from thesistrace.research_series import (
 
 MAX_PENDING_ALPHA_SESSIONS = 21
 MAX_ROLLING_FACTOR_SESSIONS = 504
-MAX_ALPHA_LOOKBACK_SESSIONS = 252
 
 
 @dataclass(frozen=True, init=False)
