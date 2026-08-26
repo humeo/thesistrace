@@ -42,6 +42,7 @@ def main() -> None:
                 alpha_language=alpha_language,
                 research_authoring=runtime.research_authoring,
                 research_runs=runtime.research_runs,
+                research_batches=runtime.research_batches,
             )
             authority = local_operator_authority(
                 enable_research_cancel=_research_cancel_is_enabled(),

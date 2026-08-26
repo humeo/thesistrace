@@ -18,6 +18,12 @@ from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.server.auth.provider import AccessToken
 from mcp_types.version import LATEST_HANDSHAKE_VERSION
+from test_core_research_batch_fifo import (
+    _release_claim_barrier_worker,
+    _start_claim_barrier_worker,
+    _terminate_worker,
+    _wait_for_worker_event,
+)
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
@@ -140,9 +146,7 @@ def test_mounted_oauth_streamable_http_read_loop_and_fail_closed_boundaries(
         serialized_events = str(events)
         mcp_events = [event for event in events if event.component == "research_agent_mcp"]
         assert mcp_events
-        assert all(
-            event.context["transport"] == "streamable_http" for event in mcp_events
-        )
+        assert all(event.context["transport"] == "streamable_http" for event in mcp_events)
         expected_subject = f"oauth_{sha256(b'researcher_test').hexdigest()[:32]}"
         assert all(event.context["subject"] == expected_subject for event in mcp_events)
         assert "researcher_test" not in serialized_events
@@ -226,7 +230,9 @@ async def _exercise_http_contract(
             tools = await client.list_tools()
             tools_by_name = {tool.name: tool for tool in tools.tools}
             assert set(tools_by_name) == RESEARCH_AGENT_TOOL_NAMES - {
+                "submit_research_batch",
                 "submit_research_run",
+                "cancel_research_batch",
                 "cancel_research_run",
             }
 
@@ -270,6 +276,194 @@ async def _exercise_http_contract(
             assert cancel_tool.annotations is not None
             assert cancel_tool.annotations.destructive_hint is True
             assert cancel_tool.annotations.idempotent_hint is True
+            batch_cancel_tool = tools["cancel_research_batch"]
+            assert batch_cancel_tool.annotations is not None
+            assert batch_cancel_tool.annotations.destructive_hint is True
+            assert batch_cancel_tool.annotations.idempotent_hint is True
+
+            batch = await client.call_tool(
+                "submit_research_batch",
+                _batch_command("http-batch-cancel-target"),
+            )
+            assert batch.is_error is False
+            assert batch.structured_content["status"] == "queued"
+            batch_replay = await client.call_tool(
+                "submit_research_batch",
+                _batch_command("http-batch-cancel-target"),
+            )
+            assert (
+                batch_replay.structured_content["batch_id"]
+                == (batch.structured_content["batch_id"])
+            )
+            assert batch_replay.structured_content["replayed"] is True
+            rejected_batch_command = {
+                **_batch_command("http-batch-rejected"),
+                "factors": [{"item_key": "invalid", "formula": "unknown_alpha"}],
+            }
+            rejected_batch = await client.call_tool(
+                "submit_research_batch",
+                rejected_batch_command,
+            )
+            rejected_batch_replay = await client.call_tool(
+                "submit_research_batch",
+                rejected_batch_command,
+            )
+            assert rejected_batch.structured_content["outcome"] == "rejected"
+            assert rejected_batch.structured_content["replayed"] is False
+            assert rejected_batch_replay.structured_content["replayed"] is True
+            rejected_batch_conflict = await client.call_tool(
+                "submit_research_batch",
+                {
+                    **rejected_batch_command,
+                    "factors": [{"item_key": "changed", "formula": "close"}],
+                },
+            )
+            assert rejected_batch_conflict.is_error is True
+            assert rejected_batch_conflict.structured_content["code"] == ("IDEMPOTENCY_CONFLICT")
+            concurrent_batch_command = _batch_command("http-batch-concurrent-accepted")
+            concurrent_batch_results = await _concurrent_batch_submits(
+                app,
+                action_token,
+                concurrent_batch_command,
+            )
+            assert all(not result.is_error for result in concurrent_batch_results)
+            assert (
+                len({result.structured_content["batch_id"] for result in concurrent_batch_results})
+                == 1
+            )
+            assert (
+                sum(
+                    result.structured_content["replayed"] is False
+                    for result in concurrent_batch_results
+                )
+                == 1
+            )
+            concurrent_rejected_command = {
+                **_batch_command("http-batch-concurrent-rejected"),
+                "factors": [{"item_key": "invalid", "formula": "unknown_alpha"}],
+            }
+            concurrent_rejected_results = await _concurrent_batch_submits(
+                app,
+                action_token,
+                concurrent_rejected_command,
+            )
+            assert all(not result.is_error for result in concurrent_rejected_results)
+            assert all(
+                result.structured_content["outcome"] == "rejected"
+                for result in concurrent_rejected_results
+            )
+            assert (
+                sum(
+                    result.structured_content["replayed"] is False
+                    for result in concurrent_rejected_results
+                )
+                == 1
+            )
+            concurrent_submit_conflict = await client.call_tool(
+                "submit_research_batch",
+                {
+                    **concurrent_batch_command,
+                    "factors": [{"item_key": "changed", "formula": "open"}],
+                },
+            )
+            assert concurrent_submit_conflict.is_error is True
+            assert concurrent_submit_conflict.structured_content["code"] == ("IDEMPOTENCY_CONFLICT")
+            unchanged_concurrent_batch = await client.call_tool(
+                "get_research_batch",
+                {"batch_id": concurrent_batch_results[0].structured_content["batch_id"]},
+            )
+            assert unchanged_concurrent_batch.structured_content["status"] == "queued"
+            assert [
+                item["item_key"] for item in unchanged_concurrent_batch.structured_content["items"]
+            ] == ["value"]
+            listed_batches = await client.call_tool(
+                "list_research_batches",
+                {"limit": 20},
+            )
+            assert {item["id"] for item in listed_batches.structured_content["items"]} == {
+                batch.structured_content["batch_id"],
+                concurrent_batch_results[0].structured_content["batch_id"],
+            }
+            batch_detail = await client.call_tool(
+                "get_research_batch",
+                {"batch_id": batch.structured_content["batch_id"]},
+            )
+            assert batch_detail.structured_content["items"][0]["item_key"] == "value"
+            assert "result" not in batch_detail.structured_content
+            assert batch_detail.structured_content["retry_after_seconds"] == 2
+
+            batch_worker = _start_claim_barrier_worker(settings, "batch-research")
+            try:
+                await anyio.to_thread.run_sync(
+                    _wait_for_worker_event,
+                    batch_worker,
+                    "worker_claim",
+                )
+                running_batch = await client.call_tool(
+                    "get_research_batch",
+                    {"batch_id": batch.structured_content["batch_id"]},
+                )
+                assert running_batch.structured_content["status"] == "running"
+                assert running_batch.structured_content["retry_after_seconds"] == 2
+                cancelled_batch = await client.call_tool(
+                    "cancel_research_batch",
+                    {
+                        "batch_id": batch.structured_content["batch_id"],
+                        "request_id": "http-batch-cancel-request",
+                    },
+                )
+                assert cancelled_batch.is_error is False
+                assert cancelled_batch.structured_content["batch"]["status"] == ("cancelling")
+                assert cancelled_batch.structured_content["replayed"] is False
+                assert cancelled_batch.structured_content["retry_after_seconds"] == 2
+                concurrent_batch_replays = await _concurrent_batch_cancel_replays(
+                    app,
+                    action_token,
+                    batch_id=str(batch.structured_content["batch_id"]),
+                    request_id="http-batch-cancel-request",
+                )
+                assert all(not result.is_error for result in concurrent_batch_replays)
+                assert all(
+                    result.structured_content["batch"]
+                    == cancelled_batch.structured_content["batch"]
+                    for result in concurrent_batch_replays
+                )
+                assert all(
+                    result.structured_content["replayed"] is True
+                    for result in concurrent_batch_replays
+                )
+                batch_conflict_target = await client.call_tool(
+                    "submit_research_batch",
+                    _batch_command("http-batch-conflict-target"),
+                )
+                batch_cancel_conflict = await client.call_tool(
+                    "cancel_research_batch",
+                    {
+                        "batch_id": batch_conflict_target.structured_content["batch_id"],
+                        "request_id": "http-batch-cancel-request",
+                    },
+                )
+                assert batch_cancel_conflict.is_error is True
+                assert batch_cancel_conflict.structured_content["code"] == ("IDEMPOTENCY_CONFLICT")
+                untouched_conflict_target = await client.call_tool(
+                    "get_research_batch",
+                    {"batch_id": batch_conflict_target.structured_content["batch_id"]},
+                )
+                assert untouched_conflict_target.structured_content["status"] == "queued"
+                await anyio.to_thread.run_sync(
+                    _release_claim_barrier_worker,
+                    batch_worker,
+                )
+                batch_worker = None
+            finally:
+                if batch_worker is not None:
+                    _terminate_worker(batch_worker)
+            terminal_batch = await client.call_tool(
+                "get_research_batch",
+                {"batch_id": batch.structured_content["batch_id"]},
+            )
+            assert terminal_batch.structured_content["status"] == "cancelled"
+            assert terminal_batch.structured_content["retry_after_seconds"] is None
 
             cancel_target = await client.call_tool(
                 "submit_research_run",
@@ -341,13 +535,11 @@ async def _exercise_http_contract(
                 )
                 assert all(not result.is_error for result in concurrent_replays)
                 assert all(
-                    result.structured_content["run"]
-                    == cancelled.structured_content["run"]
+                    result.structured_content["run"] == cancelled.structured_content["run"]
                     for result in concurrent_replays
                 )
                 assert all(
-                    result.structured_content["replayed"] is True
-                    for result in concurrent_replays
+                    result.structured_content["replayed"] is True for result in concurrent_replays
                 )
 
                 idempotency_conflict = await client.call_tool(
@@ -358,9 +550,7 @@ async def _exercise_http_contract(
                     },
                 )
                 assert idempotency_conflict.is_error is True
-                assert idempotency_conflict.structured_content["code"] == (
-                    "IDEMPOTENCY_CONFLICT"
-                )
+                assert idempotency_conflict.structured_content["code"] == ("IDEMPOTENCY_CONFLICT")
 
                 _install_transient_cancel_failure(settings)
                 try:
@@ -378,9 +568,7 @@ async def _exercise_http_contract(
                     "TEMPORARILY_UNAVAILABLE"
                 )
                 assert temporarily_unavailable.structured_content["retryable"] is True
-                assert temporarily_unavailable.structured_content[
-                    "retry_after_seconds"
-                ] == 2
+                assert temporarily_unavailable.structured_content["retry_after_seconds"] == 2
                 assert temporarily_unavailable.structured_content["trace_id"]
 
                 conflict_state = await client.call_tool(
@@ -442,6 +630,34 @@ async def _exercise_http_contract(
                 {"run_id": cancel_target.structured_content["run_id"]},
             )
             assert stable_after_restart.structured_content["status"] == "cancelled"
+            batch_cancel_replay = await restarted.call_tool(
+                "cancel_research_batch",
+                {
+                    "batch_id": batch.structured_content["batch_id"],
+                    "request_id": "http-batch-cancel-request",
+                },
+            )
+            assert batch_cancel_replay.is_error is False
+            assert (
+                batch_cancel_replay.structured_content["batch"]
+                == (cancelled_batch.structured_content["batch"])
+            )
+            assert batch_cancel_replay.structured_content["replayed"] is True
+            restarted_batch_submit = await restarted.call_tool(
+                "submit_research_batch",
+                concurrent_batch_command,
+            )
+            restarted_rejected_submit = await restarted.call_tool(
+                "submit_research_batch",
+                concurrent_rejected_command,
+            )
+            assert (
+                restarted_batch_submit.structured_content["batch_id"]
+                == (concurrent_batch_results[0].structured_content["batch_id"])
+            )
+            assert restarted_batch_submit.structured_content["replayed"] is True
+            assert restarted_rejected_submit.structured_content["outcome"] == "rejected"
+            assert restarted_rejected_submit.structured_content["replayed"] is True
 
 
 def _run_barrier_worker(settings: CoreSettings, prepared, release_worker) -> None:
@@ -496,6 +712,47 @@ async def _concurrent_cancel_replays(
     return results
 
 
+async def _concurrent_batch_cancel_replays(
+    app,
+    token: str,
+    *,
+    batch_id: str,
+    request_id: str,
+) -> list[object]:
+    results: list[object] = []
+
+    async def replay() -> None:
+        async with _mcp_client(app, token) as client:
+            results.append(
+                await client.call_tool(
+                    "cancel_research_batch",
+                    {"batch_id": batch_id, "request_id": request_id},
+                )
+            )
+
+    async with anyio.create_task_group() as task_group:
+        for _index in range(4):
+            task_group.start_soon(replay)
+    return results
+
+
+async def _concurrent_batch_submits(
+    app,
+    token: str,
+    command: dict[str, object],
+) -> list[object]:
+    results: list[object] = []
+
+    async def submit() -> None:
+        async with _mcp_client(app, token) as client:
+            results.append(await client.call_tool("submit_research_batch", command))
+
+    async with anyio.create_task_group() as task_group:
+        for _index in range(4):
+            task_group.start_soon(submit)
+    return results
+
+
 async def _exercise_allowlist_intersection(app, token: str) -> None:
     async with app.router.lifespan_context(app):
         async with _mcp_client(app, token) as client:
@@ -524,6 +781,25 @@ def _research_command(request_id: str) -> dict[str, object]:
         "universe": "top300",
         "neutralization": "none",
         "research_kind": "factor_evaluation",
+    }
+
+
+def _batch_command(request_id: str) -> dict[str, object]:
+    return {
+        "request_id": request_id,
+        "batch_kind": "factor_evaluation",
+        "start_date": "2026-08-07",
+        "end_date": "2026-08-07",
+        "universe": "top300",
+        "neutralization": "none",
+        "factors": [
+            {
+                "item_key": "value",
+                "name": "HTTP MCP Batch",
+                "formula": "close",
+                "hypothesis": "Close prices preserve a stable cross-sectional signal.",
+            }
+        ],
     }
 
 

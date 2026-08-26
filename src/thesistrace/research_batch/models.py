@@ -247,6 +247,78 @@ class ResearchBatchDetail(ResearchBatchSummary):
     items: list[ResearchBatchItemSummary]
 
 
+def research_batch_retry_after_seconds(status: ResearchBatchStatus) -> int | None:
+    return 2 if status in {"queued", "running", "cancelling"} else None
+
+
+class ResearchBatchPollingItemSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ordinal: int
+    item_key: str
+    research_run_id: str
+    dependency_role: Literal["factor", "strategy"]
+    status: Literal["queued", "running", "cancelling", "succeeded", "failed", "cancelled"]
+    outcome: Literal["succeeded", "failed", "cancelled"] | None = None
+    run_availability: Literal["available", "deleted"]
+    diagnostic: ResearchBatchDiagnostic | None = None
+    deleted_at: datetime | None = None
+
+
+class ResearchBatchPollingDetail(ResearchBatchSummary):
+    diagnostic: ResearchBatchDiagnostic | None
+    items: list[ResearchBatchPollingItemSummary]
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
+def research_batch_polling_detail(
+    detail: ResearchBatchDetail,
+) -> ResearchBatchPollingDetail:
+    return ResearchBatchPollingDetail(
+        **{name: getattr(detail, name) for name in ResearchBatchSummary.model_fields},
+        diagnostic=detail.attempt.diagnostic if detail.attempt is not None else None,
+        items=[
+            ResearchBatchPollingItemSummary.model_validate(
+                item.model_dump(exclude={"task_attempt_count"})
+            )
+            for item in detail.items
+        ],
+        retry_after_seconds=research_batch_retry_after_seconds(detail.status),
+    )
+
+
+class ResearchBatchAdmissionAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    batch: ResearchBatchDetail
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
+class ResearchBatchAdmissionRejectedOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["rejected"] = "rejected"
+    issues: Annotated[list[ResearchBatchAdmissionIssue], Field(min_length=1)]
+    replayed: bool
+
+
+type ResearchBatchAdmissionOutcome = Annotated[
+    ResearchBatchAdmissionAccepted | ResearchBatchAdmissionRejectedOutcome,
+    Field(discriminator="outcome"),
+]
+
+
+class ResearchBatchCancelOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    batch: ResearchBatchDetail
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
 class ResearchBatchList(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

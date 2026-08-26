@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-from base64 import urlsafe_b64encode
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -12,6 +10,8 @@ import pytest
 from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
+from psycopg.errors import CheckViolation
+from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import (
@@ -111,7 +111,7 @@ def test_batch_admission_rejects_all_invalid_computation_before_product_state(
         )
         assert duplicate_key.status_code == 422
         assert duplicate_key.json()["issues"][0]["code"] == "DUPLICATE_ITEM_KEY"
-        assert _counts(settings) == _empty_counts()
+        assert _counts(settings) == _empty_counts(batch_receipts=1)
 
         invalid = client.post(
             "/api/research-batches",
@@ -128,7 +128,27 @@ def test_batch_admission_rejects_all_invalid_computation_before_product_state(
         assert issue["item_key"] == "invalid"
         assert issue["field"] == "factors[1].formula"
         assert issue["range"] is not None
-        assert _counts(settings) == _empty_counts()
+        replayed_invalid = client.post(
+            "/api/research-batches",
+            json={
+                **_factor_command("batch-invalid"),
+                "factors": [
+                    {"item_key": "valid", "formula": "close"},
+                    {"item_key": "invalid", "formula": "unknown_field +"},
+                ],
+            },
+        )
+        assert replayed_invalid.status_code == 422
+        assert replayed_invalid.json() == invalid.json()
+        conflicting_invalid = client.post(
+            "/api/research-batches",
+            json={
+                **_factor_command("batch-invalid"),
+                "factors": [{"item_key": "changed", "formula": "close"}],
+            },
+        )
+        assert conflicting_invalid.status_code == 409
+        assert _counts(settings) == _empty_counts(batch_receipts=2)
 
         duplicate_factor = client.post(
             "/api/research-batches",
@@ -152,7 +172,7 @@ def test_batch_admission_rejects_all_invalid_computation_before_product_state(
                 "details": None,
             }
         ]
-        assert _counts(settings) == _empty_counts()
+        assert _counts(settings) == _empty_counts(batch_receipts=3)
 
         duplicate_strategy = client.post(
             "/api/research-batches",
@@ -174,7 +194,7 @@ def test_batch_admission_rejects_all_invalid_computation_before_product_state(
         )
         assert duplicate_strategy.status_code == 422
         assert "first and second" in duplicate_strategy.json()["issues"][0]["message"]
-        assert _counts(settings) == _empty_counts()
+        assert _counts(settings) == _empty_counts(batch_receipts=4)
 
 
 @pytest.mark.skipif(
@@ -200,7 +220,7 @@ def test_strategy_sweep_capacity_rejection_creates_no_product_state(
 
         assert response.status_code == 422
         assert response.json()["issues"][0]["code"] == ("RESEARCH_BATCH_EXCEEDS_WORKER_CAPACITY")
-        assert _counts(settings) == _empty_counts()
+        assert _counts(settings) == _empty_counts(batch_receipts=1)
 
 
 @pytest.mark.skipif(
@@ -298,15 +318,13 @@ def test_factor_and_strategy_batch_admission_is_atomic_idempotent_and_queryable(
         assert client.get(f"/api/research-batches/{factor['id']}").json() == factor
         assert client.get("/api/research-batches/batch_missing").status_code == 404
         assert client.get("/api/research-batches", params={"cursor": "bad"}).status_code == 422
-        empty_id_cursor = urlsafe_b64encode(
-            json.dumps(
-                {"created_at": datetime.now(UTC).isoformat(), "id": ""}
-            ).encode()
-        ).decode().rstrip("=")
+        cursor = first_page.json()["next_cursor"]
+        assert isinstance(cursor, str)
+        tampered_cursor = f"{cursor[:-1]}{'A' if cursor[-1] != 'A' else 'B'}"
         assert (
             client.get(
                 "/api/research-batches",
-                params={"cursor": empty_id_cursor},
+                params={"cursor": tampered_cursor},
             ).status_code
             == 422
         )
@@ -382,6 +400,80 @@ def test_injected_second_item_failure_rolls_back_complete_batch_admission(
             )
         assert response.status_code == 500
         assert _counts(settings) == _empty_counts()
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_batch_receipt_schema_rejects_malformed_durable_outcomes(tmp_path: Path) -> None:
+    settings = isolated_core_settings(tmp_path)
+    drop_product_schemas(settings)
+    with TestClient(create_app(settings)) as client:
+        _publish_current_data(settings)
+        batch = client.post(
+            "/api/research-batches",
+            json=_factor_command("batch-receipt-schema-source"),
+        ).json()
+        with client.app.state.core_runtime.database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM research_batches.admission_receipts WHERE batch_id = %s",
+                (batch["id"],),
+            )
+        cancelled_batch = client.post(
+            f"/api/research-batches/{batch['id']}/cancel",
+            json={"request_id": "batch-receipt-schema-cancel"},
+        ).json()
+        with client.app.state.core_runtime.database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM research_batches.cancel_receipts WHERE batch_id = %s",
+                (batch["id"],),
+            )
+
+        invalid_admission_outcomes = (
+            (batch["id"], {"outcome": "accepted", "extra": True}),
+            (None, {"outcome": "rejected", "issues": []}),
+            (None, {"outcome": "rejected", "issues": [{}], "extra": True}),
+        )
+        for index, (batch_id, outcome) in enumerate(invalid_admission_outcomes):
+            with pytest.raises(CheckViolation):
+                with client.app.state.core_runtime.database.transaction() as transaction:
+                    transaction.execute(
+                        """
+                        INSERT INTO research_batches.admission_receipts (
+                            request_id, request_fingerprint, batch_id, outcome
+                        ) VALUES (%s, %s, %s, %s)
+                        """,
+                        (
+                            f"malformed-admission-{index}",
+                            "fingerprint",
+                            batch_id,
+                            Jsonb(outcome),
+                        ),
+                    )
+
+        invalid_cancel_outcomes = (
+            {},
+            {**cancelled_batch, "id": "batch_wrong"},
+            {**cancelled_batch, "status": "succeeded"},
+            {**cancelled_batch, "extra": True},
+        )
+        for index, outcome in enumerate(invalid_cancel_outcomes):
+            with pytest.raises(CheckViolation):
+                with client.app.state.core_runtime.database.transaction() as transaction:
+                    transaction.execute(
+                        """
+                        INSERT INTO research_batches.cancel_receipts (
+                            request_id, request_fingerprint, batch_id, outcome
+                        ) VALUES (%s, %s, %s, %s)
+                        """,
+                        (
+                            f"malformed-cancel-{index}",
+                            "fingerprint",
+                            batch["id"],
+                            Jsonb(outcome),
+                        ),
+                    )
 
 
 def _factor_command(request_id: str) -> dict[str, object]:
@@ -582,11 +674,11 @@ def _counts(settings: CoreSettings) -> dict[str, int]:
         database.close()
 
 
-def _empty_counts() -> dict[str, int]:
+def _empty_counts(*, batch_receipts: int = 0) -> dict[str, int]:
     return {
         "batches": 0,
         "items": 0,
-        "batch_receipts": 0,
+        "batch_receipts": batch_receipts,
         "runs": 0,
         "ordinary_receipts": 0,
         "cancel_receipts": 0,

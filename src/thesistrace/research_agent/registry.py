@@ -12,23 +12,47 @@ from thesistrace.data.models import DataOverview
 from thesistrace.research_agent.models import (
     AlphaCatalogIdentifiers,
     AlphaCatalogView,
+    CancelResearchBatchInput,
+    CancelResearchBatchOutcome,
     CancelResearchRunInput,
     DiagnoseAlphaFormulaInput,
     FormulaSource,
     GetAlphaCatalogInput,
+    GetResearchBatchInput,
     GetResearchContextInput,
     GetResearchRunInput,
+    ListResearchBatchesInput,
     ListResearchRunsInput,
     ResearchAgentAuthority,
     ResearchAgentErrorCode,
     ResearchAgentScope,
     ResearchAgentToolError,
     ResearchContext,
+    SubmitResearchBatchAccepted,
+    SubmitResearchBatchOutcome,
+    SubmitResearchBatchRejected,
     SubmitResearchRunAccepted,
     SubmitResearchRunOutcome,
     SubmitResearchRunRejected,
 )
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
+from thesistrace.research_batch import (
+    ResearchBatchAdmissionAccepted,
+    ResearchBatchAdmissionCommand,
+    ResearchBatchAdmissionConflict,
+    ResearchBatchAdmissionOutcome,
+    ResearchBatchCancelCommand,
+    ResearchBatchCancelIdempotencyConflict,
+    ResearchBatchCancelStateConflict,
+    ResearchBatchInvalidCursor,
+    ResearchBatchList,
+    ResearchBatchPollingDetail,
+    ResearchBatchTemporarilyUnavailable,
+    research_batch_polling_detail,
+)
+from thesistrace.research_batch import (
+    ResearchBatchCancelOutcome as DomainResearchBatchCancelOutcome,
+)
 from thesistrace.research_folder.models import ResearchFolderList
 from thesistrace.research_run import (
     ResearchRunAdmissionAccepted,
@@ -98,6 +122,23 @@ class ResearchRunReader(Protocol):
     ) -> ResearchRunAdmissionOutcome: ...
 
 
+class ResearchBatchReader(Protocol):
+    def list(self, *, cursor: str | None, limit: int) -> ResearchBatchList: ...
+
+    def get_polling_detail(self, batch_id: str) -> ResearchBatchPollingDetail | None: ...
+
+    def admit_with_outcome(
+        self,
+        command: ResearchBatchAdmissionCommand,
+    ) -> ResearchBatchAdmissionOutcome: ...
+
+    def cancel_with_outcome(
+        self,
+        batch_id: str,
+        command: ResearchBatchCancelCommand,
+    ) -> DomainResearchBatchCancelOutcome | None: ...
+
+
 @dataclass(frozen=True)
 class ResearchAgentModules:
     data_overview: DataOverviewReader
@@ -105,6 +146,7 @@ class ResearchAgentModules:
     alpha_language: AlphaAuthoringLanguage
     research_authoring: ResearchAuthoringReader
     research_runs: ResearchRunReader
+    research_batches: ResearchBatchReader
 
 
 @dataclass(frozen=True)
@@ -186,6 +228,10 @@ RESEARCH_AGENT_TOOL_NAMES = frozenset(
         "list_research_runs",
         "get_research_run",
         "get_research_run_result",
+        "list_research_batches",
+        "get_research_batch",
+        "submit_research_batch",
+        "cancel_research_batch",
         "cancel_research_run",
         "submit_research_run",
     }
@@ -276,6 +322,60 @@ class ResearchAgentCapabilityRegistry:
                 output_model=ResearchRunResultSectionResponse,
                 annotations=READ_ONLY_TOOL_ANNOTATIONS,
                 handler=self.get_research_run_result,
+            ),
+            ResearchAgentCapability(
+                name="list_research_batches",
+                description=(
+                    "List durable Research Batches newest first with opaque pagination; "
+                    "requires research:read and returns no child Results."
+                ),
+                required_scope=ResearchAgentScope.RESEARCH_READ,
+                input_model=ListResearchBatchesInput,
+                output_model=ResearchBatchList,
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                handler=self.list_research_batches,
+            ),
+            ResearchAgentCapability(
+                name="get_research_batch",
+                description=(
+                    "Poll one durable Research Batch with aggregate progress and ordered "
+                    "child run identifiers; requires research:read, embeds no Results, and "
+                    "returns retry_after_seconds while work remains active."
+                ),
+                required_scope=ResearchAgentScope.RESEARCH_READ,
+                input_model=GetResearchBatchInput,
+                output_model=ResearchBatchPollingDetail,
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                handler=self.get_research_batch,
+            ),
+            ResearchAgentCapability(
+                name="cancel_research_batch",
+                description=(
+                    "Cancel one queued or running Research Batch; requires research:cancel, "
+                    "irreversibly cancels unfinished child work, is idempotent by request_id, "
+                    "and when status is cancelling requires get_research_batch polling after "
+                    "retry_after_seconds until terminal cancelled."
+                ),
+                required_scope=ResearchAgentScope.RESEARCH_CANCEL,
+                input_model=CancelResearchBatchInput,
+                output_model=CancelResearchBatchOutcome,
+                annotations=DESTRUCTIVE_TOOL_ANNOTATIONS,
+                handler=self.cancel_research_batch,
+            ),
+            ResearchAgentCapability(
+                name="submit_research_batch",
+                description=(
+                    "Atomically submit a fully specified Factor Evaluation Batch or Strategy "
+                    "Sweep with 1 to 20 caller-keyed items; requires research:execute, is "
+                    "non-destructive, and is idempotent by request_id. Invalid research is a "
+                    "successful structured rejected outcome; after acceptance, poll "
+                    "get_research_batch using retry_after_seconds until terminal."
+                ),
+                required_scope=ResearchAgentScope.RESEARCH_EXECUTE,
+                input_model=ResearchBatchAdmissionCommand,
+                output_model=SubmitResearchBatchOutcome,
+                annotations=EFFECTFUL_TOOL_ANNOTATIONS,
+                handler=self.submit_research_batch,
             ),
             ResearchAgentCapability(
                 name="cancel_research_run",
@@ -524,14 +624,85 @@ class ResearchAgentCapabilityRegistry:
                 ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT
             ) from error
         except ResearchRunCancelStateConflict as error:
-            raise ResearchAgentExpectedFailure(
-                ResearchAgentErrorCode.STATE_CONFLICT
-            ) from error
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.STATE_CONFLICT) from error
         except ResearchRunTemporarilyUnavailable as error:
             raise _temporarily_unavailable() from error
         if outcome is None:
             raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
         return outcome
+
+    def list_research_batches(
+        self,
+        cursor: str | None = None,
+        limit: int = 20,
+    ) -> ResearchBatchList:
+        self._require(ResearchAgentScope.RESEARCH_READ)
+        try:
+            return self._modules.research_batches.list(cursor=cursor, limit=limit)
+        except ResearchBatchInvalidCursor as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.INVALID_INPUT) from error
+        except ResearchBatchTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+
+    def get_research_batch(self, batch_id: str) -> ResearchBatchPollingDetail:
+        self._require(ResearchAgentScope.RESEARCH_READ)
+        try:
+            batch = self._modules.research_batches.get_polling_detail(batch_id)
+        except ResearchBatchTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if batch is None:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
+        return batch
+
+    def cancel_research_batch(
+        self,
+        batch_id: str,
+        request_id: str,
+    ) -> CancelResearchBatchOutcome:
+        self._require(ResearchAgentScope.RESEARCH_CANCEL)
+        try:
+            outcome = self._modules.research_batches.cancel_with_outcome(
+                batch_id,
+                ResearchBatchCancelCommand(request_id=request_id),
+            )
+        except ResearchBatchCancelIdempotencyConflict as error:
+            raise ResearchAgentExpectedFailure(
+                ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT
+            ) from error
+        except ResearchBatchCancelStateConflict as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.STATE_CONFLICT) from error
+        except ResearchBatchTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if outcome is None:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
+        return CancelResearchBatchOutcome(
+            batch=research_batch_polling_detail(outcome.batch),
+            replayed=outcome.replayed,
+            retry_after_seconds=outcome.retry_after_seconds,
+        )
+
+    def submit_research_batch(self, **command_fields: object) -> BaseModel:
+        self._require(ResearchAgentScope.RESEARCH_EXECUTE)
+        command = TypeAdapter(ResearchBatchAdmissionCommand).validate_python(command_fields)
+        try:
+            outcome = self._modules.research_batches.admit_with_outcome(command)
+        except ResearchBatchAdmissionConflict as error:
+            raise ResearchAgentExpectedFailure(
+                ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT
+            ) from error
+        except ResearchBatchTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if isinstance(outcome, ResearchBatchAdmissionAccepted):
+            return SubmitResearchBatchAccepted(
+                batch_id=outcome.batch.id,
+                status=outcome.batch.status,
+                replayed=outcome.replayed,
+                retry_after_seconds=outcome.retry_after_seconds,
+            )
+        return SubmitResearchBatchRejected(
+            issues=outcome.issues,
+            replayed=outcome.replayed,
+        )
 
     def submit_research_run(self, **command_fields: object) -> BaseModel:
         self._require(ResearchAgentScope.RESEARCH_EXECUTE)

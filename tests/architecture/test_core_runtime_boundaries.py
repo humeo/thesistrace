@@ -128,6 +128,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "data",
             "operational_events",
             "research_authoring",
+            "research_batch",
             "research_folder",
             "research_run",
         },
@@ -198,6 +199,7 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "research_batches.progress",
             "research_batches.admission_receipts",
             "research_batches.cancel_receipts",
+            "research_batches.cursor_secrets",
         ),
         "daily_track": (
             "daily_tracks.tracks",

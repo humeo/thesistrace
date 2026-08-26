@@ -51,7 +51,9 @@ from thesistrace.research_batch import (
     ResearchBatchCancelCommand,
     ResearchBatchCancelConflict,
     ResearchBatchDetail,
+    ResearchBatchInvalidCursor,
     ResearchBatchList,
+    ResearchBatchTemporarilyUnavailable,
 )
 from thesistrace.research_folder import (
     CreateResearchFolder,
@@ -101,9 +103,7 @@ def create_app(
         )
     selected_event_sink = emit_operational_event if event_sink is None else event_sink
     selected_request_id_factory = (
-        _new_http_request_id
-        if http_request_id_factory is None
-        else http_request_id_factory
+        _new_http_request_id if http_request_id_factory is None else http_request_id_factory
     )
     selected_monotonic_ns = perf_counter_ns if monotonic_ns is None else monotonic_ns
 
@@ -122,6 +122,7 @@ def create_app(
 
     app = FastAPI(title="ThesisTrace Core", lifespan=lifespan)
     if research_agent_http is not None:
+
         def research_agent_modules() -> ResearchAgentModules:
             runtime = app.state.core_runtime
             return ResearchAgentModules(
@@ -130,6 +131,7 @@ def create_app(
                 alpha_language=alpha_language,
                 research_authoring=runtime.research_authoring,
                 research_runs=runtime.research_runs,
+                research_batches=runtime.research_batches,
             )
 
         research_agent_transport = create_research_agent_http_transport(
@@ -147,6 +149,7 @@ def create_app(
                 include_in_schema=False,
             )
         )
+
     @app.middleware("http")
     async def observe_http_request(request: Request, call_next):  # type: ignore[no-untyped-def]
         if request.url.path in _HEALTH_PATHS:
@@ -212,8 +215,7 @@ def create_app(
     install_alpha_http(
         app,
         financial_authoring_ready=lambda request: (
-            _runtime(request).data_overview.overview().financial_research_readiness
-            != "not_ready"
+            _runtime(request).data_overview.overview().financial_research_readiness != "not_ready"
         ),
     )
 
@@ -300,6 +302,11 @@ def create_app(
                 status_code=422,
                 content=rejection.model_dump(mode="json"),
             )
+        except ResearchBatchTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="Research Batch admission is temporarily unavailable",
+            ) from error
 
     @app.get("/api/research-batches", response_model=ResearchBatchList)
     def list_research_batches(
@@ -309,15 +316,26 @@ def create_app(
     ) -> ResearchBatchList:
         try:
             return _runtime(request).research_batches.list(cursor=cursor, limit=limit)
-        except ValueError as error:
+        except ResearchBatchInvalidCursor as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        except ResearchBatchTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="Research Batch listing is temporarily unavailable",
+            ) from error
 
     @app.get(
         "/api/research-batches/{batch_id}",
         response_model=ResearchBatchDetail,
     )
     def get_research_batch(request: Request, batch_id: str) -> ResearchBatchDetail:
-        batch = _runtime(request).research_batches.get(batch_id)
+        try:
+            batch = _runtime(request).research_batches.get(batch_id)
+        except ResearchBatchTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="Research Batch lookup is temporarily unavailable",
+            ) from error
         if batch is None:
             raise HTTPException(status_code=404, detail="Research Batch not found")
         return batch
@@ -335,6 +353,11 @@ def create_app(
             batch = _runtime(request).research_batches.cancel(batch_id, command)
         except ResearchBatchCancelConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except ResearchBatchTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="Research Batch cancellation is temporarily unavailable",
+            ) from error
         if batch is None:
             raise HTTPException(status_code=404, detail="Research Batch not found")
         return batch

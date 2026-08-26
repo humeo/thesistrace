@@ -4,8 +4,7 @@ import fcntl
 import hashlib
 import json
 import math
-from base64 import urlsafe_b64decode, urlsafe_b64encode
-from binascii import Error as Base64DecodeError
+from base64 import urlsafe_b64encode
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -14,6 +13,7 @@ from pathlib import Path
 from threading import Event, Thread
 from uuid import uuid4
 
+from cryptography.fernet import Fernet, InvalidToken
 from psycopg import OperationalError
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
@@ -41,20 +41,27 @@ from thesistrace.research_batch.execution import (
 from thesistrace.research_batch.models import (
     FactorEvaluationBatchAdmissionCommand,
     FactorEvaluationBatchProgress,
+    ResearchBatchAdmissionAccepted,
     ResearchBatchAdmissionCommand,
     ResearchBatchAdmissionIssue,
+    ResearchBatchAdmissionOutcome,
+    ResearchBatchAdmissionRejectedOutcome,
     ResearchBatchAttemptSummary,
     ResearchBatchCancelCommand,
+    ResearchBatchCancelOutcome,
     ResearchBatchDetail,
     ResearchBatchDiagnostic,
     ResearchBatchExecutionTiming,
     ResearchBatchItemSummary,
     ResearchBatchList,
     ResearchBatchLiveProgress,
+    ResearchBatchPollingDetail,
     ResearchBatchScope,
     ResearchBatchSummary,
     StrategySweepBatchAdmissionCommand,
     StrategySweepBatchProgress,
+    research_batch_polling_detail,
+    research_batch_retry_after_seconds,
 )
 from thesistrace.research_batch.planning import (
     ResearchBatchCapacityError,
@@ -93,6 +100,8 @@ FACTOR_TASK_INFRASTRUCTURE_PUBLIC_REASON = (
     "Research execution could not complete after automatic retries."
 )
 FACTOR_TASK_PERMANENT_PUBLIC_REASON = "Research execution failed."
+
+
 def preserve_deleted_run_history(
     transaction: PostgresTransaction,
     run_id: str,
@@ -225,6 +234,22 @@ class ResearchBatchAdmissionConflict(RuntimeError):
 
 
 class ResearchBatchCancelConflict(RuntimeError):
+    pass
+
+
+class ResearchBatchCancelIdempotencyConflict(ResearchBatchCancelConflict):
+    pass
+
+
+class ResearchBatchCancelStateConflict(ResearchBatchCancelConflict):
+    pass
+
+
+class ResearchBatchTemporarilyUnavailable(RuntimeError):
+    pass
+
+
+class ResearchBatchInvalidCursor(ValueError):
     pass
 
 
@@ -591,6 +616,29 @@ class ResearchBatchService:
         return removed
 
     def admit(self, command: ResearchBatchAdmissionCommand) -> ResearchBatchDetail:
+        outcome = self.admit_with_outcome(command)
+        if isinstance(outcome, ResearchBatchAdmissionRejectedOutcome):
+            raise ResearchBatchAdmissionRejected(outcome.issues)
+        return outcome.batch
+
+    def admit_with_outcome(
+        self,
+        command: ResearchBatchAdmissionCommand,
+    ) -> ResearchBatchAdmissionOutcome:
+        try:
+            try:
+                return self._admit_with_outcome(command)
+            except ResearchBatchAdmissionRejected as error:
+                return self._record_admission_rejection(command, error.issues)
+        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+            raise ResearchBatchTemporarilyUnavailable(
+                "Research Batch admission is temporarily unavailable"
+            ) from error
+
+    def _admit_with_outcome(
+        self,
+        command: ResearchBatchAdmissionCommand,
+    ) -> ResearchBatchAdmissionOutcome:
         fingerprint = _admission_fingerprint(command)
         replay = self._locked_receipt(command.request_id, fingerprint)
         if replay is not None:
@@ -635,7 +683,13 @@ class ResearchBatchService:
                 raise ResearchBatchAdmissionConflict("Research Batch request_id conflicts")
             receipt = _receipt(transaction, command.request_id)
             if receipt is not None:
-                return _replayed_receipt(receipt, fingerprint)
+                return _admission_outcome(
+                    transaction,
+                    receipt,
+                    fingerprint=fingerprint,
+                    research_runs=self._research_runs,
+                    replayed=True,
+                )
             folder = transaction.execute(
                 """
                 SELECT id
@@ -715,14 +769,27 @@ class ResearchBatchService:
                     command.request_id,
                     fingerprint,
                     batch_id,
-                    Jsonb(outcome.model_dump(mode="json")),
+                    Jsonb({"outcome": "accepted"}),
                 ),
             )
-        return outcome
+        return ResearchBatchAdmissionAccepted(
+            batch=outcome,
+            replayed=False,
+            retry_after_seconds=research_batch_retry_after_seconds(outcome.status),
+        )
 
     def list(self, *, cursor: str | None, limit: int) -> ResearchBatchList:
-        cursor_created_at, cursor_id = _decode_cursor(cursor)
+        try:
+            return self._list(cursor=cursor, limit=limit)
+        except (OperationalError, PoolTimeout) as error:
+            raise ResearchBatchTemporarilyUnavailable(
+                "Research Batch listing is temporarily unavailable"
+            ) from error
+
+    def _list(self, *, cursor: str | None, limit: int) -> ResearchBatchList:
         with self._database.transaction() as transaction:
+            secret = _cursor_secret(transaction)
+            cursor_created_at, cursor_id = _decode_cursor(cursor, secret=secret)
             rows = transaction.execute(
                 """
                 SELECT batch.id, batch.batch_kind, batch.status, batch.scope,
@@ -763,10 +830,20 @@ class ResearchBatchService:
             summaries = [_summary_from_row(row) for row in rows[:limit]]
         return ResearchBatchList(
             items=summaries,
-            next_cursor=(_encode_cursor(summaries[-1]) if len(rows) > limit else None),
+            next_cursor=(
+                _encode_cursor(summaries[-1], secret=secret) if len(rows) > limit else None
+            ),
         )
 
     def get(self, batch_id: str) -> ResearchBatchDetail | None:
+        try:
+            return self._get(batch_id)
+        except (OperationalError, PoolTimeout) as error:
+            raise ResearchBatchTemporarilyUnavailable(
+                "Research Batch lookup is temporarily unavailable"
+            ) from error
+
+    def _get(self, batch_id: str) -> ResearchBatchDetail | None:
         with self._database.transaction() as transaction:
             exists = transaction.execute(
                 "SELECT id FROM research_batches.batches WHERE id = %s",
@@ -780,11 +857,37 @@ class ResearchBatchService:
                 research_runs=self._research_runs,
             )
 
+    def get_polling_detail(self, batch_id: str) -> ResearchBatchPollingDetail | None:
+        detail = self.get(batch_id)
+        if detail is None:
+            return None
+        return research_batch_polling_detail(detail)
+
     def cancel(
         self,
         batch_id: str,
         command: ResearchBatchCancelCommand,
     ) -> ResearchBatchDetail | None:
+        outcome = self.cancel_with_outcome(batch_id, command)
+        return None if outcome is None else outcome.batch
+
+    def cancel_with_outcome(
+        self,
+        batch_id: str,
+        command: ResearchBatchCancelCommand,
+    ) -> ResearchBatchCancelOutcome | None:
+        try:
+            return self._cancel_with_outcome(batch_id, command)
+        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+            raise ResearchBatchTemporarilyUnavailable(
+                "Research Batch cancellation is temporarily unavailable"
+            ) from error
+
+    def _cancel_with_outcome(
+        self,
+        batch_id: str,
+        command: ResearchBatchCancelCommand,
+    ) -> ResearchBatchCancelOutcome | None:
         fingerprint = _cancel_fingerprint(batch_id)
         with self._database.transaction() as transaction:
             transaction.execute(
@@ -792,25 +895,27 @@ class ResearchBatchService:
                 (f"research_batches.request:{command.request_id}",),
             ).fetchone()
             if _receipt(transaction, command.request_id) is not None:
-                raise ResearchBatchCancelConflict("Research Batch Cancel request_id conflicts")
+                raise ResearchBatchCancelIdempotencyConflict(
+                    "Research Batch Cancel request_id conflicts"
+                )
             receipt = transaction.execute(
                 """
-                SELECT request_fingerprint, batch_id
+                SELECT request_fingerprint, batch_id, outcome
                 FROM research_batches.cancel_receipts
                 WHERE request_id = %s
                 """,
                 (command.request_id,),
             ).fetchone()
             if receipt is not None:
-                if receipt != {
-                    "request_fingerprint": fingerprint,
-                    "batch_id": batch_id,
-                }:
-                    raise ResearchBatchCancelConflict("Research Batch Cancel request_id conflicts")
-                return _detail_in_transaction(
-                    transaction,
-                    batch_id,
-                    research_runs=self._research_runs,
+                if receipt["request_fingerprint"] != fingerprint or receipt["batch_id"] != batch_id:
+                    raise ResearchBatchCancelIdempotencyConflict(
+                        "Research Batch Cancel request_id conflicts"
+                    )
+                replayed_batch = ResearchBatchDetail.model_validate(receipt["outcome"])
+                return ResearchBatchCancelOutcome(
+                    batch=replayed_batch,
+                    replayed=True,
+                    retry_after_seconds=research_batch_retry_after_seconds(replayed_batch.status),
                 )
 
             lock_publication_mutation(transaction)
@@ -849,18 +954,32 @@ class ResearchBatchService:
                 )
                 if updated.rowcount != 1:
                     raise RuntimeError("Research Batch cancellation was fenced")
-            transaction.execute(
-                """
-                INSERT INTO research_batches.cancel_receipts (
-                    request_id, request_fingerprint, batch_id
-                ) VALUES (%s, %s, %s)
-                """,
-                (command.request_id, fingerprint, batch_id),
-            )
-            return _detail_in_transaction(
+            else:
+                raise ResearchBatchCancelStateConflict(
+                    "Research Batch state does not allow cancellation"
+                )
+            outcome = _detail_in_transaction(
                 transaction,
                 batch_id,
                 research_runs=self._research_runs,
+            )
+            transaction.execute(
+                """
+                INSERT INTO research_batches.cancel_receipts (
+                    request_id, request_fingerprint, batch_id, outcome
+                ) VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    command.request_id,
+                    fingerprint,
+                    batch_id,
+                    Jsonb(outcome.model_dump(mode="json")),
+                ),
+            )
+            return ResearchBatchCancelOutcome(
+                batch=outcome,
+                replayed=False,
+                retry_after_seconds=research_batch_retry_after_seconds(outcome.status),
             )
 
     def _cancellation_is_pending(self, claim: _ResearchBatchClaim) -> bool:
@@ -3015,13 +3134,65 @@ class ResearchBatchService:
         self,
         request_id: str,
         fingerprint: str,
-    ) -> ResearchBatchDetail | None:
+    ) -> ResearchBatchAdmissionOutcome | None:
         with self._database.transaction() as transaction:
             _lock_admission(transaction, request_id)
             if _cancel_receipt_exists(transaction, request_id):
                 raise ResearchBatchAdmissionConflict("Research Batch request_id conflicts")
             receipt = _receipt(transaction, request_id)
-            return None if receipt is None else _replayed_receipt(receipt, fingerprint)
+            return (
+                None
+                if receipt is None
+                else _admission_outcome(
+                    transaction,
+                    receipt,
+                    fingerprint=fingerprint,
+                    research_runs=self._research_runs,
+                    replayed=True,
+                )
+            )
+
+    def _record_admission_rejection(
+        self,
+        command: ResearchBatchAdmissionCommand,
+        issues: list[ResearchBatchAdmissionIssue],
+    ) -> ResearchBatchAdmissionOutcome:
+        fingerprint = _admission_fingerprint(command)
+        rejected = ResearchBatchAdmissionRejectedOutcome(
+            issues=issues,
+            replayed=False,
+        )
+        with self._database.transaction() as transaction:
+            _lock_admission(transaction, command.request_id)
+            if _cancel_receipt_exists(transaction, command.request_id):
+                raise ResearchBatchAdmissionConflict("Research Batch request_id conflicts")
+            receipt = _receipt(transaction, command.request_id)
+            if receipt is not None:
+                return _admission_outcome(
+                    transaction,
+                    receipt,
+                    fingerprint=fingerprint,
+                    research_runs=self._research_runs,
+                    replayed=True,
+                )
+            transaction.execute(
+                """
+                INSERT INTO research_batches.admission_receipts (
+                    request_id, request_fingerprint, batch_id, outcome
+                ) VALUES (%s, %s, NULL, %s)
+                """,
+                (
+                    command.request_id,
+                    fingerprint,
+                    Jsonb(
+                        rejected.model_dump(
+                            mode="json",
+                            exclude={"replayed"},
+                        )
+                    ),
+                ),
+            )
+        return rejected
 
 
 def _child_commands(
@@ -3220,7 +3391,7 @@ def _receipt(
 ) -> Mapping[str, object] | None:
     return transaction.execute(
         """
-        SELECT request_fingerprint, outcome
+        SELECT request_fingerprint, batch_id, outcome
         FROM research_batches.admission_receipts
         WHERE request_id = %s
         """,
@@ -3241,13 +3412,36 @@ def _cancel_receipt_exists(
     )
 
 
-def _replayed_receipt(
+def _admission_outcome(
+    transaction: PostgresTransaction,
     receipt: Mapping[str, object],
+    *,
     fingerprint: str,
-) -> ResearchBatchDetail:
+    research_runs: ResearchRunService,
+    replayed: bool,
+) -> ResearchBatchAdmissionOutcome:
     if receipt["request_fingerprint"] != fingerprint:
         raise ResearchBatchAdmissionConflict("Research Batch request_id conflicts")
-    return ResearchBatchDetail.model_validate(receipt["outcome"])
+    stored = receipt.get("outcome")
+    if not isinstance(stored, Mapping):
+        raise RuntimeError("Research Batch admission receipt outcome is invalid")
+    if stored.get("outcome") == "rejected":
+        return ResearchBatchAdmissionRejectedOutcome.model_validate(
+            {**stored, "replayed": replayed}
+        )
+    batch_id = receipt.get("batch_id")
+    if stored.get("outcome") != "accepted" or not isinstance(batch_id, str):
+        raise RuntimeError("Research Batch accepted receipt is incomplete")
+    batch = _detail_in_transaction(
+        transaction,
+        batch_id,
+        research_runs=research_runs,
+    )
+    return ResearchBatchAdmissionAccepted(
+        batch=batch,
+        replayed=replayed,
+        retry_after_seconds=research_batch_retry_after_seconds(batch.status),
+    )
 
 
 def _summary_in_transaction(
@@ -3608,30 +3802,65 @@ def _exception_diagnostic(error: Exception) -> ResearchBatchDiagnostic:
     )
 
 
-def _encode_cursor(summary: ResearchBatchSummary) -> str:
+def _cursor_secret(transaction: PostgresTransaction) -> bytes:
+    row = transaction.execute(
+        "SELECT secret FROM research_batches.cursor_secrets WHERE singleton = 1"
+    ).fetchone()
+    if row is None or not isinstance(row.get("secret"), str):
+        raise RuntimeError("Research Batch cursor secret is unavailable")
+    try:
+        secret = bytes.fromhex(str(row["secret"]))
+    except ValueError as error:
+        raise RuntimeError("Research Batch cursor secret is invalid") from error
+    if len(secret) != 32:
+        raise RuntimeError("Research Batch cursor secret is invalid")
+    return secret
+
+
+def _cursor_fernet(secret: bytes) -> Fernet:
+    return Fernet(urlsafe_b64encode(secret))
+
+
+def _encode_cursor(summary: ResearchBatchSummary, *, secret: bytes) -> str:
     payload = json.dumps(
-        {"created_at": summary.created_at.isoformat(), "id": summary.id},
+        {
+            "created_at": summary.created_at.isoformat(),
+            "id": summary.id,
+            "order": "created_at_desc_id_asc",
+        },
         sort_keys=True,
         separators=(",", ":"),
-    ).encode()
-    return urlsafe_b64encode(payload).decode().rstrip("=")
+    ).encode("utf-8")
+    return _cursor_fernet(secret).encrypt(payload).decode("ascii")
 
 
-def _decode_cursor(cursor: str | None) -> tuple[datetime | None, str | None]:
+def _decode_cursor(
+    cursor: str | None,
+    *,
+    secret: bytes,
+) -> tuple[datetime | None, str | None]:
     if cursor is None:
         return None, None
     try:
-        padded = cursor + "=" * (-len(cursor) % 4)
-        value = json.loads(urlsafe_b64decode(padded).decode())
+        plaintext = _cursor_fernet(secret).decrypt(cursor.encode("ascii"))
+        value = json.loads(plaintext.decode("utf-8"))
         if (
-            set(value) != {"created_at", "id"}
+            not isinstance(value, dict)
+            or set(value) != {"created_at", "id", "order"}
             or not isinstance(value["id"], str)
             or not value["id"]
+            or value["order"] != "created_at_desc_id_asc"
         ):
             raise ValueError
-        created_at = datetime.fromisoformat(value["created_at"])
+        created_at = datetime.fromisoformat(str(value["created_at"]))
         if created_at.tzinfo is None:
             raise ValueError
         return created_at, value["id"]
-    except (Base64DecodeError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
-        raise ValueError("Research Batch cursor is invalid") from None
+    except (
+        InvalidToken,
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+        TypeError,
+    ):
+        raise ResearchBatchInvalidCursor("Research Batch cursor is invalid") from None

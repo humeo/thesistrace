@@ -11,6 +11,11 @@ from thesistrace.alpha_language.models import (
 )
 from thesistrace.data.models import DataOverview
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
+from thesistrace.research_batch.models import (
+    ResearchBatchAdmissionIssue,
+    ResearchBatchPollingDetail,
+    ResearchBatchStatus,
+)
 from thesistrace.research_folder.models import ResearchFolderList
 from thesistrace.research_run.models import (
     RequestId,
@@ -107,6 +112,8 @@ class AlphaCatalogView(BaseModel):
 
 ResearchRunId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 ResearchRunCursor = Annotated[str, Field(strict=True, min_length=1, max_length=1024)]
+ResearchBatchId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
+ResearchBatchCursor = Annotated[str, Field(strict=True, min_length=1, max_length=1024)]
 
 
 class ListResearchRunsInput(BaseModel):
@@ -129,6 +136,59 @@ class CancelResearchRunInput(BaseModel):
 
     run_id: ResearchRunId
     request_id: RequestId
+
+
+class ListResearchBatchesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    cursor: ResearchBatchCursor | None = None
+    limit: Annotated[int, Field(strict=True, ge=1, le=50)] = 20
+
+
+class GetResearchBatchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    batch_id: ResearchBatchId
+
+
+class CancelResearchBatchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    batch_id: ResearchBatchId
+    request_id: RequestId
+
+
+class CancelResearchBatchOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    batch: ResearchBatchPollingDetail
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
+class SubmitResearchBatchAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    batch_id: ResearchBatchId
+    status: ResearchBatchStatus
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
+class SubmitResearchBatchRejected(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    outcome: Literal["rejected"] = "rejected"
+    issues: Annotated[list[ResearchBatchAdmissionIssue], Field(min_length=1)]
+    replayed: bool
+
+
+type SubmitResearchBatchOutcome = Annotated[
+    SubmitResearchBatchAccepted | SubmitResearchBatchRejected,
+    Field(discriminator="outcome"),
+]
 
 
 class SubmitResearchRunAccepted(BaseModel):

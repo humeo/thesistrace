@@ -30,6 +30,31 @@ from thesistrace.research_agent.registry import (
     ResearchAgentForbidden,
 )
 from thesistrace.research_authoring import ResearchAuthoringService
+from thesistrace.research_batch.models import (
+    FactorEvaluationBatchProgress,
+    ResearchBatchAdmissionAccepted,
+    ResearchBatchAdmissionCommand,
+    ResearchBatchAdmissionIssue,
+    ResearchBatchAdmissionOutcome,
+    ResearchBatchAdmissionRejectedOutcome,
+    ResearchBatchAttemptSummary,
+    ResearchBatchCancelCommand,
+    ResearchBatchCancelOutcome,
+    ResearchBatchDetail,
+    ResearchBatchDiagnostic,
+    ResearchBatchExecutionTiming,
+    ResearchBatchList,
+    ResearchBatchPollingDetail,
+    ResearchBatchScope,
+    research_batch_polling_detail,
+)
+from thesistrace.research_batch.service import (
+    ResearchBatchAdmissionConflict,
+    ResearchBatchCancelIdempotencyConflict,
+    ResearchBatchCancelStateConflict,
+    ResearchBatchInvalidCursor,
+    ResearchBatchTemporarilyUnavailable,
+)
 from thesistrace.research_folder.models import ResearchFolderList, ResearchFolderSummary
 from thesistrace.research_run.models import (
     FactorResultSection,
@@ -157,6 +182,54 @@ class _ResearchRunReader:
         return self.admission_outcome
 
 
+class _ResearchBatchReader:
+    def __init__(self) -> None:
+        self.list_filters: dict[str, object] | None = None
+        self.admission_outcome: ResearchBatchAdmissionOutcome = ResearchBatchAdmissionAccepted(
+            batch=_batch_detail(),
+            replayed=False,
+            retry_after_seconds=2,
+        )
+        self.cancel_outcome: ResearchBatchCancelOutcome | None = ResearchBatchCancelOutcome(
+            batch=ResearchBatchDetail.model_validate(
+                {**_batch_detail().model_dump(mode="json"), "status": "cancelled"}
+            ),
+            replayed=False,
+            retry_after_seconds=None,
+        )
+        self.cancel_commands: list[tuple[str, ResearchBatchCancelCommand]] = []
+        self.failure: Exception | None = None
+
+    def list(self, *, cursor: str | None, limit: int) -> ResearchBatchList:
+        if self.failure is not None:
+            raise self.failure
+        self.list_filters = {"cursor": cursor, "limit": limit}
+        return ResearchBatchList(items=[_batch_detail()], next_cursor="batch_cursor_next")
+
+    def get_polling_detail(self, _batch_id: str) -> ResearchBatchPollingDetail | None:
+        if self.failure is not None:
+            raise self.failure
+        return research_batch_polling_detail(_batch_detail())
+
+    def admit_with_outcome(
+        self,
+        _command: ResearchBatchAdmissionCommand,
+    ) -> ResearchBatchAdmissionOutcome:
+        if self.failure is not None:
+            raise self.failure
+        return self.admission_outcome
+
+    def cancel_with_outcome(
+        self,
+        batch_id: str,
+        command: ResearchBatchCancelCommand,
+    ) -> ResearchBatchCancelOutcome | None:
+        if self.failure is not None:
+            raise self.failure
+        self.cancel_commands.append((batch_id, command))
+        return self.cancel_outcome
+
+
 class _BlockingDataOverviewReader(_DataOverviewReader):
     def __init__(self) -> None:
         self.started = Event()
@@ -198,6 +271,38 @@ def _run_summary() -> ResearchRunSummary:
         end_date=date(2024, 1, 31),
         formula_summary="close",
         research_kind="factor_evaluation",
+    )
+
+
+def _batch_detail() -> ResearchBatchDetail:
+    return ResearchBatchDetail(
+        id="batch_test",
+        batch_kind="factor_evaluation",
+        status="queued",
+        created_at=datetime(2024, 2, 1, tzinfo=UTC),
+        scope=ResearchBatchScope(
+            start_date=date(2024, 1, 2),
+            end_date=date(2024, 1, 31),
+            universe="top300",
+            neutralization="none",
+            numeric_execution_contract="float64-v1",
+            semantic_versions={"alpha_language": "1"},
+            data_generation_id="generation_test",
+            data_through_session=date(2024, 1, 31),
+        ),
+        progress=FactorEvaluationBatchProgress(
+            completed_factor_tasks=0,
+            total_factor_tasks=1,
+        ),
+        execution_timing=ResearchBatchExecutionTiming(
+            started_at=None,
+            finished_at=None,
+            elapsed_seconds=None,
+            is_final=False,
+        ),
+        attempt=None,
+        live_progress=None,
+        items=[],
     )
 
 
@@ -285,6 +390,25 @@ def _factor_command(request_id: str) -> dict[str, object]:
     }
 
 
+def _factor_batch_command(request_id: str) -> dict[str, object]:
+    return {
+        "request_id": request_id,
+        "batch_kind": "factor_evaluation",
+        "start_date": "2024-01-02",
+        "end_date": "2024-01-31",
+        "universe": "top300",
+        "neutralization": "none",
+        "factors": [
+            {
+                "item_key": "value",
+                "name": "Value Factor",
+                "formula": "close",
+                "hypothesis": "Prices preserve a stable cross-sectional signal.",
+            }
+        ],
+    }
+
+
 def _registry(
     authority: ResearchAgentAuthority | None = None,
     *,
@@ -292,6 +416,7 @@ def _registry(
     data_overview: _DataOverviewReader | None = None,
     selected_alpha_language: AlphaAuthoringLanguage = alpha_language,
     research_runs: _ResearchRunReader | None = None,
+    research_batches: _ResearchBatchReader | None = None,
 ) -> ResearchAgentCapabilityRegistry:
     return ResearchAgentCapabilityRegistry(
         authority=authority or local_operator_authority(),
@@ -301,6 +426,7 @@ def _registry(
             alpha_language=selected_alpha_language,
             research_authoring=ResearchAuthoringService(),
             research_runs=research_runs or _ResearchRunReader(),
+            research_batches=research_batches or _ResearchBatchReader(),
         ),
         **({} if allowed_tools is None else {"allowed_tools": allowed_tools}),
     )
@@ -320,9 +446,7 @@ def test_local_operator_has_only_safe_default_scopes() -> None:
     assert ResearchAgentScope.TRACKING_STOP not in authority.scopes
 
     cancel_authority = local_operator_authority(enable_research_cancel=True)
-    assert cancel_authority.scopes == authority.scopes | {
-        ResearchAgentScope.RESEARCH_CANCEL
-    }
+    assert cancel_authority.scopes == authority.scopes | {ResearchAgentScope.RESEARCH_CANCEL}
 
 
 def test_registry_filters_discovery_and_rechecks_scope_at_invocation() -> None:
@@ -452,9 +576,7 @@ def test_registry_projects_research_run_outcomes_and_expected_errors() -> None:
     )
     assert rejected.result is not None
     assert rejected.result.model_dump(mode="json")["outcome"] == "rejected"
-    assert rejected.result.model_dump(mode="json")["issues"][0]["code"] == (
-        "UNKNOWN_IDENTIFIER"
-    )
+    assert rejected.result.model_dump(mode="json")["issues"][0]["code"] == ("UNKNOWN_IDENTIFIER")
     assert rejected.result.model_dump(mode="json")["replayed"] is True
 
     reader.failure = ResearchRunAdmissionConflict("conflicting command")
@@ -512,9 +634,7 @@ def test_registry_projects_research_run_outcomes_and_expected_errors() -> None:
     )
     assert failed.result is not None
     assert failed.result.model_dump(mode="json")["status"] == "failed"
-    assert failed.result.model_dump(mode="json")["failure_reason"] == (
-        "Research execution failed."
-    )
+    assert failed.result.model_dump(mode="json")["failure_reason"] == ("Research execution failed.")
     assert failed.result.model_dump(mode="json")["retry_after_seconds"] is None
 
     reader.polling_detail = None
@@ -626,6 +746,195 @@ def test_registry_maps_cancel_outcomes_authority_and_conflicts() -> None:
     assert missing.error.code == "NOT_FOUND"
 
 
+def test_registry_projects_research_batch_outcomes_and_expected_errors() -> None:
+    reader = _ResearchBatchReader()
+    registry = _registry(research_batches=reader)
+
+    listed = registry.invoke(
+        "list_research_batches",
+        {"cursor": "batch_cursor"},
+        trace_id="trace_batch_list",
+    )
+    assert listed.result is not None
+    assert listed.result.model_dump(mode="json")["next_cursor"] == "batch_cursor_next"
+    assert reader.list_filters == {"cursor": "batch_cursor", "limit": 20}
+
+    detail = registry.invoke(
+        "get_research_batch",
+        {"batch_id": "batch_test"},
+        trace_id="trace_batch_get",
+    )
+    assert detail.result is not None
+    assert detail.result.model_dump(mode="json")["retry_after_seconds"] == 2
+
+    accepted = registry.invoke(
+        "submit_research_batch",
+        _factor_batch_command("batch_request_accepted"),
+        trace_id="trace_batch_accepted",
+    )
+    assert accepted.result is not None
+    assert accepted.result.model_dump(mode="json") == {
+        "outcome": "accepted",
+        "batch_id": "batch_test",
+        "status": "queued",
+        "replayed": False,
+        "retry_after_seconds": 2,
+    }
+
+    reader.admission_outcome = ResearchBatchAdmissionRejectedOutcome(
+        issues=[
+            ResearchBatchAdmissionIssue(
+                code="UNKNOWN_IDENTIFIER",
+                field="factors[0].formula",
+                item_key="value",
+                message="Unknown Alpha identifier",
+            )
+        ],
+        replayed=True,
+    )
+    rejected = registry.invoke(
+        "submit_research_batch",
+        _factor_batch_command("batch_request_rejected"),
+        trace_id="trace_batch_rejected",
+    )
+    assert rejected.result is not None
+    assert rejected.result.model_dump(mode="json")["outcome"] == "rejected"
+    assert rejected.result.model_dump(mode="json")["issues"][0]["item_key"] == "value"
+    assert rejected.result.model_dump(mode="json")["replayed"] is True
+
+    for failure, tool, arguments, code in (
+        (
+            ResearchBatchAdmissionConflict("conflicting command"),
+            "submit_research_batch",
+            _factor_batch_command("batch_request_conflict"),
+            "IDEMPOTENCY_CONFLICT",
+        ),
+        (
+            ResearchBatchTemporarilyUnavailable("database unavailable"),
+            "get_research_batch",
+            {"batch_id": "batch_test"},
+            "TEMPORARILY_UNAVAILABLE",
+        ),
+        (
+            ResearchBatchInvalidCursor("invalid opaque cursor"),
+            "list_research_batches",
+            {"cursor": "invalid"},
+            "INVALID_INPUT",
+        ),
+    ):
+        reader.failure = failure
+        failed = registry.invoke(tool, arguments, trace_id=f"trace_batch_{code.lower()}")
+        assert failed.error is not None
+        assert failed.error.code == code
+
+    reader.failure = None
+    original_get = reader.get_polling_detail
+    reader.get_polling_detail = lambda _batch_id: None  # type: ignore[method-assign]
+    missing = registry.invoke(
+        "get_research_batch",
+        {"batch_id": "batch_missing"},
+        trace_id="trace_batch_missing",
+    )
+    reader.get_polling_detail = original_get  # type: ignore[method-assign]
+    assert missing.error is not None
+    assert missing.error.code == "NOT_FOUND"
+
+
+def test_research_batch_polling_projection_removes_recovery_internals() -> None:
+    detail = ResearchBatchDetail.model_validate(
+        {
+            **_batch_detail().model_dump(mode="json"),
+            "status": "failed",
+            "attempt": ResearchBatchAttemptSummary(
+                id="attempt_private",
+                number=2,
+                status="failed",
+                started_at=datetime(2024, 2, 1, tzinfo=UTC),
+                finished_at=datetime(2024, 2, 1, 0, 1, tzinfo=UTC),
+                diagnostic=ResearchBatchDiagnostic(
+                    code="RESEARCH_BATCH_EXECUTION_FAILED",
+                    category="execution",
+                    message="Research Batch execution failed.",
+                ),
+            ).model_dump(mode="json"),
+            "items": [
+                {
+                    "ordinal": 1,
+                    "item_key": "value",
+                    "research_run_id": "run_child",
+                    "dependency_role": "factor",
+                    "status": "failed",
+                    "outcome": "failed",
+                    "run_availability": "available",
+                    "task_attempt_count": 2,
+                    "diagnostic": {
+                        "code": "RESEARCH_BATCH_EXECUTION_FAILED",
+                        "category": "execution",
+                        "message": "Research Batch execution failed.",
+                    },
+                    "deleted_at": None,
+                }
+            ],
+        }
+    )
+
+    projected = research_batch_polling_detail(detail).model_dump(mode="json")
+
+    assert projected["diagnostic"]["code"] == "RESEARCH_BATCH_EXECUTION_FAILED"
+    assert projected["retry_after_seconds"] is None
+    serialized = str(projected)
+    assert "attempt_private" not in serialized
+    assert "task_attempt_count" not in serialized
+    assert "attempt_number" not in serialized
+
+
+def test_registry_maps_research_batch_cancel_authority_and_conflicts() -> None:
+    reader = _ResearchBatchReader()
+    denied = _registry(research_batches=reader).invoke(
+        "cancel_research_batch",
+        {"batch_id": "batch_test", "request_id": "cancel_batch_request"},
+        trace_id="trace_batch_cancel_denied",
+    )
+    assert denied.error is not None
+    assert denied.error.code == "FORBIDDEN"
+    assert reader.cancel_commands == []
+
+    registry = _registry(
+        local_operator_authority(enable_research_cancel=True),
+        research_batches=reader,
+    )
+    accepted = registry.invoke(
+        "cancel_research_batch",
+        {"batch_id": "batch_test", "request_id": " cancel_batch_request "},
+        trace_id="trace_batch_cancel",
+    )
+    assert accepted.result is not None
+    assert accepted.result.model_dump(mode="json")["batch"]["status"] == "cancelled"
+    assert reader.cancel_commands == [
+        ("batch_test", ResearchBatchCancelCommand(request_id="cancel_batch_request"))
+    ]
+
+    for failure, code in (
+        (
+            ResearchBatchCancelIdempotencyConflict("conflicting request"),
+            "IDEMPOTENCY_CONFLICT",
+        ),
+        (ResearchBatchCancelStateConflict("terminal batch"), "STATE_CONFLICT"),
+        (
+            ResearchBatchTemporarilyUnavailable("database unavailable"),
+            "TEMPORARILY_UNAVAILABLE",
+        ),
+    ):
+        reader.failure = failure
+        failed = registry.invoke(
+            "cancel_research_batch",
+            {"batch_id": "batch_test", "request_id": "another_request"},
+            trace_id=f"trace_batch_cancel_{code.lower()}",
+        )
+        assert failed.error is not None
+        assert failed.error.code == code
+
+
 def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delete() -> None:
     reader = ResearchAgentAuthority(
         subject="reader",
@@ -650,8 +959,8 @@ def test_registry_separates_read_and_execute_discovery_and_has_no_retry_or_delet
 
     assert "submit_research_run" not in reader_tools
     assert {"list_research_runs", "get_research_run"} <= reader_tools
-    assert executor_tools == {"submit_research_run"}
-    assert cancel_tools == {"cancel_research_run"}
+    assert executor_tools == {"submit_research_batch", "submit_research_run"}
+    assert cancel_tools == {"cancel_research_batch", "cancel_research_run"}
     assert all("retry" not in name and "delete" not in name for name in reader_tools)
     assert all("retry" not in name and "delete" not in name for name in executor_tools)
 
@@ -693,6 +1002,9 @@ async def _exercise_in_memory_protocol() -> None:
             "list_research_runs",
             "get_research_run",
             "get_research_run_result",
+            "list_research_batches",
+            "get_research_batch",
+            "submit_research_batch",
             "submit_research_run",
         }
         assert client.server_capabilities is not None
@@ -708,9 +1020,12 @@ async def _exercise_in_memory_protocol() -> None:
             assert tool.annotations.destructive_hint is False
             assert tool.annotations.idempotent_hint is True
             assert tool.annotations.open_world_hint is False
-            if tool.name == "submit_research_run":
+            if tool.name in {"submit_research_batch", "submit_research_run"}:
                 assert tool.annotations.read_only_hint is False
-                assert tool.input_schema["discriminator"]["propertyName"] == "research_kind"
+                discriminator = (
+                    "batch_kind" if tool.name == "submit_research_batch" else "research_kind"
+                )
+                assert tool.input_schema["discriminator"]["propertyName"] == discriminator
                 assert len(tool.input_schema["oneOf"]) == 2
                 for branch in tool.input_schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
@@ -740,6 +1055,25 @@ async def _exercise_in_memory_protocol() -> None:
         assert list_schema["properties"]["limit"]["default"] == 20
         assert list_schema["properties"]["limit"]["maximum"] == 50
         assert list_schema["properties"]["cursor"]["anyOf"][0]["maxLength"] == 1024
+        batch_list_schema = tools["list_research_batches"].input_schema
+        assert batch_list_schema["properties"]["limit"]["default"] == 20
+        assert batch_list_schema["properties"]["limit"]["maximum"] == 50
+        assert batch_list_schema["properties"]["cursor"]["anyOf"][0]["maxLength"] == 1024
+        batch_submit_schema = tools["submit_research_batch"].input_schema
+        assert "structured rejected outcome" in (tools["submit_research_batch"].description or "")
+        assert "get_research_batch" in (tools["submit_research_batch"].description or "")
+        assert "retry_after_seconds" in (tools["get_research_batch"].description or "")
+        for schema in (str(tools["get_research_batch"].output_schema),):
+            assert "ResearchBatchAttemptSummary" not in schema
+            assert "ResearchBatchLiveProgress" not in schema
+            assert "task_attempt_count" not in schema
+            assert "attempt_number" not in schema
+            assert "diagnostic" in schema
+        for branch in batch_submit_schema["oneOf"]:
+            definition = batch_submit_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
+            items_name = "factors" if "FactorEvaluation" in branch["$ref"] else "strategies"
+            assert definition["properties"][items_name]["minItems"] == 1
+            assert definition["properties"][items_name]["maxItems"] == 20
         submit_schema = tools["submit_research_run"].input_schema
         strategy_ref = next(
             branch["$ref"]
@@ -747,9 +1081,7 @@ async def _exercise_in_memory_protocol() -> None:
             if "StrategyBacktest" in branch["$ref"]
         )
         strategy_schema = submit_schema["$defs"][strategy_ref.rsplit("/", 1)[-1]]
-        assert {"holdings_count", "rebalance_every_sessions"} <= set(
-            strategy_schema["required"]
-        )
+        assert {"holdings_count", "rebalance_every_sessions"} <= set(strategy_schema["required"])
         result_schema = tools["get_research_run_result"].input_schema
         collection_schemas = [
             result_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
@@ -837,9 +1169,7 @@ async def _exercise_in_memory_protocol() -> None:
             factor_result.structured_content,
             tools["get_research_run_result"].output_schema,
         )
-        assert factor_result.structured_content["units"]["horizon"] == (
-            "research_sessions"
-        )
+        assert factor_result.structured_content["units"]["horizon"] == ("research_sessions")
         invalid_section_fields = await client.call_tool(
             "get_research_run_result",
             {"run_id": "run_test", "section": "factor", "limit": 20},
@@ -864,9 +1194,11 @@ async def _exercise_in_memory_protocol() -> None:
 
 async def _exercise_destructive_cancel_protocol() -> None:
     reader = _ResearchRunReader()
+    batch_reader = _ResearchBatchReader()
     registry = _registry(
         local_operator_authority(enable_research_cancel=True),
         research_runs=reader,
+        research_batches=batch_reader,
     )
     events: list[OperationalEvent] = []
     async with Client(_server(registry, events=events)) as client:
@@ -883,9 +1215,7 @@ async def _exercise_destructive_cancel_protocol() -> None:
         assert "queued or running" in (cancel.description or "")
         assert "research:cancel" in (cancel.description or "")
         assert "irreversibly" in (cancel.description or "")
-        assert "get_research_run after retry_after_seconds" in (
-            cancel.description or ""
-        )
+        assert "get_research_run after retry_after_seconds" in (cancel.description or "")
         assert "until terminal cancelled" in (cancel.description or "")
 
         result = await client.call_tool(
@@ -907,9 +1237,37 @@ async def _exercise_destructive_cancel_protocol() -> None:
         assert rejected_confirmation.is_error is True
         assert rejected_confirmation.structured_content["code"] == "INVALID_INPUT"
 
+        batch_cancel = tools["cancel_research_batch"]
+        assert batch_cancel.annotations is not None
+        assert batch_cancel.annotations.read_only_hint is False
+        assert batch_cancel.annotations.destructive_hint is True
+        assert batch_cancel.annotations.idempotent_hint is True
+        assert batch_cancel.annotations.open_world_hint is False
+        assert batch_cancel.input_schema["additionalProperties"] is False
+        assert set(batch_cancel.input_schema["required"]) == {"batch_id", "request_id"}
+        assert "confirmation_token" not in batch_cancel.input_schema["properties"]
+        assert "queued or running" in (batch_cancel.description or "")
+        assert "research:cancel" in (batch_cancel.description or "")
+        assert "get_research_batch polling" in (batch_cancel.description or "")
+        batch_cancel_output_schema = str(batch_cancel.output_schema)
+        assert "ResearchBatchAttemptSummary" not in batch_cancel_output_schema
+        assert "ResearchBatchLiveProgress" not in batch_cancel_output_schema
+        assert "task_attempt_count" not in batch_cancel_output_schema
+        assert "attempt_number" not in batch_cancel_output_schema
+        assert "diagnostic" in batch_cancel_output_schema
+
+        batch_result = await client.call_tool(
+            "cancel_research_batch",
+            {"batch_id": "batch_test", "request_id": "cancel_batch_request"},
+        )
+        assert batch_result.is_error is False
+        validate(batch_result.structured_content, batch_cancel.output_schema)
+        assert batch_result.structured_content["batch"]["status"] == "cancelled"
+
     assert [event.context["outcome"] for event in events] == [
         "succeeded",
         "failed",
+        "succeeded",
     ]
 
 
