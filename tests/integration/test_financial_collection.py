@@ -75,6 +75,17 @@ EXECUTABLE_FIELDS = {
 }
 
 
+def _overview_service(
+    database: PostgresDatabase,
+    mount_root: Path,
+) -> DatasetOverviewService:
+    return DatasetOverviewService(
+        database,
+        mount_root,
+        benchmark_mount_for_data_mount(mount_root),
+    )
+
+
 class StatementSource:
     def __init__(self, *, interrupt_after: int | None = None) -> None:
         self.requests: list[tuple[str, str, str]] = []
@@ -765,7 +776,7 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
             raise AssertionError("Data Overview opened Parquet")
 
         monkeypatch.setattr("thesistrace.data.generation_store.pq.read_table", reject_parquet)
-        overview = DatasetOverviewService(database, tmp_path).overview()
+        overview = _overview_service(database, tmp_path).overview()
         assert overview.market_coverage.model_dump(mode="json") == {
             "start": "2010-01-04",
             "end": "2026-08-13",
@@ -957,7 +968,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
         )
         assert published.candidate.readiness_status == "ready"
         assert published.candidate.discovery_baseline_session == "2026-08-13"
-        overview = DatasetOverviewService(database, tmp_path).overview()
+        overview = _overview_service(database, tmp_path).overview()
         assert overview.financial_research_readiness == "ready"
         assert overview.financial_coverage is not None
         assert overview.financial_coverage.model_dump(mode="json") == {
@@ -1977,7 +1988,7 @@ def test_financial_publication_reconciles_a_post_cas_completion_failure(
 
         assert replayed.generation_manifest_sha256 == moved.generation_manifest_sha256
         assert MountedDatasetHeadStore(tmp_path).current_pointer() == moved
-        assert DatasetOverviewService(database, tmp_path).overview().last_financial_refresh_at == (
+        assert _overview_service(database, tmp_path).overview().last_financial_refresh_at == (
             COLLECTED_AT + timedelta(days=1)
         )
     finally:
@@ -2017,9 +2028,9 @@ def test_financial_publication_recovers_head_move_before_receipt_commit(
             clock=lambda: COLLECTED_AT + timedelta(days=1),
             lifecycle_event=lifecycle_events.append,
         )
-        prior_refresh_at = DatasetOverviewService(
-            database, tmp_path
-        ).overview().last_financial_refresh_at
+        prior_refresh_at = (
+            _overview_service(database, tmp_path).overview().last_financial_refresh_at
+        )
         with database.transaction() as transaction:
             transaction.execute(
                 """
@@ -2079,9 +2090,10 @@ def test_financial_publication_recovers_head_move_before_receipt_commit(
             "publication_head_moved_at": None,
             "published_generation_manifest_sha256": None,
         }
-        assert DatasetOverviewService(
-            database, tmp_path
-        ).overview().last_financial_refresh_at == prior_refresh_at
+        assert (
+            _overview_service(database, tmp_path).overview().last_financial_refresh_at
+            == prior_refresh_at
+        )
 
         store = MountedGenerationStore(tmp_path)
         successor_base = store.open_refresh_base(moved.generation_manifest_sha256)
@@ -2147,10 +2159,9 @@ def test_financial_publication_recovers_head_move_before_receipt_commit(
         assert recovered_operation == {
             "published_at": COLLECTED_AT + timedelta(days=1)
         }
-        assert DatasetOverviewService(
-            database, tmp_path
-        ).overview().last_financial_refresh_at == COLLECTED_AT + timedelta(
-            days=1, hours=2
+        assert (
+            _overview_service(database, tmp_path).overview().last_financial_refresh_at
+            == COLLECTED_AT + timedelta(days=1, hours=2)
         )
         with database.transaction() as transaction:
             active_candidate = transaction.execute(

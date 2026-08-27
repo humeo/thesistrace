@@ -124,7 +124,6 @@ PUBLIC_TERMINAL_STATE_KEYS = frozenset(
         "net_cash",
         "gross_nav",
         "net_nav",
-        "benchmark_nav",
         "cumulative_transaction_cost",
         "rebalance_phase",
         "pending_signal",

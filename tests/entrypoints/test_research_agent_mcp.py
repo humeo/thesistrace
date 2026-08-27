@@ -170,8 +170,10 @@ def test_packaged_stdio_entrypoint_sanitizes_unavailable_core_context(
 ) -> None:
     executable = Path(os.sys.executable).with_name("thesistrace-research-agent-mcp")
     data_mount = tmp_path / "data"
+    benchmark_mount = tmp_path / "benchmark-data"
     batch_attempt_control_directory = tmp_path / "batch-attempts"
     data_mount.mkdir()
+    benchmark_mount.mkdir()
     batch_attempt_control_directory.mkdir()
     database_canary = "private-database-canary"
     secret_canary = "private-s3-secret-canary"
@@ -183,6 +185,7 @@ def test_packaged_stdio_entrypoint_sanitizes_unavailable_core_context(
         "THESISTRACE_S3_SECRET_ACCESS_KEY": secret_canary,
         "THESISTRACE_S3_BUCKET": "unused",
         "THESISTRACE_DATA_MOUNT": str(data_mount),
+        "THESISTRACE_BENCHMARK_MOUNT": str(benchmark_mount),
         "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(batch_attempt_control_directory),
     }
 

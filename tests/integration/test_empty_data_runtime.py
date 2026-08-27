@@ -8,11 +8,24 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from thesistrace.benchmark import BENCHMARK_SNAPSHOT_FILENAME
 from thesistrace.data import DatasetHeadError, DatasetLifecycle, MountedGenerationStore
 from thesistrace.entrypoints.http import create_app
-from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
+from thesistrace.entrypoints.runtime import (
+    CoreSettings,
+    open_core_runtime,
+    open_worker_runtime,
+)
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
+
+
+def _isolated_settings(core_settings: CoreSettings, data_mount: Path) -> CoreSettings:
+    return replace(
+        core_settings,
+        data_mount=data_mount,
+        benchmark_mount=data_mount.parent / f"{data_mount.name}-benchmark-data",
+    )
 
 
 def test_api_exposes_a_dedicated_liveness_endpoint(
@@ -20,7 +33,7 @@ def test_api_exposes_a_dedicated_liveness_endpoint(
     tmp_path: Path,
 ) -> None:
     initialize_core(core_settings.database_url)
-    settings = replace(core_settings, data_mount=tmp_path)
+    settings = _isolated_settings(core_settings, tmp_path)
 
     with TestClient(create_app(settings)) as client:
         response = client.get("/health/live")
@@ -29,12 +42,29 @@ def test_api_exposes_a_dedicated_liveness_endpoint(
     assert response.json() == {"status": "ok"}
 
 
+def test_worker_runtime_does_not_touch_the_unmounted_benchmark_store(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    initialize_core(core_settings.database_url)
+    settings = _isolated_settings(core_settings, tmp_path)
+    assert not settings.benchmark_mount.exists()
+
+    with open_worker_runtime(
+        settings,
+        internal_api_origin="http://127.0.0.1:1",
+    ) as runtime:
+        assert runtime.data_overview is None
+
+    assert not settings.benchmark_mount.exists()
+
+
 def test_empty_and_prepared_data_overview_survive_real_http_restart(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
     initialize_core(core_settings.database_url)
-    settings = replace(core_settings, data_mount=tmp_path)
+    settings = _isolated_settings(core_settings, tmp_path)
     with open_core_runtime(settings) as runtime:
         with runtime.database.transaction() as transaction:
             transaction.execute(
@@ -48,6 +78,9 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
         "market_coverage": None,
         "financial_coverage": None,
         "industry_coverage": None,
+        "benchmark_coverage": None,
+        "benchmark_snapshot_sha256": None,
+        "benchmark_last_published_at": None,
         "data_through_session": None,
         "last_market_refresh_at": None,
         "last_financial_refresh_at": None,
@@ -55,6 +88,7 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
         "industry_refresh_status": None,
         "industry_refresh_failure_code": None,
         "market_research_readiness": False,
+        "benchmark_research_readiness": False,
         "financial_research_readiness": "not_ready",
         "industry_research_readiness": False,
     }
@@ -92,6 +126,9 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
             "observation_through_session": "2026-08-07",
             "classification_version": "SW2021",
         },
+        "benchmark_coverage": None,
+        "benchmark_snapshot_sha256": None,
+        "benchmark_last_published_at": None,
         "data_through_session": "2026-08-07",
         "last_market_refresh_at": None,
         "last_financial_refresh_at": None,
@@ -99,6 +136,7 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
         "industry_refresh_status": None,
         "industry_refresh_failure_code": None,
         "market_research_readiness": True,
+        "benchmark_research_readiness": False,
         "financial_research_readiness": "not_ready",
         "industry_research_readiness": True,
     }
@@ -127,7 +165,7 @@ def test_data_overview_does_not_open_generation_parquet(
     tmp_path: Path,
 ) -> None:
     initialize_core(core_settings.database_url)
-    settings = replace(core_settings, data_mount=tmp_path)
+    settings = _isolated_settings(core_settings, tmp_path)
     store = MountedGenerationStore(tmp_path)
     generation = store.materialize(
         build_minimal_canonical_fixture(),
@@ -173,6 +211,9 @@ def test_data_overview_does_not_open_generation_parquet(
                 "observation_through_session": "2026-08-07",
                 "classification_version": "SW2021",
             },
+            "benchmark_coverage": None,
+            "benchmark_snapshot_sha256": None,
+            "benchmark_last_published_at": None,
             "data_through_session": "2026-08-07",
             "last_market_refresh_at": None,
             "last_financial_refresh_at": None,
@@ -180,9 +221,29 @@ def test_data_overview_does_not_open_generation_parquet(
             "industry_refresh_status": None,
             "industry_refresh_failure_code": None,
             "market_research_readiness": True,
+            "benchmark_research_readiness": False,
             "financial_research_readiness": "not_ready",
             "industry_research_readiness": True,
         }
+
+
+def test_data_overview_treats_a_damaged_benchmark_snapshot_as_unavailable(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    initialize_core(core_settings.database_url)
+    settings = _isolated_settings(core_settings, tmp_path)
+    settings.benchmark_mount.mkdir(parents=True)
+    (settings.benchmark_mount / BENCHMARK_SNAPSHOT_FILENAME).write_bytes(b'{"format":')
+
+    with TestClient(create_app(settings)) as client:
+        overview = client.get("/api/data")
+
+    assert overview.status_code == 200
+    assert overview.json()["benchmark_coverage"] is None
+    assert overview.json()["benchmark_snapshot_sha256"] is None
+    assert overview.json()["benchmark_last_published_at"] is None
+    assert overview.json()["benchmark_research_readiness"] is False
 
 
 def test_malformed_existing_head_prevents_healthy_runtime_start(
@@ -191,7 +252,7 @@ def test_malformed_existing_head_prevents_healthy_runtime_start(
 ) -> None:
     initialize_core(core_settings.database_url)
     (tmp_path / "HEAD.json").write_bytes(b'{"format":')
-    settings = replace(core_settings, data_mount=tmp_path)
+    settings = _isolated_settings(core_settings, tmp_path)
 
     with pytest.raises(DatasetHeadError, match="malformed"):
         with open_core_runtime(settings):
@@ -203,7 +264,7 @@ def test_same_generation_with_forged_head_projection_is_revalidated(
     tmp_path: Path,
 ) -> None:
     initialize_core(core_settings.database_url)
-    settings = replace(core_settings, data_mount=tmp_path)
+    settings = _isolated_settings(core_settings, tmp_path)
     generation = MountedGenerationStore(tmp_path).materialize(
         build_minimal_canonical_fixture(),
         prepared_at=datetime(2026, 8, 9, tzinfo=UTC),

@@ -96,13 +96,25 @@ if arguments[0] == "inspect":
     else:
         print("container inspection")
     raise SystemExit(0)
+if arguments[0] == "stop":
+    raise SystemExit(0)
+if arguments[0] == "logs":
+    print("outage api logs")
+    raise SystemExit(0)
 if arguments[:2] == ["network", "inspect"]:
     print("true")
     raise SystemExit(0)
 if arguments[:2] == ["image", "tag"]:
+    failing_target = os.environ.get("FAKE_IMAGE_TAG_FAILURE_TARGET")
+    if failing_target and arguments[-1].endswith(f"-{failing_target}"):
+        raise SystemExit(6)
     raise SystemExit(0)
 if arguments[:2] == ["image", "inspect"]:
     print("sha256:test-image")
+    raise SystemExit(0)
+if arguments[:2] == ["volume", "inspect"]:
+    raise SystemExit(0)
+if arguments[:2] == ["volume", "rm"]:
     raise SystemExit(0)
 if arguments[0] == "run" and "--project-name" not in arguments:
     print('{"classified":true,"child_returncode":-9}')
@@ -151,6 +163,14 @@ elif "logs" in arguments:
         print(os.environ.get("FAKE_COMPOSE_LOGS", "test logs"))
 elif "images" in arguments:
     print('{"ID":"sha256:test-image"}')
+if (
+    "run" in arguments
+    and "thesistrace-data-operator" in arguments
+    and "bootstrap" in arguments
+):
+    data_mount = Path(os.environ["THESISTRACE_TEST_DATA_MOUNT"])
+    data_mount.mkdir(parents=True, exist_ok=True)
+    (data_mount / "HEAD.json").write_text("fake Dataset Head")
 smoke_script = next(
     (argument for argument in arguments if argument.endswith("production_image_smoke.py")),
     None,
@@ -960,6 +980,7 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
 
     assert completed.returncode == 0, completed.stderr
     run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    project_name = f"thesistrace-test-{run_id}"
     assert not (tmp_path / "runs" / run_id / "canonical-data").exists()
     assert not (tmp_path / "runs" / run_id / "benchmark-data").exists()
     metadata = (tmp_path / "runs" / run_id / "run.txt").read_text().splitlines()
@@ -990,6 +1011,8 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     assert "db=postgresql://thesistrace:thesistrace-test@127.0.0.1:41001" in commands
     assert "s3=http://127.0.0.1:41002" in commands
     assert "down --volumes --remove-orphans" in commands
+    assert f"docker volume rm {project_name}_canonical-data\n" in commands
+    assert f"docker volume rm {project_name}_benchmark-data\n" in commands
 
 
 def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
@@ -1129,6 +1152,9 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
         "up --detach --no-build --wait --wait-timeout 120 "
         "api research-worker batch-research-worker tracking-worker\n" in commands
     )
+    assert "THESISTRACE_DATA_MOUNT=/smoke-data/dataset-store-outage/current" in commands
+    assert "production_image_smoke.py health" in commands
+    assert "production_image_smoke.py readiness-outage" in commands
     assert "--build" not in commands
 
 
@@ -1158,6 +1184,53 @@ def test_production_image_base_tags_are_locked_to_content_digests() -> None:
         assert from_lines
         assert all("@sha256:" in line for line in from_lines)
         assert all(len(line.partition("@sha256:")[2].split()[0]) == 64 for line in from_lines)
+
+
+def test_failed_image_build_stops_smoke_before_runtime_phases(tmp_path: Path) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_BUILD_STATUS"] = "7"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 7
+    commands = command_log.read_text()
+    assert "build initialize web\n" in commands
+    assert "entrypoint /bin/true batch-research-worker" not in commands
+    assert "production_image_smoke.py" not in commands
+
+
+@pytest.mark.parametrize(
+    "target",
+    ("api", "research-worker", "batch-research-worker", "tracking-worker"),
+)
+def test_failed_backend_image_tag_stops_smoke_before_runtime_phases(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_IMAGE_TAG_FAILURE_TARGET"] = target
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 6
+    commands = command_log.read_text()
+    assert f"-{target}\n" in commands
+    assert "entrypoint /bin/true batch-research-worker" not in commands
+    assert "production_image_smoke.py" not in commands
 
 
 def test_failed_image_smoke_persists_runner_diagnostics_before_cleanup(

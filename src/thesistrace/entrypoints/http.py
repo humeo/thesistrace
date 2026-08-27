@@ -36,7 +36,7 @@ from thesistrace.daily_track import (
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
 )
-from thesistrace.data import DataOverview
+from thesistrace.data import DataOverview, DatasetOverviewService
 from thesistrace.entrypoints.alpha_http import install_alpha_http
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
 from thesistrace.operational_events import (
@@ -224,7 +224,8 @@ def create_app(
     install_alpha_http(
         app,
         financial_authoring_ready=lambda request: (
-            _runtime(request).data_overview.overview().financial_research_readiness != "not_ready"
+            _data_overview(request).overview().financial_research_readiness
+            != "not_ready"
         ),
     )
 
@@ -271,7 +272,7 @@ def create_app(
 
     @app.get("/api/data", response_model=DataOverview)
     def data_overview(request: Request) -> DataOverview:
-        return _runtime(request).data_overview.overview()
+        return _data_overview(request).overview()
 
     @app.get("/api/research-folders", response_model=ResearchFolderList)
     def list_research_folders(request: Request) -> ResearchFolderList:
@@ -692,6 +693,13 @@ def _batch_validation_components(location: object) -> list[str | int]:
 
 def _runtime(request: Request) -> CoreRuntime:
     return request.app.state.core_runtime
+
+
+def _data_overview(request: Request) -> DatasetOverviewService:
+    overview = _runtime(request).data_overview
+    if overview is None:
+        raise RuntimeError("Data Overview is unavailable outside the API runtime")
+    return overview
 
 
 def _normalized_route(request: Request) -> str:

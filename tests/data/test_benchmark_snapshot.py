@@ -80,6 +80,27 @@ def test_first_update_publishes_strict_complete_snapshot(tmp_path: Path) -> None
     }
 
 
+def test_update_ignores_market_warmup_before_the_fixed_benchmark_start(
+    tmp_path: Path,
+) -> None:
+    source = RecordingSource(
+        [
+            (
+                BenchmarkLevel("2010-01-04", "3592.47"),
+                BenchmarkLevel("2010-01-05", "3545.19"),
+            )
+        ]
+    )
+
+    result = BenchmarkSnapshotUpdater(BenchmarkSnapshotStore(tmp_path), source).update(
+        ("2009-12-31", "2010-01-04", "2010-01-05")
+    )
+
+    assert result.snapshot.coverage_start_session == "2010-01-04"
+    assert result.snapshot.coverage_end_session == "2010-01-05"
+    assert source.requests == [("2010-01-04", "2010-01-05")]
+
+
 def test_update_requests_only_new_dates_and_never_overwrites_history(tmp_path: Path) -> None:
     store = BenchmarkSnapshotStore(tmp_path)
     store.publish(

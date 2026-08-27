@@ -30,6 +30,9 @@ export type DataOverview = {
     observation_through_session: string;
     classification_version: "SW2021";
   } | null;
+  benchmark_coverage: { start: string; end: string } | null;
+  benchmark_snapshot_sha256: string | null;
+  benchmark_last_published_at: string | null;
   data_through_session: string | null;
   last_market_refresh_at: string | null;
   last_financial_refresh_at: string | null;
@@ -37,6 +40,7 @@ export type DataOverview = {
   industry_refresh_status: "running" | "succeeded" | "failed" | null;
   industry_refresh_failure_code: string | null;
   market_research_readiness: boolean;
+  benchmark_research_readiness: boolean;
   financial_research_readiness: FinancialResearchReadiness;
   industry_research_readiness: boolean;
 };
@@ -94,6 +98,7 @@ export function DataOverviewView({
   onRefresh: () => void;
 }) {
   const marketCoverage = overview.market_coverage;
+  const benchmarkCoverage = overview.benchmark_coverage;
   const financialCoverage = overview.financial_coverage;
   const industryCoverage = overview.industry_coverage;
   const industryState = overview.industry_refresh_status === "failed"
@@ -142,6 +147,37 @@ export function DataOverviewView({
         <div>
           <dt>Last market refresh</dt>
           <dd>{overview.last_market_refresh_at ?? "Not available"}</dd>
+        </div>
+      </dl>
+      <div className="signal-strip" aria-label="Strategy Benchmark readiness">
+        <span className="signal-strip-label">
+          <span
+            aria-hidden="true"
+            className={overview.benchmark_research_readiness
+              ? "health-dot"
+              : "health-dot health-dot-warning"}
+          /> Strategy Benchmark
+        </span>
+        <strong>{overview.benchmark_research_readiness ? "沪深300 ready" : "沪深300 not ready"}</strong>
+      </div>
+      <dl className="data-overview-stats" aria-label="Strategy Benchmark snapshot">
+        <div>
+          <dt>Benchmark coverage start</dt>
+          <dd>{benchmarkCoverage?.start ?? "Not available"}</dd>
+        </div>
+        <div>
+          <dt>Benchmark coverage end</dt>
+          <dd>{benchmarkCoverage?.end ?? "Not available"}</dd>
+        </div>
+        <div>
+          <dt>Snapshot SHA-256</dt>
+          <dd>{overview.benchmark_snapshot_sha256 === null
+            ? "Not available"
+            : <code>{overview.benchmark_snapshot_sha256}</code>}</dd>
+        </div>
+        <div>
+          <dt>Last benchmark publication</dt>
+          <dd>{overview.benchmark_last_published_at ?? "Not available"}</dd>
         </div>
       </dl>
       <div className="signal-strip" aria-label="Financial data readiness">

@@ -254,20 +254,45 @@ verify_service_readiness_outage() {
 }
 
 verify_dataset_readiness_outage() {
-  unavailable_mount="$run_root/canonical-data-unavailable"
+  outage_container="dataset-store-outage-$run_id"
+  outage_parent="$run_root/dataset-store-outage"
+  outage_root="$outage_parent/current"
   outage_status=0
   recovery_status=0
-  mv "$data_mount" "$unavailable_mount"
-  compose_run \
-    -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-    -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
-    -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
-    -e THESISTRACE_TEST_UNAVAILABLE_DEPENDENCY=dataset_store \
-    initialize python /smoke/production_image_smoke.py readiness-outage \
-    >"$evidence_dir/readiness-dataset_store-unavailable.json" \
-    2>"$evidence_dir/readiness-dataset_store-unavailable.stderr.log" \
-    || outage_status=$?
-  mv "$unavailable_mount" "$data_mount" || recovery_status=$?
+  mkdir -p "$outage_parent"
+  ln -s ../canonical-data "$outage_root"
+  compose_run --detach \
+    --name "$outage_container" \
+    --volume "$outage_parent:/smoke-data/dataset-store-outage:ro" \
+    -e THESISTRACE_DATA_MOUNT=/smoke-data/dataset-store-outage/current \
+    api >/dev/null || outage_status=$?
+  if [ "$outage_status" -eq 0 ]; then
+    compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN="http://$outage_container:8100" \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
+      initialize python /smoke/production_image_smoke.py health \
+      >"$evidence_dir/readiness-dataset_store-before-outage.json" \
+      2>"$evidence_dir/readiness-dataset_store-before-outage.stderr.log" \
+      || outage_status=$?
+  fi
+  if [ "$outage_status" -eq 0 ]; then
+    unlink "$outage_root" || outage_status=$?
+  fi
+  if [ "$outage_status" -eq 0 ]; then
+    compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN="http://$outage_container:8100" \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
+      -e THESISTRACE_TEST_UNAVAILABLE_DEPENDENCY=dataset_store \
+      initialize python /smoke/production_image_smoke.py readiness-outage \
+      >"$evidence_dir/readiness-dataset_store-unavailable.json" \
+      2>"$evidence_dir/readiness-dataset_store-unavailable.stderr.log" \
+      || outage_status=$?
+  fi
+  docker logs "$outage_container" \
+    >"$evidence_dir/readiness-dataset_store-api.log" 2>&1 || true
+  docker stop "$outage_container" >/dev/null || recovery_status=$?
   if [ "$recovery_status" -eq 0 ]; then
     verify_image_health dataset_store-recovered || recovery_status=$?
   fi
@@ -410,7 +435,7 @@ cleanup_project() {
   compose_status=0
   compose down --volumes --remove-orphans || compose_status=$?
   product_state_status=0
-  "$repo_root/scripts/product-state-volumes" reset "$project_name" \
+  "$repo_root/scripts/product-state-volumes" erase "$project_name" \
     || product_state_status=$?
   mount_status=0
   rm -rf -- "$state_root/$run_id/canonical-data" || mount_status=$?
@@ -845,6 +870,7 @@ case "$command" in
     ;;
   image-smoke)
     smoke_state=/smoke-evidence/image-smoke-state.json
+    bootstrap_replay=/smoke-evidence/tushare-financial-product-full-replay.json
     run_phase image-smoke-images build_runtime_images
     backend_image=$(runtime_image_name initialize)
     image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
@@ -858,12 +884,16 @@ case "$command" in
       --wait --wait-timeout 300 \
       postgres rustfs initialize
     run_phase image-smoke-initialization compose wait initialize
+    run_phase image-smoke-bootstrap-replay compose_run initialize \
+      python /smoke/browser/prepare_image_smoke_bootstrap_replay.py \
+      --input /smoke/fixtures/tushare-financial-product-replay.json \
+      --output "$bootstrap_replay"
     run_phase image-smoke-operator-bootstrap compose_run initialize \
       thesistrace-data-operator bootstrap \
       --idempotency-key financial-release-bootstrap \
       --as-of 2026-08-05T18:00:00+08:00 \
       --start-date 2010-01-04 \
-      --replay /smoke/fixtures/tushare-financial-product-replay.json
+      --replay "$bootstrap_replay"
     run_phase image-smoke-prepare-data compose_run initialize \
       python /smoke/browser/prepare_image_smoke_data.py
     run_phase image-smoke-mcp-preflight run_mcp_image_smoke preflight \

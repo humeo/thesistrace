@@ -3,6 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.benchmark import (
+    BenchmarkSnapshot,
+    BenchmarkSnapshotError,
+    BenchmarkSnapshotStore,
+    validate_independent_benchmark_mount,
+)
 from thesistrace.data.head_store import DatasetHeadPointer, MountedDatasetHeadStore
 from thesistrace.data.lifecycle import lock_data_lifecycle
 from thesistrace.data.models import (
@@ -16,9 +22,17 @@ from thesistrace.data.models import (
 class DatasetOverviewService:
     """Read the one current mounted Dataset Head without exposing its identity."""
 
-    def __init__(self, database: PostgresDatabase, mount_root: Path | str) -> None:
+    def __init__(
+        self,
+        database: PostgresDatabase,
+        mount_root: Path | str,
+        benchmark_mount_root: Path | str,
+    ) -> None:
         self._database = database
         self._heads = MountedDatasetHeadStore(mount_root)
+        self._benchmark = BenchmarkSnapshotStore(
+            validate_independent_benchmark_mount(mount_root, benchmark_mount_root)
+        )
         self._validated_pointer: DatasetHeadPointer | None = None
 
     def validate_startup(self) -> None:
@@ -27,12 +41,20 @@ class DatasetOverviewService:
     def overview(self) -> DataOverview:
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
+            benchmark = self._read_benchmark()
             pointer = self._heads.current_pointer()
             if pointer is None:
                 return DataOverview(
                     market_coverage=None,
                     financial_coverage=None,
                     industry_coverage=None,
+                    benchmark_coverage=_benchmark_coverage(benchmark),
+                    benchmark_snapshot_sha256=(
+                        None if benchmark is None else benchmark.sha256
+                    ),
+                    benchmark_last_published_at=(
+                        None if benchmark is None else benchmark.published_at
+                    ),
                     data_through_session=None,
                     last_market_refresh_at=None,
                     last_financial_refresh_at=None,
@@ -40,6 +62,7 @@ class DatasetOverviewService:
                     industry_refresh_status=None,
                     industry_refresh_failure_code=None,
                     market_research_readiness=False,
+                    benchmark_research_readiness=False,
                     financial_research_readiness="not_ready",
                     industry_research_readiness=False,
                 )
@@ -104,6 +127,13 @@ class DatasetOverviewService:
                         observation_through_session=industry_coverage["end"],
                     )
                 ),
+                benchmark_coverage=_benchmark_coverage(benchmark),
+                benchmark_snapshot_sha256=(
+                    None if benchmark is None else benchmark.sha256
+                ),
+                benchmark_last_published_at=(
+                    None if benchmark is None else benchmark.published_at
+                ),
                 data_through_session=pointer.data_through_session,
                 last_market_refresh_at=state["last_market_refresh_at"],
                 last_financial_refresh_at=state["last_financial_refresh_at"],
@@ -111,6 +141,10 @@ class DatasetOverviewService:
                 industry_refresh_status=state["industry_refresh_status"],
                 industry_refresh_failure_code=state["industry_refresh_failure_code"],
                 market_research_readiness=True,
+                benchmark_research_readiness=(
+                    benchmark is not None
+                    and benchmark.coverage_end_session >= market_end
+                ),
                 financial_research_readiness=(
                     "not_ready"
                     if financial is None or descriptor.financial_research_readiness is None
@@ -122,6 +156,23 @@ class DatasetOverviewService:
                     and industry_coverage["end"] >= market_end
                 ),
             )
+
+    def _read_benchmark(self) -> BenchmarkSnapshot | None:
+        try:
+            return self._benchmark.read()
+        except (BenchmarkSnapshotError, OSError):
+            return None
+
+
+def _benchmark_coverage(
+    snapshot: BenchmarkSnapshot | None,
+) -> DatasetCoverage | None:
+    if snapshot is None:
+        return None
+    return DatasetCoverage(
+        start=snapshot.coverage_start_session,
+        end=snapshot.coverage_end_session,
+    )
 
 
 def _financial_coverage(coverage: dict[str, object]) -> FinancialCoverage:

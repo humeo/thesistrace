@@ -129,21 +129,24 @@ mise exec -- pnpm dev:reset
 
 Reset accepts only the canonical `thesistrace-dev` project, deletes and recreates
 its PostgreSQL, RustFS, and Batch Attempt Control runtime volumes, preserves the
-canonical-data volume and exact Dataset Head, runs the one-shot schema
-initializer, and waits for health. It does not contact Tushare, migrate old
-Product State, or publish Fixture data. The initialized runtime validates and
-immediately reuses the preserved mounted Canonical Data Store.
+canonical-data volume and exact Dataset Head, and preserves the independent
+benchmark-data volume and its current Snapshot. It then runs the one-shot
+schema initializer and waits for health. It does not contact Tushare, migrate
+old Product State, or publish Fixture data. The initialized runtime validates
+and immediately reuses the preserved mounted Canonical Data Store; Benchmark
+readiness is reported independently through Data Overview.
 
-Complete deletion of Product State and downloaded Canonical Data is a separate
-explicit operation:
+Complete deletion of Product State, downloaded Canonical Data, and the
+Benchmark Snapshot is a separate explicit operation:
 
 ```sh
 mise exec -- pnpm dev:erase
 ```
 
 `dev:erase` accepts only the canonical `thesistrace-dev` project, stops it, and
-removes all four Development volumes without restarting the runtime. Research
-cannot run again until Canonical Data is bootstrapped or restored.
+removes all five Development volumes without restarting the runtime. Research
+cannot run again until Canonical Data is bootstrapped or restored; the next
+Market Bootstrap recreates the Benchmark Snapshot before the first Head.
 
 ## Test gates
 

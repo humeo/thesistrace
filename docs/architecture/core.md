@@ -10,8 +10,8 @@
 ThesisTrace currently closes one local, single-operator research loop:
 
 ```text
-Data Operator prepares the current Dataset Head
-    -> Data Overview exposes current coverage read-only
+Data Operator prepares the current Dataset Head and CSI 300 Benchmark Snapshot
+    -> Data Overview exposes Dataset and Benchmark readiness read-only
     -> author one browser-local Draft inside a Research Folder
     -> Run compiles and atomically admits one immutable ResearchRun
     -> a ResearchRun Attempt pins the Generation frozen at admission
@@ -24,7 +24,8 @@ The browser-visible resources are Data Overview, Research Folders, Research
 (ResearchRuns), and DailyTracks. Research Batches are a backend API resource in
 V1 and their child ResearchRuns appear in the Batch Research Folder; there is no
 Batch browser surface. Browser Draft is local authoring state rather than a
-server resource. Data Generation, execution Attempt, Tracking Checkpoint,
+server resource. Benchmark Store, Data Generation, execution Attempt, Tracking
+Checkpoint,
 Working Cache, publication manifest, and schema fingerprint are implementation
 concepts, not additional product resources.
 
@@ -49,9 +50,12 @@ flowchart LR
     Q["Batch Research Worker pool"] --> M
     T["Tracking Worker pool"] --> M
     O["Private Data Operator"] --> D["Data module"]
+    O --> X["Benchmark module"]
+    H --> X
     M --> P["PostgreSQL"]
     M --> S["RustFS via S3 client"]
     D --> F["Mounted Canonical Data Store"]
+    X --> G["Mounted Benchmark Store"]
 ```
 
 PostgreSQL stores product lifecycle state, action receipts, attempts, data
@@ -59,6 +63,11 @@ operation state, pins, and publication manifests. RustFS stores immutable
 ResearchRun and DailyTrack publication bytes. The mounted Canonical Data Store
 contains the current Dataset Head and immutable-while-referenced Data Generation
 files. No runtime downloads data during API or Worker startup.
+The mounted Benchmark Store contains one current atomically replaced
+`csi300-price-index-open.json` Snapshot. It is outside Canonical Data, Product
+State, Dataset Families, and Data Generations. Only API and private Data
+Operator processes mount it; Research, Batch Research, and Tracking Workers do
+not.
 
 ## Operational observability
 
@@ -104,6 +113,7 @@ permanent retention.
 ```text
 src/thesistrace/
 ├── alpha_language/
+├── benchmark/
 ├── data/
 ├── research_folder/
 ├── research_run/
@@ -125,16 +135,19 @@ flowchart LR
     E --> R["ResearchRuns"]
     E --> T["DailyTracks"]
     E --> A["Data"]
+    E --> B["Benchmark"]
     E --> L["Alpha Language"]
     L --> A
     L --> K["Research Kernel"]
     R --> F
     R --> A
     R --> K
+    R --> B
     R --> P["Publication"]
     R --> T
     T --> A
     T --> K
+    T --> B
     T --> P
 ```
 
@@ -174,7 +187,8 @@ path.
 The product interface is read-only:
 
 ```text
-GET /api/data -> coverage, data-through session, last refresh, readiness
+GET /api/data -> Dataset coverage and readiness plus Benchmark Snapshot readiness,
+                 coverage, SHA-256, and publication time
 ```
 
 Bootstrap, Refresh, inspection, work execution, and garbage collection belong
@@ -189,6 +203,17 @@ calling Industry endpoints. Financial and Industry Refresh each build and
 validate their own candidate, recompose it with the latest unaffected Families,
 and atomically move Head only if its target Family is still current. Any
 failure leaves the previous Head readable.
+
+Dataset Bootstrap and Market Refresh use one Benchmark-first publication
+barrier. The Data Operator obtains Tushare `index_daily` Open Levels for
+`399300.SZ`, initially from 2010-01-04 and later only after the published
+Snapshot terminal Research Session. It validates every required session,
+atomically replaces the complete Snapshot, and only then attempts the Market
+Head compare-and-swap. The Snapshot may lead a failed or concurrent Head move;
+a newly published Market Head may never lead it. Market no-change may still
+append Benchmark Levels. Published historical Levels are fixed and there is no
+alternate index, carry, runtime remote read, compatibility reader, or other
+fallback.
 
 An active execution pins one Data Generation. Garbage collection retains the
 current Head, live candidates, and active pins; completed Results and Tracking
@@ -254,10 +279,16 @@ Folder membership stay outside immutable execution input.
 
 A succeeded Run exposes one immutable Result discriminated by Research Kind.
 Factor Evaluation publishes `factor` and provenance; Strategy Backtest adds
-`strategy` and `terminal_strategy_state`. Publication failure cannot expose a
-partial Result or mark the Run succeeded. Cancel fences publication immediately
-and enters `cancelling`; it reaches terminal `cancelled` only after execution
-has stopped and the Generation pin is released.
+Strategy-only `strategy` and `terminal_strategy_state` facts. Successful
+Strategy finalization reads the current Snapshot once to persist the existing
+list `key_metrics.annualized_excess_return`; unavailable Benchmark data stores
+`null` without failing the Run. Detail reads assemble Strategy Comparison from
+the immutable Strategy facts and current Snapshot. Benchmark Levels, identity,
+NAV, cumulative metrics, and CAGR are not immutable Result or execution state.
+Publication failure cannot expose a partial Result or mark the Run succeeded.
+Cancel fences publication immediately and enters `cancelling`; it reaches
+terminal `cancelled` only after execution has stopped and the Generation pin is
+released.
 
 ## DailyTracks
 
@@ -265,6 +296,12 @@ A succeeded Strategy Backtest ResearchRun can activate at most one DailyTrack;
 Factor Evaluation cannot. Activation freezes the complete Tracking Origin and
 initial Strategy state. The current product permits at most ten non-stopped
 Tracks; terminally stopped Tracks do not count.
+
+DailyTrack Detail assembles the same Snapshot-backed Strategy Comparison as its
+seed ResearchRun. Entry Open and Initial Cash remain the seed baseline even
+when the response exposes only the latest 504 observations. Missing, damaged,
+or insufficient Snapshot data makes only the comparison unavailable and never
+blocks Tracking.
 
 ```text
 active | blocked | stopping | stopped
@@ -447,6 +484,8 @@ are not Production readiness.
 - SQLite Product State or a second runtime implementation.
 - Tracking Generation branches, multi-contract dispatch, or contract migration.
 - Raw artifact browsers, physical object paths, or internal lifecycle pages.
+- A public Raw Benchmark API or browser-side alignment, compounding, and excess
+  return calculation.
 - Server Definitions, visible Revisions, Save, authoring Refresh, or product
   Rerun endpoints and compatibility paths.
 

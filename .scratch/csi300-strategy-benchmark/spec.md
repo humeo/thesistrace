@@ -1,6 +1,6 @@
 # Fixed CSI 300 Strategy Benchmark
 
-**Status:** ready-for-agent
+**Status:** complete
 
 ## Objective
 

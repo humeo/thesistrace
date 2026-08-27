@@ -376,7 +376,6 @@ describe("ResearchResultView", () => {
     expect(markup).toContain("Entry Open");
     expect(markup).toContain("Terminal Open");
     expect(markup).toContain("Net Excess");
-    expect(markup).not.toContain("Selected-universe benchmark");
     expect(markup).not.toMatch(
       /Predictive evidence|One fill path|Research-period account observations|signal sessions|Daily Observations|Provenance|Input digest/i,
     );

@@ -38,6 +38,15 @@ Bootstrap records internal preparation time in the Head but does not set a
 successful Refresh timestamp. Repeating the same key and request returns the
 same outcome. A different key cannot overwrite an existing Head.
 
+Bootstrap also publishes the independent Strategy Benchmark before publishing
+that first Market Head. The Benchmark contract is fixed to Tushare
+`index_daily`, `399300.SZ`, and `open`; its initial request runs from
+2010-01-04 through the target Market Coverage. The complete validated Snapshot
+is stored as `/var/lib/thesistrace/benchmark-data/csi300-price-index-open.json`,
+outside Canonical Data and every Data Generation. The API and Data Operator
+mount that Store read-write. Research, Batch Research, and Tracking Workers do
+not mount it.
+
 Market bootstrap and refresh use the `tushare-market-v1` source contract and
 never call `index_classify` or `index_member_all`. A fresh bootstrap therefore
 publishes the required Core Market Families without an Industry Family. When a
@@ -79,6 +88,21 @@ reproduction. Inspect an operation without changing it:
 thesistrace-data-operator inspect-refresh \
   --idempotency-key refresh-2026-08-12
 ```
+
+Before a Market Head publication, `work-refresh` validates the current
+Benchmark Snapshot, requests only required Research Sessions after its terminal
+session, and atomically appends them by replacing the complete JSON file in the
+same directory after flush/fsync. Published historical Levels are never
+re-requested or overwritten. A Snapshot can lead a failed or concurrent Market
+Head compare-and-swap, but a new Market Head cannot lead the Snapshot. When
+Market data is unchanged, newly required Benchmark Sessions still publish a
+new Snapshot. Missing, duplicate, invalid, non-positive, non-finite, damaged,
+or insufficient Levels fail the Market operation; there is no alternate index,
+carry, remote runtime read, replay substitution, or other fallback.
+
+Live work requires `THESISTRACE_TUSHARE_TOKEN`. An explicit versioned replay
+must contain the same CSI 300 source response and enters the same source-neutral
+normalization and publication path; replay is never selected automatically.
 
 Garbage collection is explicit and idempotent:
 

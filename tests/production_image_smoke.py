@@ -51,8 +51,10 @@ EXPECTED_OVERVIEW = {
         "observation_through_session": "2026-08-05",
         "classification_version": "SW2021",
     },
+    "benchmark_coverage": {"start": "2010-01-04", "end": "2026-08-05"},
     "data_through_session": "2026-08-05",
     "market_research_readiness": True,
+    "benchmark_research_readiness": True,
     "financial_research_readiness": "ready",
     "industry_research_readiness": True,
 }
@@ -2068,7 +2070,11 @@ def _wait_for_readiness(
         "dependencies": expected_dependencies,
     }
     while time.monotonic() < deadline:
-        last = _request_health(api_origin, "/health/ready")
+        try:
+            last = _request_health(api_origin, "/health/ready")
+        except urllib.error.URLError:
+            interval.wait(0.05)
+            continue
         if last[0] == expected_status and last[1] == expected_payload:
             return last
         interval.wait(0.05)
@@ -2092,20 +2098,20 @@ def _request_health(
     return status, payload, elapsed
 
 
-def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
-    fixture = Path("/smoke/fixtures/tushare-financial-product-replay.json")
-    replay = json.loads(fixture.read_text())
+def _build_data_refresh_replay(replay: dict[str, object]) -> dict[str, object]:
     replay.pop("financial")
-    _source, canonical = normalize_tushare_snapshot(replay["snapshot"])
+    snapshot = replay["snapshot"]
+    assert isinstance(snapshot, dict)
+    _source, canonical = normalize_tushare_snapshot(snapshot)
     calendar = canonical["research_calendar"]
     request_start = calendar[-20]
     request_end = calendar[-1]
     compact_start = request_start.replace("-", "")
     compact_end = request_end.replace("-", "")
     for table in ("calendar_sse", "calendar_szse"):
-        replay["snapshot"][table] = [
+        snapshot[table] = [
             row
-            for row in replay["snapshot"][table]
+            for row in snapshot[table]
             if compact_start <= str(row["cal_date"]) <= compact_end
         ]
     for table in (
@@ -2115,8 +2121,9 @@ def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
         "price_limits",
         "industry_membership",
     ):
-        replay["snapshot"][table] = []
-    for instrument in replay["snapshot"]["stock_basic"]:
+        snapshot[table] = []
+    snapshot["benchmark_index_daily"] = []
+    for instrument in snapshot["stock_basic"]:
         instrument["list_date"] = EXPECTED_OVERVIEW["market_coverage"]["start"].replace(
             "-", ""
         )
@@ -2128,6 +2135,12 @@ def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
             "request_end": request_end,
         }
     )
+    return replay
+
+
+def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
+    fixture = Path("/smoke/fixtures/tushare-financial-product-replay.json")
+    replay = _build_data_refresh_replay(json.loads(fixture.read_text()))
     with tempfile.TemporaryDirectory(prefix="thesistrace-image-refresh-") as directory:
         replay_path = Path(directory) / "refresh-replay.json"
         replay_path.write_text(json.dumps(replay, sort_keys=True, separators=(",", ":")))
@@ -2172,6 +2185,7 @@ def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
         "market",
         "validation",
         "materialization",
+        "benchmark",
         "candidate_validation",
         "publication",
     ]
@@ -2501,10 +2515,17 @@ def _assert_private_operator_installed() -> None:
 
 def _assert_expected_overview(overview: dict[str, object]) -> None:
     assert {key: overview[key] for key in EXPECTED_OVERVIEW} == EXPECTED_OVERVIEW
+    snapshot_sha256 = overview.get("benchmark_snapshot_sha256")
+    assert isinstance(snapshot_sha256, str)
+    assert len(snapshot_sha256) == 64
+    assert all(character in "0123456789abcdef" for character in snapshot_sha256)
     for field in ("last_market_refresh_at", "last_financial_refresh_at"):
         refreshed_at = overview.get(field)
         assert isinstance(refreshed_at, str)
         assert refreshed_at.endswith(("+00:00", "Z"))
+    benchmark_published_at = overview.get("benchmark_last_published_at")
+    assert isinstance(benchmark_published_at, str)
+    assert benchmark_published_at.endswith(("+00:00", "Z"))
 
 
 def _durable_result(

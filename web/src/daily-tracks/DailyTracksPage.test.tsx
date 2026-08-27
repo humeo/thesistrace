@@ -110,7 +110,6 @@ describe("DailyTrackAnalysisView", () => {
     expect(markup).toContain("数据截至 <time dateTime=\"2026-08-13\">2026-08-13</time>");
     expect(markup).toContain("504 Research Sessions");
     expect(markup).toContain("Net Excess");
-    expect(markup).not.toContain("Selected-universe benchmark");
     expect(markup).not.toMatch(/Predictive evidence|Fixed origin|signal sessions/i);
 
     const unavailableMarkup = renderToStaticMarkup(

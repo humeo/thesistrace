@@ -364,6 +364,7 @@ select { color-scheme: dark; }
 .signal-strip-label { display: inline-flex; align-items: center; gap: 9px; color: var(--ink-muted); font-size: 12px; }
 .signal-strip strong { color: var(--ink); font-size: 12px; font-weight: 500; }
 .health-dot { width: 7px; height: 7px; background: var(--success); border-radius: 50%; }
+.health-dot-warning { background: var(--warning); }
 .data-overview-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -384,11 +385,12 @@ select { color-scheme: dark; }
   font-weight: 500;
   letter-spacing: .02em;
 }
+.data-overview-stats dt { font-size: 12px; }
 .data-overview-stats dd {
   margin: 7px 0 0;
   color: var(--ink);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 .data-field-catalog { margin-top: 32px; }

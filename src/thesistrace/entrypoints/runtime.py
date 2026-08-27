@@ -162,7 +162,7 @@ def core_environment_is_configured(
 @dataclass(frozen=True)
 class CoreRuntime:
     database: PostgresDatabase
-    data_overview: DatasetOverviewService
+    data_overview: DatasetOverviewService | None
     research_authoring: ResearchAuthoringService
     research_folders: ResearchFolderService
     research_batches: ResearchBatchService
@@ -181,6 +181,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         settings,
         annualized_excess_calculator=comparison,
         strategy_comparison=comparison,
+        include_data_overview=True,
     ) as runtime:
         yield runtime
 
@@ -197,6 +198,7 @@ def open_worker_runtime(
             internal_api_origin
         ),
         strategy_comparison=None,
+        include_data_overview=False,
     ) as runtime:
         yield runtime
 
@@ -207,6 +209,7 @@ def _open_runtime(
     *,
     annualized_excess_calculator: AnnualizedExcessCalculator,
     strategy_comparison: StrategyComparisonService | None,
+    include_data_overview: bool,
 ) -> Iterator[CoreRuntime]:
     working_cache = TemporaryDirectory(prefix="thesistrace-core-working-cache-")
     database = PostgresDatabase(settings.database_url)
@@ -223,10 +226,17 @@ def _open_runtime(
         )
         s3.list_buckets()
         publication = Publication(database, s3, bucket=settings.s3_bucket)
-        data_overview = DatasetOverviewService(database, settings.data_mount)
-        data_overview.validate_startup()
         dataset_admission = DatasetAdmissionService(database, settings.data_mount)
         dataset_lifecycle = DatasetLifecycle(database, settings.data_mount)
+        dataset_lifecycle.current_pointer()
+        data_overview: DatasetOverviewService | None = None
+        if include_data_overview:
+            data_overview = DatasetOverviewService(
+                database,
+                settings.data_mount,
+                settings.benchmark_mount,
+            )
+            data_overview.validate_startup()
         generation_store = MountedGenerationStore(settings.data_mount)
         daily_tracks = DailyTrackService(
             database,

@@ -135,6 +135,12 @@ class _DataOverviewReader:
             ),
             financial_coverage=None,
             industry_coverage=None,
+            benchmark_coverage=DatasetCoverage(
+                start=date(2010, 1, 4),
+                end=date(2024, 1, 31),
+            ),
+            benchmark_snapshot_sha256="b" * 64,
+            benchmark_last_published_at=datetime(2024, 2, 1, tzinfo=UTC),
             data_through_session=date(2024, 1, 31),
             last_market_refresh_at=datetime(2024, 2, 1, tzinfo=UTC),
             last_financial_refresh_at=None,
@@ -142,6 +148,7 @@ class _DataOverviewReader:
             industry_refresh_status=None,
             industry_refresh_failure_code=None,
             market_research_readiness=True,
+            benchmark_research_readiness=True,
             financial_research_readiness="ready",
             industry_research_readiness=False,
         )
@@ -1549,9 +1556,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "4bb14ffc9d4fbabff2eee6718280a070ccbf040c4b8acbfba61bf93b79592047"
+        "9a99f6a74cfc6f9d1deeaaec342d538b80908e9dadc2611f612a0cc982f4058a"
     )
-    assert len(canonical) == 148225
+    assert len(canonical) == 148753
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:

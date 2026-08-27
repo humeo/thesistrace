@@ -56,7 +56,11 @@ def _request_status(url: str) -> int:
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
 def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Path) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = replace(
+        CoreSettings.from_environment(),
+        data_mount=tmp_path,
+        benchmark_mount=tmp_path.parent / f"{tmp_path.name}-benchmark-data",
+    )
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
@@ -104,6 +108,9 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
             "observation_through_session": "2026-08-07",
             "classification_version": "SW2021",
         },
+        "benchmark_coverage": None,
+        "benchmark_snapshot_sha256": None,
+        "benchmark_last_published_at": None,
         "data_through_session": "2026-08-07",
         "last_market_refresh_at": None,
         "last_financial_refresh_at": None,
@@ -111,6 +118,7 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
         "industry_refresh_status": None,
         "industry_refresh_failure_code": None,
         "market_research_readiness": True,
+        "benchmark_research_readiness": False,
         "financial_research_readiness": "not_ready",
         "industry_research_readiness": True,
     }

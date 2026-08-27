@@ -3957,6 +3957,9 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
             "market_coverage",
             "financial_coverage",
             "industry_coverage",
+            "benchmark_coverage",
+            "benchmark_snapshot_sha256",
+            "benchmark_last_published_at",
             "data_through_session",
             "last_market_refresh_at",
             "last_financial_refresh_at",
@@ -3964,6 +3967,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
             "industry_refresh_status",
             "industry_refresh_failure_code",
             "market_research_readiness",
+            "benchmark_research_readiness",
             "financial_research_readiness",
             "industry_research_readiness",
         }

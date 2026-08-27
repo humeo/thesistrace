@@ -486,9 +486,14 @@ def _validate_required_sessions(sessions: tuple[str, ...]) -> tuple[str, ...]:
     if not sessions or sessions != tuple(sorted(set(sessions))):
         raise BenchmarkSnapshotError("BENCHMARK_REQUIRED_SESSIONS_INVALID")
     for session in sessions:
-        if _iso_date(session) != session or session < BENCHMARK_START_SESSION:
+        if _iso_date(session) != session:
             raise BenchmarkSnapshotError("BENCHMARK_REQUIRED_SESSIONS_INVALID")
-    return sessions
+    benchmark_sessions = tuple(
+        session for session in sessions if session >= BENCHMARK_START_SESSION
+    )
+    if not benchmark_sessions:
+        raise BenchmarkSnapshotError("BENCHMARK_REQUIRED_SESSIONS_INVALID")
+    return benchmark_sessions
 
 
 def _require_existing_prefix_complete(
