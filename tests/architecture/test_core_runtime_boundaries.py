@@ -22,6 +22,7 @@ from thesistrace.entrypoints.runtime import (
 ROOT = Path(__file__).resolve().parents[2]
 CORE_PACKAGES = (
     "_postgres",
+    "benchmark",
     "data",
     "daily_track",
     "entrypoints",
@@ -76,12 +77,14 @@ def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
 def test_internal_import_graph_is_layered_and_acyclic() -> None:
     allowed = {
         "_postgres": set(),
+        "benchmark": set(),
         "alpha_language": {"data", "research_kernel"},
         "publication": {"_postgres"},
         "research_series": set(),
         "research_kernel": {"research_series"},
         "data": {
             "_postgres",
+            "benchmark",
             "operational_events",
             "product_state",
             "publication",
@@ -134,11 +137,12 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_run",
         },
         "fixture": {"data"},
-        "adapters": {"data", "fixture"},
+        "adapters": {"benchmark", "data", "fixture"},
         "entrypoints": {
             "_postgres",
             "alpha_language",
             "adapters",
+            "benchmark",
             "daily_track",
             "data",
             "operational_events",
@@ -259,6 +263,7 @@ def test_runtime_requires_independent_batch_attempt_control_directory(
         "THESISTRACE_S3_SECRET_ACCESS_KEY": "unused",
         "THESISTRACE_S3_BUCKET": "unused",
         "THESISTRACE_DATA_MOUNT": str(data_mount),
+        "THESISTRACE_BENCHMARK_MOUNT": str(tmp_path / "benchmark-data"),
         "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
             attempt_control_directory
         ),
@@ -269,9 +274,25 @@ def test_runtime_requires_independent_batch_attempt_control_directory(
     settings = CoreSettings.from_environment()
 
     assert settings.data_mount == data_mount
+    assert settings.benchmark_mount == tmp_path / "benchmark-data"
     assert settings.batch_attempt_control_directory == attempt_control_directory
     assert not settings.batch_attempt_control_directory.is_relative_to(
         settings.data_mount
+    )
+
+    independent_mount = tmp_path / "independent-store" / "benchmark"
+    monkeypatch.setenv("THESISTRACE_BENCHMARK_MOUNT", str(independent_mount))
+    assert CoreSettings.from_environment().benchmark_mount == independent_mount
+
+    monkeypatch.setenv("THESISTRACE_BENCHMARK_MOUNT", str(data_mount / "benchmark"))
+    with pytest.raises(
+        RuntimeError,
+        match="must be independent of Canonical Data",
+    ):
+        CoreSettings.from_environment()
+    monkeypatch.setenv(
+        "THESISTRACE_BENCHMARK_MOUNT",
+        str(tmp_path / "benchmark-data"),
     )
 
     monkeypatch.delenv("THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY")
@@ -852,17 +873,30 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     assert "deepcopy(" not in execution_source
     assert "run_kernel(" not in service_source
     assert "canonical-data:/var/lib/thesistrace/canonical-data:ro" in compose_source
+    assert "benchmark-data:/var/lib/thesistrace/benchmark-data" in compose_source
+    assert compose_source.count(
+        "benchmark-data:/var/lib/thesistrace/benchmark-data"
+    ) == 1
     assert (
         "batch-attempt-control:/var/lib/thesistrace/.batch-attempts"
         in compose_source
     )
     assert "/canonical-data/.batch-attempts" not in compose_source
     assert ":/var/lib/thesistrace/canonical-data:ro" in test_compose_source
+    assert ":/var/lib/thesistrace/benchmark-data" in test_compose_source
+    assert test_compose_source.count(":/var/lib/thesistrace/benchmark-data") == 1
     assert (
         ":/var/lib/thesistrace/.batch-attempts" in test_compose_source
     )
     assert "/canonical-data/.batch-attempts" not in test_compose_source
-    assert "${THESISTRACE_TEST_RUN_ROOT}:/smoke-data:ro" in image_smoke_compose_source
+    assert (
+        "${THESISTRACE_TEST_BENCHMARK_MOUNT}:/smoke-data/benchmark-data"
+        in image_smoke_compose_source
+    )
+    assert image_smoke_compose_source.count(
+        "${THESISTRACE_TEST_BENCHMARK_MOUNT}:/smoke-data/benchmark-data"
+    ) == 2
+    assert "${THESISTRACE_TEST_RUN_ROOT}:/smoke-data" not in image_smoke_compose_source
     assert "/canonical-data/.batch-attempts" not in image_smoke_compose_source
     child_environment = transport_source[
         transport_source.index("def child_environment(") : transport_source.index(

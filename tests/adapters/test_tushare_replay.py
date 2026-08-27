@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from thesistrace.adapters import tushare_replay
+from thesistrace.adapters.tushare_benchmark import TushareBenchmarkSource
 from thesistrace.adapters.tushare_provider import TushareSourceError
 from thesistrace.adapters.tushare_replay import ReplayTushareProvider
 
@@ -69,7 +70,7 @@ def test_product_replay_serves_market_and_exact_financial_responses(tmp_path: Pa
                 "version": 1,
                 "request_start": "2010-01-04",
                 "request_end": "2026-08-05",
-                "snapshot": {"calendar_sse": []},
+            "snapshot": {"calendar_sse": []},
                 "financial": {
                     "income": {
                         "000001.SZ": {
@@ -102,3 +103,44 @@ def test_product_replay_serves_market_and_exact_financial_responses(tmp_path: Pa
             fields=("ts_code",),
         )
     assert failure.value.reason_code == "REPLAY_REQUEST_MISMATCH"
+
+
+def test_product_replay_serves_benchmark_through_source_neutral_adapter(
+    tmp_path: Path,
+) -> None:
+    replay = tmp_path / "product-replay.json"
+    replay.write_text(
+        json.dumps(
+            {
+                "format": "thesistrace-tushare-product-replay",
+                "version": 1,
+                "request_start": "2010-01-04",
+                "request_end": "2010-01-05",
+                "snapshot": {
+                    "benchmark_index_daily": [
+                        {
+                            "ts_code": "399300.SZ",
+                            "trade_date": "20100105",
+                            "open": 3545.19,
+                        },
+                        {
+                            "ts_code": "399300.SZ",
+                            "trade_date": "20100104",
+                            "open": 3592.47,
+                        },
+                    ]
+                },
+                "financial": {},
+            }
+        )
+    )
+
+    levels = TushareBenchmarkSource(ReplayTushareProvider(replay)).collect_open_levels(
+        start_session="2010-01-04",
+        end_session="2010-01-05",
+    )
+
+    assert [(level.session, level.open_level) for level in levels] == [
+        ("2010-01-04", "3592.47"),
+        ("2010-01-05", "3545.19"),
+    ]

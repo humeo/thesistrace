@@ -13,6 +13,7 @@ from botocore.config import Config
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
+from thesistrace.benchmark import validate_independent_benchmark_mount
 from thesistrace.daily_track import DailyTrackService, SessionCoordinateRepository
 from thesistrace.daily_track.planning import DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES
 from thesistrace.data import (
@@ -45,6 +46,7 @@ CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_S3_SECRET_ACCESS_KEY",
     "THESISTRACE_S3_BUCKET",
     "THESISTRACE_DATA_MOUNT",
+    "THESISTRACE_BENCHMARK_MOUNT",
     "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY",
 )
 PUBLICATION_REQUEST_TIMEOUT_SECONDS = 5.0
@@ -66,6 +68,7 @@ class CoreSettings:
     s3_secret_access_key: str
     s3_bucket: str
     data_mount: Path
+    benchmark_mount: Path
     batch_attempt_control_directory: Path
     s3_region: str = "us-east-1"
     research_execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES
@@ -73,21 +76,18 @@ class CoreSettings:
 
     @classmethod
     def from_environment(cls) -> CoreSettings:
-        names = dict(
-            zip(
-                (
-                    "database_url",
-                    "s3_endpoint_url",
-                    "s3_access_key_id",
-                    "s3_secret_access_key",
-                    "s3_bucket",
-                    "data_mount",
-                    "batch_attempt_control_directory",
-                ),
-                CORE_ENVIRONMENT_NAMES,
-                strict=True,
-            )
-        )
+        names = {
+            "database_url": "THESISTRACE_DATABASE_URL",
+            "s3_endpoint_url": "THESISTRACE_S3_ENDPOINT_URL",
+            "s3_access_key_id": "THESISTRACE_S3_ACCESS_KEY_ID",
+            "s3_secret_access_key": "THESISTRACE_S3_SECRET_ACCESS_KEY",
+            "s3_bucket": "THESISTRACE_S3_BUCKET",
+            "data_mount": "THESISTRACE_DATA_MOUNT",
+            "benchmark_mount": "THESISTRACE_BENCHMARK_MOUNT",
+            "batch_attempt_control_directory": (
+                "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY"
+            ),
+        }
         values: dict[str, str] = {}
         missing: list[str] = []
         for field, name in names.items():
@@ -115,8 +115,19 @@ class CoreSettings:
         if tracking_execution_memory_bytes <= 0:
             raise RuntimeError("Tracking execution memory must be positive")
         data_mount = Path(values["data_mount"])
-        batch_attempt_control_directory = Path(values["batch_attempt_control_directory"])
-        if batch_attempt_control_directory.resolve().is_relative_to(data_mount.resolve()):
+        try:
+            benchmark_mount = validate_independent_benchmark_mount(
+                data_mount,
+                values["benchmark_mount"],
+            )
+        except ValueError as error:
+            raise RuntimeError(str(error)) from error
+        batch_attempt_control_directory = Path(
+            values["batch_attempt_control_directory"]
+        )
+        if batch_attempt_control_directory.resolve().is_relative_to(
+            data_mount.resolve()
+        ):
             raise RuntimeError(
                 "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY must be outside THESISTRACE_DATA_MOUNT"
             )
@@ -127,6 +138,7 @@ class CoreSettings:
             s3_secret_access_key=values["s3_secret_access_key"],
             s3_bucket=values["s3_bucket"],
             data_mount=data_mount,
+            benchmark_mount=benchmark_mount,
             batch_attempt_control_directory=batch_attempt_control_directory,
             s3_region=os.environ.get("THESISTRACE_S3_REGION", "us-east-1"),
             research_execution_memory_bytes=research_execution_memory_bytes,

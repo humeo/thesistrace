@@ -4954,6 +4954,14 @@ def _write_refresh_replay(
         if isinstance(price, dict)
     ]
     snapshot = {
+        "benchmark_index_daily": [
+            {
+                "ts_code": "399300.SZ",
+                "trade_date": session.replace("-", ""),
+                "open": str(Decimal("3000") + Decimal(index)),
+            }
+            for index, session in enumerate(("2010-01-04", *calendar), start=1)
+        ],
         "calendar_sse": [
             {
                 "exchange": "SSE",
@@ -6203,6 +6211,7 @@ def _run_data_operator(
         **os.environ,
         "THESISTRACE_DATABASE_URL": settings.database_url,
         "THESISTRACE_DATA_MOUNT": os.fspath(settings.data_mount),
+        "THESISTRACE_BENCHMARK_MOUNT": os.fspath(settings.benchmark_mount),
     }
     completed = subprocess.run(
         [sys.executable, "-m", "thesistrace.entrypoints.data_operator", *arguments],

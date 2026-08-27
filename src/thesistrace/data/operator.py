@@ -11,6 +11,12 @@ from pathlib import Path
 from threading import Event, Thread
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.benchmark import (
+    BenchmarkLevelSource,
+    BenchmarkSnapshotError,
+    BenchmarkSnapshotStore,
+    BenchmarkSnapshotUpdater,
+)
 from thesistrace.data.canonical_mapping import liquidity_universes
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
 from thesistrace.data.head_store import DatasetHeadConflict, DatasetHeadPointer
@@ -67,7 +73,7 @@ class _BootstrapHeartbeat:
 
 
 class DataOperator:
-    """Deployment-private mutation boundary for the mounted Canonical Data Store."""
+    """Private publisher for Canonical Data and its required Benchmark Snapshot."""
 
     def __init__(
         self,
@@ -75,6 +81,8 @@ class DataOperator:
         mount_root: Path | str,
         source: BootstrapDataSource,
         *,
+        benchmark_mount_root: Path | str,
+        benchmark_source: BenchmarkLevelSource,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         lease_seconds: float = _BOOTSTRAP_LEASE_SECONDS,
         heartbeat_seconds: float = _BOOTSTRAP_HEARTBEAT_SECONDS,
@@ -87,6 +95,11 @@ class DataOperator:
         self._clock = clock
         self._lifecycle = DatasetLifecycle(database, mount_root)
         self._generations = MountedGenerationStore(mount_root)
+        self._benchmark = BenchmarkSnapshotUpdater(
+            BenchmarkSnapshotStore(benchmark_mount_root),
+            benchmark_source,
+            clock=self._operator_time,
+        )
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
         self._progress = progress or (lambda _event: None)
@@ -207,6 +220,23 @@ class DataOperator:
                     }
                 )
                 heartbeat.assert_owned()
+                self._progress({"phase": "benchmark", "status": "started"})
+                admission = self._generations.open_admission(generation.manifest_sha256)
+                benchmark_update = self._benchmark.update(
+                    admission.research_calendar,
+                )
+                self._progress(
+                    {
+                        "phase": "benchmark",
+                        "status": "completed",
+                        "published": benchmark_update.published,
+                        "coverage_end_session": (
+                            benchmark_update.snapshot.coverage_end_session
+                        ),
+                        "snapshot_sha256": benchmark_update.snapshot.sha256,
+                    }
+                )
+                heartbeat.assert_owned()
                 candidate_manifest = generation.manifest_sha256
                 self._lifecycle.protect_candidate(
                     operation_id=operation_id,
@@ -252,6 +282,9 @@ class DataOperator:
             code = f"SOURCE_{error.category.upper()}"
             self._fail(key, owner_token, code)
             raise DataOperatorError(code) from error
+        except BenchmarkSnapshotError as error:
+            self._fail(key, owner_token, error.code)
+            raise DataOperatorError(error.code) from error
         except (GenerationStoreError, ValueError) as error:
             self._fail(key, owner_token, "INVALID_CANONICAL_DATA")
             raise DataOperatorError("INVALID_CANONICAL_DATA") from error

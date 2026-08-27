@@ -15,6 +15,7 @@ from thesistrace.adapters.tushare_provider import (
     normalize_instruments,
     normalize_tushare_increment,
     normalize_tushare_snapshot,
+    tushare_source_error_category,
 )
 from thesistrace.data.canonical_mapping import (
     SOURCE_CORRECTABLE_PRICE_FIELDS,
@@ -149,7 +150,7 @@ class TushareDataSource:
                 lineage = _compact_source_lineage(lineage)
         except TushareSourceError as error:
             raise DataSourceError(
-                _error_category(error.reason_code),
+                tushare_source_error_category(error.reason_code),
                 detail_code=error.reason_code,
             ) from error
         except (KeyError, IndexError, TypeError, ValueError) as error:
@@ -195,7 +196,7 @@ class TushareDataSource:
             lineage, canonical = normalize_tushare_snapshot(snapshot)
         except TushareSourceError as error:
             raise DataSourceError(
-                _error_category(error.reason_code),
+                tushare_source_error_category(error.reason_code),
                 detail_code=error.reason_code,
             ) from error
         except (KeyError, IndexError, TypeError, ValueError) as error:
@@ -284,7 +285,7 @@ def _stream_bootstrap_archive(
                     )
                 except TushareSourceError as error:
                     raise DataSourceError(
-                        _error_category(error.reason_code),
+                        tushare_source_error_category(error.reason_code),
                         detail_code=error.reason_code,
                     ) from error
                 except (KeyError, IndexError, TypeError, ValueError) as error:
@@ -343,14 +344,6 @@ def _stream_bootstrap_archive(
         covered_session_range=(iso_sessions[0], iso_sessions[-1]),
         partitions=partitions,
     )
-
-
-def _error_category(reason_code: str) -> str:
-    if reason_code in {"TOKEN_MISSING", "MISSING_PERMISSION"}:
-        return "authorization"
-    if reason_code in {"UPSTREAM_UNAVAILABLE", "UPSTREAM_RATE_LIMITED"}:
-        return "unavailable"
-    return "invalid_source_data"
 
 
 def _materialize_increment(

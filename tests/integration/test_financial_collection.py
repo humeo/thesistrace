@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from benchmark_support import FixtureBenchmarkSource, benchmark_mount_for_data_mount
 from psycopg.errors import CheckViolation
 
 from thesistrace._postgres import PostgresDatabase
@@ -1867,6 +1868,7 @@ def test_market_refresh_completes_while_financial_collection_is_blocked(
         market_refresh = DataRefreshService(
             database,
             tmp_path,
+            benchmark_mount_root=benchmark_mount_for_data_mount(tmp_path),
             clock=lambda: COLLECTED_AT + timedelta(days=1, hours=12),
             heartbeat_seconds=1,
         )
@@ -1885,7 +1887,10 @@ def test_market_refresh_completes_while_financial_collection_is_blocked(
                 observation_through_session="2026-08-13",
             )
             assert started.wait(timeout=20)
-            assert market_refresh.process_next(MarketSource(market_canonical)) is True
+            assert market_refresh.process_next(
+                MarketSource(market_canonical),
+                benchmark_source=FixtureBenchmarkSource(),
+            ) is True
             market_outcome = market_refresh.inspect("market-during-financial")
             assert market_outcome.status == "succeeded"
             release.set()

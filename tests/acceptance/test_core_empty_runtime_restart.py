@@ -85,6 +85,7 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
     environment = {
         **os.environ,
         "THESISTRACE_DATA_MOUNT": str(tmp_path),
+        "THESISTRACE_BENCHMARK_MOUNT": str(settings.benchmark_mount),
         "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
             settings.batch_attempt_control_directory
         ),

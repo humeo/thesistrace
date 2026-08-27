@@ -1221,6 +1221,7 @@ def test_tushare_provider_preflight_checks_every_contract_without_exposing_token
         ("adjustment", "adj_factor"),
         ("suspension", "suspend_d"),
         ("price_limit", "stk_limit"),
+        ("benchmark_csi300_price_index_open", "index_daily"),
     }
     assert all(item["status"] == "available" for item in result["permissions"])
     assert "deployment-secret-token" not in repr(result)

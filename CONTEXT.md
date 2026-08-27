@@ -283,8 +283,9 @@ _Avoid_: Pause, Retry, Delete
 
 **Tracking Origin**:
 The successful seed ResearchRun and Terminal Strategy State from which a
-DailyTrack continues.
-_Avoid_: Activation date, rolling ResearchRun, Tracking Head
+DailyTrack continues, including the first investable Entry Open and Initial
+Cash that remain the Strategy Comparison baseline.
+_Avoid_: Activation date, rolling ResearchRun, Tracking Head, rebased comparison
 
 **Activation Checkpoint**:
 The immutable root state of a DailyTrack, derived from its Tracking Origin.
@@ -394,7 +395,7 @@ _Avoid_: Forced sale, suspension carry, missing-data fallback
 
 **Terminal Delisting Return**:
 The synthetic `-100%` return used when explicit terminal delisting makes a valid
-Benchmark or Forward Return Label exit unavailable.
+Forward Return Label exit unavailable.
 _Avoid_: Observed zero-price trade, missing-entry return
 
 **Board-Lot Rounding**:
@@ -490,7 +491,8 @@ The 252-Research-Session compound annual growth rate of a NAV series.
 _Avoid_: Cumulative Return, Annualized Volatility
 
 **Net Excess NAV**:
-Net NAV growth divided by Strategy Benchmark NAV growth from a common start.
+Net NAV growth divided by one plus Benchmark Relative Return from the same
+investable baseline.
 _Avoid_: Return subtraction, Gross excess
 
 **Annualized Excess Return**:
@@ -530,9 +532,28 @@ forced liquidation.
 _Avoid_: Final Rebalance, hypothetical exit
 
 **Strategy Benchmark**:
-The equal-weight return series of the ResearchRun's selected Liquidity Universe
-over the same next-open intervals as the Strategy.
-_Avoid_: External index, implicit benchmark
+The fixed CSI 300 Price Index used to compare Strategy performance over the same
+Open-to-Open interval beginning at the first investable Entry Open.
+_Avoid_: Selected-universe benchmark, configurable benchmark, total-return index
+
+**Benchmark Level**:
+The official CSI 300 Price Index Open point for one Research Session.
+_Avoid_: Benchmark NAV, benchmark return, constituent average
+
+**Benchmark Snapshot**:
+The one current atomically published, append-only sequence of Benchmark Levels
+stored outside Canonical Data and Product State.
+_Avoid_: Dataset Family, Data Generation, per-ResearchRun copy, snapshot history
+
+**Benchmark Relative Return**:
+The Benchmark Level divided by its level at the first investable Entry Open,
+minus one.
+_Avoid_: Benchmark NAV, daily pct_chg, return since 2010
+
+**Strategy Comparison**:
+The read model that aligns immutable Strategy facts with the current Benchmark
+Snapshot over one Entry-to-Terminal Open interval.
+_Avoid_: Strategy Result, benchmark execution state, browser calculation
 
 ### Dataset and Market Data
 
@@ -582,6 +603,11 @@ The Dataset Coverage of end-of-day market families through one completed
 Research Session.
 _Avoid_: Financial Coverage, Research Period
 
+**Benchmark Coverage**:
+The independent Benchmark Snapshot extent from 2010-01-04 through a terminal
+Research Session. A new Market Head cannot lead it.
+_Avoid_: Dataset Coverage, Data Generation, lagging benchmark, carried level
+
 **Financial Coverage**:
 The quality-bearing Dataset Coverage of Point-in-Time Financial Data, including
 its discovery baseline, attempted-through and complete-through coordinates,
@@ -605,8 +631,9 @@ Session-Aligned Financial Field at Financial Coverage Start.
 _Avoid_: Earlier Financial Coverage, invented value
 
 **Data Overview**:
-The read-only product view of current Dataset Coverage, freshness, Financial
-Research Readiness, and aggregate pending or discovery-gap counts.
+The read-only product view of current Dataset Coverage, Benchmark Snapshot
+readiness and identity, freshness, Financial Research Readiness, and aggregate
+pending or discovery-gap counts.
 _Avoid_: Data Refresh control, raw table browser, instrument failure dump
 
 **Financial Research Readiness**:
@@ -807,7 +834,7 @@ _Avoid_: Universe definition, permanent member list
 
 **Research Eligibility**:
 The downstream decision about which Universe Membership instruments may enter a
-signal session's Alpha, Factor, Benchmark, and new-buy calculations.
+signal session's Alpha, Factor, and new-buy calculations.
 _Avoid_: Liquidity ranking, permanent exclusion
 
 **Industry Classification**:

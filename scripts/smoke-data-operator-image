@@ -7,12 +7,16 @@ test_file="$repo_root/deploy/core/compose.test-run.yaml"
 replay="$repo_root/tests/fixtures/tushare-bootstrap-replay-v2.json"
 project_name="thesistrace-test-operator-image-$$"
 bucket_name="$project_name"
-data_mount=$(mktemp -d "${TMPDIR:-/tmp}/thesistrace-data-operator-smoke.XXXXXX")
+state_mount=$(mktemp -d "${TMPDIR:-/tmp}/thesistrace-data-operator-smoke.XXXXXX")
+data_mount="$state_mount/canonical-data"
+benchmark_mount="$state_mount/benchmark-data"
+mkdir -p "$data_mount" "$benchmark_mount"
 
 compose() {
   COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
     THESISTRACE_TEST_BUCKET="$bucket_name" \
     THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
+    THESISTRACE_TEST_BENCHMARK_MOUNT="$benchmark_mount" \
     docker compose \
     --project-name "$project_name" \
     --file "$base_file" \
@@ -24,7 +28,7 @@ cleanup() {
   status=$?
   trap - EXIT INT TERM
   compose down --volumes --remove-orphans
-  rm -rf -- "$data_mount"
+  rm -rf -- "$state_mount"
   exit "$status"
 }
 

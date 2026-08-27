@@ -13,8 +13,10 @@ services:
       THESISTRACE_S3_ACCESS_KEY_ID: observability-access-canary
       THESISTRACE_S3_SECRET_ACCESS_KEY: observability-secret-canary
       THESISTRACE_DATA_MOUNT: /smoke-data/canonical-data
+      THESISTRACE_BENCHMARK_MOUNT: /smoke-data/benchmark-data
     volumes:
-      - ${THESISTRACE_TEST_RUN_ROOT}:/smoke-data
+      - ${THESISTRACE_TEST_DATA_MOUNT}:/smoke-data/canonical-data
+      - ${THESISTRACE_TEST_BENCHMARK_MOUNT}:/smoke-data/benchmark-data
       - ${THESISTRACE_TEST_EVIDENCE_DIR}:/smoke-evidence
       - ../../tests:/smoke:ro
       - ../../scripts:/qualification:ro
@@ -25,8 +27,10 @@ services:
       THESISTRACE_S3_ACCESS_KEY_ID: observability-access-canary
       THESISTRACE_S3_SECRET_ACCESS_KEY: observability-secret-canary
       THESISTRACE_DATA_MOUNT: /smoke-data/canonical-data
+      THESISTRACE_BENCHMARK_MOUNT: /smoke-data/benchmark-data
     volumes:
-      - ${THESISTRACE_TEST_RUN_ROOT}:/smoke-data
+      - ${THESISTRACE_TEST_DATA_MOUNT}:/smoke-data/canonical-data
+      - ${THESISTRACE_TEST_BENCHMARK_MOUNT}:/smoke-data/benchmark-data
       - ../../tests:/smoke:ro
   research-worker:
     environment:
@@ -34,7 +38,7 @@ services:
       THESISTRACE_S3_SECRET_ACCESS_KEY: observability-secret-canary
       THESISTRACE_DATA_MOUNT: /smoke-data/canonical-data
     volumes:
-      - ${THESISTRACE_TEST_RUN_ROOT}:/smoke-data:ro
+      - ${THESISTRACE_TEST_DATA_MOUNT}:/smoke-data/canonical-data:ro
       - ${THESISTRACE_TEST_EVIDENCE_DIR}:/qualification-evidence
       - ../../scripts:/qualification:ro
       - ../../benchmarks:/benchmarks:ro
@@ -44,7 +48,7 @@ services:
       THESISTRACE_S3_SECRET_ACCESS_KEY: observability-secret-canary
       THESISTRACE_DATA_MOUNT: /smoke-data/canonical-data
     volumes:
-      - ${THESISTRACE_TEST_RUN_ROOT}:/smoke-data:ro
+      - ${THESISTRACE_TEST_DATA_MOUNT}:/smoke-data/canonical-data:ro
       - ${THESISTRACE_TEST_EVIDENCE_DIR}:/qualification-evidence
       - ../../scripts:/qualification:ro
       - ../../benchmarks:/benchmarks:ro
@@ -54,4 +58,4 @@ services:
       THESISTRACE_S3_SECRET_ACCESS_KEY: observability-secret-canary
       THESISTRACE_DATA_MOUNT: /smoke-data/canonical-data
     volumes:
-      - ${THESISTRACE_TEST_RUN_ROOT}:/smoke-data
+      - ${THESISTRACE_TEST_DATA_MOUNT}:/smoke-data/canonical-data

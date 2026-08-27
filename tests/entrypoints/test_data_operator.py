@@ -145,6 +145,10 @@ def test_daily_financial_operator_wires_live_discovery_and_current_head_service(
     financial_source = object()
     monkeypatch.setenv("THESISTRACE_DATABASE_URL", "postgresql://unused")
     monkeypatch.setenv("THESISTRACE_DATA_MOUNT", str(tmp_path))
+    monkeypatch.setenv(
+        "THESISTRACE_BENCHMARK_MOUNT",
+        str(tmp_path.parent / f"{tmp_path.name}-benchmark-data"),
+    )
     monkeypatch.setattr(data_operator, "PostgresDatabase", FakeDatabase)
     monkeypatch.setattr(data_operator, "verify_core_schema", lambda _database: None)
     monkeypatch.setattr(
@@ -283,6 +287,10 @@ def test_bootstrap_cli_passes_the_explicit_start_date_to_the_operator(
 
     monkeypatch.setenv("THESISTRACE_DATABASE_URL", "postgresql://unused")
     monkeypatch.setenv("THESISTRACE_DATA_MOUNT", str(tmp_path))
+    monkeypatch.setenv(
+        "THESISTRACE_BENCHMARK_MOUNT",
+        str(tmp_path.parent / f"{tmp_path.name}-benchmark-data"),
+    )
     monkeypatch.setattr(data_operator, "PostgresDatabase", FakeDatabase)
     monkeypatch.setattr(data_operator, "verify_core_schema", lambda _database: None)
     monkeypatch.setattr(data_operator, "ReplayTushareProvider", lambda _path: object())

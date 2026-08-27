@@ -4,6 +4,29 @@
   "request_start": "2010-01-04",
   "request_end": "2026-08-05",
   "snapshot": {
+    "benchmark_index_daily": [
+      {"ts_code": "399300.SZ", "trade_date": "20100104", "open": "3592.47"},
+      {"ts_code": "399300.SZ", "trade_date": "20260709", "open": "4401.09"},
+      {"ts_code": "399300.SZ", "trade_date": "20260710", "open": "4402.10"},
+      {"ts_code": "399300.SZ", "trade_date": "20260713", "open": "4403.13"},
+      {"ts_code": "399300.SZ", "trade_date": "20260714", "open": "4404.14"},
+      {"ts_code": "399300.SZ", "trade_date": "20260715", "open": "4405.15"},
+      {"ts_code": "399300.SZ", "trade_date": "20260716", "open": "4406.16"},
+      {"ts_code": "399300.SZ", "trade_date": "20260717", "open": "4407.17"},
+      {"ts_code": "399300.SZ", "trade_date": "20260720", "open": "4408.20"},
+      {"ts_code": "399300.SZ", "trade_date": "20260721", "open": "4409.21"},
+      {"ts_code": "399300.SZ", "trade_date": "20260722", "open": "4410.22"},
+      {"ts_code": "399300.SZ", "trade_date": "20260723", "open": "4411.23"},
+      {"ts_code": "399300.SZ", "trade_date": "20260724", "open": "4412.24"},
+      {"ts_code": "399300.SZ", "trade_date": "20260727", "open": "4413.27"},
+      {"ts_code": "399300.SZ", "trade_date": "20260728", "open": "4414.28"},
+      {"ts_code": "399300.SZ", "trade_date": "20260729", "open": "4415.29"},
+      {"ts_code": "399300.SZ", "trade_date": "20260730", "open": "4416.30"},
+      {"ts_code": "399300.SZ", "trade_date": "20260731", "open": "4417.31"},
+      {"ts_code": "399300.SZ", "trade_date": "20260803", "open": "4418.03"},
+      {"ts_code": "399300.SZ", "trade_date": "20260804", "open": "4419.04"},
+      {"ts_code": "399300.SZ", "trade_date": "20260805", "open": "4420.05"}
+    ],
     "calendar_sse": [
       {
         "exchange": "SSE",

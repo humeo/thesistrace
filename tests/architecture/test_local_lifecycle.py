@@ -21,6 +21,7 @@ def _fake_development_docker(tmp_path: Path) -> tuple[Path, Path, dict[str, str]
     volume_root.mkdir()
     for volume in (
         "thesistrace-dev_batch-attempt-control",
+        "thesistrace-dev_benchmark-data",
         "thesistrace-dev_canonical-data",
         "thesistrace-dev_postgres-data",
         "thesistrace-dev_rustfs-data",
@@ -55,6 +56,7 @@ if "down" in arguments and "--volumes" in arguments:
 if "up" in arguments:
     for volume in (
         "thesistrace-dev_batch-attempt-control",
+        "thesistrace-dev_benchmark-data",
         "thesistrace-dev_canonical-data",
         "thesistrace-dev_postgres-data",
         "thesistrace-dev_rustfs-data",
@@ -354,6 +356,12 @@ def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) 
     command_log, volume_root, environment = _fake_development_docker(tmp_path)
     canonical_head = volume_root / "thesistrace-dev_canonical-data" / "HEAD.json"
     canonical_head.write_text("frozen-dataset-head")
+    benchmark_snapshot = (
+        volume_root
+        / "thesistrace-dev_benchmark-data"
+        / "csi300-price-index-open.json"
+    )
+    benchmark_snapshot.write_text("frozen-benchmark-snapshot")
 
     completed = subprocess.run(
         [ROOT / "scripts" / "dev-runtime", "reset"],
@@ -366,6 +374,7 @@ def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) 
 
     assert completed.returncode == 0, completed.stderr
     assert canonical_head.read_text() == "frozen-dataset-head"
+    assert benchmark_snapshot.read_text() == "frozen-benchmark-snapshot"
     assert (
         volume_root / "thesistrace-dev_canonical-data" / "preserved-marker"
     ).exists()
@@ -380,6 +389,7 @@ def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) 
     assert "volume rm thesistrace-dev_rustfs-data" in commands
     assert "volume rm thesistrace-dev_batch-attempt-control" in commands
     assert "volume rm thesistrace-dev_canonical-data" not in commands
+    assert "volume rm thesistrace-dev_benchmark-data" not in commands
     assert "up --detach --build --wait --wait-timeout 300" in commands
 
 
@@ -404,6 +414,7 @@ def test_development_erase_removes_every_development_volume(tmp_path: Path) -> N
     assert "volume rm thesistrace-dev_rustfs-data" in commands
     assert "volume rm thesistrace-dev_batch-attempt-control" in commands
     assert "volume rm thesistrace-dev_canonical-data" in commands
+    assert "volume rm thesistrace-dev_benchmark-data" in commands
     assert "up --detach" not in commands
 
 
@@ -848,6 +859,7 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
     assert "postgres-data:" in base
     assert "rustfs-data:" in base
     assert "batch-attempt-control:" in base
+    assert "benchmark-data:" in base
     assert "name:" not in base.split("volumes:", maxsplit=1)[1]
 
 
@@ -902,6 +914,10 @@ def test_test_cleanup_accepts_only_an_identity_with_matching_run_metadata(
     (run_root / "run.txt").write_text(f"run_id={run_id}\nproject_name={project_name}\n")
     (run_root / "canonical-data").mkdir()
     (run_root / "canonical-data" / "HEAD.json").write_text("test data")
+    (run_root / "benchmark-data").mkdir()
+    (run_root / "benchmark-data" / "csi300-price-index-open.json").write_text(
+        "test benchmark"
+    )
     marker = tmp_path / "docker-invoked"
     docker = tmp_path / "docker"
     docker.write_text(f"#!/bin/sh\nprintf invoked > '{marker}'\n")
@@ -925,6 +941,7 @@ def test_test_cleanup_accepts_only_an_identity_with_matching_run_metadata(
     assert completed.returncode == 0, completed.stderr
     assert marker.exists()
     assert not (run_root / "canonical-data").exists()
+    assert not (run_root / "benchmark-data").exists()
 
 
 def test_integration_runtime_validates_starts_host_tests_and_cleans(
@@ -944,6 +961,7 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     assert completed.returncode == 0, completed.stderr
     run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
     assert not (tmp_path / "runs" / run_id / "canonical-data").exists()
+    assert not (tmp_path / "runs" / run_id / "benchmark-data").exists()
     metadata = (tmp_path / "runs" / run_id / "run.txt").read_text().splitlines()
     assert len([line for line in metadata if line.startswith("git_revision=")]) == 1
     assert len(

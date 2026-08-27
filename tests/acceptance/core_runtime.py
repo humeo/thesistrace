@@ -13,6 +13,7 @@ def isolated_core_settings(data_mount: Path) -> CoreSettings:
     return replace(
         CoreSettings.from_environment(),
         data_mount=data_mount,
+        benchmark_mount=data_mount.parent / f"{data_mount.name}-benchmark-data",
         batch_attempt_control_directory=(
             data_mount.parent
             / f"{data_mount.name}-batch-attempt-control"

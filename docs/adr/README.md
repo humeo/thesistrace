@@ -14,7 +14,6 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0016 — Apply conservative availability to date-only financial disclosures](0016-apply-conservative-availability-to-date-only-financial-disclosures.md)
 - [ADR-0018 — Preserve source financial versions without inventing history](0018-preserve-source-financial-versions-without-inventing-history.md)
 - [ADR-0019 — Use one minimal Instrument Identity across asset families](0019-use-one-minimal-instrument-identity-across-asset-families.md)
-- [ADR-0022 — Use the selected Liquidity Universe as the Strategy Benchmark](0022-use-the-selected-liquidity-universe-as-the-strategy-benchmark.md)
 - [ADR-0023 — Separate Raw Market Prices from causal adjusted Research Prices](0023-separate-raw-market-prices-from-causal-cumulative-adjusted-research-prices.md)
 - [ADR-0024 — Run research without Qlib](0024-run-research-without-qlib.md)
 - [ADR-0025 — Value portfolios with adjusted returns without company-action events](0025-value-portfolios-with-adjusted-returns-without-company-action-events.md)
@@ -34,7 +33,6 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0045 — Cancel blocked Open orders without retry or substitution](0045-cancel-blocked-open-orders-without-retry-or-substitution.md)
 - [ADR-0046 — Reassess existing-position eligibility only at scheduled Rebalances](0046-reassess-existing-position-eligibility-only-at-scheduled-rebalances.md)
 - [ADR-0052 — Carry the last Adjusted Research Price only for suspended-holding valuation](0052-carry-the-last-adjusted-price-only-for-suspended-holding-valuation.md)
-- [ADR-0053 — Keep suspended members in the equal-weight Strategy Benchmark](0053-keep-suspended-members-in-the-equal-weight-strategy-benchmark.md)
 - [ADR-0054 — Report Gross and Net NAV from one fill path](0054-report-gross-and-net-nav-from-one-fill-path.md)
 - [ADR-0055 — Record Strategy NAV after each Open execution cycle](0055-record-strategy-nav-after-each-open-execution-cycle.md)
 - [ADR-0070 — Use dual units for synthetic total-return accounting](0070-use-dual-units-for-synthetic-total-return-accounting.md)
@@ -43,6 +41,7 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0089 — Use the daily first-traded price as the Open coordinate](0089-use-the-daily-first-traded-price-as-the-open-coordinate.md)
 - [ADR-0100 — Resolve missing Opens from suspension and delisting evidence](0100-resolve-missing-opens-from-suspension-and-delisting-evidence.md)
 - [ADR-0212 — Filter Research membership by positive-turnover observations](0212-filter-research-membership-by-positive-turnover-observations.md)
+- [ADR-0231 — Use an independent append-only CSI 300 Benchmark Snapshot](0231-use-an-independent-append-only-csi-300-benchmark-snapshot.md)
 
 ## Market universe and calendar
 

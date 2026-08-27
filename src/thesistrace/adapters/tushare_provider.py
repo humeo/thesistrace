@@ -15,6 +15,11 @@ from typing import Protocol
 
 import httpx
 
+from thesistrace.benchmark import (
+    BENCHMARK_SOURCE_API_NAME,
+    BENCHMARK_SOURCE_FIELDS,
+    BENCHMARK_TS_CODE,
+)
 from thesistrace.data.canonical_mapping import (
     CanonicalMappingError,
     adjusted_price_string,
@@ -26,6 +31,15 @@ from thesistrace.data.canonical_mapping import (
 )
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.source import RawSourceError, RawSourceResponse
+
+
+def tushare_source_error_category(reason_code: str) -> str:
+    if reason_code in {"TOKEN_MISSING", "MISSING_PERMISSION"}:
+        return "authorization"
+    if reason_code in {"UPSTREAM_UNAVAILABLE", "UPSTREAM_RATE_LIMITED"}:
+        return "unavailable"
+    return "invalid_source_data"
+
 
 SOURCE_CONTRACT_VERSION = "tushare-market-v1"
 _BOOTSTRAP_CHECKPOINT_FORMAT = "thesistrace-tushare-bootstrap-checkpoint"
@@ -296,6 +310,16 @@ def permission_probes(reference_date: date | None = None) -> tuple[PermissionPro
             "stk_limit",
             {"trade_date": current_text},
             ("trade_date", "ts_code", "pre_close", "up_limit", "down_limit"),
+        ),
+        PermissionProbe(
+            "benchmark_csi300_price_index_open",
+            BENCHMARK_SOURCE_API_NAME,
+            {
+                "ts_code": BENCHMARK_TS_CODE,
+                "start_date": current_text,
+                "end_date": current_text,
+            },
+            BENCHMARK_SOURCE_FIELDS,
         ),
     )
 

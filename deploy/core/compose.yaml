@@ -12,6 +12,7 @@ x-core-environment: &core-environment
   THESISTRACE_S3_BUCKET: thesistrace-local
   THESISTRACE_S3_REGION: us-east-1
   THESISTRACE_DATA_MOUNT: /var/lib/thesistrace/canonical-data
+  THESISTRACE_BENCHMARK_MOUNT: /var/lib/thesistrace/benchmark-data
   THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY: /var/lib/thesistrace/.batch-attempts
   THESISTRACE_RESEARCH_WORKER_EXECUTION_MEMORY_BYTES: ${THESISTRACE_RESEARCH_WORKER_EXECUTION_MEMORY_BYTES:-1610612736}
   THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES: ${THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES:-1610612736}
@@ -67,6 +68,9 @@ services:
   api:
     <<: *backend
     logging: *bounded-logging
+    volumes:
+      - canonical-data:/var/lib/thesistrace/canonical-data
+      - benchmark-data:/var/lib/thesistrace/benchmark-data
     depends_on:
       initialize:
         condition: service_completed_successfully
@@ -191,6 +195,7 @@ services:
 
 volumes:
   batch-attempt-control:
+  benchmark-data:
   canonical-data:
   postgres-data:
   rustfs-data:
