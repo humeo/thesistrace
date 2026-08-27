@@ -22,6 +22,12 @@ from pydantic import ValidationError
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.alpha_language import CompiledAlpha, FormulaCompilationError, alpha_language
+from thesistrace.benchmark import (
+    AnnualizedExcessCalculator,
+    StrategyComparisonFacts,
+    StrategyComparisonService,
+    strategy_comparison_summary,
+)
 from thesistrace.daily_track import (
     DailyTrackActivationLimitReached,
     DailyTrackAlreadyExists,
@@ -112,7 +118,6 @@ from thesistrace.research_run.models import (
     StrategyBacktestAdmissionCommand,
     StrategyBacktestResearchRunKeyMetrics,
     StrategyBacktestResearchRunResult,
-    StrategyComparison,
     StrategyObservationsResultSection,
     StrategyObservationsResultSectionInput,
     StrategySummaryResultSection,
@@ -265,8 +270,8 @@ FIXED_COSTS = {
 }
 SEMANTIC_VERSIONS = {
     "factor": "factor-v1",
-    "strategy": "strategy-v1",
-    "kernel": "kernel-v4",
+    "strategy": "strategy-v2",
+    "kernel": "kernel-v5",
 }
 
 
@@ -343,6 +348,8 @@ class ResearchRunService:
         execution: SupervisedResearchExecutor | None = None,
         execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
         lifecycle_event: ExecutionEvent | None = None,
+        annualized_excess_calculator: AnnualizedExcessCalculator | None = None,
+        strategy_comparison: StrategyComparisonService | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
@@ -360,6 +367,8 @@ class ResearchRunService:
         self._preserve_dependent_run_history = preserve_dependent_run_history
         self._execution = execution
         self._execution_memory_bytes = execution_memory_bytes
+        self._annualized_excess_calculator = annualized_excess_calculator
+        self._strategy_comparison = strategy_comparison
         self._lifecycle_event = non_blocking_operational_event_sink(
             lifecycle_event or (lambda _event: None),
             component="core_api",
@@ -677,7 +686,11 @@ class ResearchRunService:
             final_chunk,
         )
         provenance = _result_provenance(claim)
-        key_metrics = _result_key_metrics(final_values, "strategy_backtest")
+        key_metrics = _result_key_metrics(
+            final_values,
+            "strategy_backtest",
+            annualized_excess_return=self._strategy_annualized_excess(final_values),
+        )
         partitions: list[tuple[StagedPayload, int, str, str]] = []
         observation_offset = 0
         for plan_chunk in claim.immutable_input.execution_plan.chunks:
@@ -1985,6 +1998,19 @@ class ResearchRunService:
                 stored_result,
                 dict(provenance),
                 research_kind=summary.research_kind,
+                comparison=(
+                    self._comparison_for_result(stored_result)
+                    if summary.research_kind == "strategy_backtest"
+                    else None
+                ),
+                annualized_excess_return=(
+                    summary.key_metrics.annualized_excess_return
+                    if isinstance(
+                        summary.key_metrics,
+                        StrategyBacktestResearchRunKeyMetrics,
+                    )
+                    else None
+                ),
             )
         except Exception as error:
             raise ResearchRunResultUnavailable from error
@@ -2133,6 +2159,15 @@ class ResearchRunService:
                 after=after,
                 limit=limit,
             )
+            comparison_summary = None
+            if isinstance(query, StrategySummaryResultSectionInput):
+                stored_result = read_result_bundle(
+                    self._publication.read(published_ref),
+                    research_kind=immutable_input.research_kind,
+                )
+                comparison_summary = strategy_comparison_summary(
+                    self._comparison_for_result(stored_result)
+                )
             result = _result_section_response(
                 query,
                 section_read=section_read,
@@ -2140,6 +2175,7 @@ class ResearchRunService:
                 authoring_input=_authorable_input(row),
                 manifest_sha256=manifest_sha256,
                 cursor_secret=cursor_secret,
+                comparison=comparison_summary,
             )
         except PublicationUnavailableError:
             raise
@@ -2228,17 +2264,17 @@ class ResearchRunService:
             ),
         )
         stored_result = read_result_bundle(bundle, research_kind=immutable_input.research_kind)
-        _public_result(
-            stored_result,
-            selected_provenance,
-            research_kind=immutable_input.research_kind,
-        )
         if not isinstance(stored_result, Mapping):
             raise ResearchRunTrackingUnavailable
         initial_strategy_state = stored_result.get("terminal_strategy_state")
+        strategy_summary = stored_result.get("strategy_summary")
         calculation_contracts = selected_provenance.get("calculation_contracts")
-        if not isinstance(initial_strategy_state, Mapping) or not isinstance(
-            calculation_contracts, Mapping
+        if (
+            not isinstance(initial_strategy_state, Mapping)
+            or not isinstance(strategy_summary, Mapping)
+            or not isinstance(calculation_contracts, Mapping)
+            or not isinstance(strategy_summary.get("entry_session"), str)
+            or not isinstance(strategy_summary.get("initial_cash_cny"), str)
         ):
             raise ResearchRunTrackingUnavailable
         return TrackingOrigin(
@@ -2255,8 +2291,36 @@ class ResearchRunService:
                     canonical_json_bytes(stored_result)
                 ).hexdigest(),
             },
+            strategy_entry_session=str(strategy_summary["entry_session"]),
+            strategy_initial_cash_cny=str(strategy_summary["initial_cash_cny"]),
             initial_strategy_state=dict(initial_strategy_state),
             calculation_contracts=dict(calculation_contracts),
+        )
+
+    def _strategy_annualized_excess(
+        self,
+        final_values: Mapping[str, object],
+    ) -> float | None:
+        if self._annualized_excess_calculator is None:
+            raise RuntimeError("Annualized excess calculator is not configured")
+        return self._annualized_excess_calculator.annualized_excess_return(
+            _strategy_comparison_facts(final_values)
+        )
+
+    def _comparison_for_result(
+        self,
+        stored_result: Mapping[str, object],
+    ) -> dict[str, object]:
+        if self._strategy_comparison is None:
+            raise RuntimeError("Strategy comparison service is not configured")
+        observations = stored_result.get("strategy_daily_observations")
+        if not isinstance(observations, list) or any(
+            not isinstance(value, Mapping) for value in observations
+        ):
+            raise ResearchResultError("Strategy observations are invalid")
+        return self._strategy_comparison.comparison(
+            _strategy_comparison_facts(stored_result),
+            observations,
         )
 
     def _require_execution_dependencies(self) -> None:
@@ -2763,6 +2827,11 @@ class ResearchRunService:
         key_metrics = _result_key_metrics(
             final_values,
             claim.immutable_input.research_kind,
+            annualized_excess_return=(
+                self._strategy_annualized_excess(final_values)
+                if claim.immutable_input.research_kind == "strategy_backtest"
+                else None
+            ),
         )
         provenance = _result_provenance(claim)
         with self._database.transaction() as transaction:
@@ -3684,7 +3753,7 @@ def _result_provenance(claim: ResearchRunExecutionClaim) -> dict[str, object]:
             }
         )
     return {
-        "schema_version": "research-result-v1",
+        "schema_version": "research-result-v2",
         "research_run_id": claim.run_id,
         "research_kind": claim.immutable_input.research_kind,
         "immutable_input_sha256": hashlib.sha256(canonical_json_bytes(value)).hexdigest(),
@@ -3841,6 +3910,8 @@ def _summary(row: object) -> ResearchRunSummary:
 def _result_key_metrics(
     final_values: Mapping[str, object],
     research_kind: ResearchKind,
+    *,
+    annualized_excess_return: float | None = None,
 ) -> ResearchRunKeyMetrics:
     if research_kind == "factor_evaluation":
         factor_summary = final_values.get("factor_summary")
@@ -3874,7 +3945,7 @@ def _result_key_metrics(
         return StrategyBacktestResearchRunKeyMetrics.model_validate(
             {
                 "research_kind": research_kind,
-                "annualized_excess_return": metrics.get("annualized_excess_return"),
+                "annualized_excess_return": annualized_excess_return,
                 "sharpe": metrics.get("sharpe"),
                 "maximum_drawdown": maximum_drawdown.get("value"),
             }
@@ -3899,6 +3970,44 @@ def _factor_rank_ic_mean(
     if not isinstance(rank_ic, Mapping):
         raise ResearchResultError(f"Final Research {horizon_name}-session horizon has no Rank IC")
     return rank_ic.get("mean")
+
+
+def _strategy_comparison_facts(
+    values: Mapping[str, object],
+) -> StrategyComparisonFacts:
+    strategy_summary = values.get("strategy_summary")
+    terminal = values.get("terminal_strategy_state")
+    if not isinstance(strategy_summary, Mapping) or not isinstance(terminal, Mapping):
+        raise ResearchResultError("Strategy comparison facts are missing")
+    metric_state = terminal.get("metric_state")
+    if not isinstance(metric_state, Mapping):
+        raise ResearchResultError("Strategy comparison coordinate is missing")
+    entry_session_ordinal = metric_state.get("entry_session_ordinal")
+    session_count = metric_state.get("session_count")
+    if (
+        isinstance(entry_session_ordinal, bool)
+        or not isinstance(entry_session_ordinal, int)
+        or isinstance(session_count, bool)
+        or not isinstance(session_count, int)
+        or entry_session_ordinal < 1
+        or session_count < entry_session_ordinal
+    ):
+        raise ResearchResultError("Strategy comparison coordinate is invalid")
+    facts = {
+        "entry_session": strategy_summary.get("entry_session"),
+        "terminal_session": terminal.get("session"),
+        "initial_cash_cny": strategy_summary.get("initial_cash_cny"),
+        "terminal_net_nav": terminal.get("net_nav"),
+    }
+    if any(not isinstance(value, str) for value in facts.values()):
+        raise ResearchResultError("Strategy comparison facts are invalid")
+    return StrategyComparisonFacts(
+        entry_session=str(facts["entry_session"]),
+        terminal_session=str(facts["terminal_session"]),
+        session_interval_count=session_count - entry_session_ordinal,
+        initial_cash_cny=str(facts["initial_cash_cny"]),
+        terminal_net_nav=str(facts["terminal_net_nav"]),
+    )
 
 
 def _authorable_input(row: object) -> ResearchRunAuthorableInput:
@@ -4012,7 +4121,7 @@ def _checkpoint_binding(
             }
         )
     return {
-        "schema_version": "research-execution-checkpoint-v1",
+        "schema_version": "research-execution-checkpoint-v2",
         "research_kind": immutable_input.research_kind,
         "run_id": run_id,
         "creator_attempt_id": creator_attempt_id,
@@ -4074,6 +4183,7 @@ def _result_section_response(
     authoring_input: ResearchRunAuthorableInput,
     manifest_sha256: str,
     cursor_secret: bytes,
+    comparison: Mapping[str, object] | None,
 ) -> ResearchRunResultSectionResponse:
     run_id = query.run_id
     research_kind = authoring_input.research_kind
@@ -4132,20 +4242,15 @@ def _result_section_response(
             raise ResearchRunResultReadFailed("Strategy Summary section is invalid")
         summary = dict(section_read.value)
         metrics = summary.get("metrics")
-        benchmark = summary.get("benchmark")
-        if not isinstance(metrics, Mapping) or not isinstance(benchmark, Mapping):
+        if not isinstance(metrics, Mapping) or comparison is None:
             raise ResearchRunResultReadFailed("Strategy Result metrics are unavailable")
         return StrategySummaryResultSection.model_validate(
             {
                 "run_id": run_id,
+                "entry_session": summary["entry_session"],
                 "initial_cash_cny": summary["initial_cash_cny"],
                 "metrics": metrics,
-                "benchmark": benchmark,
-                "comparison": StrategyComparison(
-                    net_cumulative_return=metrics.get("net_cumulative_return"),
-                    benchmark_cumulative_return=metrics.get("benchmark_cumulative_return"),
-                    annualized_excess_return=metrics.get("annualized_excess_return"),
-                ),
+                "comparison": comparison,
             }
         )
     if isinstance(query, StrategyObservationsResultSectionInput):
@@ -4265,6 +4370,8 @@ def _public_result(
     provenance: dict[str, object],
     *,
     research_kind: str,
+    comparison: Mapping[str, object] | None = None,
+    annualized_excess_return: float | int | None = None,
 ) -> ResearchRunResult:
     if not isinstance(stored, Mapping):
         raise ResearchRunResultUnavailable
@@ -4314,16 +4421,34 @@ def _public_result(
         or not isinstance(terminal_strategy_state, Mapping)
     ):
         raise ResearchRunResultUnavailable
-    benchmark = strategy_summary.get("benchmark")
-    public_strategy_summary = {
-        name: value for name, value in strategy_summary.items() if name != "benchmark"
+    if comparison is None:
+        raise ResearchRunResultUnavailable
+    public_strategy_summary = dict(strategy_summary)
+    stored_metrics = strategy_summary.get("metrics")
+    if not isinstance(stored_metrics, Mapping):
+        raise ResearchRunResultUnavailable
+    public_metrics = {
+        **dict(stored_metrics),
+        "annualized_excess_return": annualized_excess_return,
+        "benchmark_cumulative_return": None,
+        "benchmark_cagr": None,
     }
+    comparison_metrics = comparison.get("metrics")
+    if comparison.get("status") == "available" and isinstance(
+        comparison_metrics,
+        Mapping,
+    ):
+        public_metrics["benchmark_cumulative_return"] = comparison_metrics.get(
+            "benchmark_cumulative_return"
+        )
+        public_metrics["benchmark_cagr"] = comparison_metrics.get("benchmark_cagr")
+    public_strategy_summary["metrics"] = public_metrics
     public.update(
         {
             "strategy": {
                 "summary": public_strategy_summary,
-                "benchmark": benchmark,
                 "observations": observations,
+                "comparison": comparison,
             },
             "terminal_strategy_state": {
                 name: terminal_strategy_state[name]
@@ -4333,7 +4458,6 @@ def _public_result(
                     "net_cash",
                     "gross_nav",
                     "net_nav",
-                    "benchmark_nav",
                     "cumulative_transaction_cost",
                     "positions",
                     "rebalance_phase",

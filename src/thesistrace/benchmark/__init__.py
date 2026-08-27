@@ -1,3 +1,24 @@
+from thesistrace.benchmark.client import (
+    INTERNAL_STRATEGY_METRIC_PATH,
+    AnnualizedExcessCalculator,
+    RemoteAnnualizedExcessCalculator,
+)
+from thesistrace.benchmark.comparison import (
+    BENCHMARK_SNAPSHOT_UNAVAILABLE_REASON,
+    StrategyComparisonError,
+    StrategyComparisonFacts,
+    StrategyComparisonService,
+    strategy_comparison_summary,
+)
+from thesistrace.benchmark.models import (
+    AvailableStrategyComparison,
+    AvailableStrategyComparisonSummary,
+    InternalAnnualizedExcessRequest,
+    InternalAnnualizedExcessResponse,
+    StrategyComparison,
+    StrategyComparisonSummary,
+    UnavailableStrategyComparison,
+)
 from thesistrace.benchmark.snapshot import (
     BENCHMARK_CONTRACT_VERSION,
     BENCHMARK_COORDINATE,
@@ -22,6 +43,7 @@ from thesistrace.benchmark.snapshot import (
 )
 
 __all__ = (
+    "AnnualizedExcessCalculator",
     "BENCHMARK_CONTRACT_VERSION",
     "BENCHMARK_COORDINATE",
     "BENCHMARK_DISPLAY_NAME",
@@ -34,6 +56,10 @@ __all__ = (
     "BENCHMARK_SOURCE_PROVIDER",
     "BENCHMARK_START_SESSION",
     "BENCHMARK_TS_CODE",
+    "BENCHMARK_SNAPSHOT_UNAVAILABLE_REASON",
+    "INTERNAL_STRATEGY_METRIC_PATH",
+    "InternalAnnualizedExcessRequest",
+    "InternalAnnualizedExcessResponse",
     "BenchmarkLevel",
     "BenchmarkLevelSource",
     "BenchmarkSnapshot",
@@ -41,5 +67,15 @@ __all__ = (
     "BenchmarkSnapshotStore",
     "BenchmarkSnapshotUpdate",
     "BenchmarkSnapshotUpdater",
+    "RemoteAnnualizedExcessCalculator",
+    "AvailableStrategyComparison",
+    "AvailableStrategyComparisonSummary",
+    "StrategyComparison",
+    "StrategyComparisonSummary",
+    "StrategyComparisonError",
+    "StrategyComparisonFacts",
+    "StrategyComparisonService",
+    "strategy_comparison_summary",
+    "UnavailableStrategyComparison",
     "validate_independent_benchmark_mount",
 )

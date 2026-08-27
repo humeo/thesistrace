@@ -46,8 +46,6 @@ class ValuationEvent(TerminalStateModel):
 
 
 class LastDailyObservation(TerminalStateModel):
-    benchmark_nav: StrictStr
-    benchmark_return: StrictNumber
     cash_ratio: StrictNumber
     cumulative_transaction_cost: StrictStr
     cycle_type: StrictStr
@@ -81,9 +79,10 @@ OPTIONAL_METRIC_ACCUMULATORS = frozenset(
 
 class StrategyMetricState(TerminalStateModel):
     contract: StrictStr
+    entry_session: StrictStr | None
+    entry_session_ordinal: StrictInt | None
     first_gross_nav: StrictStr
     first_net_nav: StrictStr
-    first_benchmark_nav: StrictStr
     return_count: StrictInt
     peak_net_nav: StrictStr
     peak_session: StrictStr
@@ -103,7 +102,6 @@ class StrategyMetricState(TerminalStateModel):
     session_count: StrictInt
     last_gross_nav: StrictStr
     last_net_nav: StrictStr
-    last_benchmark_nav: StrictStr
     last_session: StrictStr
     holdings_ending: StrictInt
     weight_ending: StrictNumber
@@ -137,7 +135,6 @@ class TerminalStrategyStateValue(TerminalStateModel):
     net_cash: StrictStr
     gross_nav: StrictStr
     net_nav: StrictStr
-    benchmark_nav: StrictStr
     cumulative_transaction_cost: StrictStr
     positions: list[TerminalPosition]
     rebalance_phase: RebalancePhase

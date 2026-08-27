@@ -9,6 +9,7 @@ from pathlib import Path
 import boto3
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.benchmark import BenchmarkLevel, BenchmarkSnapshotStore
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.entrypoints.runtime import CoreSettings
@@ -17,6 +18,16 @@ from thesistrace.fixture import build_minimal_canonical_fixture
 
 def publish_current_data(settings: CoreSettings) -> tuple[str, ...]:
     sessions = _weekday_sessions(date(2026, 8, 3), 75)
+    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+        (
+            BenchmarkLevel("2010-01-04", "3500"),
+            *(
+                BenchmarkLevel(session, str(4000 + index))
+                for index, session in enumerate(sessions)
+            ),
+        ),
+        published_at=datetime(2026, 9, 11, 12, tzinfo=UTC),
+    )
     s3 = boto3.client(
         "s3",
         endpoint_url=settings.s3_endpoint_url,
@@ -150,6 +161,7 @@ def core_environment(settings: CoreSettings) -> dict[str, str]:
         "THESISTRACE_S3_BUCKET": settings.s3_bucket,
         "THESISTRACE_S3_REGION": settings.s3_region,
         "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
+        "THESISTRACE_BENCHMARK_MOUNT": str(settings.benchmark_mount),
         "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
             settings.batch_attempt_control_directory
         ),

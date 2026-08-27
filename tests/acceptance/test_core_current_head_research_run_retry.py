@@ -19,7 +19,7 @@ import pytest
 from botocore.config import Config
 from canonical_store import align_canonical_market_data, open_complete_refresh_basis
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
+from core_runtime import drop_product_schemas, internal_api_origin
 from fastapi.testclient import TestClient
 from psycopg import Connection, connect
 from psycopg.conninfo import make_conninfo
@@ -402,6 +402,79 @@ def test_publication_retry_reuses_the_validated_final_checkpoint(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+def test_internal_strategy_metric_outage_retries_finalization_from_checkpoint(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, price_offset=0, sessions=SESSIONS)
+
+    class SwitchableCalculator:
+        def __init__(self) -> None:
+            self.available = False
+
+        def annualized_excess_return(self, _facts) -> float:
+            if not self.available:
+                raise ConnectionError("internal strategy metric endpoint unavailable")
+            return 0.125
+
+    calculator = SwitchableCalculator()
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(
+            client,
+            request_id="retry-internal-strategy-metric",
+            sessions=SESSIONS,
+            research_kind="strategy_backtest",
+        )
+        processor = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
+            annualized_excess_calculator=calculator,
+        )
+        first_events: list[dict[str, object]] = []
+
+        assert processor.process_next(on_execution_event=first_events.append) is True
+
+        waiting = client.get(f"/api/research-runs/{run_id}").json()
+        assert waiting["status"] == "running"
+        assert _attempts(settings, run_id)[0]["failure_reason"] == (
+            "InfrastructureUnavailable"
+        )
+        assert [
+            event["event"]
+            for event in first_events
+            if event["event"] in {"research_attempt_failed", "research_retry_scheduled"}
+        ] == ["research_attempt_failed", "research_retry_scheduled"]
+        assert _checkpoint_ordinals(settings, run_id) == [1]
+
+        calculator.available = True
+        second_events: list[dict[str, object]] = []
+        assert processor.process_next(on_execution_event=second_events.append) is True
+
+        completed = client.get(f"/api/research-runs/{run_id}").json()
+        assert completed["status"] == "succeeded"
+        assert completed["key_metrics"]["annualized_excess_return"] == 0.125
+        assert [row["status"] for row in _attempts(settings, run_id)] == [
+            "failed",
+            "succeeded",
+        ]
+        assert [
+            event["reused_checkpoint"]
+            for event in second_events
+            if event["event"] == "research_execution_chunk_received"
+        ] == [True]
+        assert _checkpoint_ordinals(settings, run_id) == []
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 def test_corrupt_checkpoint_payload_is_a_terminal_integrity_failure(
     tmp_path: Path,
 ) -> None:
@@ -465,7 +538,7 @@ def test_retry_rejects_checkpoint_after_runtime_semantics_change(
         monkeypatch.setattr(
             research_run_service,
             "SEMANTIC_VERSIONS",
-            {"factor": "factor-v2", "strategy": "strategy-v1", "kernel": "kernel-v4"},
+            {"factor": "factor-v2", "strategy": "strategy-v2", "kernel": "kernel-v5"},
         )
 
         assert runtime.research_runs.process_next() is True
@@ -1004,7 +1077,6 @@ def _reference_result(
         output,
         research_kind=research_kind,
         rebalance_interval=(1 if research_kind == "strategy_backtest" else None),
-        universe="top300",
     )
 
 
@@ -1548,6 +1620,7 @@ def _worker_environment(settings: CoreSettings) -> dict[str, str]:
         "THESISTRACE_S3_BUCKET": settings.s3_bucket,
         "THESISTRACE_S3_REGION": settings.s3_region,
         "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
+        "THESISTRACE_INTERNAL_API_ORIGIN": internal_api_origin(settings),
         "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
             settings.batch_attempt_control_directory
         ),

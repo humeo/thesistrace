@@ -1136,16 +1136,21 @@ def _assert_result_trajectory(
 def _semantic_conclusion(summary: Mapping[str, object]) -> dict[str, str]:
     comparison = _require_mapping(summary.get("comparison"))
     metrics = _require_mapping(summary.get("metrics"))
+    comparison_metrics = (
+        _require_mapping(comparison.get("metrics"))
+        if comparison.get("status") == "available"
+        else {}
+    )
     maximum_drawdown = _require_mapping(metrics.get("maximum_drawdown"))
     return {
         "return_direction": _sign_category(
-            comparison.get("net_cumulative_return"),
+            metrics.get("net_cumulative_return"),
             positive="positive",
             negative="negative",
             zero="flat",
         ),
         "benchmark_comparison": _sign_category(
-            comparison.get("annualized_excess_return"),
+            comparison_metrics.get("annualized_excess_return"),
             positive="outperformed",
             negative="underperformed",
             zero="matched",
@@ -2145,10 +2150,13 @@ def test_trajectory_evidence_is_derived_from_tool_arguments_and_results() -> Non
     submission = _assert_submission_trajectory(first)
     summary = {
         "comparison": {
-            "net_cumulative_return": 0.2,
-            "annualized_excess_return": -0.1,
+            "status": "available",
+            "metrics": {"annualized_excess_return": -0.1},
         },
-        "metrics": {"maximum_drawdown": {"value": -0.05}},
+        "metrics": {
+            "net_cumulative_return": 0.2,
+            "maximum_drawdown": {"value": -0.05},
+        },
     }
     second = [
         _call(

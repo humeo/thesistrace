@@ -2,8 +2,6 @@ from decimal import Decimal
 
 from thesistrace.research_kernel.factor import factor_day
 from thesistrace.research_kernel.numeric import canonical_binary64_bytes, canonical_decimal
-from thesistrace.research_kernel.strategy import equal_weight_benchmark_return
-from thesistrace.research_series import ExecutionPrice, InstrumentProfile
 
 EXPECTED_CHECKSUMS = {
     "alpha": "2408e4eb856b85d9fa26261ec25b49cdeb4900c3f99ce863701a5fa9926f72a7",
@@ -17,7 +15,7 @@ EXPECTED_CHECKSUMS = {
         "5": "f3a1105c1b77af3999b0da993348e6707fadd1b4863941e03ca478b372e555b5",
         "20": "c4f4a77935c35417c95d66edbcff6b761afb212eef9698e9704f563892ad3a73",
     },
-    "strategy": "b252ba64058af52252ed6d2fdc3efbd09ebd6ea43e466dd39635d8f14709e3d9",
+    "strategy": "580ce4d3959f43104526f811dbf429a56725e92b5fcd9fa44a34e6cf83f17cb2",
 }
 
 
@@ -70,7 +68,6 @@ def test_accepted_quantitative_boundaries_are_frozen(
         "session": "2026-05-29",
         "gross_nav": "1e+7",
         "net_nav": "1e+7",
-        "benchmark_nav": "1e+0",
         "net_cash": "1e+7",
         "holdings_count": 0,
         "rebalance": False,
@@ -80,7 +77,6 @@ def test_accepted_quantitative_boundaries_are_frozen(
         "session": "2026-07-29",
         "gross_nav": "9702899e+0",
         "net_nav": "967759052382e-5",
-        "benchmark_nav": "9822402584754961170254219637e-28",
         "net_cash": "92552382e-5",
         "holdings_count": 10,
         "rebalance": False,
@@ -114,22 +110,18 @@ def test_accepted_quantitative_boundaries_are_frozen(
         for key in (
             "gross_cumulative_return",
             "net_cumulative_return",
-            "benchmark_cumulative_return",
-            "annualized_excess_return",
             "annualized_volatility",
             "sharpe",
         )
     } == {
         "gross_cumulative_return": -0.0297101,
         "net_cumulative_return": -0.032240947618,
-        "benchmark_cumulative_return": -0.017759741524503884,
-        "annualized_excess_return": -0.0833635130245971,
         "annualized_volatility": 0.11365945883188307,
         "sharpe": -1.6324393725923343,
     }
 
 
-def test_independent_edge_fixture_freezes_numeric_missing_order_and_benchmark() -> None:
+def test_independent_edge_fixture_freezes_numeric_and_missing_order() -> None:
     assert canonical_decimal(Decimal("123.4500")) == "12345e-2"
     assert canonical_binary64_bytes(-0.0).hex() == "0000000000000000"
     assert factor_day(
@@ -155,27 +147,6 @@ def test_independent_edge_fixture_freezes_numeric_missing_order_and_benchmark() 
         "top_bottom_return": 4.0,
         "quantile_reason": None,
     }
-    assert equal_weight_benchmark_return(
-        "s0",
-        "s1",
-        "s2",
-        {"s0": ("equity:B.SH", "equity:A.SH", "equity:C.SH")},
-        {
-            ("s1", "equity:A.SH"): ExecutionPrice("20", "20"),
-            ("s2", "equity:A.SH"): ExecutionPrice("20", "20"),
-            ("s1", "equity:B.SH"): ExecutionPrice("10", "10"),
-            ("s2", "equity:B.SH"): ExecutionPrice("11", "11"),
-            ("s1", "equity:C.SH"): ExecutionPrice("4", "4"),
-        },
-        {},
-        {
-            "equity:A.SH": InstrumentProfile("main", ""),
-            "equity:B.SH": InstrumentProfile("main", ""),
-            "equity:C.SH": InstrumentProfile("main", "s2"),
-        },
-    ) == Decimal("-0.3")
-
-
 def _daily_boundary(observation: dict[str, object]) -> dict[str, object]:
     return {
         key: observation[key]
@@ -183,7 +154,6 @@ def _daily_boundary(observation: dict[str, object]) -> dict[str, object]:
             "session",
             "gross_nav",
             "net_nav",
-            "benchmark_nav",
             "net_cash",
             "holdings_count",
             "rebalance",

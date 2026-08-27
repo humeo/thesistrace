@@ -433,8 +433,8 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "numeric_execution_contract": "thesistrace-numeric-v1",
             "semantic_versions": {
                 "factor": "factor-v1",
-                "strategy": "strategy-v1",
-                "kernel": "kernel-v4",
+                "strategy": "strategy-v2",
+                "kernel": "kernel-v5",
             },
             "alpha_admission": {
                 "effective_lookback": 0,

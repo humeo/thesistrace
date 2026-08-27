@@ -28,6 +28,7 @@ _THREAD_ENVIRONMENT_NAMES = (
     "MKL_NUM_THREADS",
     "NUMEXPR_NUM_THREADS",
 )
+INTERNAL_API_ORIGIN_ENVIRONMENT = "THESISTRACE_INTERNAL_API_ORIGIN"
 
 
 class WorkerRole(StrEnum):
@@ -245,10 +246,16 @@ def main(arguments: Sequence[str] | None = None) -> None:
             "actual_memory_bytes": actual.memory_bytes,
         }
     )
-    from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
+    from thesistrace.entrypoints.runtime import CoreSettings, open_worker_runtime
 
     settings = CoreSettings.from_environment()
-    with open_core_runtime(settings) as runtime:
+    internal_api_origin = os.environ.get(INTERNAL_API_ORIGIN_ENVIRONMENT, "").strip()
+    if not internal_api_origin:
+        raise RuntimeError(f"missing Worker configuration: {INTERNAL_API_ORIGIN_ENVIRONMENT}")
+    with open_worker_runtime(
+        settings,
+        internal_api_origin=internal_api_origin,
+    ) as runtime:
         process_one_poll(runtime, configuration, emit=_emit_event)
         if parsed.once:
             _emit_event(

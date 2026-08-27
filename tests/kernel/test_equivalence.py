@@ -16,8 +16,8 @@ def test_first_divergence_preserves_canonical_scalar_semantics() -> None:
         "output": {
             "strategy_backtest": {
                 "daily": [
-                    {"benchmark_nav": "1"},
-                    {"benchmark_nav": "2"},
+                    {"net_nav": "1"},
+                    {"net_nav": "2"},
                 ]
             }
         }
@@ -26,14 +26,14 @@ def test_first_divergence_preserves_canonical_scalar_semantics() -> None:
         "output": {
             "strategy_backtest": {
                 "daily": [
-                    {"benchmark_nav": "semantic-mismatch"},
-                    {"benchmark_nav": "2"},
+                    {"net_nav": "semantic-mismatch"},
+                    {"net_nav": "2"},
                 ]
             }
         }
     }
     assert first_divergence(actual, expected) == (
-        "$.output.strategy_backtest.daily[0].benchmark_nav"
+        "$.output.strategy_backtest.daily[0].net_nav"
     )
     with pytest.raises(NumericContractError):
         first_divergence(float("nan"), float("nan"))

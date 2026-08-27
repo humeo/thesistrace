@@ -22,10 +22,11 @@ import pytest
 from botocore.config import Config
 from canonical_store import align_canonical_market_data, open_complete_refresh_basis
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
+from core_runtime import drop_product_schemas, internal_api_origin
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.benchmark import BenchmarkLevel, BenchmarkSnapshotStore
 from thesistrace.daily_track import (
     DailyTrackProgressionFailed,
     DailyTrackService,
@@ -889,6 +890,9 @@ def test_2010_to_latest_market_financial_and_composite_runs_commit_multiple_chun
                     publication=runtime.publication,
                     execution=SupervisedResearchExecutor(settings.data_mount),
                     progress=pause_after_second_checkpoint,
+                    annualized_excess_calculator=(
+                        runtime.annualized_excess_calculator
+                    ),
                 )
                 worker = Thread(
                     target=processor.process_next,
@@ -915,6 +919,9 @@ def test_2010_to_latest_market_financial_and_composite_runs_commit_multiple_chun
                     generation_store=MountedGenerationStore(settings.data_mount),
                     publication=runtime.publication,
                     execution=SupervisedResearchExecutor(settings.data_mount),
+                    annualized_excess_calculator=(
+                        runtime.annualized_excess_calculator
+                    ),
                 )
                 assert processor.process_next(on_execution_event=execution_events.append) is True
             peak_rss_values = [
@@ -2382,12 +2389,77 @@ def test_tracking_execution_refuses_obsolete_numeric_contract(tmp_path: Path) ->
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+def test_interior_benchmark_gap_keeps_successful_run_comparison_unavailable(
+    tmp_path: Path,
+) -> None:
+    settings = replace(
+        CoreSettings.from_environment(),
+        data_mount=tmp_path / "canonical-data",
+        benchmark_mount=tmp_path / "benchmark-data",
+    )
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06")
+    _publish_head(settings, sessions=sessions, price_offset=0)
+    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+        (
+            BenchmarkLevel("2010-01-04", "3500"),
+            BenchmarkLevel(sessions[0], "4000"),
+            BenchmarkLevel(sessions[1], "4040"),
+            BenchmarkLevel(sessions[3], "4120"),
+        ),
+        published_at=datetime(2026, 8, 6, 18, tzinfo=UTC),
+    )
+
+    with TestClient(create_app(settings)) as client:
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "interior-benchmark-gap",
+                start_date=sessions[0],
+                end_date=sessions[-1],
+            ),
+        )
+        assert accepted.status_code == 202
+        run_id = accepted.json()["id"]
+
+        assert client.app.state.core_runtime.research_runs.process_next() is True
+
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "succeeded"
+        assert detail["key_metrics"]["annualized_excess_return"] is None
+        assert detail["result"]["strategy"]["comparison"] == {
+            "status": "unavailable",
+            "reason": "benchmark_snapshot_unavailable",
+        }
+        assert detail["result"]["strategy"]["summary"]["metrics"][
+            "annualized_excess_return"
+        ] is None
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = replace(
+        CoreSettings.from_environment(),
+        data_mount=tmp_path / "canonical-data",
+        benchmark_mount=tmp_path / "benchmark-data",
+    )
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
     head_a = _publish_head(settings, sessions=sessions, price_offset=0)
+    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+        (
+            BenchmarkLevel("2010-01-04", "3500"),
+            BenchmarkLevel(sessions[0], "4000"),
+            BenchmarkLevel(sessions[1], "4040"),
+            BenchmarkLevel(sessions[2], "4080"),
+        ),
+        published_at=datetime(2026, 8, 5, 18, tzinfo=UTC),
+    )
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
@@ -2445,7 +2517,15 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             "semantic_versions",
         }
         assert len(public_run["result"]["strategy"]["observations"]) == 3
+        comparison = public_run["result"]["strategy"]["comparison"]
+        assert comparison["status"] == "available"
+        assert comparison["entry"]["session"] == sessions[1]
+        assert comparison["terminal"]["session"] == sessions[-1]
         result_metrics = public_run["result"]["strategy"]["summary"]["metrics"]
+        assert result_metrics["annualized_excess_return"] is not None
+        assert result_metrics["annualized_excess_return"] == comparison["metrics"][
+            "annualized_excess_return"
+        ]
         assert public_run["key_metrics"] == {
             "research_kind": "strategy_backtest",
             "annualized_excess_return": result_metrics["annualized_excess_return"],
@@ -2464,7 +2544,6 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             "net_cash",
             "gross_nav",
             "net_nav",
-            "benchmark_nav",
             "cumulative_transaction_cost",
             "positions",
             "rebalance_phase",
@@ -3788,7 +3867,11 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
 def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = replace(
+        CoreSettings.from_environment(),
+        data_mount=tmp_path / "canonical-data",
+        benchmark_mount=tmp_path / "benchmark-data",
+    )
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     seed_sessions = (
@@ -3802,6 +3885,16 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         settings,
         seed_canonical,
         operation_id="forward-only-seed",
+    )
+    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+        (
+            BenchmarkLevel("2010-01-04", "3001"),
+            *(
+                BenchmarkLevel(session, str(3002 + index))
+                for index, session in enumerate(seed_sessions)
+            ),
+        ),
+        published_at=datetime(2026, 8, 5, 8, tzinfo=UTC),
     )
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
@@ -3968,6 +4061,7 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
             publication=runtime.publication,
             execution=SupervisedResearchExecutor(settings.data_mount),
             progress=barrier,
+            annualized_excess_calculator=runtime.annualized_excess_calculator,
         )
         worker = Thread(target=processor.process_next)
         worker.start()
@@ -4001,7 +4095,6 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
             run(_kernel_input(canonical_a, sessions=sessions)),
             research_kind="strategy_backtest",
             rebalance_interval=1,
-            universe="top300",
         )
         assert actual == expected
         assert stored["active_pin_count"] == 0
@@ -4037,6 +4130,7 @@ def test_claim_commits_before_execution_child_receives_generation_request(
             generation_store=MountedGenerationStore(settings.data_mount),
             publication=runtime.publication,
             execution=SupervisedResearchExecutor(settings.data_mount),
+            annualized_excess_calculator=runtime.annualized_excess_calculator,
         )
 
         def process_one() -> None:
@@ -4489,12 +4583,19 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
             assert strategy_metrics["sharpe"] is None
             assert listed[0]["key_metrics"] == {
                 "research_kind": "strategy_backtest",
-                "annualized_excess_return": strategy_metrics[
-                    "annualized_excess_return"
-                ],
+                "annualized_excess_return": None,
                 "sharpe": strategy_metrics["sharpe"],
                 "maximum_drawdown": strategy_metrics["maximum_drawdown"]["value"],
             }
+            public_detail = client.get(f"/api/research-runs/{run_id}").json()
+            assert public_detail["status"] == "succeeded"
+            assert public_detail["result"]["strategy"]["comparison"] == {
+                "status": "unavailable",
+                "reason": "benchmark_snapshot_unavailable",
+            }
+            assert public_detail["result"]["strategy"]["summary"]["metrics"][
+                "annualized_excess_return"
+            ] is None
             terminal = result["terminal_strategy_state"]
             assert terminal["session"] == sessions[-1]
             assert terminal["last_daily_observation"]["session"] == sessions[-1]
@@ -5455,7 +5556,6 @@ def _reference_result(
         ),
         research_kind="strategy_backtest",
         rebalance_interval=int(strategy["rebalance_every_sessions"]),
-        universe=immutable.universe,
     )
 
 
@@ -6049,6 +6149,7 @@ def _worker_environment(settings: CoreSettings) -> dict[str, str]:
         "THESISTRACE_S3_BUCKET": settings.s3_bucket,
         "THESISTRACE_S3_REGION": settings.s3_region,
         "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
+        "THESISTRACE_INTERNAL_API_ORIGIN": internal_api_origin(settings),
         "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
             settings.batch_attempt_control_directory
         ),

@@ -84,13 +84,12 @@ STRATEGY_RESULT_BASE_PAYLOAD_NAMES = frozenset(
 )
 STRATEGY_DAILY_OBSERVATIONS_CONTRACT = ParquetWriterContract(
     name="research-result-strategy-daily-observations",
-    version=1,
+    version=2,
     schema=pa.schema(
         [
             pa.field("session", pa.string(), nullable=False),
             pa.field("gross_nav", pa.string(), nullable=False),
             pa.field("net_nav", pa.string(), nullable=False),
-            pa.field("benchmark_nav", pa.string(), nullable=False),
             pa.field("net_cash", pa.string(), nullable=False),
             pa.field("transaction_cost_cny", pa.string(), nullable=False),
             pa.field("holdings_count", pa.int64(), nullable=False),
@@ -493,14 +492,13 @@ def build_result_payload(
     *,
     research_kind: str,
     rebalance_interval: int | None = None,
-    universe: str | None = None,
 ) -> dict[str, object]:
     """Project transient Kernel output into the bounded durable Result contract."""
     artifacts = output.artifacts_snapshot()
     factor = _mapping(artifacts, "factor_evaluation")
     if research_kind == "factor_evaluation":
         return {"factor_summary": _factor_summary(factor)}
-    if research_kind != "strategy_backtest" or rebalance_interval is None or universe is None:
+    if research_kind != "strategy_backtest" or rebalance_interval is None:
         raise ResearchResultError("Strategy Backtest Result inputs are incomplete")
     strategy = _mapping(artifacts, "strategy_backtest")
     daily = _rows(strategy, "daily")
@@ -508,7 +506,7 @@ def build_result_payload(
         raise ResearchResultError("Result requires a positive Research Period")
     return {
         "factor_summary": _factor_summary(factor),
-        "strategy_summary": _strategy_summary(strategy, universe=universe),
+        "strategy_summary": _strategy_summary(strategy),
         "strategy_daily_observations": _strategy_daily_observations(strategy),
         "terminal_strategy_state": _terminal_strategy_state(
             strategy,
@@ -562,8 +560,6 @@ def _factor_summary(factor: Mapping[str, object]) -> dict[str, object]:
 
 def _strategy_summary(
     strategy: Mapping[str, object],
-    *,
-    universe: str,
 ) -> dict[str, object]:
     metrics = strategy.get("metrics")
     if not isinstance(metrics, Mapping):
@@ -574,16 +570,18 @@ def _strategy_summary(
     _remove_nested(projected, "holdings_count", "daily")
     _remove_nested(projected, "maximum_single_name_weight", "daily")
     _remove_nested(projected, "cash_ratio", "daily")
+    daily = _rows(strategy, "daily")
+    entry_session = next(
+        (str(row["session"]) for row in daily if row.get("rebalance") is True),
+        str(daily[-1]["session"]),
+    )
     return {
         "alpha_checksum": str(strategy["alpha_checksum"]),
+        "entry_session": entry_session,
         "initial_cash_cny": str(strategy["initial_cash_cny"]),
         "source_checksum": canonical_checksum_chain(
             _strategy_daily_observations(strategy)
         ),
-        "benchmark": {
-            "universe": universe,
-            "methodology": "selected_universe_equal_weight",
-        },
         "metrics": projected,
     }
 
@@ -609,7 +607,6 @@ def _strategy_daily_observations(
                 "session": str(row["session"]),
                 "gross_nav": str(row["gross_nav"]),
                 "net_nav": str(row["net_nav"]),
-                "benchmark_nav": str(row["benchmark_nav"]),
                 "net_cash": str(row["net_cash"]),
                 "transaction_cost_cny": canonical_decimal(session_cost),
                 "holdings_count": int(row["holdings_count"]),
@@ -653,7 +650,6 @@ def _terminal_strategy_state(
         "net_cash": str(terminal["net_cash"]),
         "gross_nav": str(terminal["gross_nav"]),
         "net_nav": str(terminal["net_nav"]),
-        "benchmark_nav": str(terminal["benchmark_nav"]),
         "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
         "positions": [copy.deepcopy(dict(position)) for position in positions],
         "rebalance_phase": {

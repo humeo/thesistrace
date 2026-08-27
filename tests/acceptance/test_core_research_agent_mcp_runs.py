@@ -276,17 +276,26 @@ async def _exercise_research_runs(
         last_observation = observation_tail.structured_content["items"][-1]
         assert terminal_state["session"] == last_observation["session"]
         assert terminal_state["net_nav"] == last_observation["net_nav"]
-        assert terminal_state["benchmark_nav"] == last_observation["benchmark_nav"]
+        comparison = strategy_summary["comparison"]
+        assert comparison["status"] == "available"
+        assert comparison["benchmark"]["id"] == "csi300-price-index-open"
+        assert comparison["benchmark"]["display_name"] == "沪深300"
+        assert comparison["entry"]["session"] == strategy_summary["entry_session"]
+        assert comparison["terminal"]["session"] == terminal_state["session"]
         initial_cash = Decimal(strategy_summary["initial_cash_cny"])
         assert math.isclose(
-            strategy_summary["comparison"]["net_cumulative_return"],
+            comparison["metrics"]["net_strategy_cumulative_return"],
             float(Decimal(last_observation["net_nav"]) / initial_cash - Decimal(1)),
             rel_tol=0,
             abs_tol=1e-12,
         )
         assert math.isclose(
-            strategy_summary["comparison"]["benchmark_cumulative_return"],
-            float(Decimal(last_observation["benchmark_nav"]) - Decimal(1)),
+            comparison["metrics"]["benchmark_cumulative_return"],
+            float(
+                Decimal(comparison["terminal"]["benchmark_open_level"])
+                / Decimal(comparison["entry"]["benchmark_open_level"])
+                - Decimal(1)
+            ),
             rel_tol=0,
             abs_tol=1e-12,
         )
@@ -631,10 +640,11 @@ async def _assert_first_semantic_result_pages(
         {"run_id": strategy_run_id, "section": "strategy_summary"},
     )
     assert summary.is_error is False
-    assert summary.structured_content["benchmark"] == {
-        "universe": strategy_command["universe"],
-        "methodology": "selected_universe_equal_weight",
-    }
+    assert summary.structured_content["comparison"]["status"] == "available"
+    assert summary.structured_content["comparison"]["benchmark"]["id"] == (
+        "csi300-price-index-open"
+    )
+    assert "curves" not in summary.structured_content["comparison"]
     _assert_optional_numbers_are_finite(summary.structured_content)
 
     observations = await client.call_tool(

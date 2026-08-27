@@ -10,6 +10,11 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+from thesistrace.benchmark import (
+    INTERNAL_STRATEGY_METRIC_PATH,
+    StrategyComparisonError,
+    StrategyComparisonFacts,
+)
 from thesistrace.entrypoints import readiness as readiness_module
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.readiness import CoreReadiness
@@ -70,6 +75,83 @@ def test_readiness_deadline_includes_probe_process_creation(
         if monotonic() >= deadline:
             raise AssertionError(f"readiness did not recover after blocked spawn: {snapshot}")
         Event().wait(0.01)
+
+
+def test_internal_strategy_metric_endpoint_is_hidden_and_returns_only_the_scalar() -> None:
+    class Calculator:
+        received: StrategyComparisonFacts | None = None
+
+        def annualized_excess_return(
+            self,
+            facts: StrategyComparisonFacts,
+        ) -> float:
+            self.received = facts
+            return 0.125
+
+    calculator = Calculator()
+    app = create_app(event_sink=lambda _event: None)
+    app.state.core_runtime = SimpleNamespace(
+        annualized_excess_calculator=calculator
+    )
+    client = TestClient(app)
+    try:
+        response = client.post(
+            INTERNAL_STRATEGY_METRIC_PATH,
+            json={
+                "entry_session": "2026-08-03",
+                "terminal_session": "2026-08-05",
+                "session_interval_count": 2,
+                "initial_cash_cny": "10000000",
+                "terminal_net_nav": "10100000",
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"annualized_excess_return": 0.125}
+        assert calculator.received == StrategyComparisonFacts(
+            entry_session="2026-08-03",
+            terminal_session="2026-08-05",
+            session_interval_count=2,
+            initial_cash_cny="10000000",
+            terminal_net_nav="10100000",
+        )
+        assert INTERNAL_STRATEGY_METRIC_PATH not in client.get("/openapi.json").json()[
+            "paths"
+        ]
+    finally:
+        client.close()
+
+
+def test_internal_strategy_metric_endpoint_rejects_invalid_domain_facts() -> None:
+    class RejectingCalculator:
+        def annualized_excess_return(
+            self,
+            _facts: StrategyComparisonFacts,
+        ) -> float:
+            raise StrategyComparisonError("Strategy comparison facts are invalid")
+
+    app = create_app(event_sink=lambda _event: None)
+    app.state.core_runtime = SimpleNamespace(
+        annualized_excess_calculator=RejectingCalculator()
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.post(
+            INTERNAL_STRATEGY_METRIC_PATH,
+            json={
+                "entry_session": "2026-08-03",
+                "terminal_session": "2026-08-05",
+                "session_interval_count": 2,
+                "initial_cash_cny": "10000000",
+                "terminal_net_nav": "10100000",
+            },
+        )
+    finally:
+        client.close()
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Strategy comparison facts are invalid"}
 
 
 def test_readiness_has_one_end_to_end_deadline_for_blocked_probes(

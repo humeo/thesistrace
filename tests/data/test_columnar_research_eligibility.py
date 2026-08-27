@@ -6,7 +6,6 @@ import pyarrow as pa
 
 from thesistrace.data.columnar_series import ColumnarResearchData
 from thesistrace.research_kernel.numeric import canonical_binary64_bytes
-from thesistrace.research_kernel.strategy import columnar_equal_weight_benchmark_return
 from thesistrace.research_series import decimal_to_binary64
 
 
@@ -149,70 +148,3 @@ def test_decimal_fields_keep_correct_rounding_when_arrow_cast_selects_adjacent_f
     expected = canonical_binary64_bytes(decimal_to_binary64(value))
     assert canonical_binary64_bytes(field_value) == expected
     assert canonical_binary64_bytes(adjusted_open) == expected
-
-
-def test_zero_turnover_member_cannot_fail_the_columnar_benchmark() -> None:
-    signal, entry, exit_session = ("2010-02-09", "2010-02-10", "2010-02-11")
-    active = "equity:000001.SZ"
-    suspended_from_coverage_start = "equity:000004.SZ"
-    series = ColumnarResearchData(
-        sessions=(signal, entry, exit_session),
-        _instruments=pa.table(
-            {
-                "instrument_id": [active, suspended_from_coverage_start],
-                "board": ["main", "main"],
-                "listed_to": ["", ""],
-            }
-        ),
-        _eod_prices=pa.table(
-            {
-                "session_date": [signal, entry, exit_session, exit_session],
-                "instrument_id": [active, active, active, suspended_from_coverage_start],
-                "open_raw": [
-                    Decimal("10"),
-                    Decimal("11"),
-                    Decimal("12"),
-                    Decimal("38.608"),
-                ],
-                "open_adj": [
-                    Decimal("10"),
-                    Decimal("11"),
-                    Decimal("12"),
-                    Decimal("38.608"),
-                ],
-                "turnover_amount_cny": [
-                    Decimal("1000"),
-                    Decimal("1000"),
-                    Decimal("1000"),
-                    Decimal("1000"),
-                ],
-            }
-        ),
-        _universes=pa.table(
-            {
-                "session": [signal],
-                "instrument_ids": [[active, suspended_from_coverage_start]],
-            }
-        ),
-        _trading_states=_empty_table(),
-        _price_limits=_empty_table(),
-        _industries=_empty_table(),
-        _financial_values=None,
-        _field_columns={},
-    )
-    instruments = tuple(sorted(series.instruments))
-
-    result = columnar_equal_weight_benchmark_return(
-        signal,
-        entry,
-        exit_session,
-        series.universe_members,
-        {(entry, suspended_from_coverage_start): "full_session_suspension"},
-        series.instruments,
-        {instrument_id: index for index, instrument_id in enumerate(instruments)},
-        {session: index for index, session in enumerate(series.sessions)},
-        series.adjusted_open_decimal_matrix(instruments),
-        series.adjusted_open_matrix(instruments),
-    )
-
-    assert result == Decimal(12) / Decimal(11) - Decimal(1)

@@ -13,6 +13,7 @@ x-core-environment: &core-environment
   THESISTRACE_S3_REGION: us-east-1
   THESISTRACE_DATA_MOUNT: /var/lib/thesistrace/canonical-data
   THESISTRACE_BENCHMARK_MOUNT: /var/lib/thesistrace/benchmark-data
+  THESISTRACE_INTERNAL_API_ORIGIN: http://api:8100
   THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY: /var/lib/thesistrace/.batch-attempts
   THESISTRACE_RESEARCH_WORKER_EXECUTION_MEMORY_BYTES: ${THESISTRACE_RESEARCH_WORKER_EXECUTION_MEMORY_BYTES:-1610612736}
   THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES: ${THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES:-1610612736}
@@ -110,6 +111,8 @@ services:
         condition: service_completed_successfully
       rustfs:
         condition: service_healthy
+      api:
+        condition: service_healthy
     environment:
       <<: *core-environment
       OMP_NUM_THREADS: ${THESISTRACE_RESEARCH_WORKER_CALCULATION_THREADS:-2}
@@ -140,6 +143,8 @@ services:
       initialize:
         condition: service_completed_successfully
       rustfs:
+        condition: service_healthy
+      api:
         condition: service_healthy
     environment:
       <<: *core-environment

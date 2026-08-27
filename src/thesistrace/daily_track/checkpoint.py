@@ -43,7 +43,7 @@ def project_tracking_checkpoint(
     continuation = continuation_snapshot(state)
     continuation_bytes = canonical_json_bytes(continuation)
     return {
-        "schema_version": "daily-track-checkpoint-v1",
+        "schema_version": "daily-track-checkpoint-v2",
         "origin_session": state.origin_session,
         "boundary_session": state.boundary_session,
         "run_input": {
@@ -257,7 +257,6 @@ def terminal_strategy_state(state: KernelState) -> dict[str, object]:
         "net_cash": str(terminal["net_cash"]),
         "gross_nav": str(terminal["gross_nav"]),
         "net_nav": str(terminal["net_nav"]),
-        "benchmark_nav": str(terminal["benchmark_nav"]),
         "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
         "positions": [copy.deepcopy(dict(item)) for item in positions],
         "rebalance_phase": {
@@ -391,7 +390,6 @@ def _strategy_state(
             "net_cash": str(finalized_terminal["net_cash"]),
             "gross_nav": str(finalized_terminal["gross_nav"]),
             "net_nav": str(finalized_terminal["net_nav"]),
-            "benchmark_nav": str(finalized_terminal["benchmark_nav"]),
             "cumulative_transaction_cost": str(finalized_terminal["cumulative_transaction_cost"]),
             "positions": [copy.deepcopy(dict(item)) for item in finalized_positions],
             "rebalance_phase": {
@@ -442,7 +440,6 @@ def _minimal_strategy_observations(
                 "session": session,
                 "gross_nav": str(row["gross_nav"]),
                 "net_nav": str(row["net_nav"]),
-                "benchmark_nav": str(row["benchmark_nav"]),
                 "net_cash": str(row["net_cash"]),
                 "transaction_cost_cny": canonical_decimal(session_cost),
                 "holdings_count": int(row["holdings_count"]),
@@ -463,7 +460,6 @@ def _continuation_observation(value: Mapping[str, object]) -> dict[str, object]:
             "gross_cash",
             "net_cash",
             "cumulative_transaction_cost",
-            "benchmark_nav",
             "gross_nav",
             "net_nav",
         )

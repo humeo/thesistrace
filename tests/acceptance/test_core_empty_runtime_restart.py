@@ -116,27 +116,33 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
     }
 
     for role in ("research", "tracking"):
-        worker = subprocess.run(
-            [worker_command, "--role", role, "--once"],
-            cwd=ROOT,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        assert worker.returncode == 0, worker.stderr
-
         port = _free_port()
+        process_environment = {
+            **environment,
+            "THESISTRACE_INTERNAL_API_ORIGIN": f"http://127.0.0.1:{port}",
+        }
         http = subprocess.Popen(
             [api_command, "--host", "127.0.0.1", "--port", str(port)],
             cwd=ROOT,
-            env=environment,
+            env=process_environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
         try:
+            assert _request_json(f"http://127.0.0.1:{port}/health/live") == {
+                "status": "ok"
+            }
+            worker = subprocess.run(
+                [worker_command, "--role", role, "--once"],
+                cwd=ROOT,
+                env=process_environment,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            assert worker.returncode == 0, worker.stderr
             assert _request_json(f"http://127.0.0.1:{port}/api/data") == expected_overview
             assert _request_status(f"http://127.0.0.1:{port}/api/data/releases") == 404
             assert _request_status(f"http://127.0.0.1:{port}/api/data/update") == 404

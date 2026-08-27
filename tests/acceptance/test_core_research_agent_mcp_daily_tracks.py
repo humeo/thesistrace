@@ -620,10 +620,11 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
             summary_result.structured_content["strategy_session"]
             == (transient_advanced.structured_content["progress"]["head_session"])
         )
-        assert summary_result.structured_content["benchmark"] == {
-            "universe": "top300",
-            "methodology": "selected_universe_equal_weight",
-        }
+        assert summary_result.structured_content["comparison"]["status"] == "available"
+        assert summary_result.structured_content["comparison"]["benchmark"]["id"] == (
+            "csi300-price-index-open"
+        )
+        assert "curves" not in summary_result.structured_content["comparison"]
         assert set(summary_result.structured_content["summary"]) == (
             transient_seed_summary_keys
         )

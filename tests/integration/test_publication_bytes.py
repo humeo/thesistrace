@@ -211,7 +211,6 @@ def test_semantic_result_sections_read_only_bounded_real_rustfs_objects(
                 "net_cash",
                 "gross_nav",
                 "net_nav",
-                "benchmark_nav",
                 "cumulative_transaction_cost",
                 "rebalance_phase",
                 "pending_signal",
@@ -638,7 +637,6 @@ def _legal_result() -> dict[str, object]:
     last_daily = {name: 0 for name in LAST_DAILY_OBSERVATION_KEYS}
     last_daily.update(
         {
-            "benchmark_nav": "1",
             "cumulative_transaction_cost": "0",
             "cycle_type": "terminal_valuation",
             "execution_rounding_residual": "0",
@@ -656,10 +654,11 @@ def _legal_result() -> dict[str, object]:
     metric_state = {name: 0 for name in METRIC_STATE_KEYS}
     metric_state.update(
         {
-            "contract": "strategy-metric-state-v1",
+            "contract": "strategy-metric-state-v2",
+            "entry_session": "2024-01-02",
+            "entry_session_ordinal": 1,
             "first_gross_nav": "1e+7",
             "first_net_nav": "1e+7",
-            "first_benchmark_nav": "1",
             "peak_net_nav": "1e+7",
             "peak_session": "2024-01-02",
             "worst_drawdown": "0",
@@ -671,7 +670,6 @@ def _legal_result() -> dict[str, object]:
             "cash_maximum_session": "2024-01-02",
             "last_gross_nav": "1e+7",
             "last_net_nav": "1e+7",
-            "last_benchmark_nav": "1",
             "last_session": "2024-01-02",
             "cumulative_cost": "0",
         }
@@ -680,20 +678,16 @@ def _legal_result() -> dict[str, object]:
         "factor_summary": {"horizons": horizons},
         "strategy_summary": {
             "alpha_checksum": "a" * 64,
+            "entry_session": "2024-01-02",
             "initial_cash_cny": "1e+7",
             "source_checksum": "c" * 64,
             "metrics": metrics,
-            "benchmark": {
-                "universe": "manual",
-                "methodology": "selected_universe_equal_weight",
-            },
         },
         "strategy_daily_observations": [
             {
                 "session": "2024-01-02",
                 "gross_nav": "1e+7",
                 "net_nav": "1e+7",
-                "benchmark_nav": "1",
                 "net_cash": "1e+7",
                 "transaction_cost_cny": "0",
                 "holdings_count": 0,
@@ -709,7 +703,6 @@ def _legal_result() -> dict[str, object]:
             "net_cash": "1e+7",
             "gross_nav": "1e+7",
             "net_nav": "1e+7",
-            "benchmark_nav": "1",
             "cumulative_transaction_cost": "0",
             "positions": [],
             "rebalance_phase": {

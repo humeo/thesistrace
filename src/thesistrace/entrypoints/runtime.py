@@ -13,7 +13,13 @@ from botocore.config import Config
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
-from thesistrace.benchmark import validate_independent_benchmark_mount
+from thesistrace.benchmark import (
+    AnnualizedExcessCalculator,
+    BenchmarkSnapshotStore,
+    RemoteAnnualizedExcessCalculator,
+    StrategyComparisonService,
+    validate_independent_benchmark_mount,
+)
 from thesistrace.daily_track import DailyTrackService, SessionCoordinateRepository
 from thesistrace.daily_track.planning import DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES
 from thesistrace.data import (
@@ -165,10 +171,43 @@ class CoreRuntime:
     daily_track_sessions: SessionCoordinateRepository
     publication: Publication
     readiness: CoreReadiness
+    annualized_excess_calculator: AnnualizedExcessCalculator
 
 
 @contextmanager
 def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
+    comparison = StrategyComparisonService(BenchmarkSnapshotStore(settings.benchmark_mount))
+    with _open_runtime(
+        settings,
+        annualized_excess_calculator=comparison,
+        strategy_comparison=comparison,
+    ) as runtime:
+        yield runtime
+
+
+@contextmanager
+def open_worker_runtime(
+    settings: CoreSettings,
+    *,
+    internal_api_origin: str,
+) -> Iterator[CoreRuntime]:
+    with _open_runtime(
+        settings,
+        annualized_excess_calculator=RemoteAnnualizedExcessCalculator(
+            internal_api_origin
+        ),
+        strategy_comparison=None,
+    ) as runtime:
+        yield runtime
+
+
+@contextmanager
+def _open_runtime(
+    settings: CoreSettings,
+    *,
+    annualized_excess_calculator: AnnualizedExcessCalculator,
+    strategy_comparison: StrategyComparisonService | None,
+) -> Iterator[CoreRuntime]:
     working_cache = TemporaryDirectory(prefix="thesistrace-core-working-cache-")
     database = PostgresDatabase(settings.database_url)
     try:
@@ -204,6 +243,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             research_references_result=research_result_manifest_is_referenced,
             execution_memory_bytes=settings.tracking_execution_memory_bytes,
             lifecycle_event=emit_operational_event_data,
+            strategy_comparison=strategy_comparison,
         )
         research_runs = ResearchRunService(
             database,
@@ -221,6 +261,8 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             ),
             execution_memory_bytes=settings.research_execution_memory_bytes,
             lifecycle_event=emit_operational_event_data,
+            annualized_excess_calculator=annualized_excess_calculator,
+            strategy_comparison=strategy_comparison,
         )
         research_batches = ResearchBatchService(
             database,
@@ -253,6 +295,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
                 s3_region=settings.s3_region,
                 data_mount=settings.data_mount,
             ),
+            annualized_excess_calculator=annualized_excess_calculator,
         )
     finally:
         database.close()

@@ -94,6 +94,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "research_folder": {"_postgres"},
         "daily_track": {
             "_postgres",
+            "benchmark",
             "data",
             "operational_events",
             "publication",
@@ -103,6 +104,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "research_run": {
             "_postgres",
             "alpha_language",
+            "benchmark",
             "daily_track",
             "data",
             "operational_events",

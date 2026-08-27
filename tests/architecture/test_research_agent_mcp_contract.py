@@ -1549,9 +1549,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "2b8cc6a48f5df6815a41eeb054973f1b82ac0da8536c088899249d4904dc7952"
+        "4bb14ffc9d4fbabff2eee6718280a070ccbf040c4b8acbfba61bf93b79592047"
     )
-    assert len(canonical) == 143238
+    assert len(canonical) == 148225
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -1985,10 +1985,26 @@ async def _exercise_in_memory_protocol() -> None:
         assert metrics_definition["additionalProperties"] is False
         assert {
             "net_cumulative_return",
-            "benchmark_cumulative_return",
-            "annualized_excess_return",
             "maximum_drawdown",
         } <= set(metrics_definition["properties"])
+        assert {
+            "benchmark_cumulative_return",
+            "benchmark_cagr",
+            "annualized_excess_return",
+        }.isdisjoint(metrics_definition["properties"])
+        comparison_definition = result_output_schema["$defs"][
+            "AvailableStrategyComparisonSummary"
+        ]
+        assert set(comparison_definition["properties"]) == {
+            "status",
+            "benchmark",
+            "entry",
+            "terminal",
+            "metrics",
+        }
+        assert "curves" not in str(summary_definition).lower()
+        assert "selected_universe_equal_weight" not in str(result_output_schema).lower()
+        assert "benchmark_nav" not in str(result_output_schema).lower()
         serialize_server_result(
             "tools/list",
             LATEST_HANDSHAKE_VERSION,

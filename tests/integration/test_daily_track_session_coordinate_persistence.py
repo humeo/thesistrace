@@ -556,10 +556,12 @@ def _insert_parent_track(database: PostgresDatabase, *, track_id: str) -> None:
         "verified_result": {
             "kind": "research.result",
             "research_run_id": f"run_{track_id}",
-            "schema_version": "research-result-v1",
+            "schema_version": "research-result-v2",
             "result_manifest_sha256": "f" * 64,
             "result_checksum_sha256": "e" * 64,
         },
+        "strategy_entry_session": "2026-08-03",
+        "strategy_initial_cash_cny": "10000000",
         "initial_strategy_state": _strategy_state("2026-08-03", "10000000"),
         "calculation_contracts": {},
     }
@@ -578,7 +580,6 @@ def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
     last_daily = {name: 0 for name in LAST_DAILY_OBSERVATION_KEYS}
     last_daily.update(
         {
-            "benchmark_nav": "1",
             "cumulative_transaction_cost": "0",
             "cycle_type": "terminal_valuation",
             "execution_rounding_residual": "0",
@@ -606,7 +607,6 @@ def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
         "net_cash": net_nav,
         "gross_nav": net_nav,
         "net_nav": net_nav,
-        "benchmark_nav": "1",
         "cumulative_transaction_cost": "0",
         "positions": [],
         "rebalance_phase": {

@@ -13,6 +13,8 @@ from pydantic import (
     model_validator,
 )
 
+from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
+
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 type DailyTrackResultSection = Literal[
     "factor",
@@ -102,7 +104,6 @@ class InitialStrategyState(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
-    benchmark_nav: str
     cumulative_transaction_cost: str
     positions: list[dict[str, object]]
     rebalance_phase: dict[str, object]
@@ -121,6 +122,8 @@ class TrackingOrigin(BaseModel):
     seed_data_generation_id: str
     seed_data_through_session: str
     verified_result: VerifiedResultOrigin
+    strategy_entry_session: str
+    strategy_initial_cash_cny: str
     initial_strategy_state: InitialStrategyState
     calculation_contracts: dict[str, object]
 
@@ -301,7 +304,6 @@ class DailyTrackOriginAccount(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
-    benchmark_nav: str
     cumulative_transaction_cost: str
     positions: list[DailyTrackOriginPosition]
     rebalance_phase: DailyTrackOriginRebalancePhase
@@ -382,7 +384,6 @@ class DailyTrackStrategyObservation(BaseModel):
     session: str
     gross_nav: str
     net_nav: str
-    benchmark_nav: str
     net_cash: str
     transaction_cost_cny: str
     holdings_count: int
@@ -392,19 +393,12 @@ class DailyTrackStrategyObservation(BaseModel):
     suspension_rejections: int
 
 
-class DailyTrackBenchmark(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    universe: str
-    methodology: Literal["selected_universe_equal_weight"]
-
-
 class DailyTrackStrategyResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     summary: dict[str, object]
-    benchmark: DailyTrackBenchmark
     observations: list[DailyTrackStrategyObservation]
+    comparison: StrategyComparison
 
 
 class DailyTrackFactorMetricUnits(BaseModel):
@@ -520,10 +514,7 @@ class DailyTrackTurnover(BaseModel):
 class DailyTrackStrategyMetrics(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    annualized_excess_return: DailyTrackOptionalNumber
     annualized_volatility: DailyTrackOptionalNumber
-    benchmark_cagr: DailyTrackOptionalNumber
-    benchmark_cumulative_return: DailyTrackOptionalNumber
     calmar: DailyTrackOptionalNumber
     cash_ratio: DailyTrackCashRatio
     gross_cagr: DailyTrackOptionalNumber
@@ -548,7 +539,7 @@ class DailyTrackStrategySummaryResultSection(BaseModel):
     origin_session: date
     strategy_session: date
     summary: DailyTrackStrategyMetrics
-    benchmark: DailyTrackBenchmark
+    comparison: StrategyComparisonSummary
     units: DailyTrackStrategyMetricUnits = DailyTrackStrategyMetricUnits()
     missing_values: DailyTrackMissingValueSemantics = DailyTrackMissingValueSemantics()
 
@@ -570,7 +561,6 @@ class DailyTrackOriginAccountSummary(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
-    benchmark_nav: str
     cumulative_transaction_cost: str
     rebalance_phase: DailyTrackOriginRebalancePhase
     pending_signal: DailyTrackOriginPendingSignal | None
@@ -695,7 +685,7 @@ class KernelStateCheckpoint(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["daily-track-checkpoint-v1"]
+    schema_version: Literal["daily-track-checkpoint-v2"]
     origin_session: str
     boundary_session: str
     run_input: KernelRunInputSnapshot

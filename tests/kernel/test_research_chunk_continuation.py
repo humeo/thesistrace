@@ -285,7 +285,7 @@ def _alpha_factor_binding(
     run_input: RunInput,
     *,
     data_generation_id: str = "e" * 64,
-    kernel_semantic_version: str = "kernel-v4",
+    kernel_semantic_version: str = "kernel-v5",
 ) -> AlphaFactorExecutionBinding:
     return AlphaFactorExecutionBinding.from_run_input(
         run_input,
@@ -293,7 +293,7 @@ def _alpha_factor_binding(
         numeric_execution_contract=NUMERIC_CONTRACT_ID,
         semantic_versions={
             "factor": "factor-v1",
-            "strategy": "strategy-v1",
+            "strategy": "strategy-v2",
             "kernel": kernel_semantic_version,
         },
     )
@@ -788,7 +788,7 @@ def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None
             factor_input,
             data_generation_id="e" * 64,
             numeric_execution_contract="numeric-drift",
-            semantic_versions={"kernel": "kernel-v4"},
+            semantic_versions={"kernel": "kernel-v5"},
         )
 
     changed = alpha_language.compile("-close")
@@ -1074,7 +1074,6 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         run_columnar_chunk(run_input, cancellation_check=lambda: None),
         research_kind="strategy_backtest",
         rebalance_interval=5,
-        universe=run_input.universe,
     )
     for boundaries in (
         ((20, 40), (40, 60), (60, 80)),

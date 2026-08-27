@@ -18,6 +18,11 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.benchmark import (
+    StrategyComparisonFacts,
+    StrategyComparisonService,
+    strategy_comparison_summary,
+)
 from thesistrace.daily_track.cache import _DailyTrackWorkingCache
 from thesistrace.daily_track.calculation import (
     origin_calculation_start_index,
@@ -331,6 +336,7 @@ class DailyTrackService:
         research_references_result: ResearchReferencesResult | None = None,
         execution_memory_bytes: int = DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES,
         lifecycle_event: ExecutionEvent | None = None,
+        strategy_comparison: StrategyComparisonService | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0 or execution_memory_bytes <= 0:
             raise ValueError("DailyTrack lease and heartbeat intervals must be positive")
@@ -358,6 +364,7 @@ class DailyTrackService:
         self._seed_research_exists = seed_research_exists
         self._research_references_result = research_references_result
         self._execution_memory_bytes = execution_memory_bytes
+        self._strategy_comparison = strategy_comparison
         self._lifecycle_event = non_blocking_operational_event_sink(
             lifecycle_event or (lambda _event: None),
             component="core_api",
@@ -438,7 +445,7 @@ class DailyTrackService:
         track_id = f"track_{uuid4().hex[:20]}"
         boundary = origin.initial_strategy_state.session
         provenance = {
-            "schema_version": "daily-track-activation-checkpoint-v1",
+            "schema_version": "daily-track-activation-checkpoint-v2",
             "daily_track_id": track_id,
             "seed_run_id": origin.seed_run_id,
             "boundary_session": boundary,
@@ -449,7 +456,7 @@ class DailyTrackService:
             payloads={
                 "checkpoint": JsonPayload(
                     {
-                        "schema_version": "daily-track-activation-checkpoint-v1",
+                        "schema_version": "daily-track-activation-checkpoint-v2",
                         "terminal_strategy_state": (
                             origin.initial_strategy_state.model_dump(mode="json")
                         ),
@@ -1571,16 +1578,29 @@ class DailyTrackService:
                 factor=_public_factor(factor_value),
             )
         if isinstance(query, DailyTrackStrategySummaryResultSectionInput):
-            summary = self._current_strategy_summary(origin, track_snapshot)
+            detail = self.get(query.track_id)
+            if detail is None:
+                raise DailyTrackResultUnavailable("DailyTrack detail is unavailable")
+            summary = dict(
+                _mapping_value(
+                    detail.strategy.summary.get("metrics"),
+                    "Tracking Strategy metrics",
+                )
+            )
+            for comparison_metric in (
+                "annualized_excess_return",
+                "benchmark_cagr",
+                "benchmark_cumulative_return",
+            ):
+                summary.pop(comparison_metric, None)
             return DailyTrackStrategySummaryResultSection(
                 track_id=query.track_id,
-                origin_session=origin.initial_strategy_state.session,
-                strategy_session=current_session,
-                summary=dict(summary),
-                benchmark={
-                    "universe": origin_universe(origin),
-                    "methodology": "selected_universe_equal_weight",
-                },
+                origin_session=detail.origin.strategy_session,
+                strategy_session=detail.strategy_session,
+                summary=summary,
+                comparison=strategy_comparison_summary(
+                    detail.strategy.comparison.model_dump(mode="json")
+                ),
             )
         if isinstance(query, DailyTrackStrategyObservationsResultSectionInput):
             rows, next_after = self._bounded_strategy_observations(
@@ -1630,7 +1650,6 @@ class DailyTrackService:
                             "net_cash",
                             "gross_nav",
                             "net_nav",
-                            "benchmark_nav",
                             "cumulative_transaction_cost",
                             "rebalance_phase",
                             "pending_signal",
@@ -1891,9 +1910,7 @@ class DailyTrackService:
             observations_by_session = {
                 str(item["session"]): dict(item) for item in seed_observations
             }
-            projected_strategy_summary: Mapping[str, object] = {
-                name: value for name, value in strategy_summary.items() if name != "benchmark"
-            }
+            projected_strategy_summary: Mapping[str, object] = dict(strategy_summary)
             for checkpoint in snapshot.checkpoints[1:]:
                 value = _read_publication_json(
                     self._publication,
@@ -1926,8 +1943,33 @@ class DailyTrackService:
                 ):
                     observations_by_session[str(observation["session"])] = dict(observation)
             factor = _public_factor(factor_value)
-            universe = origin_universe(origin)
-            recent_strategy_sessions = sorted(observations_by_session)[-504:]
+            all_strategy_sessions = sorted(observations_by_session)
+            if origin.strategy_entry_session not in observations_by_session:
+                raise RuntimeError("Tracking Origin Entry session is missing")
+            entry_session_index = all_strategy_sessions.index(origin.strategy_entry_session)
+            recent_strategy_sessions = all_strategy_sessions[-504:]
+            recent_observations = [
+                observations_by_session[session] for session in recent_strategy_sessions
+            ]
+            terminal_observation = recent_observations[-1]
+            if self._strategy_comparison is None:
+                raise RuntimeError("Strategy comparison service is not configured")
+            comparison = self._strategy_comparison.comparison(
+                StrategyComparisonFacts(
+                    entry_session=origin.strategy_entry_session,
+                    terminal_session=str(terminal_observation["session"]),
+                    session_interval_count=(
+                        len(all_strategy_sessions) - entry_session_index - 1
+                    ),
+                    initial_cash_cny=origin.strategy_initial_cash_cny,
+                    terminal_net_nav=str(terminal_observation["net_nav"]),
+                ),
+                recent_observations,
+            )
+            projected_strategy_summary = _inject_comparison_metrics(
+                projected_strategy_summary,
+                comparison,
+            )
             return DailyTrackDetail.model_validate(
                 {
                     "id": str(row["id"]),
@@ -1945,7 +1987,6 @@ class DailyTrackService:
                                 "net_cash",
                                 "gross_nav",
                                 "net_nav",
-                                "benchmark_nav",
                                 "cumulative_transaction_cost",
                                 "positions",
                                 "rebalance_phase",
@@ -1992,13 +2033,8 @@ class DailyTrackService:
                     "factor": factor,
                     "strategy": {
                         "summary": projected_strategy_summary,
-                        "benchmark": {
-                            "universe": universe,
-                            "methodology": "selected_universe_equal_weight",
-                        },
-                        "observations": [
-                            observations_by_session[session] for session in recent_strategy_sessions
-                        ],
+                        "observations": recent_observations,
+                        "comparison": comparison,
                     },
                 }
             )
@@ -2959,7 +2995,7 @@ class DailyTrackService:
     ) -> Mapping[str, object] | None:
         if (
             self._working_cache is None
-            or predecessor.get("schema_version") != "daily-track-checkpoint-v1"
+            or predecessor.get("schema_version") != "daily-track-checkpoint-v2"
         ):
             return None
         try:
@@ -3624,6 +3660,31 @@ def _public_factor(value: Mapping[str, object]) -> dict[str, object]:
             for name in ("1", "5", "20")
         }
     }
+
+
+def _inject_comparison_metrics(
+    summary: Mapping[str, object],
+    comparison: Mapping[str, object],
+) -> dict[str, object]:
+    metrics = _mapping_value(summary.get("metrics"), "Strategy metrics")
+    comparison_metrics = comparison.get("metrics")
+    injected = {
+        **dict(metrics),
+        "annualized_excess_return": None,
+        "benchmark_cumulative_return": None,
+        "benchmark_cagr": None,
+    }
+    if comparison.get("status") == "available" and isinstance(
+        comparison_metrics,
+        Mapping,
+    ):
+        for name in (
+            "annualized_excess_return",
+            "benchmark_cumulative_return",
+            "benchmark_cagr",
+        ):
+            injected[name] = comparison_metrics.get(name)
+    return {**dict(summary), "metrics": injected}
 
 
 def _read_publication_json(

@@ -14,6 +14,13 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
 from thesistrace.alpha_language import alpha_language
+from thesistrace.benchmark import (
+    INTERNAL_STRATEGY_METRIC_PATH,
+    InternalAnnualizedExcessRequest,
+    InternalAnnualizedExcessResponse,
+    StrategyComparisonError,
+    StrategyComparisonFacts,
+)
 from thesistrace.daily_track import (
     DailyTrackDeleteConflict,
     DailyTrackDetail,
@@ -235,6 +242,31 @@ def create_app(
                 else status.HTTP_503_SERVICE_UNAVAILABLE
             ),
             content=snapshot,
+        )
+
+    @app.post(
+        INTERNAL_STRATEGY_METRIC_PATH,
+        response_model=InternalAnnualizedExcessResponse,
+        include_in_schema=False,
+    )
+    def calculate_annualized_excess(
+        request: Request,
+        facts: InternalAnnualizedExcessRequest,
+    ) -> InternalAnnualizedExcessResponse:
+        try:
+            metric = _runtime(request).annualized_excess_calculator.annualized_excess_return(
+                StrategyComparisonFacts(
+                    entry_session=facts.entry_session,
+                    terminal_session=facts.terminal_session,
+                    session_interval_count=facts.session_interval_count,
+                    initial_cash_cny=facts.initial_cash_cny,
+                    terminal_net_nav=facts.terminal_net_nav,
+                )
+            )
+        except StrategyComparisonError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return InternalAnnualizedExcessResponse(
+            annualized_excess_return=metric,
         )
 
     @app.get("/api/data", response_model=DataOverview)

@@ -1058,22 +1058,18 @@ def _assert_strategy_science(results: list[dict[str, object]]) -> None:
         summary = stored["strategy_summary"]
         metrics = summary["metrics"]
         assert summary["source_checksum"] == _independent_observation_checksum(observations)
+        initial_cash = Decimal(str(summary["initial_cash_cny"]))
         for observation in observations:
-            for name in ("gross_nav", "net_nav", "benchmark_nav", "net_cash"):
+            for name in ("gross_nav", "net_nav", "net_cash"):
                 assert Decimal(str(observation[name])).is_finite()
             assert Decimal(str(observation["gross_nav"])) > 0
             assert Decimal(str(observation["net_nav"])) > 0
-            assert Decimal(str(observation["benchmark_nav"])) > 0
-        first = observations[0]
         last = observations[-1]
         assert metrics["gross_cumulative_return"] == float(
-            Decimal(str(last["gross_nav"])) / Decimal(str(first["gross_nav"])) - 1
+            Decimal(str(last["gross_nav"])) / initial_cash - 1
         )
         assert metrics["net_cumulative_return"] == float(
-            Decimal(str(last["net_nav"])) / Decimal(str(first["net_nav"])) - 1
-        )
-        assert metrics["benchmark_cumulative_return"] == float(
-            Decimal(str(last["benchmark_nav"])) / Decimal(str(first["benchmark_nav"])) - 1
+            Decimal(str(last["net_nav"])) / initial_cash - 1
         )
         cumulative_cost = sum(
             (Decimal(str(observation["transaction_cost_cny"])) for observation in observations),
@@ -1084,10 +1080,10 @@ def _assert_strategy_science(results: list[dict[str, object]]) -> None:
         assert metrics["transaction_costs"]["cumulative_amount"] == float(cumulative_cost)
         assert {
             name: str(terminal[name])
-            for name in ("session", "gross_nav", "net_nav", "benchmark_nav", "net_cash")
+            for name in ("session", "gross_nav", "net_nav", "net_cash")
         } == {
             name: str(last[name])
-            for name in ("session", "gross_nav", "net_nav", "benchmark_nav", "net_cash")
+            for name in ("session", "gross_nav", "net_nav", "net_cash")
         }
         independently_recomputed_drawdown = _independent_maximum_drawdown(observations)
         assert metrics["maximum_drawdown"] == independently_recomputed_drawdown, {

@@ -114,14 +114,18 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
                 prepared_at=datetime(2026, 8, 11, 13, tzinfo=UTC),
             )
             assert replacement_generation != frozen_generation
+            barrier.release.set()
+            assert future.result(timeout=20) is True
+
+            # Both the Batch and ordinary runs were admitted against the frozen
+            # generation. Complete the Batch before executing the ordinary runs
+            # so their unrelated runtime cannot exhaust the preparation barrier.
             for ordinary_run in ordinary:
                 assert runtime.research_runs.process_next() is True
                 assert (
                     client.get(f"/api/research-runs/{ordinary_run['id']}").json()["status"]
                     == "succeeded"
                 )
-            barrier.release.set()
-            assert future.result(timeout=20) is True
 
         completed = client.get(f"/api/research-batches/{batch['id']}").json()
         assert completed["status"] == "succeeded"

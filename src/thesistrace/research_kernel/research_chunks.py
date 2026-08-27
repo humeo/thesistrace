@@ -621,18 +621,18 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
         factor_summary = alpha_factor_outcome._factor_summary_for_current_process()
         if factor_summary is None:
             raise ValueError("Final Alpha-and-Factor outcome is incomplete")
+        entry_session = metric_state.get("entry_session")
+        if not isinstance(entry_session, str):
+            raise ValueError("Final Strategy has no investable Entry Open")
         final_values = {
             "factor_summary": factor_summary,
             "strategy_summary": {
                 "alpha_checksum": str(
                     alpha_factor_outcome._continuation_for_current_process()["alpha_checksum"]
                 ),
+                "entry_session": entry_session,
                 "initial_cash_cny": str(strategy["initial_cash_cny"]),
                 "source_checksum": str(continuation["strategy_checksum"]),
-                "benchmark": {
-                    "universe": run_input.universe,
-                    "methodology": "selected_universe_equal_weight",
-                },
                 "metrics": metrics,
             },
             "terminal_strategy_state": {
@@ -641,7 +641,6 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
                 "net_cash": str(terminal["net_cash"]),
                 "gross_nav": str(terminal["gross_nav"]),
                 "net_nav": str(terminal["net_nav"]),
-                "benchmark_nav": str(terminal["benchmark_nav"]),
                 "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
                 "positions": [dict(value) for value in strategy["positions"]],
                 "rebalance_phase": {
@@ -1134,7 +1133,6 @@ def _strategy_observations(
                 "session": str(row["session"]),
                 "gross_nav": str(row["gross_nav"]),
                 "net_nav": str(row["net_nav"]),
-                "benchmark_nav": str(row["benchmark_nav"]),
                 "net_cash": str(row["net_cash"]),
                 "transaction_cost_cny": canonical_decimal(cumulative_cost - prior_cost),
                 "holdings_count": int(row["holdings_count"]),
@@ -1292,7 +1290,6 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
         "net_nav",
         "gross_cash",
         "net_cash",
-        "benchmark_nav",
         "cumulative_transaction_cost",
     }
     if not required_daily <= set(last_daily) or not isinstance(last_daily["session"], str):
@@ -1319,7 +1316,7 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
             ):
                 raise ValueError("Strategy continuation is invalid")
         if (
-            metric_state.get("contract") != "strategy-metric-state-v1"
+            metric_state.get("contract") != "strategy-metric-state-v2"
             or metric_state.get("session_count") != report_session_count
             or metric_state.get("last_session") != last_daily["session"]
         ):

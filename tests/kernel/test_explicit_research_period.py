@@ -81,7 +81,6 @@ def test_explicit_research_period_projects_four_variable_length_result_values(
         output,
         research_kind="strategy_backtest",
         rebalance_interval=1,
-        universe="manual",
     )
     payloads = result_publication_payloads(
         result, research_kind="strategy_backtest"

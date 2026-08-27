@@ -15,7 +15,7 @@ from time import monotonic
 import boto3
 import pytest
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
+from core_runtime import drop_product_schemas, internal_api_origin
 from fastapi.testclient import TestClient
 from psycopg import connect
 from test_core_current_head_research_run_retry import (
@@ -189,6 +189,7 @@ def test_running_cancel_fences_a_stale_prepared_worker_and_survives_restart(
             publication=runtime.publication,
             execution=SupervisedResearchExecutor(settings.data_mount),
             progress=pause_after_prepare,
+            annualized_excess_calculator=runtime.annualized_excess_calculator,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(stale.process_next)
@@ -584,23 +585,44 @@ def test_cancel_racing_with_terminal_handshake_failure_is_confirmed_locally(
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
         run_id = _admit_run(client, request_id="cancel-acknowledgement-failure")
+        events: list[dict[str, object]] = []
         service = ResearchRunService(
             runtime.database,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
             publication=runtime.publication,
             execution=FailingAcknowledgementExecutor(),
+            annualized_excess_calculator=runtime.annualized_excess_calculator,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(service.process_next)
-            assert acknowledgement_started.wait(timeout=20)
-            cancelled = client.post(
-                f"/api/research-runs/{run_id}/cancel",
-                json={"request_id": "cancel-acknowledgement-failure-request"},
+            future = executor.submit(
+                service.process_next,
+                on_execution_event=events.append,
             )
-            assert cancelled.status_code == 200
-            assert cancelled.json()["status"] == "cancelling"
-            release_failure.set()
+            deadline = monotonic() + 30
+            try:
+                while not acknowledgement_started.wait(timeout=0.1):
+                    if future.done():
+                        assert future.result() is True
+                        detail = client.get(f"/api/research-runs/{run_id}").json()
+                        raise AssertionError(
+                            "Research Worker finished before terminal acknowledgement; "
+                            f"status={detail['status']!r}; events={events!r}"
+                        )
+                    if monotonic() >= deadline:
+                        detail = client.get(f"/api/research-runs/{run_id}").json()
+                        raise AssertionError(
+                            "Research Worker did not reach terminal acknowledgement; "
+                            f"status={detail['status']!r}; events={events!r}"
+                        )
+                cancelled = client.post(
+                    f"/api/research-runs/{run_id}/cancel",
+                    json={"request_id": "cancel-acknowledgement-failure-request"},
+                )
+                assert cancelled.status_code == 200
+                assert cancelled.json()["status"] == "cancelling"
+            finally:
+                release_failure.set()
             assert future.result(timeout=10) is True
 
         assert _attempt_status(runtime.database, run_id) == "cancelled"
@@ -983,6 +1005,7 @@ def _start_claim_barrier_worker(
             "THESISTRACE_S3_BUCKET": settings.s3_bucket,
             "THESISTRACE_S3_REGION": settings.s3_region,
             "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
+            "THESISTRACE_INTERNAL_API_ORIGIN": internal_api_origin(settings),
             "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
                 settings.batch_attempt_control_directory
             ),

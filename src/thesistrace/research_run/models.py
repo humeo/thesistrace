@@ -17,6 +17,7 @@ from pydantic import (
 
 from thesistrace.alpha_language.language import MAX_FORMULA_LENGTH
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
+from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
 from thesistrace.daily_track.models import DailyTrackSummary
 from thesistrace.data.models import FinancialResearchReadiness
 from thesistrace.research_run.result_schema import StrategyMetrics
@@ -504,7 +505,6 @@ class StrategyDailyObservation(BaseModel):
     session: str
     gross_nav: str
     net_nav: str
-    benchmark_nav: str
     net_cash: str
     transaction_cost_cny: str
     holdings_count: int
@@ -514,19 +514,12 @@ class StrategyDailyObservation(BaseModel):
     suspension_rejections: int
 
 
-class StrategyBenchmark(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    universe: str
-    methodology: Literal["selected_universe_equal_weight"]
-
-
 class StrategyResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     summary: dict[str, object]
-    benchmark: StrategyBenchmark
     observations: list[StrategyDailyObservation]
+    comparison: StrategyComparison
 
 
 class TerminalStrategyPosition(BaseModel):
@@ -564,7 +557,6 @@ class TerminalStrategyStateView(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
-    benchmark_nav: str
     cumulative_transaction_cost: str
     positions: list[TerminalStrategyPosition]
     rebalance_phase: TerminalRebalancePhase
@@ -685,24 +677,16 @@ class FactorResultSection(BaseModel):
     missing_values: FactorMissingValueSemantics = FactorMissingValueSemantics()
 
 
-class StrategyComparison(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    net_cumulative_return: float | None
-    benchmark_cumulative_return: float | None
-    annualized_excess_return: float | None
-
-
 class StrategySummaryResultSection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     section: Literal["strategy_summary"] = "strategy_summary"
     run_id: str
     research_kind: Literal["strategy_backtest"] = "strategy_backtest"
+    entry_session: str
     initial_cash_cny: str
     metrics: StrategyMetrics
-    benchmark: StrategyBenchmark
-    comparison: StrategyComparison
+    comparison: StrategyComparisonSummary
 
 
 class StrategyObservationsResultSection(BaseModel):
@@ -726,7 +710,6 @@ class TerminalStrategyStateResultSection(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
-    benchmark_nav: str
     cumulative_transaction_cost: str
     rebalance_phase: TerminalRebalancePhase
     pending_signal: TerminalPendingSignal | None
