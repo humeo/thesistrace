@@ -51,6 +51,7 @@ class StrategyComparisonCurvePoint(ComparisonModel):
     net_strategy_return: float
     benchmark_relative_return: float
     net_excess_nav: float
+    net_excess_return: float
 
 
 class AvailableStrategyComparisonSummary(ComparisonModel):

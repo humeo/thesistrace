@@ -60,6 +60,7 @@ def test_comparison_uses_entry_initial_cash_and_same_open_interval(tmp_path: Pat
             "net_strategy_return": -0.001,
             "benchmark_relative_return": 0.0,
             "net_excess_nav": 0.999,
+            "net_excess_return": -0.001,
         }
     )
     assert comparison["curves"][-1] == pytest.approx(
@@ -68,6 +69,7 @@ def test_comparison_uses_entry_initial_cash_and_same_open_interval(tmp_path: Pat
             "net_strategy_return": 0.01,
             "benchmark_relative_return": 0.02,
             "net_excess_nav": 1.01 / 1.02,
+            "net_excess_return": (1.01 / 1.02) - 1,
         }
     )
     metrics = comparison["metrics"]

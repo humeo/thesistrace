@@ -1146,6 +1146,33 @@ def test_obsolete_authoring_contract_cannot_reenter_the_active_runtime() -> None
         assert forbidden not in active_authoring
 
 
+def test_browser_only_plots_backend_precomputed_strategy_comparison_curves() -> None:
+    web_root = ROOT / "web" / "src"
+    chart_source = (web_root / "analysis" / "StrategyPerformanceChart.tsx").read_text()
+    product_source = "\n".join(
+        path.read_text()
+        for path in web_root.rglob("*")
+        if path.suffix in {".ts", ".tsx"} and ".test." not in path.name
+    )
+
+    for precomputed_field in (
+        "net_strategy_return",
+        "benchmark_relative_return",
+        "net_excess_return",
+    ):
+        assert precomputed_field in chart_source
+    for forbidden_financial_input in (
+        "net_nav",
+        "benchmark_nav",
+        "initial_cash_cny",
+        "benchmark_open_level",
+        "net_excess_nav",
+    ):
+        assert forbidden_financial_input not in chart_source
+    assert "selected_universe_equal_weight" not in product_source
+    assert "benchmark_nav" not in product_source
+
+
 
 def _string_literals(path: Path) -> str:
     tree = ast.parse(path.read_text())

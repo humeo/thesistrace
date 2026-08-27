@@ -16,6 +16,7 @@ import {
   isTerminalResearch,
   researchRunListPath,
   sortResearchRuns,
+  type ResearchResult,
   type ResearchRun,
   type TerminalStrategyState,
 } from "./ResearchRunsPage";
@@ -180,7 +181,6 @@ const TERMINAL_STATE: TerminalStrategyState = {
   net_cash: "8999995",
   gross_nav: "10001000",
   net_nav: "10000995",
-  benchmark_nav: "1.001",
   cumulative_transaction_cost: "5",
   positions: [
     {
@@ -278,7 +278,7 @@ describe("ResearchResultView", () => {
         quantile_valid_session_count: 0,
       },
     };
-    const markup = renderToStaticMarkup(<ResearchResultView result={{
+    const result = {
       factor: {
         horizons: {
           "1": horizon,
@@ -289,23 +289,23 @@ describe("ResearchResultView", () => {
       strategy: {
         summary: {
           alpha_checksum: "a",
+          entry_session: "2026-08-03",
           initial_cash_cny: "10000000",
           source_checksum: "b",
           metrics: {
             net_cumulative_return: 0.1,
             benchmark_cumulative_return: 0.05,
+            benchmark_cagr: 0.07,
             annualized_excess_return: 0.03,
             maximum_drawdown: { value: -0.02 },
             sharpe: 1.2,
             transaction_costs: { cumulative_amount: 25 },
           },
         },
-        benchmark: { universe: "top300", methodology: "selected_universe_equal_weight" },
         observations: [{
           session: "2026-08-03",
           gross_nav: "10000000",
           net_nav: "10000000",
-          benchmark_nav: "1",
           net_cash: "10000000",
           transaction_cost_cny: "0",
           holdings_count: 0,
@@ -314,24 +314,90 @@ describe("ResearchResultView", () => {
           lower_limit_sell_rejections: 0,
           suspension_rejections: 0,
         }],
+        comparison: {
+          status: "available",
+          benchmark: {
+            id: "csi300-price-index-open",
+            display_name: "沪深300",
+            ts_code: "399300.SZ",
+            kind: "price_index",
+            coordinate: "open",
+            snapshot_sha256: "c".repeat(64),
+            coverage: {
+              start_session: "2010-01-04",
+              end_session: "2026-08-13",
+            },
+            published_at: "2026-08-13T18:00:00Z",
+          },
+          entry: {
+            session: "2026-08-03",
+            benchmark_open_level: "4000.1",
+            initial_cash_cny: "10000000",
+          },
+          terminal: {
+            session: "2026-08-05",
+            benchmark_open_level: "4200.105",
+            net_nav: "11000000",
+          },
+          metrics: {
+            net_strategy_cumulative_return: 0.1,
+            benchmark_cumulative_return: 0.05,
+            net_strategy_cagr: 0.14,
+            benchmark_cagr: 0.07,
+            annualized_excess_return: 0.03,
+          },
+          curves: [{
+            session: "2026-08-03",
+            net_strategy_return: -0.001,
+            benchmark_relative_return: 0,
+            net_excess_nav: 0.999,
+            net_excess_return: -0.001,
+          }],
+        },
       },
       terminal_strategy_state: TERMINAL_STATE,
       provenance: {
-        schema_version: "research-result-v1",
+        schema_version: "research-result-v2",
         research_run_id: "run_test",
         immutable_input_sha256: "a".repeat(64),
         calculation_contracts: {},
-        semantic_versions: { kernel: "kernel-v4" },
+        semantic_versions: { kernel: "kernel-v5" },
         research_kind: "strategy_backtest",
       },
-    }} />);
+    } satisfies ResearchResult;
+    const markup = renderToStaticMarkup(<ResearchResultView result={result} />);
 
     expect(markup).toContain("Factor Summary");
     expect(markup).toContain("Strategy Summary");
     expect(markup).toContain("Rank IC coverage 1/2");
+    expect(markup).toContain("沪深300");
+    expect(markup).toContain("数据截至 <time dateTime=\"2026-08-13\">2026-08-13</time>");
+    expect(markup).toContain("c".repeat(64));
+    expect(markup).toContain("Entry Open");
+    expect(markup).toContain("Terminal Open");
+    expect(markup).toContain("Net Excess");
+    expect(markup).not.toContain("Selected-universe benchmark");
     expect(markup).not.toMatch(
       /Predictive evidence|One fill path|Research-period account observations|signal sessions|Daily Observations|Provenance|Input digest/i,
     );
+
+    const unavailableMarkup = renderToStaticMarkup(
+      <ResearchResultView
+        result={{
+          ...result,
+          strategy: {
+            ...result.strategy,
+            comparison: {
+              status: "unavailable",
+              reason: "benchmark_snapshot_unavailable",
+            },
+          },
+        }}
+      />,
+    );
+    expect(unavailableMarkup).toContain("沪深300 comparison unavailable");
+    expect(unavailableMarkup).toContain("No comparison chart is shown");
+    expect(unavailableMarkup).not.toContain("<figure");
   });
 });
 
@@ -525,7 +591,7 @@ const FACTOR_RESULT = {
     }>,
   },
   provenance: {
-    schema_version: "research-result-v1",
+    schema_version: "research-result-v2",
     research_run_id: "run_factor",
     immutable_input_sha256: "a".repeat(64),
     calculation_contracts: {},

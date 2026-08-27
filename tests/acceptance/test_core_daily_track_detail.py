@@ -158,6 +158,7 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
     assert comparison["curves"][0]["net_strategy_return"] == expected_net_return
     assert comparison["curves"][0]["benchmark_relative_return"] == 0.0
     assert comparison["curves"][0]["net_excess_nav"] == float(expected_wealth)
+    assert comparison["curves"][0]["net_excess_return"] == expected_net_return
     assert actual_metrics["sharpe"] == pytest.approx(
         -math.sqrt(252 / return_intervals),
         rel=1e-12,

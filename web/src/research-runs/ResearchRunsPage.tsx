@@ -7,7 +7,8 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { StrategyPerformanceChart } from "../analysis/StrategyPerformanceChart";
+import { StrategyComparisonPanel } from "../analysis/StrategyComparisonPanel";
+import type { StrategyComparison } from "../analysis/strategyComparison";
 import {
   useResearchAsDraft,
   type FrozenResearchAuthorableInput,
@@ -42,7 +43,6 @@ type StrategyObservation = {
   session: string;
   gross_nav: string;
   net_nav: string;
-  benchmark_nav: string;
   net_cash: string;
   transaction_cost_cny: string;
   holdings_count: number;
@@ -54,8 +54,9 @@ type StrategyObservation = {
 
 type StrategyMetrics = {
   net_cumulative_return: number;
-  benchmark_cumulative_return: number;
-  annualized_excess_return: number;
+  benchmark_cumulative_return: number | null;
+  benchmark_cagr: number | null;
+  annualized_excess_return: number | null;
   maximum_drawdown: { value: number | null };
   sharpe: number | null;
   transaction_costs: { cumulative_amount: number };
@@ -67,7 +68,6 @@ export type TerminalStrategyState = {
   net_cash: string;
   gross_nav: string;
   net_nav: string;
-  benchmark_nav: string;
   cumulative_transaction_cost: string;
   positions: Array<{
     instrument_id: string;
@@ -107,15 +107,13 @@ type StrategyBacktestResearchResult = {
   strategy: {
     summary: {
       alpha_checksum: string;
+      entry_session: string;
       initial_cash_cny: string;
       source_checksum: string;
       metrics: StrategyMetrics;
     };
-    benchmark: {
-      universe: string;
-      methodology: "selected_universe_equal_weight";
-    };
     observations: StrategyObservation[];
+    comparison: StrategyComparison;
   };
   terminal_strategy_state: TerminalStrategyState;
   provenance: ResearchResultProvenance & {
@@ -123,7 +121,7 @@ type StrategyBacktestResearchResult = {
   };
 };
 
-type ResearchResult = FactorEvaluationResearchResult | StrategyBacktestResearchResult;
+export type ResearchResult = FactorEvaluationResearchResult | StrategyBacktestResearchResult;
 
 export type ResearchRunProgress = {
   phase: "queued" | "warmup" | "research" | "finalizing" | "succeeded";
@@ -1282,12 +1280,11 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
       {strategyResult !== null ? <section className="research-result-section">
         <div className="section-heading">
           <h2>Strategy Summary</h2>
-          <p>Selected universe {strategyResult.strategy.benchmark.universe}</p>
         </div>
         <div className="strategy-metrics">
           <Metric label="Net cumulative" value={formatPercent(strategyResult.strategy.summary.metrics.net_cumulative_return)} />
           <Metric
-            label="Benchmark cumulative"
+            label="沪深300 cumulative"
             value={formatPercent(strategyResult.strategy.summary.metrics.benchmark_cumulative_return)}
           />
           <Metric
@@ -1304,7 +1301,7 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
             value={formatCny(strategyResult.strategy.summary.metrics.transaction_costs.cumulative_amount)}
           />
         </div>
-        <StrategyPerformanceChart observations={strategyResult.strategy.observations} />
+        <StrategyComparisonPanel comparison={strategyResult.strategy.comparison} />
       </section> : null}
 
       {strategyResult !== null ? (

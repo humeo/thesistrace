@@ -79,12 +79,14 @@ class StrategyComparisonService:
                 benchmark_level = _required_level(level_by_session, session)
                 strategy_growth = net_nav / validated.initial_cash
                 benchmark_growth = benchmark_level / entry_level
+                net_excess_nav = strategy_growth / benchmark_growth
                 curves.append(
                     {
                         "session": session,
                         "net_strategy_return": float(strategy_growth - 1),
                         "benchmark_relative_return": float(benchmark_growth - 1),
-                        "net_excess_nav": float(strategy_growth / benchmark_growth),
+                        "net_excess_nav": float(net_excess_nav),
+                        "net_excess_return": float(net_excess_nav - 1),
                     }
                 )
             if not curves:

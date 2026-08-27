@@ -3,6 +3,7 @@ import {
   ColorType,
   CrosshairMode,
   LineSeries,
+  LineStyle,
   createChart,
   type IChartApi,
   type LineData,
@@ -10,19 +11,16 @@ import {
   type Time,
 } from "lightweight-charts";
 
+import type { StrategyComparisonCurvePoint } from "./strategyComparison";
+
 // TradingView Lightweight Charts™
 // Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/
-
-export type StrategyChartObservation = {
-  session: string;
-  net_nav: string;
-  benchmark_nav: string;
-};
 
 export type StrategyChartPoint = {
   time: string;
   strategy: number;
   benchmark: number;
+  netExcess: number;
 };
 
 type VisibleRange = "1Y" | "3Y" | "5Y" | "All";
@@ -35,48 +33,25 @@ const RANGE_SESSIONS: Record<Exclude<VisibleRange, "All">, number> = {
 
 const STRATEGY_COLOR = "#828fff";
 const BENCHMARK_COLOR = "#777b84";
+const NET_EXCESS_COLOR = "#d0d6e0";
 
 export function strategyChartPoints(
-  observations: StrategyChartObservation[],
+  curves: StrategyComparisonCurvePoint[],
 ): StrategyChartPoint[] {
-  const ordered = [...new Map(
-    observations
-      .filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item.session))
-      .map((item) => [item.session, item] as const),
-  ).values()].sort((left, right) => left.session.localeCompare(right.session));
-  const origin = ordered.find((item) => {
-    const strategy = Number(item.net_nav);
-    const benchmark = Number(item.benchmark_nav);
-    return Number.isFinite(strategy) && strategy > 0
-      && Number.isFinite(benchmark) && benchmark > 0;
-  });
-  if (origin === undefined) return [];
-  const strategyOrigin = Number(origin.net_nav);
-  const benchmarkOrigin = Number(origin.benchmark_nav);
-  return ordered.flatMap((item) => {
-    if (item.session < origin.session) return [];
-    const strategy = Number(item.net_nav);
-    const benchmark = Number(item.benchmark_nav);
-    if (
-      !Number.isFinite(strategy)
-      || strategy <= 0
-      || !Number.isFinite(benchmark)
-      || benchmark <= 0
-    ) return [];
-    return [{
-      time: item.session,
-      strategy: ((strategy / strategyOrigin) - 1) * 100,
-      benchmark: ((benchmark / benchmarkOrigin) - 1) * 100,
-    }];
-  });
+  return curves.map((point) => ({
+    time: point.session,
+    strategy: point.net_strategy_return,
+    benchmark: point.benchmark_relative_return,
+    netExcess: point.net_excess_return,
+  }));
 }
 
 export function StrategyPerformanceChart({
-  observations,
+  curves,
 }: {
-  observations: StrategyChartObservation[];
+  curves: StrategyComparisonCurvePoint[];
 }) {
-  const points = useMemo(() => strategyChartPoints(observations), [observations]);
+  const points = useMemo(() => strategyChartPoints(curves), [curves]);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [visibleRange, setVisibleRange] = useState<VisibleRange>("All");
@@ -114,7 +89,7 @@ export function StrategyPerformanceChart({
       handleScroll: true,
       handleScale: true,
       localization: {
-        priceFormatter: (value: number) => `${value.toFixed(2)}%`,
+        priceFormatter: formatPercent,
       },
     });
     chartRef.current = chart;
@@ -130,6 +105,13 @@ export function StrategyPerformanceChart({
       priceLineVisible: false,
       lastValueVisible: false,
     });
+    const netExcessSeries = chart.addSeries(LineSeries, {
+      color: NET_EXCESS_COLOR,
+      lineStyle: LineStyle.Dashed,
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
     strategySeries.setData(points.map((point) => ({
       time: point.time as Time,
       value: point.strategy,
@@ -137,6 +119,10 @@ export function StrategyPerformanceChart({
     benchmarkSeries.setData(points.map((point) => ({
       time: point.time as Time,
       value: point.benchmark,
+    })));
+    netExcessSeries.setData(points.map((point) => ({
+      time: point.time as Time,
+      value: point.netExcess,
     })));
     strategySeries.createPriceLine({
       price: 0,
@@ -155,11 +141,12 @@ export function StrategyPerformanceChart({
       }
       const strategy = seriesValue(event.seriesData.get(strategySeries));
       const benchmark = seriesValue(event.seriesData.get(benchmarkSeries));
-      if (strategy === null || benchmark === null) {
+      const netExcess = seriesValue(event.seriesData.get(netExcessSeries));
+      if (strategy === null || benchmark === null || netExcess === null) {
         setTooltip(null);
         return;
       }
-      setTooltip({ time: timeLabel(event.time), strategy, benchmark });
+      setTooltip({ time: timeLabel(event.time), strategy, benchmark, netExcess });
     };
     chart.subscribeCrosshairMove(onCrosshairMove);
     const observer = new ResizeObserver(([entry]) => {
@@ -194,13 +181,17 @@ export function StrategyPerformanceChart({
   }
 
   if (points.length === 0) {
-    return <p className="strategy-chart-empty">No strategy observations.</p>;
+    return <p className="strategy-chart-empty">No comparison observations.</p>;
   }
   return (
-    <figure className="strategy-chart" aria-label="Strategy performance chart">
+    <figure
+      className="strategy-chart"
+      aria-label="Net Strategy, 沪深300, and Net Excess performance chart"
+    >
       <figcaption>
-        <span><i className="strategy-swatch" /> Net strategy</span>
-        <span><i className="benchmark-swatch" /> Selected-universe benchmark</span>
+        <span><i className="strategy-swatch" /> Net Strategy</span>
+        <span><i className="benchmark-swatch" /> 沪深300</span>
+        <span><i className="net-excess-swatch" /> Net Excess</span>
         <span className="strategy-chart-session-count">{points.length} Research Sessions</span>
       </figcaption>
       <div className="strategy-chart-toolbar" aria-label="Chart range">
@@ -222,9 +213,9 @@ export function StrategyPerformanceChart({
         ) : (
           <>
             <time dateTime={tooltip.time}>{tooltip.time}</time>
-            <span>Strategy {formatPercent(tooltip.strategy)}</span>
-            <span>Benchmark {formatPercent(tooltip.benchmark)}</span>
-            <span>Excess {formatPercent(tooltip.strategy - tooltip.benchmark)}</span>
+            <span>Net Strategy {formatPercent(tooltip.strategy)}</span>
+            <span>沪深300 {formatPercent(tooltip.benchmark)}</span>
+            <span>Net Excess {formatPercent(tooltip.netExcess)}</span>
           </>
         )}
       </div>
@@ -257,5 +248,5 @@ function timeLabel(time: Time): string {
 
 function formatPercent(value: number): string {
   const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(2)}%`;
+  return `${sign}${(value * 100).toFixed(2)}%`;
 }
