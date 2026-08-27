@@ -4,6 +4,7 @@ import ast
 import errno
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -1042,6 +1043,22 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
     assert scripts["test:image-smoke"] == "./scripts/test-runtime image-smoke"
     assert scripts["test:cleanup"] == "./scripts/test-runtime cleanup"
+
+
+def test_managed_compose_run_phases_never_read_from_the_parent_terminal() -> None:
+    runtime = (ROOT / "scripts" / "test-runtime").read_text()
+    normalized_runtime = re.sub(r"\\\s*\n\s*", " ", runtime)
+    raw_compose_runs = re.findall(
+        r"(?<![A-Za-z0-9_])(?:base_)?compose\s+run\b",
+        normalized_runtime,
+    )
+
+    assert raw_compose_runs == ["compose run", "base_compose run"]
+    for invocation in (
+        'compose run --rm --no-deps -T --interactive=false "$@"',
+        'base_compose run --rm --no-deps -T --interactive=false "$@"',
+    ):
+        assert invocation in normalized_runtime
 
 
 def test_production_image_smoke_builds_once_and_reuses_the_images(
