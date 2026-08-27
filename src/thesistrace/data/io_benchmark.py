@@ -461,6 +461,11 @@ def _validate_kind_specific_sample(
     object_names = sample.get("result_object_names")
     if not isinstance(payload_names, list) or not isinstance(object_names, list):
         raise AssertionError("long Research Result object evidence is invalid")
+    if (
+        any(not isinstance(name, str) for name in payload_names)
+        or len(payload_names) != len(set(payload_names))
+    ):
+        raise AssertionError("long Research Result payload evidence is invalid")
     if research_kind == "factor_evaluation":
         if (
             _number(timings, "strategy") != 0
@@ -477,20 +482,38 @@ def _validate_kind_specific_sample(
         "strategy_summary",
         "terminal_strategy_state",
     ]
-    partition_names = {
-        str(name)
-        for name in payload_names
-        if str(name).startswith("strategy_daily_observations.part-")
-    }
+    partition_names = _contiguous_partition_names(
+        payload_names,
+        "strategy_daily_observations.part-",
+    )
+    position_partition_names = _contiguous_partition_names(
+        payload_names,
+        "terminal_positions.part-",
+    )
     if (
         _number(timings, "strategy") <= 0
         or sample.get("strategy_continuation_present") is not True
         or _number(sample, "strategy_observation_count") <= 0
         or object_names != expected_objects
         or not partition_names
-        or set(payload_names) != set(expected_objects) | partition_names
+        or not position_partition_names
+        or set(payload_names)
+        != (
+            set(expected_objects)
+            | {"terminal_positions"}
+            | partition_names
+            | position_partition_names
+        )
     ):
         raise AssertionError("Strategy Backtest journey evidence is incomplete")
+
+
+def _contiguous_partition_names(payload_names: Sequence[str], prefix: str) -> set[str]:
+    names = [name for name in payload_names if name.startswith(prefix)]
+    expected = [f"{prefix}{index:06d}" for index in range(len(names))]
+    if names != expected:
+        raise AssertionError("Strategy Backtest journey evidence is incomplete")
+    return set(names)
 
 
 def _validate_cancellation(value: object, research_kind: str) -> None:

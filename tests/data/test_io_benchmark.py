@@ -66,6 +66,8 @@ def _long_research_evidence() -> dict[str, object]:
                     "strategy_daily_observations",
                     "strategy_daily_observations.part-000000",
                     "strategy_summary",
+                    "terminal_positions",
+                    "terminal_positions.part-000000",
                     "terminal_strategy_state",
                 ]
                 if strategy
@@ -229,6 +231,42 @@ def test_long_research_qualification_accepts_only_the_exact_release_workload() -
                 value, "factor_evaluation", "warm", 0
             ).update(strategy_continuation_present=True),
             "performed or published Strategy work",
+        ),
+        (
+            lambda value: _qualification_sample(
+                value, "strategy_backtest", "warm", 0
+            )["result_payload_names"].remove("terminal_positions.part-000000"),
+            "journey evidence is incomplete",
+        ),
+        (
+            lambda value: _qualification_sample(
+                value, "strategy_backtest", "warm", 0
+            )["result_payload_names"].append("terminal_positions.part-unexpected-extra"),
+            "journey evidence is incomplete",
+        ),
+        (
+            lambda value: _qualification_sample(
+                value, "strategy_backtest", "warm", 0
+            )["result_payload_names"].__setitem__(
+                2,
+                "strategy_daily_observations.part-000001",
+            ),
+            "journey evidence is incomplete",
+        ),
+        (
+            lambda value: _qualification_sample(
+                value, "strategy_backtest", "warm", 0
+            )["result_payload_names"].__setitem__(
+                5,
+                "terminal_positions.part-invalid",
+            ),
+            "journey evidence is incomplete",
+        ),
+        (
+            lambda value: _qualification_sample(
+                value, "strategy_backtest", "warm", 0
+            )["result_payload_names"].append("factor_summary"),
+            "payload evidence is invalid",
         ),
         (
             lambda value: _qualification_sample(
