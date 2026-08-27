@@ -654,6 +654,34 @@ def _registry(
     )
 
 
+def _canonical_v1_contract() -> bytes:
+    authority = ResearchAgentAuthority(
+        subject="contract-auditor",
+        scopes=frozenset(ResearchAgentScope),
+    )
+    contract = [
+        {
+            "name": capability.name,
+            "scope": capability.required_scope.value,
+            "description": capability.description,
+            "annotations": capability.annotations.model_dump(
+                mode="json",
+                by_alias=True,
+                exclude_none=True,
+            ),
+            "input_schema": capability.input_schema(),
+            "output_schema": capability.output_schema(),
+        }
+        for capability in _registry(authority).accessible_capabilities()
+    ]
+    return json.dumps(
+        contract,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+
+
 def test_local_operator_has_only_safe_default_scopes() -> None:
     authority = local_operator_authority()
 
@@ -1518,36 +1546,12 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
         "retry_daily_track",
         "stop_daily_track",
     }
-    all_scopes = ResearchAgentAuthority(
-        subject="contract-auditor",
-        scopes=frozenset(ResearchAgentScope),
-    )
-    contract = [
-        {
-            "name": capability.name,
-            "scope": capability.required_scope.value,
-            "description": capability.description,
-            "annotations": capability.annotations.model_dump(
-                mode="json",
-                by_alias=True,
-                exclude_none=True,
-            ),
-            "input_schema": capability.input_schema(),
-            "output_schema": capability.output_schema(),
-        }
-        for capability in _registry(all_scopes).accessible_capabilities()
-    ]
-    canonical = json.dumps(
-        contract,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode()
+    canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "96cebd400bb6893eaa8be98de2737122d35d1b8cb938257ce288454b63ab65b0"
+        "2b8cc6a48f5df6815a41eeb054973f1b82ac0da8536c088899249d4904dc7952"
     )
-    assert len(canonical) == 143094
+    assert len(canonical) == 143238
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -1598,6 +1602,7 @@ def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None
     evidence = json.loads(
         Path("docs/research/research-agent-mcp-v1-ingress-benchmark.json").read_text()
     )
+    canonical_contract = _canonical_v1_contract()
     assert evidence["fixed_limits"] == {
         "request_bytes": RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES,
         "response_bytes": RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES,
@@ -1612,10 +1617,8 @@ def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None
         "cursor_characters": 1024,
     }
     assert evidence["deterministic_payloads"] == {
-        "v1_contract_sha256": (
-            "96cebd400bb6893eaa8be98de2737122d35d1b8cb938257ce288454b63ab65b0"
-        ),
-        "v1_contract_bytes": 143094,
+        "v1_contract_sha256": sha256(canonical_contract).hexdigest(),
+        "v1_contract_bytes": len(canonical_contract),
         "maximum_factor_batch_call_bytes": maximum_batch_bytes,
     }
     assert evidence["observed"]["maximum_resident_set_bytes"] < (
@@ -1920,6 +1923,10 @@ async def _exercise_in_memory_protocol() -> None:
             assert definition["properties"][items_name]["minItems"] == 1
             assert definition["properties"][items_name]["maxItems"] == 20
         submit_schema = tools["submit_research_run"].input_schema
+        assert "structured rejected outcome" in (
+            tools["submit_research_run"].description or ""
+        )
+        assert "get_research_run" in (tools["submit_research_run"].description or "")
         strategy_ref = next(
             branch["$ref"]
             for branch in submit_schema["oneOf"]

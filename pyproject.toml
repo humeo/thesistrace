@@ -46,6 +46,7 @@ testpaths = ["tests"]
 markers = [
   "database_restart: isolated final-phase acceptance that restarts its owned PostgreSQL",
   "dependency_restart: isolated final-phase acceptance that stops and restarts owned dependencies",
+  "real_codex: explicit real-model Codex Host acceptance; excluded from deterministic release gates",
 ]
 
 [tool.ruff]

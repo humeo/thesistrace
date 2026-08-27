@@ -29,10 +29,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.server.auth.provider import AccessToken
 from mcp_types.version import LATEST_HANDSHAKE_VERSION
 from psycopg.types.json import Jsonb
-from test_core_research_agent_mcp_runs import (
-    _assert_worker_succeeded,
-    _core_environment,
-)
+from research_agent_mcp_runtime import assert_worker_succeeded, core_environment
 from test_core_research_agent_mcp_runs import (
     _mcp_client as _stdio_mcp_client,
 )
@@ -749,7 +746,7 @@ async def _exercise_http_contract(
                 settings,
                 1,
             )
-            _assert_worker_succeeded(blocked_worker)
+            assert_worker_succeeded(blocked_worker)
             blocked_track = await client.call_tool(
                 "get_daily_track",
                 {"track_id": daily_track.structured_content["track_id"]},
@@ -1387,14 +1384,14 @@ def _raw_stdio_probe(
         ).encode()
         for message in messages
     )
-    core_environment = _core_environment(settings)
+    configured_environment = core_environment(settings)
     process = subprocess.Popen(
         [str(executable)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=Path.cwd(),
-        env={**os.environ, **core_environment},
+        env={**os.environ, **configured_environment},
     )
     assert process.stdin is not None
     assert process.stdout is not None
@@ -1807,7 +1804,7 @@ def _run_tracking_worker_once(
     settings: CoreSettings,
     execution_memory_bytes: int,
 ) -> subprocess.CompletedProcess[str]:
-    environment = _core_environment(settings)
+    environment = core_environment(settings)
     environment["THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES"] = str(execution_memory_bytes)
     return subprocess.run(
         [

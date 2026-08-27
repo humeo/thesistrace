@@ -204,7 +204,25 @@ for argument in "$@"; do
   esac
 done
 case " $* " in
+  *" python -c "*)
+    target=
+    for argument in "$@"; do
+      target=$argument
+    done
+    test -s "$target" || exit 1
+    grep -Fqx '{"status": "passed"}' "$target" || exit 1
+    ;;
   *" pytest "*)
+    if [ -n "${THESISTRACE_REAL_CODEX_EVIDENCE_PATH:-}" ] && \
+       [ -z "${FAKE_SKIP_CODEX_EVIDENCE:-}" ]; then
+      mkdir -p "$(dirname "$THESISTRACE_REAL_CODEX_EVIDENCE_PATH")"
+      if [ -n "${FAKE_INVALID_CODEX_EVIDENCE:-}" ]; then
+        printf '{"status": "failed", "nested": {"status": "passed"}}\n' \
+          > "$THESISTRACE_REAL_CODEX_EVIDENCE_PATH"
+      else
+        printf '{"status": "passed"}\n' > "$THESISTRACE_REAL_CODEX_EVIDENCE_PATH"
+      fi
+    fi
     if [ -n "${FAKE_PYTEST_READY_DIR:-}" ] && \
        [ -z "${THESISTRACE_DATABASE_RESTART_PHASE:-}" ]; then
       mkdir -p "$FAKE_PYTEST_READY_DIR" "$FAKE_PYTEST_RELEASE_DIR"
@@ -241,6 +259,9 @@ exit "${FAKE_PLAYWRIGHT_STATUS:-0}"
 """
     )
     bun.chmod(0o755)
+    codex = tmp_path / "codex"
+    codex.write_text('#!/bin/sh\nexit "${FAKE_CODEX_STATUS:-0}"\n')
+    codex.chmod(0o755)
     environment = {
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
@@ -670,6 +691,120 @@ def test_integration_command_generates_unique_test_identities() -> None:
     assert len(projects) == 2
     assert all(project.startswith("thesistrace-test-") for project in projects)
     assert "thesistrace-dev" not in projects
+
+
+def test_real_codex_mcp_runtime_is_explicit_isolated_and_evidence_backed(
+    tmp_path: Path,
+) -> None:
+    package = json.loads((ROOT / "package.json").read_text())
+    assert package["scripts"]["test:codex-mcp"] == "./scripts/test-runtime codex-mcp"
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "codex-mcp"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    commands = command_log.read_text()
+    assert "up --detach --wait --wait-timeout 300 postgres rustfs" in commands
+    assert "uv run thesistrace-initialize" in commands
+    assert (
+        "uv run pytest -q tests/acceptance/"
+        "test_real_codex_research_agent_mcp.py -m real_codex" in commands
+    )
+    assert "--junitxml=" not in commands
+    assert not (tmp_path / "runs" / run_id / "evidence" / "pytest.xml").exists()
+    runtime = (ROOT / "scripts" / "test-runtime").read_text()
+    assert (
+        'THESISTRACE_REAL_CODEX_EVIDENCE_PATH="$evidence_dir/'
+        'codex-stdio-acceptance.json"' in runtime
+    )
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
+    assert "test_kind=codex-mcp\n" in metadata
+    assert "phase=codex-mcp-host-preflight " in metadata
+    assert "phase=codex-mcp-infrastructure " in metadata
+    assert "phase=codex-mcp-initialization " in metadata
+    assert "phase=codex-mcp-acceptance " in metadata
+    assert "phase=codex-mcp-evidence " in metadata
+    assert "down --volumes --remove-orphans" in commands
+
+
+def test_real_codex_mcp_runtime_fails_closed_without_host_or_evidence(
+    tmp_path: Path,
+) -> None:
+    _, environment = _fake_test_runtime_commands(tmp_path)
+    (tmp_path / "codex").unlink()
+    environment["PATH"] = f"{tmp_path}:/usr/bin:/bin"
+
+    missing_host = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "codex-mcp"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert missing_host.returncode != 0
+    assert "requires the Codex CLI" in missing_host.stderr
+
+    unsupported_root = tmp_path / "unsupported"
+    unsupported_root.mkdir()
+    _, unsupported_environment = _fake_test_runtime_commands(unsupported_root)
+    unsupported_environment["FAKE_CODEX_STATUS"] = "2"
+    unsupported_contract = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "codex-mcp"],
+        cwd=ROOT,
+        env=unsupported_environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert unsupported_contract.returncode != 0
+    assert "supported noninteractive CLI contract" in unsupported_contract.stderr
+
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    _, evidence_environment = _fake_test_runtime_commands(evidence_root)
+    evidence_environment["FAKE_SKIP_CODEX_EVIDENCE"] = "1"
+    missing_evidence = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "codex-mcp"],
+        cwd=ROOT,
+        env=evidence_environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert missing_evidence.returncode != 0
+    run_id = missing_evidence.stdout.splitlines()[0].removeprefix("Test run: ")
+    metadata = (tmp_path / "evidence" / "runs" / run_id / "run.txt").read_text()
+    assert any(
+        line.startswith("phase=codex-mcp-evidence ") and not line.endswith("status=0")
+        for line in metadata.splitlines()
+    )
+
+    invalid_root = tmp_path / "invalid-evidence"
+    invalid_root.mkdir()
+    _, invalid_environment = _fake_test_runtime_commands(invalid_root)
+    invalid_environment["FAKE_INVALID_CODEX_EVIDENCE"] = "1"
+    invalid_evidence = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "codex-mcp"],
+        cwd=ROOT,
+        env=invalid_environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert invalid_evidence.returncode != 0
 
 
 def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() -> None:

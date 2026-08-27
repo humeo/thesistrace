@@ -17,14 +17,13 @@ import pytest
 from core_runtime import drop_product_schemas, isolated_core_settings
 from psycopg.errors import CheckViolation, ForeignKeyViolation
 from psycopg.types.json import Jsonb
-from test_core_research_agent_mcp_runs import (
-    _assert_worker_succeeded,
-    _command,
-    _core_environment,
-    _mcp_client,
-    _publish_current_data,
-    _run_worker_once,
+from research_agent_mcp_runtime import (
+    assert_worker_succeeded,
+    core_environment,
+    publish_current_data,
+    run_research_worker_once,
 )
+from test_core_research_agent_mcp_runs import _command, _mcp_client
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.daily_track import DailyTrackService
@@ -53,7 +52,7 @@ def test_stdio_daily_tracks_survive_disconnect_progress_and_enforce_capacity(
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     try:
-        _publish_current_data(settings)
+        publish_current_data(settings)
         anyio.run(_exercise_daily_tracks, settings, tmp_path)
     finally:
         drop_product_schemas(settings)
@@ -173,8 +172,8 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         factor_run_id = str(factor.structured_content["run_id"])
 
     for _ in range(6):
-        completed = await anyio.to_thread.run_sync(_run_worker_once, settings)
-        _assert_worker_succeeded(completed)
+        completed = await anyio.to_thread.run_sync(run_research_worker_once, settings)
+        assert_worker_succeeded(completed)
 
     concurrent = await _concurrent_start(
         settings,
@@ -359,13 +358,13 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         settings,
         1,
     )
-    _assert_worker_succeeded(blocked_worker)
+    assert_worker_succeeded(blocked_worker)
     second_blocked_worker = await anyio.to_thread.run_sync(
         _run_tracking_worker_once,
         settings,
         1,
     )
-    _assert_worker_succeeded(second_blocked_worker)
+    assert_worker_succeeded(second_blocked_worker)
     async with _mcp_client(settings, tmp_path / "track-blocked.stderr.log") as client:
         blocked = await client.call_tool(
             "get_daily_track",
@@ -560,7 +559,7 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
 
     for _ in range(6):
         completed = await anyio.to_thread.run_sync(_run_tracking_worker_once, settings)
-        _assert_worker_succeeded(completed)
+        assert_worker_succeeded(completed)
 
     async with _mcp_client(settings, tmp_path / "track-reconnect.stderr.log") as client:
         advanced = await client.call_tool("get_daily_track", {"track_id": track_id})
@@ -1096,7 +1095,7 @@ def _run_tracking_worker_once(
     settings: CoreSettings,
     execution_memory_bytes: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    environment = _core_environment(settings)
+    environment = core_environment(settings)
     if execution_memory_bytes is not None:
         environment["THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES"] = str(
             execution_memory_bytes

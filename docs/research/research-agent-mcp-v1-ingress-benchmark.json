@@ -21,19 +21,19 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "96cebd400bb6893eaa8be98de2737122d35d1b8cb938257ce288454b63ab65b0",
-    "v1_contract_bytes": 143094,
+    "v1_contract_sha256": "2b8cc6a48f5df6815a41eeb054973f1b82ac0da8536c088899249d4904dc7952",
+    "v1_contract_bytes": 143238,
     "maximum_factor_batch_call_bytes": 84536
   },
   "observed": {
     "tests_passed": 4,
-    "tests_deselected": 32,
-    "pytest_seconds": 1.98,
-    "wall_seconds": 3.36,
-    "user_cpu_seconds": 2.11,
-    "system_cpu_seconds": 0.33,
-    "maximum_resident_set_bytes": 151650304,
-    "maximum_resident_set_percent_of_container": 7.06,
+    "tests_deselected": 35,
+    "pytest_seconds": 2.08,
+    "wall_seconds": 2.94,
+    "user_cpu_seconds": 2.08,
+    "system_cpu_seconds": 0.32,
+    "maximum_resident_set_bytes": 153223168,
+    "maximum_resident_set_percent_of_container": 7.14,
     "swaps": 0
   },
   "measurement_context": {

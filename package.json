@@ -20,6 +20,7 @@
     "test:benchmark": "./scripts/test-runtime benchmark",
     "test:image-smoke": "./scripts/test-runtime image-smoke",
     "test:integration": "./scripts/test-runtime integration",
+    "test:codex-mcp": "./scripts/test-runtime codex-mcp",
     "check": "pnpm test && pnpm test:integration && pnpm test:e2e",
     "check:release": "pnpm check && pnpm test:image-smoke && pnpm test:benchmark",
     "check:live-tushare": "uv run python scripts/check_live_tushare.py"

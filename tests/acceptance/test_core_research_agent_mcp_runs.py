@@ -9,22 +9,25 @@ from base64 import urlsafe_b64decode
 from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from multiprocessing import get_context
 from pathlib import Path
 
 import anyio
-import boto3
 import pytest
 from core_runtime import drop_product_schemas, isolated_core_settings
 from mcp.client import Client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from pydantic import TypeAdapter
+from research_agent_mcp_runtime import (
+    assert_worker_succeeded,
+    core_environment,
+    publish_current_data,
+    run_research_worker_once,
+)
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
-from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.entrypoints.research_agent_mcp import (
     RESEARCH_CANCEL_ENABLE_ENVIRONMENT,
 )
@@ -34,7 +37,6 @@ from thesistrace.entrypoints.runtime import (
     open_core_runtime,
 )
 from thesistrace.entrypoints.schema import initialize_core
-from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.models import (
     ResearchRunAdmissionCommand,
@@ -56,7 +58,7 @@ def test_stdio_research_runs_survive_disconnect_and_real_worker_restarts(
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     try:
-        sessions = _publish_current_data(settings)
+        sessions = publish_current_data(settings)
         _assert_concurrent_rejection_receipt(settings)
         anyio.run(_exercise_research_runs, settings, tmp_path, sessions[54])
     finally:
@@ -123,10 +125,10 @@ async def _exercise_research_runs(
         assert unavailable_result.is_error is True
         assert unavailable_result.structured_content["code"] == "STATE_CONFLICT"
 
-    first_worker = await anyio.to_thread.run_sync(_run_worker_once, settings)
-    second_worker = await anyio.to_thread.run_sync(_run_worker_once, settings)
-    _assert_worker_succeeded(first_worker)
-    _assert_worker_succeeded(second_worker)
+    first_worker = await anyio.to_thread.run_sync(run_research_worker_once, settings)
+    second_worker = await anyio.to_thread.run_sync(run_research_worker_once, settings)
+    assert_worker_succeeded(first_worker)
+    assert_worker_succeeded(second_worker)
 
     second_log = tmp_path / "mcp-second.stderr.log"
     async with _mcp_client(settings, second_log) as client:
@@ -241,8 +243,8 @@ async def _exercise_research_runs(
         "stderr": lost_worker.stderr[-4096:],
     }
     _expire_active_attempt(settings, str(recovery.structured_content["run_id"]))
-    replacement_worker = await anyio.to_thread.run_sync(_run_worker_once, settings)
-    _assert_worker_succeeded(replacement_worker)
+    replacement_worker = await anyio.to_thread.run_sync(run_research_worker_once, settings)
+    assert_worker_succeeded(replacement_worker)
 
     await anyio.to_thread.run_sync(_seed_pagination_runs, settings, 48)
     third_log = tmp_path / "mcp-third.stderr.log"
@@ -801,7 +803,7 @@ def _run_worker_lost_after_claim(
         text=True,
         timeout=30,
         cwd=Path.cwd(),
-        env={**os.environ, **_core_environment(settings)},
+        env={**os.environ, **core_environment(settings)},
     )
 
 
@@ -978,7 +980,7 @@ async def _mcp_client(
                     command=str(executable),
                     cwd=Path.cwd(),
                     env={
-                        **_core_environment(settings),
+                        **core_environment(settings),
                         **({} if environment is None else environment),
                         **(
                             {RESEARCH_CANCEL_ENABLE_ENVIRONMENT: "true"}
@@ -1052,154 +1054,3 @@ def _command(request_id: str, *, research_kind: str = "strategy_backtest") -> di
     if research_kind == "strategy_backtest":
         command.update({"holdings_count": 1, "rebalance_every_sessions": 1})
     return command
-
-
-def _weekday_sessions(start: date, count: int) -> tuple[str, ...]:
-    sessions: list[str] = []
-    cursor = start
-    while len(sessions) < count:
-        if cursor.weekday() < 5:
-            sessions.append(cursor.isoformat())
-        cursor += timedelta(days=1)
-    return tuple(sessions)
-
-
-def _publish_current_data(settings: CoreSettings) -> tuple[str, ...]:
-    sessions = _weekday_sessions(date(2026, 8, 3), 75)
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=settings.s3_endpoint_url,
-        aws_access_key_id=settings.s3_access_key_id,
-        aws_secret_access_key=settings.s3_secret_access_key,
-        region_name=settings.s3_region,
-    )
-    try:
-        try:
-            s3.create_bucket(Bucket=settings.s3_bucket)
-        except s3.exceptions.BucketAlreadyOwnedByYou:
-            pass
-    finally:
-        s3.close()
-    template = build_minimal_canonical_fixture()
-    instrument_template = template["instruments"][0]
-    price = template["prices"][0]
-    state = template["trading_states"][0]
-    limit = template["price_limits"][0]
-    industry = template["industry_membership"][0]
-    instruments = []
-    instrument_ids = []
-    for index in range(1, 52):
-        ts_code = f"{index:06d}.SZ"
-        instrument_id = f"equity:{ts_code}"
-        instrument_ids.append(instrument_id)
-        instruments.append(
-            {
-                **instrument_template,
-                "instrument_id": instrument_id,
-                "ts_code": ts_code,
-            }
-        )
-    universe = {"instrument_ids": instrument_ids, "status": "available"}
-    canonical = {
-        **template,
-        "field_catalog": [
-            next(
-                row
-                for row in field_catalog(sessions[0])
-                if row["field_id"] == "price.close.adjusted"
-            )
-        ],
-        "research_calendar": list(sessions),
-        "instruments": instruments,
-        "prices": [
-            {**price, "instrument_id": instrument_id, "session": session}
-            for session in sessions
-            for instrument_id in instrument_ids
-        ],
-        "trading_states": [
-            {**state, "instrument_id": instrument_id, "session": session}
-            for session in sessions
-            for instrument_id in instrument_ids
-        ],
-        "price_limits": [
-            {**limit, "instrument_id": instrument_id, "session": session}
-            for session in sessions
-            for instrument_id in instrument_ids
-        ],
-        "base_pool": [
-            {"session": session, "instrument_ids": instrument_ids} for session in sessions
-        ],
-        "liquidity_universes": {
-            name: [{"session": session, **universe} for session in sessions]
-            for name in ("top300", "top1000", "top2000", "top3000")
-        },
-        "industry_membership": [
-            {**industry, "instrument_id": instrument_id}
-            for instrument_id in instrument_ids
-        ],
-    }
-    generation = MountedGenerationStore(settings.data_mount).materialize(
-        canonical,
-        prepared_at=datetime(2026, 9, 11, 12, tzinfo=UTC),
-        source_name="research-agent-mcp-acceptance",
-        source_lineage={"contract": "research-agent-mcp"},
-    )
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        lifecycle = DatasetLifecycle(database, settings.data_mount)
-        lifecycle.protect_candidate(
-            operation_id="research-agent-mcp-head",
-            generation_manifest_sha256=generation.manifest_sha256,
-            lease_seconds=60,
-        )
-        lifecycle.compare_and_swap_head(
-            expected_generation_manifest_sha256=None,
-            candidate_generation_manifest_sha256=generation.manifest_sha256,
-            operation_id="research-agent-mcp-head",
-        )
-    finally:
-        database.close()
-    return sessions
-
-
-def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "thesistrace.entrypoints.worker",
-            "--role",
-            "research",
-            "--once",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        cwd=Path.cwd(),
-        env={**os.environ, **_core_environment(settings)},
-    )
-
-
-def _assert_worker_succeeded(completed: subprocess.CompletedProcess[str]) -> None:
-    assert completed.returncode == 0, {
-        "returncode": completed.returncode,
-        "stdout": completed.stdout[-4096:],
-        "stderr": completed.stderr[-4096:],
-    }
-
-
-def _core_environment(settings: CoreSettings) -> dict[str, str]:
-    return {
-        "THESISTRACE_DATABASE_URL": settings.database_url,
-        "THESISTRACE_S3_ENDPOINT_URL": settings.s3_endpoint_url,
-        "THESISTRACE_S3_ACCESS_KEY_ID": settings.s3_access_key_id,
-        "THESISTRACE_S3_SECRET_ACCESS_KEY": settings.s3_secret_access_key,
-        "THESISTRACE_S3_BUCKET": settings.s3_bucket,
-        "THESISTRACE_S3_REGION": settings.s3_region,
-        "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
-        "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
-            settings.batch_attempt_control_directory
-        ),
-    }

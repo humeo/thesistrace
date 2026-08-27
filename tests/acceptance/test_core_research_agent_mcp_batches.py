@@ -8,12 +8,12 @@ import anyio
 import pytest
 from core_runtime import drop_product_schemas, isolated_core_settings
 from pydantic import TypeAdapter
-from test_core_research_agent_mcp_runs import (
-    _assert_worker_succeeded,
-    _mcp_client,
-    _publish_current_data,
-    _run_worker_once,
+from research_agent_mcp_runtime import (
+    assert_worker_succeeded,
+    publish_current_data,
+    run_research_worker_once,
 )
+from test_core_research_agent_mcp_runs import _mcp_client
 from test_core_research_batch_fifo import (
     _release_claim_barrier_worker,
     _start_claim_barrier_worker,
@@ -48,7 +48,7 @@ def test_stdio_research_batches_execute_read_child_results_and_cancel_across_res
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     try:
-        sessions = _publish_current_data(settings)
+        sessions = publish_current_data(settings)
         anyio.run(_exercise_batches, settings, tmp_path, sessions[20])
     finally:
         drop_product_schemas(settings)
@@ -63,7 +63,7 @@ def test_stdio_research_batch_pagination_is_bounded_stable_and_restartable(
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     try:
-        _publish_current_data(settings)
+        publish_current_data(settings)
         expected_ids = _prepare_tied_pagination_batches(settings)
         anyio.run(_exercise_batch_pagination, settings, tmp_path, expected_ids)
     finally:
@@ -286,15 +286,15 @@ async def _exercise_batches(
             "value"
         ]
 
-    ordinary_worker = await anyio.to_thread.run_sync(_run_worker_once, settings)
-    _assert_worker_succeeded(ordinary_worker)
+    ordinary_worker = await anyio.to_thread.run_sync(run_research_worker_once, settings)
+    assert_worker_succeeded(ordinary_worker)
     for _index in range(3):
         batch_worker = await anyio.to_thread.run_sync(
             _run_batch_worker_once,
             settings,
             "batch-research",
         )
-        _assert_worker_succeeded(batch_worker)
+        assert_worker_succeeded(batch_worker)
 
     async with _mcp_client(settings, tmp_path / "batch-second.stderr.log") as client:
         factor_replay = await client.call_tool("submit_research_batch", factor_command)

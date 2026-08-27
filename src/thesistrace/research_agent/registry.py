@@ -548,7 +548,9 @@ class ResearchAgentCapabilityRegistry:
                 name="submit_research_run",
                 description=(
                     "Submit a fully specified Factor Evaluation or Strategy Backtest; requires "
-                    "research:execute, is non-destructive, and is idempotent by request_id."
+                    "research:execute, is non-destructive, and is idempotent by request_id. "
+                    "Invalid research is a successful structured rejected outcome; after "
+                    "acceptance, poll get_research_run using retry_after_seconds until terminal."
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_EXECUTE,
                 input_model=ResearchRunAdmissionCommand,
