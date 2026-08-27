@@ -1,0 +1,5 @@
+#!/bin/sh
+if [ "$1" = "dataset_store" ]; then
+    kill -STOP "$$"
+fi
+exit 0

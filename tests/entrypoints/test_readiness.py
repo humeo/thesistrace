@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from subprocess import TimeoutExpired
 from time import monotonic
@@ -12,22 +11,12 @@ from thesistrace.entrypoints import readiness as readiness_module
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.readiness import CoreReadiness
 
+_BLOCKED_READINESS_PROBE = Path(__file__).with_name("fixtures") / "blocked-readiness-probe"
+
 
 def test_readiness_has_one_end_to_end_deadline_for_blocked_probes(
     tmp_path: Path,
 ) -> None:
-    probe = tmp_path / "blocked_readiness_probe.py"
-    probe.write_text(
-        """
-import sys
-from threading import Event
-
-if sys.argv[1] == "dataset_store":
-    Event().wait()
-raise SystemExit(0)
-""".lstrip(),
-        encoding="utf-8",
-    )
     events: list[object] = []
     readiness = CoreReadiness(
         database_url="private-dsn",
@@ -38,7 +27,7 @@ raise SystemExit(0)
         s3_region="us-east-1",
         data_mount=tmp_path / "private-mounted-root",
         deadline_seconds=0.25,
-        probe_command=(sys.executable, str(probe)),
+        probe_command=("/bin/sh", str(_BLOCKED_READINESS_PROBE)),
     )
     app = create_app(event_sink=events.append)
     app.state.core_runtime = SimpleNamespace(readiness=readiness)
