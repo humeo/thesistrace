@@ -35,6 +35,15 @@ _DURATION_REGRESSION_FACTOR = 3
 _PEAK_MEMORY_REGRESSION_FACTOR = 2
 
 
+def is_research_execution_child_started_event(
+    event: Mapping[str, object], run_id: str
+) -> bool:
+    return (
+        event.get("event") == "research_execution_child_started"
+        and event.get("run_id") == run_id
+    )
+
+
 @dataclass(frozen=True)
 class BenchmarkSample:
     duration_ms: float
@@ -550,6 +559,7 @@ __all__ = (
     "assert_benchmark_budgets",
     "assert_long_research_qualification",
     "derive_repository_budgets",
+    "is_research_execution_child_started_event",
     "measure_operation",
     "summarize_samples",
 )

@@ -12,6 +12,7 @@ from thesistrace.data.io_benchmark import (
     assert_benchmark_budgets,
     assert_long_research_qualification,
     derive_repository_budgets,
+    is_research_execution_child_started_event,
     long_research_qualification_summary,
     summarize_samples,
 )
@@ -346,6 +347,22 @@ def test_long_research_profile_is_the_fixed_top3000_release_fixture() -> None:
         "universe": "top3000",
         "repetitions_per_phase": 5,
     }
+
+
+def test_cancellation_wait_matches_the_public_worker_child_start_event() -> None:
+    event = json.loads(
+        '{"event":"research_execution_child_started","run_id":"run_expected"}'
+    )
+
+    assert is_research_execution_child_started_event(event, "run_expected")
+    assert not is_research_execution_child_started_event(event, "run_other")
+    assert not is_research_execution_child_started_event(
+        {
+            "event": "research_execution_child_started",
+            "resource_id": "run_expected",
+        },
+        "run_expected",
+    )
 
 
 def test_repository_budgets_gate_exact_io_and_material_time_and_memory_regressions() -> None:

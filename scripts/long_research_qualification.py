@@ -20,6 +20,7 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.generation_store import MountedGenerationStore
 from thesistrace.data.io_benchmark import (
     assert_long_research_qualification,
+    is_research_execution_child_started_event,
     long_research_qualification_summary,
 )
 from thesistrace.data.io_metrics import measure_data_io
@@ -650,8 +651,7 @@ def _wait_for_child_start(
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if any(
-            event.get("event") == "research_execution_child_started"
-            and event.get("resource_id") == run_id
+            is_research_execution_child_started_event(event, run_id)
             for event in _read_events(log_path)
         ):
             return
