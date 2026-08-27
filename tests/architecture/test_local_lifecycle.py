@@ -88,7 +88,10 @@ log = Path(os.environ["TEST_COMMAND_LOG"])
 with log.open("a") as stream:
     stream.write(f"docker {' '.join(arguments)}\\n")
 if arguments[0] == "inspect":
-    print("container inspection")
+    if any(argument.startswith('{"status"') for argument in arguments):
+        print('{"status":"exited","exit_code":143,"oom_killed":false}')
+    else:
+        print("container inspection")
     raise SystemExit(0)
 if arguments[:2] == ["network", "inspect"]:
     print("true")
@@ -103,6 +106,8 @@ if arguments[0] == "run" and "--project-name" not in arguments:
     raise SystemExit(0)
 
 project = arguments[arguments.index("--project-name") + 1]
+if "build" in arguments and os.environ.get("FAKE_BUILD_STATUS"):
+    raise SystemExit(int(os.environ["FAKE_BUILD_STATUS"]))
 if "up" in arguments:
     with log.open("a") as stream:
         stream.write(
@@ -147,6 +152,18 @@ smoke_script = next(
     (argument for argument in arguments if argument.endswith("production_image_smoke.py")),
     None,
 )
+mcp_smoke_script = next(
+    (argument for argument in arguments if argument.endswith("production_mcp_image_smoke.py")),
+    None,
+)
+if "run" in arguments and mcp_smoke_script is not None:
+    print('{"status":"passed"}')
+    phase = arguments[arguments.index(mcp_smoke_script) + 1]
+    if phase == os.environ.get("FAKE_MCP_IMAGE_SMOKE_PHASE") and os.environ.get(
+        "FAKE_MCP_IMAGE_SMOKE_STATUS"
+    ):
+        print(f"fake {phase} MCP image smoke failure", file=sys.stderr)
+        raise SystemExit(int(os.environ["FAKE_MCP_IMAGE_SMOKE_STATUS"]))
 if "run" in arguments and smoke_script is not None:
     phase = arguments[arguments.index(smoke_script) + 1]
     failing_phase = os.environ.get("FAKE_IMAGE_SMOKE_PHASE", "before")
@@ -194,6 +211,14 @@ trap terminate_fake_pytest TERM
 printf 'uv %s db=%s s3=%s bucket=%s\\n' \
   "$*" "$THESISTRACE_DATABASE_URL" "$THESISTRACE_S3_ENDPOINT_URL" \
   "$THESISTRACE_S3_BUCKET" >> "$TEST_COMMAND_LOG"
+if [ "${1:-}" = run ] && [ "${2:-}" = python ] && \
+   [ "$(basename "${3:-}")" = sanitize_production_mcp_evidence.py ]; then
+  if [ "${4:-}" = sanitize ] && [ -n "${FAKE_SANITIZER_STATUS:-}" ]; then
+    exit "$FAKE_SANITIZER_STATUS"
+  fi
+  python3 "$3" "$4" "$5"
+  exit $?
+fi
 for argument in "$@"; do
   case "$argument" in
     --junitxml=*)
@@ -1058,11 +1083,46 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
         "up --detach --no-build --wait --wait-timeout 120 "
         "research-worker batch-research-worker tracking-worker\n" in commands
     )
+    assert "production_mcp_image_smoke.py preflight" in commands
+    assert "production_mcp_image_smoke.py http-before" in commands
+    assert "stop --timeout 30 api" in commands
+    assert "production_mcp_image_smoke.py http-after" in commands
+    assert "production_mcp_image_smoke.py stdio" in commands
+    assert "production_mcp_image_smoke.py evidence" in commands
+    assert "THESISTRACE_TEST_RANDOM_SEED=1401" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
         "api research-worker batch-research-worker tracking-worker\n" in commands
     )
     assert "--build" not in commands
+
+
+def test_image_smoke_mounts_explicit_local_mcp_api_without_changing_production_image() -> None:
+    overlay = (ROOT / "deploy" / "core" / "compose.image-smoke.yaml").read_text()
+    dockerfile = (ROOT / "deploy" / "core" / "Dockerfile.backend").read_text()
+    api_harness = (ROOT / "tests" / "production_mcp_image_api.py").read_text()
+    smoke = (ROOT / "tests" / "production_mcp_image_smoke.py").read_text()
+
+    assert 'command: ["python", "/smoke/production_mcp_image_api.py"]' in overlay
+    assert "../../tests:/smoke:ro" in overlay
+    assert "THESISTRACE_RESEARCH_AGENT_TEST" not in dockerfile
+    assert "LocalImageSmokeTokenVerifier" in api_harness
+    assert "create_app(" in api_harness
+    assert "enable_research_agent_http=True" in api_harness
+    assert '"/mcp" not in default_routes' in smoke
+    assert "create_app(enable_research_agent_http=True)" in smoke
+    assert "terminate_on_close=False" in smoke
+
+
+def test_production_image_base_tags_are_locked_to_content_digests() -> None:
+    backend = (ROOT / "deploy" / "core" / "Dockerfile.backend").read_text()
+    web = (ROOT / "deploy" / "core" / "Dockerfile.web").read_text()
+
+    for dockerfile in (backend, web):
+        from_lines = [line for line in dockerfile.splitlines() if line.startswith("FROM ")]
+        assert from_lines
+        assert all("@sha256:" in line for line in from_lines)
+        assert all(len(line.partition("@sha256:")[2].split()[0]) == 64 for line in from_lines)
 
 
 def test_failed_image_smoke_persists_runner_diagnostics_before_cleanup(
@@ -1094,6 +1154,112 @@ def test_failed_image_smoke_persists_runner_diagnostics_before_cleanup(
         "ps --all"
     )
     assert commands.rindex("ps --all") < commands.index("down --volumes")
+
+
+def test_failed_image_build_stops_before_infrastructure_and_preserves_status(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_BUILD_STATUS"] = "12"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 12
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
+    assert "phase=image-smoke-images " in metadata
+    assert "status=12" in metadata
+    commands = command_log.read_text()
+    assert "build initialize web" in commands
+    assert "image tag" not in commands
+    assert "up --detach" not in commands
+
+
+def test_failed_mcp_image_smoke_sanitizes_preserved_protocol_evidence(
+    tmp_path: Path,
+) -> None:
+    _, environment = _fake_test_runtime_commands(tmp_path)
+    environment.update(
+        {
+            "FAKE_MCP_IMAGE_SMOKE_PHASE": "http-before",
+            "FAKE_MCP_IMAGE_SMOKE_STATUS": "17",
+            "FAKE_COMPOSE_LOGS": " ".join(
+                (
+                    "mcp-image-action-token-canary",
+                    "mcp-image-read-token-canary",
+                    "mcp-image-hypothesis-canary",
+                    "image-smoke-researcher",
+                    "rank(close) + 0.123456789",
+                )
+            ),
+        }
+    )
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 17
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    run_root = tmp_path / "runs" / run_id
+    metadata = (run_root / "run.txt").read_text()
+    assert "failure_evidence_sanitization_status=0" in metadata
+    assert "failure_canary_scan_status=0" in metadata
+    compose_logs = (run_root / "evidence" / "compose-logs.txt").read_text()
+    assert compose_logs.count("<redacted>") == 5
+    assert "rank(close)" not in compose_logs
+    for canary in (
+        "mcp-image-action-token-canary",
+        "mcp-image-read-token-canary",
+        "mcp-image-hypothesis-canary",
+        "image-smoke-researcher",
+        "0.123456789",
+    ):
+        assert canary not in compose_logs
+
+
+def test_failed_evidence_sanitization_discards_all_text_evidence(
+    tmp_path: Path,
+) -> None:
+    _, environment = _fake_test_runtime_commands(tmp_path)
+    environment.update(
+        {
+            "FAKE_MCP_IMAGE_SMOKE_PHASE": "http-before",
+            "FAKE_MCP_IMAGE_SMOKE_STATUS": "17",
+            "FAKE_SANITIZER_STATUS": "19",
+            "FAKE_COMPOSE_LOGS": "rank(close) + 0.123456789",
+        }
+    )
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 17
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    run_root = tmp_path / "runs" / run_id
+    metadata = (run_root / "run.txt").read_text()
+    assert "failure_evidence_sanitization_status=1" in metadata
+    assert "failure_evidence_discard_status=0" in metadata
+    assert "failure_canary_scan_status=0" in metadata
+    assert not (run_root / "evidence" / "compose-logs.txt").exists()
 
 
 def test_active_lifecycle_rejects_legacy_and_hybrid_entrypoints() -> None:
@@ -1191,7 +1357,7 @@ def test_failed_integration_captures_evidence_before_default_cleanup(
     assert commands.index("ps --all") < commands.index("down --volumes")
 
 
-def test_failed_runtime_scans_new_failure_evidence_for_secret_canaries(
+def test_failed_runtime_sanitizes_then_scans_new_failure_evidence(
     tmp_path: Path,
 ) -> None:
     _, environment = _fake_test_runtime_commands(tmp_path)
@@ -1208,11 +1374,14 @@ def test_failed_runtime_scans_new_failure_evidence_for_secret_canaries(
     )
 
     assert completed.returncode == 7
-    assert "secret canary detected in failure evidence" in completed.stderr
     run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
     run_root = tmp_path / "runs" / run_id
-    assert (run_root / "evidence" / "secret-canary-scan.txt").read_text() == "failed\n"
-    assert "failure_canary_scan_status=1\n" in (run_root / "run.txt").read_text()
+    evidence = run_root / "evidence"
+    assert (evidence / "secret-canary-scan.txt").read_text() == "passed\n"
+    assert (evidence / "compose-logs.txt").read_text().strip() == "<redacted>"
+    metadata = (run_root / "run.txt").read_text()
+    assert "failure_evidence_sanitization_status=0\n" in metadata
+    assert "failure_canary_scan_status=0\n" in metadata
 
 
 def test_cleanup_failure_is_reported_without_masking_the_test_failure(

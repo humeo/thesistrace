@@ -86,12 +86,15 @@ runtime_image_name() {
 }
 
 build_runtime_images() {
-  compose build initialize web
+  compose build initialize web || return $?
   built_backend_image=$(runtime_image_name initialize)
-  docker image tag "$built_backend_image" "$(runtime_image_name api)"
-  docker image tag "$built_backend_image" "$(runtime_image_name research-worker)"
-  docker image tag "$built_backend_image" "$(runtime_image_name batch-research-worker)"
-  docker image tag "$built_backend_image" "$(runtime_image_name tracking-worker)"
+  docker image tag "$built_backend_image" "$(runtime_image_name api)" || return $?
+  docker image tag "$built_backend_image" "$(runtime_image_name research-worker)" \
+    || return $?
+  docker image tag "$built_backend_image" "$(runtime_image_name batch-research-worker)" \
+    || return $?
+  docker image tag "$built_backend_image" "$(runtime_image_name tracking-worker)" \
+    || return $?
 }
 
 mapped_port() {
@@ -161,16 +164,23 @@ capture_api_log_evidence() {
 scan_secret_canaries() {
   scan_result="$evidence_dir/secret-canary-scan.txt"
   : >"$scan_result"
-  for canary in \
-    observability-access-canary \
-    observability-secret-canary \
-    observability-request-canary; do
-    if grep -R -F -q -- "$canary" "$evidence_dir"; then
-      printf 'failed\n' >"$scan_result"
-      return 1
-    fi
-  done
-  printf 'passed\n' >"$scan_result"
+  if uv run python "$repo_root/tests/sanitize_production_mcp_evidence.py" \
+    verify "$evidence_dir"; then
+    printf 'passed\n' >"$scan_result"
+    return 0
+  fi
+  printf 'failed\n' >"$scan_result"
+  return 1
+}
+
+sanitize_mcp_failure_evidence() {
+  uv run python "$repo_root/tests/sanitize_production_mcp_evidence.py" \
+    sanitize "$evidence_dir"
+}
+
+discard_unsanitized_failure_evidence() {
+  uv run python "$repo_root/tests/sanitize_production_mcp_evidence.py" \
+    discard "$evidence_dir"
 }
 
 verify_image_health() {
@@ -182,6 +192,24 @@ verify_image_health() {
     initialize python /smoke/production_image_smoke.py health \
     >"$evidence_dir/health-$suffix.json" \
     2>"$evidence_dir/health-$suffix.stderr.log"
+}
+
+run_mcp_image_smoke() {
+  phase=$1
+  compose run --rm --no-deps -T \
+    -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+    -e THESISTRACE_TEST_EVIDENCE_DIR=/smoke-evidence \
+    -e THESISTRACE_TEST_IMAGE_ID="$image_revision" \
+    -e THESISTRACE_TEST_RANDOM_SEED=1401 \
+    initialize python /smoke/production_mcp_image_smoke.py "$phase"
+}
+
+capture_stopped_api_state() {
+  container_id=$(compose ps --all --quiet api)
+  test -n "$container_id" || return 1
+  docker inspect --format \
+    '{"status":"{{.State.Status}}","exit_code":{{.State.ExitCode}},"oom_killed":{{.State.OOMKilled}}}' \
+    "$container_id" >"$evidence_dir/mcp-api-stopped.json"
 }
 
 verify_service_readiness_outage() {
@@ -459,6 +487,22 @@ finish() {
   set +e
   if [ "$status" -ne 0 ]; then
     capture_evidence
+    if sanitize_mcp_failure_evidence; then
+      failure_evidence_sanitization_status=0
+    else
+      failure_evidence_sanitization_status=1
+      echo "failed to sanitize MCP failure evidence" >&2
+      if discard_unsanitized_failure_evidence; then
+        failure_evidence_discard_status=0
+      else
+        failure_evidence_discard_status=1
+        echo "failed to discard unsanitized MCP evidence" >&2
+      fi
+      printf 'failure_evidence_discard_status=%s\n' \
+        "$failure_evidence_discard_status" >>"$run_metadata"
+    fi
+    printf 'failure_evidence_sanitization_status=%s\n' \
+      "$failure_evidence_sanitization_status" >>"$run_metadata"
     if scan_secret_canaries; then
       failure_canary_scan_status=0
     else
@@ -786,6 +830,8 @@ case "$command" in
   image-smoke)
     smoke_state=/smoke-evidence/image-smoke-state.json
     run_phase image-smoke-images build_runtime_images
+    backend_image=$(runtime_image_name initialize)
+    image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
     run_phase image-smoke-fresh-named-volume-mount \
       base_compose run --rm --no-deps -T \
       --entrypoint /bin/true batch-research-worker
@@ -804,6 +850,9 @@ case "$command" in
       --replay /smoke/fixtures/tushare-financial-product-replay.json
     run_phase image-smoke-prepare-data compose run --rm --no-deps -T initialize \
       python /smoke/browser/prepare_image_smoke_data.py
+    run_phase image-smoke-mcp-preflight run_mcp_image_smoke preflight \
+      >"$evidence_dir/mcp-preflight.json" \
+      2>"$evidence_dir/mcp-preflight.stderr.log"
     run_phase image-smoke-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
       api web
@@ -821,8 +870,6 @@ case "$command" in
     test "$network_internal" = true
     printf 'internal=%s\n' "$network_internal" >"$evidence_dir/network.txt"
     compose images --format json >"$evidence_dir/images.jsonl"
-    backend_image=$(runtime_image_name initialize)
-    image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
     compose ps --all >"$evidence_dir/compose-ps-before-restart.txt"
     run_phase image-smoke-before compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
@@ -937,5 +984,25 @@ case "$command" in
       initialize python /smoke/production_image_smoke.py observability \
       >"$evidence_dir/smoke-observability.json" \
       2>"$evidence_dir/smoke-observability.stderr.log"
+    run_phase image-smoke-mcp-http-before run_mcp_image_smoke http-before \
+      >"$evidence_dir/mcp-http-before.json" \
+      2>"$evidence_dir/mcp-http-before.stderr.log"
+    run_phase image-smoke-mcp-api-stop compose stop --timeout 30 api
+    run_phase image-smoke-mcp-api-stopped capture_stopped_api_state
+    run_phase image-smoke-mcp-api-reopen compose up --detach --no-build \
+      --wait --wait-timeout 120 api
+    run_phase image-smoke-mcp-workers compose up --detach --no-build \
+      --wait --wait-timeout 120 \
+      research-worker batch-research-worker tracking-worker
+    run_phase image-smoke-mcp-http-after run_mcp_image_smoke http-after \
+      >"$evidence_dir/mcp-http-after.json" \
+      2>"$evidence_dir/mcp-http-after.stderr.log"
+    run_phase image-smoke-mcp-stdio run_mcp_image_smoke stdio \
+      >"$evidence_dir/mcp-stdio.json" \
+      2>"$evidence_dir/mcp-stdio.stderr.log"
+    run_phase image-smoke-mcp-api-logs capture_api_log_evidence
+    run_phase image-smoke-mcp-evidence run_mcp_image_smoke evidence \
+      >"$evidence_dir/mcp-image-evidence.json" \
+      2>"$evidence_dir/mcp-image-evidence.stderr.log"
     ;;
 esac

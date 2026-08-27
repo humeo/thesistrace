@@ -26,6 +26,7 @@ from thesistrace.publication import Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_run.result import (
     RESULT_DAILY_PARTITION_PREFIX,
+    RESULT_TERMINAL_POSITION_PARTITION_PREFIX,
     read_result_bundle,
 )
 
@@ -65,6 +66,7 @@ UNAVAILABLE_DEPENDENCY_CODES = {
     "rustfs": "RUSTFS_UNAVAILABLE",
     "dataset_store": "DATASET_STORE_UNAVAILABLE",
 }
+HTTP_REQUEST_TIMEOUT_SECONDS = 10
 
 BATCH_PERFORMANCE_WARMUP_SAMPLES = 1
 BATCH_PERFORMANCE_MEASURED_SAMPLES = 4
@@ -2262,6 +2264,8 @@ def _verify_observability_evidence(
     ):
         assert isinstance(json.loads(path.read_text()), dict)
     canaries = {
+        "mcp-image-action-token-canary",
+        "mcp-image-read-token-canary",
         "observability-access-canary",
         "observability-secret-canary",
         "observability-request-canary",
@@ -2596,8 +2600,18 @@ def _durable_result(
             partition_names = {
                 name for name in payload_names if name.startswith(RESULT_DAILY_PARTITION_PREFIX)
             }
+            position_partition_names = {
+                name
+                for name in payload_names
+                if name.startswith(RESULT_TERMINAL_POSITION_PARTITION_PREFIX)
+            }
             assert partition_names
-            assert set(payload_names) == set(result_object_names) | partition_names
+            assert set(payload_names) == (
+                set(result_object_names)
+                | {"terminal_positions"}
+                | partition_names
+                | position_partition_names
+            )
         return {
             "active_pin_count": int(row["active_pin_count"]),
             "manifest_sha256": manifest_sha256,
@@ -2763,7 +2777,10 @@ def _request_json(
         method=method,
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(
+            request,
+            timeout=HTTP_REQUEST_TIMEOUT_SECONDS,
+        ) as response:
             assert response.status < 300
             value = json.loads(response.read())
     except urllib.error.HTTPError as error:
