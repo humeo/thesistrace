@@ -6054,7 +6054,7 @@ def _run_worker_replicas(
 ) -> list[subprocess.CompletedProcess[str]]:
     with ThreadPoolExecutor(max_workers=count) as executor:
         futures = [executor.submit(_run_worker_once, settings, role) for _ in range(count)]
-        return [future.result(timeout=30) for future in futures]
+        return [future.result() for future in futures]
 
 
 def _start_claim_barrier_worker(
