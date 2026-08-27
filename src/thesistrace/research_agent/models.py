@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from thesistrace.alpha_language.language import MAX_FORMULA_LENGTH
 from thesistrace.alpha_language.models import (
     AlphaBuiltinCatalogEntry,
     AlphaFieldCatalogEntry,
@@ -109,7 +110,7 @@ AlphaCatalogIdentifiers = Annotated[
     list[AlphaCatalogIdentifier],
     Field(min_length=1, max_length=50),
 ]
-FormulaSource = Annotated[str, Field(strict=True, max_length=4096)]
+FormulaSource = Annotated[str, Field(strict=True, max_length=MAX_FORMULA_LENGTH)]
 
 
 class GetResearchContextInput(BaseModel):

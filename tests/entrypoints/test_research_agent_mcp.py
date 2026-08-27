@@ -5,13 +5,112 @@ import logging
 import os
 import subprocess
 from contextlib import contextmanager
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
+import anyio
 import pytest
 
 from thesistrace.entrypoints import research_agent_mcp
 from thesistrace.entrypoints.runtime import CORE_ENVIRONMENT_NAMES
+from thesistrace.research_agent.mcp_server import RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
+
+
+def test_stdio_raw_frame_reader_is_bounded_before_json_parsing() -> None:
+    anyio.run(_exercise_bounded_stdio_reader)
+
+
+async def _exercise_bounded_stdio_reader() -> None:
+    exact = b"x" * (RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES - 1) + b"\n"
+    reader = research_agent_mcp._BoundedStdin(
+        BytesIO(exact + b"private-raw-frame-canary" * 10000)
+    )
+
+    assert await anext(reader) == exact.decode()
+    with pytest.raises(research_agent_mcp.ResearchAgentStdioRequestTooLarge):
+        await anext(reader)
+
+
+def test_stdio_claim_diverts_handler_and_child_stdin_then_restores_wire() -> None:
+    script = """
+import json
+import os
+import subprocess
+import sys
+from thesistrace.entrypoints.research_agent_mcp import _claimed_bounded_stdin
+
+with _claimed_bounded_stdin() as reader:
+    child = subprocess.run(
+        [sys.executable, "-c", "import os,sys; sys.stdout.buffer.write(os.read(0, 1))"],
+        check=True,
+        capture_output=True,
+        timeout=5,
+    )
+    try:
+        reader._readline()
+    except Exception as error:
+        rejected = type(error).__name__
+print(json.dumps({
+    "child_stdin": child.stdout.decode(),
+    "rejected": rejected,
+}))
+"""
+    process = subprocess.Popen(
+        [os.sys.executable, "-c", script],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    try:
+        process.stdin.write(b"x" * (RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES + 1))
+        process.stdin.flush()
+        returncode = process.wait(timeout=10)
+    except Exception as error:
+        returncode, completed_stdout, completed_stderr = _finish_stdio_claim_probe(
+            process
+        )
+        raise AssertionError(
+            "bounded stdio claim probe failed: "
+            f"returncode={returncode}, "
+            f"stdout={completed_stdout!r}, stderr={completed_stderr!r}"
+        ) from error
+    else:
+        completed_stdout = process.stdout.read(4096)
+        completed_stderr = process.stderr.read(4096)
+    finally:
+        if not process.stdin.closed:
+            process.stdin.close()
+
+    assert returncode == 0
+    assert json.loads(completed_stdout) == {
+        "child_stdin": "",
+        "rejected": "ResearchAgentStdioRequestTooLarge",
+    }
+    assert completed_stderr == b""
+
+
+def _finish_stdio_claim_probe(
+    process: subprocess.Popen[bytes],
+) -> tuple[int | None, bytes, bytes]:
+    if process.stdin is not None and not process.stdin.closed:
+        try:
+            process.stdin.close()
+        except BrokenPipeError:
+            pass
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+    stdout = b"" if process.stdout is None else process.stdout.read(4096)
+    stderr = b"" if process.stderr is None else process.stderr.read(4096)
+    return process.returncode, stdout, stderr
 
 
 def test_stdio_dangerous_scope_requires_exact_explicit_process_configuration(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Literal
 
 import anyio
@@ -15,6 +17,9 @@ from mcp.types import (
     TextContent,
     Tool,
 )
+from mcp_types import JSONRPCResponse
+from mcp_types.methods import serialize_server_result
+from pydantic import BaseModel
 
 from thesistrace.operational_events import (
     OperationalEvent,
@@ -41,11 +46,71 @@ type ResearchAgentRegistryFactory = Callable[
 ]
 type ResearchAgentSubjectFactory = Callable[[ServerRequestContext[object]], str]
 type ResearchAgentTransport = Literal["stdio", "streamable_http"]
-RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES = 64 * 1024
+RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES = 128 * 1024
+RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES = 256 * 1024
+RESEARCH_AGENT_RATE_WINDOW_SECONDS = 60
+RESEARCH_AGENT_MAX_CALLS_PER_WINDOW = 120
+RESEARCH_AGENT_MAX_CONCURRENT_CALLS = 4
 
 
 class ResearchAgentWireResponseTooLarge(RuntimeError):
     pass
+
+
+@dataclass
+class _PrincipalIngressState:
+    window_started_ns: int
+    calls: int = 0
+    active: int = 0
+
+
+class _ResearchAgentIngressGuard:
+    def __init__(self, monotonic_ns: Callable[[], int]) -> None:
+        self._monotonic_ns = monotonic_ns
+        self._lock = anyio.Lock()
+        self._principals: dict[str, _PrincipalIngressState] = {}
+
+    async def acquire(self, subject: str) -> int | None:
+        principal = digested_identifier("principal", subject)
+        now = self._monotonic_ns()
+        window_ns = RESEARCH_AGENT_RATE_WINDOW_SECONDS * 1_000_000_000
+        async with self._lock:
+            self._prune(now, window_ns)
+            state = self._principals.get(principal)
+            if state is None:
+                state = _PrincipalIngressState(window_started_ns=now)
+                self._principals[principal] = state
+            elif now - state.window_started_ns >= window_ns:
+                state.window_started_ns = now
+                state.calls = 0
+            if state.calls >= RESEARCH_AGENT_MAX_CALLS_PER_WINDOW:
+                remaining_ns = max(1, window_ns - (now - state.window_started_ns))
+                return min(
+                    RESEARCH_AGENT_RATE_WINDOW_SECONDS,
+                    max(1, (remaining_ns + 999_999_999) // 1_000_000_000),
+                )
+            state.calls += 1
+            if state.active >= RESEARCH_AGENT_MAX_CONCURRENT_CALLS:
+                return 1
+            state.active += 1
+        return None
+
+    async def release(self, subject: str) -> None:
+        principal = digested_identifier("principal", subject)
+        async with self._lock:
+            state = self._principals.get(principal)
+            if state is None or state.active < 1:
+                raise RuntimeError("Research Agent ingress release has no active call")
+            state.active -= 1
+
+    def _prune(self, now: int, window_ns: int) -> None:
+        expired = [
+            principal
+            for principal, state in self._principals.items()
+            if state.active == 0 and now - state.window_started_ns >= window_ns
+        ]
+        for principal in expired:
+            del self._principals[principal]
 
 
 def create_research_agent_mcp_server(
@@ -57,12 +122,14 @@ def create_research_agent_mcp_server(
     trace_id_factory: Callable[[], str],
     transport: ResearchAgentTransport,
 ) -> Server[object]:
+    ingress = _ResearchAgentIngressGuard(monotonic_ns)
+
     async def list_tools(
         context: ServerRequestContext[object],
         _params: PaginatedRequestParams | None,
     ) -> ListToolsResult:
         registry = registry_factory(context)
-        return ListToolsResult(
+        result = ListToolsResult(
             tools=[
                 Tool(
                     name=capability.name,
@@ -74,6 +141,14 @@ def create_research_agent_mcp_server(
                 for capability in registry.accessible_capabilities()
             ]
         )
+        if (
+            _wire_response_bytes(context, method="tools/list", result=result)
+            > RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+        ):
+            raise ResearchAgentWireResponseTooLarge(
+                "Research Agent wire response exceeds its byte limit"
+            )
+        return result
 
     async def call_tool(
         context: ServerRequestContext[object],
@@ -81,39 +156,45 @@ def create_research_agent_mcp_server(
     ) -> CallToolResult:
         trace_id = trace_id_factory()
         started = monotonic_ns()
-        registry: ResearchAgentCapabilityRegistry | None = None
         subject = "unavailable"
         try:
             subject = subject_factory(context)
-            registry = registry_factory(context)
-            invocation = await anyio.to_thread.run_sync(
-                lambda: registry.invoke(
-                    params.name,
-                    params.arguments or {},
+            if _wire_request_bytes(params) > RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES:
+                return _failure_result(
+                    error=_boundary_error(
+                        ResearchAgentErrorCode.INVALID_INPUT,
+                        params=params,
+                        trace_id=trace_id,
+                    ),
+                    event_sink=event_sink,
+                    monotonic_ns=monotonic_ns,
+                    started=started,
+                    subject=subject,
                     trace_id=trace_id,
+                    transport=transport,
                 )
-            )
-            await checkpoint_if_cancelled()
-        except anyio.get_cancelled_exc_class():
-            _emit_completion(
-                event_sink,
-                duration_ms=(monotonic_ns() - started) // 1_000_000,
-                outcome="cancelled",
-                call_context=_safe_call_context(params),
-                response=None,
-                subject=subject,
-                trace_id=trace_id,
-                transport=transport,
-            )
-            raise
+            retry_after_seconds = await ingress.acquire(subject)
+            if retry_after_seconds is not None:
+                return _failure_result(
+                    error=_boundary_error(
+                        ResearchAgentErrorCode.TEMPORARILY_UNAVAILABLE,
+                        params=params,
+                        retry_after_seconds=retry_after_seconds,
+                        trace_id=trace_id,
+                    ),
+                    event_sink=event_sink,
+                    monotonic_ns=monotonic_ns,
+                    started=started,
+                    subject=subject,
+                    trace_id=trace_id,
+                    transport=transport,
+                )
         except Exception as exception:
             return _failure_result(
-                error=ResearchAgentToolError(
-                    code=ResearchAgentErrorCode.INTERNAL,
-                    message="Tool execution failed",
-                    retryable=False,
+                error=_boundary_error(
+                    ResearchAgentErrorCode.INTERNAL,
+                    params=params,
                     trace_id=trace_id,
-                    context=_safe_call_context(params),
                 ),
                 event_sink=event_sink,
                 exception=exception,
@@ -123,58 +204,21 @@ def create_research_agent_mcp_server(
                 trace_id=trace_id,
                 transport=transport,
             )
-        if invocation.error is not None:
-            return _failure_result(
-                error=invocation.error,
+        try:
+            return await _invoke_admitted_tool(
+                context,
+                params,
                 event_sink=event_sink,
-                exception=invocation.exception,
                 monotonic_ns=monotonic_ns,
+                registry_factory=registry_factory,
                 started=started,
                 subject=subject,
                 trace_id=trace_id,
                 transport=transport,
             )
-        assert invocation.result is not None
-        result = CallToolResult(
-            content=[
-                TextContent(
-                    type="text",
-                    text="Structured result is available.",
-                )
-            ],
-            structured_content=invocation.result.model_dump(mode="json"),
-        )
-        wire_bytes = len(result.model_dump_json(by_alias=True, exclude_none=True).encode())
-        if wire_bytes > RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES:
-            return _failure_result(
-                error=ResearchAgentToolError(
-                    code=ResearchAgentErrorCode.INTERNAL,
-                    message="Tool execution failed",
-                    retryable=False,
-                    trace_id=trace_id,
-                    context=_safe_call_context(params),
-                ),
-                event_sink=event_sink,
-                exception=ResearchAgentWireResponseTooLarge(
-                    "Research Agent wire response exceeds its byte limit"
-                ),
-                monotonic_ns=monotonic_ns,
-                started=started,
-                subject=subject,
-                trace_id=trace_id,
-                transport=transport,
-            )
-        _emit_completion(
-            event_sink,
-            duration_ms=(monotonic_ns() - started) // 1_000_000,
-            outcome="succeeded",
-            call_context=_safe_call_context(params, response=result),
-            response=result,
-            subject=subject,
-            trace_id=trace_id,
-            transport=transport,
-        )
-        return result
+        finally:
+            with anyio.CancelScope(shield=True):
+                await ingress.release(subject)
 
     return Server(
         name="ThesisTrace Research Agent",
@@ -182,6 +226,163 @@ def create_research_agent_mcp_server(
         on_list_tools=list_tools,
         on_call_tool=call_tool,
     )
+
+
+async def _invoke_admitted_tool(
+    context: ServerRequestContext[object],
+    params: CallToolRequestParams,
+    *,
+    event_sink: OperationalEventWriter,
+    monotonic_ns: Callable[[], int],
+    registry_factory: ResearchAgentRegistryFactory,
+    started: int,
+    subject: str,
+    trace_id: str,
+    transport: ResearchAgentTransport,
+) -> CallToolResult:
+    try:
+        registry = registry_factory(context)
+        invocation = await anyio.to_thread.run_sync(
+            lambda: registry.invoke(
+                params.name,
+                params.arguments or {},
+                trace_id=trace_id,
+            )
+        )
+        await checkpoint_if_cancelled()
+    except anyio.get_cancelled_exc_class():
+        _emit_completion(
+            event_sink,
+            duration_ms=(monotonic_ns() - started) // 1_000_000,
+            outcome="cancelled",
+            call_context=_safe_call_context(params),
+            response=None,
+            subject=subject,
+            trace_id=trace_id,
+            transport=transport,
+        )
+        raise
+    except Exception as exception:
+        return _failure_result(
+            error=_boundary_error(
+                ResearchAgentErrorCode.INTERNAL,
+                params=params,
+                trace_id=trace_id,
+            ),
+            event_sink=event_sink,
+            exception=exception,
+            monotonic_ns=monotonic_ns,
+            started=started,
+            subject=subject,
+            trace_id=trace_id,
+            transport=transport,
+        )
+    if invocation.error is not None:
+        return _failure_result(
+            error=invocation.error,
+            event_sink=event_sink,
+            exception=invocation.exception,
+            monotonic_ns=monotonic_ns,
+            started=started,
+            subject=subject,
+            trace_id=trace_id,
+            transport=transport,
+        )
+    assert invocation.result is not None
+    result = CallToolResult(
+        content=[TextContent(type="text", text="Structured result is available.")],
+        structured_content=invocation.result.model_dump(mode="json"),
+    )
+    wire_bytes = _wire_response_bytes(context, method="tools/call", result=result)
+    if wire_bytes > RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES:
+        return _failure_result(
+            error=_boundary_error(
+                ResearchAgentErrorCode.INTERNAL,
+                params=params,
+                trace_id=trace_id,
+            ),
+            event_sink=event_sink,
+            exception=ResearchAgentWireResponseTooLarge(
+                "Research Agent wire response exceeds its byte limit"
+            ),
+            monotonic_ns=monotonic_ns,
+            started=started,
+            subject=subject,
+            trace_id=trace_id,
+            transport=transport,
+        )
+    _emit_completion(
+        event_sink,
+        duration_ms=(monotonic_ns() - started) // 1_000_000,
+        outcome="succeeded",
+        call_context=_safe_call_context(params, response=result),
+        response=result,
+        subject=subject,
+        trace_id=trace_id,
+        transport=transport,
+    )
+    return result
+
+
+def _boundary_error(
+    code: ResearchAgentErrorCode,
+    *,
+    params: CallToolRequestParams,
+    trace_id: str,
+    retry_after_seconds: int | None = None,
+) -> ResearchAgentToolError:
+    messages = {
+        ResearchAgentErrorCode.INVALID_INPUT: "Tool input is invalid",
+        ResearchAgentErrorCode.TEMPORARILY_UNAVAILABLE: "Tool is temporarily unavailable",
+        ResearchAgentErrorCode.INTERNAL: "Tool execution failed",
+    }
+    return ResearchAgentToolError(
+        code=code,
+        message=messages[code],
+        retryable=code is ResearchAgentErrorCode.TEMPORARILY_UNAVAILABLE,
+        retry_after_seconds=retry_after_seconds,
+        trace_id=trace_id,
+        context=_safe_call_context(params),
+    )
+
+
+def _wire_request_bytes(params: CallToolRequestParams) -> int:
+    payload = {
+        "jsonrpc": "2.0",
+        "id": "request",
+        "method": "tools/call",
+        "params": {
+            "name": params.name,
+            "arguments": params.arguments or {},
+        },
+    }
+    return len(
+        json.dumps(
+            payload,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    )
+
+
+def _wire_response_bytes(
+    context: ServerRequestContext[object],
+    *,
+    method: str,
+    result: BaseModel,
+) -> int:
+    surface_result = serialize_server_result(
+        method,
+        context.protocol_version,
+        result.model_dump(mode="json", by_alias=True, exclude_none=True),
+    )
+    response = JSONRPCResponse(
+        jsonrpc="2.0",
+        id=context.request_id if context.request_id is not None else "request",
+        result=surface_result,
+    )
+    return len(response.model_dump_json(by_alias=True, exclude_none=True).encode())
 
 
 def _failure_result(

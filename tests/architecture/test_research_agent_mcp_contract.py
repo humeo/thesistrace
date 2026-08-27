@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
+from hashlib import sha256
 from itertools import count
-from threading import Event
+from pathlib import Path
+from threading import Event, Lock
+from types import SimpleNamespace
 
 import anyio
 import pytest
 from jsonschema import validate
 from mcp.client import Client
-from mcp.types import ListToolsResult, TextContent
+from mcp.types import CallToolRequestParams, CallToolResult, ListToolsResult, TextContent
 from mcp_types.methods import serialize_server_result
 from mcp_types.version import LATEST_HANDSHAKE_VERSION
 from pydantic import ValidationError
@@ -21,7 +25,6 @@ from thesistrace.daily_track import (
     DailyTrackInvalidCursor,
     DailyTrackList,
     DailyTrackPollingDetail,
-    DailyTrackProvenanceResultSection,
     DailyTrackResultSectionInput,
     DailyTrackResultSectionResponse,
     DailyTrackResultUnavailable,
@@ -46,7 +49,15 @@ from thesistrace.research_agent import (
     create_research_agent_mcp_server,
     local_operator_authority,
 )
-from thesistrace.research_agent.mcp_server import RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+from thesistrace.research_agent.mcp_server import (
+    RESEARCH_AGENT_MAX_CALLS_PER_WINDOW,
+    RESEARCH_AGENT_MAX_CONCURRENT_CALLS,
+    RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES,
+    RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES,
+    RESEARCH_AGENT_RATE_WINDOW_SECONDS,
+    _wire_request_bytes,
+    _wire_response_bytes,
+)
 from thesistrace.research_agent.models import ResearchAgentToolError
 from thesistrace.research_agent.registry import (
     RESEARCH_AGENT_TOOL_NAMES,
@@ -82,7 +93,6 @@ from thesistrace.research_batch.service import (
 from thesistrace.research_folder.models import ResearchFolderList, ResearchFolderSummary
 from thesistrace.research_run.models import (
     FactorResultSection,
-    ProvenanceResultSection,
     ResearchRunAdmissionAccepted,
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionIssue,
@@ -99,8 +109,6 @@ from thesistrace.research_run.models import (
     ResearchRunResultSectionResponse,
     ResearchRunStartTrackingOutcome,
     ResearchRunSummary,
-    ResultDataProvenance,
-    ResultExecutionProvenance,
     StartTrackingCommand,
 )
 from thesistrace.research_run.service import (
@@ -357,6 +365,20 @@ class _BlockingDataOverviewReader(_DataOverviewReader):
             self.finished.set()
 
 
+class _ConcurrentDataOverviewReader(_DataOverviewReader):
+    def __init__(self) -> None:
+        self.started = 0
+        self.release = Event()
+        self._lock = Lock()
+
+    def overview(self) -> DataOverview:
+        with self._lock:
+            self.started += 1
+        if not self.release.wait(timeout=2):
+            raise RuntimeError("concurrency test did not release Core read")
+        return super().overview()
+
+
 class _ExplodingAlphaLanguage:
     def catalog(
         self,
@@ -374,6 +396,32 @@ class _ExplodingAlphaLanguage:
     def diagnose(self, source: str) -> FormulaDiagnostics:
         del source
         raise RuntimeError("private-formula-canary")
+
+
+class _OversizedAlphaLanguage:
+    def catalog(
+        self,
+        *,
+        financial_authoring_ready: bool = True,
+    ) -> AlphaAuthoringCatalog:
+        catalog = alpha_language.catalog(
+            financial_authoring_ready=financial_authoring_ready,
+        )
+        first = catalog.fields[0]
+        return AlphaAuthoringCatalog(
+            fields=[
+                first.model_copy(
+                    update={
+                        "description": "wire-response-canary-"
+                        * (RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES // 10)
+                    }
+                )
+            ],
+            builtins=[],
+        )
+
+    def diagnose(self, source: str) -> FormulaDiagnostics:
+        return alpha_language.diagnose(source)
 
 
 def _run_summary() -> ResearchRunSummary:
@@ -1441,6 +1489,207 @@ def test_registry_separates_read_execute_and_destructive_tracking_discovery() ->
     assert "delete_daily_track" not in RESEARCH_AGENT_TOOL_NAMES
 
 
+def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() -> None:
+    assert {scope.value for scope in ResearchAgentScope} == {
+        "research:read",
+        "research:execute",
+        "research:cancel",
+        "tracking:read",
+        "tracking:execute",
+        "tracking:stop",
+    }
+    assert RESEARCH_AGENT_TOOL_NAMES == {
+        "get_research_context",
+        "get_alpha_catalog",
+        "diagnose_alpha_formula",
+        "list_research_runs",
+        "get_research_run",
+        "get_research_run_result",
+        "list_research_batches",
+        "get_research_batch",
+        "submit_research_batch",
+        "cancel_research_batch",
+        "cancel_research_run",
+        "submit_research_run",
+        "list_daily_tracks",
+        "get_daily_track",
+        "get_daily_track_result",
+        "start_daily_track",
+        "retry_daily_track",
+        "stop_daily_track",
+    }
+    all_scopes = ResearchAgentAuthority(
+        subject="contract-auditor",
+        scopes=frozenset(ResearchAgentScope),
+    )
+    contract = [
+        {
+            "name": capability.name,
+            "scope": capability.required_scope.value,
+            "description": capability.description,
+            "annotations": capability.annotations.model_dump(
+                mode="json",
+                by_alias=True,
+                exclude_none=True,
+            ),
+            "input_schema": capability.input_schema(),
+            "output_schema": capability.output_schema(),
+        }
+        for capability in _registry(all_scopes).accessible_capabilities()
+    ]
+    canonical = json.dumps(
+        contract,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+
+    assert sha256(canonical).hexdigest() == (
+        "96cebd400bb6893eaa8be98de2737122d35d1b8cb938257ce288454b63ab65b0"
+    )
+    assert len(canonical) == 143094
+
+
+def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
+    assert RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES == 128 * 1024
+    assert RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES == 256 * 1024
+    assert RESEARCH_AGENT_RATE_WINDOW_SECONDS == 60
+    assert RESEARCH_AGENT_MAX_CALLS_PER_WINDOW == 120
+    assert RESEARCH_AGENT_MAX_CONCURRENT_CALLS == 4
+
+    capabilities = {
+        capability.name: capability
+        for capability in _registry().accessible_capabilities()
+    }
+    assert capabilities["diagnose_alpha_formula"].input_schema()["properties"][
+        "source"
+    ]["maxLength"] == 4096
+    for name in ("submit_research_run", "submit_research_batch"):
+        assert '"maxLength": 4096' in json.dumps(
+            capabilities[name].input_schema(),
+            sort_keys=True,
+        )
+    for name in ("list_research_runs", "list_research_batches", "list_daily_tracks"):
+        schema = capabilities[name].input_schema()
+        assert schema["properties"]["limit"]["default"] == 20
+        assert schema["properties"]["limit"]["maximum"] == 50
+        assert schema["properties"]["cursor"]["anyOf"][0]["maxLength"] == 1024
+
+    batch = _factor_batch_command("r")
+    template = batch["factors"][0]
+    assert isinstance(template, dict)
+    batch["factors"] = [
+        {
+            **template,
+            "item_key": f"i{index}",
+            "formula": "x" * 4096,
+        }
+        for index in range(20)
+    ]
+    maximum_batch_bytes = _wire_request_bytes(
+        CallToolRequestParams(
+            name="submit_research_batch",
+            arguments=batch,
+        )
+    )
+    assert maximum_batch_bytes == 84536
+    assert maximum_batch_bytes < RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
+
+    evidence = json.loads(
+        Path("docs/research/research-agent-mcp-v1-ingress-benchmark.json").read_text()
+    )
+    assert evidence["fixed_limits"] == {
+        "request_bytes": RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES,
+        "response_bytes": RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES,
+        "formula_characters": 4096,
+        "calls_per_window": RESEARCH_AGENT_MAX_CALLS_PER_WINDOW,
+        "window_seconds": RESEARCH_AGENT_RATE_WINDOW_SECONDS,
+        "concurrent_calls_per_principal": RESEARCH_AGENT_MAX_CONCURRENT_CALLS,
+        "list_default_items": 20,
+        "list_maximum_items": 50,
+        "batch_maximum_items": 20,
+        "catalog_maximum_identifiers": 50,
+        "cursor_characters": 1024,
+    }
+    assert evidence["deterministic_payloads"] == {
+        "v1_contract_sha256": (
+            "96cebd400bb6893eaa8be98de2737122d35d1b8cb938257ce288454b63ab65b0"
+        ),
+        "v1_contract_bytes": 143094,
+        "maximum_factor_batch_call_bytes": maximum_batch_bytes,
+    }
+    assert evidence["observed"]["maximum_resident_set_bytes"] < (
+        evidence["production_envelope"]["container_memory_bytes"] // 10
+    )
+    assert evidence["observed"]["swaps"] == 0
+
+
+def test_v1_response_ceiling_counts_the_exact_jsonrpc_envelope() -> None:
+    context = SimpleNamespace(
+        protocol_version=LATEST_HANDSHAKE_VERSION,
+        request_id="request-" + "i" * 1024,
+    )
+
+    def result(payload_characters: int) -> CallToolResult:
+        return CallToolResult(
+            content=[TextContent(type="text", text="Structured result is available.")],
+            structured_content={"payload": "x" * payload_characters},
+        )
+
+    base_bytes = _wire_response_bytes(
+        context,  # type: ignore[arg-type]
+        method="tools/call",
+        result=result(0),
+    )
+    exact_payload = RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES - base_bytes
+    assert _wire_response_bytes(
+        context,  # type: ignore[arg-type]
+        method="tools/call",
+        result=result(exact_payload),
+    ) == RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+    assert _wire_response_bytes(
+        context,  # type: ignore[arg-type]
+        method="tools/call",
+        result=result(exact_payload + 1),
+    ) == RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES + 1
+
+
+def test_v1_contract_has_no_forbidden_generic_or_compatibility_surface() -> None:
+    serialized = json.dumps(
+        [
+            {
+                "name": capability.name,
+                "description": capability.description,
+                "input": capability.input_schema(),
+                "output": capability.output_schema(),
+            }
+            for capability in _registry(
+                ResearchAgentAuthority(
+                    subject="contract-auditor",
+                    scopes=frozenset(ResearchAgentScope),
+                )
+            ).accessible_capabilities()
+        ],
+        sort_keys=True,
+    ).lower()
+    for forbidden in (
+        "delete_research_run",
+        "retry_research_run",
+        "delete_daily_track",
+        "mutate_folder",
+        "delete_folder",
+        "data_operator",
+        "execute_sql",
+        "execute_python",
+        "execute_shell",
+        "http_request",
+        "object_storage",
+        "get_research_batch_result",
+        "confirmation_token",
+    ):
+        assert forbidden not in serialized
+
+
 def test_stop_daily_track_is_destructive_closed_world_and_has_no_confirmation_field() -> None:
     registry = _registry(local_operator_authority(enable_tracking_stop=True))
     tool = next(
@@ -1509,6 +1758,26 @@ def test_stdio_and_http_transports_share_structured_business_outcomes() -> None:
 
 def test_in_memory_protocol_rejects_oversized_wire_response_without_truncation() -> None:
     anyio.run(_exercise_wire_response_ceiling)
+
+
+def test_in_memory_protocol_rejects_oversized_wire_request_before_registry() -> None:
+    anyio.run(_exercise_wire_request_ceiling)
+
+
+def test_in_memory_protocol_rate_limits_each_principal_independently() -> None:
+    anyio.run(_exercise_principal_rate_limit)
+
+
+def test_in_memory_protocol_caps_concurrent_calls_per_principal() -> None:
+    anyio.run(_exercise_principal_concurrency_limit)
+
+
+def test_concurrent_calls_remain_counted_across_rate_window_rollover() -> None:
+    anyio.run(_exercise_concurrency_across_rate_window)
+
+
+def test_cancelled_calls_release_concurrency_slots() -> None:
+    anyio.run(_exercise_cancelled_calls_release_concurrency)
 
 
 def test_in_memory_protocol_rechecks_request_authority_after_discovery() -> None:
@@ -2220,38 +2489,15 @@ def _temporary_run_case():
 
 
 async def _exercise_wire_response_ceiling() -> None:
-    reader = _ResearchRunReader()
-    canary = "wire-response-canary-" * 4096
-    reader.result_section = ProvenanceResultSection(
-        run_id="run_test",
-        research_kind="factor_evaluation",
-        schema_version="research-result-v1",
-        immutable_input_sha256="0" * 64,
-        authoring_input=ResearchRunAuthorableInput(
-            formula=canary,
-            hypothesis=None,
-            start_date=date(2024, 1, 2),
-            end_date=date(2024, 1, 31),
-            universe="top300",
-            neutralization="none",
-            research_kind="factor_evaluation",
-        ),
-        data=ResultDataProvenance(
-            generation_id="generation_test",
-            data_through_session=date(2024, 1, 31),
-            financial_research_readiness="ready",
-        ),
-        execution=ResultExecutionProvenance(
-            calculation_contracts={"numeric_execution_contract": "decimal-v1"},
-            semantic_versions={"alpha": "v1"},
-        ),
-    )
+    canary = "wire-response-canary-"
     events: list[OperationalEvent] = []
-    async with Client(_server(_registry(research_runs=reader), events=events)) as client:
-        result = await client.call_tool(
-            "get_research_run_result",
-            {"run_id": "run_test", "section": "provenance"},
+    async with Client(
+        _server(
+            _registry(selected_alpha_language=_OversizedAlphaLanguage()),
+            events=events,
         )
+    ) as client:
+        result = await client.call_tool("get_alpha_catalog", {})
 
     assert result.is_error is True
     assert result.structured_content["code"] == "INTERNAL"
@@ -2260,45 +2506,137 @@ async def _exercise_wire_response_ceiling() -> None:
     assert canary not in serialized
     assert events[0].context["response_bytes"] < RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
 
-    track_reader = _DailyTrackReader()
-    track_reader.result_section = DailyTrackProvenanceResultSection.model_validate(
-        {
-            "track_id": "track_test",
-            "origin_research_run_id": "run_strategy",
-            "origin_result_checksum_sha256": "a" * 64,
-            "origin_result_schema_version": "research-result-v1",
-            "immutable_input_sha256": "b" * 64,
-            "frozen_research_input": {
-                "formula": canary,
-                "hypothesis": None,
-                "start_date": "2024-01-02",
-                "end_date": "2024-01-31",
-                "universe": "top300",
-                "neutralization": "none",
-                "holdings_count": 20,
-                "rebalance_every_sessions": 5,
-            },
-            "origin_data_through_session": "2024-01-31",
-            "tracking_strategy_session": "2024-02-01",
-            "calculation_contracts": {"numeric_execution_contract": "decimal-v1"},
-            "semantic_versions": {"alpha": "v1"},
-        }
+
+async def _exercise_wire_request_ceiling() -> None:
+    registry_calls = 0
+    registry = _registry()
+
+    def registry_factory(_context) -> ResearchAgentCapabilityRegistry:
+        nonlocal registry_calls
+        registry_calls += 1
+        return registry
+
+    server = create_research_agent_mcp_server(
+        registry_factory,
+        event_sink=lambda _event: None,
+        monotonic_ns=lambda: 0,
+        subject_factory=lambda _context: "request-boundary",
+        trace_id_factory=lambda: "trace_request_boundary",
+        transport="stdio",
     )
-    track_events: list[OperationalEvent] = []
-    async with Client(
-        _server(_registry(daily_tracks=track_reader), events=track_events)
-    ) as client:
-        track_result = await client.call_tool(
-            "get_daily_track_result",
-            {"track_id": "track_test", "section": "provenance"},
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "diagnose_alpha_formula",
+            {"source": "request-size-canary" * RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES},
         )
 
-    assert track_result.is_error is True
-    assert track_result.structured_content["code"] == "INTERNAL"
-    serialized_track = track_result.model_dump_json(by_alias=True, exclude_none=True)
-    assert len(serialized_track.encode()) < RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
-    assert canary not in serialized_track
-    assert track_events[0].context["response_bytes"] < RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+    assert result.is_error is True
+    assert result.structured_content["code"] == "INVALID_INPUT"
+    assert registry_calls == 0
+    assert "request-size-canary" not in result.model_dump_json()
+
+
+async def _exercise_principal_rate_limit() -> None:
+    selected_subject = "principal-a"
+    registry = _registry()
+    server = create_research_agent_mcp_server(
+        lambda _context: registry,
+        event_sink=lambda _event: None,
+        monotonic_ns=lambda: 0,
+        subject_factory=lambda _context: selected_subject,
+        trace_id_factory=lambda: "trace_rate_limit",
+        transport="stdio",
+    )
+    async with Client(server) as client:
+        for _ in range(RESEARCH_AGENT_MAX_CALLS_PER_WINDOW):
+            assert (await client.call_tool("get_research_context", {})).is_error is False
+        limited = await client.call_tool("get_research_context", {})
+        selected_subject = "principal-b"
+        independent = await client.call_tool("get_research_context", {})
+
+    assert limited.is_error is True
+    assert limited.structured_content["code"] == "TEMPORARILY_UNAVAILABLE"
+    assert limited.structured_content["retry_after_seconds"] == 60
+    assert independent.is_error is False
+
+
+async def _exercise_principal_concurrency_limit() -> None:
+    reader = _ConcurrentDataOverviewReader()
+    registry = _registry(data_overview=reader)
+    results = []
+    async with Client(_server(registry, events=[])) as client:
+        async with anyio.create_task_group() as tasks:
+            for _ in range(RESEARCH_AGENT_MAX_CONCURRENT_CALLS):
+                tasks.start_soon(_collect_context_result, client, results)
+            with anyio.fail_after(2):
+                while reader.started < RESEARCH_AGENT_MAX_CONCURRENT_CALLS:
+                    await anyio.sleep(0)
+            limited = await client.call_tool("get_research_context", {})
+            reader.release.set()
+
+    assert limited.is_error is True
+    assert limited.structured_content["code"] == "TEMPORARILY_UNAVAILABLE"
+    assert limited.structured_content["retry_after_seconds"] == 1
+    assert len(results) == RESEARCH_AGENT_MAX_CONCURRENT_CALLS
+    assert all(result.is_error is False for result in results)
+
+
+async def _exercise_concurrency_across_rate_window() -> None:
+    now = 0
+    reader = _ConcurrentDataOverviewReader()
+    registry = _registry(data_overview=reader)
+    trace_ids = count()
+    server = create_research_agent_mcp_server(
+        lambda _context: registry,
+        event_sink=lambda _event: None,
+        monotonic_ns=lambda: now,
+        subject_factory=lambda _context: "window-principal",
+        trace_id_factory=lambda: f"trace_window_{next(trace_ids)}",
+        transport="stdio",
+    )
+    results = []
+    async with Client(server) as client:
+        async with anyio.create_task_group() as tasks:
+            for _ in range(RESEARCH_AGENT_MAX_CONCURRENT_CALLS):
+                tasks.start_soon(_collect_context_result, client, results)
+            with anyio.fail_after(2):
+                while reader.started < RESEARCH_AGENT_MAX_CONCURRENT_CALLS:
+                    await anyio.sleep(0)
+            now = (RESEARCH_AGENT_RATE_WINDOW_SECONDS + 1) * 1_000_000_000
+            limited = await client.call_tool("get_research_context", {})
+            reader.release.set()
+        admitted_after_release = await client.call_tool("get_research_context", {})
+
+    assert limited.is_error is True
+    assert limited.structured_content["code"] == "TEMPORARILY_UNAVAILABLE"
+    assert admitted_after_release.is_error is False
+    assert len(results) == RESEARCH_AGENT_MAX_CONCURRENT_CALLS
+
+
+async def _exercise_cancelled_calls_release_concurrency() -> None:
+    reader = _ConcurrentDataOverviewReader()
+    events: list[OperationalEvent] = []
+    scopes: list[anyio.CancelScope] = []
+    async with Client(_server(_registry(data_overview=reader), events=events)) as client:
+        async with anyio.create_task_group() as tasks:
+            for _ in range(RESEARCH_AGENT_MAX_CONCURRENT_CALLS):
+                tasks.start_soon(_call_context_until_cancelled, client, scopes)
+            with anyio.fail_after(2):
+                while (
+                    reader.started < RESEARCH_AGENT_MAX_CONCURRENT_CALLS
+                    or len(scopes) < RESEARCH_AGENT_MAX_CONCURRENT_CALLS
+                ):
+                    await anyio.sleep(0)
+            for scope in scopes:
+                scope.cancel()
+            reader.release.set()
+        admitted_after_cancel = await client.call_tool("get_research_context", {})
+
+    assert admitted_after_cancel.is_error is False
+    assert len(events) == RESEARCH_AGENT_MAX_CONCURRENT_CALLS + 1
+    assert sum(event.context["outcome"] == "cancelled" for event in events) == (
+        RESEARCH_AGENT_MAX_CONCURRENT_CALLS
+    )
 
 
 async def _exercise_stale_discovery_authority() -> None:

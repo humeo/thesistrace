@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from thesistrace.alpha_language.language import MAX_FORMULA_LENGTH
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
 from thesistrace.daily_track.models import DailyTrackSummary
 from thesistrace.data.models import FinancialResearchReadiness
@@ -35,7 +36,7 @@ RequestId = Annotated[
 ]
 FolderId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 ResearchName = Annotated[str, Field(strict=True, max_length=200)]
-Formula = Annotated[str, Field(strict=True)]
+Formula = Annotated[str, Field(strict=True, max_length=MAX_FORMULA_LENGTH)]
 MIN_HOLDINGS_COUNT = 1
 MAX_HOLDINGS_COUNT = 100
 MIN_REBALANCE_INTERVAL = 1

@@ -18,6 +18,7 @@ from mcp_types.version import LATEST_HANDSHAKE_VERSION
 
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
+from thesistrace.research_agent.mcp_server import RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
 
 
 def test_packaged_stdio_reads_real_core_context_and_exits_cleanly(
@@ -47,6 +48,11 @@ def test_packaged_stdio_reads_real_core_context_and_exits_cleanly(
         assert events[-1]["failure_code"] == "INVALID_INPUT"
         assert "private-formula-canary" not in stderr_path.read_text()
         _assert_raw_stdio_process_exits_cleanly(settings)
+        anyio.run(
+            _exercise_official_client_oversize_disconnect_and_reconnect,
+            settings,
+            tmp_path,
+        )
     finally:
         drop_product_schemas(settings)
 
@@ -230,6 +236,51 @@ def _assert_raw_stdio_process_exits_cleanly(settings: CoreSettings) -> None:
         raise AssertionError(
             f"raw stdio MCP acceptance failed: {json.dumps(diagnostic, sort_keys=True)[:8192]}"
         ) from error
+
+
+async def _exercise_official_client_oversize_disconnect_and_reconnect(
+    settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    executable = Path(sys.executable).with_name("thesistrace-research-agent-mcp")
+    parameters = StdioServerParameters(
+        command=str(executable),
+        cwd=Path.cwd(),
+        env=_core_environment(settings),
+    )
+    canary = "official-client-oversize-canary"
+    failure: BaseException | None = None
+    failed_stderr = tmp_path / "mcp-oversize-stderr.log"
+    with failed_stderr.open("w+") as errlog:
+        try:
+            with anyio.fail_after(10):
+                async with Client(stdio_client(parameters, errlog=errlog)) as client:
+                    await client.call_tool(
+                        "diagnose_alpha_formula",
+                        {
+                            "source": canary
+                            * (RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES // len(canary))
+                        },
+                    )
+        except BaseException as error:
+            failure = error
+
+    assert failure is not None
+    assert not isinstance(failure, TimeoutError)
+    assert canary not in str(failure)
+    failure_events = [json.loads(line) for line in failed_stderr.read_text().splitlines()]
+    assert len(failure_events) == 1
+    assert failure_events[0]["component"] == "research_agent_mcp"
+    assert failure_events[0]["event"] == "mcp_process_failed"
+    assert failure_events[0]["failure_code"] == "MCP_PROCESS_FAILED"
+    assert canary not in failed_stderr.read_text()
+
+    reconnected_stderr = tmp_path / "mcp-reconnected-stderr.log"
+    with reconnected_stderr.open("w+") as errlog:
+        async with Client(stdio_client(parameters, errlog=errlog)) as client:
+            tools = await client.list_tools()
+    assert len(tools.tools) == 15
+    assert reconnected_stderr.read_text() == ""
 
 
 def _raw_stdio_exchange(

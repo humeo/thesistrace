@@ -1,6 +1,11 @@
+from __future__ import annotations
+
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from time import perf_counter_ns
+from typing import BinaryIO
 from uuid import uuid4
 
 import anyio
@@ -21,9 +26,14 @@ from thesistrace.research_agent import (
     create_research_agent_mcp_server,
     local_operator_authority,
 )
+from thesistrace.research_agent.mcp_server import RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
 
 RESEARCH_CANCEL_ENABLE_ENVIRONMENT = "THESISTRACE_RESEARCH_AGENT_ENABLE_RESEARCH_CANCEL"
 TRACKING_STOP_ENABLE_ENVIRONMENT = "THESISTRACE_RESEARCH_AGENT_ENABLE_TRACKING_STOP"
+
+
+class ResearchAgentStdioRequestTooLarge(RuntimeError):
+    pass
 
 
 def main() -> None:
@@ -105,11 +115,63 @@ def _exit_with_failure(failure_code: str, error: Exception) -> None:
 
 
 async def _serve_stdio(server: Server[object]) -> None:
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
+    with _claimed_bounded_stdin() as stdin:
+        async with stdio_server(stdin=stdin) as (  # type: ignore[arg-type]
             read_stream,
             write_stream,
-            server.create_initialization_options(),
+        ):
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
+
+
+@contextmanager
+def _claimed_bounded_stdin() -> Iterator[_BoundedStdin]:
+    wire_fd = os.dup(0)
+    if wire_fd <= 2:
+        os.close(wire_fd)
+        raise RuntimeError("Research Agent stdin duplicate is not private")
+    wire = os.fdopen(wire_fd, "rb", buffering=0, closefd=True)
+    null_fd = os.open(os.devnull, os.O_RDONLY)
+    try:
+        os.dup2(null_fd, 0)
+    except Exception:
+        wire.close()
+        raise
+    finally:
+        os.close(null_fd)
+    try:
+        yield _BoundedStdin(wire)
+    finally:
+        try:
+            os.dup2(wire.fileno(), 0)
+        finally:
+            wire.close()
+
+
+class _BoundedStdin:
+    def __init__(self, stream: BinaryIO) -> None:
+        self._stream = stream
+
+    def __aiter__(self) -> _BoundedStdin:
+        return self
+
+    async def __anext__(self) -> str:
+        line = await anyio.to_thread.run_sync(self._readline)
+        if line is None:
+            raise StopAsyncIteration
+        return line
+
+    def _readline(self) -> str | None:
+        raw = self._stream.readline(RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES + 1)
+        if not raw:
+            return None
+        if len(raw) <= RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES:
+            return raw.decode("utf-8", errors="replace")
+        raise ResearchAgentStdioRequestTooLarge(
+            "Research Agent stdio request exceeds its byte limit"
         )
 
 
