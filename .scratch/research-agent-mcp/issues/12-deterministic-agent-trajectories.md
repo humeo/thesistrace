@@ -4,14 +4,14 @@
 
 **Blocked by:** 11 — 闭合固定入口边界与精确 V1 合同
 
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] 建立完全确定性的 Agent trajectory harness，固定模型响应、时间、UUID、随机种子、Fixture data 和 transport 行为，不访问公网或真实模型。
-- [ ] 覆盖 context discovery、Alpha Catalog lookup、Formula Diagnostics 修正、Factor/Strategy submission、`retry_after_seconds` polling、终态判断和多页 Result inspection。
-- [ ] 覆盖 Research Batch admission、ordered item monitoring、child ResearchRun Result 读取和授权 Batch cancellation。
-- [ ] 覆盖 DailyTrack start、history/detail、blocked-only Retry、result paging，以及有/无 `tracking:stop` 时的 Stop selection 与拒绝。
-- [ ] 覆盖 transport 失败后的相同 `request_id` 重试、原 outcome replay、changed fingerprint conflict、HTTP token expiry/refresh后的 rediscovery、临时失败 backoff 和永久错误不重试。
-- [ ] 断言任务完成、durable IDs、Product State、Result sections、权限、调用成本与最大轮询次数等不变量，不断言模型逐字输出或私有 handler 调用次数。
-- [ ] 所有轮询都有明确 timeout/最大步数且不使用 arbitrary sleep；失败保存 trajectory、Tool envelopes、trace IDs、随机种子与经净化的服务状态。
-- [ ] Fake Model 轨迹与真实数据库/Worker 的工程测试保持分离；概率性真实模型表现不进入确定性发布门禁。
-- [ ] 全部 trajectory 测试可由现有本地测试入口重复运行并稳定通过，无 flaky retry 掩盖失败。
+- [x] 建立完全确定性的 Agent trajectory harness，固定模型响应、时间、UUID、随机种子、Fixture data 和 transport 行为，不访问公网或真实模型。
+- [x] 覆盖 context discovery、Alpha Catalog lookup、Formula Diagnostics 修正、Factor/Strategy submission、`retry_after_seconds` polling、终态判断和多页 Result inspection。
+- [x] 覆盖 Research Batch admission、ordered item monitoring、child ResearchRun Result 读取和授权 Batch cancellation。
+- [x] 覆盖 DailyTrack start、history/detail、blocked-only Retry、result paging，以及有/无 `tracking:stop` 时的 Stop selection 与拒绝。
+- [x] 覆盖 transport 失败后的相同 `request_id` 重试、原 outcome replay、changed fingerprint conflict、HTTP token expiry/refresh后的 rediscovery、临时失败 backoff 和永久错误不重试。
+- [x] 断言任务完成、durable IDs、Product State、Result sections、权限、调用成本与最大轮询次数等不变量，不断言模型逐字输出或私有 handler 调用次数。
+- [x] 所有轮询都有明确 timeout/最大步数且不使用 arbitrary sleep；失败保存 trajectory、Tool envelopes、trace IDs、随机种子与经净化的服务状态。
+- [x] Fake Model 轨迹与真实数据库/Worker 的工程测试保持分离；概率性真实模型表现不进入确定性发布门禁。
+- [x] 全部 trajectory 测试可由现有本地测试入口重复运行并稳定通过，无 flaky retry 掩盖失败。
