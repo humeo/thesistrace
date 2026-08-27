@@ -51,6 +51,10 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0090 — Keep listing lifecycle out of the Liquidity Universe](0090-keep-listing-lifecycle-out-of-the-liquidity-universe.md)
 - [ADR-0097 — Build the daily Base Pool from Tushare reference evidence](0097-build-the-daily-base-pool-from-tushare-reference-evidence.md)
 
+## Identity, access, and public entry
+
+- [ADR-0233 — Separate Better Auth identity from Core Research authorization behind one origin](0233-separate-better-auth-identity-from-core-research-authorization.md)
+
 ## Research lifecycle, Daily Tracking, and Batches
 
 - [ADR-0095 — Persist ResearchRun lifecycle and isolate infrastructure Attempts](0095-persist-researchrun-lifecycle-and-isolate-infrastructure-attempts.md)

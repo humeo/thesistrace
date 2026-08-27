@@ -7,6 +7,40 @@ the [ADR index](docs/adr/README.md) and [Core architecture](docs/architecture/co
 
 ## Language
 
+### Identity and Access
+
+**Operator**:
+The trusted deployment administrator who manages Researcher access and
+Canonical Data only through private operational interfaces.
+_Avoid_: Researcher, Web administrator, separate Access Operator
+
+**Researcher**:
+An authenticated human who owns one private set of Research Folders,
+ResearchRuns, Research Batches, and DailyTracks.
+_Avoid_: User, account, tenant, Personal Workspace
+
+**Login Session**:
+A revocable, time-bounded authentication grant that lets one client act as one
+active Researcher.
+_Avoid_: Research Session, ResearchRun, permanent access, API key
+
+**Researcher Invitation**:
+A single-use, expiring, email-bound grant issued by the Operator that allows one
+person to create one Researcher.
+_Avoid_: Public signup, shared invitation code, Organization invitation
+
+**Research Ownership**:
+The invariant that binds every private Research resource to exactly one
+Researcher and excludes every other Researcher.
+_Avoid_: Login Session, Folder membership, optional owner
+
+**Researcher Deactivation**:
+The reversible Operator action that revokes a Researcher's access without
+cancelling accepted Research or stopping DailyTracks, while preserving their
+Research Ownership and private Research resources.
+_Avoid_: Researcher deletion, ResearchRun cancellation, DailyTrack Stop,
+expired Login Session
+
 ### Research and Alpha
 
 **Investment Hypothesis**:
@@ -111,18 +145,18 @@ _Avoid_: Alpha, Strategy signal, persisted factor table
 ### Research Lifecycle and Factor Evaluation
 
 **Research Folder**:
-A durable, one-level container that organizes ResearchRuns without owning their
-inputs or results.
+A durable, one-level container owned by one Researcher that organizes
+ResearchRuns without owning their inputs or results.
 _Avoid_: Research Definition, nested directory, Browser Draft
 
 **Batch Research Folder**:
-The system-created default Research Folder for ResearchRuns admitted through a
-Research Batch; Folder membership does not define Batch ownership.
+The per-Researcher system-created Research Folder for ResearchRuns admitted
+through a Research Batch; Folder membership does not define Batch ownership.
 _Avoid_: Research Batch, immutable membership, folder-name lookup
 
 **Browser Draft**:
-The browser-local, non-authoritative authoring state for prospective Research in
-one Research Folder.
+The browser-local, non-authoritative authoring state for one Researcher's
+prospective Research in one Research Folder.
 _Avoid_: ResearchRun, server Draft, latest Run
 
 **Research Kind**:
@@ -605,9 +639,10 @@ executable and are frozen into ResearchRun and DailyTrack provenance;
 _Avoid_: Boolean readiness, raw ingestion completion, hidden stale input
 
 **Data Operator**:
-The trusted private actor allowed to initialize, inspect, refresh, and collect
-Canonical Data outside the ordinary research product.
-_Avoid_: Research user, Research execution
+The private operational capability through which the Operator initializes,
+inspects, refreshes, and collects Canonical Data outside the ordinary research
+product.
+_Avoid_: Researcher, Web administrator, Researcher access management
 
 **Dataset Bootstrap**:
 The explicit Data Operator action that creates the first complete Data
