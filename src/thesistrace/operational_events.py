@@ -38,6 +38,7 @@ _ID_FIELDS = frozenset(
         "track_id",
         "attempt_id",
         "http_request_id",
+        "request_id",
         "subject",
         "trace_id",
     }
@@ -62,6 +63,7 @@ _STRING_FIELDS = frozenset(
         "track_id",
         "attempt_id",
         "http_request_id",
+        "request_id",
         "subject",
         "trace_id",
         "worker_role",

@@ -65,8 +65,11 @@ files. No runtime downloads data during API or Worker startup.
 Every first-party Core operational event uses one JSONL envelope on process
 stderr: `timestamp`, `level`, `component`, and stable lower-snake-case `event`.
 The only optional correlation identities are `operation_id`, `run_id`,
-`track_id`, `attempt_id`, and `http_request_id`; event-specific context comes
-from the closed allowlist in `operational_events.py`. Request URLs, query
+`batch_id`, `track_id`, `attempt_id`, `http_request_id`, `request_id`,
+`subject`, and `trace_id`; event-specific context comes from the closed
+allowlist in `operational_events.py`. Research Agent identities supplied by a
+caller are recorded only as field-domain digests; canonical Product IDs may be
+recorded after validated successful output. Request URLs, query
 strings, headers, bodies, responses, Formulae, Hypotheses, credentials, object
 keys, exception messages, local variables, and physical paths are not event
 fields.

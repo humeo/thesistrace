@@ -47,6 +47,7 @@ from thesistrace.research_agent import (
     local_operator_authority,
 )
 from thesistrace.research_agent.mcp_server import RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+from thesistrace.research_agent.models import ResearchAgentToolError
 from thesistrace.research_agent.registry import (
     RESEARCH_AGENT_TOOL_NAMES,
     AlphaAuthoringLanguage,
@@ -363,7 +364,12 @@ class _ExplodingAlphaLanguage:
         financial_authoring_ready: bool = True,
     ) -> AlphaAuthoringCatalog:
         del financial_authoring_ready
-        raise RuntimeError("private-formula-canary")
+        raise RuntimeError(
+            "private-formula-canary private-hypothesis-canary "
+            "SELECT private-sql-canary FROM secret_table "
+            "/private/private-path-canary credential=private-credential-canary "
+            "observation=private-observation-canary position=private-position-canary"
+        )
 
     def diagnose(self, source: str) -> FormulaDiagnostics:
         del source
@@ -1452,8 +1458,53 @@ def test_stop_daily_track_is_destructive_closed_world_and_has_no_confirmation_fi
     assert "tracking:stop" in tool.description
 
 
+def test_structured_error_retry_contract_is_fail_closed() -> None:
+    for invalid in (
+        {
+            "code": "TEMPORARILY_UNAVAILABLE",
+            "message": "Tool is temporarily unavailable",
+            "retryable": False,
+            "trace_id": "trace_invalid_temporary",
+        },
+        {
+            "code": "INVALID_INPUT",
+            "message": "Tool input is invalid",
+            "retryable": True,
+            "retry_after_seconds": 2,
+            "trace_id": "trace_invalid_permanent",
+        },
+    ):
+        with pytest.raises(ValidationError):
+            ResearchAgentToolError.model_validate(
+                {
+                    **invalid,
+                    "context": {"tool_name": "get_research_context"},
+                }
+            )
+
+
 def test_in_memory_protocol_sanitizes_unexpected_tool_failures() -> None:
     anyio.run(_exercise_sanitized_failure)
+
+
+def test_in_memory_protocol_ignores_operational_event_sink_failure() -> None:
+    anyio.run(_exercise_event_sink_failure)
+
+
+def test_in_memory_protocol_maps_registry_factory_failure_to_internal() -> None:
+    anyio.run(_exercise_registry_factory_failure)
+
+
+def test_in_memory_protocol_emits_only_safe_call_context() -> None:
+    anyio.run(_exercise_safe_call_context)
+
+
+def test_stdio_and_http_event_context_is_total_for_unicode_surrogates() -> None:
+    anyio.run(_exercise_surrogate_context)
+
+
+def test_stdio_and_http_transports_share_structured_business_outcomes() -> None:
+    anyio.run(_exercise_transport_business_outcomes)
 
 
 def test_in_memory_protocol_rejects_oversized_wire_response_without_truncation() -> None:
@@ -1508,6 +1559,8 @@ async def _exercise_in_memory_protocol() -> None:
             assert tool.output_schema is not None
             assert tool.output_schema["type"] == "object"
             assert len(tool.output_schema["anyOf"]) == 2
+            error_definition = tool.output_schema["$defs"]["ResearchAgentToolError"]
+            assert "context" in error_definition["required"]
             assert tool.annotations is not None
             assert tool.annotations.destructive_hint is False
             assert tool.annotations.idempotent_hint is True
@@ -1768,6 +1821,11 @@ async def _exercise_in_memory_protocol() -> None:
     assert events[4].context["failure_code"] == "INVALID_INPUT"
     assert events[6].context["failure_code"] == "INVALID_INPUT"
     assert events[8].context["failure_code"] == "INVALID_INPUT"
+    assert events[4].context["request_id"].startswith("request_")
+    assert events[5].context["run_id"] == "run_test"
+    assert events[6].context["run_id"].startswith("run_id_")
+    assert events[7].context["track_id"] == "track_test"
+    assert events[8].context["track_id"].startswith("track_id_")
 
 
 async def _exercise_destructive_cancel_protocol() -> None:
@@ -1866,10 +1924,299 @@ async def _exercise_sanitized_failure() -> None:
         "retryable": False,
         "trace_id": "trace_test_0",
         "retry_after_seconds": None,
+        "context": {
+            "tool_name": "get_alpha_catalog",
+            "run_id": None,
+            "batch_id": None,
+            "track_id": None,
+            "request_id": None,
+        },
     }
     assert events[0].context["failure_code"] == "INTERNAL"
     assert events[0].context["trace_id"] == "trace_test_0"
-    assert "private-formula-canary" not in str(events[0].context)
+    serialized_diagnostics = str(result.model_dump()) + str(events[0].context)
+    for canary in (
+        "private-formula-canary",
+        "private-hypothesis-canary",
+        "private-sql-canary",
+        "private-path-canary",
+        "private-credential-canary",
+        "private-observation-canary",
+        "private-position-canary",
+    ):
+        assert canary not in serialized_diagnostics
+
+
+async def _exercise_event_sink_failure() -> None:
+    def unavailable_sink(_event: OperationalEvent) -> None:
+        raise RuntimeError("operational-event-sink-canary")
+
+    server = create_research_agent_mcp_server(
+        lambda _context: _registry(),
+        event_sink=unavailable_sink,
+        monotonic_ns=lambda: 0,
+        subject_factory=lambda _context: "local_operator",
+        trace_id_factory=lambda: "trace_sink_failure",
+        transport="stdio",
+    )
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "submit_research_run",
+            _factor_command("event_sink_failure_request"),
+        )
+
+    assert result.is_error is False
+    assert result.structured_content["outcome"] == "accepted"
+    assert result.structured_content["run_id"] == "run_test"
+
+
+async def _exercise_registry_factory_failure() -> None:
+    events: list[OperationalEvent] = []
+
+    def unavailable_registry(_context: object) -> ResearchAgentCapabilityRegistry:
+        raise RuntimeError("registry-private-credential-canary")
+
+    server = create_research_agent_mcp_server(
+        unavailable_registry,
+        event_sink=events.append,
+        monotonic_ns=lambda: 0,
+        subject_factory=lambda _context: "local_operator",
+        trace_id_factory=lambda: "trace_registry_failure",
+        transport="stdio",
+    )
+    async with Client(server) as client:
+        result = await client.call_tool("get_research_context", {})
+
+    assert result.is_error is True
+    assert result.structured_content["code"] == "INTERNAL"
+    assert result.structured_content["context"]["tool_name"] == "get_research_context"
+    assert len(events) == 1
+    assert events[0].context["outcome"] == "failed"
+    assert events[0].context["failure_code"] == "INTERNAL"
+    assert events[0].context["subject"] == "local_operator"
+    assert events[0].level == "ERROR"
+    assert "registry-private-credential-canary" not in (
+        str(result.structured_content) + str(events)
+    )
+
+
+async def _exercise_safe_call_context() -> None:
+    resource_canary = "postgresql://user:private-resource-canary@host/database"
+    request_canary = "Bearer private-request-canary"
+    formula_canary = "private-success-formula-canary"
+    hypothesis_canary = "private-success-hypothesis-canary"
+    events: list[OperationalEvent] = []
+    async with Client(_server(_registry(), events=events)) as client:
+        read = await client.call_tool(
+            "get_research_run",
+            {"run_id": resource_canary},
+        )
+        submitted = await client.call_tool(
+            "submit_research_run",
+            {
+                **_factor_command(request_canary),
+                "formula": formula_canary,
+                "hypothesis": hypothesis_canary,
+            },
+        )
+        invalid = await client.call_tool(
+            "get_research_run",
+            {"run_id": resource_canary, "credential": "private-credential-canary"},
+        )
+        spaced_request = await client.call_tool(
+            "submit_research_run",
+            {**_factor_command(" normalized-request "), "unexpected": True},
+        )
+        normalized_request = await client.call_tool(
+            "submit_research_run",
+            {**_factor_command("normalized-request"), "unexpected": True},
+        )
+
+    assert read.is_error is False
+    assert submitted.is_error is False
+    assert invalid.is_error is True
+    assert invalid.structured_content["context"]["run_id"].startswith("run_id_")
+    assert invalid.structured_content["context"]["tool_name"] == "get_research_run"
+    assert spaced_request.structured_content["context"]["request_id"] == (
+        normalized_request.structured_content["context"]["request_id"]
+    )
+    assert events[0].context["run_id"] == "run_test"
+    assert events[1].context["request_id"].startswith("request_")
+    assert events[1].context["run_id"] == "run_test"
+    assert events[2].context["run_id"].startswith("run_id_")
+    diagnostics = str(events) + str(invalid.structured_content)
+    for canary in (
+        resource_canary,
+        request_canary,
+        formula_canary,
+        hypothesis_canary,
+        "private-credential-canary",
+    ):
+        assert canary not in diagnostics
+
+
+async def _exercise_surrogate_context() -> None:
+    surrogate = "\ud800"
+    for transport in ("stdio", "streamable_http"):
+        registry = _registry()
+        events: list[OperationalEvent] = []
+        server = create_research_agent_mcp_server(
+            lambda _context, selected=registry: selected,
+            event_sink=events.append,
+            monotonic_ns=lambda: 0,
+            subject_factory=lambda _context: surrogate,
+            trace_id_factory=lambda: "trace_surrogate",
+            transport=transport,
+        )
+        async with Client(server) as client:
+            result = await client.call_tool(
+                "submit_research_run",
+                {**_factor_command(surrogate), "unexpected": True},
+            )
+
+        assert result.is_error is True
+        assert result.structured_content["code"] == "INVALID_INPUT"
+        assert result.structured_content["context"]["request_id"].startswith("request_")
+        assert len(events) == 1
+        assert events[0].context["subject"].startswith(
+            "stdio_" if transport == "stdio" else "oauth_"
+        )
+        assert events[0].context["request_id"].startswith("request_")
+
+
+async def _exercise_transport_business_outcomes() -> None:
+    for expected_code, build_case in (
+        (
+            "INVALID_INPUT",
+            lambda: (_registry(), "get_research_run", {}),
+        ),
+        (
+            "FORBIDDEN",
+            lambda: (
+                _registry(ResearchAgentAuthority(subject="denied", scopes=frozenset())),
+                "get_research_context",
+                {},
+            ),
+        ),
+        ("NOT_FOUND", _missing_run_case),
+        ("STATE_CONFLICT", _result_state_conflict_case),
+        ("IDEMPOTENCY_CONFLICT", _cancel_idempotency_conflict_case),
+        ("TEMPORARILY_UNAVAILABLE", _temporary_run_case),
+        (
+            "INTERNAL",
+            lambda: (
+                _registry(selected_alpha_language=_ExplodingAlphaLanguage()),
+                "get_alpha_catalog",
+                {},
+            ),
+        ),
+    ):
+        transport_results = []
+        for transport in ("stdio", "streamable_http"):
+            registry, tool_name, arguments = build_case()
+            events: list[OperationalEvent] = []
+            server = create_research_agent_mcp_server(
+                lambda _context, selected=registry: selected,
+                event_sink=events.append,
+                monotonic_ns=lambda: 0,
+                subject_factory=lambda _context, selected=registry: (
+                    selected.authority.subject
+                ),
+                trace_id_factory=lambda: "trace_transport_parity",
+                transport=transport,
+            )
+            async with Client(server) as client:
+                result = await client.call_tool(tool_name, arguments)
+            assert result.is_error is True
+            assert result.structured_content["code"] == expected_code
+            assert len(events) == 1
+            assert events[0].context["failure_code"] == expected_code
+            assert events[0].context["transport"] == transport
+            expected_level = (
+                "ERROR"
+                if expected_code == "INTERNAL"
+                else "WARNING"
+                if expected_code == "TEMPORARILY_UNAVAILABLE"
+                else "INFO"
+            )
+            assert events[0].level == expected_level
+            transport_results.append(result.structured_content)
+        assert transport_results[0] == transport_results[1]
+
+    reader = _ResearchRunReader()
+    reader.admission_outcome = ResearchRunAdmissionRejectedOutcome(
+        issues=[
+            ResearchRunAdmissionIssue(
+                code="UNKNOWN_IDENTIFIER",
+                field="formula",
+                message="Unknown Alpha identifier",
+            )
+        ],
+        replayed=False,
+    )
+    successful_outcomes = []
+    for transport in ("stdio", "streamable_http"):
+        server = create_research_agent_mcp_server(
+            lambda _context: _registry(research_runs=reader),
+            event_sink=lambda _event: None,
+            monotonic_ns=lambda: 0,
+            subject_factory=lambda _context: "local_operator",
+            trace_id_factory=lambda: "trace_success_parity",
+            transport=transport,
+        )
+        async with Client(server) as client:
+            diagnostic = await client.call_tool(
+                "diagnose_alpha_formula",
+                {"source": "unknown_alpha + close"},
+            )
+            rejected = await client.call_tool(
+                "submit_research_run",
+                _factor_command("domain_rejection_parity"),
+            )
+        assert diagnostic.is_error is False
+        assert diagnostic.structured_content["valid"] is False
+        assert rejected.is_error is False
+        assert rejected.structured_content["outcome"] == "rejected"
+        successful_outcomes.append(
+            (diagnostic.structured_content, rejected.structured_content)
+        )
+    assert successful_outcomes[0] == successful_outcomes[1]
+
+
+def _missing_run_case():
+    reader = _ResearchRunReader()
+    reader.polling_detail = None
+    return _registry(research_runs=reader), "get_research_run", {"run_id": "run_missing"}
+
+
+def _result_state_conflict_case():
+    reader = _ResearchRunReader()
+    reader.failure = ResearchRunResultUnavailable("result unavailable")
+    return (
+        _registry(research_runs=reader),
+        "get_research_run_result",
+        {"run_id": "run_test", "section": "factor"},
+    )
+
+
+def _cancel_idempotency_conflict_case():
+    reader = _ResearchRunReader()
+    reader.failure = ResearchRunCancelIdempotencyConflict("request conflict")
+    authority = ResearchAgentAuthority(
+        subject="canceller",
+        scopes=frozenset({ResearchAgentScope.RESEARCH_CANCEL}),
+    )
+    return (
+        _registry(authority, research_runs=reader),
+        "cancel_research_run",
+        {"run_id": "run_test", "request_id": "cancel_conflict"},
+    )
+
+
+def _temporary_run_case():
+    reader = _ResearchRunReader()
+    reader.failure = ResearchRunTemporarilyUnavailable("database unavailable")
+    return _registry(research_runs=reader), "list_research_runs", {}
 
 
 async def _exercise_wire_response_ceiling() -> None:
@@ -1961,6 +2308,7 @@ async def _exercise_stale_discovery_authority() -> None:
         lambda _context: current["registry"],
         event_sink=lambda _event: None,
         monotonic_ns=lambda: 0,
+        subject_factory=lambda _context: current["registry"].authority.subject,
         trace_id_factory=lambda: f"trace_test_{next(trace_ids)}",
         transport="stdio",
     )
@@ -1991,6 +2339,7 @@ async def _exercise_oauth_subject_event() -> None:
         lambda _context: registry,
         event_sink=events.append,
         monotonic_ns=lambda: 0,
+        subject_factory=lambda _context: registry.authority.subject,
         trace_id_factory=lambda: f"trace_test_{next(trace_ids)}",
         transport="streamable_http",
     )
@@ -2043,7 +2392,10 @@ async def _exercise_cancelled_core_read() -> None:
             reader.release.set()
 
     assert reader.finished.is_set() is True
-    assert not any(event.context["outcome"] == "succeeded" for event in events)
+    assert len(events) == 1
+    assert events[0].context["outcome"] == "cancelled"
+    assert events[0].context["response_bytes"] == 0
+    assert events[0].level == "INFO"
 
 
 async def _collect_context_result(client: Client, results: list) -> None:
@@ -2069,6 +2421,7 @@ def _server(
         lambda _context: registry,
         event_sink=events.append,
         monotonic_ns=lambda: 0,
+        subject_factory=lambda _context: registry.authority.subject,
         trace_id_factory=lambda: f"trace_test_{next(trace_ids)}",
         transport="stdio",
     )

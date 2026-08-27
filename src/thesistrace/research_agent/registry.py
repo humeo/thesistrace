@@ -64,6 +64,7 @@ from thesistrace.research_agent.models import (
     SubmitResearchRunOutcome,
     SubmitResearchRunRejected,
 )
+from thesistrace.research_agent.safe_context import safe_tool_call_context
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
 from thesistrace.research_batch import (
     ResearchBatchAdmissionAccepted,
@@ -586,14 +587,18 @@ class ResearchAgentCapabilityRegistry:
             return ResearchAgentInvocation(
                 error=self._tool_error(
                     ResearchAgentErrorCode.INVALID_INPUT,
+                    arguments=arguments,
                     trace_id=trace_id,
+                    tool_name=name,
                 )
             )
         if capability.name not in self._allowed_tools:
             return ResearchAgentInvocation(
                 error=self._tool_error(
                     ResearchAgentErrorCode.FORBIDDEN,
+                    arguments=arguments,
                     trace_id=trace_id,
+                    tool_name=capability.name,
                 )
             )
         try:
@@ -602,7 +607,9 @@ class ResearchAgentCapabilityRegistry:
             return ResearchAgentInvocation(
                 error=self._tool_error(
                     ResearchAgentErrorCode.FORBIDDEN,
+                    arguments=arguments,
                     trace_id=trace_id,
+                    tool_name=capability.name,
                 )
             )
         try:
@@ -611,13 +618,24 @@ class ResearchAgentCapabilityRegistry:
             return ResearchAgentInvocation(
                 error=self._tool_error(
                     ResearchAgentErrorCode.INVALID_INPUT,
+                    arguments=arguments,
                     trace_id=trace_id,
+                    tool_name=capability.name,
                 )
             )
+        if not isinstance(validated, BaseModel):
+            return ResearchAgentInvocation(
+                error=self._tool_error(
+                    ResearchAgentErrorCode.INTERNAL,
+                    arguments=arguments,
+                    trace_id=trace_id,
+                    tool_name=capability.name,
+                ),
+                exception=TypeError("Research Agent input contract must produce a model"),
+            )
+        validated_arguments = validated.model_dump()
         try:
-            if not isinstance(validated, BaseModel):
-                raise TypeError("Research Agent input contract must produce a model")
-            result = capability.handler(**validated.model_dump())
+            result = capability.handler(**validated_arguments)
             validated_result = TypeAdapter(capability.output_model).validate_python(result)
             if not isinstance(validated_result, BaseModel):
                 raise TypeError("Research Agent output contract must produce a model")
@@ -626,7 +644,9 @@ class ResearchAgentCapabilityRegistry:
             return ResearchAgentInvocation(
                 error=self._tool_error(
                     error.code,
+                    arguments=validated_arguments,
                     trace_id=trace_id,
+                    tool_name=capability.name,
                     retryable=error.retryable,
                     retry_after_seconds=error.retry_after_seconds,
                 )
@@ -635,7 +655,9 @@ class ResearchAgentCapabilityRegistry:
             return ResearchAgentInvocation(
                 error=self._tool_error(
                     ResearchAgentErrorCode.INTERNAL,
+                    arguments=validated_arguments,
                     trace_id=trace_id,
+                    tool_name=capability.name,
                 ),
                 exception=exception,
             )
@@ -644,7 +666,9 @@ class ResearchAgentCapabilityRegistry:
         self,
         code: ResearchAgentErrorCode,
         *,
+        arguments: dict[str, object],
         trace_id: str,
+        tool_name: str,
         retryable: bool = False,
         retry_after_seconds: int | None = None,
     ) -> ResearchAgentToolError:
@@ -666,6 +690,11 @@ class ResearchAgentCapabilityRegistry:
             retryable=retryable,
             trace_id=trace_id,
             retry_after_seconds=retry_after_seconds,
+            context=safe_tool_call_context(
+                tool_name,
+                arguments,
+                known_tool_names=RESEARCH_AGENT_TOOL_NAMES,
+            ),
         )
 
     def get_research_context(self) -> ResearchContext:

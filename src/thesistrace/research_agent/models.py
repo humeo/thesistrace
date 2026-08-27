@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from thesistrace.alpha_language.models import (
     AlphaBuiltinCatalogEntry,
@@ -44,6 +44,22 @@ class ResearchAgentErrorCode(StrEnum):
     INTERNAL = "INTERNAL"
 
 
+ResearchAgentSafeContextId = Annotated[
+    str,
+    Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
+]
+
+
+class ResearchAgentToolErrorContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    tool_name: ResearchAgentSafeContextId
+    run_id: ResearchAgentSafeContextId | None = None
+    batch_id: ResearchAgentSafeContextId | None = None
+    track_id: ResearchAgentSafeContextId | None = None
+    request_id: ResearchAgentSafeContextId | None = None
+
+
 class ResearchAgentToolError(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -55,6 +71,16 @@ class ResearchAgentToolError(BaseModel):
         Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"),
     ]
     retry_after_seconds: Annotated[int, Field(ge=1, le=60)] | None = None
+    context: ResearchAgentToolErrorContext
+
+    @model_validator(mode="after")
+    def validate_retry_contract(self) -> ResearchAgentToolError:
+        temporarily_unavailable = self.code is ResearchAgentErrorCode.TEMPORARILY_UNAVAILABLE
+        if self.retryable != temporarily_unavailable:
+            raise ValueError("Research Agent error retryability must match its code")
+        if self.retry_after_seconds is not None and not self.retryable:
+            raise ValueError("Permanent Research Agent errors cannot have a retry delay")
+        return self
 
 
 class ResearchAgentAuthority(BaseModel):

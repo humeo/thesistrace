@@ -64,6 +64,7 @@ def main() -> None:
                     registry_factory,
                     event_sink=emit_operational_event,
                     monotonic_ns=perf_counter_ns,
+                    subject_factory=lambda _context: authority.subject,
                     trace_id_factory=_new_trace_id,
                     transport="stdio",
                 ),

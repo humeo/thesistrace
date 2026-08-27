@@ -85,17 +85,22 @@ def create_research_agent_http_transport(
 ) -> ResearchAgentHTTPTransport:
     selected_trace_id_factory = trace_id_factory or _new_trace_id
 
-    def registry_factory(_context: object) -> ResearchAgentCapabilityRegistry:
+    def authenticated_subject(_context: object) -> str:
         token = get_access_token()
         if token is None:
             raise RuntimeError("authenticated Research Agent token is unavailable")
-        subject = token.subject or token.client_id
+        return token.subject or token.client_id
+
+    def registry_factory(context: object) -> ResearchAgentCapabilityRegistry:
+        token = get_access_token()
+        if token is None:
+            raise RuntimeError("authenticated Research Agent token is unavailable")
         granted_scopes = frozenset(
             scope for scope in ResearchAgentScope if scope.value in token.scopes
         )
         return ResearchAgentCapabilityRegistry(
             authority=ResearchAgentAuthority(
-                subject=subject,
+                subject=authenticated_subject(context),
                 scopes=granted_scopes,
             ),
             modules=modules(),
@@ -106,6 +111,7 @@ def create_research_agent_http_transport(
         registry_factory,
         event_sink=event_sink,
         monotonic_ns=monotonic_ns,
+        subject_factory=authenticated_subject,
         trace_id_factory=selected_trace_id_factory,
         transport="streamable_http",
     )

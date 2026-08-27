@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import select
 import subprocess
 import sys
 from collections.abc import AsyncIterator
@@ -9,10 +11,12 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from functools import partial
 from hashlib import sha256
+from io import StringIO
 from itertools import count
 from multiprocessing import get_context
 from pathlib import Path
 from threading import Event
+from typing import BinaryIO
 
 import anyio
 import httpx2
@@ -24,9 +28,13 @@ from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.server.auth.provider import AccessToken
 from mcp_types.version import LATEST_HANDSHAKE_VERSION
+from psycopg.types.json import Jsonb
 from test_core_research_agent_mcp_runs import (
     _assert_worker_succeeded,
     _core_environment,
+)
+from test_core_research_agent_mcp_runs import (
+    _mcp_client as _stdio_mcp_client,
 )
 from test_core_research_batch_fifo import (
     _release_claim_barrier_worker,
@@ -42,7 +50,7 @@ from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture, field_catalog
-from thesistrace.operational_events import OperationalEvent
+from thesistrace.operational_events import OperationalEvent, OperationalEventSink
 from thesistrace.research_agent import (
     RESEARCH_AGENT_TOOL_NAMES,
     ResearchAgentHTTPConfiguration,
@@ -161,6 +169,15 @@ def test_mounted_oauth_streamable_http_read_loop_and_fail_closed_boundaries(
         assert all(event.context["transport"] == "streamable_http" for event in mcp_events)
         expected_subject = f"oauth_{sha256(b'researcher_test').hexdigest()[:32]}"
         assert all(event.context["subject"] == expected_subject for event in mcp_events)
+        start_event = next(
+            event
+            for event in mcp_events
+            if event.context["tool_name"] == "start_daily_track"
+            and event.context.get("outcome") == "succeeded"
+        )
+        assert str(start_event.context["request_id"]).startswith("request_")
+        assert start_event.context["run_id"]
+        assert start_event.context["track_id"]
         assert "researcher_test" not in serialized_events
         assert _SIGNING_KEY not in serialized_events
         assert "eyJ" not in serialized_events
@@ -195,16 +212,57 @@ def test_http_discovery_intersects_deployment_allowlist_with_grant(tmp_path: Pat
         drop_product_schemas(settings)
 
 
+def test_packaged_stdio_and_mounted_http_share_safe_structured_outcomes(
+    tmp_path: Path,
+) -> None:
+    settings = isolated_core_settings(tmp_path / "parity-data")
+    settings.data_mount.mkdir(parents=True)
+    settings.batch_attempt_control_directory.mkdir(parents=True)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_current_data(settings)
+    issuer = _DeterministicOAuthIssuer()
+    events: list[OperationalEvent] = []
+    application_log = StringIO()
+    log_sink = OperationalEventSink(application_log)
+
+    def event_sink(event: OperationalEvent) -> None:
+        events.append(event)
+        log_sink(event)
+
+    app = _app(settings, issuer, event_sink=event_sink)
+    try:
+        anyio.run(
+            _exercise_real_transport_parity_and_redaction,
+            app,
+            issuer,
+            settings,
+            tmp_path,
+            events,
+            application_log,
+        )
+    finally:
+        drop_product_schemas(settings)
+
+
 def _app(
     settings: CoreSettings,
     issuer: _DeterministicOAuthIssuer,
     *,
     deployment_tool_allowlist: frozenset[str] = RESEARCH_AGENT_TOOL_NAMES,
     events: list[OperationalEvent] | None = None,
+    event_sink=None,
 ):
+    selected_event_sink = (
+        event_sink
+        if event_sink is not None
+        else (lambda _event: None)
+        if events is None
+        else events.append
+    )
     return create_app(
         settings,
-        event_sink=(lambda _event: None) if events is None else events.append,
+        event_sink=selected_event_sink,
         enable_research_agent_http=True,
         research_agent_http=ResearchAgentHTTPConfiguration(
             token_verifier=issuer,
@@ -851,6 +909,12 @@ async def _exercise_http_contract(
             )
             assert stop_fingerprint_conflict.is_error is True
             assert stop_fingerprint_conflict.structured_content["code"] == ("IDEMPOTENCY_CONFLICT")
+            conflict_context = stop_fingerprint_conflict.structured_content["context"]
+            assert conflict_context["tool_name"] == "stop_daily_track"
+            assert conflict_context["run_id"] is None
+            assert conflict_context["batch_id"] is None
+            assert conflict_context["track_id"].startswith("track_id_")
+            assert conflict_context["request_id"].startswith("request_")
             stop_state_conflict = await stopper.call_tool(
                 "stop_daily_track",
                 {
@@ -989,6 +1053,483 @@ async def _exercise_http_contract(
             )
             assert stop_replay_after_restart.is_error is False
             assert stop_replay_after_restart.structured_content == stopped_replay.structured_content
+
+
+async def _exercise_real_transport_parity_and_redaction(
+    app,
+    issuer: _DeterministicOAuthIssuer,
+    settings: CoreSettings,
+    tmp_path: Path,
+    events: list[OperationalEvent],
+    application_log: StringIO,
+) -> None:
+    read_token = issuer.issue()
+    action_token = issuer.issue(
+        scopes=tuple(scope.value for scope in ResearchAgentScope)
+    )
+    stdio_log = tmp_path / "mcp-parity.stderr.log"
+    cancel_stdio_log = tmp_path / "mcp-parity-cancel.stderr.log"
+    captured_payloads: list[object] = []
+
+    async def assert_same_error(
+        stdio_client: Client,
+        http_client: Client,
+        tool_name: str,
+        arguments: dict[str, object],
+        expected_code: str,
+    ) -> None:
+        stdio_result = await stdio_client.call_tool(tool_name, arguments)
+        http_result = await http_client.call_tool(tool_name, arguments)
+        assert stdio_result.is_error is True
+        assert http_result.is_error is True
+        assert stdio_result.structured_content["code"] == expected_code
+        assert http_result.structured_content["code"] == expected_code
+        assert _without_trace_id(stdio_result.structured_content) == _without_trace_id(
+            http_result.structured_content
+        )
+        captured_payloads.extend(
+            (
+                stdio_result.model_dump(mode="json"),
+                http_result.model_dump(mode="json"),
+            )
+        )
+
+    async with app.router.lifespan_context(app):
+        async with (
+            _stdio_mcp_client(settings, stdio_log) as stdio,
+            _mcp_client(app, action_token) as http_action,
+            _mcp_client(app, read_token) as http_read,
+        ):
+            seed = await stdio.call_tool(
+                "submit_research_run",
+                _strategy_command("transport-parity-seed"),
+            )
+            assert seed.is_error is False
+            assert seed.structured_content.get("outcome") == "accepted", (
+                seed.structured_content
+            )
+            seed_run_id = str(seed.structured_content["run_id"])
+            conflict_command = _strategy_command("transport-parity-conflict")
+            conflict_seed = await stdio.call_tool(
+                "submit_research_run",
+                conflict_command,
+            )
+            assert conflict_seed.is_error is False
+            assert conflict_seed.structured_content.get("outcome") == "accepted", (
+                conflict_seed.structured_content
+            )
+            conflicting = {**conflict_command, "formula": "open"}
+
+            await assert_same_error(
+                stdio,
+                http_action,
+                "get_research_run",
+                {},
+                "INVALID_INPUT",
+            )
+            await assert_same_error(
+                stdio,
+                http_action,
+                "get_research_run",
+                {"run_id": "run_missing"},
+                "NOT_FOUND",
+            )
+            await assert_same_error(
+                stdio,
+                http_action,
+                "get_research_run_result",
+                {"run_id": seed_run_id, "section": "factor"},
+                "STATE_CONFLICT",
+            )
+            await assert_same_error(
+                stdio,
+                http_action,
+                "submit_research_run",
+                conflicting,
+                "IDEMPOTENCY_CONFLICT",
+            )
+            await assert_same_error(
+                stdio,
+                http_read,
+                "cancel_research_run",
+                {"run_id": seed_run_id, "request_id": "transport-parity-forbidden"},
+                "FORBIDDEN",
+            )
+
+            stdio_diagnostic = await stdio.call_tool(
+                "diagnose_alpha_formula",
+                {"source": "missing_alpha + close"},
+            )
+            http_diagnostic = await http_action.call_tool(
+                "diagnose_alpha_formula",
+                {"source": "missing_alpha + close"},
+            )
+            assert stdio_diagnostic.is_error is False
+            assert stdio_diagnostic.structured_content == http_diagnostic.structured_content
+            captured_payloads.extend(
+                (
+                    stdio_diagnostic.model_dump(mode="json"),
+                    http_diagnostic.model_dump(mode="json"),
+                )
+            )
+            rejected_stdio = await stdio.call_tool(
+                "submit_research_run",
+                {
+                    **_strategy_command("transport-rejected-stdio"),
+                    "formula": "unknown_alpha",
+                },
+            )
+            rejected_http = await http_action.call_tool(
+                "submit_research_run",
+                {
+                    **_strategy_command("transport-rejected-http"),
+                    "formula": "unknown_alpha",
+                },
+            )
+            assert rejected_stdio.is_error is False
+            assert rejected_http.is_error is False
+            assert rejected_stdio.structured_content == rejected_http.structured_content
+            assert rejected_stdio.structured_content["outcome"] == "rejected"
+            captured_payloads.extend(
+                (
+                    rejected_stdio.model_dump(mode="json"),
+                    rejected_http.model_dump(mode="json"),
+                )
+            )
+
+            canaries = {
+                "token": action_token,
+                "formula": "private_formula_canary_10",
+                "hypothesis": "private_hypothesis_canary_10",
+                "sql": "private_sql_canary_10",
+                "path": "private_path_canary_10",
+                "credential": "private_credential_canary_10",
+                "observation": "private_observation_canary_10",
+                "position": "private_position_canary_10",
+            }
+            canary_arguments = {
+                "request_id": canaries["credential"],
+                "formula": canaries["formula"],
+                "hypothesis": canaries["hypothesis"],
+                "sql": canaries["sql"],
+                "path": canaries["path"],
+                "observation": canaries["observation"],
+                "position": canaries["position"],
+            }
+            await assert_same_error(
+                stdio,
+                http_action,
+                "submit_research_run",
+                canary_arguments,
+                "INVALID_INPUT",
+            )
+            _install_transient_cancel_failure(settings)
+            try:
+                async with _stdio_mcp_client(
+                    settings,
+                    cancel_stdio_log,
+                    enable_research_cancel=True,
+                ) as cancel_stdio:
+                    await assert_same_error(
+                        cancel_stdio,
+                        http_action,
+                        "cancel_research_run",
+                        {
+                            "run_id": seed_run_id,
+                            "request_id": "transport-parity-temporary",
+                        },
+                        "TEMPORARILY_UNAVAILABLE",
+                    )
+            finally:
+                _remove_transient_cancel_failure(settings)
+
+            original_input = _corrupt_research_run_input(settings, seed_run_id)
+            try:
+                await assert_same_error(
+                    stdio,
+                    http_action,
+                    "get_research_run",
+                    {"run_id": seed_run_id},
+                    "INTERNAL",
+                )
+            finally:
+                _restore_research_run_input(settings, seed_run_id, original_input)
+
+        raw_stdio = await anyio.to_thread.run_sync(
+            partial(
+                _raw_stdio_probe,
+                settings,
+                {
+                    **canary_arguments,
+                    "credential": canaries["credential"],
+                },
+            )
+        )
+        assert raw_stdio.returncode == 0
+        raw_stdio_messages = [
+            json.loads(line)
+            for line in raw_stdio.stdout.splitlines()
+            if line.strip()
+        ]
+        raw_stdio_call_messages = [
+            message for message in raw_stdio_messages if message.get("id") == 3
+        ]
+        assert raw_stdio_call_messages, (
+            raw_stdio.stdout.decode(errors="replace"),
+            raw_stdio.stderr.decode(errors="replace"),
+        )
+        raw_stdio_result = raw_stdio_call_messages[0]["result"]
+        assert raw_stdio_result["isError"] is True
+        assert raw_stdio_result["structuredContent"]["code"] == "INVALID_INPUT"
+
+        async with _raw_http_client(app) as raw_client:
+            health_live = await raw_client.get("/health/live")
+            health_ready = await raw_client.get("/health/ready")
+            auth_error = await _initialize(raw_client, token="private_token_canary_10")
+            protocol_error = await raw_client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 91,
+                    "method": "unknown/canary",
+                    "params": canary_arguments,
+                },
+                headers={
+                    **_protocol_headers(),
+                    "Authorization": f"Bearer {action_token}",
+                },
+            )
+            surrogate_http = await raw_client.post(
+                "/mcp",
+                content=json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 92,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "submit_research_run",
+                            "arguments": {
+                                **canary_arguments,
+                                "request_id": "\ud800",
+                                "credential": canaries["credential"],
+                            },
+                        },
+                    },
+                    ensure_ascii=True,
+                ).encode(),
+                headers={
+                    **_protocol_headers(),
+                    "Authorization": f"Bearer {action_token}",
+                    "Content-Type": "application/json",
+                },
+            )
+        assert health_live.status_code == 200
+        assert health_ready.status_code == 200
+        assert auth_error.status_code == 401
+        assert protocol_error.status_code == 200
+        assert surrogate_http.status_code == 400
+
+    diagnostic_surfaces = "\n".join(
+        (
+            str(captured_payloads),
+            str(events),
+            application_log.getvalue(),
+            stdio_log.read_text(),
+            cancel_stdio_log.read_text(),
+            raw_stdio.stdout.decode(errors="replace"),
+            raw_stdio.stderr.decode(errors="replace"),
+            health_live.text,
+            health_ready.text,
+            auth_error.text,
+            protocol_error.text,
+            surrogate_http.text,
+        )
+    )
+    for canary in (*canaries.values(), "private_token_canary_10"):
+        assert canary not in diagnostic_surfaces
+
+
+def _without_trace_id(payload: dict[str, object]) -> dict[str, object]:
+    return {**payload, "trace_id": "trace_transport_specific"}
+
+
+def _raw_stdio_probe(
+    settings: CoreSettings,
+    arguments: dict[str, object],
+) -> subprocess.CompletedProcess[bytes]:
+    executable = Path(sys.executable).with_name("thesistrace-research-agent-mcp")
+    messages = (
+        _initialize_request(),
+        {
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "submit_research_run",
+                "arguments": arguments,
+            },
+        },
+    )
+    encoded = tuple(
+        (
+            json.dumps(message, ensure_ascii=True, separators=(",", ":"))
+            + "\n"
+        ).encode()
+        for message in messages
+    )
+    core_environment = _core_environment(settings)
+    process = subprocess.Popen(
+        [str(executable)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=Path.cwd(),
+        env={**os.environ, **core_environment},
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stdout = b""
+    try:
+        process.stdin.write(encoded[0])
+        process.stdin.flush()
+        stdout += _read_process_line(process)
+        process.stdin.write(encoded[1])
+        process.stdin.write(encoded[2])
+        process.stdin.flush()
+        stdout += _read_process_line(process)
+        process.stdin.write(encoded[3])
+        process.stdin.flush()
+        stdout += _read_process_line(process)
+        process.stdin.close()
+        returncode = process.wait(timeout=30)
+        stderr = _read_bounded_tail(process.stderr)
+    except Exception as error:
+        _terminate_probe_process(process)
+        stdout += _read_bounded_tail(process.stdout)
+        stderr = _read_bounded_tail(process.stderr)
+        sensitive_values = (
+            *_string_values(arguments),
+            *_string_values(core_environment),
+            str(settings.data_mount),
+            str(Path.cwd()),
+            str(executable),
+        )
+        raise AssertionError(
+            "raw stdio MCP probe failed: "
+            f"returncode={process.returncode}; "
+            f"stdout={_sanitized_process_output(stdout, sensitive_values)!r}; "
+            f"stderr={_sanitized_process_output(stderr, sensitive_values)!r}"
+        ) from error
+    finally:
+        if not process.stdin.closed:
+            try:
+                process.stdin.close()
+            except BrokenPipeError:
+                pass
+        process.stdout.close()
+        process.stderr.close()
+    return subprocess.CompletedProcess(
+        args=[str(executable)],
+        returncode=returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+def _read_process_line(process: subprocess.Popen[bytes]) -> bytes:
+    assert process.stdout is not None
+    readable, _, _ = select.select((process.stdout,), (), (), 10)
+    if not readable:
+        raise TimeoutError("raw stdio MCP response timed out")
+    return process.stdout.readline()
+
+
+def _terminate_probe_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
+def _string_values(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [item for child in value.values() for item in _string_values(child)]
+    if isinstance(value, list | tuple):
+        return [item for child in value for item in _string_values(child)]
+    return []
+
+
+def _sanitized_process_output(
+    output: bytes,
+    sensitive_values: tuple[str, ...],
+) -> str:
+    text = output[-4096:].decode(errors="replace")
+    for value in sensitive_values:
+        if value:
+            text = text.replace(value, "[redacted]")
+    return text
+
+
+def _read_bounded_tail(stream: BinaryIO, *, read_limit: int = 64 * 1024) -> bytes:
+    return stream.read(read_limit)[-4096:]
+
+
+def _corrupt_research_run_input(
+    settings: CoreSettings,
+    run_id: str,
+) -> dict[str, object]:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                "SELECT immutable_input FROM research_runs.runs WHERE id = %s",
+                (run_id,),
+            ).fetchone()
+            assert row is not None
+            immutable_input = dict(row["immutable_input"])
+            invalid_input = {**immutable_input, "strategy": {}}
+            transaction.execute(
+                "UPDATE research_runs.runs SET immutable_input = %s WHERE id = %s",
+                (Jsonb(invalid_input), run_id),
+            )
+        return immutable_input
+    finally:
+        database.close()
+
+
+def _restore_research_run_input(
+    settings: CoreSettings,
+    run_id: str,
+    immutable_input: dict[str, object],
+) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "UPDATE research_runs.runs SET immutable_input = %s WHERE id = %s",
+                (Jsonb(immutable_input), run_id),
+            )
+    finally:
+        database.close()
 
 
 def _run_barrier_worker(settings: CoreSettings, prepared, release_worker) -> None:
