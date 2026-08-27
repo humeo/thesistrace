@@ -843,8 +843,18 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
                         name="平安银行",
                         title="平安银行2026年半年度报告",
                         source_published_date="2026-08-14",
-                        report_period="2026-06-30",
+                        report_period=None,
                         url="https://example.test/announcement/a",
+                    ),
+                    FinancialAnnouncement(
+                        announcement_id="b" * 64,
+                        category="补充更正",
+                        ts_code="000001.SZ",
+                        name="平安银行",
+                        title="平安银行2026年半年度报告更正公告",
+                        source_published_date="2026-08-13",
+                        report_period="2026-06-30",
+                        url="https://example.test/announcement/b",
                     ),
                 ),
                 gaps=(),
@@ -927,6 +937,10 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
         assert published.complete_through_session == "2026-08-14"
         assert published.accepted_instrument_count == 1
         assert published.failed_instrument_count == 0
+        inspection = service.inspect("daily-financial-publish")
+        assert inspection["matched_trigger_count"] == 2
+        assert inspection["checked_no_structured_change_count"] == 0
+        assert inspection["pending_trigger_count"] == 0
         assert statement_source.requests == [
             (endpoint, "000001.SZ", "complete-history")
             for endpoint in FINANCIAL_ENDPOINTS
@@ -964,6 +978,141 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             observation_through_session="2026-08-14",
         ) == published
         assert len(statement_source.requests) == 3
+    finally:
+        database.close()
+
+
+def test_daily_financial_refresh_closes_unchanged_trigger_and_reuses_tables(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    class AnnouncementSource:
+        def discover(
+            self,
+            *,
+            start_date: str,
+            end_date: str,
+            allowed_ts_codes: set[str] | frozenset[str],
+        ) -> FinancialAnnouncementDiscovery:
+            assert (start_date, end_date) == ("2026-08-07", "2026-08-13")
+            assert allowed_ts_codes == {"000001.SZ"}
+            return FinancialAnnouncementDiscovery(
+                start_date=start_date,
+                end_date=end_date,
+                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
+                announcements=(
+                    FinancialAnnouncement(
+                        announcement_id="c" * 64,
+                        category="半年报",
+                        ts_code="000001.SZ",
+                        name="平安银行",
+                        title="平安银行2026年半年度报告",
+                        source_published_date="2026-08-12",
+                        report_period="2026-06-30",
+                        url="https://example.test/announcement/unchanged",
+                    ),
+                ),
+                gaps=(),
+                source_lineage_sha256="d" * 64,
+            )
+
+    class StableStatementSource(StatementSource):
+        def query_raw(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, object],
+            fields: tuple[str, ...],
+        ) -> RawSourceResponse:
+            assert fields == EXECUTABLE_FIELDS[endpoint]
+            ts_code = str(params["ts_code"])
+            self.requests.append((endpoint, ts_code, "complete-history"))
+            values = {
+                "income": ("10", "4"),
+                "balancesheet": ("20", "8", "12"),
+                "cashflow": ("6",),
+            }[endpoint]
+            return RawSourceResponse(
+                fields,
+                (
+                    (
+                        ts_code,
+                        "20260812",
+                        "",
+                        "20260630",
+                        "1",
+                        "1",
+                        "2",
+                        *values,
+                        "0",
+                    ),
+                ),
+            )
+
+    database = _database(core_settings)
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=("2010-01-04", "2026-08-07", "2026-08-12", "2026-08-13"),
+        )
+        _establish_head(database, tmp_path, market, operation_id="unchanged-daily-market")
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            StableStatementSource(),
+            market,
+            idempotency_key="unchanged-daily-prior",
+            contract=contract,
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id="unchanged-daily-source",
+            expected=market,
+        )
+        statement_source = StableStatementSource()
+        service = DailyFinancialRefreshService(
+            database,
+            tmp_path,
+            AnnouncementSource(),
+            statement_source,
+            clock=lambda: datetime(2026, 8, 13, 10, tzinfo=UTC),
+        )
+
+        published = service.publish(
+            idempotency_key="unchanged-daily-publish",
+            observation_through_session="2026-08-13",
+        )
+
+        assert published.status == "succeeded"
+        assert published.accepted_instrument_count == 1
+        assert published.pending_instrument_count == 0
+        inspection = service.inspect("unchanged-daily-publish")
+        assert inspection["matched_trigger_count"] == 0
+        assert inspection["checked_no_structured_change_count"] == 1
+        assert inspection["pending_trigger_count"] == 0
+        assert statement_source.requests == [
+            (endpoint, "000001.SZ", "complete-history")
+            for endpoint in FINANCIAL_ENDPOINTS
+        ]
+
+        def family_manifest(manifest_sha256: str) -> dict[str, object]:
+            return json.loads(
+                (
+                    tmp_path
+                    / "manifests"
+                    / "sha256"
+                    / manifest_sha256[:2]
+                    / f"{manifest_sha256}.json"
+                ).read_bytes()
+            )
+
+        assert family_manifest(published.candidate.manifest_sha256)["tables"] == (
+            family_manifest(prior.manifest_sha256)["tables"]
+        )
     finally:
         database.close()
 

@@ -432,8 +432,8 @@ class FinancialCandidateStore:
         *,
         prior_candidate_manifest_sha256: str,
         observation_through_session: str,
-    ) -> None:
-        """Reject one targeted snapshot before it can resolve a pending trigger."""
+    ) -> bool:
+        """Validate one targeted snapshot and report whether Canonical rows changed."""
         if len({item.instrument_id for item in collection.shards}) != 1:
             raise FinancialCandidateError("FINANCIAL_DAILY_INSTRUMENT_INVALID")
         prior = self.reopen(prior_candidate_manifest_sha256)
@@ -469,7 +469,7 @@ class FinancialCandidateStore:
             )
         )
         self._validate_historical_identities(prior_checkpoints, historical)
-        _deltas, quarantine_unchanged = self._daily_table_deltas(
+        deltas, quarantine_unchanged = self._daily_table_deltas(
             collection.shards,
             prior_checkpoints=prior_checkpoints,
             endpoint_fields=endpoint_fields,
@@ -483,6 +483,7 @@ class FinancialCandidateStore:
         )
         if not quarantine_unchanged:
             raise FinancialCandidateError("FINANCIAL_DAILY_INSTRUMENT_INVALID")
+        return any(deltas[endpoint] for endpoint in FINANCIAL_ENDPOINTS)
 
     def _materialize_daily(
         self,

@@ -107,6 +107,7 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0188 — Expose financial data only through Alpha authoring and Data readiness](0188-expose-financial-data-only-through-alpha-authoring-and-data-readiness.md)
 - [ADR-0192 — Paginate the ordinary balance sheet inside one logical shard](0192-paginate-the-ordinary-balance-sheet-inside-one-logical-shard.md)
 - [ADR-0219 — Drive daily financial refresh from CNINFO disclosures](0219-drive-daily-financial-refresh-from-cninfo-disclosures.md)
+- [ADR-0232 — Resolve financial announcement triggers from stock-level Canonical deltas](0232-resolve-financial-announcement-triggers-from-stock-level-canonical-deltas.md)
 
 ## Bounded execution and operations
 

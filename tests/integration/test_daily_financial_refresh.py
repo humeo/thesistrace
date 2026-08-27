@@ -11,8 +11,6 @@ from thesistrace.data.daily_financial_refresh import (
     DailyFinancialStatementCollector,
     FinancialDailyRefreshStore,
     FinancialPendingInstrument,
-    FinancialTriggerResolver,
-    PendingFinancialTrigger,
     financial_discovery_window,
 )
 from thesistrace.data.financial_announcements import (
@@ -138,26 +136,6 @@ def test_targeted_collection_accepts_three_statements_atomically_per_instrument(
             ),
         )
         assert len(tuple((tmp_path / "financial" / "raw").rglob("*.json"))) == 3
-        resolver = FinancialTriggerResolver(tmp_path)
-        assert resolver.matching_announcement_ids(
-            checkpoints=outcome.snapshot.shards,
-            triggers=(
-                PendingFinancialTrigger(
-                    announcement_id="d" * 64,
-                    instrument_id="equity:000001.SZ",
-                    ts_code="000001.SZ",
-                    source_published_date="2026-08-18",
-                    report_period="2026-06-30",
-                ),
-                PendingFinancialTrigger(
-                    announcement_id="e" * 64,
-                    instrument_id="equity:000001.SZ",
-                    ts_code="000001.SZ",
-                    source_published_date="2026-08-14",
-                    report_period="2026-06-30",
-                ),
-            ),
-        ) == ("d" * 64,)
     finally:
         database.close()
 
@@ -246,86 +224,113 @@ def test_discovery_store_persists_partial_progress_without_losing_pending_stocks
         database.close()
 
 
-def test_five_accepted_no_match_attempts_close_trigger_but_failed_pull_does_not(
+def test_failed_pull_stays_pending_but_first_accepted_no_change_closes_trigger(
     core_settings: CoreSettings,
 ) -> None:
     database = _database(core_settings)
     store = FinancialDailyRefreshStore(database)
     operation_prefix = "daily-financial-no-structured-change-"
     identity = HistoricalInstrumentIdentity("equity:000001.SZ", "000001.SZ")
-    sessions = (
-        "2026-08-14",
-        "2026-08-17",
-        "2026-08-18",
-        "2026-08-19",
-        "2026-08-20",
-        "2026-08-21",
-    )
-    complete = "2026-08-13"
+    failed_key = f"{operation_prefix}failed"
+    accepted_key = f"{operation_prefix}accepted"
     try:
-        for ordinal, session in enumerate(sessions):
-            operation_key = f"{operation_prefix}{session}"
-            store.begin(
-                idempotency_key=operation_key,
-                source_generation_manifest_sha256=f"{ordinal + 1:x}" * 64,
-                prior_financial_manifest_sha256="b" * 64,
-                discovery_baseline_session="2026-08-13",
-                prior_attempted_through_session=complete,
-                prior_complete_through_session=complete,
-                target_session=session,
-                started_at=datetime(2026, 8, 14 + ordinal, 9, tzinfo=UTC),
-            )
-            store.record_discovery(
-                idempotency_key=operation_key,
-                discovery=FinancialAnnouncementDiscovery(
-                    start_date="2026-08-07",
-                    end_date=session,
-                    completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
-                    announcements=(
-                        (_announcement("3" * 64, "000001.SZ"),)
-                        if ordinal == 0
-                        else ()
-                    ),
-                    gaps=(),
-                    source_lineage_sha256=f"{ordinal + 4:x}" * 64,
-                ),
-                identities=(identity,),
-                recorded_at=datetime(2026, 8, 14 + ordinal, 9, 1, tzinfo=UTC),
-            )
-            if ordinal == 0:
-                store.record_instrument_attempt(
-                    idempotency_key=operation_key,
-                    instrument_id=identity.instrument_id,
-                    status="failed",
-                    matched_announcement_ids=(),
-                    checkpoints=(),
-                    failure_code="SOURCE_FAILURE",
-                    failure_endpoint="income",
-                    attempted_at=datetime(2026, 8, 14, 9, 2, tzinfo=UTC),
-                )
-            else:
-                store.record_instrument_attempt(
-                    idempotency_key=operation_key,
-                    instrument_id=identity.instrument_id,
-                    status="accepted",
-                    matched_announcement_ids=(),
-                    checkpoints=_accepted_checkpoints(
-                        identity.instrument_id,
-                        identity.ts_code,
-                    ),
-                    failure_code=None,
-                    failure_endpoint=None,
-                    attempted_at=datetime(2026, 8, 14 + ordinal, 9, 2, tzinfo=UTC),
-                )
-            publication = store.publication_state(operation_key)
-            complete = session
-            if ordinal < 5:
-                assert publication.readiness_status == "ready_with_pending"
-                assert publication.pending_instrument_count == 1
-            else:
-                assert publication.readiness_status == "ready"
-                assert publication.pending_instrument_count == 0
-                assert store.inspect(operation_key).checked_no_structured_change_count == 1
+        store.begin(
+            idempotency_key=failed_key,
+            source_generation_manifest_sha256="1" * 64,
+            prior_financial_manifest_sha256="b" * 64,
+            discovery_baseline_session="2026-08-13",
+            prior_attempted_through_session="2026-08-13",
+            prior_complete_through_session="2026-08-13",
+            target_session="2026-08-14",
+            started_at=datetime(2026, 8, 14, 9, tzinfo=UTC),
+        )
+        store.record_discovery(
+            idempotency_key=failed_key,
+            discovery=FinancialAnnouncementDiscovery(
+                start_date="2026-08-07",
+                end_date="2026-08-14",
+                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
+                announcements=(_announcement("3" * 64, "000001.SZ"),),
+                gaps=(),
+                source_lineage_sha256="4" * 64,
+            ),
+            identities=(identity,),
+            recorded_at=datetime(2026, 8, 14, 9, 1, tzinfo=UTC),
+        )
+        store.record_instrument_attempt(
+            idempotency_key=failed_key,
+            instrument_id=identity.instrument_id,
+            status="failed",
+            matched_announcement_ids=(),
+            checkpoints=(),
+            failure_code="SOURCE_FAILURE",
+            failure_endpoint="income",
+            attempted_at=datetime(2026, 8, 14, 9, 2, tzinfo=UTC),
+        )
+
+        failed_publication = store.publication_state(failed_key)
+        assert failed_publication.readiness_status == "ready_with_pending"
+        assert failed_publication.pending_instrument_count == 1
+        assert store.inspect(failed_key).checked_no_structured_change_count == 0
+
+        store.begin(
+            idempotency_key=accepted_key,
+            source_generation_manifest_sha256="2" * 64,
+            prior_financial_manifest_sha256="b" * 64,
+            discovery_baseline_session="2026-08-13",
+            prior_attempted_through_session="2026-08-14",
+            prior_complete_through_session="2026-08-14",
+            target_session="2026-08-17",
+            started_at=datetime(2026, 8, 17, 9, tzinfo=UTC),
+        )
+        store.record_discovery(
+            idempotency_key=accepted_key,
+            discovery=FinancialAnnouncementDiscovery(
+                start_date="2026-08-08",
+                end_date="2026-08-17",
+                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
+                announcements=(),
+                gaps=(),
+                source_lineage_sha256="5" * 64,
+            ),
+            identities=(identity,),
+            recorded_at=datetime(2026, 8, 17, 9, 1, tzinfo=UTC),
+        )
+        store.record_instrument_attempt(
+            idempotency_key=accepted_key,
+            instrument_id=identity.instrument_id,
+            status="accepted",
+            matched_announcement_ids=(),
+            checkpoints=_accepted_checkpoints(
+                identity.instrument_id,
+                identity.ts_code,
+            ),
+            failure_code=None,
+            failure_endpoint=None,
+            attempted_at=datetime(2026, 8, 17, 9, 2, tzinfo=UTC),
+        )
+
+        accepted_publication = store.publication_state(accepted_key)
+        assert accepted_publication.readiness_status == "ready"
+        assert accepted_publication.pending_instrument_count == 0
+        assert store.inspect(accepted_key).checked_no_structured_change_count == 1
+        with database.transaction() as transaction:
+            trigger = transaction.execute(
+                """
+                SELECT status, resolution_code, accepted_no_match_count,
+                       last_attempt_operation_key
+                FROM data.financial_announcement_triggers
+                WHERE announcement_id = %s
+                """,
+                ("3" * 64,),
+            ).fetchone()
+        assert trigger is not None
+        assert dict(trigger) == {
+            "status": "checked_no_structured_change",
+            "resolution_code": "checked_no_structured_change",
+            "accepted_no_match_count": 5,
+            "last_attempt_operation_key": accepted_key,
+        }
     finally:
         _delete_operations(database, operation_prefix)
         database.close()

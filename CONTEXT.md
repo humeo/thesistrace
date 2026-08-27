@@ -654,9 +654,11 @@ _Avoid_: Known instrument failure, discarded remote error, complete discovery
 
 **Financial Announcement Trigger**:
 A deduplicated current-instrument disclosure or correction that requires an
-atomic three-statement Tushare refresh and remains unresolved until explicitly
-matched or closed under the accepted no-structured-change rule.
-_Avoid_: Canonical Financial Fact, one-shot notification, best-effort log
+atomic three-statement Tushare refresh. It resolves for the stock when that
+validated refresh changes Canonical financial facts or confirms none changed;
+collection or projection failure leaves it unresolved.
+_Avoid_: Canonical Financial Fact, exact announcement-version link,
+five-refresh waiting item, best-effort log
 
 **Canonical Market Data**:
 The source-neutral market and reference facts governed by stable field names,

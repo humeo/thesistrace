@@ -66,15 +66,6 @@ class FinancialDailyRefreshInspection:
 
 
 @dataclass(frozen=True)
-class PendingFinancialTrigger:
-    announcement_id: str
-    instrument_id: str
-    ts_code: str
-    source_published_date: str
-    report_period: str | None
-
-
-@dataclass(frozen=True)
 class FinancialDailyRefreshOutcome:
     idempotency_key: str
     status: str
@@ -303,35 +294,21 @@ class FinancialDailyRefreshStore:
             for row in rows
         )
 
-    def pending_triggers(
+    def pending_announcement_ids(
         self,
         instrument_id: str,
-    ) -> tuple[PendingFinancialTrigger, ...]:
+    ) -> tuple[str, ...]:
         with self._database.transaction() as transaction:
             rows = transaction.execute(
                 """
-                SELECT announcement_id, instrument_id, ts_code,
-                       source_published_date, report_period
+                SELECT announcement_id
                 FROM data.financial_announcement_triggers
                 WHERE instrument_id = %s AND status = 'pending'
                 ORDER BY source_published_date, announcement_id
                 """,
                 (instrument_id,),
             ).fetchall()
-        return tuple(
-            PendingFinancialTrigger(
-                announcement_id=str(row["announcement_id"]),
-                instrument_id=str(row["instrument_id"]),
-                ts_code=str(row["ts_code"]),
-                source_published_date=row["source_published_date"].isoformat(),
-                report_period=(
-                    None
-                    if row["report_period"] is None
-                    else row["report_period"].isoformat()
-                ),
-            )
-            for row in rows
-        )
+        return tuple(str(row["announcement_id"]) for row in rows)
 
     def attempted_instrument_ids(self, idempotency_key: str) -> frozenset[str]:
         with self._database.transaction() as transaction:
@@ -509,22 +486,11 @@ class FinancialDailyRefreshStore:
             transaction.execute(
                 """
                 UPDATE data.financial_announcement_triggers
-                SET accepted_no_match_count = accepted_no_match_count + 1,
+                SET accepted_no_match_count = 5,
                     last_attempt_operation_key = %s,
-                    status = CASE
-                        WHEN accepted_no_match_count + 1 = 5
-                        THEN 'checked_no_structured_change'
-                        ELSE 'pending'
-                    END,
-                    resolution_code = CASE
-                        WHEN accepted_no_match_count + 1 = 5
-                        THEN 'checked_no_structured_change'
-                        ELSE NULL
-                    END,
-                    resolved_at = CASE
-                        WHEN accepted_no_match_count + 1 = 5 THEN %s
-                        ELSE NULL
-                    END,
+                    status = 'checked_no_structured_change',
+                    resolution_code = 'checked_no_structured_change',
+                    resolved_at = %s,
                     updated_at = %s
                 WHERE instrument_id = %s AND status = 'pending'
                 """,
@@ -903,40 +869,6 @@ class FinancialDailyRefreshStore:
             raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_NOT_RECORDED")
 
 
-class FinancialTriggerResolver:
-    def __init__(self, mount_root: Path | str) -> None:
-        self._batches = RawFinancialBatchStore(mount_root)
-
-    def matching_announcement_ids(
-        self,
-        *,
-        checkpoints: Sequence[FinancialShardCheckpoint],
-        triggers: Sequence[PendingFinancialTrigger],
-    ) -> tuple[str, ...]:
-        if not triggers:
-            return ()
-        endpoints: dict[str, tuple[tuple[str, ...], tuple[tuple[object, ...], ...]]] = {}
-        for checkpoint in checkpoints:
-            if checkpoint.status != "completed" or checkpoint.batch_sha256 is None:
-                raise FinancialDailyRefreshError("FINANCIAL_TRIGGER_EVIDENCE_INVALID")
-            batch = self._batches.read(checkpoint.batch_sha256)
-            fields = tuple(str(value) for value in batch["returned_fields"])
-            rows = tuple(tuple(value for value in row) for row in batch["items"])
-            endpoints[checkpoint.endpoint] = (fields, rows)
-        if tuple(endpoint for endpoint in FINANCIAL_ENDPOINTS if endpoint in endpoints) != (
-            FINANCIAL_ENDPOINTS
-        ):
-            raise FinancialDailyRefreshError("FINANCIAL_TRIGGER_EVIDENCE_INVALID")
-        matched: list[str] = []
-        for trigger in triggers:
-            if any(
-                _endpoint_has_trigger_version(fields, rows, trigger)
-                for fields, rows in endpoints.values()
-            ):
-                matched.append(trigger.announcement_id)
-        return tuple(sorted(matched))
-
-
 class DailyFinancialRefreshService:
     def __init__(
         self,
@@ -958,7 +890,6 @@ class DailyFinancialRefreshService:
         self._candidates = FinancialCandidateStore(self._root)
         self._generations = MountedGenerationStore(self._root)
         self._lifecycle = DatasetLifecycle(database, self._root)
-        self._resolver = FinancialTriggerResolver(self._root)
 
     def publish(
         self,
@@ -1122,7 +1053,7 @@ class DailyFinancialRefreshService:
             checkpoints = collection.snapshot.shards
             if checkpoints:
                 try:
-                    self._candidates.validate_daily_instrument(
+                    has_canonical_delta = self._candidates.validate_daily_instrument(
                         collection.snapshot,
                         prior_candidate_manifest_sha256=prior_manifest,
                         observation_through_session=target,
@@ -1142,15 +1073,16 @@ class DailyFinancialRefreshService:
                     )
                     status = "failed"
                 else:
-                    matches = self._resolver.matching_announcement_ids(
-                        checkpoints=checkpoints,
-                        triggers=self._store.pending_triggers(identity.instrument_id),
+                    pending_announcement_ids = self._store.pending_announcement_ids(
+                        identity.instrument_id
                     )
                     self._store.record_instrument_attempt(
                         idempotency_key=idempotency_key,
                         instrument_id=identity.instrument_id,
                         status="accepted",
-                        matched_announcement_ids=matches,
+                        matched_announcement_ids=(
+                            pending_announcement_ids if has_canonical_delta else ()
+                        ),
                         checkpoints=checkpoints,
                         failure_code=None,
                         failure_endpoint=None,
@@ -1617,53 +1549,6 @@ def _checkpoint_from_payload(value: object) -> FinancialShardCheckpoint:
     return checkpoint
 
 
-def _endpoint_has_trigger_version(
-    fields: Sequence[str],
-    rows: Sequence[Sequence[object]],
-    trigger: PendingFinancialTrigger,
-) -> bool:
-    required = {"ts_code", "ann_date", "end_date"}
-    if not required.issubset(fields):
-        raise FinancialDailyRefreshError("FINANCIAL_TRIGGER_EVIDENCE_INVALID")
-    positions = {field: fields.index(field) for field in required}
-    final_position = fields.index("f_ann_date") if "f_ann_date" in fields else None
-    for row in rows:
-        if len(row) != len(fields) or str(row[positions["ts_code"]]) != trigger.ts_code:
-            continue
-        report_period = _source_date_value(row[positions["end_date"]])
-        announcement = _source_date_value(row[positions["ann_date"]], required=False)
-        final = (
-            None
-            if final_position is None
-            else _source_date_value(row[final_position], required=False)
-        )
-        if (
-            trigger.report_period is not None
-            and report_period == trigger.report_period
-            and trigger.source_published_date in {announcement, final}
-        ):
-            return True
-    return False
-
-
-def _source_date_value(value: object, *, required: bool = True) -> str | None:
-    candidate = str(value or "").strip().replace("-", "")
-    if not candidate:
-        if required:
-            raise FinancialDailyRefreshError("FINANCIAL_TRIGGER_EVIDENCE_INVALID")
-        return None
-    if len(candidate) != 8 or not candidate.isdigit():
-        raise FinancialDailyRefreshError("FINANCIAL_TRIGGER_EVIDENCE_INVALID")
-    try:
-        return date(
-            int(candidate[:4]),
-            int(candidate[4:6]),
-            int(candidate[6:]),
-        ).isoformat()
-    except ValueError as error:
-        raise FinancialDailyRefreshError("FINANCIAL_TRIGGER_EVIDENCE_INVALID") from error
-
-
 def financial_discovery_window(
     *,
     complete_through_session: str,
@@ -1975,7 +1860,5 @@ __all__ = (
     "FinancialDailyRefreshOutcome",
     "FinancialDailyRefreshStore",
     "FinancialPendingInstrument",
-    "FinancialTriggerResolver",
-    "PendingFinancialTrigger",
     "financial_discovery_window",
 )

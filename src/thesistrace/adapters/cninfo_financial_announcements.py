@@ -217,7 +217,7 @@ def _source_date(value: object) -> str:
 
 
 def _report_period(category: str, title: str) -> str | None:
-    year = re.search(r"(?<!\d)(20\d{2})\s*年", title)
+    year = re.search(r"(?<!\d)(20\d{2})(?!\d)\s*年?", title)
     if year is None:
         return None
     suffix = {

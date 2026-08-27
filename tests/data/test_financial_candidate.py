@@ -198,6 +198,76 @@ def _materialized_candidate(tmp_path: Path):
     return store, first, repeated, snapshot
 
 
+def _targeted_instrument_collection(
+    snapshot: CompletedFinancialCollection,
+    *,
+    idempotency_key: str,
+    generation_manifest_sha256: str | None = None,
+) -> CompletedFinancialCollection:
+    checkpoints = tuple(
+        replace(checkpoint, ordinal=ordinal)
+        for ordinal, checkpoint in enumerate(
+            item
+            for item in snapshot.shards
+            if item.instrument_id == "equity:000001.SZ"
+        )
+    )
+    return replace(
+        snapshot,
+        idempotency_key=idempotency_key,
+        generation_manifest_sha256=(
+            snapshot.generation_manifest_sha256
+            if generation_manifest_sha256 is None
+            else generation_manifest_sha256
+        ),
+        target_count=len(checkpoints),
+        shards=checkpoints,
+    )
+
+
+def _append_targeted_source_row(
+    root: Path,
+    collection: CompletedFinancialCollection,
+    *,
+    endpoint: str,
+    row: list[object],
+) -> CompletedFinancialCollection:
+    raw = RawFinancialBatchStore(root)
+    checkpoints: list[FinancialShardCheckpoint] = []
+    for checkpoint in collection.shards:
+        assert checkpoint.batch_sha256 is not None
+        payload = raw.read(checkpoint.batch_sha256)
+        items = [*payload["items"]]
+        if checkpoint.endpoint == endpoint:
+            items.append(row)
+        publication_dates = [
+            str(item[2] or item[1]) for item in items if item[2] or item[1]
+        ]
+        payload["items"] = items
+        payload["row_count"] = len(items)
+        payload["source_date_extent"] = [
+            min(publication_dates),
+            max(publication_dates),
+        ]
+        payload["payload_sha256"] = hashlib.sha256(
+            canonical_json_bytes({"fields": list(FIELDS), "items": items})
+        ).hexdigest()
+        checkpoints.append(
+            replace(
+                checkpoint,
+                ordinal=len(checkpoints),
+                batch_sha256=raw.store(canonical_json_bytes(payload)),
+                collected_at="2026-08-14T08:30:00+00:00",
+                first_observed_at="2026-08-14T08:30:00+00:00",
+            )
+        )
+    return replace(
+        collection,
+        finished_at="2026-08-14T09:00:00+00:00",
+        shards=tuple(checkpoints),
+    )
+
+
 def test_materializes_sparse_versioned_financial_family_without_publishing(tmp_path: Path) -> None:
     store, first, repeated, _snapshot = _materialized_candidate(tmp_path)
 
@@ -1411,6 +1481,122 @@ def test_targeted_daily_rebuild_reads_only_affected_instrument_history(
     assert current_manifest["tables"] == prior_manifest["tables"]
 
 
+def test_daily_instrument_validation_reports_no_delta_for_identical_history(
+    tmp_path: Path,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    targeted = _targeted_instrument_collection(
+        snapshot,
+        idempotency_key="daily-financial-identical-history",
+    )
+
+    changed = store.validate_daily_instrument(
+        targeted,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session="2026-08-13",
+    )
+
+    assert changed is False
+
+
+def test_daily_instrument_validation_ignores_raw_batch_only_change(
+    tmp_path: Path,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    targeted = _append_targeted_source_row(
+        tmp_path,
+        _targeted_instrument_collection(
+            snapshot,
+            idempotency_key="daily-financial-raw-batch-only-change",
+        ),
+        endpoint="income",
+        row=[
+            "000001.SZ",
+            "20090425",
+            "",
+            "20081231",
+            "1",
+            "1",
+            "4",
+            "81",
+            "1",
+        ],
+    )
+
+    changed = store.validate_daily_instrument(
+        targeted,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session="2026-08-13",
+    )
+
+    assert changed is False
+
+
+@pytest.mark.parametrize(
+    "row",
+    (
+        ["000001.SZ", "20260813", "", "20260630", "1", "1", "2", "901", "0"],
+        [
+            "000001.SZ",
+            "20090425",
+            "20100422",
+            "20081231",
+            "1",
+            "1",
+            "4",
+            "82",
+            "1",
+        ],
+    ),
+    ids=("new-report-period", "revised-value"),
+)
+def test_daily_instrument_validation_reports_canonical_row_delta(
+    tmp_path: Path,
+    row: list[object],
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    targeted = _append_targeted_source_row(
+        tmp_path,
+        _targeted_instrument_collection(
+            snapshot,
+            idempotency_key="daily-financial-canonical-delta",
+        ),
+        endpoint="income",
+        row=row,
+    )
+
+    changed = store.validate_daily_instrument(
+        targeted,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session="2026-08-13",
+    )
+
+    assert changed is True
+
+
+def test_daily_instrument_validation_reports_availability_session_delta(
+    tmp_path: Path,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    next_market = _market_generation(
+        tmp_path,
+        sessions=(*SESSIONS, "2026-08-14"),
+    )
+    targeted = _targeted_instrument_collection(
+        snapshot,
+        idempotency_key="daily-financial-availability-delta",
+        generation_manifest_sha256=next_market,
+    )
+
+    changed = store.validate_daily_instrument(
+        targeted,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session="2026-08-14",
+    )
+
+    assert changed is True
+
+
 def test_daily_instrument_validation_rejects_a_new_undated_source_row(
     tmp_path: Path,
 ) -> None:
@@ -1807,7 +1993,12 @@ def _empty_complete_snapshot(
     )
 
 
-def _market_generation(root: Path, *, include_second: bool = True) -> str:
+def _market_generation(
+    root: Path,
+    *,
+    include_second: bool = True,
+    sessions: tuple[str, ...] = SESSIONS,
+) -> str:
     canonical = build_minimal_canonical_fixture()
     template_price = dict(canonical["prices"][0])
     template_state = dict(canonical["trading_states"][0])
@@ -1816,7 +2007,7 @@ def _market_generation(root: Path, *, include_second: bool = True) -> str:
     template_universe = {
         name: dict(rows[0]) for name, rows in canonical["liquidity_universes"].items()
     }
-    canonical["research_calendar"] = list(SESSIONS)
+    canonical["research_calendar"] = list(sessions)
     if include_second:
         canonical["instruments"] = [
             *canonical["instruments"],
@@ -1830,16 +2021,20 @@ def _market_generation(root: Path, *, include_second: bool = True) -> str:
                 "listed_to": "2020-01-02",
             },
         ]
-    canonical["prices"] = [dict(template_price, session=session) for session in SESSIONS]
-    canonical["trading_states"] = [dict(template_state, session=session) for session in SESSIONS]
-    canonical["price_limits"] = [dict(template_limit, session=session) for session in SESSIONS]
-    canonical["base_pool"] = [dict(template_pool, session=session) for session in SESSIONS]
+    canonical["prices"] = [dict(template_price, session=session) for session in sessions]
+    canonical["trading_states"] = [
+        dict(template_state, session=session) for session in sessions
+    ]
+    canonical["price_limits"] = [
+        dict(template_limit, session=session) for session in sessions
+    ]
+    canonical["base_pool"] = [dict(template_pool, session=session) for session in sessions]
     canonical["liquidity_universes"] = {
-        name: [dict(row, session=session) for session in SESSIONS]
+        name: [dict(row, session=session) for session in sessions]
         for name, row in template_universe.items()
     }
     catalog = dict(canonical["field_catalog"][0])
-    catalog["release_available_from"] = SESSIONS[0]
+    catalog["release_available_from"] = sessions[0]
     canonical["field_catalog"] = [catalog]
     return (
         MountedGenerationStore(root)

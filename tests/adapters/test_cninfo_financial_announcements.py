@@ -84,6 +84,58 @@ def test_discovery_returns_deduplicated_current_instrument_triggers() -> None:
     assert len(discovery.source_lineage_sha256) == 64
 
 
+def test_discovery_parses_half_year_report_period_with_or_without_year_marker() -> None:
+    class ReportTitleClient(_AkshareClient):
+        def stock_zh_a_disclosure_report_cninfo(
+            self,
+            *,
+            symbol: str,
+            market: str,
+            category: str,
+            start_date: str,
+            end_date: str,
+        ) -> _Frame:
+            if category != "半年报":
+                return _Frame([])
+            return _Frame(
+                [
+                    {
+                        "代码": "000001",
+                        "简称": "甲公司",
+                        "公告标题": "甲公司2026半年度报告",
+                        "公告时间": "2026-08-18 00:00:00",
+                        "公告链接": "https://example.test/announcement/no-year-marker",
+                    },
+                    {
+                        "代码": "000002",
+                        "简称": "乙公司",
+                        "公告标题": "乙公司2026半年度报告摘要",
+                        "公告时间": "2026-08-18 00:00:00",
+                        "公告链接": "https://example.test/announcement/summary",
+                    },
+                    {
+                        "代码": "000003",
+                        "简称": "丙公司",
+                        "公告标题": "丙公司2026年半年度报告摘要",
+                        "公告时间": "2026-08-18 00:00:00",
+                        "公告链接": "https://example.test/announcement/with-year-marker",
+                    },
+                ]
+            )
+
+    discovery = AkshareCninfoFinancialAnnouncementSource(ReportTitleClient()).discover(
+        start_date="2026-08-12",
+        end_date="2026-08-18",
+        allowed_ts_codes={"000001.SZ", "000002.SZ", "000003.SZ"},
+    )
+
+    assert [item.report_period for item in discovery.announcements] == [
+        "2026-06-30",
+        "2026-06-30",
+        "2026-06-30",
+    ]
+
+
 def test_discovery_preserves_successful_categories_and_reports_failed_category_gap() -> None:
     class PartiallyUnavailableClient(_AkshareClient):
         def stock_zh_a_disclosure_report_cninfo(

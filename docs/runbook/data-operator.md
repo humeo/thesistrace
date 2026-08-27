@@ -207,8 +207,10 @@ fallback from a failed live provider.
 
 After bootstrap, each trading-day Financial Refresh discovers affected current
 instruments from CNINFO through the pinned AKShare adapter, then requests the
-three ordinary Tushare statements only for those instruments. It reads the
-current Dataset Head and Financial contract automatically:
+complete `income`, `balancesheet`, and `cashflow` histories once for each of
+those instruments. Multiple pending announcements for one instrument share the
+same atomic three-statement pull. The command reads the current Dataset Head and
+Financial contract automatically:
 
 Each underlying AKShare CNINFO request has a 30-second timeout. A timed-out or
 invalid category is recorded as a discovery gap; it does not hide the gap or
@@ -218,7 +220,21 @@ The candidate path is incremental. With no triggers it reuses the prior
 Financial table objects and Raw Evidence index. With accepted instruments it
 replays only those instruments' prior evidence and appends only changed rows as
 immutable delta objects; it does not scan or rewrite the unaffected historical
-Financial Family.
+Financial Family. Candidate validation compares the pulled histories with the
+prior Canonical rows, including availability-session changes:
+
+- any Canonical delta marks every pending announcement for that instrument as
+  `matched`;
+- a successful pull with no Canonical delta immediately marks every pending
+  announcement for that instrument as `checked_no_structured_change`;
+- collection or Canonical projection failure leaves the announcements pending
+  for the next Financial Refresh.
+
+Announcement dates and parsed report periods remain discovery audit metadata;
+they do not control trigger closure. The Tushare transport keeps its bounded
+per-request retry policy of at most six attempts with backoff during the same
+refresh. There is no second whole-instrument retry layer after those attempts
+are exhausted.
 
 ```sh
 "${tt_compose[@]}" run --rm -T \
@@ -236,8 +252,13 @@ The daily command has no replay, capability-report, prior-candidate, or
 Generation argument. A failed instrument retains its prior or missing facts and
 remains pending for the next trading-day refresh; a discovery gap is published
 as degraded readiness rather than hidden. A three-statement response that
-introduces an unprojectable PIT row is handled as an instrument failure. Trigger
-matching requires a known report period and the exact source publication date.
+introduces an unprojectable PIT row is handled as an instrument failure. With no
+failed instrument or discovery gap the outcome is `succeeded`; failed
+instruments produce `succeeded_with_pending`, while an open CNINFO discovery gap
+produces `succeeded_with_gaps`. `accepted_instrument_count` includes both changed
+and unchanged successful instruments, while
+`checked_no_structured_change_count` counts announcements closed by a successful
+no-delta refresh.
 
 The ordinary-interface contract has one complete-history logical shard per
 `endpoint × instrument`. `balancesheet` is transparently collected with fixed
