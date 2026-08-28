@@ -17,12 +17,12 @@
     "test": "uv run ruff check src tests && uv run pytest -q -n 4 tests/kernel tests/architecture tests/adapters tests/data tests/entrypoints && pnpm --dir web typecheck && pnpm --dir web test:shell",
     "test:cleanup": "./scripts/test-runtime cleanup",
     "test:e2e": "./scripts/test-runtime e2e",
-    "test:benchmark": "./scripts/test-runtime benchmark",
     "test:image-smoke": "./scripts/test-runtime image-smoke",
     "test:integration": "./scripts/test-runtime integration",
     "test:codex-mcp": "./scripts/test-runtime codex-mcp",
     "check": "pnpm test && pnpm test:integration && pnpm test:e2e",
-    "check:release": "pnpm check && pnpm test:image-smoke && pnpm test:benchmark",
+    "check:performance": "./scripts/test-runtime performance",
+    "check:release": "pnpm check && pnpm test:image-smoke",
     "check:live-tushare": "uv run python scripts/check_live_tushare.py"
   }
 }

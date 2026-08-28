@@ -215,9 +215,22 @@ Before a release, run every local seam, including the final image qualification:
 mise exec -- pnpm check:release
 ```
 
-`pnpm check:release` runs `pnpm check` once, then `pnpm test:image-smoke`, then
-the dual-kind `pnpm test:benchmark` final-image qualification. It does not
-repeat the standard gate.
+`pnpm check:release` runs `pnpm check` once and then `pnpm test:image-smoke`. It
+does not repeat the standard gate or run the long performance qualification.
+
+Run the dual-kind long-Research performance qualification separately, only on
+a controlled and otherwise idle host:
+
+```sh
+mise exec -- pnpm check:performance
+```
+
+The command keeps one serial Research Worker and five fresh cold plus five fresh
+warm samples per Research Kind. It stores each completed sample and its verdict
+before enforcing duration, memory, and first-Checkpoint limits, so a sample that
+makes the maximum-of-five limit impossible stops the run immediately. Use this
+gate for performance-sensitive Kernel, Data, Worker, or final-image changes and
+for deliberate periodic qualification, not for ordinary merges.
 
 ## Evidence, cleanup, and interactive diagnosis
 

@@ -25,8 +25,8 @@ LONG_RESEARCH_START_DATE = "2010-01-04"
 LONG_RESEARCH_END_DATE = "2026-08-13"
 LONG_RESEARCH_UNIVERSE = "top3000"
 LONG_RESEARCH_SAMPLE_COUNT = 5
-LONG_RESEARCH_COLD_P95_LIMIT_MS = 600_000
-LONG_RESEARCH_WARM_P95_LIMIT_MS = 300_000
+LONG_RESEARCH_COLD_MAX_LIMIT_MS = 600_000
+LONG_RESEARCH_WARM_MAX_LIMIT_MS = 300_000
 LONG_RESEARCH_PEAK_RSS_LIMIT_BYTES = 1536 * 1024 * 1024
 LONG_RESEARCH_FIRST_CHECKPOINT_LIMIT_MS = 45_000
 LONG_RESEARCH_CANCELLATION_LIMIT_MS = 5_000
@@ -186,7 +186,7 @@ def assert_long_research_qualification(
 ) -> dict[str, dict[str, int | float]]:
     if (
         evidence.get("format") != "thesistrace-long-research-qualification"
-        or evidence.get("version") != 1
+        or evidence.get("version") != 2
     ):
         raise AssertionError("long Research evidence format is invalid")
     capacity = _mapping(evidence.get("capacity"), "capacity")
@@ -254,17 +254,6 @@ def assert_long_research_qualification(
         sample_run_ids.update(str(item["run_id"]) for item in (*cold, *warm))
         sample_attempt_ids.update(str(item["attempt_id"]) for item in (*cold, *warm))
         kind_summary = summary[research_kind]
-        if kind_summary["cold_p95_duration_ms"] > LONG_RESEARCH_COLD_P95_LIMIT_MS:
-            raise AssertionError(f"{research_kind} cold execution P95 exceeds ten minutes")
-        if kind_summary["warm_p95_duration_ms"] > LONG_RESEARCH_WARM_P95_LIMIT_MS:
-            raise AssertionError(f"{research_kind} warm execution P95 exceeds five minutes")
-        if kind_summary["peak_rss_bytes"] > LONG_RESEARCH_PEAK_RSS_LIMIT_BYTES:
-            raise AssertionError(f"{research_kind} peak RSS exceeds the 1.5 GiB execution budget")
-        if (
-            kind_summary["first_checkpoint_latency_ms"]
-            > LONG_RESEARCH_FIRST_CHECKPOINT_LIMIT_MS
-        ):
-            raise AssertionError(f"{research_kind} first Checkpoint exceeds 45 seconds")
         if kind_summary["cancellation_latency_ms"] > LONG_RESEARCH_CANCELLATION_LIMIT_MS:
             raise AssertionError(f"{research_kind} cancellation exceeds five seconds")
         _validate_cancellation(kind_evidence.get("cancellation"), research_kind)
@@ -311,12 +300,8 @@ def long_research_qualification_summary(
         all_samples = (*cold, *warm)
         cancellation = _mapping(kind.get("cancellation"), f"{research_kind} cancellation")
         summary[research_kind] = {
-            "cold_p95_duration_ms": _percentile(
-                [_number(item, "duration_ms") for item in cold], 0.95
-            ),
-            "warm_p95_duration_ms": _percentile(
-                [_number(item, "duration_ms") for item in warm], 0.95
-            ),
+            "cold_max_duration_ms": max(_number(item, "duration_ms") for item in cold),
+            "warm_max_duration_ms": max(_number(item, "duration_ms") for item in warm),
             "peak_rss_bytes": max(
                 _number(item, "peak_rss_bytes") for item in all_samples
             ),
@@ -340,6 +325,29 @@ def _qualification_samples(
     if not isinstance(samples_value, list) or len(samples_value) != LONG_RESEARCH_SAMPLE_COUNT:
         raise AssertionError(f"long Research requires five {phase} samples")
     samples = tuple(_mapping(item, f"{phase} sample") for item in samples_value)
+    for index, sample in enumerate(samples):
+        assert_long_research_sample(
+            sample,
+            research_kind=research_kind,
+            phase=phase,
+            index=index,
+        )
+    return samples
+
+
+def assert_long_research_sample(
+    sample: Mapping[str, object],
+    *,
+    research_kind: str,
+    phase: str,
+    index: int,
+) -> None:
+    if (
+        research_kind not in LONG_RESEARCH_KINDS
+        or phase not in {"cold", "warm"}
+        or index < 0
+    ):
+        raise AssertionError("long Research sample identity is invalid")
     required = {
         "duration_ms",
         "admission_duration_ms",
@@ -373,68 +381,115 @@ def _qualification_samples(
         "checkpoint_count_after_success",
         "active_pin_count_after_success",
     }
-    for sample in samples:
-        if not required.issubset(sample):
-            raise AssertionError(f"{phase} sample evidence is incomplete")
-        if sample["financial_parquet_scans"] != 0 or sample["raw_financial_batch_opens"] != 0:
-            raise AssertionError("market-only long Research opened Financial Data")
-        if sample["market_parquet_scans"] == 0:
-            raise AssertionError("market-only long Research did not scan Market Data")
-        if sample["process_exit_code"] != 0:
-            raise AssertionError("long Research child process did not exit successfully")
-        if sample["worker_exit_code"] != 0 or sample.get("research_kind") != research_kind:
-            raise AssertionError("long Research Worker or Research Kind evidence is invalid")
-        if (
-            not isinstance(sample["run_id"], str)
-            or not sample["run_id"]
-            or not isinstance(sample["attempt_id"], str)
-            or not sample["attempt_id"]
-        ):
-            raise AssertionError("long Research Run or Attempt identity is invalid")
-        if sample["fresh_product_state_verified"] is not True:
-            raise AssertionError("long Research sample reused Product State")
-        _empty_product_state(sample["fresh_product_state_counts"], f"{phase} sample")
-        manifest = sample["result_manifest_sha256"]
-        if not isinstance(manifest, str) or len(manifest) != 64:
-            raise AssertionError("long Research Result manifest identity is invalid")
-        factor_summary_sha256 = sample["factor_summary_sha256"]
-        if not isinstance(factor_summary_sha256, str) or len(factor_summary_sha256) != 64:
-            raise AssertionError("long Research Factor Summary identity is invalid")
-        _validate_kind_specific_sample(sample, research_kind)
-        if (
-            sample["checkpoint_count_after_success"] != 0
-            or sample["active_pin_count_after_success"] != 0
-        ):
-            raise AssertionError("long Research success leaked Checkpoints or Generation Pins")
-        generation = sample["generation_manifest_sha256"]
-        if not isinstance(generation, str) or len(generation) != 64:
-            raise AssertionError("long Research sample Generation identity is invalid")
-        if _positive_int(sample["chunk_session_count"], "sample Chunk size") > 64:
-            raise AssertionError("long Research sample Chunk exceeds 64 sessions")
-        _positive_int(sample["chunk_count"], "sample Chunk count")
-        for metric in required - {
-            "result_manifest_sha256",
-            "generation_manifest_sha256",
-            "chunk_session_count",
-            "chunk_count",
-            "result_payload_names",
-            "result_object_names",
-            "factor_summary_sha256",
-            "phase_timings_seconds",
-            "strategy_continuation_present",
-            "fresh_product_state_verified",
-            "fresh_product_state_counts",
-            "run_id",
-            "attempt_id",
-        }:
-            _number(sample, metric)
-    if (
-        sorted(int(sample.get("index", -1)) for sample in samples)
-        != list(range(LONG_RESEARCH_SAMPLE_COUNT))
-        or any(sample.get("phase") != phase for sample in samples)
-    ):
+    if not required.issubset(sample):
+        raise AssertionError(f"{phase} sample evidence is incomplete")
+    if sample.get("index") != index or sample.get("phase") != phase:
         raise AssertionError(f"long Research {phase} sample identities are invalid")
-    return samples
+    if sample["financial_parquet_scans"] != 0 or sample["raw_financial_batch_opens"] != 0:
+        raise AssertionError("market-only long Research opened Financial Data")
+    if sample["market_parquet_scans"] == 0:
+        raise AssertionError("market-only long Research did not scan Market Data")
+    if sample["process_exit_code"] != 0:
+        raise AssertionError("long Research child process did not exit successfully")
+    if sample["worker_exit_code"] != 0 or sample.get("research_kind") != research_kind:
+        raise AssertionError("long Research Worker or Research Kind evidence is invalid")
+    if (
+        not isinstance(sample["run_id"], str)
+        or not sample["run_id"]
+        or not isinstance(sample["attempt_id"], str)
+        or not sample["attempt_id"]
+    ):
+        raise AssertionError("long Research Run or Attempt identity is invalid")
+    if sample["fresh_product_state_verified"] is not True:
+        raise AssertionError("long Research sample reused Product State")
+    _empty_product_state(sample["fresh_product_state_counts"], f"{phase} sample")
+    manifest = sample["result_manifest_sha256"]
+    if not isinstance(manifest, str) or len(manifest) != 64:
+        raise AssertionError("long Research Result manifest identity is invalid")
+    factor_summary_sha256 = sample["factor_summary_sha256"]
+    if not isinstance(factor_summary_sha256, str) or len(factor_summary_sha256) != 64:
+        raise AssertionError("long Research Factor Summary identity is invalid")
+    _validate_kind_specific_sample(sample, research_kind)
+    if (
+        sample["checkpoint_count_after_success"] != 0
+        or sample["active_pin_count_after_success"] != 0
+    ):
+        raise AssertionError("long Research success leaked Checkpoints or Generation Pins")
+    generation = sample["generation_manifest_sha256"]
+    if not isinstance(generation, str) or len(generation) != 64:
+        raise AssertionError("long Research sample Generation identity is invalid")
+    if _positive_int(sample["chunk_session_count"], "sample Chunk size") > 64:
+        raise AssertionError("long Research sample Chunk exceeds 64 sessions")
+    _positive_int(sample["chunk_count"], "sample Chunk count")
+    for metric in required - {
+        "result_manifest_sha256",
+        "generation_manifest_sha256",
+        "chunk_session_count",
+        "chunk_count",
+        "result_payload_names",
+        "result_object_names",
+        "factor_summary_sha256",
+        "phase_timings_seconds",
+        "strategy_continuation_present",
+        "fresh_product_state_verified",
+        "fresh_product_state_counts",
+        "run_id",
+        "attempt_id",
+    }:
+        _number(sample, metric)
+    duration_ms = _number(sample, "duration_ms")
+    duration_limit_ms = (
+        LONG_RESEARCH_COLD_MAX_LIMIT_MS
+        if phase == "cold"
+        else LONG_RESEARCH_WARM_MAX_LIMIT_MS
+    )
+    if duration_ms > duration_limit_ms:
+        limit = "ten minutes" if phase == "cold" else "five minutes"
+        raise AssertionError(f"{research_kind} {phase} sample {index} exceeds {limit}")
+    if _number(sample, "peak_rss_bytes") > LONG_RESEARCH_PEAK_RSS_LIMIT_BYTES:
+        raise AssertionError(
+            f"{research_kind} {phase} sample {index} "
+            "exceeds the 1.5 GiB execution budget"
+        )
+    if (
+        _number(sample, "first_checkpoint_latency_ms")
+        > LONG_RESEARCH_FIRST_CHECKPOINT_LIMIT_MS
+    ):
+        raise AssertionError(
+            f"{research_kind} {phase} sample {index} "
+            "first Checkpoint exceeds 45 seconds"
+        )
+
+
+def long_research_sample_qualification(
+    sample: Mapping[str, object],
+    *,
+    research_kind: str,
+    phase: str,
+    index: int,
+) -> dict[str, str | None]:
+    return _qualification_outcome(
+        lambda: assert_long_research_sample(
+            sample,
+            research_kind=research_kind,
+            phase=phase,
+            index=index,
+        )
+    )
+
+
+def long_research_qualification_outcome(
+    evidence: Mapping[str, object],
+) -> dict[str, str | None]:
+    return _qualification_outcome(lambda: assert_long_research_qualification(evidence))
+
+
+def _qualification_outcome(check: Callable[[], object]) -> dict[str, str | None]:
+    try:
+        check()
+    except AssertionError as error:
+        return {"status": "failed", "failure_reason": str(error)}
+    return {"status": "passed", "failure_reason": None}
 
 
 def _validate_kind_specific_sample(
@@ -581,8 +636,12 @@ __all__ = (
     "EXACT_IO_BUDGET_METRICS",
     "assert_benchmark_budgets",
     "assert_long_research_qualification",
+    "assert_long_research_sample",
     "derive_repository_budgets",
     "is_research_execution_child_started_event",
+    "long_research_qualification_outcome",
+    "long_research_qualification_summary",
+    "long_research_sample_qualification",
     "measure_operation",
     "summarize_samples",
 )

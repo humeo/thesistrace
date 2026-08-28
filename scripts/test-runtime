@@ -45,7 +45,7 @@ validate_cleanup_target() {
 compose() {
   validate_test_project
   if [ "${command:-}" = image-smoke ] \
-    || { [ "${command:-}" = benchmark ] && [ "${use_image_overlay:-false}" = true ]; }; then
+    || { [ "${command:-}" = performance ] && [ "${use_image_overlay:-false}" = true ]; }; then
     COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
       THESISTRACE_TEST_BUCKET="$bucket_name" \
       THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
@@ -624,9 +624,9 @@ case "$command" in
     fi
     exit 0
     ;;
-  integration | integration-batch-cancel | codex-mcp | benchmark | e2e | image-smoke) ;;
+  integration | integration-batch-cancel | codex-mcp | performance | e2e | image-smoke) ;;
   *)
-    echo "usage: $0 {identity|cleanup|stop-postgres|restart-postgres|stop-rustfs|restart-rustfs|integration|integration-batch-cancel|codex-mcp|benchmark|e2e|image-smoke [--keep-environment]}" >&2
+    echo "usage: $0 {identity|cleanup|stop-postgres|restart-postgres|stop-rustfs|restart-rustfs|integration|integration-batch-cancel|codex-mcp|performance|e2e|image-smoke [--keep-environment]}" >&2
     exit 2
     ;;
 esac
@@ -722,25 +722,25 @@ case "$command" in
       tests/acceptance/test_core_research_batch_cancel.py::test_cancel_is_terminal_while_object_cleanup_retries_after_rustfs_restart \
       --junitxml="$dependency_restart_report"
     ;;
-  benchmark)
+  performance)
     use_image_overlay=true
-    run_phase benchmark-images build_runtime_images
-    run_phase benchmark-infrastructure compose up --detach --no-build \
+    run_phase performance-images build_runtime_images
+    run_phase performance-infrastructure compose up --detach --no-build \
       --wait --wait-timeout 300 postgres rustfs initialize
-    run_phase benchmark-initialization compose wait initialize
+    run_phase performance-initialization compose wait initialize
     qualification_dir="$evidence_dir/long-research"
     mkdir -p "$qualification_dir"
-    run_phase benchmark-prepare compose_run initialize \
+    run_phase performance-prepare compose_run initialize \
       python /qualification/long_research_qualification.py prepare \
       --output /smoke-evidence/long-research/preparation.json
     for research_kind in factor_evaluation strategy_backtest; do
       sample_index=0
       while [ "$sample_index" -lt 5 ]; do
-        run_phase "benchmark-$research_kind-cold-$sample_index-product-state-reset" \
+        run_phase "performance-$research_kind-cold-$sample_index-product-state-reset" \
           reset_product_state
-        run_phase "benchmark-$research_kind-cold-$sample_index-api" \
+        run_phase "performance-$research_kind-cold-$sample_index-api" \
           compose up --detach --no-build --wait --wait-timeout 120 api
-        run_phase "benchmark-$research_kind-cold-$sample_index" \
+        run_phase "performance-$research_kind-cold-$sample_index" \
           compose_run \
           -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
           research-worker python /qualification/long_research_qualification.py sample \
@@ -751,18 +751,18 @@ case "$command" in
         sample_index=$((sample_index + 1))
       done
     done
-    run_phase benchmark-warm-preload-product-state-reset reset_product_state
-    run_phase benchmark-warm-preload compose_run \
+    run_phase performance-warm-preload-product-state-reset reset_product_state
+    run_phase performance-warm-preload compose_run \
       research-worker python /qualification/long_research_qualification.py preload \
       --output /qualification-evidence/long-research/preload.json
     for research_kind in factor_evaluation strategy_backtest; do
       sample_index=0
       while [ "$sample_index" -lt 5 ]; do
-        run_phase "benchmark-$research_kind-warm-$sample_index-product-state-reset" \
+        run_phase "performance-$research_kind-warm-$sample_index-product-state-reset" \
           reset_product_state
-        run_phase "benchmark-$research_kind-warm-$sample_index-api" \
+        run_phase "performance-$research_kind-warm-$sample_index-api" \
           compose up --detach --no-build --wait --wait-timeout 120 api
-        run_phase "benchmark-$research_kind-warm-$sample_index" \
+        run_phase "performance-$research_kind-warm-$sample_index" \
           compose_run \
           -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
           research-worker python /qualification/long_research_qualification.py sample \
@@ -774,11 +774,11 @@ case "$command" in
       done
     done
     for research_kind in factor_evaluation strategy_backtest; do
-      run_phase "benchmark-$research_kind-cancellation-product-state-reset" \
+      run_phase "performance-$research_kind-cancellation-product-state-reset" \
         reset_product_state
-      run_phase "benchmark-$research_kind-cancellation-api" \
+      run_phase "performance-$research_kind-cancellation-api" \
         compose up --detach --no-build --wait --wait-timeout 120 api
-      run_phase "benchmark-$research_kind-cancellation" compose_run \
+      run_phase "performance-$research_kind-cancellation" compose_run \
         -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
         research-worker python /qualification/long_research_qualification.py cancel \
         --research-kind "$research_kind" \
@@ -787,7 +787,7 @@ case "$command" in
     done
     backend_image=$(runtime_image_name initialize)
     image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
-    run_phase benchmark-qualification compose_run initialize \
+    run_phase performance-qualification compose_run initialize \
       python /qualification/long_research_qualification.py assemble \
       --samples /smoke-evidence/long-research \
       --image-revision "$image_revision" \

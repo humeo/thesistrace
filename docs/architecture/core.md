@@ -466,11 +466,14 @@ The active local gates are documented in the
 3. `mise exec -- pnpm test:e2e` drives the complete browser loop against a fresh
    topology.
 4. `mise exec -- pnpm test:image-smoke` qualifies the built application images.
-5. `mise exec -- pnpm test:benchmark` qualifies both long Research Kinds in the
-   final image under the declared Worker envelope.
+5. `mise exec -- pnpm check:performance` independently qualifies both long
+   Research Kinds in the final image under the declared Worker envelope on a
+   controlled idle host. It is serial and fails immediately after persisting an
+   over-budget sample.
 6. `mise exec -- pnpm check` is the ordinary merge gate;
-   `mise exec -- pnpm check:release` adds image smoke and long-Research
-   qualification.
+   `mise exec -- pnpm check:release` adds image smoke. Long-Research performance
+   qualification remains explicit so unrelated host load cannot turn an
+   ordinary release check into a multi-hour ambiguous failure.
 
 Live Tushare credential verification is a separate explicit gate. Local checks
 are not Production readiness.

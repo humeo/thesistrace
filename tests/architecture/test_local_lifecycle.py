@@ -179,6 +179,21 @@ mcp_smoke_script = next(
     (argument for argument in arguments if argument.endswith("production_mcp_image_smoke.py")),
     None,
 )
+qualification_script = next(
+    (argument for argument in arguments if argument.endswith("long_research_qualification.py")),
+    None,
+)
+if (
+    "run" in arguments
+    and qualification_script is not None
+    and arguments[arguments.index(qualification_script) + 1] == "sample"
+):
+    failure_target = os.environ.get("FAKE_LONG_RESEARCH_SAMPLE_FAILURE")
+    research_kind = arguments[arguments.index("--research-kind") + 1]
+    phase = arguments[arguments.index("--phase") + 1]
+    index = arguments[arguments.index("--index") + 1]
+    if failure_target == f"{research_kind}:{phase}:{index}":
+        raise SystemExit(7)
 if "run" in arguments and mcp_smoke_script is not None:
     print('{"status":"passed"}')
     phase = arguments[arguments.index(mcp_smoke_script) + 1]
@@ -1072,18 +1087,43 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
         "pnpm test:integration",
         "pnpm test:e2e",
     ]
-    assert scripts["check:release"] == (
-        "pnpm check && pnpm test:image-smoke && pnpm test:benchmark"
-    )
+    assert scripts["check:release"] == "pnpm check && pnpm test:image-smoke"
     assert scripts["check:release"].split(" && ") == [
         "pnpm check",
         "pnpm test:image-smoke",
-        "pnpm test:benchmark",
     ]
+    assert scripts["check:performance"] == "./scripts/test-runtime performance"
+    assert "test:benchmark" not in scripts
     assert scripts["test:integration"] == "./scripts/test-runtime integration"
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
     assert scripts["test:image-smoke"] == "./scripts/test-runtime image-smoke"
     assert scripts["test:cleanup"] == "./scripts/test-runtime cleanup"
+
+
+def test_long_research_performance_stops_after_the_first_failed_sample(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_LONG_RESEARCH_SAMPLE_FAILURE"] = "factor_evaluation:warm:1"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "performance"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 7
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    commands = command_log.read_text()
+    assert "--research-kind factor_evaluation --phase warm --index 1" in commands
+    assert "--research-kind factor_evaluation --phase warm --index 2" not in commands
+    assert "--research-kind strategy_backtest --phase warm" not in commands
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
+    assert "phase=performance-factor_evaluation-warm-1 " in metadata
+    assert "status=7" in metadata
 
 
 def test_managed_compose_run_phases_never_read_from_the_parent_terminal() -> None:
@@ -1736,9 +1776,9 @@ def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None
         "mise exec -- pnpm test:integration",
         "mise exec -- pnpm test:e2e",
         "mise exec -- pnpm test:image-smoke",
-        "mise exec -- pnpm test:benchmark",
         "mise exec -- pnpm check",
         "mise exec -- pnpm check:release",
+        "mise exec -- pnpm check:performance",
     ):
         assert f"`{command}`" in architecture
     assert "`bun run " not in architecture
