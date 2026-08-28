@@ -1,6 +1,6 @@
 # 01 — Auth service and exact schema foundation
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Blocked by:** none
 
