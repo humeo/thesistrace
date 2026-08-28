@@ -81,9 +81,12 @@ services:
     logging: *bounded-logging
     environment:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
+      RESEND_API_KEY: ${RESEND_API_KEY:?RESEND_API_KEY is required}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:?RESEND_FROM_EMAIL is required}
       THESISTRACE_AUTH_DATABASE_URL: postgresql://auth_runtime:${THESISTRACE_AUTH_DATABASE_PASSWORD:?THESISTRACE_AUTH_DATABASE_PASSWORD is required}@postgres:5432/thesistrace
       THESISTRACE_ENVIRONMENT: ${THESISTRACE_ENVIRONMENT:?THESISTRACE_ENVIRONMENT is required}
       THESISTRACE_PUBLIC_ORIGIN: ${THESISTRACE_PUBLIC_ORIGIN:?THESISTRACE_PUBLIC_ORIGIN is required}
+      THESISTRACE_RESEND_API_URL: ${THESISTRACE_RESEND_API_URL:?THESISTRACE_RESEND_API_URL is required}
     depends_on:
       auth-initialize:
         condition: service_completed_successfully

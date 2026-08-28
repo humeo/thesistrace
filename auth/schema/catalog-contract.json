@@ -1,90 +1,998 @@
 {
   "columns": [
-    { "default": "gen_random_uuid()", "name": "id", "notNull": true, "position": 1, "relation": "account", "type": "uuid" },
-    { "default": null, "name": "issuer", "notNull": true, "position": 2, "relation": "account", "type": "text" },
-    { "default": null, "name": "accountId", "notNull": true, "position": 3, "relation": "account", "type": "text" },
-    { "default": null, "name": "providerId", "notNull": true, "position": 4, "relation": "account", "type": "text" },
-    { "default": null, "name": "userId", "notNull": true, "position": 5, "relation": "account", "type": "uuid" },
-    { "default": null, "name": "accessToken", "notNull": false, "position": 6, "relation": "account", "type": "text" },
-    { "default": null, "name": "refreshToken", "notNull": false, "position": 7, "relation": "account", "type": "text" },
-    { "default": null, "name": "idToken", "notNull": false, "position": 8, "relation": "account", "type": "text" },
-    { "default": null, "name": "accessTokenExpiresAt", "notNull": false, "position": 9, "relation": "account", "type": "timestamp with time zone" },
-    { "default": null, "name": "refreshTokenExpiresAt", "notNull": false, "position": 10, "relation": "account", "type": "timestamp with time zone" },
-    { "default": null, "name": "scope", "notNull": false, "position": 11, "relation": "account", "type": "text" },
-    { "default": null, "name": "password", "notNull": false, "position": 12, "relation": "account", "type": "text" },
-    { "default": "CURRENT_TIMESTAMP", "name": "createdAt", "notNull": true, "position": 13, "relation": "account", "type": "timestamp with time zone" },
-    { "default": null, "name": "updatedAt", "notNull": true, "position": 14, "relation": "account", "type": "timestamp with time zone" },
-    { "default": "gen_random_uuid()", "name": "id", "notNull": true, "position": 1, "relation": "rateLimit", "type": "uuid" },
-    { "default": null, "name": "key", "notNull": true, "position": 2, "relation": "rateLimit", "type": "text" },
-    { "default": null, "name": "count", "notNull": true, "position": 3, "relation": "rateLimit", "type": "integer" },
-    { "default": null, "name": "lastRequest", "notNull": true, "position": 4, "relation": "rateLimit", "type": "bigint" },
-    { "default": null, "name": "singleton", "notNull": true, "position": 1, "relation": "schema_contract", "type": "boolean" },
-    { "default": null, "name": "schema_fingerprint", "notNull": true, "position": 2, "relation": "schema_contract", "type": "text" },
-    { "default": "gen_random_uuid()", "name": "id", "notNull": true, "position": 1, "relation": "session", "type": "uuid" },
-    { "default": null, "name": "expiresAt", "notNull": true, "position": 2, "relation": "session", "type": "timestamp with time zone" },
-    { "default": null, "name": "token", "notNull": true, "position": 3, "relation": "session", "type": "text" },
-    { "default": "CURRENT_TIMESTAMP", "name": "createdAt", "notNull": true, "position": 4, "relation": "session", "type": "timestamp with time zone" },
-    { "default": null, "name": "updatedAt", "notNull": true, "position": 5, "relation": "session", "type": "timestamp with time zone" },
-    { "default": null, "name": "ipAddress", "notNull": false, "position": 6, "relation": "session", "type": "text" },
-    { "default": null, "name": "userAgent", "notNull": false, "position": 7, "relation": "session", "type": "text" },
-    { "default": null, "name": "userId", "notNull": true, "position": 8, "relation": "session", "type": "uuid" },
-    { "default": "gen_random_uuid()", "name": "id", "notNull": true, "position": 1, "relation": "user", "type": "uuid" },
-    { "default": null, "name": "name", "notNull": true, "position": 2, "relation": "user", "type": "text" },
-    { "default": null, "name": "email", "notNull": true, "position": 3, "relation": "user", "type": "text" },
-    { "default": null, "name": "emailVerified", "notNull": true, "position": 4, "relation": "user", "type": "boolean" },
-    { "default": null, "name": "image", "notNull": false, "position": 5, "relation": "user", "type": "text" },
-    { "default": "CURRENT_TIMESTAMP", "name": "createdAt", "notNull": true, "position": 6, "relation": "user", "type": "timestamp with time zone" },
-    { "default": "CURRENT_TIMESTAMP", "name": "updatedAt", "notNull": true, "position": 7, "relation": "user", "type": "timestamp with time zone" },
-    { "default": null, "name": "active", "notNull": true, "position": 8, "relation": "user", "type": "boolean" },
-    { "default": "gen_random_uuid()", "name": "id", "notNull": true, "position": 1, "relation": "verification", "type": "uuid" },
-    { "default": null, "name": "identifier", "notNull": true, "position": 2, "relation": "verification", "type": "text" },
-    { "default": null, "name": "value", "notNull": true, "position": 3, "relation": "verification", "type": "text" },
-    { "default": null, "name": "expiresAt", "notNull": true, "position": 4, "relation": "verification", "type": "timestamp with time zone" },
-    { "default": "CURRENT_TIMESTAMP", "name": "createdAt", "notNull": true, "position": 5, "relation": "verification", "type": "timestamp with time zone" },
-    { "default": "CURRENT_TIMESTAMP", "name": "updatedAt", "notNull": true, "position": 6, "relation": "verification", "type": "timestamp with time zone" }
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "account",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "issuer",
+      "notNull": true,
+      "position": 2,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "accountId",
+      "notNull": true,
+      "position": 3,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "providerId",
+      "notNull": true,
+      "position": 4,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "userId",
+      "notNull": true,
+      "position": 5,
+      "relation": "account",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "accessToken",
+      "notNull": false,
+      "position": 6,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "refreshToken",
+      "notNull": false,
+      "position": 7,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "idToken",
+      "notNull": false,
+      "position": 8,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "accessTokenExpiresAt",
+      "notNull": false,
+      "position": 9,
+      "relation": "account",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "refreshTokenExpiresAt",
+      "notNull": false,
+      "position": 10,
+      "relation": "account",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "scope",
+      "notNull": false,
+      "position": 11,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "password",
+      "notNull": false,
+      "position": 12,
+      "relation": "account",
+      "type": "text"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "createdAt",
+      "notNull": true,
+      "position": 13,
+      "relation": "account",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "updatedAt",
+      "notNull": true,
+      "position": 14,
+      "relation": "account",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "singleton",
+      "notNull": true,
+      "position": 1,
+      "relation": "auth_secret_contract",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "secret_fingerprint",
+      "notNull": true,
+      "position": 2,
+      "relation": "auth_secret_contract",
+      "type": "text"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "password_reset",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "user_id",
+      "notNull": true,
+      "position": 2,
+      "relation": "password_reset",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "token_hash",
+      "notNull": true,
+      "position": 3,
+      "relation": "password_reset",
+      "type": "bytea"
+    },
+    {
+      "default": null,
+      "name": "status",
+      "notNull": true,
+      "position": 4,
+      "relation": "password_reset",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "expires_at",
+      "notNull": true,
+      "position": 5,
+      "relation": "password_reset",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "created_at",
+      "notNull": true,
+      "position": 6,
+      "relation": "password_reset",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "delivered_at",
+      "notNull": false,
+      "position": 7,
+      "relation": "password_reset",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "terminal_at",
+      "notNull": false,
+      "position": 8,
+      "relation": "password_reset",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "rateLimit",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "key",
+      "notNull": true,
+      "position": 2,
+      "relation": "rateLimit",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "count",
+      "notNull": true,
+      "position": 3,
+      "relation": "rateLimit",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "name": "lastRequest",
+      "notNull": true,
+      "position": 4,
+      "relation": "rateLimit",
+      "type": "bigint"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "researcher_invitation",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "email",
+      "notNull": true,
+      "position": 2,
+      "relation": "researcher_invitation",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "token_hash",
+      "notNull": true,
+      "position": 3,
+      "relation": "researcher_invitation",
+      "type": "bytea"
+    },
+    {
+      "default": null,
+      "name": "status",
+      "notNull": true,
+      "position": 4,
+      "relation": "researcher_invitation",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "expires_at",
+      "notNull": true,
+      "position": 5,
+      "relation": "researcher_invitation",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "created_at",
+      "notNull": true,
+      "position": 6,
+      "relation": "researcher_invitation",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "delivered_at",
+      "notNull": false,
+      "position": 7,
+      "relation": "researcher_invitation",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "terminal_at",
+      "notNull": false,
+      "position": 8,
+      "relation": "researcher_invitation",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "user_id",
+      "notNull": false,
+      "position": 9,
+      "relation": "researcher_invitation",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "singleton",
+      "notNull": true,
+      "position": 1,
+      "relation": "schema_contract",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "schema_fingerprint",
+      "notNull": true,
+      "position": 2,
+      "relation": "schema_contract",
+      "type": "text"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "security_audit",
+      "type": "uuid"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "occurred_at",
+      "notNull": true,
+      "position": 2,
+      "relation": "security_audit",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "event",
+      "notNull": true,
+      "position": 3,
+      "relation": "security_audit",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "outcome",
+      "notNull": true,
+      "position": 4,
+      "relation": "security_audit",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "researcher_id",
+      "notNull": false,
+      "position": 5,
+      "relation": "security_audit",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "unknown_email_hmac",
+      "notNull": false,
+      "position": 6,
+      "relation": "security_audit",
+      "type": "bytea"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "session",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "expiresAt",
+      "notNull": true,
+      "position": 2,
+      "relation": "session",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "token",
+      "notNull": true,
+      "position": 3,
+      "relation": "session",
+      "type": "text"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "createdAt",
+      "notNull": true,
+      "position": 4,
+      "relation": "session",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "updatedAt",
+      "notNull": true,
+      "position": 5,
+      "relation": "session",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "ipAddress",
+      "notNull": false,
+      "position": 6,
+      "relation": "session",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "userAgent",
+      "notNull": false,
+      "position": 7,
+      "relation": "session",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "userId",
+      "notNull": true,
+      "position": 8,
+      "relation": "session",
+      "type": "uuid"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "user",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "name",
+      "notNull": true,
+      "position": 2,
+      "relation": "user",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "email",
+      "notNull": true,
+      "position": 3,
+      "relation": "user",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "emailVerified",
+      "notNull": true,
+      "position": 4,
+      "relation": "user",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "image",
+      "notNull": false,
+      "position": 5,
+      "relation": "user",
+      "type": "text"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "createdAt",
+      "notNull": true,
+      "position": 6,
+      "relation": "user",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "updatedAt",
+      "notNull": true,
+      "position": 7,
+      "relation": "user",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "active",
+      "notNull": true,
+      "position": 8,
+      "relation": "user",
+      "type": "boolean"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "verification",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "identifier",
+      "notNull": true,
+      "position": 2,
+      "relation": "verification",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "value",
+      "notNull": true,
+      "position": 3,
+      "relation": "verification",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "expiresAt",
+      "notNull": true,
+      "position": 4,
+      "relation": "verification",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "createdAt",
+      "notNull": true,
+      "position": 5,
+      "relation": "verification",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "updatedAt",
+      "notNull": true,
+      "position": 6,
+      "relation": "verification",
+      "type": "timestamp with time zone"
+    }
   ],
   "constraints": [
-    { "definition": "PRIMARY KEY (id)", "name": "account_pkey", "relation": "account", "type": "p" },
-    { "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE", "name": "account_userid_fkey", "relation": "account", "type": "f" },
-    { "definition": "UNIQUE (key)", "name": "ratelimit_key_key", "relation": "rateLimit", "type": "u" },
-    { "definition": "PRIMARY KEY (id)", "name": "ratelimit_pkey", "relation": "rateLimit", "type": "p" },
-    { "definition": "PRIMARY KEY (singleton)", "name": "schema_contract_pkey", "relation": "schema_contract", "type": "p" },
-    { "definition": "CHECK ((schema_fingerprint ~ '^[0-9a-f]{64}$'::text))", "name": "schema_contract_schema_fingerprint_check", "relation": "schema_contract", "type": "c" },
-    { "definition": "CHECK (singleton)", "name": "schema_contract_singleton_check", "relation": "schema_contract", "type": "c" },
-    { "definition": "PRIMARY KEY (id)", "name": "session_pkey", "relation": "session", "type": "p" },
-    { "definition": "UNIQUE (token)", "name": "session_token_key", "relation": "session", "type": "u" },
-    { "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE", "name": "session_userid_fkey", "relation": "session", "type": "f" },
-    { "definition": "CHECK (((email = lower(btrim(email))) AND (char_length(email) <= 254)))", "name": "user_email_canonical_check", "relation": "user", "type": "c" },
-    { "definition": "UNIQUE (email)", "name": "user_email_key", "relation": "user", "type": "u" },
-    { "definition": "PRIMARY KEY (id)", "name": "user_pkey", "relation": "user", "type": "p" },
-    { "definition": "PRIMARY KEY (id)", "name": "verification_pkey", "relation": "verification", "type": "p" }
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "account_pkey",
+      "relation": "account",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "account_userid_fkey",
+      "relation": "account",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (singleton)",
+      "name": "auth_secret_contract_pkey",
+      "relation": "auth_secret_contract",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((secret_fingerprint ~ '^[0-9a-f]{64}$'::text))",
+      "name": "auth_secret_contract_secret_fingerprint_check",
+      "relation": "auth_secret_contract",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK (singleton)",
+      "name": "auth_secret_contract_singleton_check",
+      "relation": "auth_secret_contract",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((((status = 'delivery_pending'::text) AND (delivered_at IS NULL) AND (terminal_at IS NULL)) OR ((status = 'delivered'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NULL)) OR ((status = ANY (ARRAY['delivery_failed'::text, 'revoked'::text])) AND (terminal_at IS NOT NULL)) OR ((status = 'consumed'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NOT NULL))))",
+      "name": "password_reset_lifecycle_check",
+      "relation": "password_reset",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "password_reset_pkey",
+      "relation": "password_reset",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((status = ANY (ARRAY['delivery_pending'::text, 'delivered'::text, 'delivery_failed'::text, 'consumed'::text, 'revoked'::text])))",
+      "name": "password_reset_status_check",
+      "relation": "password_reset",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((octet_length(token_hash) = 32))",
+      "name": "password_reset_token_hash_check",
+      "relation": "password_reset",
+      "type": "c"
+    },
+    {
+      "definition": "UNIQUE (token_hash)",
+      "name": "password_reset_token_hash_key",
+      "relation": "password_reset",
+      "type": "u"
+    },
+    {
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "password_reset_user_id_fkey",
+      "relation": "password_reset",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (key)",
+      "name": "ratelimit_key_key",
+      "relation": "rateLimit",
+      "type": "u"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "ratelimit_pkey",
+      "relation": "rateLimit",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK (((email = lower(btrim(email))) AND (char_length(email) <= 254)))",
+      "name": "researcher_invitation_email_canonical_check",
+      "relation": "researcher_invitation",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((((status = 'delivery_pending'::text) AND (delivered_at IS NULL) AND (terminal_at IS NULL) AND (user_id IS NULL)) OR ((status = 'delivered'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NULL) AND (user_id IS NULL)) OR ((status = ANY (ARRAY['delivery_failed'::text, 'revoked'::text])) AND (terminal_at IS NOT NULL) AND (user_id IS NULL)) OR ((status = 'consumed'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NOT NULL) AND (user_id IS NOT NULL))))",
+      "name": "researcher_invitation_lifecycle_check",
+      "relation": "researcher_invitation",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "researcher_invitation_pkey",
+      "relation": "researcher_invitation",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((status = ANY (ARRAY['delivery_pending'::text, 'delivered'::text, 'delivery_failed'::text, 'consumed'::text, 'revoked'::text])))",
+      "name": "researcher_invitation_status_check",
+      "relation": "researcher_invitation",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((octet_length(token_hash) = 32))",
+      "name": "researcher_invitation_token_hash_check",
+      "relation": "researcher_invitation",
+      "type": "c"
+    },
+    {
+      "definition": "UNIQUE (token_hash)",
+      "name": "researcher_invitation_token_hash_key",
+      "relation": "researcher_invitation",
+      "type": "u"
+    },
+    {
+      "definition": "FOREIGN KEY (user_id) REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "researcher_invitation_user_id_fkey",
+      "relation": "researcher_invitation",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (singleton)",
+      "name": "schema_contract_pkey",
+      "relation": "schema_contract",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((schema_fingerprint ~ '^[0-9a-f]{64}$'::text))",
+      "name": "schema_contract_schema_fingerprint_check",
+      "relation": "schema_contract",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK (singleton)",
+      "name": "schema_contract_singleton_check",
+      "relation": "schema_contract",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((event = ANY (ARRAY['invitation_issued'::text, 'invitation_revoked'::text, 'invitation_accepted'::text, 'sign_in_succeeded'::text, 'sign_in_failed'::text, 'password_reset_requested'::text, 'password_reset_succeeded'::text, 'password_reset_failed'::text, 'password_changed'::text, 'sessions_revoked'::text, 'researcher_deactivated'::text, 'researcher_reactivated'::text, 'display_label_corrected'::text])))",
+      "name": "security_audit_event_check",
+      "relation": "security_audit",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((num_nonnulls(researcher_id, unknown_email_hmac) = 1))",
+      "name": "security_audit_identity_check",
+      "relation": "security_audit",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((outcome = ANY (ARRAY['succeeded'::text, 'failed'::text, 'rejected'::text, 'no_change'::text])))",
+      "name": "security_audit_outcome_check",
+      "relation": "security_audit",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "security_audit_pkey",
+      "relation": "security_audit",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (researcher_id) REFERENCES auth.\"user\"(id) ON DELETE RESTRICT",
+      "name": "security_audit_researcher_id_fkey",
+      "relation": "security_audit",
+      "type": "f"
+    },
+    {
+      "definition": "CHECK (((unknown_email_hmac IS NULL) OR (octet_length(unknown_email_hmac) = 32)))",
+      "name": "security_audit_unknown_email_hmac_check",
+      "relation": "security_audit",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "session_pkey",
+      "relation": "session",
+      "type": "p"
+    },
+    {
+      "definition": "UNIQUE (token)",
+      "name": "session_token_key",
+      "relation": "session",
+      "type": "u"
+    },
+    {
+      "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "session_userid_fkey",
+      "relation": "session",
+      "type": "f"
+    },
+    {
+      "definition": "CHECK (((email = lower(btrim(email))) AND (char_length(email) <= 254)))",
+      "name": "user_email_canonical_check",
+      "relation": "user",
+      "type": "c"
+    },
+    {
+      "definition": "UNIQUE (email)",
+      "name": "user_email_key",
+      "relation": "user",
+      "type": "u"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "user_pkey",
+      "relation": "user",
+      "type": "p"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "verification_pkey",
+      "relation": "verification",
+      "type": "p"
+    }
   ],
   "indexes": [
-    { "definition": "CREATE UNIQUE INDEX \"account_issuer_accountId_uidx\" ON auth.account USING btree (issuer, \"accountId\")", "name": "account_issuer_accountId_uidx", "relation": "account" },
-    { "definition": "CREATE UNIQUE INDEX account_pkey ON auth.account USING btree (id)", "name": "account_pkey", "relation": "account" },
-    { "definition": "CREATE INDEX \"account_userId_idx\" ON auth.account USING btree (\"userId\")", "name": "account_userId_idx", "relation": "account" },
-    { "definition": "CREATE UNIQUE INDEX ratelimit_key_key ON auth.\"rateLimit\" USING btree (key)", "name": "ratelimit_key_key", "relation": "rateLimit" },
-    { "definition": "CREATE UNIQUE INDEX ratelimit_pkey ON auth.\"rateLimit\" USING btree (id)", "name": "ratelimit_pkey", "relation": "rateLimit" },
-    { "definition": "CREATE UNIQUE INDEX schema_contract_pkey ON auth.schema_contract USING btree (singleton)", "name": "schema_contract_pkey", "relation": "schema_contract" },
-    { "definition": "CREATE UNIQUE INDEX session_pkey ON auth.session USING btree (id)", "name": "session_pkey", "relation": "session" },
-    { "definition": "CREATE UNIQUE INDEX session_token_key ON auth.session USING btree (token)", "name": "session_token_key", "relation": "session" },
-    { "definition": "CREATE INDEX \"session_userId_idx\" ON auth.session USING btree (\"userId\")", "name": "session_userId_idx", "relation": "session" },
-    { "definition": "CREATE UNIQUE INDEX user_email_key ON auth.\"user\" USING btree (email)", "name": "user_email_key", "relation": "user" },
-    { "definition": "CREATE UNIQUE INDEX user_pkey ON auth.\"user\" USING btree (id)", "name": "user_pkey", "relation": "user" },
-    { "definition": "CREATE INDEX verification_identifier_idx ON auth.verification USING btree (identifier)", "name": "verification_identifier_idx", "relation": "verification" },
-    { "definition": "CREATE UNIQUE INDEX verification_pkey ON auth.verification USING btree (id)", "name": "verification_pkey", "relation": "verification" }
+    {
+      "definition": "CREATE UNIQUE INDEX \"account_issuer_accountId_uidx\" ON auth.account USING btree (issuer, \"accountId\")",
+      "name": "account_issuer_accountId_uidx",
+      "relation": "account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX account_pkey ON auth.account USING btree (id)",
+      "name": "account_pkey",
+      "relation": "account"
+    },
+    {
+      "definition": "CREATE INDEX \"account_userId_idx\" ON auth.account USING btree (\"userId\")",
+      "name": "account_userId_idx",
+      "relation": "account"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX auth_secret_contract_pkey ON auth.auth_secret_contract USING btree (singleton)",
+      "name": "auth_secret_contract_pkey",
+      "relation": "auth_secret_contract"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX password_reset_effective_user_id_uidx ON auth.password_reset USING btree (user_id) WHERE (status = ANY (ARRAY['delivery_pending'::text, 'delivered'::text]))",
+      "name": "password_reset_effective_user_id_uidx",
+      "relation": "password_reset"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX password_reset_pkey ON auth.password_reset USING btree (id)",
+      "name": "password_reset_pkey",
+      "relation": "password_reset"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX password_reset_token_hash_key ON auth.password_reset USING btree (token_hash)",
+      "name": "password_reset_token_hash_key",
+      "relation": "password_reset"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX ratelimit_key_key ON auth.\"rateLimit\" USING btree (key)",
+      "name": "ratelimit_key_key",
+      "relation": "rateLimit"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX ratelimit_pkey ON auth.\"rateLimit\" USING btree (id)",
+      "name": "ratelimit_pkey",
+      "relation": "rateLimit"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX researcher_invitation_effective_email_uidx ON auth.researcher_invitation USING btree (email) WHERE (status = ANY (ARRAY['delivery_pending'::text, 'delivered'::text]))",
+      "name": "researcher_invitation_effective_email_uidx",
+      "relation": "researcher_invitation"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX researcher_invitation_pkey ON auth.researcher_invitation USING btree (id)",
+      "name": "researcher_invitation_pkey",
+      "relation": "researcher_invitation"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX researcher_invitation_token_hash_key ON auth.researcher_invitation USING btree (token_hash)",
+      "name": "researcher_invitation_token_hash_key",
+      "relation": "researcher_invitation"
+    },
+    {
+      "definition": "CREATE INDEX researcher_invitation_user_id_idx ON auth.researcher_invitation USING btree (user_id)",
+      "name": "researcher_invitation_user_id_idx",
+      "relation": "researcher_invitation"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX schema_contract_pkey ON auth.schema_contract USING btree (singleton)",
+      "name": "schema_contract_pkey",
+      "relation": "schema_contract"
+    },
+    {
+      "definition": "CREATE INDEX security_audit_occurred_at_idx ON auth.security_audit USING btree (occurred_at)",
+      "name": "security_audit_occurred_at_idx",
+      "relation": "security_audit"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX security_audit_pkey ON auth.security_audit USING btree (id)",
+      "name": "security_audit_pkey",
+      "relation": "security_audit"
+    },
+    {
+      "definition": "CREATE INDEX security_audit_researcher_id_idx ON auth.security_audit USING btree (researcher_id)",
+      "name": "security_audit_researcher_id_idx",
+      "relation": "security_audit"
+    },
+    {
+      "definition": "CREATE INDEX security_audit_unknown_email_hmac_idx ON auth.security_audit USING btree (unknown_email_hmac)",
+      "name": "security_audit_unknown_email_hmac_idx",
+      "relation": "security_audit"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX session_pkey ON auth.session USING btree (id)",
+      "name": "session_pkey",
+      "relation": "session"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX session_token_key ON auth.session USING btree (token)",
+      "name": "session_token_key",
+      "relation": "session"
+    },
+    {
+      "definition": "CREATE INDEX \"session_userId_idx\" ON auth.session USING btree (\"userId\")",
+      "name": "session_userId_idx",
+      "relation": "session"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX user_email_key ON auth.\"user\" USING btree (email)",
+      "name": "user_email_key",
+      "relation": "user"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX user_pkey ON auth.\"user\" USING btree (id)",
+      "name": "user_pkey",
+      "relation": "user"
+    },
+    {
+      "definition": "CREATE INDEX verification_identifier_idx ON auth.verification USING btree (identifier)",
+      "name": "verification_identifier_idx",
+      "relation": "verification"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX verification_pkey ON auth.verification USING btree (id)",
+      "name": "verification_pkey",
+      "relation": "verification"
+    }
   ],
   "policies": [],
   "relations": [
-    { "forceRowSecurity": false, "kind": "r", "name": "account", "owner": "thesistrace_owner", "persistence": "p", "rowSecurity": false },
-    { "forceRowSecurity": false, "kind": "r", "name": "rateLimit", "owner": "thesistrace_owner", "persistence": "p", "rowSecurity": false },
-    { "forceRowSecurity": false, "kind": "r", "name": "schema_contract", "owner": "thesistrace_owner", "persistence": "p", "rowSecurity": false },
-    { "forceRowSecurity": false, "kind": "r", "name": "session", "owner": "thesistrace_owner", "persistence": "p", "rowSecurity": false },
-    { "forceRowSecurity": false, "kind": "r", "name": "user", "owner": "thesistrace_owner", "persistence": "p", "rowSecurity": false },
-    { "forceRowSecurity": false, "kind": "r", "name": "verification", "owner": "thesistrace_owner", "persistence": "p", "rowSecurity": false }
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "account",
+      "rowSecurity": false,
+      "owner": "thesistrace_owner",
+      "persistence": "p"
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "auth_secret_contract",
+      "rowSecurity": false,
+      "owner": "thesistrace_owner",
+      "persistence": "p"
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "password_reset",
+      "rowSecurity": false,
+      "owner": "thesistrace_owner",
+      "persistence": "p"
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "rateLimit",
+      "rowSecurity": false,
+      "owner": "thesistrace_owner",
+      "persistence": "p"
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "researcher_invitation",
+      "rowSecurity": false,
+      "owner": "thesistrace_owner",
+      "persistence": "p"
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "schema_contract",
+      "rowSecurity": false,
+      "owner": "thesistrace_owner",
+      "persistence": "p"
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "security_audit",
+      "rowSecurity": false,
+      "owner": "thesistrace_owner",
+      "persistence": "p"
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "session",
+      "rowSecurity": false,
+      "owner": "thesistrace_owner",
+      "persistence": "p"
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "user",
+      "rowSecurity": false,
+      "owner": "thesistrace_owner",
+      "persistence": "p"
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "verification",
+      "rowSecurity": false,
+      "owner": "thesistrace_owner",
+      "persistence": "p"
+    }
   ],
-  "routines": [],
-  "schema": { "owner": "thesistrace_owner" },
-  "triggers": [],
-  "types": []
+  "routines": [
+    {
+      "configuration": [
+        "search_path=pg_catalog"
+      ],
+      "identityArguments": "",
+      "kind": "f",
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "enforce_active_session_owner",
+      "owner": "thesistrace_owner",
+      "parallel": "u",
+      "result": "trigger",
+      "securityDefiner": false,
+      "source": "\nBEGIN\n    PERFORM 1\n    FROM auth.\"user\"\n    WHERE id = NEW.\"userId\" AND active = TRUE\n    FOR UPDATE;\n    IF NOT FOUND THEN\n        RETURN NULL;\n    END IF;\n    RETURN NEW;\nEND;\n",
+      "strict": false,
+      "volatility": "v"
+    }
+  ],
+  "triggers": [
+    {
+      "definition": "CREATE TRIGGER session_active_researcher_trigger BEFORE INSERT ON auth.session FOR EACH ROW EXECUTE FUNCTION auth.enforce_active_session_owner()",
+      "name": "session_active_researcher_trigger",
+      "relation": "session"
+    }
+  ],
+  "types": [],
+  "schema": {
+    "owner": "thesistrace_owner"
+  }
 }

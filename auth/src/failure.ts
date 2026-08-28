@@ -46,6 +46,7 @@ export function diagnoseAuthFailure(error: unknown): AuthFailureDiagnostic {
   }
   if (
     sqlstate?.startsWith("08") ||
+    sqlstate === "57P01" ||
     connectionErrorCodes.has(code ?? "") ||
     pgConnectionFailureMessages.has(errorMessage(error) ?? "")
   ) {

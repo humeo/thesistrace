@@ -4,10 +4,13 @@ import { readAuthInitializerSettings, readAuthSettings } from "./config.js";
 
 const baseEnvironment = {
   BETTER_AUTH_SECRET: "0123456789abcdef0123456789abcdef",
+  RESEND_API_KEY: "test-resend-key",
+  RESEND_FROM_EMAIL: "ThesisTrace <noreply@thesistrace.test>",
   THESISTRACE_AUTH_DATABASE_URL:
     "postgresql://auth_runtime:auth-password@postgres:5432/thesistrace",
   THESISTRACE_ENVIRONMENT: "test",
   THESISTRACE_PUBLIC_ORIGIN: "http://127.0.0.1:5173",
+  THESISTRACE_RESEND_API_URL: "http://127.0.0.1:8300",
 };
 
 const productionEnvironment = {
@@ -16,6 +19,7 @@ const productionEnvironment = {
     "a4f781c2d6e9035b8a1f74c092e5bd3680c4f719a2e65b03d8f14c7a9e256bd0",
   THESISTRACE_ENVIRONMENT: "production",
   THESISTRACE_PUBLIC_ORIGIN: "https://thesistrace.test",
+  THESISTRACE_RESEND_API_URL: "https://api.resend.com",
 };
 
 describe("readAuthSettings", () => {
@@ -23,8 +27,63 @@ describe("readAuthSettings", () => {
     expect(readAuthSettings(baseEnvironment)).toMatchObject({
       environment: "test",
       publicOrigin: "http://127.0.0.1:5173",
+      resendApiKey: "test-resend-key",
+      resendApiUrl: "http://127.0.0.1:8300",
+      resendFromEmail: "ThesisTrace <noreply@thesistrace.test>",
       secureCookies: false,
     });
+  });
+
+  it("accepts only the canonical internal Resend fake origin for Compose Test", () => {
+    expect(
+      readAuthSettings({
+        ...baseEnvironment,
+        THESISTRACE_RESEND_API_URL: "http://resend-fake:8300",
+      }).resendApiUrl,
+    ).toBe("http://resend-fake:8300");
+  });
+
+  it.each(["RESEND_API_KEY", "RESEND_FROM_EMAIL", "THESISTRACE_RESEND_API_URL"])(
+    "requires the %s Resend setting",
+    (name) => {
+      expect(() => readAuthSettings({ ...baseEnvironment, [name]: "" })).toThrow(name);
+    },
+  );
+
+  it.each([
+    "https://api.resend.com/",
+    "https://resend.example.test",
+    "http://127.0.0.1:8300",
+  ])("rejects a non-canonical Production Resend URL: %s", (resendApiUrl) => {
+    expect(() =>
+      readAuthSettings({
+        ...productionEnvironment,
+        THESISTRACE_RESEND_API_URL: resendApiUrl,
+      }),
+    ).toThrow(/THESISTRACE_RESEND_API_URL/);
+  });
+
+  it.each([
+    "https://api.resend.com",
+    "http://example.test",
+    "http://0.0.0.0:8300",
+  ])("rejects a non-loopback Test Resend URL: %s", (resendApiUrl) => {
+    expect(() =>
+      readAuthSettings({
+        ...baseEnvironment,
+        THESISTRACE_RESEND_API_URL: resendApiUrl,
+      }),
+    ).toThrow(/THESISTRACE_RESEND_API_URL/);
+  });
+
+  it.each([
+    "not-an-email",
+    "ThesisTrace <not-an-email>",
+    "ThesisTrace <noreply@thesistrace.test>\r\nBcc: attacker@example.test",
+  ])("rejects an invalid Resend From value", (fromEmail) => {
+    expect(() =>
+      readAuthSettings({ ...baseEnvironment, RESEND_FROM_EMAIL: fromEmail }),
+    ).toThrow(/RESEND_FROM_EMAIL/);
   });
 
   it.each([

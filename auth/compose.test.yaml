@@ -50,9 +50,12 @@ services:
     logging: *bounded-logging
     environment:
       BETTER_AUTH_SECRET: ${THESISTRACE_AUTH_TEST_SECRET:?THESISTRACE_AUTH_TEST_SECRET is required}
+      RESEND_API_KEY: image-smoke-resend-key
+      RESEND_FROM_EMAIL: ThesisTrace <noreply@thesistrace.test>
       THESISTRACE_AUTH_DATABASE_URL: postgresql://auth_runtime:auth-test-password@postgres:5432/thesistrace
       THESISTRACE_ENVIRONMENT: production
       THESISTRACE_PUBLIC_ORIGIN: https://thesistrace.test
+      THESISTRACE_RESEND_API_URL: https://api.resend.com
     depends_on:
       auth-initialize:
         condition: service_completed_successfully

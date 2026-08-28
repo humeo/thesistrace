@@ -10,6 +10,31 @@ x-test-environment: &test-environment
   THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY: /var/lib/thesistrace/.batch-attempts
 
 services:
+  resend-fake:
+    image: node:24.14.0-bookworm-slim
+    command: ["node", "/test-fixtures/resend-fake.mjs"]
+    environment:
+      THESISTRACE_RESEND_FAKE_HOST: 0.0.0.0
+      THESISTRACE_RESEND_FAKE_MODE: success
+      THESISTRACE_RESEND_FAKE_PORT: "8300"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - --input-type=module
+        - --eval
+        - fetch('http://127.0.0.1:8300/health/live').then((response) => { if (!response.ok) process.exit(1) })
+      interval: 1s
+      timeout: 5s
+      retries: 60
+    volumes:
+      - ../../auth/test-fixtures:/test-fixtures:ro
+
+  auth:
+    depends_on:
+      resend-fake:
+        condition: service_healthy
+
   postgres:
     command:
       - postgres

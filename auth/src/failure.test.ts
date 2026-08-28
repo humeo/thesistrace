@@ -49,5 +49,10 @@ describe("sanitized Auth diagnostics", () => {
     expect(diagnoseAuthFailure(new Error("Query read timeout"))).toEqual({
       reason: "DATABASE_OPERATION_FAILED",
     });
+    expect(
+      diagnoseAuthFailure(
+        Object.assign(new Error("terminating connection"), { code: "57P01" }),
+      ),
+    ).toEqual({ reason: "DATABASE_UNAVAILABLE", sqlstate: "57P01" });
   });
 });

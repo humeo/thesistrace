@@ -188,6 +188,26 @@ describe.sequential("Auth physical schema", () => {
     );
   });
 
+  it("rejects unexpected or grantable Auth trigger-function execution", async () => {
+    await initializeAuthSchema(owner);
+    await owner.query(
+      "GRANT EXECUTE ON FUNCTION auth.enforce_active_session_owner() TO pg_monitor",
+    );
+    await expect(initializeAuthSchema(owner)).rejects.toBeInstanceOf(
+      AuthSchemaContractError,
+    );
+
+    await owner.query(
+      "REVOKE EXECUTE ON FUNCTION auth.enforce_active_session_owner() FROM pg_monitor",
+    );
+    await owner.query(
+      "GRANT EXECUTE ON FUNCTION auth.enforce_active_session_owner() TO auth_runtime WITH GRANT OPTION",
+    );
+    await expect(initializeAuthSchema(owner)).rejects.toBeInstanceOf(
+      AuthSchemaContractError,
+    );
+  });
+
   it("rejects runtime role capability and membership drift", async () => {
     await initializeAuthSchema(owner);
     try {
@@ -227,6 +247,33 @@ describe.sequential("Auth physical schema", () => {
         [`a@${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}.${"e".repeat(61)}`],
       ),
     ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("installs the complete Auth-owned access lifecycle schema", async () => {
+    await initializeAuthSchema(owner);
+
+    const relations = await owner.query<{ name: string }>(`
+      SELECT relation.relname AS name
+      FROM pg_catalog.pg_class AS relation
+      JOIN pg_catalog.pg_namespace AS namespace
+        ON namespace.oid = relation.relnamespace
+      WHERE namespace.nspname = 'auth'
+        AND relation.relkind = 'r'
+      ORDER BY relation.relname
+    `);
+
+    expect(relations.rows.map((row) => row.name)).toEqual([
+      "account",
+      "auth_secret_contract",
+      "password_reset",
+      "rateLimit",
+      "researcher_invitation",
+      "schema_contract",
+      "security_audit",
+      "session",
+      "user",
+      "verification",
+    ]);
   });
 
   it("gives each runtime role access only to its own schema", async () => {

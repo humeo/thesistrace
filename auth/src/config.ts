@@ -12,6 +12,9 @@ export type AuthSettings = Readonly<{
   host: string;
   port: number;
   publicOrigin: string;
+  resendApiKey: string;
+  resendApiUrl: string;
+  resendFromEmail: string;
   secret: string;
   secureCookies: boolean;
 }>;
@@ -52,6 +55,14 @@ export function readAuthSettings(environment: Environment = process.env): AuthSe
     required(environment, "BETTER_AUTH_SECRET"),
     parsedEnvironment.data,
   );
+  const resendApiKey = parseResendApiKey(required(environment, "RESEND_API_KEY"));
+  const resendFromEmail = parseResendFromEmail(
+    required(environment, "RESEND_FROM_EMAIL"),
+  );
+  const resendApiUrl = parseResendApiUrl(
+    required(environment, "THESISTRACE_RESEND_API_URL"),
+    parsedEnvironment.data,
+  );
   const port = parsePort(environment.THESISTRACE_AUTH_PORT ?? "8200");
 
   return {
@@ -60,6 +71,9 @@ export function readAuthSettings(environment: Environment = process.env): AuthSe
     host: environment.THESISTRACE_AUTH_HOST ?? "0.0.0.0",
     port,
     publicOrigin,
+    resendApiKey,
+    resendApiUrl,
+    resendFromEmail,
     secret,
     secureCookies: parsedEnvironment.data === "production",
   };
@@ -236,4 +250,65 @@ function parsePort(value: string): number {
     );
   }
   return port;
+}
+
+function parseResendApiKey(value: string): string {
+  if (value.length > 512 || /\s/.test(value)) {
+    throw new AuthConfigurationError(
+      "RESEND_API_KEY must be one non-whitespace credential",
+    );
+  }
+  return value;
+}
+
+function parseResendFromEmail(value: string): string {
+  if (value !== value.trim() || value.length > 320 || /[\r\n]/.test(value)) {
+    throw new AuthConfigurationError("RESEND_FROM_EMAIL must be one sender address");
+  }
+  const bracketed = /^[^<>]{1,100} <([^<>]+)>$/.exec(value);
+  const address = bracketed?.[1] ?? value;
+  if (!z.email().safeParse(address).success) {
+    throw new AuthConfigurationError("RESEND_FROM_EMAIL must be one sender address");
+  }
+  return value;
+}
+
+function parseResendApiUrl(
+  value: string,
+  environment: AuthSettings["environment"],
+): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new AuthConfigurationError(
+      "THESISTRACE_RESEND_API_URL must be one canonical origin",
+    );
+  }
+  if (value !== url.origin || url.username.length > 0 || url.password.length > 0) {
+    throw new AuthConfigurationError(
+      "THESISTRACE_RESEND_API_URL must be one canonical origin",
+    );
+  }
+  if (environment === "production") {
+    if (value !== "https://api.resend.com") {
+      throw new AuthConfigurationError(
+        "THESISTRACE_RESEND_API_URL must be https://api.resend.com in Production",
+      );
+    }
+    return value;
+  }
+  const loopbackHttp =
+    url.protocol === "http:" && isLoopbackHostname(unbracketedHostname(url.hostname));
+  const composeTestFake = value === "http://resend-fake:8300";
+  if (
+    environment === "test"
+      ? !loopbackHttp && !composeTestFake
+      : !loopbackHttp && value !== "https://api.resend.com"
+  ) {
+    throw new AuthConfigurationError(
+      "THESISTRACE_RESEND_API_URL must use the Test fake or Resend production origin",
+    );
+  }
+  return value;
 }

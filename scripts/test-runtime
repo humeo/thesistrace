@@ -14,6 +14,9 @@ port_lock_root=${THESISTRACE_TEST_PORT_LOCK_ROOT:-"$runtime_root/thesistrace-$(i
 owner_database_password=owner-test-password
 core_database_password=core-test-password
 auth_database_password=auth-test-password
+resend_api_key=resend-test-key
+resend_from_email='ThesisTrace <noreply@thesistrace.test>'
+resend_api_url=http://resend-fake:8300
 compose_cleanup_required=true
 
 new_run_id() {
@@ -99,6 +102,9 @@ compose() {
       THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
       THESISTRACE_AUTH_IMAGE="$project_name-auth" \
       BETTER_AUTH_SECRET="$auth_secret" \
+      RESEND_API_KEY="$resend_api_key" \
+      RESEND_FROM_EMAIL="$resend_from_email" \
+      THESISTRACE_RESEND_API_URL="$resend_api_url" \
       docker compose \
       --project-name "$project_name" \
       --file "$base_file" \
@@ -118,6 +124,9 @@ compose() {
       THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
       THESISTRACE_AUTH_IMAGE="$project_name-auth" \
       BETTER_AUTH_SECRET="$auth_secret" \
+      RESEND_API_KEY="$resend_api_key" \
+      RESEND_FROM_EMAIL="$resend_from_email" \
+      THESISTRACE_RESEND_API_URL="$resend_api_url" \
       docker compose \
       --project-name "$project_name" \
       --file "$base_file" \
@@ -137,6 +146,9 @@ base_compose() {
     THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
     THESISTRACE_AUTH_IMAGE="$project_name-auth" \
     BETTER_AUTH_SECRET="$auth_secret" \
+    RESEND_API_KEY="$resend_api_key" \
+    RESEND_FROM_EMAIL="$resend_from_email" \
+    THESISTRACE_RESEND_API_URL="$resend_api_url" \
     docker compose \
     --project-name "$project_name" \
     --file "$base_file" \

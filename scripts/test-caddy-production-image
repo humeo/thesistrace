@@ -8,17 +8,22 @@ run_id="$timestamp-$$-$random_suffix"
 resource_prefix="thesistrace-caddy-smoke-$run_id"
 image_name="$resource_prefix"
 container_name="$resource_prefix-web"
+auth_container_name="$resource_prefix-auth"
+client_one_name="$resource_prefix-client-one"
+client_two_name="$resource_prefix-client-two"
 network_name="$resource_prefix-network"
 volume_name="$resource_prefix-data"
 evidence_root=$(mktemp -d "${TMPDIR:-/tmp}/thesistrace-caddy-smoke.XXXXXX")
 
 capture_runtime_evidence() {
   initial_status=$1
-  printf 'run_id=%s\nimage_name=%s\ncontainer_name=%s\nnetwork_name=%s\nvolume_name=%s\ninitial_status=%s\n' \
-    "$run_id" "$image_name" "$container_name" "$network_name" "$volume_name" \
+  printf 'run_id=%s\nimage_name=%s\ncontainer_name=%s\nauth_container_name=%s\nclient_one_name=%s\nclient_two_name=%s\nnetwork_name=%s\nvolume_name=%s\ninitial_status=%s\n' \
+    "$run_id" "$image_name" "$container_name" "$auth_container_name" \
+    "$client_one_name" "$client_two_name" "$network_name" "$volume_name" \
     "$initial_status" >"$evidence_root/run.txt"
   docker version >"$evidence_root/docker-version.txt" 2>&1 || true
   docker logs "$container_name" >"$evidence_root/caddy.log" 2>&1 || true
+  docker logs "$auth_container_name" >"$evidence_root/auth-echo.log" 2>&1 || true
   docker container inspect "$container_name" \
     >"$evidence_root/container-inspect.json" 2>&1 || true
   docker image inspect "$image_name" \
@@ -34,9 +39,15 @@ cleanup() {
   trap - EXIT INT TERM
   capture_runtime_evidence "$run_status"
   cleanup_status=0
-  if docker container inspect "$container_name" >/dev/null 2>&1; then
-    docker rm --force "$container_name" >/dev/null || cleanup_status=$?
-  fi
+  for cleanup_container in \
+    "$container_name" \
+    "$auth_container_name" \
+    "$client_one_name" \
+    "$client_two_name"; do
+    if docker container inspect "$cleanup_container" >/dev/null 2>&1; then
+      docker rm --force "$cleanup_container" >/dev/null || cleanup_status=$?
+    fi
+  done
   if docker network inspect "$network_name" >/dev/null 2>&1; then
     docker network rm "$network_name" >/dev/null || cleanup_status=$?
   fi
@@ -90,6 +101,27 @@ start_container() {
   done
 }
 
+start_header_echo_backend() {
+  docker run --detach \
+    --name "$auth_container_name" \
+    --network "$network_name" \
+    --network-alias auth \
+    --volume "$repo_root/deploy/core/Caddyfile.header-echo.test:/etc/caddy/Caddyfile:ro" \
+    --entrypoint caddy \
+    "$image_name" run --config /etc/caddy/Caddyfile \
+    >"$evidence_root/auth-container-id.txt"
+}
+
+start_test_client() {
+  client_name=$1
+  docker run --detach \
+    --name "$client_name" \
+    --network "$network_name" \
+    --entrypoint /bin/sh \
+    "$image_name" -c 'exec sleep 300' \
+    >"$evidence_root/$client_name.id"
+}
+
 trap cleanup EXIT
 trap 'terminate 130' INT
 trap 'terminate 143' TERM
@@ -101,6 +133,9 @@ docker build \
 docker network create "$network_name" >"$evidence_root/network-id.txt"
 docker volume create "$volume_name" >"$evidence_root/volume-name.txt"
 
+start_header_echo_backend
+start_test_client "$client_one_name"
+start_test_client "$client_two_name"
 start_container
 docker exec "$container_name" wget --quiet --no-check-certificate \
   --output-document - https://thesistrace.test/login \
@@ -113,6 +148,21 @@ docker exec "$container_name" wget --server-response --spider \
 grep -F "308 Permanent Redirect" "$evidence_root/http-redirect.stderr.log"
 grep -F "Location: https://thesistrace.test/" \
   "$evidence_root/http-redirect.stderr.log"
+
+client_ip_one=$(docker exec "$client_one_name" wget --quiet \
+  --no-check-certificate --output-document - \
+  https://thesistrace.test/api/auth/client-ip)
+client_ip_two=$(docker exec "$client_two_name" wget --quiet \
+  --no-check-certificate --output-document - \
+  https://thesistrace.test/api/auth/client-ip)
+forged_client_ip=$(docker exec "$client_one_name" wget --quiet \
+  --header 'X-ThesisTrace-Client-IP: 203.0.113.250' \
+  --no-check-certificate --output-document - \
+  https://thesistrace.test/api/auth/client-ip)
+test -n "$client_ip_one"
+test -n "$client_ip_two"
+test "$client_ip_one" != "$client_ip_two"
+test "$forged_client_ip" = "$client_ip_one"
 
 for private_probe in \
   "health/live private-health" \

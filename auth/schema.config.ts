@@ -1,6 +1,9 @@
 import { Pool } from "pg";
 
-import { createThesisTraceAuth } from "./src/auth.js";
+import {
+  createClosedAuthLifecycle,
+  createThesisTraceAuth,
+} from "./src/auth.js";
 
 const databaseUrl = process.env.THESISTRACE_SCHEMA_GENERATION_DATABASE_URL;
 if (databaseUrl === undefined) {
@@ -16,8 +19,12 @@ export const auth = createThesisTraceAuth(
     host: "127.0.0.1",
     port: 8200,
     publicOrigin: "http://127.0.0.1:5173",
+    resendApiKey: "schema-generation-only",
+    resendApiUrl: "http://127.0.0.1:8300",
+    resendFromEmail: "ThesisTrace <noreply@thesistrace.test>",
     secret: "schema-generation-only-secret-000000000000000000",
     secureCookies: false,
   },
   pool,
+  createClosedAuthLifecycle(),
 );

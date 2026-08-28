@@ -14,6 +14,20 @@ export function createAuthPool(databaseUrl: string): Pool {
   });
 }
 
+export function createAuthCoordinationPool(databaseUrl: string): Pool {
+  return new Pool({
+    application_name: "thesistrace_auth_coordination",
+    connectionString: databaseUrl,
+    connectionTimeoutMillis: 10_000,
+    idle_in_transaction_session_timeout: 10_000,
+    lock_timeout: 3_000,
+    max: 2,
+    options: "-c search_path=auth",
+    query_timeout: 10_000,
+    statement_timeout: 8_000,
+  });
+}
+
 export function createAuthInitializerPool(databaseUrl: string): Pool {
   return new Pool({
     application_name: "thesistrace_auth_initializer",

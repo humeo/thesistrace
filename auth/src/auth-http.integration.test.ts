@@ -2,12 +2,24 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createAuthApp } from "./app.js";
-import { createThesisTraceAuth } from "./auth.js";
+import {
+  createThesisTraceAuth,
+  type AuthLifecycleDependencies,
+} from "./auth.js";
+import { AuthEventRecorder } from "./auth-events.js";
+import { AuthBackgroundTasks } from "./background-tasks.js";
 import type { AuthSettings } from "./config.js";
-import { createAuthPool } from "./database.js";
+import {
+  AuthOperationCoordinator,
+  CredentialOperationCoordinator,
+} from "./coordination.js";
+import { createAuthCoordinationPool, createAuthPool } from "./database.js";
+import { InvitationRejectedError } from "./invitation.js";
 import { checkAuthReadiness } from "./readiness.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
 import { verifyAuthSchema } from "./schema-contract.js";
+import { InvitationAdmission } from "./invitation-admission.js";
+import { unknownEmailHmac } from "./security.js";
 
 const ownerDatabaseUrl = process.env.THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL;
 if (ownerDatabaseUrl === undefined) {
@@ -21,14 +33,39 @@ const authRuntimeDatabaseUrl = roleDatabaseUrl(
 );
 const owner = new Pool({ connectionString: ownerDatabaseUrl, max: 2 });
 const runtimePool = createAuthPool(authRuntimeDatabaseUrl);
+const coordinationPool = createAuthCoordinationPool(authRuntimeDatabaseUrl);
 const settings: AuthSettings = {
   databaseUrl: authRuntimeDatabaseUrl,
   environment: "test",
   host: "127.0.0.1",
   port: 8200,
   publicOrigin: "http://127.0.0.1:5173",
+  resendApiKey: "test-resend-key",
+  resendApiUrl: "http://127.0.0.1:8300",
+  resendFromEmail: "ThesisTrace <noreply@thesistrace.test>",
   secret: "0123456789abcdef0123456789abcdef",
   secureCookies: false,
+};
+const invitationAdmission = new InvitationAdmission();
+const credentialCoordinator = new CredentialOperationCoordinator({
+  authSecret: settings.secret,
+  coordination: new AuthOperationCoordinator(coordinationPool),
+  pool: runtimePool,
+});
+const runtimeTasks = new Set<AuthBackgroundTasks>();
+const authLifecycle: AuthLifecycleDependencies = {
+  backgroundTask(promise) {
+    void promise.catch(() => undefined);
+  },
+  invitationAdmission,
+  async isResearcherActive(userId) {
+    const result = await runtimePool.query<{ active: boolean }>(
+      'SELECT active FROM auth."user" WHERE id = $1',
+      [userId],
+    );
+    return result.rows[0]?.active === true;
+  },
+  async sendResetPassword() {},
 };
 const ambientOverrideNames = [
   "BETTER_AUTH_SECRETS",
@@ -52,11 +89,24 @@ describe.sequential("Auth database-backed HTTP contract", () => {
   });
 
   beforeEach(async () => {
-    await owner.query('TRUNCATE auth."user" CASCADE');
-    await owner.query('TRUNCATE auth."rateLimit"');
+    await Promise.all([...runtimeTasks].map((tasks) => tasks.drain()));
+    runtimeTasks.clear();
+    await owner.query(`
+      TRUNCATE
+        auth.security_audit,
+        auth.password_reset,
+        auth.researcher_invitation,
+        auth."verification",
+        auth."rateLimit",
+        auth."user"
+      CASCADE
+    `);
   });
 
   afterAll(async () => {
+    await Promise.all([...runtimeTasks].map((tasks) => tasks.drain()));
+    runtimeTasks.clear();
+    await coordinationPool.end();
     await runtimePool.end();
     await owner.query("DROP SCHEMA IF EXISTS auth CASCADE");
     await owner.end();
@@ -196,6 +246,281 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     expect(records.rows).toEqual([{ count: "1" }]);
   });
 
+  it("audits known and unknown sign-in outcomes without raw unknown email", async () => {
+    const { app, auth, tasks } = runtime();
+    await createSessionCookie(auth, "audit@example.com");
+
+    const knownFailure = await app.request(
+      `${settings.publicOrigin}/api/auth/sign-in/email`,
+      {
+        body: JSON.stringify({
+          email: "audit@example.com",
+          password: "wrong-password-still-long",
+        }),
+        headers: {
+          "content-type": "application/json",
+          origin: settings.publicOrigin,
+        },
+        method: "POST",
+      },
+    );
+    const knownSuccess = await app.request(
+      `${settings.publicOrigin}/api/auth/sign-in/email`,
+      {
+        body: JSON.stringify({
+          email: "audit@example.com",
+          password: "correct-horse-battery-staple",
+        }),
+        headers: {
+          "content-type": "application/json",
+          origin: settings.publicOrigin,
+        },
+        method: "POST",
+      },
+    );
+    await app.request(`${settings.publicOrigin}/api/auth/sign-in/email`, {
+      body: JSON.stringify({
+        email: "unknown-audit@example.com",
+        password: "wrong-password-still-long",
+      }),
+      headers: {
+        "content-type": "application/json",
+        origin: settings.publicOrigin,
+      },
+      method: "POST",
+    });
+    await tasks.drain();
+    const audits = await owner.query<{
+      outcome: string;
+      researcher_id: string | null;
+      unknown_email_hmac: Buffer | null;
+    }>(`
+      SELECT outcome, researcher_id, unknown_email_hmac
+      FROM auth.security_audit
+      WHERE event IN ('sign_in_succeeded', 'sign_in_failed')
+    `);
+
+    expect(knownFailure.status).not.toBe(200);
+    expect(knownSuccess.status).toBe(200);
+    expect(audits.rows).toHaveLength(3);
+    expect(audits.rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ outcome: "failed", researcher_id: expect.any(String) }),
+        expect.objectContaining({
+          outcome: "succeeded",
+          researcher_id: expect.any(String),
+        }),
+        {
+          outcome: "failed",
+          researcher_id: null,
+          unknown_email_hmac: unknownEmailHmac(
+            settings.secret,
+            "unknown-audit@example.com",
+          ),
+        },
+      ]),
+    );
+    expect(JSON.stringify(audits.rows)).not.toContain("unknown-audit@example.com");
+  });
+
+  it("audits password change and logout while revoking the intended Sessions", async () => {
+    const { app, auth, tasks } = runtime();
+    const originalCookie = await createSessionCookie(auth, "password@example.com");
+    await app.request(`${settings.publicOrigin}/api/auth/sign-in/email`, {
+      body: JSON.stringify({
+        email: "password@example.com",
+        password: "correct-horse-battery-staple",
+      }),
+      headers: {
+        "content-type": "application/json",
+        origin: settings.publicOrigin,
+      },
+      method: "POST",
+    });
+
+    const changed = await app.request(
+      `${settings.publicOrigin}/api/auth/change-password`,
+      {
+        body: JSON.stringify({
+          currentPassword: "correct-horse-battery-staple",
+          newPassword: "new-correct-horse-battery-staple",
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: originalCookie,
+          origin: settings.publicOrigin,
+        },
+        method: "POST",
+      },
+    );
+    const currentCookie = changed.headers.get("set-cookie") ?? "";
+    expect(changed.status).toBe(200);
+    expect(currentCookie).toContain("session_token=");
+    expect(
+      await owner.query<{ count: string }>('SELECT count(*) FROM auth."session"'),
+    ).toMatchObject({ rows: [{ count: "1" }] });
+
+    const signedOut = await app.request(`${settings.publicOrigin}/api/auth/sign-out`, {
+      headers: { cookie: currentCookie, origin: settings.publicOrigin },
+      method: "POST",
+    });
+    await tasks.drain();
+    const audits = await owner.query<{ event: string; outcome: string }>(`
+      SELECT event, outcome
+      FROM auth.security_audit
+      WHERE event IN ('password_changed', 'sessions_revoked')
+    `);
+
+    expect(signedOut.status).toBe(200);
+    expect(
+      await owner.query<{ count: string }>('SELECT count(*) FROM auth."session"'),
+    ).toMatchObject({ rows: [{ count: "0" }] });
+    expect(audits.rows).toEqual(
+      expect.arrayContaining([
+        { event: "password_changed", outcome: "succeeded" },
+        { event: "sessions_revoked", outcome: "succeeded" },
+        { event: "sessions_revoked", outcome: "succeeded" },
+      ]),
+    );
+  });
+
+  it("never turns a committed sign-in, password change, or sign-out into an audit 503", async () => {
+    const { app, auth, tasks } = runtime();
+    const originalCookie = await createSessionCookie(
+      auth,
+      "audit-unavailable@example.com",
+    );
+    const whileAuditUnavailable = async (
+      operation: () => Promise<Response>,
+    ): Promise<Response> => {
+      const blocker = await owner.connect();
+      let response: Response;
+      let elapsedMilliseconds: number;
+      try {
+        await blocker.query("BEGIN");
+        await blocker.query("LOCK TABLE auth.security_audit IN ACCESS EXCLUSIVE MODE");
+        const startedAt = performance.now();
+        response = await operation();
+        elapsedMilliseconds = performance.now() - startedAt;
+        await tasks.drain();
+      } finally {
+        await blocker.query("ROLLBACK").catch(() => undefined);
+        blocker.release();
+      }
+      expect(response.status).toBe(200);
+      expect(elapsedMilliseconds).toBeLessThan(500);
+      return response;
+    };
+
+    const signedIn = await whileAuditUnavailable(() =>
+      Promise.resolve(app.request(`${settings.publicOrigin}/api/auth/sign-in/email`, {
+        body: JSON.stringify({
+          email: "audit-unavailable@example.com",
+          password: "correct-horse-battery-staple",
+        }),
+        headers: {
+          "content-type": "application/json",
+          origin: settings.publicOrigin,
+        },
+        method: "POST",
+      })),
+    );
+    expect(signedIn.headers.get("set-cookie")).toContain("session_token=");
+
+    const changed = await whileAuditUnavailable(() =>
+      Promise.resolve(app.request(`${settings.publicOrigin}/api/auth/change-password`, {
+        body: JSON.stringify({
+          currentPassword: "correct-horse-battery-staple",
+          newPassword: "new-correct-horse-battery-staple",
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: originalCookie,
+          origin: settings.publicOrigin,
+        },
+        method: "POST",
+      })),
+    );
+    const changedCookie = changed.headers.get("set-cookie") ?? "";
+    expect(changedCookie).toContain("session_token=");
+
+    await whileAuditUnavailable(() =>
+      Promise.resolve(app.request(`${settings.publicOrigin}/api/auth/sign-out`, {
+        headers: { cookie: changedCookie, origin: settings.publicOrigin },
+        method: "POST",
+      })),
+    );
+    expect(
+      await owner.query<{ count: string }>('SELECT count(*) FROM auth."session"'),
+    ).toMatchObject({ rows: [{ count: "0" }] });
+  });
+
+  it("audits an unknown Reset request only as a keyed HMAC", async () => {
+    const { app, tasks } = runtime();
+    const response = await app.request(
+      `${settings.publicOrigin}/api/auth/request-password-reset`,
+      {
+        body: JSON.stringify({ email: "unknown-reset@example.com" }),
+        headers: {
+          "content-type": "application/json",
+          origin: settings.publicOrigin,
+        },
+        method: "POST",
+      },
+    );
+    await tasks.drain();
+    const audit = await owner.query<{
+      outcome: string;
+      researcher_id: string | null;
+      unknown_email_hmac: Buffer;
+    }>(`
+      SELECT outcome, researcher_id, unknown_email_hmac
+      FROM auth.security_audit
+      WHERE event = 'password_reset_requested'
+    `);
+
+    expect(response.status).toBe(200);
+    expect(audit.rows).toEqual([
+      {
+        outcome: "no_change",
+        researcher_id: null,
+        unknown_email_hmac: unknownEmailHmac(
+          settings.secret,
+          "unknown-reset@example.com",
+        ),
+      },
+    ]);
+  });
+
+  it("does not hold an unknown Reset response on deferred audit storage", async () => {
+    const { app, tasks } = runtime();
+    const blocker = await owner.connect();
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query("LOCK TABLE auth.security_audit IN ACCESS EXCLUSIVE MODE");
+      const startedAt = performance.now();
+
+      const response = await app.request(
+        `${settings.publicOrigin}/api/auth/request-password-reset`,
+        {
+          body: JSON.stringify({ email: "deferred-reset@example.com" }),
+          headers: {
+            "content-type": "application/json",
+            origin: settings.publicOrigin,
+          },
+          method: "POST",
+        },
+      );
+
+      expect(response.status).toBe(200);
+      expect(performance.now() - startedAt).toBeLessThan(500);
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+    }
+    await tasks.drain();
+  });
+
   it("sets the complete Production Session Cookie attributes", async () => {
     const auth = createThesisTraceAuth(
       {
@@ -207,6 +532,7 @@ describe.sequential("Auth database-backed HTTP contract", () => {
         secureCookies: true,
       },
       runtimePool,
+      authLifecycle,
     );
     const response = await directSignUp(auth, {
       email: "cookie@example.com",
@@ -370,13 +696,54 @@ describe.sequential("Auth database-backed HTTP contract", () => {
 });
 
 function runtime() {
-  const auth = createThesisTraceAuth(settings, runtimePool);
-  const app = createAuthApp({
-    authHandler: (request) => auth.handler(request),
-    getSession: (input) => auth.api.getSession(input),
-    readiness: () => checkAuthReadiness(runtimePool),
+  const auth = createThesisTraceAuth(settings, runtimePool, authLifecycle);
+  const tasks = new AuthBackgroundTasks();
+  runtimeTasks.add(tasks);
+  const events = new AuthEventRecorder({
+    authSecret: settings.secret,
+    backgroundTask: tasks.handler,
+    pool: runtimePool,
   });
-  return { app, auth };
+  const app = createAuthApp({
+    async acceptInvitation() {
+      throw new InvitationRejectedError();
+    },
+    authHandler: (request) =>
+      credentialCoordinator.handleAuthRequest(
+        request,
+        (coordinated) =>
+          events.handle(
+            coordinated,
+            (delegated) => auth.handler(delegated),
+            (headers) =>
+              auth.api.getSession({
+                headers,
+                query: { disableCookieCache: true, disableRefresh: true },
+              }),
+          ),
+        (headers) =>
+          auth.api.getSession({
+            headers,
+            query: { disableCookieCache: true, disableRefresh: true },
+          }),
+      ),
+    async consumeInvitationRateLimit() {
+      return { allowed: true, retryAfterSeconds: 0 };
+    },
+    async consumePasswordResetRateLimit() {
+      return { allowed: true, retryAfterSeconds: 0 };
+    },
+    getSession: (input) => auth.api.getSession(input),
+    async inspectInvitation() {
+      throw new InvitationRejectedError();
+    },
+    publicOrigin: settings.publicOrigin,
+    readiness: () => checkAuthReadiness(runtimePool),
+    async resetPassword() {
+      throw new Error("PASSWORD_RESET_UNAVAILABLE_IN_HTTP_CONTRACT_HARNESS");
+    },
+  });
+  return { app, auth, tasks };
 }
 
 async function createSessionCookie(
@@ -403,20 +770,24 @@ async function directSignUp(
   }>,
 ): Promise<Response> {
   const publicOrigin = input.publicOrigin ?? settings.publicOrigin;
-  return auth.handler(
-    new Request(`${publicOrigin}/api/auth/sign-up/email`, {
-      body: JSON.stringify({
-        email: input.email,
-        name: "client-supplied-label",
-        password: input.password,
-      }),
-      headers: {
-        "content-type": "application/json",
-        origin: input.origin ?? settings.publicOrigin,
-        "x-thesistrace-client-ip": `192.0.2.${input.password.length}`,
-      },
-      method: "POST",
-    }),
+  return invitationAdmission.run(
+    input.email.trim().toLowerCase(),
+    () =>
+      auth.handler(
+        new Request(`${publicOrigin}/api/auth/sign-up/email`, {
+          body: JSON.stringify({
+            email: input.email,
+            name: "client-supplied-label",
+            password: input.password,
+          }),
+          headers: {
+            "content-type": "application/json",
+            origin: input.origin ?? settings.publicOrigin,
+            "x-thesistrace-client-ip": `192.0.2.${input.password.length}`,
+          },
+          method: "POST",
+        }),
+      ),
   );
 }
 

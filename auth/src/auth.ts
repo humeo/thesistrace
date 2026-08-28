@@ -6,6 +6,7 @@ import {
   type AuthSettings,
 } from "./config.js";
 import { canonicalizeEmail } from "./identity.js";
+import { InvitationAdmission } from "./invitation-admission.js";
 
 const DAY_SECONDS = 60 * 60 * 24;
 const disabledBetterAuthPaths = [
@@ -19,6 +20,7 @@ const disabledBetterAuthPaths = [
   "/list-accounts",
   "/list-sessions",
   "/refresh-token",
+  "/reset-password",
   "/reset-password/:token",
   "/revoke-other-sessions",
   "/revoke-session",
@@ -32,10 +34,50 @@ const disabledBetterAuthPaths = [
   "/verify-password",
 ] as const;
 
-export function createThesisTraceAuth(settings: AuthSettings, pool: Pool) {
+type PasswordResetUser = Readonly<{
+  email: string;
+  id: string;
+  name: string;
+}>;
+
+export type AuthLifecycleDependencies = Readonly<{
+  backgroundTask: (promise: Promise<unknown>) => void;
+  invitationAdmission: InvitationAdmission;
+  isResearcherActive: (userId: string) => Promise<boolean>;
+  sendResetPassword: (
+    data: Readonly<{
+      token: string;
+      url: string;
+      user: PasswordResetUser;
+    }>,
+    request?: Request,
+  ) => Promise<void>;
+}>;
+
+export function createClosedAuthLifecycle(): AuthLifecycleDependencies {
+  return {
+    backgroundTask(promise) {
+      void promise.catch(() => undefined);
+    },
+    invitationAdmission: new InvitationAdmission(),
+    async isResearcherActive() {
+      return false;
+    },
+    async sendResetPassword() {
+      throw new Error("PASSWORD_RESET_DELIVERY_UNAVAILABLE");
+    },
+  };
+}
+
+export function createThesisTraceAuth(
+  settings: AuthSettings,
+  pool: Pool,
+  lifecycle: AuthLifecycleDependencies,
+) {
   assertNoAmbientBetterAuthOverrides(process.env);
   return betterAuth({
     advanced: {
+      backgroundTasks: { handler: lifecycle.backgroundTask },
       cookiePrefix: "thesistrace",
       database: { generateId: "uuid" },
       defaultCookieAttributes: {
@@ -59,13 +101,28 @@ export function createThesisTraceAuth(settings: AuthSettings, pool: Pool) {
         create: {
           async before(user) {
             const email = canonicalizeEmail(user.email);
+            if (!lifecycle.invitationAdmission.allows(email)) {
+              return false;
+            }
             return {
               data: {
                 ...user,
+                active: true,
                 email,
+                emailVerified: true,
                 name: email.slice(0, email.lastIndexOf("@")),
               },
             };
+          },
+        },
+      },
+      session: {
+        create: {
+          async before(session) {
+            if (lifecycle.invitationAdmission.isActive()) {
+              return true;
+            }
+            return lifecycle.isResearcherActive(session.userId);
           },
         },
       },
@@ -76,6 +133,8 @@ export function createThesisTraceAuth(settings: AuthSettings, pool: Pool) {
       maxPasswordLength: 128,
       minPasswordLength: 12,
       requireEmailVerification: false,
+      resetPasswordTokenExpiresIn: 30 * 60,
+      sendResetPassword: lifecycle.sendResetPassword,
     },
     logger: { disabled: true },
     rateLimit: {

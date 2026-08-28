@@ -10,7 +10,8 @@
     "test:integration": "./scripts/test-runtime integration",
     "test:image-smoke": "./scripts/test-runtime image-smoke",
     "start": "node dist/server.js",
-    "initialize": "node dist/initialize.js"
+    "initialize": "node dist/initialize.js",
+    "operator": "node dist/operator.js"
   },
   "dependencies": {
     "@hono/node-server": "2.1.1",

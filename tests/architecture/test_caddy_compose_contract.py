@@ -39,6 +39,9 @@ def test_caddy_is_the_only_web_runtime_and_preserves_api_paths() -> None:
     assert "handle_path" not in caddyfile
     assert "reverse_proxy auth:8200" in caddyfile
     assert "reverse_proxy api:8100" in caddyfile
+    assert caddyfile.count(
+        "header_up X-ThesisTrace-Client-IP {remote_host}"
+    ) == 2
     assert "path /health /health/* /internal /internal/*" in caddyfile
     assert 'respond 404' in caddyfile
     assert 'Cache-Control "no-store"' in caddyfile
@@ -144,6 +147,10 @@ def test_release_image_gate_uses_the_same_caddyfile_with_an_internal_test_ca() -
     assert "internal/session/verify private-internal" in smoke
     assert "certificates_after" in smoke
     assert "certificates_before" in smoke
+    assert "Caddyfile.header-echo.test" in smoke
+    assert "203.0.113.250" in smoke
+    assert "client_ip_one" in smoke
+    assert "client_ip_two" in smoke
     for evidence_name in (
         "caddy.log",
         "container-inspect.json",

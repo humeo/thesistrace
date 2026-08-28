@@ -12,12 +12,16 @@
 
 	handle /api/auth/* {
 		header Cache-Control "no-store"
-		reverse_proxy auth:8200
+		reverse_proxy auth:8200 {
+			header_up X-ThesisTrace-Client-IP {remote_host}
+		}
 	}
 
 	handle /api/* {
 		header Cache-Control "no-store"
-		reverse_proxy api:8100
+		reverse_proxy api:8100 {
+			header_up X-ThesisTrace-Client-IP {remote_host}
+		}
 	}
 
 	@hashed_assets path_regexp hashed ^/assets/.+-[A-Za-z0-9_-]{8,}\.[^/]+$

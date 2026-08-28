@@ -76,7 +76,21 @@ describe("Auth schema contract", () => {
       assertExactCatalog(catalog, {
         ...catalog,
         routines: [
-          { identityArguments: "", kind: "f", name: "unexpected", result: "void" },
+          {
+            configuration: [],
+            identityArguments: "",
+            kind: "f",
+            language: "sql",
+            leakproof: false,
+            name: "unexpected",
+            owner: "thesistrace_owner",
+            parallel: "u",
+            result: "void",
+            securityDefiner: false,
+            source: "SELECT NULL",
+            strict: false,
+            volatility: "v",
+          },
         ],
       }),
     ).toThrow(AuthSchemaContractError);

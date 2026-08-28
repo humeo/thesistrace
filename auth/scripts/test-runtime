@@ -137,6 +137,9 @@ start_postgres() {
 case "$command" in
   integration)
     start_postgres
+    "$auth_root/node_modules/.bin/tsc" \
+      --project "$auth_root/tsconfig.build.json" \
+      --pretty false
     address=$(compose port postgres 5432)
     postgres_port=${address##*:}
     case "$postgres_port" in

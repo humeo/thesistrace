@@ -184,7 +184,17 @@ async function verifyAuthRoleGrants(client: PoolClient): Promise<void> {
   }
 
   const expected = new Set<string>();
-  for (const table of ["account", "rateLimit", "session", "user", "verification"]) {
+  for (const table of [
+    "account",
+    "auth_secret_contract",
+    "password_reset",
+    "rateLimit",
+    "researcher_invitation",
+    "security_audit",
+    "session",
+    "user",
+    "verification",
+  ]) {
     for (const privilege of ["DELETE", "INSERT", "SELECT", "UPDATE"]) {
       expected.add(`auth_runtime:${table}:${privilege}:false`);
     }
@@ -258,6 +268,50 @@ async function verifyAuthRoleGrants(client: PoolClient): Promise<void> {
     ),
   );
   if (!sameSet(new Set(["auth_runtime:USAGE:false"]), actualSchemaPrivileges)) {
+    throw new AuthSchemaContractError("SCHEMA_ROLE_CONTRACT_INVALID");
+  }
+
+  const routineGrants = await client.query<{
+    grantee: string;
+    is_grantable: boolean;
+    privilege_type: string;
+    routine_name: string;
+  }>(`
+    SELECT
+      CASE
+        WHEN privilege.grantee = 0 THEN 'PUBLIC'
+        ELSE pg_catalog.pg_get_userbyid(privilege.grantee)
+      END AS grantee,
+      privilege.is_grantable,
+      routine.proname AS routine_name,
+      privilege.privilege_type
+    FROM pg_catalog.pg_proc AS routine
+    JOIN pg_catalog.pg_namespace AS namespace
+      ON namespace.oid = routine.pronamespace
+    CROSS JOIN LATERAL pg_catalog.aclexplode(
+      COALESCE(
+        routine.proacl,
+        pg_catalog.acldefault('f', routine.proowner)
+      )
+    ) AS privilege
+    WHERE namespace.nspname = 'auth'
+      AND privilege.grantee <> routine.proowner
+    ORDER BY grantee, routine_name, privilege_type
+  `);
+  const actualRoutinePrivileges = new Set(
+    routineGrants.rows.map(
+      (row) =>
+        `${row.grantee}:${row.routine_name}:${row.privilege_type}:${row.is_grantable}`,
+    ),
+  );
+  if (
+    !sameSet(
+      new Set([
+        "auth_runtime:enforce_active_session_owner:EXECUTE:false",
+      ]),
+      actualRoutinePrivileges,
+    )
+  ) {
     throw new AuthSchemaContractError("SCHEMA_ROLE_CONTRACT_INVALID");
   }
 }

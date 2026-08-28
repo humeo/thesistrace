@@ -49,10 +49,19 @@ export type AuthSchemaCatalog = Readonly<{
   >;
   routines: ReadonlyArray<
     Readonly<{
+      configuration: string[];
       identityArguments: string;
       kind: string;
+      language: string;
+      leakproof: boolean;
       name: string;
+      owner: string;
+      parallel: string;
       result: string;
+      securityDefiner: boolean;
+      source: string;
+      strict: boolean;
+      volatility: string;
     }>
   >;
   schema: Readonly<{ owner: string }>;
@@ -215,22 +224,42 @@ export async function collectAuthSchemaCatalog(
     );
     const routines = await database.query<
       Readonly<{
+        configuration: string[];
         identityArguments: string;
         kind: string;
+        language: string;
+        leakproof: boolean;
         name: string;
+        owner: string;
+        parallel: string;
         result: string;
+        securityDefiner: boolean;
+        source: string;
+        strict: boolean;
+        volatility: string;
       }>
     >(
       `
         SELECT
+          COALESCE(routine.proconfig, ARRAY[]::text[]) AS configuration,
           pg_catalog.pg_get_function_identity_arguments(routine.oid)
             AS "identityArguments",
           routine.prokind::text AS kind,
+          language.lanname AS language,
+          routine.proleakproof AS leakproof,
           routine.proname AS name,
-          pg_catalog.pg_get_function_result(routine.oid) AS result
+          pg_catalog.pg_get_userbyid(routine.proowner) AS owner,
+          routine.proparallel::text AS parallel,
+          pg_catalog.pg_get_function_result(routine.oid) AS result,
+          routine.prosecdef AS "securityDefiner",
+          routine.prosrc AS source,
+          routine.proisstrict AS strict,
+          routine.provolatile::text AS volatility
         FROM pg_catalog.pg_proc AS routine
         JOIN pg_catalog.pg_namespace AS namespace
           ON namespace.oid = routine.pronamespace
+        JOIN pg_catalog.pg_language AS language
+          ON language.oid = routine.prolang
         WHERE namespace.nspname = 'auth'
         ORDER BY routine.proname, "identityArguments"
       `,
