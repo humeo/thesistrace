@@ -1,6 +1,6 @@
 # 04 — Core Researcher and Research Ownership hard cut
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Blocked by:** 01, 02, 03
 
