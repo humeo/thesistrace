@@ -13,6 +13,7 @@ from botocore.exceptions import ClientError
 
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import (
+    CORE_ENVIRONMENT_NAMES,
     PUBLICATION_REQUEST_TIMEOUT_SECONDS,
     CoreRuntime,
     CoreSettings,
@@ -52,6 +53,14 @@ ALLOWED_SCHEMA_REFERENCES = {
     ("research_batch", "research_folders"),
     ("research_run", "research_folders"),
 }
+
+
+def test_research_agent_mcp_runbook_forwards_every_required_core_variable() -> None:
+    runbook = (ROOT / "docs" / "runbook" / "research-agent-mcp.md").read_text()
+    sample = runbook.split("```toml", maxsplit=1)[1].split("```", maxsplit=1)[0]
+    server = tomllib.loads(sample)["mcp_servers"]["thesistrace"]
+
+    assert set(CORE_ENVIRONMENT_NAMES) <= set(server["env_vars"])
 
 
 def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
