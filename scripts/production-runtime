@@ -1,0 +1,173 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+base_file="$repo_root/deploy/core/compose.yaml"
+production_file="$repo_root/deploy/core/compose.production.yaml"
+environment_file=${THESISTRACE_PRODUCTION_ENV_FILE-}
+
+fail() {
+  printf '{"code":"%s","event":"production_runtime_failed"}\n' "$1" >&2
+  exit 2
+}
+
+test "$#" -eq 1 || fail PRODUCTION_RUNTIME_USAGE_INVALID
+action=$1
+case "$action" in
+  up | down | status | validate) ;;
+  *) fail PRODUCTION_RUNTIME_USAGE_INVALID ;;
+esac
+
+case "$environment_file" in
+  /*) ;;
+  *) fail PRODUCTION_ENV_FILE_PATH_INVALID ;;
+esac
+test -f "$environment_file" || fail PRODUCTION_ENV_FILE_PATH_INVALID
+test ! -L "$environment_file" || fail PRODUCTION_ENV_FILE_PATH_INVALID
+environment_directory=$(CDPATH= cd -- "$(dirname -- "$environment_file")" && pwd -P)
+environment_file="$environment_directory/$(basename -- "$environment_file")"
+case "$environment_file" in
+  "$repo_root" | "$repo_root"/*) fail PRODUCTION_ENV_FILE_PATH_INVALID ;;
+esac
+
+metadata=$(stat -c '%u:%a' -- "$environment_file" 2>/dev/null) \
+  || metadata=$(stat -f '%u:%Lp' -- "$environment_file" 2>/dev/null) \
+  || fail PRODUCTION_ENV_FILE_PERMISSIONS_INVALID
+test "$metadata" = "0:600" || fail PRODUCTION_ENV_FILE_PERMISSIONS_INVALID
+
+awk '
+  /^[[:space:]]*($|#)/ { next }
+  {
+    separator = index($0, "=")
+    if (separator < 2) exit 1
+    key = substr($0, 1, separator - 1)
+    if (key !~ /^[A-Z][A-Z0-9_]*$/ || seen[key]++) exit 1
+  }
+' "$environment_file" || fail PRODUCTION_ENV_FILE_CONTENT_INVALID
+
+env_value() {
+  awk -v target="$1" '
+    index($0, "=") > 1 && substr($0, 1, index($0, "=") - 1) == target {
+      print substr($0, index($0, "=") + 1)
+    }
+  ' "$environment_file"
+}
+
+required_value() {
+  value=$(env_value "$1")
+  test -n "$value" || fail PRODUCTION_ENV_FILE_CONTENT_INVALID
+  printf '%s' "$value"
+}
+
+runtime_environment=$(required_value THESISTRACE_ENVIRONMENT)
+test "$runtime_environment" = production || fail PRODUCTION_ENVIRONMENT_INVALID
+
+public_origin=$(required_value THESISTRACE_PUBLIC_ORIGIN)
+case "$public_origin" in
+  https://*) ;;
+  *) fail PRODUCTION_PUBLIC_ORIGIN_INVALID ;;
+esac
+public_authority=${public_origin#https://}
+case "$public_authority" in
+  '' | *'/'* | *'?'* | *'#'* | *'@'*) fail PRODUCTION_PUBLIC_ORIGIN_INVALID ;;
+esac
+public_host=${public_authority%%:*}
+test "$public_authority" = "$public_host" \
+  || fail PRODUCTION_PUBLIC_ORIGIN_INVALID
+printf '%s\n' "$public_host" | grep -Eq \
+  '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$' \
+  || fail PRODUCTION_PUBLIC_ORIGIN_INVALID
+case "$public_host" in
+  localhost | *.localhost | test | *.test | example | *.example | invalid | *.invalid)
+    fail PRODUCTION_PUBLIC_ORIGIN_INVALID
+    ;;
+esac
+printf '%s\n' "$public_host" | grep -Eq '^[0-9]+(\.[0-9]+){3}$' \
+  && fail PRODUCTION_PUBLIC_ORIGIN_INVALID
+
+resend_url=$(required_value THESISTRACE_RESEND_API_URL)
+test "$resend_url" = https://api.resend.com || fail PRODUCTION_RESEND_URL_INVALID
+
+validate_database_password() {
+  password=$(required_value "$1")
+  test "${#password}" -ge 24 || fail PRODUCTION_DATABASE_PASSWORD_INVALID
+  test "${#password}" -le 128 || fail PRODUCTION_DATABASE_PASSWORD_INVALID
+  printf '%s\n' "$password" | grep -Eq '^[A-Za-z0-9_-]+$' \
+    || fail PRODUCTION_DATABASE_PASSWORD_INVALID
+  case "$password" in
+    password | changeme | placeholder | *test-password* | *development*)
+      fail PRODUCTION_DATABASE_PASSWORD_INVALID
+      ;;
+  esac
+  printf '%s' "$password"
+}
+
+owner_password=$(validate_database_password THESISTRACE_OWNER_DATABASE_PASSWORD)
+core_password=$(validate_database_password THESISTRACE_CORE_DATABASE_PASSWORD)
+auth_password=$(validate_database_password THESISTRACE_AUTH_DATABASE_PASSWORD)
+test "$owner_password" != "$core_password" \
+  && test "$owner_password" != "$auth_password" \
+  && test "$core_password" != "$auth_password" \
+  || fail PRODUCTION_DATABASE_PASSWORD_INVALID
+
+auth_secret=$(required_value BETTER_AUTH_SECRET)
+printf '%s\n' "$auth_secret" | grep -Eq '^[0-9a-f]{64}$' \
+  || fail PRODUCTION_AUTH_SECRET_INVALID
+
+resend_key=$(required_value RESEND_API_KEY)
+test "${#resend_key}" -ge 16 || fail PRODUCTION_RESEND_KEY_INVALID
+test "${#resend_key}" -le 512 || fail PRODUCTION_RESEND_KEY_INVALID
+printf '%s\n' "$resend_key" | grep -Eq '^[^[:space:]]+$' \
+  || fail PRODUCTION_RESEND_KEY_INVALID
+case "$resend_key" in
+  resend-test-key | test-* | development-* | placeholder*)
+    fail PRODUCTION_RESEND_KEY_INVALID
+    ;;
+esac
+
+resend_from=$(required_value RESEND_FROM_EMAIL)
+printf '%s\n' "$resend_from" | grep -Eq '^[^[:cntrl:]]+@[^[:cntrl:]<> ]+>?$' \
+  || fail PRODUCTION_RESEND_FROM_INVALID
+
+auth_image=$(required_value THESISTRACE_AUTH_IMAGE)
+case "$auth_image" in
+  *@*)
+    printf '%s\n' "$auth_image" | grep -Eq \
+      '^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$' \
+      || fail PRODUCTION_AUTH_IMAGE_INVALID
+    ;;
+  *)
+    printf '%s\n' "$auth_image" | grep -Eq \
+      '^[A-Za-z0-9][A-Za-z0-9._:/-]*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$' \
+      || fail PRODUCTION_AUTH_IMAGE_INVALID
+    auth_image_tag=${auth_image##*:}
+    normalized_auth_image_tag=$(printf '%s' "$auth_image_tag" | tr '[:upper:]' '[:lower:]')
+    case "$normalized_auth_image_tag" in
+      latest | test | dev | development | placeholder)
+        fail PRODUCTION_AUTH_IMAGE_INVALID
+        ;;
+    esac
+    ;;
+esac
+case "$auth_image" in
+  *[!A-Za-z0-9._:/@-]*)
+    fail PRODUCTION_AUTH_IMAGE_INVALID
+    ;;
+esac
+
+compose() {
+  docker compose \
+    --project-name thesistrace \
+    --env-file "$environment_file" \
+    --file "$base_file" \
+    --file "$production_file" \
+    "$@"
+}
+
+compose config --quiet
+case "$action" in
+  up) compose up --detach --wait --build ;;
+  down) compose down ;;
+  status) compose ps ;;
+  validate) ;;
+esac

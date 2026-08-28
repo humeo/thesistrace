@@ -661,23 +661,6 @@ select { color-scheme: dark; }
   color: var(--ink);
   background: var(--canvas);
 }
-.alpha-formula-editor .cm-editor { height: 100%; min-height: 0; color: var(--ink); background: var(--canvas); font: 14px/1.65 var(--mono); }
-.alpha-formula-editor .cm-editor.cm-focused { outline: 0; }
-.alpha-formula-editor .cm-scroller { height: 100%; overflow: auto; }
-.alpha-formula-editor .cm-content { padding: 14px 10px; caret-color: var(--ink); }
-.alpha-formula-editor .cm-gutters { min-width: 36px; color: var(--ink-faint); background: var(--surface-1); border-right-color: var(--line); }
-.alpha-formula-editor .cm-lineNumbers .cm-gutterElement { padding: 0 8px 0 6px; }
-.alpha-formula-editor .cm-activeLine { background: rgb(94 106 210 / .06); }
-.alpha-formula-editor .cm-activeLineGutter { color: var(--ink-soft); background: var(--surface-2); }
-.alpha-formula-editor .cm-placeholder { color: var(--ink-faint); font-style: normal; }
-.alpha-formula-editor .cm-selectionBackground,
-.alpha-formula-editor .cm-focused .cm-selectionBackground { background: rgb(94 106 210 / .28) !important; }
-.alpha-formula-editor .cm-alpha-function { color: #aab3ff; font-weight: 500; }
-.alpha-formula-editor .cm-alpha-field { color: #8bd5ca; font-weight: 500; }
-.alpha-formula-editor .cm-alpha-number { color: #7cc4ff; }
-.alpha-formula-editor .cm-alpha-operator { color: var(--ink-soft); }
-.alpha-formula-editor .cm-tooltip { color: var(--ink-muted); background: var(--surface-3); border-color: var(--line-strong); }
-.alpha-formula-editor .cm-tooltip-autocomplete > ul > li[aria-selected] { color: var(--ink); background: var(--primary); }
 .formula-diagnostics {
   display: grid;
   gap: 6px;

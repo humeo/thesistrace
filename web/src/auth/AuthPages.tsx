@@ -289,11 +289,24 @@ export function AuthRoute({
     case "/login":
       return <LoginPage location={location} navigate={navigate} />;
     case "/accept-invitation":
-      return <AcceptInvitationPage clearSecret={clearSecret} secret={secret} />;
+      return (
+        <AcceptInvitationPage
+          clearSecret={clearSecret}
+          key={secret?.kind === "invitation" ? secret.token : "missing-invitation"}
+          secret={secret}
+        />
+      );
     case "/forgot-password":
       return <ForgotPasswordPage navigate={navigate} />;
     case "/reset-password":
-      return <ResetPasswordPage clearSecret={clearSecret} navigate={navigate} secret={secret} />;
+      return (
+        <ResetPasswordPage
+          clearSecret={clearSecret}
+          key={secret?.kind === "password-reset" ? secret.token : "missing-password-reset"}
+          navigate={navigate}
+          secret={secret}
+        />
+      );
     default:
       return null;
   }

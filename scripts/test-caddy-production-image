@@ -85,6 +85,7 @@ start_container() {
     --network-alias thesistrace.test \
     --env THESISTRACE_PUBLIC_ORIGIN=https://thesistrace.test \
     --env 'THESISTRACE_CADDY_TLS_DIRECTIVE=tls internal' \
+    --env 'THESISTRACE_CADDY_HSTS_DIRECTIVE=header >Strict-Transport-Security "max-age=31536000"' \
     --volume "$volume_name:/data" \
     "$image_name" >"$evidence_root/container-id.txt"
 
@@ -192,3 +193,79 @@ certificates_after=$(docker exec "$container_name" find \
   /data/caddy/certificates/local -type f -name '*.crt' \
   -exec sha256sum '{}' ';' | sort)
 test "$certificates_after" = "$certificates_before"
+
+docker exec "$container_name" wget --server-response --spider \
+  --no-check-certificate https://thesistrace.test/login \
+  >"$evidence_root/security-headers.stdout.log" \
+  2>"$evidence_root/security-headers.stderr.log"
+security_headers="$evidence_root/security-headers.stderr.log"
+grep -Fi "Content-Security-Policy: default-src 'none'; script-src 'self';" \
+  "$security_headers"
+grep -Fi "style-src 'self'; style-src-attr 'unsafe-inline'" "$security_headers"
+grep -Fi "Referrer-Policy: no-referrer" "$security_headers"
+grep -Fi "X-Content-Type-Options: nosniff" "$security_headers"
+grep -Fi "X-Frame-Options: DENY" "$security_headers"
+grep -Fi "Permissions-Policy:" "$security_headers"
+grep -Fi "Strict-Transport-Security: max-age=31536000" "$security_headers"
+grep -Ei "X-Request-Id: [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" \
+  "$security_headers"
+if grep -Ei "Strict-Transport-Security:.*(includeSubDomains|preload)" \
+  "$security_headers"; then
+  echo "Caddy emitted an unapproved HSTS directive" >&2
+  exit 1
+fi
+
+forged_request_id=$(docker exec "$client_one_name" wget --quiet \
+  --header 'X-Request-ID: request-canary-forged-id' \
+  --no-check-certificate --output-document - \
+  https://thesistrace.test/api/auth/request-id)
+test "$forged_request_id" != request-canary-forged-id
+printf '%s\n' "$forged_request_id" \
+  | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
+docker exec "$client_one_name" wget --quiet \
+  --header 'Authorization: Bearer request-canary-authorization' \
+  --header 'Cookie: session=request-canary-cookie' \
+  --no-check-certificate --output-document /dev/null \
+  'https://thesistrace.test/api/auth/request-canary-path?token=request-canary-query'
+docker stop "$auth_container_name" >/dev/null
+if docker exec "$client_one_name" wget --quiet \
+  --header 'Authorization: Bearer request-canary-outage-authorization' \
+  --header 'Cookie: session=request-canary-outage-cookie' \
+  --no-check-certificate --output-document /dev/null \
+  'https://thesistrace.test/api/auth/client-ip?token=request-canary-outage-query'; then
+  echo "Caddy reached a stopped Auth backend" >&2
+  exit 1
+fi
+attempt=0
+until docker logs "$container_name" 2>&1 \
+  | grep -F '"logger":"http.log.error.log0"' >/dev/null; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 50 ]; then
+    echo "Caddy sanitized access log did not become visible" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+docker logs "$container_name" >"$evidence_root/caddy-sanitized.log" 2>&1
+if grep -F 'request-canary' "$evidence_root/caddy-sanitized.log"; then
+  echo "Caddy access log exposed a request canary" >&2
+  exit 1
+fi
+access_logs=$(grep -F 'http.log.access' "$evidence_root/caddy-sanitized.log")
+test -n "$access_logs"
+printf '%s\n' "$access_logs" | grep -F '"request_id":' >/dev/null
+printf '%s\n' "$access_logs" | grep -F '"method":' >/dev/null
+printf '%s\n' "$access_logs" | grep -F '"path":' >/dev/null
+printf '%s\n' "$access_logs" | grep -F '"status":' >/dev/null
+printf '%s\n' "$access_logs" | grep -F '"duration":' >/dev/null
+if printf '%s\n' "$access_logs" \
+  | grep -E '"(request|uuid|resp_headers|bytes_read|user_id|size)":'; then
+  echo "Caddy access log retained an unapproved field" >&2
+  exit 1
+fi
+if grep -E '"(request|headers|uri|query|body|token|formula|object_key|manifest|resp_headers|err_trace)":' \
+  "$evidence_root/caddy-sanitized.log"; then
+  echo "Caddy runtime log retained an unapproved field" >&2
+  exit 1
+fi

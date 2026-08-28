@@ -17,6 +17,8 @@ import { alphaLanguageExtensions } from "./alpha-language";
 import type { FormulaDiagnostic } from "./diagnostics";
 import type { EditorState as StoredEditorState } from "./draft";
 
+const editorStylesheetUrl = new URL("./alpha-formula-editor.css?no-inline", import.meta.url).href;
+
 export function AlphaFormulaEditor({
   catalog,
   diagnostics,
@@ -38,6 +40,14 @@ export function AlphaFormulaEditor({
 
   useEffect(() => {
     if (host.current === null) return;
+    const root = host.current.shadowRoot ?? host.current.attachShadow({ mode: "open" });
+    if (root.querySelector("link[data-alpha-editor-styles]") === null) {
+      const stylesheet = document.createElement("link");
+      stylesheet.dataset.alphaEditorStyles = "";
+      stylesheet.href = editorStylesheetUrl;
+      stylesheet.rel = "stylesheet";
+      root.append(stylesheet);
+    }
     const options: Completion[] = [
       ...catalog.fields.map((field) => ({
         label: field.identifier,
@@ -82,7 +92,7 @@ export function AlphaFormulaEditor({
         }),
       ],
     });
-    view.current = new EditorView({ state, parent: host.current });
+    view.current = new EditorView({ root, state, parent: root });
     return () => {
       view.current?.destroy();
       view.current = null;

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { canonicalizeAuthEmailRequest } from "./identity.js";
+import type { AuthHttpObserver } from "./http-observability.js";
 import { InvitationRejectedError } from "./invitation.js";
 import { PasswordResetRejectedError } from "./password-reset.js";
 
@@ -74,6 +75,7 @@ export type AuthAppDependencies = Readonly<{
     headers: Headers,
   ) => Promise<Readonly<{ allowed: boolean; retryAfterSeconds: number }>>;
   getSession: (input: GetSessionInput) => Promise<unknown>;
+  httpObserver?: AuthHttpObserver;
   inspectInvitation: (token: string) => Promise<Readonly<{ email: string }>>;
   publicOrigin: string;
   readiness: () => Promise<boolean>;
@@ -82,6 +84,21 @@ export type AuthAppDependencies = Readonly<{
 
 export function createAuthApp(dependencies: AuthAppDependencies): Hono {
   const app = new Hono();
+  app.use("*", async (context, next) => {
+    const observer = dependencies.httpObserver;
+    if (observer === undefined || context.req.path.startsWith("/health/")) {
+      await next();
+      return;
+    }
+    const observation = observer.start(context.req.raw.headers);
+    await next();
+    context.header("X-Request-ID", observation.requestId);
+    observer.complete(observation, {
+      method: context.req.method,
+      path: context.req.path,
+      status: context.res.status,
+    });
+  });
   app.onError((_error, context) =>
     context.json({ code: "AUTH_SERVICE_UNAVAILABLE" }, 503),
   );

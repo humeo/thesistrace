@@ -188,7 +188,10 @@ def create_app(
         if request.url.path in _HEALTH_PATHS:
             return await call_next(request)
 
-        http_request_id = selected_request_id_factory()
+        http_request_id = _trusted_http_request_id(
+            request.headers.get("x-request-id"),
+            selected_request_id_factory,
+        )
         started = selected_monotonic_ns()
         try:
             response = await call_next(request)
@@ -721,6 +724,25 @@ def _normalized_route(request: Request) -> str:
 
 def _new_http_request_id() -> str:
     return str(uuid4())
+
+
+def _trusted_http_request_id(
+    candidate: str | None,
+    fallback: Callable[[], str],
+) -> str:
+    if candidate is not None:
+        normalized = candidate.lower()
+        try:
+            parsed = UUID(normalized)
+        except ValueError:
+            parsed = None
+        if (
+            parsed is not None
+            and parsed.version is not None
+            and str(parsed) == normalized
+        ):
+            return normalized
+    return fallback()
 
 
 app = create_app()

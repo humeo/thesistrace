@@ -1,3 +1,8 @@
 :8200 {
-	respond "{http.request.header.X-ThesisTrace-Client-IP}"
+	handle /api/auth/request-id {
+		respond "{http.request.header.X-Request-ID}"
+	}
+	handle {
+		respond "{http.request.header.X-ThesisTrace-Client-IP}"
+	}
 }

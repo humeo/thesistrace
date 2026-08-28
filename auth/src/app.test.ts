@@ -5,6 +5,10 @@ import {
   InvitationRejectedError,
   InvitationServiceUnavailableError,
 } from "./invitation.js";
+import {
+  createAuthHttpObserver,
+  type AuthHttpEvent,
+} from "./http-observability.js";
 
 const activeSession = {
   session: { id: "session-id" },
@@ -520,11 +524,19 @@ describe("Auth HTTP boundary", () => {
 
   it("sanitizes an unexpected Better Auth handler failure without logging it", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const events: AuthHttpEvent[] = [];
+    const ticks = [20, 25][Symbol.iterator]();
     try {
       const app = createAuthApp(
         dependencies({
           authHandler: vi.fn(async () => {
             throw new Error("cookie-canary token-canary private-database-url");
+          }),
+          httpObserver: createAuthHttpObserver({
+            clock: () => new Date("2026-08-29T00:00:00.000Z"),
+            monotonicMilliseconds: () => ticks.next().value ?? 25,
+            requestIdFactory: () => "00000000-0000-4000-8000-000000000099",
+            write: (event) => events.push(event),
           }),
         }),
       );
@@ -536,9 +548,64 @@ describe("Auth HTTP boundary", () => {
 
       expect(response.status).toBe(503);
       expect(await response.json()).toEqual({ code: "AUTH_SERVICE_UNAVAILABLE" });
+      expect(response.headers.get("x-request-id")).toBe(
+        "00000000-0000-4000-8000-000000000099",
+      );
+      expect(events).toMatchObject([
+        {
+          duration_ms: 5,
+          http_request_id: "00000000-0000-4000-8000-000000000099",
+          method: "GET",
+          route: "/api/auth/ok",
+          status_code: 503,
+        },
+      ]);
+      expect(JSON.stringify(events)).not.toMatch(
+        /cookie-canary|query-canary|token-canary|private-database-url/,
+      );
       expect(consoleError).not.toHaveBeenCalled();
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("emits one sanitized completion while excluding health probes", async () => {
+    const events: AuthHttpEvent[] = [];
+    const ticks = [10, 13][Symbol.iterator]();
+    const app = createAuthApp(
+      dependencies({
+        httpObserver: createAuthHttpObserver({
+          clock: () => new Date("2026-08-29T00:00:00.000Z"),
+          monotonicMilliseconds: () => ticks.next().value ?? 13,
+          requestIdFactory: () => "00000000-0000-4000-8000-000000000099",
+          write: (event) => events.push(event),
+        }),
+      }),
+    );
+
+    expect((await app.request("http://auth.test/health/live")).status).toBe(200);
+    const response = await app.request(
+      "http://auth.test/api/auth/ok?token=query-canary",
+      {
+        headers: {
+          cookie: "cookie-canary=private",
+          "x-request-id": "00000000-0000-4000-8000-000000000001",
+        },
+      },
+    );
+
+    expect(response.headers.get("x-request-id")).toBe(
+      "00000000-0000-4000-8000-000000000001",
+    );
+    expect(events).toMatchObject([
+      {
+        duration_ms: 3,
+        http_request_id: "00000000-0000-4000-8000-000000000001",
+        method: "GET",
+        route: "/api/auth/ok",
+        status_code: 200,
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toMatch(/query-canary|cookie-canary/);
   });
 });

@@ -1,12 +1,16 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 import {
   browserPassword,
   createResearcher,
   emailToken,
+  expect,
+  expireInvitation,
   issueInvitation,
   restoreResearcherSession,
   runAuthOperator,
+  sameOriginHeaders,
+  securityTest as test,
 } from "./auth-fixture";
 
 test("Invitation, login, account password, reset, refresh, and access lifecycle stay invite-only", async ({ page }) => {
@@ -101,6 +105,60 @@ test("Invitation, login, account password, reset, refresh, and access lifecycle 
   });
   await loginThroughUi(page, email, resetPassword);
   await expect(page).toHaveURL(/\/data$/);
+
+  expect(runAuthOperator("revoke-sessions", "--email", email)).toMatchObject({
+    command: "revoke-sessions",
+    status: "updated",
+  });
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("heading", { name: "Log in to ThesisTrace" })).toBeVisible();
+});
+
+test("Invitation expiry, reissue, and lost-response replay converge safely", async ({ page }) => {
+  const email = "browser-invitation-reissue@example.test";
+  const expiredToken = await issueInvitation(email);
+  expireInvitation(expiredToken);
+
+  await page.goto(`/accept-invitation#token=${encodeURIComponent(expiredToken)}`);
+  await expect(page).toHaveURL(/\/accept-invitation$/);
+  await expect(page.getByRole("alert")).toContainText(
+    "This invitation is invalid or has expired.",
+  );
+
+  expect(runAuthOperator("reissue", "--email", email)).toMatchObject({
+    command: "reissue",
+    status: "delivered",
+  });
+  const replacementToken = await emailToken(email, "/accept-invitation#token=");
+  expect(replacementToken).not.toBe(expiredToken);
+  await page.goto(`/accept-invitation#token=${encodeURIComponent(replacementToken)}`);
+  await expect(page.getByLabel("Email")).toHaveValue(email);
+  await page.getByLabel("Password", { exact: true }).fill(browserPassword);
+  await page.getByLabel("Confirm password").fill(browserPassword);
+  await page.getByRole("button", { name: "Accept invitation" }).click();
+  await expect(page).toHaveURL(/\/data$/);
+
+  const replay = await page.request.post(
+    "/api/auth/researcher-invitation/accept",
+    {
+      data: { password: browserPassword, token: replacementToken },
+      headers: sameOriginHeaders(),
+    },
+  );
+  expect(replay.status()).toBe(200);
+  const wrongPassword = await page.request.post(
+    "/api/auth/researcher-invitation/accept",
+    {
+      data: {
+        password: "Browser-wrong-password-2026",
+        token: replacementToken,
+      },
+      headers: sameOriginHeaders(),
+    },
+  );
+  expect(wrongPassword.status()).toBe(400);
+  await expect(page.locator("body")).not.toContainText(replacementToken);
+  expect(await localStorageContains(page, replacementToken)).toBe(false);
 });
 
 test("Bootstrap and Core failures preserve the exact Session boundary", async ({ page }) => {
@@ -140,6 +198,17 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
   await page.getByRole("button", { name: "Retry" }).click();
   await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
 
+  await page.route("**/api/auth/get-session", (route) => route.fulfill({
+    json: { code: "AUTH_SERVICE_UNAVAILABLE" },
+    status: 503,
+  }));
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("heading", { name: "Authentication unavailable" })).toBeVisible();
+  await expect(page.getByText("Existing session data has been retained.")).toBeVisible();
+  await page.unroute("**/api/auth/get-session");
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+
   await page.getByRole("link", { name: "Research", exact: true }).click();
   await page.route("**/api/data", (route) => route.fulfill({
     json: { code: "AUTHENTICATION_REQUIRED" },
@@ -151,6 +220,7 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
 });
 
 test("Two Researchers isolate Drafts, receipts, cursors, and system Folder identity", async ({ page }) => {
+  test.setTimeout(180_000);
   const researcherA = await createResearcher(page, "browser-isolation-a@example.test");
   const bootstrapA = await bootstrap(page);
   await page.goto("/research");
@@ -173,6 +243,28 @@ test("Two Researchers isolate Drafts, receipts, cursors, and system Folder ident
   const keyB = `thesistrace.research-draft.${researcherB.id}.folder_default`;
   await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), keyB)).not.toBeNull();
 
+  const folderBResponse = await page.request.post("/api/research-folders", {
+    data: { name: "Researcher B private folder" },
+    headers: sameOriginHeaders(),
+  });
+  expect(folderBResponse.status()).toBe(201);
+  const folderB = (await folderBResponse.json()) as { id: string };
+  const batchB = await admitBatch(page, "browser-owner-batch-b");
+  const strategyRunB = await admitStrategyRun(page, "browser-owner-track-run-b");
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/research-runs/${strategyRunB}`);
+    return ((await response.json()) as { status: string }).status;
+  }, { timeout: 90_000 }).toBe("succeeded");
+  const trackBResponse = await page.request.post(
+    `/api/research-runs/${strategyRunB}/daily-tracks`,
+    {
+      data: { request_id: "browser-owner-track-b" },
+      headers: sameOriginHeaders(),
+    },
+  );
+  expect(trackBResponse.status()).toBe(201);
+  const trackB = (await trackBResponse.json()) as { id: string };
+
   const sharedRequestId = "browser-shared-owner-receipt";
   const runB = await admitRun(page, sharedRequestId, "Researcher B shared receipt");
   await restoreResearcherSession(page, researcherA);
@@ -183,6 +275,12 @@ test("Two Researchers isolate Drafts, receipts, cursors, and system Folder ident
   await admitRun(page, "browser-owner-cursor-second", "Researcher A cursor second");
   expect(runA).not.toBe(runB);
   expect((await page.request.get(`/api/research-runs/${runB}`)).status()).toBe(404);
+  expect((await page.request.get(`/api/research-batches/${batchB}`)).status()).toBe(404);
+  expect((await page.request.get(`/api/daily-tracks/${trackB.id}`)).status()).toBe(404);
+  const foldersA = (await (await page.request.get("/api/research-folders")).json()) as {
+    items: Array<{ id: string }>;
+  };
+  expect(foldersA.items.map((folder) => folder.id)).not.toContain(folderB.id);
   const firstPage = await page.request.get("/api/research-runs?limit=1");
   expect(firstPage.status()).toBe(200);
   const firstPageBody = await firstPage.json() as { next_cursor: string | null };
@@ -249,6 +347,49 @@ async function admitRun(page: Page, requestId: string, name: string): Promise<st
   expect(response.status()).toBe(202);
   const body = await response.json() as { id?: unknown };
   if (typeof body.id !== "string") throw new Error("Research Run admission returned no id");
+  return body.id;
+}
+
+async function admitBatch(page: Page, requestId: string): Promise<string> {
+  const response = await page.request.post("/api/research-batches", {
+    data: {
+      request_id: requestId,
+      batch_kind: "factor_evaluation",
+      start_date: "2026-08-04",
+      end_date: "2026-08-05",
+      universe: "top300",
+      neutralization: "none",
+      factors: [{ item_key: "private-factor", formula: "close" }],
+    },
+    headers: sameOriginHeaders(),
+  });
+  expect(response.status()).toBe(202);
+  const body = (await response.json()) as { id?: unknown };
+  if (typeof body.id !== "string") throw new Error("Research Batch returned no id");
+  return body.id;
+}
+
+async function admitStrategyRun(page: Page, requestId: string): Promise<string> {
+  const response = await page.request.post("/api/research-runs", {
+    data: {
+      request_id: requestId,
+      folder_id: "folder_default",
+      name: "Researcher B private Track seed",
+      formula: "close",
+      hypothesis: null,
+      start_date: "2026-08-04",
+      end_date: "2026-08-05",
+      universe: "top300",
+      neutralization: "none",
+      research_kind: "strategy_backtest",
+      holdings_count: 10,
+      rebalance_every_sessions: 1,
+    },
+    headers: sameOriginHeaders(),
+  });
+  expect(response.status()).toBe(202);
+  const body = (await response.json()) as { id?: unknown };
+  if (typeof body.id !== "string") throw new Error("Strategy Run returned no id");
   return body.id;
 }
 

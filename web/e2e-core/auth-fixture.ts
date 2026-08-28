@@ -9,7 +9,30 @@ export type AuthenticatedResearcher = Readonly<{
 }>;
 
 export const browserPassword = "Browser-acceptance-password-2026";
-export const test = base.extend<{ researcher: AuthenticatedResearcher }>({
+export const securityTest = base.extend<{ cspGuard: void }>({
+  cspGuard: [async ({ page }, use) => {
+    resetAuthRateLimits();
+    const violations: string[] = [];
+    await page.exposeFunction(
+      "__thesistraceRecordCspViolation",
+      (directive: unknown) => {
+        violations.push(typeof directive === "string" ? directive : "invalid");
+      },
+    );
+    await page.addInitScript(() => {
+      window.addEventListener("securitypolicyviolation", (event) => {
+        const record = (window as unknown as {
+          __thesistraceRecordCspViolation: (directive: string) => Promise<void>;
+        }).__thesistraceRecordCspViolation;
+        void record(event.effectiveDirective);
+      });
+    });
+    await use();
+    expect(violations).toEqual([]);
+  }, { auto: true }],
+});
+
+export const test = securityTest.extend<{ researcher: AuthenticatedResearcher }>({
   researcher: [async ({ page }, use, testInfo) => {
     const suffix = createHash("sha256").update(testInfo.testId).digest("hex").slice(0, 16);
     const researcher = await createResearcher(page, `browser-core-${suffix}@example.test`);
@@ -99,7 +122,7 @@ export async function emailToken(email: string, path: string): Promise<string> {
       throw new Error("Local Resend acceptance fixture response is invalid");
     }
     lastEmailCount = payload.emails.length;
-    for (const candidate of payload.emails) {
+    for (const candidate of [...payload.emails].reverse()) {
       if (!isRecord(candidate) || !Array.isArray(candidate.to) || !candidate.to.includes(email)) {
         continue;
       }
@@ -121,6 +144,47 @@ export function runAuthOperator(...args: string[]): unknown {
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
   return JSON.parse(output) as unknown;
+}
+
+export function expireInvitation(token: string): void {
+  const output = execFileSync(
+    "docker",
+    [
+      "exec",
+      "--interactive",
+      `${testProjectName()}-auth-1`,
+      "node",
+      "/test-fixtures/mutate-auth-test-state.mjs",
+      "expire-invitation",
+    ],
+    {
+      encoding: "utf8",
+      input: token,
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+  const result = JSON.parse(output) as unknown;
+  if (!isRecord(result) || result.status !== "expired") {
+    throw new Error("Private Auth expiry fixture returned an invalid result");
+  }
+}
+
+function resetAuthRateLimits(): void {
+  const output = execFileSync(
+    "docker",
+    [
+      "exec",
+      `${testProjectName()}-auth-1`,
+      "node",
+      "/test-fixtures/mutate-auth-test-state.mjs",
+      "reset-rate-limits",
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const result = JSON.parse(output) as unknown;
+  if (!isRecord(result) || result.status !== "reset") {
+    throw new Error("Private Auth rate-limit fixture returned an invalid result");
+  }
 }
 
 export function sameOriginHeaders(): Record<string, string> {

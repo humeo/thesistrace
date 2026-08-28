@@ -42,6 +42,8 @@ def test_caddy_is_the_only_web_runtime_and_preserves_api_paths() -> None:
     assert caddyfile.count(
         "header_up X-ThesisTrace-Client-IP {remote_host}"
     ) == 2
+    assert caddyfile.count("header_up X-Request-ID {http.request.uuid}") == 2
+    assert ">X-Request-ID {http.request.uuid}" in caddyfile
     assert "path /health /health/* /internal /internal/*" in caddyfile
     assert 'respond 404' in caddyfile
     assert 'Cache-Control "no-store"' in caddyfile
@@ -51,6 +53,66 @@ def test_caddy_is_the_only_web_runtime_and_preserves_api_paths() -> None:
     assert "{$THESISTRACE_CADDY_TLS_DIRECTIVE}" in caddyfile
     assert "auto_https off" not in caddyfile
     assert "tls internal" not in caddyfile
+
+
+def test_caddy_applies_the_exact_security_and_sanitized_logging_contract() -> None:
+    caddyfile = (DEPLOY / "Caddyfile").read_text()
+
+    assert (
+        "default-src 'none'; script-src 'self'; style-src 'self'; "
+        "style-src-attr 'unsafe-inline'; connect-src 'self'; "
+        "form-action 'self'; img-src 'self' data:; font-src 'self'; "
+        "base-uri 'none'; object-src 'none'; frame-src 'none'; "
+        "frame-ancestors 'none'"
+    ) in caddyfile
+    assert ">Referrer-Policy \"no-referrer\"" in caddyfile
+    assert ">X-Content-Type-Options \"nosniff\"" in caddyfile
+    assert ">X-Frame-Options \"DENY\"" in caddyfile
+    assert ">Permissions-Policy" in caddyfile
+    assert "{$THESISTRACE_CADDY_HSTS_DIRECTIVE}" in caddyfile
+    assert "includeSubDomains" not in caddyfile
+    assert "preload" not in caddyfile
+
+    for forbidden_field in (
+        "request delete",
+        "uuid delete",
+        "bytes_read delete",
+        "user_id delete",
+        "size delete",
+        "resp_headers delete",
+        "err_id delete",
+        "err_trace delete",
+    ):
+        assert forbidden_field in caddyfile
+    assert "log_append request_id {http.request.uuid}" in caddyfile
+    assert "log_append method {http.request.method}" in caddyfile
+    assert "log_append path {http.request.uri.path}" not in caddyfile
+    for normalized_path in (
+        "/private/*",
+        "/api/auth/*",
+        "/api/*",
+        "/assets/*",
+        "/*",
+    ):
+        assert f"log_append path {normalized_path}" in caddyfile
+    assert "http.request.body" not in caddyfile
+    assert "http.response.body" not in caddyfile
+    assert "http.request.uri.query" not in caddyfile
+    assert "log default" in caddyfile
+    for runtime_field in (
+        "request",
+        "headers",
+        "uri",
+        "query",
+        "body",
+        "token",
+        "formula",
+        "object_key",
+        "manifest",
+        "resp_headers",
+        "err_trace",
+    ):
+        assert f"{runtime_field} delete" in caddyfile
 
 
 def test_auth_image_reuses_the_package_store_for_production_deploy() -> None:
@@ -108,12 +170,42 @@ def test_production_overlay_publishes_only_caddy_and_persists_certificates() -> 
     assert '      - "80:80"' in web
     assert '      - "443:443"' in web
     assert "      - caddy-data:/data" in web
+    assert (
+        "THESISTRACE_CADDY_HSTS_DIRECTIVE: "
+        "'header >Strict-Transport-Security \"max-age=31536000\"'"
+    ) in web
     assert production.count("    ports:\n") == 1
     assert production.count(":80") == 1
     assert production.count(":443") == 1
     assert "  caddy-data:\n" in production
     for service in ("postgres", "rustfs", "auth", "api"):
         assert f"  {service}:\n" not in production
+
+
+def test_single_node_services_have_one_replica_and_restart_unless_stopped() -> None:
+    compose = (DEPLOY / "compose.yaml").read_text()
+    ordered_services = (
+        ("postgres", "rustfs"),
+        ("rustfs", "auth-initialize"),
+        ("auth", "initialize"),
+        ("api", "research-worker"),
+        ("research-worker", "batch-research-worker"),
+        ("batch-research-worker", "tracking-worker"),
+        ("tracking-worker", "web"),
+        ("web", None),
+    )
+    for service, next_service in ordered_services:
+        section = _service(compose, service, next_service)
+        assert 'restart: unless-stopped' in section, service
+        assert "deploy:\n      replicas: 1" in section, service
+
+    for initializer, next_service in (
+        ("auth-initialize", "auth"),
+        ("initialize", "api"),
+    ):
+        section = _service(compose, initializer, next_service)
+        assert 'restart: "no"' in section
+        assert "unless-stopped" not in section
 
 
 def test_development_and_test_origins_are_exact_before_compose_rendering() -> None:
@@ -156,6 +248,10 @@ def test_release_image_gate_uses_the_same_caddyfile_with_an_internal_test_ca() -
     assert "pnpm test:caddy-image-smoke" in package
     assert "THESISTRACE_PUBLIC_ORIGIN=https://thesistrace.test" in smoke
     assert "THESISTRACE_CADDY_TLS_DIRECTIVE=tls internal" in smoke
+    assert (
+        "THESISTRACE_CADDY_HSTS_DIRECTIVE=header >Strict-Transport-Security "
+        "\"max-age=31536000\""
+    ) in smoke
     assert "308 Permanent Redirect" in smoke
     assert "internal/session/verify private-internal" in smoke
     assert "certificates_after" in smoke
@@ -164,6 +260,13 @@ def test_release_image_gate_uses_the_same_caddyfile_with_an_internal_test_ca() -
     assert "203.0.113.250" in smoke
     assert "client_ip_one" in smoke
     assert "client_ip_two" in smoke
+    assert "forged_request_id" in smoke
+    assert "Content-Security-Policy" in smoke
+    assert "Strict-Transport-Security" in smoke
+    assert "includeSubDomains" in smoke
+    assert "preload" in smoke
+    assert "request-canary" in smoke
+    assert '"logger":"http.log.error.log0"' in smoke
     for evidence_name in (
         "caddy.log",
         "container-inspect.json",

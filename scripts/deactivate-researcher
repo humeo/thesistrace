@@ -21,6 +21,8 @@ case "$identity_flag" in
 esac
 test -n "$identity_value" || fail_usage
 
+"$repo_root/scripts/production-runtime" validate
+
 compose_run() {
   docker compose \
     --project-name thesistrace \

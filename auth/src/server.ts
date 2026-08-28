@@ -13,6 +13,7 @@ import {
 } from "./coordination.js";
 import { createAuthCoordinationPool, createAuthPool } from "./database.js";
 import { diagnoseAuthFailure } from "./failure.js";
+import { createAuthHttpObserver } from "./http-observability.js";
 import { ResearcherInvitationService } from "./invitation.js";
 import { InvitationAdmission } from "./invitation-admission.js";
 import { PasswordResetLifecycle } from "./password-reset.js";
@@ -126,6 +127,7 @@ async function main(): Promise<void> {
       consumePasswordResetRateLimit: (token, headers) =>
         passwordResetRateLimiter.consume(token, headers),
       getSession: (input) => auth.api.getSession(input),
+      httpObserver: createAuthHttpObserver(),
       inspectInvitation: (token) => invitations.inspect(token),
       publicOrigin: settings.publicOrigin,
       readiness: () => checkAuthReadiness(pool),

@@ -1,36 +1,90 @@
+{
+	log default {
+		output stderr
+		format filter {
+			request delete
+			headers delete
+			uri delete
+			query delete
+			body delete
+			token delete
+			formula delete
+			object_key delete
+			manifest delete
+			resp_headers delete
+			err_trace delete
+			wrap json
+		}
+	}
+}
+
 {$THESISTRACE_PUBLIC_ORIGIN} {
 	{$THESISTRACE_CADDY_TLS_DIRECTIVE}
+	{$THESISTRACE_CADDY_HSTS_DIRECTIVE}
 
 	root * /srv
+
+	log {
+		output stderr
+		format filter {
+			request delete
+			uuid delete
+			bytes_read delete
+			user_id delete
+			size delete
+			resp_headers delete
+			err_id delete
+			err_trace delete
+			wrap json
+		}
+	}
+	log_append request_id {http.request.uuid}
+	log_append method {http.request.method}
+
+	header {
+		>Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; form-action 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'"
+		>Referrer-Policy "no-referrer"
+		>X-Content-Type-Options "nosniff"
+		>X-Frame-Options "DENY"
+		>Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+		>X-Request-ID {http.request.uuid}
+	}
 
 	@private_backend {
 		path /health /health/* /internal /internal/*
 	}
 	handle @private_backend {
+		log_append path /private/*
 		respond 404
 	}
 
 	handle /api/auth/* {
+		log_append path /api/auth/*
 		header Cache-Control "no-store"
 		reverse_proxy auth:8200 {
 			header_up X-ThesisTrace-Client-IP {remote_host}
+			header_up X-Request-ID {http.request.uuid}
 		}
 	}
 
 	handle /api/* {
+		log_append path /api/*
 		header Cache-Control "no-store"
 		reverse_proxy api:8100 {
 			header_up X-ThesisTrace-Client-IP {remote_host}
+			header_up X-Request-ID {http.request.uuid}
 		}
 	}
 
 	@hashed_assets path_regexp hashed ^/assets/.+-[A-Za-z0-9_-]{8,}\.[^/]+$
 	handle @hashed_assets {
+		log_append path /assets/*
 		header Cache-Control "public, max-age=31536000, immutable"
 		file_server
 	}
 
 	handle {
+		log_append path /*
 		header Cache-Control "no-cache"
 		try_files {path} /index.html
 		file_server

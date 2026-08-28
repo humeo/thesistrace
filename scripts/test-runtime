@@ -252,11 +252,17 @@ capture_api_log_evidence() {
   compose logs --no-color api >"$api_log"
 }
 
+capture_gateway_auth_log_evidence() {
+  compose logs --no-color web >"$evidence_dir/caddy-events.jsonl"
+  compose logs --no-color auth >"$evidence_dir/auth-events.jsonl"
+}
+
 scan_secret_canaries() {
   scan_result="$evidence_dir/secret-canary-scan.txt"
   : >"$scan_result"
   for canary in \
     observability-access-canary \
+    observability-outage-canary \
     observability-secret-canary \
     observability-request-canary; do
     if grep -R -F -q -- "$canary" "$evidence_dir"; then
@@ -279,11 +285,26 @@ verify_image_health() {
 }
 
 verify_caddy_single_origin() {
-  curl --fail --silent --show-error "$public_origin/data" \
+  curl --fail --silent --show-error --dump-header "$evidence_dir/caddy-security-headers.txt" \
+    "$public_origin/data" \
     >"$evidence_dir/caddy-spa.html"
   curl --fail --silent --show-error "$public_origin/login" \
     >"$evidence_dir/caddy-spa-fallback.html"
   cmp "$evidence_dir/caddy-spa.html" "$evidence_dir/caddy-spa-fallback.html"
+  grep -Fi "Content-Security-Policy: default-src 'none'; script-src 'self';" \
+    "$evidence_dir/caddy-security-headers.txt"
+  grep -Fi "style-src 'self'; style-src-attr 'unsafe-inline'" \
+    "$evidence_dir/caddy-security-headers.txt"
+  grep -Fi "Referrer-Policy: no-referrer" \
+    "$evidence_dir/caddy-security-headers.txt"
+  grep -Fi "X-Content-Type-Options: nosniff" \
+    "$evidence_dir/caddy-security-headers.txt"
+  grep -Fi "Permissions-Policy:" "$evidence_dir/caddy-security-headers.txt"
+  if grep -Fi "Strict-Transport-Security:" \
+    "$evidence_dir/caddy-security-headers.txt"; then
+    echo "Test Caddy unexpectedly emitted Production HSTS" >&2
+    return 1
+  fi
   curl --fail --silent --show-error "$public_origin/api/auth/ok" \
     >"$evidence_dir/caddy-auth.json"
   grep -Fqx '{"ok":true}' "$evidence_dir/caddy-auth.json"
@@ -291,6 +312,16 @@ verify_caddy_single_origin() {
     --output "$evidence_dir/caddy-core.json" --write-out '%{http_code}' \
     "$public_origin/api/data")
   test "$core_status" = 401
+
+  auth_canary_status=$(curl --silent --show-error \
+    --header "Origin: $public_origin" \
+    --header 'Content-Type: application/json' \
+    --header 'Cookie: observability=observability-request-canary' \
+    --request POST \
+    --data '{"email":"observability-request-canary@example.test","password":"observability-request-canary"}' \
+    --output /dev/null --write-out '%{http_code}' \
+    "$public_origin/api/auth/sign-in/email?token=observability-request-canary")
+  test "$auth_canary_status" = 400 || test "$auth_canary_status" = 401
 
   for private_path in /health/live /health/ready /internal/session/verify; do
     private_status=$(curl --silent --show-error \
@@ -305,7 +336,10 @@ verify_caddy_backend_independence() {
   curl --fail --silent --show-error "$public_origin/data" \
     >"$evidence_dir/caddy-backends-unavailable.html"
   auth_status=$(curl --silent --show-error \
-    --output /dev/null --write-out '%{http_code}' "$public_origin/api/auth/ok")
+    --header 'Authorization: Bearer observability-outage-canary' \
+    --header 'Cookie: session=observability-outage-canary' \
+    --output /dev/null --write-out '%{http_code}' \
+    "$public_origin/api/auth/ok?token=observability-outage-canary")
   core_status=$(curl --silent --show-error \
     --output /dev/null --write-out '%{http_code}' "$public_origin/api/data")
   test "$auth_status" = 502
@@ -1099,6 +1133,7 @@ case "$command" in
       2>"$evidence_dir/smoke-reset-ready.stderr.log"
     run_phase image-smoke-worker-logs capture_worker_log_evidence
     run_phase image-smoke-api-logs capture_api_log_evidence
+    run_phase image-smoke-gateway-auth-logs capture_gateway_auth_log_evidence
     run_phase image-smoke-worker-event-contract compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
@@ -1126,6 +1161,8 @@ case "$command" in
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
       -e THESISTRACE_TEST_API_EVENTS=/smoke-evidence/api-events.jsonl \
       -e THESISTRACE_TEST_WORKER_EVENTS=/smoke-evidence/worker-events.jsonl \
+      -e THESISTRACE_TEST_CADDY_EVENTS=/smoke-evidence/caddy-events.jsonl \
+      -e THESISTRACE_TEST_AUTH_EVENTS=/smoke-evidence/auth-events.jsonl \
       initialize python /smoke/production_image_smoke.py observability \
       >"$evidence_dir/smoke-observability.json" \
       2>"$evidence_dir/smoke-observability.stderr.log"

@@ -34,6 +34,8 @@ x-auth-image: &auth-image
 
 services:
   postgres:
+    deploy:
+      replicas: 1
     logging: *bounded-logging
     image: postgres:16.10-alpine
     environment:
@@ -50,8 +52,11 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres-init/010-runtime-roles.sh:/docker-entrypoint-initdb.d/010-runtime-roles.sh:ro
+    restart: unless-stopped
 
   rustfs:
+    deploy:
+      replicas: 1
     logging: *bounded-logging
     image: rustfs/rustfs:1.0.0-beta.12
     environment:
@@ -64,6 +69,7 @@ services:
       retries: 180
     volumes:
       - rustfs-data:/data
+    restart: unless-stopped
 
   auth-initialize:
     <<: *auth-image
@@ -78,6 +84,8 @@ services:
 
   auth:
     <<: *auth-image
+    deploy:
+      replicas: 1
     logging: *bounded-logging
     environment:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
@@ -100,6 +108,7 @@ services:
       interval: 2s
       timeout: 5s
       retries: 60
+    restart: unless-stopped
 
   initialize:
     <<: *backend
@@ -115,6 +124,8 @@ services:
 
   api:
     <<: *backend
+    deploy:
+      replicas: 1
     logging: *bounded-logging
     environment:
       <<: *core-environment
@@ -133,9 +144,12 @@ services:
       interval: 2s
       timeout: 5s
       retries: 60
+    restart: unless-stopped
 
   research-worker:
     <<: *backend
+    deploy:
+      replicas: 1
     logging: *bounded-logging
     volumes:
       - canonical-data:/var/lib/thesistrace/canonical-data:ro
@@ -164,9 +178,12 @@ services:
       OPENBLAS_NUM_THREADS: ${THESISTRACE_RESEARCH_WORKER_CALCULATION_THREADS:-2}
       MKL_NUM_THREADS: ${THESISTRACE_RESEARCH_WORKER_CALCULATION_THREADS:-2}
       NUMEXPR_NUM_THREADS: ${THESISTRACE_RESEARCH_WORKER_CALCULATION_THREADS:-2}
+    restart: unless-stopped
 
   batch-research-worker:
     <<: *backend
+    deploy:
+      replicas: 1
     logging: *bounded-logging
     volumes:
       - canonical-data:/var/lib/thesistrace/canonical-data:ro
@@ -196,9 +213,12 @@ services:
       OPENBLAS_NUM_THREADS: ${THESISTRACE_BATCH_RESEARCH_WORKER_CALCULATION_THREADS:-2}
       MKL_NUM_THREADS: ${THESISTRACE_BATCH_RESEARCH_WORKER_CALCULATION_THREADS:-2}
       NUMEXPR_NUM_THREADS: ${THESISTRACE_BATCH_RESEARCH_WORKER_CALCULATION_THREADS:-2}
+    restart: unless-stopped
 
   tracking-worker:
     <<: *backend
+    deploy:
+      replicas: 1
     logging: *bounded-logging
     command:
       - thesistrace-core-worker
@@ -225,8 +245,11 @@ services:
       OPENBLAS_NUM_THREADS: ${THESISTRACE_TRACKING_WORKER_CALCULATION_THREADS:-2}
       MKL_NUM_THREADS: ${THESISTRACE_TRACKING_WORKER_CALCULATION_THREADS:-2}
       NUMEXPR_NUM_THREADS: ${THESISTRACE_TRACKING_WORKER_CALCULATION_THREADS:-2}
+    restart: unless-stopped
 
   web:
+    deploy:
+      replicas: 1
     logging: *bounded-logging
     build:
       context: ../..
@@ -240,6 +263,7 @@ services:
       interval: 2s
       timeout: 5s
       retries: 60
+    restart: unless-stopped
 
 volumes:
   batch-attempt-control:

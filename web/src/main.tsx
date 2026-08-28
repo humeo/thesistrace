@@ -23,31 +23,57 @@ function browserLocation(): BrowserLocation {
   };
 }
 
-const extracted = extractInitialAuthSecret(browserLocation());
-if (
-  window.location.pathname === "/"
-  || locationHref(extracted.location) !== `${window.location.pathname}${window.location.search}${window.location.hash}`
-) {
-  window.history.replaceState(null, "", locationHref(extracted.location));
+type ConsumedBrowserLocation = ReturnType<typeof extractInitialAuthSecret> & Readonly<{
+  hadFragment: boolean;
+}>;
+
+function consumeBrowserLocation(): ConsumedBrowserLocation {
+  const observed = browserLocation();
+  const extracted = extractInitialAuthSecret(observed);
+  if (
+    window.location.pathname === "/"
+    || locationHref(extracted.location) !== `${window.location.pathname}${window.location.search}${window.location.hash}`
+  ) {
+    window.history.replaceState(null, "", locationHref(extracted.location));
+  }
+  return { ...extracted, hadFragment: observed.hash !== "" };
 }
+
+const initialLocation = consumeBrowserLocation();
 
 function BrowserRoutedApp() {
   const { state, retry } = useAuth();
   const researcherId = authenticatedResearcherId(state);
   const [location, setLocation] = useState(browserLocation);
-  const [secret, setSecret] = useState<InitialAuthSecret | null>(extracted.secret);
+  const [secret, setSecret] = useState<InitialAuthSecret | null>(initialLocation.secret);
+
+  const synchronizeLocation = useCallback(() => {
+    const next = consumeBrowserLocation();
+    setLocation(next.location);
+    setSecret((current) => {
+      if (next.secret !== null) return next.secret;
+      if (next.hadFragment || current === null) return null;
+      const currentPath = current.kind === "invitation"
+        ? "/accept-invitation"
+        : "/reset-password";
+      return next.location.pathname === currentPath ? current : null;
+    });
+  }, []);
 
   const navigate = useCallback((path: string, options?: Readonly<{ replace?: boolean }>) => {
     if (options?.replace) window.history.replaceState(null, "", path);
     else window.history.pushState(null, "", path);
-    setLocation(browserLocation());
-  }, []);
+    synchronizeLocation();
+  }, [synchronizeLocation]);
 
   useEffect(() => {
-    const handleLocationChange = () => setLocation(browserLocation());
-    window.addEventListener("popstate", handleLocationChange);
-    return () => window.removeEventListener("popstate", handleLocationChange);
-  }, []);
+    window.addEventListener("hashchange", synchronizeLocation);
+    window.addEventListener("popstate", synchronizeLocation);
+    return () => {
+      window.removeEventListener("hashchange", synchronizeLocation);
+      window.removeEventListener("popstate", synchronizeLocation);
+    };
+  }, [synchronizeLocation]);
 
   const anonymousRedirect = state.status === "anonymous" && !isAuthPath(location.pathname)
     ? `/login?returnTo=${encodeURIComponent(isProductPath(location.pathname)

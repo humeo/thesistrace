@@ -1,5 +1,7 @@
 services:
   web:
+    environment:
+      THESISTRACE_CADDY_HSTS_DIRECTIVE: 'header >Strict-Transport-Security "max-age=31536000"'
     ports:
       - "80:80"
       - "443:443"

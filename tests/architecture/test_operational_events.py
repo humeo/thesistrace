@@ -329,6 +329,41 @@ def test_http_request_returns_id_and_normalized_completion_event() -> None:
     assert "canary-cookie" not in output.getvalue()
 
 
+def test_http_request_uses_only_a_valid_caddy_request_id() -> None:
+    output = StringIO()
+    app = _test_app(
+        output,
+        request_ids=["00000000-0000-4000-8000-000000000099"],
+        ticks=[0, 1_000_000, 2_000_000, 3_000_000],
+    )
+
+    @app.get("/test/request-id")
+    def request_id() -> dict[str, str]:
+        return {"status": "ok"}
+
+    client = TestClient(app)
+    trusted = client.get(
+        "/test/request-id",
+        headers={"X-Request-ID": "00000000-0000-4000-8000-000000000001"},
+    )
+    forged = client.get(
+        "/test/request-id",
+        headers={"X-Request-ID": "request-id-canary-forged"},
+    )
+
+    assert trusted.headers["X-Request-ID"] == (
+        "00000000-0000-4000-8000-000000000001"
+    )
+    assert forged.headers["X-Request-ID"] == (
+        "00000000-0000-4000-8000-000000000099"
+    )
+    assert [event["http_request_id"] for event in _events(output)] == [
+        trusted.headers["X-Request-ID"],
+        forged.headers["X-Request-ID"],
+    ]
+    assert "request-id-canary" not in output.getvalue()
+
+
 def test_http_expected_client_errors_emit_completion_without_stack() -> None:
     output = StringIO()
     app = _test_app(

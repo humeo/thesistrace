@@ -122,6 +122,8 @@ def main() -> None:
         result = _verify_observability_evidence(
             state_path.parent,
             api_events=Path(_required_environment("THESISTRACE_TEST_API_EVENTS")),
+            auth_events=Path(_required_environment("THESISTRACE_TEST_AUTH_EVENTS")),
+            caddy_events=Path(_required_environment("THESISTRACE_TEST_CADDY_EVENTS")),
             worker_events=Path(_required_environment("THESISTRACE_TEST_WORKER_EVENTS")),
         )
     elif phase == "before":
@@ -2264,9 +2266,13 @@ def _verify_observability_evidence(
     evidence_dir: Path,
     *,
     api_events: Path,
+    auth_events: Path,
+    caddy_events: Path,
     worker_events: Path,
 ) -> dict[str, object]:
     api = _container_events(api_events)
+    auth = _container_events(auth_events)
+    caddy = _container_events(caddy_events)
     workers = _container_events(worker_events)
     completions = [event for event in api if event.get("event") == "http_request_completed"]
     assert completions
@@ -2280,6 +2286,54 @@ def _verify_observability_evidence(
     )
     assert any(event.get("event") == "research_run_succeeded" for event in workers)
     assert any(event.get("event") == "tracking_checkpoint_published" for event in workers)
+    auth_completions = [
+        event
+        for event in auth
+        if event.get("component") == "auth_http"
+        and event.get("event") == "http_request_completed"
+    ]
+    assert auth_completions
+    assert any(
+        event.get("method") == "POST"
+        and event.get("route") == "/api/auth/sign-in/email"
+        and event.get("status_code") in {400, 401}
+        for event in auth_completions
+    )
+    assert all(
+        set(event)
+        == {
+            "component",
+            "duration_ms",
+            "event",
+            "http_request_id",
+            "level",
+            "method",
+            "route",
+            "status_code",
+            "timestamp",
+        }
+        for event in auth_completions
+    )
+    caddy_access = [
+        event for event in caddy if "http.log.access" in str(event.get("logger", ""))
+    ]
+    assert caddy_access
+    assert any(event.get("path") == "/api/auth/*" for event in caddy_access)
+    assert all(
+        set(event)
+        <= {
+            "duration",
+            "level",
+            "logger",
+            "method",
+            "msg",
+            "path",
+            "request_id",
+            "status",
+            "ts",
+        }
+        for event in caddy_access
+    )
     refresh_events = [
         json.loads(line)
         for line in (evidence_dir / "data-refresh.events.jsonl").read_text().splitlines()
@@ -2293,6 +2347,7 @@ def _verify_observability_evidence(
         assert isinstance(json.loads(path.read_text()), dict)
     canaries = {
         "observability-access-canary",
+        "observability-outage-canary",
         "observability-secret-canary",
         "observability-request-canary",
     }
@@ -2304,6 +2359,8 @@ def _verify_observability_evidence(
             assert canary not in content, {"secret_canary_detected_in": path.name}
     return {
         "api_completion_event_verified": True,
+        "auth_completion_event_verified": True,
+        "caddy_access_event_verified": True,
         "secret_canaries_absent": True,
     }
 

@@ -1,0 +1,29 @@
+:host {
+  display: block;
+  height: 100%;
+  min-height: 0;
+}
+
+.cm-editor {
+  height: 100%;
+  min-height: 0;
+  color: var(--ink);
+  background: var(--canvas);
+  font: 14px/1.65 var(--mono);
+}
+.cm-editor.cm-focused { outline: 0; }
+.cm-scroller { height: 100%; overflow: auto; }
+.cm-content { padding: 14px 10px; caret-color: var(--ink); }
+.cm-gutters { min-width: 36px; color: var(--ink-faint); background: var(--surface-1); border-right-color: var(--line); }
+.cm-lineNumbers .cm-gutterElement { padding: 0 8px 0 6px; }
+.cm-activeLine { background: rgb(94 106 210 / .06); }
+.cm-activeLineGutter { color: var(--ink-soft); background: var(--surface-2); }
+.cm-placeholder { color: var(--ink-faint); font-style: normal; }
+.cm-selectionBackground,
+.cm-focused .cm-selectionBackground { background: rgb(94 106 210 / .28) !important; }
+.cm-alpha-function { color: #aab3ff; font-weight: 500; }
+.cm-alpha-field { color: #8bd5ca; font-weight: 500; }
+.cm-alpha-number { color: #7cc4ff; }
+.cm-alpha-operator { color: var(--ink-soft); }
+.cm-tooltip { color: var(--ink-muted); background: var(--surface-3); border-color: var(--line-strong); }
+.cm-tooltip-autocomplete > ul > li[aria-selected] { color: var(--ink); background: var(--primary); }
