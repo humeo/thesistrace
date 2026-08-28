@@ -1,6 +1,6 @@
 # 05 — Web authentication and account flow
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Blocked by:** 04
 
