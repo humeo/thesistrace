@@ -30,6 +30,7 @@ CORE_PACKAGES = (
     "research_batch",
     "research_folder",
     "research_run",
+    "researcher",
 )
 FORBIDDEN_IMPORTS = (
     "thesistrace." + "hosted",
@@ -44,10 +45,18 @@ PRODUCT_SCHEMAS = {
     "publication": "publication",
     "research_folder": "research_folders",
     "research_batch": "research_batches",
+    "researcher": "researchers",
 }
 ALLOWED_SCHEMA_REFERENCES = {
+    ("daily_track", "research_runs"),
+    ("daily_track", "researchers"),
     ("research_batch", "research_folders"),
+    ("research_batch", "research_runs"),
+    ("research_batch", "researchers"),
+    ("research_folder", "researchers"),
     ("research_run", "research_folders"),
+    ("research_run", "researchers"),
+    ("researcher", "research_folders"),
 }
 
 
@@ -87,6 +96,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         },
         "product_state": {"_postgres"},
         "research_folder": {"_postgres"},
+        "researcher": {"_postgres", "research_folder"},
         "daily_track": {
             "_postgres",
             "data",
@@ -130,6 +140,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_folder",
             "research_kernel",
             "research_run",
+            "researcher",
         },
         "operational_events": set(),
     }
@@ -168,6 +179,7 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "data.generation_pins",
         ),
         "research_run": (
+            "research_runs.run_ownership",
             "research_runs.runs",
             "research_runs.admission_requests",
             "research_runs.attempts",
@@ -196,6 +208,7 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "publication.object_deletions",
         ),
         "research_folder": ("research_folders.folders",),
+        "researcher": ("researchers.researchers",),
     }
 
     for module, owned_schema in PRODUCT_SCHEMAS.items():
@@ -276,6 +289,7 @@ def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> Non
 
     assert scripts == {
         "thesistrace-core-api": "thesistrace.entrypoints.http:main",
+        "thesistrace-core-access-inspect": "thesistrace.entrypoints.access_operator:main",
         "thesistrace-core-diagnose": "thesistrace.entrypoints.diagnose:main",
         "thesistrace-core-worker": "thesistrace.entrypoints.worker:main",
         "thesistrace-initialize": "thesistrace.entrypoints.initialize:main",
@@ -373,6 +387,7 @@ def test_postgres_support_contains_mechanics_but_no_product_sql() -> None:
         "daily_tracks.",
         "publication.",
         "research_folders.",
+        "researchers.",
     ):
         assert product_schema not in postgres_source
 
@@ -453,6 +468,7 @@ def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None
         ("get", "/api/alpha/catalog"),
         ("post", "/api/alpha/diagnostics"),
         ("get", "/api/data"),
+        ("post", "/api/researcher/bootstrap"),
         ("get", "/api/research-folders"),
         ("post", "/api/research-folders"),
         ("patch", "/api/research-folders/{folder_id}"),
@@ -880,7 +896,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "CREATE TABLE daily_tracks.retry_receipts" in track_schema
     assert "CREATE TABLE daily_tracks.stop_receipts" in track_schema
     assert "ACTIVE_DAILY_TRACK_LIMIT = 10" in track_source
-    assert '"daily_tracks.activation.capacity"' in track_source
+    assert 'f"daily_tracks.activation.capacity:{researcher_id}"' in track_source
     assert "def _record_current_failure(" in track_source
     assert "def reconcile_working_cache(" in track_source
     assert "def activate(" in track_source
@@ -897,7 +913,11 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "TrackingOrigin(" in run_source
     assert "daily_tracks." not in run_source
     assert "research_runs." not in track_source
-    assert "research_runs." not in track_schema
+    assert (
+        "REFERENCES research_runs.run_ownership(researcher_id, run_id)"
+        in track_schema
+    )
+    assert "REFERENCES research_runs.runs" not in track_schema
     for sql_verb in ("FROM", "JOIN", "INSERT INTO", "UPDATE", "DELETE FROM"):
         assert f"{sql_verb} data." not in track_source
     assert 'kind="daily-track.checkpoint"' in track_source
@@ -1059,6 +1079,7 @@ def test_obsolete_authoring_contract_cannot_reenter_the_active_runtime() -> None
     )
 
     assert '"research_folders"' in schema_source
+    assert '"researchers"' in schema_source
     assert '"definitions"' not in schema_source
     assert "/api/definitions" not in entrypoint_source
     assert "/rerun" not in entrypoint_source

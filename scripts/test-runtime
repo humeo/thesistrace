@@ -94,6 +94,7 @@ compose() {
       THESISTRACE_TEST_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
       THESISTRACE_TEST_RUN_ROOT="$run_root" \
       THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
+      THESISTRACE_TEST_SECRET_DIR="$secret_dir" \
       THESISTRACE_TEST_CADDY_PORT="$caddy_port" \
       THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
       THESISTRACE_ENVIRONMENT=test \
@@ -198,6 +199,7 @@ mapped_port() {
 
 run_with_environment() {
   THESISTRACE_DATABASE_URL="postgresql://thesistrace_owner:$owner_database_password@127.0.0.1:$postgres_port/thesistrace" \
+  THESISTRACE_AUTH_INTERNAL_ORIGIN="${auth_internal_origin-}" \
   THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
   THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
   THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
@@ -207,6 +209,7 @@ run_with_environment() {
   THESISTRACE_DATA_MOUNT="$data_mount" \
   THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
   THESISTRACE_TEST_PROJECT_NAME="$project_name" \
+  THESISTRACE_TEST_RESEND_ORIGIN="${resend_test_origin-}" \
     "$@"
 }
 
@@ -283,8 +286,10 @@ verify_caddy_single_origin() {
   curl --fail --silent --show-error "$public_origin/api/auth/ok" \
     >"$evidence_dir/caddy-auth.json"
   grep -Fqx '{"ok":true}' "$evidence_dir/caddy-auth.json"
-  curl --fail --silent --show-error "$public_origin/api/data" \
-    >"$evidence_dir/caddy-core.json"
+  core_status=$(curl --silent --show-error \
+    --output "$evidence_dir/caddy-core.json" --write-out '%{http_code}' \
+    "$public_origin/api/data")
+  test "$core_status" = 401
 
   for private_path in /health/live /health/ready /internal/session/verify; do
     private_status=$(curl --silent --show-error \
@@ -492,6 +497,21 @@ reset_product_state() {
   compose wait initialize auth-initialize
 }
 
+provision_image_smoke_auth() {
+  test -n "$auth_session_file" || return 2
+  rm -f -- "$auth_session_file"
+  run_with_environment uv run python \
+    tests/acceptance/provision_image_smoke_auth.py "$auth_session_file"
+}
+
+cleanup_runtime_secrets() {
+  test -n "${secret_dir:-}" || return 0
+  if [ -n "${auth_session_file:-}" ]; then
+    rm -f -- "$auth_session_file" || return $?
+  fi
+  rmdir "$secret_dir"
+}
+
 cleanup_project() {
   validate_cleanup_target
   load_test_origin
@@ -545,7 +565,7 @@ run_managed() {
   set -m
   (
     trap '' INT
-    "$@"
+    "$@" </dev/null
   ) &
   active_pid=$!
   set +m
@@ -582,6 +602,16 @@ finish() {
   trap - EXIT
   trap '' INT TERM
   set +e
+  secret_cleanup_status=0
+  cleanup_runtime_secrets || secret_cleanup_status=$?
+  printf 'runtime_secret_cleanup_status=%s\n' \
+    "$secret_cleanup_status" >>"$run_metadata"
+  if [ "$secret_cleanup_status" -ne 0 ]; then
+    echo "runtime secret cleanup failed" >&2
+    if [ "$status" -eq 0 ]; then
+      status=$secret_cleanup_status
+    fi
+  fi
   if [ "$status" -ne 0 ]; then
     capture_evidence
     if scan_secret_canaries; then
@@ -720,6 +750,15 @@ dependency_restart_report="$evidence_dir/pytest-dependency-restart.xml"
 run_metadata="$run_root/run.txt"
 validate_test_project
 mkdir -p "$evidence_dir" "$data_mount" "$batch_attempt_control_directory"
+secret_dir=
+auth_session_file=
+if [ "$command" = image-smoke ] || [ "$command" = benchmark ]; then
+  secret_root="$state_root/.runtime-secrets"
+  mkdir -p "$secret_root"
+  chmod 700 "$secret_root"
+  secret_dir=$(mktemp -d "$secret_root/$run_id.XXXXXX")
+  auth_session_file="$secret_dir/auth-session.json"
+fi
 git_revision=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf unknown)
 git_worktree_dirty=false
 if [ -n "$(git -C "$repo_root" status --short 2>/dev/null)" ]; then
@@ -845,10 +884,18 @@ case "$command" in
     ;;
   integration)
     run_phase integration-infrastructure compose up --detach \
-      --wait --wait-timeout 300 postgres rustfs
+      --wait --wait-timeout 300 postgres rustfs resend-fake
+    run_phase integration-auth-initialization compose up --detach auth-initialize
+    run_phase integration-auth-initializer-exit compose wait auth-initialize
+    run_phase integration-auth compose up --detach --wait --wait-timeout 120 auth
     postgres_port=$(mapped_port postgres 5432)
     s3_port=$(mapped_port rustfs 9000)
-    printf 'postgres_port=%s\ns3_port=%s\n' "$postgres_port" "$s3_port" >>"$run_metadata"
+    auth_port=$(mapped_port auth 8200)
+    resend_port=$(mapped_port resend-fake 8300)
+    auth_internal_origin="http://127.0.0.1:$auth_port"
+    resend_test_origin="http://127.0.0.1:$resend_port"
+    printf 'postgres_port=%s\ns3_port=%s\nauth_port=%s\nresend_port=%s\n' \
+      "$postgres_port" "$s3_port" "$auth_port" "$resend_port" >>"$run_metadata"
     run_phase integration-initialization run_with_environment uv run thesistrace-initialize
     run_phase integration-pytest run_with_environment uv run pytest -q \
       tests/integration tests/acceptance \
@@ -940,6 +987,9 @@ case "$command" in
     run_phase image-smoke-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
       auth api web
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase image-smoke-auth-session provision_image_smoke_auth
     run_phase image-smoke-health verify_image_health initial
     run_phase image-smoke-caddy-single-origin verify_caddy_single_origin
     run_phase image-smoke-caddy-backend-independence \
@@ -948,6 +998,8 @@ case "$command" in
       verify_service_readiness_outage postgres postgresql
     run_phase image-smoke-rustfs-readiness \
       verify_service_readiness_outage rustfs rustfs
+    run_phase image-smoke-auth-readiness \
+      verify_service_readiness_outage auth auth
     run_phase image-smoke-dataset-readiness verify_dataset_readiness_outage
     run_phase image-smoke-workers compose up --detach --no-build \
       --wait --wait-timeout 120 \
@@ -1055,6 +1107,7 @@ case "$command" in
     run_phase image-smoke-product-state-reset reset_product_state
     run_phase image-smoke-reset-api compose up --detach --no-build \
       --wait --wait-timeout 120 auth api
+    run_phase image-smoke-reset-auth-session provision_image_smoke_auth
     run_phase image-smoke-reset-verified compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \

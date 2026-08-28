@@ -4,6 +4,7 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 CREATE TABLE research_batches.batches (
+    researcher_id uuid NOT NULL,
     id text PRIMARY KEY,
     batch_kind text NOT NULL,
     status text NOT NULL,
@@ -26,7 +27,9 @@ CREATE TABLE research_batches.batches (
         ])
     ),
     CONSTRAINT batches_scope_check CHECK (jsonb_typeof(scope) = 'object'),
-    CONSTRAINT batches_execution_fence_check CHECK (execution_fence >= 0)
+    CONSTRAINT batches_execution_fence_check CHECK (execution_fence >= 0),
+    UNIQUE (researcher_id, id),
+    FOREIGN KEY (researcher_id) REFERENCES researchers.researchers(id)
 );
 
 CREATE TABLE research_batches.attempts (
@@ -172,6 +175,7 @@ CREATE TABLE research_batches.starting_claims (
 );
 
 CREATE TABLE research_batches.items (
+    researcher_id uuid NOT NULL,
     batch_id text NOT NULL,
     ordinal integer NOT NULL,
     item_key text NOT NULL,
@@ -208,7 +212,10 @@ CREATE TABLE research_batches.items (
     PRIMARY KEY (batch_id, ordinal),
     UNIQUE (batch_id, item_key),
     UNIQUE (research_run_id),
-    FOREIGN KEY (batch_id) REFERENCES research_batches.batches(id) ON DELETE CASCADE
+    FOREIGN KEY (researcher_id, batch_id)
+        REFERENCES research_batches.batches(researcher_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (researcher_id, research_run_id)
+        REFERENCES research_runs.run_ownership(researcher_id, run_id)
 );
 
 CREATE TABLE research_batches.task_attempts (
@@ -336,25 +343,31 @@ CREATE TABLE research_batches.progress (
 );
 
 CREATE TABLE research_batches.admission_receipts (
-    request_id text PRIMARY KEY,
+    researcher_id uuid NOT NULL,
+    request_id text NOT NULL,
     request_fingerprint text NOT NULL,
     batch_id text NOT NULL UNIQUE,
     outcome jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT admission_receipts_outcome_check CHECK (jsonb_typeof(outcome) = 'object'),
-    FOREIGN KEY (batch_id) REFERENCES research_batches.batches(id)
+    PRIMARY KEY (researcher_id, request_id),
+    FOREIGN KEY (researcher_id, batch_id)
+        REFERENCES research_batches.batches(researcher_id, id)
 );
 
 CREATE TABLE research_batches.cancel_receipts (
-    request_id text PRIMARY KEY,
+    researcher_id uuid NOT NULL,
+    request_id text NOT NULL,
     request_fingerprint text NOT NULL,
     batch_id text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    FOREIGN KEY (batch_id) REFERENCES research_batches.batches(id)
+    PRIMARY KEY (researcher_id, request_id),
+    FOREIGN KEY (researcher_id, batch_id)
+        REFERENCES research_batches.batches(researcher_id, id)
 );
 
 CREATE INDEX research_batches_created_idx
-ON research_batches.batches (created_at DESC, id);
+ON research_batches.batches (researcher_id, created_at DESC, id);
 
 CREATE INDEX research_batch_attempts_claim_idx
 ON research_batches.attempts (batch_id, ordinal DESC);

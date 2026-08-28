@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from threading import Event, Thread
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from psycopg import OperationalError
 from psycopg.types.json import Jsonb
@@ -79,7 +79,7 @@ from thesistrace.research_series import (
 
 Progress = Callable[[str, str, str], None]
 ResultBundleReader = Callable[[VerifiedBundle], dict[str, object]]
-SeedResearchExists = Callable[[PostgresTransaction, str], bool]
+SeedResearchExists = Callable[[PostgresTransaction, UUID, str], bool]
 ResearchReferencesResult = Callable[[PostgresTransaction, str], bool]
 ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
@@ -93,7 +93,7 @@ INFRASTRUCTURE_EXHAUSTED_BLOCKED_REASON = (
     "DailyTrack exhausted its automatic infrastructure retries."
 )
 _TRACKING_ELIGIBILITY_SELECT = """
-    SELECT track.id, track.origin, track.execution_fence,
+    SELECT track.researcher_id, track.id, track.origin, track.execution_fence,
            checkpoint.boundary_session,
            checkpoint.manifest_sha256,
            checkpoint.provenance
@@ -194,6 +194,7 @@ class DailyTrackEquivalenceEvidence:
 
 @dataclass(frozen=True)
 class _SessionProgressionClaim:
+    researcher_id: UUID
     track_id: str
     progression_id: str
     attempt_id: str
@@ -233,6 +234,27 @@ class _TrackingFailure:
 class _StoppedTrack:
     track_id: str
     attempt_id: str | None = None
+
+
+class DailyTrackAccessInspector:
+    """Read-only operator view of Researcher-scoped DailyTrack access."""
+
+    def __init__(self, database: PostgresDatabase) -> None:
+        self._database = database
+
+    def count_active(self, researcher_id: UUID) -> int:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT count(*) AS count
+                FROM daily_tracks.tracks
+                WHERE researcher_id = %s
+                  AND status IN ('active', 'blocked', 'stopping')
+                """,
+                (researcher_id,),
+            ).fetchone()
+        assert row is not None
+        return int(row["count"])
 
 
 class DailyTrackService:
@@ -314,42 +336,46 @@ class DailyTrackService:
     def activate(
         self,
         transaction: PostgresTransaction,
+        researcher_id: UUID,
         origin: TrackingOrigin,
     ) -> DailyTrackSummary:
         lock_publication_mutation(transaction)
         transaction.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-            ("daily_tracks.activation.capacity",),
+            (f"daily_tracks.activation.capacity:{researcher_id}",),
         ).fetchone()
         transaction.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-            (f"daily_tracks.activation.seed:{origin.seed_run_id}",),
+            (f"daily_tracks.activation.seed:{researcher_id}:{origin.seed_run_id}",),
         ).fetchone()
         row = transaction.execute(
             f"""
             {_TRACK_SELECT}
-            WHERE seed_run_id = %s
+            WHERE track.researcher_id = %s AND seed_run_id = %s
             """,
-            (origin.seed_run_id,),
+            (researcher_id, origin.seed_run_id),
         ).fetchone()
         if row is None:
             capacity = transaction.execute(
                 """
                 SELECT count(*) AS count
                 FROM daily_tracks.tracks
-                WHERE status IN ('active', 'blocked', 'stopping')
-                """
+                WHERE researcher_id = %s
+                  AND status IN ('active', 'blocked', 'stopping')
+                """,
+                (researcher_id,),
             ).fetchone()
             assert capacity is not None
             if int(capacity["count"]) >= ACTIVE_DAILY_TRACK_LIMIT:
                 raise DailyTrackActivationLimitReached("Active DailyTrack limit of 10 reached")
-            row = self._activate_current(transaction, origin)
+            row = self._activate_current(transaction, researcher_id, origin)
             assert row is not None
         return _summary(row)
 
     def _activate_current(
         self,
         transaction: PostgresTransaction,
+        researcher_id: UUID,
         origin: TrackingOrigin,
     ) -> dict[str, object]:
         if self._publication is None:
@@ -381,11 +407,12 @@ class DailyTrackService:
         row = transaction.execute(
             """
             INSERT INTO daily_tracks.tracks (
-                id, status, seed_run_id, origin
-            ) VALUES (%s, 'active', %s, %s)
+                researcher_id, id, status, seed_run_id, origin
+            ) VALUES (%s, %s, 'active', %s, %s)
             RETURNING id, status, origin
             """,
             (
+                researcher_id,
                 track_id,
                 origin.seed_run_id,
                 Jsonb(origin.model_dump(mode="json")),
@@ -674,18 +701,21 @@ class DailyTrackService:
             return True
         return False
 
-    def list(self) -> DailyTrackList:
+    def list(self, researcher_id: UUID) -> DailyTrackList:
         with self._database.transaction() as transaction:
             rows = transaction.execute(
                 f"""
                 {_TRACK_SELECT}
+                WHERE track.researcher_id = %s
                 ORDER BY track.created_at DESC, track.id
-                """
+                """,
+                (researcher_id,),
             ).fetchall()
         return DailyTrackList(items=[_summary(row) for row in rows], next_cursor=None)
 
     def retry(
         self,
+        researcher_id: UUID,
         track_id: str,
         command: RetryDailyTrackCommand,
     ) -> DailyTrackSummary | None:
@@ -695,17 +725,27 @@ class DailyTrackService:
         fingerprint = _retry_fingerprint(track_id)
         retry_scheduled = False
         with self._database.transaction() as transaction:
+            owned = transaction.execute(
+                """
+                SELECT 1
+                FROM daily_tracks.tracks
+                WHERE researcher_id = %s AND id = %s
+                """,
+                (researcher_id, track_id),
+            ).fetchone()
+            if owned is None:
+                return None
             transaction.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"daily_tracks.retry:{request_id}",),
+                (f"daily_tracks.retry:{researcher_id}:{request_id}",),
             ).fetchone()
             receipt = transaction.execute(
                 """
                 SELECT request_fingerprint, outcome
                 FROM daily_tracks.retry_receipts
-                WHERE request_id = %s
+                WHERE researcher_id = %s AND request_id = %s
                 """,
-                (request_id,),
+                (researcher_id, request_id),
             ).fetchone()
             if receipt is not None:
                 if receipt["request_fingerprint"] != fingerprint:
@@ -715,10 +755,10 @@ class DailyTrackService:
             track = transaction.execute(
                 f"""
                 {_TRACK_SELECT}
-                WHERE track.id = %s
+                WHERE track.researcher_id = %s AND track.id = %s
                 FOR UPDATE OF track
                 """,
-                (track_id,),
+                (researcher_id, track_id),
             ).fetchone()
             if track is None:
                 return None
@@ -787,11 +827,12 @@ class DailyTrackService:
             transaction.execute(
                 """
                 INSERT INTO daily_tracks.retry_receipts (
-                    request_id, request_fingerprint, track_id,
+                    researcher_id, request_id, request_fingerprint, track_id,
                     progression_id, outcome
-                ) VALUES (%s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s)
                 """,
                 (
+                    researcher_id,
                     request_id,
                     fingerprint,
                     track_id,
@@ -842,6 +883,7 @@ class DailyTrackService:
 
     def stop(
         self,
+        researcher_id: UUID,
         track_id: str,
         command: StopDailyTrackCommand,
     ) -> DailyTrackSummary | None:
@@ -851,17 +893,27 @@ class DailyTrackService:
         fingerprint = _stop_fingerprint(track_id)
         stopped_after_commit = False
         with self._database.transaction() as transaction:
+            owned = transaction.execute(
+                """
+                SELECT 1
+                FROM daily_tracks.tracks
+                WHERE researcher_id = %s AND id = %s
+                """,
+                (researcher_id, track_id),
+            ).fetchone()
+            if owned is None:
+                return None
             transaction.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"daily_tracks.stop:{request_id}",),
+                (f"daily_tracks.stop:{researcher_id}:{request_id}",),
             ).fetchone()
             receipt = transaction.execute(
                 """
                 SELECT request_fingerprint, outcome
                 FROM daily_tracks.stop_receipts
-                WHERE request_id = %s
+                WHERE researcher_id = %s AND request_id = %s
                 """,
-                (request_id,),
+                (researcher_id, request_id),
             ).fetchone()
             if receipt is not None:
                 if receipt["request_fingerprint"] != fingerprint:
@@ -871,10 +923,10 @@ class DailyTrackService:
                 track = transaction.execute(
                     f"""
                     {_TRACK_SELECT}
-                    WHERE track.id = %s
+                    WHERE track.researcher_id = %s AND track.id = %s
                     FOR UPDATE OF track
                     """,
-                    (track_id,),
+                    (researcher_id, track_id),
                 ).fetchone()
                 if track is None:
                     return None
@@ -956,10 +1008,11 @@ class DailyTrackService:
                 transaction.execute(
                     """
                     INSERT INTO daily_tracks.stop_receipts (
-                        request_id, request_fingerprint, track_id, outcome
-                    ) VALUES (%s, %s, %s, %s)
+                        researcher_id, request_id, request_fingerprint, track_id, outcome
+                    ) VALUES (%s, %s, %s, %s, %s)
                     """,
                     (
+                        researcher_id,
                         request_id,
                         fingerprint,
                         track_id,
@@ -978,7 +1031,7 @@ class DailyTrackService:
             )
         return outcome
 
-    def delete(self, track_id: str) -> bool:
+    def delete(self, researcher_id: UUID, track_id: str) -> bool:
         if self._publication is None:
             raise RuntimeError("DailyTrack deletion is not configured")
         with self._database.transaction() as transaction:
@@ -987,10 +1040,10 @@ class DailyTrackService:
                 """
                 SELECT status, origin
                 FROM daily_tracks.tracks
-                WHERE id = %s
+                WHERE researcher_id = %s AND id = %s
                 FOR UPDATE
                 """,
-                (track_id,),
+                (researcher_id, track_id),
             ).fetchone()
             if row is None:
                 return False
@@ -1006,8 +1059,11 @@ class DailyTrackService:
                 (track_id,),
             ).fetchall()
             deleted = transaction.execute(
-                "DELETE FROM daily_tracks.tracks WHERE id = %s AND status = 'stopped'",
-                (track_id,),
+                """
+                DELETE FROM daily_tracks.tracks
+                WHERE researcher_id = %s AND id = %s AND status = 'stopped'
+                """,
+                (researcher_id, track_id),
             )
             if deleted.rowcount != 1:
                 raise DailyTrackDeleteConflict("DailyTrack deletion lost its stopped state")
@@ -1082,19 +1138,23 @@ class DailyTrackService:
             )
         return removed
 
-    def get(self, track_id: str) -> DailyTrackDetail | None:
-        return self._get_current(track_id)
+    def get(self, researcher_id: UUID, track_id: str) -> DailyTrackDetail | None:
+        return self._get_current(researcher_id, track_id)
 
-    def _get_current(self, track_id: str) -> DailyTrackDetail | None:
+    def _get_current(
+        self,
+        researcher_id: UUID,
+        track_id: str,
+    ) -> DailyTrackDetail | None:
         if self._publication is None or self._dataset_lifecycle is None:
             raise RuntimeError("current-data DailyTrack detail is not configured")
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 f"""
                 {_TRACK_SELECT}
-                WHERE track.id = %s
+                WHERE track.researcher_id = %s AND track.id = %s
                 """,
-                (track_id,),
+                (researcher_id, track_id),
             ).fetchone()
             if row is not None:
                 persisted_origin = TrackingOrigin.model_validate(row["origin"])
@@ -1102,6 +1162,7 @@ class DailyTrackService:
                     self._seed_research_exists is not None
                     and self._seed_research_exists(
                         transaction,
+                        researcher_id,
                         persisted_origin.seed_run_id,
                     )
                 )
@@ -1299,6 +1360,7 @@ class DailyTrackService:
 
     def verify_persisted_equivalence(
         self,
+        researcher_id: UUID,
         track_id: str,
     ) -> DailyTrackEquivalenceEvidence:
         """Verify the authoritative session-coordinate Checkpoint chain read-only."""
@@ -1311,9 +1373,9 @@ class DailyTrackService:
                 FROM daily_tracks.tracks AS track
                 JOIN daily_tracks.session_tracking_states AS state
                   ON state.track_id = track.id
-                WHERE track.id = %s
+                WHERE track.researcher_id = %s AND track.id = %s
                 """,
-                (track_id,),
+                (researcher_id, track_id),
             ).fetchone()
         if row is None:
             raise KeyError(track_id)
@@ -1711,6 +1773,7 @@ class DailyTrackService:
                 if updated.rowcount != 1:
                     raise DailyTrackFenced
                 return _SessionProgressionClaim(
+                    researcher_id=row["researcher_id"],
                     track_id=str(row["id"]),
                     progression_id=progression_id,
                     attempt_id=attempt_id,
@@ -1878,10 +1941,12 @@ class DailyTrackService:
                 """
                 SELECT attempt.id, attempt.generation_pin_id
                 FROM daily_tracks.session_progression_attempts AS attempt
+                JOIN daily_tracks.tracks AS track ON track.id = attempt.track_id
                 WHERE attempt.id = %s AND attempt.status = 'cancelled'
+                  AND track.researcher_id = %s
                 FOR UPDATE OF attempt
                 """,
-                (claim.attempt_id,),
+                (claim.attempt_id, claim.researcher_id),
             ).fetchone()
             if row is None:
                 return False
@@ -1976,8 +2041,14 @@ class DailyTrackService:
                   ON progression.id = attempt.progression_id
                 JOIN daily_tracks.tracks AS track ON track.id = attempt.track_id
                 WHERE attempt.id = %s AND progression.id = %s AND track.id = %s
+                  AND track.researcher_id = %s
                 """,
-                (claim.attempt_id, claim.progression_id, claim.track_id),
+                (
+                    claim.attempt_id,
+                    claim.progression_id,
+                    claim.track_id,
+                    claim.researcher_id,
+                ),
             ).fetchone()
         return row == {
             "track_status": "stopping",
@@ -2032,10 +2103,16 @@ class DailyTrackService:
                 WHERE attempt.id = %s AND attempt.progression_id = %s
                   AND attempt.status = 'stopping'
                   AND progression.status = 'stopping'
-                  AND track.id = %s AND track.status = 'stopping'
+                  AND track.id = %s AND track.researcher_id = %s
+                  AND track.status = 'stopping'
                 FOR UPDATE OF track, progression, attempt
                 """,
-                (claim.attempt_id, claim.progression_id, claim.track_id),
+                (
+                    claim.attempt_id,
+                    claim.progression_id,
+                    claim.track_id,
+                    claim.researcher_id,
+                ),
             ).fetchone()
             if current is None:
                 return False
@@ -2062,9 +2139,9 @@ class DailyTrackService:
                 UPDATE daily_tracks.tracks
                 SET status = 'stopped', blocked_progression_id = NULL,
                     blocked_reason = NULL
-                WHERE id = %s AND status = 'stopping'
+                WHERE researcher_id = %s AND id = %s AND status = 'stopping'
                 """,
-                (claim.track_id,),
+                (claim.researcher_id, claim.track_id),
             )
             if attempt.rowcount != 1 or progression.rowcount != 1 or track.rowcount != 1:
                 raise DailyTrackFenced
@@ -2123,6 +2200,7 @@ class DailyTrackService:
                         ON progression.track_id = track.id
                        AND progression.id = attempt.progression_id
                       WHERE track.id = %s AND track.status = 'active'
+                        AND track.researcher_id = %s
                         AND track.execution_fence = attempt.fence
                         AND progression.status = 'running'
                   )
@@ -2134,6 +2212,7 @@ class DailyTrackService:
                     claim.progression_id,
                     claim.fence,
                     claim.track_id,
+                    claim.researcher_id,
                 ),
             )
             if updated.rowcount != 1:
@@ -2164,6 +2243,7 @@ class DailyTrackService:
                                 ON progression.track_id = track.id
                                AND progression.id = attempt.progression_id
                               WHERE track.id = %s AND track.status = 'active'
+                                AND track.researcher_id = %s
                                 AND track.execution_fence = attempt.fence
                                 AND progression.status = 'running'
                           )
@@ -2174,6 +2254,7 @@ class DailyTrackService:
                             claim.progression_id,
                             claim.fence,
                             claim.track_id,
+                            claim.researcher_id,
                         ),
                     )
                     if renewed.rowcount == 1:
@@ -2314,10 +2395,10 @@ class DailyTrackService:
                 FROM daily_tracks.tracks AS track
                 JOIN daily_tracks.session_tracking_states AS state
                   ON state.track_id = track.id
-                WHERE track.id = %s
+                WHERE track.researcher_id = %s AND track.id = %s
                 FOR UPDATE OF track, state
                 """,
-                (claim.track_id,),
+                (claim.researcher_id, claim.track_id),
             ).fetchone()
             if track != {
                 "status": "active",
@@ -2389,9 +2470,9 @@ class DailyTrackService:
                 FROM daily_tracks.tracks AS track
                 JOIN daily_tracks.session_tracking_states AS state
                   ON state.track_id = track.id
-                WHERE track.id = %s
+                WHERE track.researcher_id = %s AND track.id = %s
                 """,
-                (claim.track_id,),
+                (claim.researcher_id, claim.track_id),
             ).fetchone()
         if basis != {
             "status": "active",
@@ -2426,9 +2507,15 @@ class DailyTrackService:
                 JOIN daily_tracks.session_progression_attempts AS attempt
                   ON attempt.progression_id = progression.id
                 WHERE track.id = %s AND progression.id = %s AND attempt.id = %s
+                  AND track.researcher_id = %s
                 FOR UPDATE OF track, progression, attempt
                 """,
-                (claim.track_id, claim.progression_id, claim.attempt_id),
+                (
+                    claim.track_id,
+                    claim.progression_id,
+                    claim.attempt_id,
+                    claim.researcher_id,
+                ),
             ).fetchone()
             if row != {
                 "status": "active",
@@ -2492,11 +2579,13 @@ class DailyTrackService:
                     UPDATE daily_tracks.tracks
                     SET status = 'blocked', blocked_progression_id = %s,
                         blocked_reason = %s
-                    WHERE id = %s AND status = 'active' AND execution_fence = %s
+                    WHERE researcher_id = %s AND id = %s
+                      AND status = 'active' AND execution_fence = %s
                     """,
                     (
                         claim.progression_id,
                         blocked_reason,
+                        claim.researcher_id,
                         claim.track_id,
                         claim.fence,
                     ),

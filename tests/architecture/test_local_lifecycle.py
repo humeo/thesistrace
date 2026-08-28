@@ -131,13 +131,20 @@ if "port" in arguments:
     try:
         mapping = json.loads(mapping_path.read_text()) if mapping_path.exists() else {}
         if project not in mapping:
-            mapping[project] = 41000 + len(mapping) * 4
+            mapping[project] = 41000 + len(mapping) * 5
             mapping_path.write_text(json.dumps(mapping))
         base_port = mapping[project]
     finally:
         lock_path.rmdir()
     service = arguments[arguments.index("port") + 1]
-    offset = {"postgres": 1, "rustfs": 2, "api": 3, "web": 4}[service]
+    offset = {
+        "postgres": 1,
+        "rustfs": 2,
+        "auth": 3,
+        "api": 4,
+        "web": 5,
+        "resend-fake": 6,
+    }[service]
     print(f"127.0.0.1:{base_port + offset}")
 elif "ps" in arguments and "--quiet" in arguments:
     print("container-test-id")
@@ -220,6 +227,19 @@ for argument in "$@"; do
   esac
 done
 case " $* " in
+  *" provision_image_smoke_auth.py "*)
+    output=
+    for argument in "$@"; do
+      output=$argument
+    done
+    mkdir -p "$(dirname "$output")"
+    printf '%s\n' \
+      '{"cookie":"fake-session-cookie","researcher_id":"00000000-0000-4000-8000-000000000099"}' \
+      > "$output"
+    chmod 600 "$output"
+    ;;
+esac
+case " $* " in
   *" pytest "*)
     if [ -n "${FAKE_PYTEST_READY_DIR:-}" ] && \
        [ -z "${THESISTRACE_DATABASE_RESTART_PHASE:-}" ]; then
@@ -291,7 +311,7 @@ body='<html><div id="root"></div></html>'
 case "$url" in
   */health/*|*/internal/*) status=404; body='' ;;
   */api/auth/ok) body='{"ok":true}' ;;
-  */api/data) body='{}' ;;
+  */api/data) status=401; body='{"detail":"Authentication required"}' ;;
 esac
 if [ -f "$FAKE_BACKEND_MARKER" ]; then
   case "$url" in
@@ -1012,6 +1032,9 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     ) == 1
     for phase in (
         "integration-infrastructure",
+        "integration-auth-initialization",
+        "integration-auth-initializer-exit",
+        "integration-auth",
         "integration-initialization",
         "integration-pytest",
         "integration-database-restart",
@@ -1031,6 +1054,7 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
         in commands
     )
     assert "s3=http://127.0.0.1:41002" in commands
+    assert "port auth 8200" in commands
     assert "down --volumes --remove-orphans" in commands
 
 
@@ -1130,6 +1154,29 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
     assert scripts["test:cleanup"] == "./scripts/test-runtime cleanup"
 
 
+def test_test_runtime_managed_phases_cannot_read_from_the_controlling_terminal() -> None:
+    runtime = (ROOT / "scripts" / "test-runtime").read_text()
+    managed_phase = runtime.split("run_managed() {", maxsplit=1)[1].split(
+        "\n}\n\nrun_phase()", maxsplit=1
+    )[0]
+
+    assert '"$@" </dev/null' in managed_phase
+
+
+def test_image_smoke_provisions_auth_inside_the_private_compose_network() -> None:
+    runtime = (ROOT / "scripts" / "test-runtime").read_text()
+    image_smoke = runtime.split("  image-smoke)\n", maxsplit=1)[1]
+    provisioner = (
+        ROOT / "tests" / "acceptance" / "provision_image_smoke_auth.py"
+    ).read_text()
+    overlay = (ROOT / "deploy" / "core" / "compose.image-smoke.yaml").read_text()
+
+    assert "auth_port=$(mapped_port auth 8200)" not in image_smoke
+    assert "resend_port=$(mapped_port resend-fake 8300)" not in image_smoke
+    assert "create_private_compose_login_session" in provisioner
+    assert "../../auth/test-fixtures:/test-fixtures:ro" in overlay
+
+
 def test_production_image_smoke_builds_once_and_reuses_the_images(
     tmp_path: Path,
 ) -> None:
@@ -1174,6 +1221,25 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
         "up --detach --no-build --wait --wait-timeout 120 "
         "api research-worker batch-research-worker tracking-worker\n" in commands
     )
+    provision_lines = [
+        line
+        for line in commands.splitlines()
+        if "provision_image_smoke_auth.py" in line
+    ]
+    assert len(provision_lines) == 2
+    session_paths = {
+        Path(line.split(" db=", 1)[0].split()[-1]) for line in provision_lines
+    }
+    assert len(session_paths) == 1
+    session_path = session_paths.pop()
+    assert "evidence" not in session_path.parts
+    assert not session_path.exists()
+    assert commands.rindex(provision_lines[0]) < commands.index(
+        "production_image_smoke.py reset\n"
+    )
+    secret_root = tmp_path / "runs" / ".runtime-secrets"
+    assert secret_root.is_dir()
+    assert list(secret_root.iterdir()) == []
     assert "--build" not in commands
 
 
@@ -1201,6 +1267,10 @@ def test_failed_image_smoke_persists_runner_diagnostics_before_cleanup(
     assert (evidence / "compose-ps.txt").exists()
     assert (evidence / "compose-logs.txt").exists()
     assert (evidence / "container-inspect.txt").exists()
+    assert not (evidence / "auth-session.json").exists()
+    secret_root = tmp_path / "runs" / ".runtime-secrets"
+    assert secret_root.is_dir()
+    assert list(secret_root.iterdir()) == []
     commands = command_log.read_text()
     assert commands.index("production_image_smoke.py before") < commands.rindex(
         "ps --all"
@@ -1464,7 +1534,12 @@ def test_two_concurrent_test_runs_have_disjoint_resources_and_state(
         )
         records.append(record)
     assert len({record["project_name"] for record in records}) == 2
-    assert len({(record["postgres_port"], record["s3_port"]) for record in records}) == 2
+    assert len(
+        {
+            (record["postgres_port"], record["s3_port"], record["auth_port"])
+            for record in records
+        }
+    ) == 2
 
     commands = command_log.read_text()
     for record in records:

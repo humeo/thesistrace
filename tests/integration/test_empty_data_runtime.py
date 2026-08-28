@@ -6,10 +6,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from core_http import create_authenticated_core_app as create_app
 from fastapi.testclient import TestClient
 
 from thesistrace.data import DatasetHeadError, DatasetLifecycle, MountedGenerationStore
-from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture

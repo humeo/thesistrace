@@ -6,11 +6,12 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 import boto3
 import pytest
+from core_runtime import TEST_RESEARCHER, drop_product_schemas
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 from psycopg.errors import CheckViolation
 from psycopg.types.json import Jsonb
@@ -28,6 +29,7 @@ from thesistrace.entrypoints.runtime import (
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.models import ResearchRunAdmissionCommand
+from thesistrace.researcher import ResearcherIdentity, ResearcherService
 
 SESSIONS = (
     "2026-08-03",
@@ -51,6 +53,11 @@ def _weekday_sessions(start: date, count: int) -> tuple[str, ...]:
 
 
 LONG_FACTOR_SESSIONS = _weekday_sessions(date(2025, 1, 2), 140)
+DIRECT_RESEARCHER = ResearcherIdentity(
+    researcher_id=UUID("4a2df9d3-ecf2-4fe6-8ce2-49f90bf43d3f"),
+    email="direct-researcher@example.com",
+    display_label="direct-researcher",
+)
 
 
 @pytest.mark.skipif(
@@ -181,17 +188,28 @@ def test_current_schema_rejects_missing_null_or_malformed_research_kind_contract
         database.open()
         try:
             for index, immutable_input in enumerate(malformed_inputs):
+                run_id = f"run_malformed_{index}"
+                with database.transaction() as transaction:
+                    transaction.execute(
+                        """
+                        INSERT INTO research_runs.run_ownership (
+                            researcher_id, run_id
+                        ) VALUES (%s, %s)
+                        """,
+                        (TEST_RESEARCHER.researcher_id, run_id),
+                    )
                 with pytest.raises(CheckViolation):
                     with database.transaction() as transaction:
                         transaction.execute(
                             """
                             INSERT INTO research_runs.runs (
-                                id, folder_id, name, requested_start_date,
+                                researcher_id, id, folder_id, name, requested_start_date,
                                 requested_end_date, status, immutable_input
-                            ) VALUES (%s, 'folder_default', 'Malformed', %s, %s, 'queued', %s)
+                            ) VALUES (%s, %s, 'folder_default', 'Malformed', %s, %s, 'queued', %s)
                             """,
                             (
-                                f"run_malformed_{index}",
+                                TEST_RESEARCHER.researcher_id,
+                                run_id,
                                 date(2026, 8, 3),
                                 date(2026, 8, 4),
                                 Jsonb(immutable_input),
@@ -230,12 +248,15 @@ def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan()
     )
 
     with TestClient(create_app(settings)) as client:
+        ResearcherService(client.app.state.core_runtime.database).bootstrap(
+            DIRECT_RESEARCHER
+        )
         service = ResearchRunService(
             client.app.state.core_runtime.database,
             compile_formula=alpha_language.compile,
             current_dataset=lambda: snapshot,
         )
-        admitted = service.admit(command)
+        admitted = service.admit(DIRECT_RESEARCHER.researcher_id, command)
 
     assert admitted.status == "queued"
     frozen = _stored_run(settings, admitted.id)["immutable_input"]
@@ -284,12 +305,15 @@ def test_degraded_financial_readiness_is_admitted_and_frozen() -> None:
     )
 
     with TestClient(create_app(settings)) as client:
+        ResearcherService(client.app.state.core_runtime.database).bootstrap(
+            DIRECT_RESEARCHER
+        )
         service = ResearchRunService(
             client.app.state.core_runtime.database,
             compile_formula=alpha_language.compile,
             current_dataset=lambda: snapshot,
         )
-        admitted = service.admit(command)
+        admitted = service.admit(DIRECT_RESEARCHER.researcher_id, command)
 
     assert admitted.status == "queued"
     frozen = _stored_run(settings, admitted.id)["immutable_input"]
@@ -512,7 +536,7 @@ def test_research_organization_changes_without_changing_evidence(tmp_path: Path)
         assert [item["id"] for item in custom_page["items"]] == [first["id"]]
         assert [item["id"] for item in default_page["items"]] == [second["id"]]
         assert (
-            client.get("/api/research-runs", params={"cursor": "not-a-cursor"}).status_code == 422
+            client.get("/api/research-runs", params={"cursor": "not-a-cursor"}).status_code == 400
         )
         factor = client.post(
             "/api/research-runs",

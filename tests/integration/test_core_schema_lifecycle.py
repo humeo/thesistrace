@@ -4,10 +4,10 @@ import subprocess
 import sys
 
 import pytest
+from core_http import create_authenticated_core_app as create_app
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase, SchemaError
-from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import (
     CORE_SCHEMAS,
@@ -106,7 +106,6 @@ def test_core_runtime_access_is_exact_and_does_not_cross_into_auth() -> None:
     try:
         initialize_core(settings.database_url)
         with database.transaction() as transaction:
-            transaction.execute("CREATE SCHEMA auth")
             transaction.execute("CREATE TABLE auth.access_probe (value text)")
             transaction.execute("GRANT USAGE ON SCHEMA data TO auth_runtime")
             transaction.execute(
@@ -185,7 +184,7 @@ def test_core_runtime_access_is_exact_and_does_not_cross_into_auth() -> None:
             }
     finally:
         with database.transaction() as transaction:
-            transaction.execute("DROP SCHEMA IF EXISTS auth CASCADE")
+            transaction.execute("DROP TABLE IF EXISTS auth.access_probe")
         _drop_core_schemas(settings.database_url)
         database.close()
 

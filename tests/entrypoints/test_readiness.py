@@ -19,6 +19,7 @@ def test_readiness_has_one_end_to_end_deadline_for_blocked_probes(
 ) -> None:
     events: list[object] = []
     readiness = CoreReadiness(
+        auth_internal_origin="http://auth:8200",
         database_url="private-dsn",
         s3_endpoint_url="private-endpoint",
         s3_access_key_id="private-access-key",
@@ -49,6 +50,7 @@ def test_readiness_has_one_end_to_end_deadline_for_blocked_probes(
                     "status": "unavailable",
                     "code": "DATASET_STORE_UNAVAILABLE",
                 },
+                "auth": {"status": "ready", "code": "AUTH_READY"},
             },
         }
         assert "private" not in response.text
@@ -80,6 +82,7 @@ def test_readiness_does_not_wait_for_a_probe_that_cannot_be_reaped(
         lambda *args, **kwargs: UnreapableProbe(),
     )
     readiness = CoreReadiness(
+        auth_internal_origin="http://auth:8200",
         database_url="private-dsn",
         s3_endpoint_url="private-endpoint",
         s3_access_key_id="private-access-key",
@@ -110,6 +113,10 @@ def test_readiness_does_not_wait_for_a_probe_that_cannot_be_reaped(
                 "dataset_store": {
                     "status": "unavailable",
                     "code": "DATASET_STORE_UNAVAILABLE",
+                },
+                "auth": {
+                    "status": "unavailable",
+                    "code": "AUTH_UNAVAILABLE",
                 },
             },
         }

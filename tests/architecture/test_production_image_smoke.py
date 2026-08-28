@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from threading import Thread
 from types import ModuleType
 
 import pytest
@@ -25,6 +27,7 @@ def test_outage_polling_ignores_transient_fail_closed_snapshot(
                     "status": "unavailable",
                     "code": "DATASET_STORE_UNAVAILABLE",
                 },
+                "auth": {"status": "unavailable", "code": "AUTH_UNAVAILABLE"},
             },
         },
         0.01,
@@ -40,6 +43,7 @@ def test_outage_polling_ignores_transient_fail_closed_snapshot(
                 },
                 "rustfs": {"status": "ready", "code": "RUSTFS_READY"},
                 "dataset_store": {"status": "ready", "code": "DATASET_STORE_READY"},
+                "auth": {"status": "unavailable", "code": "AUTH_UNAVAILABLE"},
             },
         },
         0.01,
@@ -62,6 +66,43 @@ def test_mounted_data_hash_detects_batch_attempt_control_pollution(tmp_path: Pat
     control_file.write_text("runtime state", encoding="utf-8")
 
     assert smoke._directory_sha256(tmp_path) != expected
+
+
+def test_web_image_probe_uses_the_public_origin_host_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_host = "thesistrace.test:8443"
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            if self.headers.get("Host") != expected_host:
+                self.send_response(421)
+                self.end_headers()
+                return
+            body = b'<!doctype html><div id="root"></div>'
+            self.send_response(200)
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv(
+        "THESISTRACE_PUBLIC_ORIGIN",
+        f"https://{expected_host}",
+    )
+    try:
+        smoke = _load_smoke_module()
+        smoke._assert_web_image(f"http://127.0.0.1:{server.server_port}")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def _load_smoke_module() -> ModuleType:

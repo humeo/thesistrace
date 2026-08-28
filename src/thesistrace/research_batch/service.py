@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from psycopg import OperationalError
 from psycopg.types.json import Jsonb
@@ -52,6 +52,7 @@ from thesistrace.research_batch.models import (
     ResearchBatchList,
     ResearchBatchLiveProgress,
     ResearchBatchScope,
+    ResearchBatchStorageScope,
     ResearchBatchSummary,
     StrategySweepBatchAdmissionCommand,
     StrategySweepBatchProgress,
@@ -95,16 +96,17 @@ FACTOR_TASK_INFRASTRUCTURE_PUBLIC_REASON = (
 FACTOR_TASK_PERMANENT_PUBLIC_REASON = "Research execution failed."
 def preserve_deleted_run_history(
     transaction: PostgresTransaction,
+    researcher_id: UUID,
     run_id: str,
 ) -> None:
     item = transaction.execute(
         """
         SELECT outcome, run_deleted_at
         FROM research_batches.items
-        WHERE research_run_id = %s
+        WHERE researcher_id = %s AND research_run_id = %s
         FOR UPDATE
         """,
-        (run_id,),
+        (researcher_id, run_id),
     ).fetchone()
     if item is None:
         return
@@ -116,9 +118,9 @@ def preserve_deleted_run_history(
         """
         UPDATE research_batches.items
         SET run_deleted_at = now()
-        WHERE research_run_id = %s
+        WHERE researcher_id = %s AND research_run_id = %s
         """,
-        (run_id,),
+        (researcher_id, run_id),
     )
 
 
@@ -183,6 +185,7 @@ def _confirm_starting_child_exited(child_control_path: str) -> bool:
 
 @dataclass(frozen=True)
 class _ResearchBatchClaim:
+    researcher_id: UUID
     batch_id: str
     batch_kind: str
     admitted_at: datetime
@@ -590,9 +593,13 @@ class ResearchBatchService:
                 removed += 1
         return removed
 
-    def admit(self, command: ResearchBatchAdmissionCommand) -> ResearchBatchDetail:
+    def admit(
+        self,
+        researcher_id: UUID,
+        command: ResearchBatchAdmissionCommand,
+    ) -> ResearchBatchDetail:
         fingerprint = _admission_fingerprint(command)
-        replay = self._locked_receipt(command.request_id, fingerprint)
+        replay = self._locked_receipt(researcher_id, command.request_id, fingerprint)
         if replay is not None:
             return replay
 
@@ -604,6 +611,7 @@ class ResearchBatchService:
         for ordinal, (item_key, child_command) in enumerate(child_commands, start=1):
             try:
                 child = self._research_runs.prepare_child_admission(
+                    researcher_id,
                     child_command,
                     dataset=dataset,
                 )
@@ -630,31 +638,36 @@ class ResearchBatchService:
         batch_id = f"batch_{uuid4().hex[:20]}"
         scope = _scope(prepared)
         with self._database.transaction() as transaction:
-            _lock_admission(transaction, command.request_id)
-            if _cancel_receipt_exists(transaction, command.request_id):
+            _lock_admission(transaction, researcher_id, command.request_id)
+            if _cancel_receipt_exists(transaction, researcher_id, command.request_id):
                 raise ResearchBatchAdmissionConflict("Research Batch request_id conflicts")
-            receipt = _receipt(transaction, command.request_id)
+            receipt = _receipt(transaction, researcher_id, command.request_id)
             if receipt is not None:
                 return _replayed_receipt(receipt, fingerprint)
             folder = transaction.execute(
                 """
                 SELECT id
                 FROM research_folders.folders
-                WHERE id = %s
+                WHERE researcher_id = %s AND id = %s
                 FOR KEY SHARE
                 """,
-                (BATCH_RESEARCH_FOLDER_ID,),
+                (researcher_id, BATCH_RESEARCH_FOLDER_ID),
             ).fetchone()
             if folder is None:
                 raise RuntimeError("Batch Research Folder is unavailable")
             batch_row = transaction.execute(
                 """
                 INSERT INTO research_batches.batches (
-                    id, batch_kind, status, scope
-                ) VALUES (%s, %s, 'queued', %s)
+                    researcher_id, id, batch_kind, status, scope
+                ) VALUES (%s, %s, %s, 'queued', %s)
                 RETURNING id, batch_kind, status, scope, created_at
                 """,
-                (batch_id, command.batch_kind, Jsonb(scope.model_dump(mode="json"))),
+                (
+                    researcher_id,
+                    batch_id,
+                    command.batch_kind,
+                    Jsonb(scope.model_dump(mode="json")),
+                ),
             ).fetchone()
             assert batch_row is not None
             for ordinal, ((item_key, _), child) in enumerate(
@@ -670,10 +683,12 @@ class ResearchBatchService:
                 transaction.execute(
                     """
                     INSERT INTO research_batches.items (
-                        batch_id, ordinal, item_key, research_run_id, dependency_role
-                    ) VALUES (%s, %s, %s, %s, %s)
+                        researcher_id, batch_id, ordinal, item_key,
+                        research_run_id, dependency_role
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
+                        researcher_id,
                         batch_id,
                         ordinal,
                         item_key,
@@ -702,16 +717,18 @@ class ResearchBatchService:
             )
             outcome = _detail_in_transaction(
                 transaction,
+                researcher_id,
                 batch_id,
                 research_runs=self._research_runs,
             )
             transaction.execute(
                 """
                 INSERT INTO research_batches.admission_receipts (
-                    request_id, request_fingerprint, batch_id, outcome
-                ) VALUES (%s, %s, %s, %s)
+                    researcher_id, request_id, request_fingerprint, batch_id, outcome
+                ) VALUES (%s, %s, %s, %s, %s)
                 """,
                 (
+                    researcher_id,
                     command.request_id,
                     fingerprint,
                     batch_id,
@@ -720,8 +737,14 @@ class ResearchBatchService:
             )
         return outcome
 
-    def list(self, *, cursor: str | None, limit: int) -> ResearchBatchList:
-        cursor_created_at, cursor_id = _decode_cursor(cursor)
+    def list(
+        self,
+        researcher_id: UUID,
+        *,
+        cursor: str | None,
+        limit: int,
+    ) -> ResearchBatchList:
+        cursor_created_at, cursor_id = _decode_cursor(cursor, researcher_id)
         with self._database.transaction() as transaction:
             rows = transaction.execute(
                 """
@@ -741,7 +764,8 @@ class ResearchBatchService:
                     FROM research_batches.attempts AS attempt
                     WHERE attempt.batch_id = batch.id
                 ) AS timing ON true
-                WHERE (
+                WHERE batch.researcher_id = %s
+                  AND (
                     %s::timestamptz IS NULL
                     OR batch.created_at < %s::timestamptz
                     OR (
@@ -753,6 +777,7 @@ class ResearchBatchService:
                 LIMIT %s::integer
                 """,
                 (
+                    researcher_id,
                     cursor_created_at,
                     cursor_created_at,
                     cursor_created_at,
@@ -763,43 +788,61 @@ class ResearchBatchService:
             summaries = [_summary_from_row(row) for row in rows[:limit]]
         return ResearchBatchList(
             items=summaries,
-            next_cursor=(_encode_cursor(summaries[-1]) if len(rows) > limit else None),
+            next_cursor=(
+                _encode_cursor(summaries[-1], researcher_id) if len(rows) > limit else None
+            ),
         )
 
-    def get(self, batch_id: str) -> ResearchBatchDetail | None:
+    def get(self, researcher_id: UUID, batch_id: str) -> ResearchBatchDetail | None:
         with self._database.transaction() as transaction:
             exists = transaction.execute(
-                "SELECT id FROM research_batches.batches WHERE id = %s",
-                (batch_id,),
+                """
+                SELECT id
+                FROM research_batches.batches
+                WHERE researcher_id = %s AND id = %s
+                """,
+                (researcher_id, batch_id),
             ).fetchone()
             if exists is None:
                 return None
             return _detail_in_transaction(
                 transaction,
+                researcher_id,
                 batch_id,
                 research_runs=self._research_runs,
             )
 
     def cancel(
         self,
+        researcher_id: UUID,
         batch_id: str,
         command: ResearchBatchCancelCommand,
     ) -> ResearchBatchDetail | None:
         fingerprint = _cancel_fingerprint(batch_id)
         with self._database.transaction() as transaction:
+            owned = transaction.execute(
+                """
+                SELECT 1
+                FROM research_batches.batches
+                WHERE researcher_id = %s AND id = %s
+                """,
+                (researcher_id, batch_id),
+            ).fetchone()
+            if owned is None:
+                return None
             transaction.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"research_batches.request:{command.request_id}",),
+                (f"research_batches.request:{researcher_id}:{command.request_id}",),
             ).fetchone()
-            if _receipt(transaction, command.request_id) is not None:
+            if _receipt(transaction, researcher_id, command.request_id) is not None:
                 raise ResearchBatchCancelConflict("Research Batch Cancel request_id conflicts")
             receipt = transaction.execute(
                 """
                 SELECT request_fingerprint, batch_id
                 FROM research_batches.cancel_receipts
-                WHERE request_id = %s
+                WHERE researcher_id = %s AND request_id = %s
                 """,
-                (command.request_id,),
+                (researcher_id, command.request_id),
             ).fetchone()
             if receipt is not None:
                 if receipt != {
@@ -809,6 +852,7 @@ class ResearchBatchService:
                     raise ResearchBatchCancelConflict("Research Batch Cancel request_id conflicts")
                 return _detail_in_transaction(
                     transaction,
+                    researcher_id,
                     batch_id,
                     research_runs=self._research_runs,
                 )
@@ -818,10 +862,10 @@ class ResearchBatchService:
                 """
                 SELECT id, status, execution_fence
                 FROM research_batches.batches
-                WHERE id = %s
+                WHERE researcher_id = %s AND id = %s
                 FOR UPDATE
                 """,
-                (batch_id,),
+                (researcher_id, batch_id),
             ).fetchone()
             if batch is None:
                 return None
@@ -852,13 +896,14 @@ class ResearchBatchService:
             transaction.execute(
                 """
                 INSERT INTO research_batches.cancel_receipts (
-                    request_id, request_fingerprint, batch_id
-                ) VALUES (%s, %s, %s)
+                    researcher_id, request_id, request_fingerprint, batch_id
+                ) VALUES (%s, %s, %s, %s)
                 """,
-                (command.request_id, fingerprint, batch_id),
+                (researcher_id, command.request_id, fingerprint, batch_id),
             )
             return _detail_in_transaction(
                 transaction,
+                researcher_id,
                 batch_id,
                 research_runs=self._research_runs,
             )
@@ -971,7 +1016,7 @@ class ResearchBatchService:
     ) -> None:
         batch = transaction.execute(
             """
-            SELECT status
+            SELECT researcher_id, status
             FROM research_batches.batches
             WHERE id = %s
             FOR UPDATE
@@ -993,6 +1038,7 @@ class ResearchBatchService:
         run_ids = [str(item["research_run_id"]) for item in incomplete]
         self._research_runs.cancel_incomplete_batch_owned_executions_in_transaction(
             transaction,
+            batch["researcher_id"],
             run_ids,
         )
         if incomplete:
@@ -1127,7 +1173,7 @@ class ResearchBatchService:
             while True:
                 row = transaction.execute(
                     """
-                    SELECT batch.id, batch.batch_kind, batch.created_at,
+                    SELECT batch.researcher_id, batch.id, batch.batch_kind, batch.created_at,
                            batch.execution_fence, batch.scope, batch.status,
                            expired.id AS expired_attempt_id,
                            expired.fence AS expired_attempt_fence,
@@ -1189,7 +1235,7 @@ class ResearchBatchService:
                         return None
                     refreshed = transaction.execute(
                         """
-                        SELECT id, batch_kind, created_at, execution_fence,
+                        SELECT researcher_id, id, batch_kind, created_at, execution_fence,
                                scope, status
                         FROM research_batches.batches
                         WHERE id = %s
@@ -1202,6 +1248,9 @@ class ResearchBatchService:
                     row = refreshed
                 break
             batch_id = str(row["id"])
+            researcher_id = row["researcher_id"]
+            if not isinstance(researcher_id, UUID):
+                raise RuntimeError("Research Batch Researcher identity is invalid")
             batch_kind = str(row["batch_kind"])
             if batch_kind == "factor_evaluation":
                 dependency_role = "factor"
@@ -1222,7 +1271,7 @@ class ResearchBatchService:
             attempt_id = f"batch_attempt_{uuid4().hex[:20]}"
             child_control_path = str(self._attempt_control_directory / f"{attempt_id}.lock")
             starting_guard = _StartingGuard(child_control_path)
-            scope = ResearchBatchScope.model_validate(row["scope"])
+            scope = ResearchBatchStorageScope.model_validate(row["scope"])
             pinned = self._dataset_lifecycle.pin_generation_in_transaction(
                 transaction,
                 generation_manifest_sha256=scope.data_generation_id,
@@ -1239,12 +1288,12 @@ class ResearchBatchService:
                 """
                 SELECT ordinal, item_key, research_run_id
                 FROM research_batches.items
-                WHERE batch_id = %s AND dependency_role = %s
+                WHERE researcher_id = %s AND batch_id = %s AND dependency_role = %s
                   AND outcome IS NULL
                 ORDER BY ordinal
                 FOR UPDATE
                 """,
-                (batch_id, dependency_role),
+                (researcher_id, batch_id, dependency_role),
             ).fetchall()
             if not item_rows:
                 raise RuntimeError("Research Batch has no incomplete items")
@@ -1254,6 +1303,7 @@ class ResearchBatchService:
                     str(item["item_key"]),
                     self._research_runs.begin_batch_owned_execution_in_transaction(
                         transaction,
+                        researcher_id,
                         str(item["research_run_id"]),
                         batch_attempt_id=attempt_id,
                         generation_pin_id=pinned.pin.id,
@@ -1304,6 +1354,7 @@ class ResearchBatchService:
                 retention_id=f"research-batch:{batch_id}",
             )
         return _ResearchBatchClaim(
+            researcher_id=researcher_id,
             batch_id=batch_id,
             batch_kind=batch_kind,
             admitted_at=row["created_at"],
@@ -1343,6 +1394,7 @@ class ResearchBatchService:
         )
         self._close_factor_attempt_in_transaction(
             transaction,
+            researcher_id=row["researcher_id"],
             batch_id=batch_id,
             attempt_id=attempt_id,
             fence=attempt_fence,
@@ -1379,6 +1431,7 @@ class ResearchBatchService:
             return False
         self._close_strategy_attempt_in_transaction(
             transaction,
+            researcher_id=row["researcher_id"],
             batch_id=batch_id,
             attempt_id=attempt_id,
             fence=attempt_fence,
@@ -1429,6 +1482,7 @@ class ResearchBatchService:
         ).fetchall()
         self._research_runs.reset_incomplete_batch_owned_executions_in_transaction(
             transaction,
+            row["researcher_id"],
             [str(item["research_run_id"]) for item in incomplete],
         )
         deleted = transaction.execute(
@@ -1462,6 +1516,7 @@ class ResearchBatchService:
         self,
         transaction: PostgresTransaction,
         *,
+        researcher_id: UUID,
         batch_id: str,
         item_ordinal: int,
         run_id: str,
@@ -1469,6 +1524,7 @@ class ResearchBatchService:
     ) -> None:
         self._research_runs.fail_recovered_batch_owned_item_in_transaction(
             transaction,
+            researcher_id,
             run_id,
             public_reason=diagnostic.message,
         )
@@ -1632,11 +1688,12 @@ class ResearchBatchService:
                    attempt.generation_pin_id
             FROM research_batches.batches AS batch
             JOIN research_batches.attempts AS attempt ON attempt.batch_id = batch.id
-            WHERE batch.id = %s AND attempt.id = %s AND attempt.fence = %s
+            WHERE batch.researcher_id = %s AND batch.id = %s
+              AND attempt.id = %s AND attempt.fence = %s
               AND attempt.lease_expires_at > now()
             FOR UPDATE OF batch, attempt
             """,
-            (claim.batch_id, claim.attempt_id, claim.fence),
+            (claim.researcher_id, claim.batch_id, claim.attempt_id, claim.fence),
         ).fetchone()
         if current != {
             "status": "running",
@@ -2501,6 +2558,7 @@ class ResearchBatchService:
             ).fetchall()
             self._research_runs.reset_incomplete_batch_owned_executions_in_transaction(
                 transaction,
+                claim.researcher_id,
                 [str(item["research_run_id"]) for item in incomplete],
             )
             if isinstance(error, ResearchBatchPrivateArtifactRejected):
@@ -2512,6 +2570,7 @@ class ResearchBatchService:
                 for item in incomplete:
                     self._fail_recovered_item_in_transaction(
                         transaction,
+                        researcher_id=claim.researcher_id,
                         batch_id=claim.batch_id,
                         item_ordinal=int(item["ordinal"]),
                         run_id=str(item["research_run_id"]),
@@ -2579,6 +2638,7 @@ class ResearchBatchService:
                 raise RuntimeError("Interrupted Factor child exit is not confirmed")
             self._close_factor_attempt_in_transaction(
                 transaction,
+                researcher_id=claim.researcher_id,
                 batch_id=claim.batch_id,
                 attempt_id=claim.attempt_id,
                 fence=claim.fence,
@@ -2614,6 +2674,7 @@ class ResearchBatchService:
                 raise RuntimeError("Interrupted Strategy Sweep child exit is not confirmed")
             self._close_strategy_attempt_in_transaction(
                 transaction,
+                researcher_id=claim.researcher_id,
                 batch_id=claim.batch_id,
                 attempt_id=claim.attempt_id,
                 fence=claim.fence,
@@ -2627,6 +2688,7 @@ class ResearchBatchService:
         self,
         transaction: PostgresTransaction,
         *,
+        researcher_id: UUID,
         batch_id: str,
         attempt_id: str,
         fence: int,
@@ -2637,6 +2699,7 @@ class ResearchBatchService:
     ) -> None:
         task, incomplete = self._close_interrupted_attempt_in_transaction(
             transaction,
+            researcher_id=researcher_id,
             batch_id=batch_id,
             attempt_id=attempt_id,
             fence=fence,
@@ -2679,6 +2742,7 @@ class ResearchBatchService:
             for item in incomplete:
                 self._fail_recovered_item_in_transaction(
                     transaction,
+                    researcher_id=researcher_id,
                     batch_id=batch_id,
                     item_ordinal=int(item["ordinal"]),
                     run_id=str(item["research_run_id"]),
@@ -2692,6 +2756,7 @@ class ResearchBatchService:
             if selected is not None:
                 self._fail_recovered_item_in_transaction(
                     transaction,
+                    researcher_id=researcher_id,
                     batch_id=batch_id,
                     item_ordinal=int(selected["ordinal"]),
                     run_id=str(selected["research_run_id"]),
@@ -2718,6 +2783,7 @@ class ResearchBatchService:
         self,
         transaction: PostgresTransaction,
         *,
+        researcher_id: UUID,
         batch_id: str,
         attempt_id: str,
         fence: int,
@@ -2789,6 +2855,7 @@ class ResearchBatchService:
         ).fetchall()
         self._research_runs.reset_incomplete_batch_owned_executions_in_transaction(
             transaction,
+            researcher_id,
             [str(item["research_run_id"]) for item in incomplete],
         )
         return task, incomplete
@@ -2838,6 +2905,7 @@ class ResearchBatchService:
         self,
         transaction: PostgresTransaction,
         *,
+        researcher_id: UUID,
         batch_id: str,
         attempt_id: str,
         fence: int,
@@ -2848,6 +2916,7 @@ class ResearchBatchService:
     ) -> None:
         task_attempt, incomplete = self._close_interrupted_attempt_in_transaction(
             transaction,
+            researcher_id=researcher_id,
             batch_id=batch_id,
             attempt_id=attempt_id,
             fence=fence,
@@ -2871,6 +2940,7 @@ class ResearchBatchService:
                 exhausted = policy.retryable and int(task_attempt["ordinal"]) >= MAX_TASK_ATTEMPTS
                 self._fail_recovered_item_in_transaction(
                     transaction,
+                    researcher_id=researcher_id,
                     batch_id=batch_id,
                     item_ordinal=int(selected["ordinal"]),
                     run_id=str(selected["research_run_id"]),
@@ -2929,6 +2999,7 @@ class ResearchBatchService:
             run_ids = [str(row["research_run_id"]) for row in item_rows]
             child_statuses = self._research_runs.project_child_statuses_in_transaction(
                 transaction,
+                claim.researcher_id,
                 run_ids,
             )
             statuses = [child_statuses[run_id] for run_id in run_ids]
@@ -3013,14 +3084,15 @@ class ResearchBatchService:
 
     def _locked_receipt(
         self,
+        researcher_id: UUID,
         request_id: str,
         fingerprint: str,
     ) -> ResearchBatchDetail | None:
         with self._database.transaction() as transaction:
-            _lock_admission(transaction, request_id)
-            if _cancel_receipt_exists(transaction, request_id):
+            _lock_admission(transaction, researcher_id, request_id)
+            if _cancel_receipt_exists(transaction, researcher_id, request_id):
                 raise ResearchBatchAdmissionConflict("Research Batch request_id conflicts")
-            receipt = _receipt(transaction, request_id)
+            receipt = _receipt(transaction, researcher_id, request_id)
             return None if receipt is None else _replayed_receipt(receipt, fingerprint)
 
 
@@ -3173,11 +3245,11 @@ def _deduplicated_issues(
     return list(unique.values())
 
 
-def _scope(children: Sequence[PreparedResearchRunAdmission]) -> ResearchBatchScope:
+def _scope(children: Sequence[PreparedResearchRunAdmission]) -> ResearchBatchStorageScope:
     if not children:
         raise ValueError("Research Batch requires child Runs")
     frozen = children[0].immutable_input
-    return ResearchBatchScope(
+    return ResearchBatchStorageScope(
         start_date=frozen.requested_start_date,
         end_date=frozen.requested_end_date,
         universe=frozen.universe,
@@ -3207,35 +3279,45 @@ def _cancel_fingerprint(batch_id: str) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
-def _lock_admission(transaction: PostgresTransaction, request_id: str) -> None:
+def _lock_admission(
+    transaction: PostgresTransaction,
+    researcher_id: UUID,
+    request_id: str,
+) -> None:
     transaction.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-        (f"research_batches.request:{request_id}",),
+        (f"research_batches.request:{researcher_id}:{request_id}",),
     ).fetchone()
 
 
 def _receipt(
     transaction: PostgresTransaction,
+    researcher_id: UUID,
     request_id: str,
 ) -> Mapping[str, object] | None:
     return transaction.execute(
         """
         SELECT request_fingerprint, outcome
         FROM research_batches.admission_receipts
-        WHERE request_id = %s
+        WHERE researcher_id = %s AND request_id = %s
         """,
-        (request_id,),
+        (researcher_id, request_id),
     ).fetchone()
 
 
 def _cancel_receipt_exists(
     transaction: PostgresTransaction,
+    researcher_id: UUID,
     request_id: str,
 ) -> bool:
     return (
         transaction.execute(
-            "SELECT 1 FROM research_batches.cancel_receipts WHERE request_id = %s",
-            (request_id,),
+            """
+            SELECT 1
+            FROM research_batches.cancel_receipts
+            WHERE researcher_id = %s AND request_id = %s
+            """,
+            (researcher_id, request_id),
         ).fetchone()
         is not None
     )
@@ -3252,9 +3334,10 @@ def _replayed_receipt(
 
 def _summary_in_transaction(
     transaction: PostgresTransaction,
+    researcher_id: UUID,
     batch_id: str,
 ) -> ResearchBatchSummary:
-    row = _batch_projection_row(transaction, batch_id)
+    row = _batch_projection_row(transaction, researcher_id, batch_id)
     if row is None:
         raise RuntimeError("Research Batch projection is missing")
     return _summary_from_row(row)
@@ -3266,19 +3349,27 @@ def _summary_from_row(row: Mapping[str, object]) -> ResearchBatchSummary:
         batch_kind=str(row["batch_kind"]),
         status=str(row["status"]),
         created_at=row["created_at"],
-        scope=ResearchBatchScope.model_validate(row["scope"]),
+        scope=_public_scope(row["scope"]),
         progress=_public_progress(row),
         execution_timing=_execution_timing(row),
     )
 
 
+def _public_scope(value: object) -> ResearchBatchScope:
+    stored = ResearchBatchStorageScope.model_validate(value)
+    return ResearchBatchScope.model_validate(
+        stored.model_dump(exclude={"data_generation_id"})
+    )
+
+
 def _detail_in_transaction(
     transaction: PostgresTransaction,
+    researcher_id: UUID,
     batch_id: str,
     *,
     research_runs: ResearchRunService,
 ) -> ResearchBatchDetail:
-    row = _batch_projection_row(transaction, batch_id)
+    row = _batch_projection_row(transaction, researcher_id, batch_id)
     if row is None:
         raise RuntimeError("Research Batch projection is missing")
     item_rows = transaction.execute(
@@ -3293,15 +3384,16 @@ def _detail_in_transaction(
                      AND task_attempt.item_ordinal = item.ordinal
                ) AS task_attempt_count
         FROM research_batches.items AS item
-        WHERE item.batch_id = %s
+        WHERE item.researcher_id = %s AND item.batch_id = %s
         ORDER BY item.ordinal
         FOR SHARE OF item
         """,
-        (batch_id,),
+        (researcher_id, batch_id),
     ).fetchall()
     run_ids = [str(item["research_run_id"]) for item in item_rows if item["deleted_at"] is None]
     child_statuses = research_runs.project_child_statuses_in_transaction(
         transaction,
+        researcher_id,
         run_ids,
     )
     attempt_row = transaction.execute(
@@ -3320,7 +3412,7 @@ def _detail_in_transaction(
         """,
         (batch_id,),
     ).fetchone()
-    summary = _summary_in_transaction(transaction, batch_id)
+    summary = _summary_in_transaction(transaction, researcher_id, batch_id)
     return ResearchBatchDetail(
         **summary.model_dump(),
         attempt=_attempt_summary(attempt_row),
@@ -3346,6 +3438,7 @@ def _detail_in_transaction(
 
 def _batch_projection_row(
     transaction: PostgresTransaction,
+    researcher_id: UUID,
     batch_id: str,
 ) -> Mapping[str, object] | None:
     return transaction.execute(
@@ -3363,9 +3456,9 @@ def _batch_projection_row(
             FROM research_batches.attempts AS attempt
             WHERE attempt.batch_id = batch.id
         ) AS timing ON true
-        WHERE batch.id = %s
+        WHERE batch.researcher_id = %s AND batch.id = %s
         """,
-        (batch_id,),
+        (researcher_id, batch_id),
     ).fetchone()
 
 
@@ -3608,23 +3701,31 @@ def _exception_diagnostic(error: Exception) -> ResearchBatchDiagnostic:
     )
 
 
-def _encode_cursor(summary: ResearchBatchSummary) -> str:
+def _encode_cursor(summary: ResearchBatchSummary, researcher_id: UUID) -> str:
     payload = json.dumps(
-        {"created_at": summary.created_at.isoformat(), "id": summary.id},
+        {
+            "researcher_id": str(researcher_id),
+            "created_at": summary.created_at.isoformat(),
+            "id": summary.id,
+        },
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
     return urlsafe_b64encode(payload).decode().rstrip("=")
 
 
-def _decode_cursor(cursor: str | None) -> tuple[datetime | None, str | None]:
+def _decode_cursor(
+    cursor: str | None,
+    researcher_id: UUID,
+) -> tuple[datetime | None, str | None]:
     if cursor is None:
         return None, None
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
         value = json.loads(urlsafe_b64decode(padded).decode())
         if (
-            set(value) != {"created_at", "id"}
+            set(value) != {"researcher_id", "created_at", "id"}
+            or value["researcher_id"] != str(researcher_id)
             or not isinstance(value["id"], str)
             or not value["id"]
         ):

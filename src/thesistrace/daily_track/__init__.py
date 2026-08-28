@@ -11,6 +11,7 @@ from thesistrace.daily_track.models import (
     TrackingOrigin,
 )
 from thesistrace.daily_track.service import (
+    DailyTrackAccessInspector,
     DailyTrackActivationLimitReached,
     DailyTrackDeleteConflict,
     DailyTrackDetailUnavailable,
@@ -24,6 +25,7 @@ from thesistrace.daily_track.service import (
 from thesistrace.daily_track.session_persistence import SessionCoordinateRepository
 
 __all__ = [
+    "DailyTrackAccessInspector",
     "DailyTrackActivationLimitReached",
     "DailyTrackDiagnosticNotFound",
     "DailyTrackDiagnostics",

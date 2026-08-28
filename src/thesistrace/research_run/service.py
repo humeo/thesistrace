@@ -12,7 +12,7 @@ from datetime import datetime
 from threading import Event, Thread
 from time import monotonic
 from typing import Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from psycopg import OperationalError
 from psycopg.errors import OutOfMemory
@@ -131,11 +131,11 @@ Progress = Callable[[str, str], None]
 CompileFormula = Callable[[str], CompiledAlpha]
 CurrentDataset = Callable[[], DatasetAdmissionSnapshot | None]
 TrackReferencesResult = Callable[[PostgresTransaction, str], bool]
-PreserveDependentRunHistory = Callable[[PostgresTransaction, str], None]
+PreserveDependentRunHistory = Callable[[PostgresTransaction, UUID, str], None]
 BatchExecutionAuthorization = Callable[[PostgresTransaction], None]
 BatchItemCompletion = Callable[[PostgresTransaction, str, str | None], None]
 ActivateTrack = Callable[
-    [PostgresTransaction, TrackingOrigin],
+    [PostgresTransaction, UUID, TrackingOrigin],
     DailyTrackSummary,
 ]
 
@@ -216,6 +216,7 @@ SEMANTIC_VERSIONS = {
 
 @dataclass(frozen=True)
 class ResearchRunExecutionClaim:
+    researcher_id: UUID
     run_id: str
     attempt_id: str
     fence: int
@@ -262,6 +263,7 @@ class _ClaimResult:
 
 @dataclass(frozen=True)
 class PreparedResearchRunAdmission:
+    researcher_id: UUID
     run_id: str
     folder_id: str
     name: str
@@ -321,6 +323,7 @@ class ResearchRunService:
     def begin_batch_owned_execution_in_transaction(
         self,
         transaction: PostgresTransaction,
+        researcher_id: UUID,
         run_id: str,
         *,
         batch_attempt_id: str,
@@ -331,12 +334,13 @@ class ResearchRunService:
         """Fence one queued Batch-owned Run under its Batch Attempt authority."""
         row = transaction.execute(
             """
-            SELECT id, status, execution_owner, execution_fence, immutable_input
+            SELECT researcher_id, id, status, execution_owner, execution_fence,
+                   immutable_input
             FROM research_runs.runs
-            WHERE id = %s
+            WHERE researcher_id = %s AND id = %s
             FOR UPDATE
             """,
-            (run_id,),
+            (researcher_id, run_id),
         ).fetchone()
         if row is None or row["execution_owner"] != "research_batch":
             raise ResearchRunInputInvalid("Batch-owned ResearchRun is unavailable")
@@ -359,13 +363,14 @@ class ResearchRunService:
             UPDATE research_runs.runs
             SET status = 'running', execution_fence = %s,
                 failure_reason = NULL, updated_at = now()
-            WHERE id = %s AND status = 'queued'
+            WHERE researcher_id = %s AND id = %s AND status = 'queued'
             """,
-            (fence, run_id),
+            (fence, researcher_id, run_id),
         )
         if updated.rowcount != 1:
             raise ResearchRunFenced
         return ResearchRunExecutionClaim(
+            researcher_id=researcher_id,
             run_id=run_id,
             attempt_id=batch_attempt_id,
             fence=fence,
@@ -378,11 +383,13 @@ class ResearchRunService:
     def reset_incomplete_batch_owned_executions_in_transaction(
         self,
         transaction: PostgresTransaction,
+        researcher_id: UUID,
         run_ids: Sequence[str],
     ) -> None:
         """Fence lost Batch authority and return only incomplete child Runs to queued."""
         self._transition_incomplete_batch_owned_executions_in_transaction(
             transaction,
+            researcher_id,
             run_ids,
             target_status="queued",
             delete_checkpoints=False,
@@ -391,11 +398,13 @@ class ResearchRunService:
     def cancel_incomplete_batch_owned_executions_in_transaction(
         self,
         transaction: PostgresTransaction,
+        researcher_id: UUID,
         run_ids: Sequence[str],
     ) -> None:
         """Fence and terminally cancel only unfinished children of one Batch."""
         self._transition_incomplete_batch_owned_executions_in_transaction(
             transaction,
+            researcher_id,
             run_ids,
             target_status="cancelled",
             delete_checkpoints=True,
@@ -404,6 +413,7 @@ class ResearchRunService:
     def _transition_incomplete_batch_owned_executions_in_transaction(
         self,
         transaction: PostgresTransaction,
+        researcher_id: UUID,
         run_ids: Sequence[str],
         *,
         target_status: Literal["queued", "cancelled"],
@@ -416,11 +426,11 @@ class ResearchRunService:
             """
             SELECT id, status, execution_owner
             FROM research_runs.runs
-            WHERE id = ANY(%s)
+            WHERE researcher_id = %s AND id = ANY(%s)
             ORDER BY id
             FOR UPDATE
             """,
-            (selected_ids,),
+            (researcher_id, selected_ids),
         ).fetchall()
         if len(rows) != len(run_ids) or any(
             row["execution_owner"] != "research_batch" or row["status"] not in {"queued", "running"}
@@ -437,10 +447,11 @@ class ResearchRunService:
                 END,
                 failure_reason = NULL,
                 updated_at = now()
-            WHERE id = ANY(%s) AND execution_owner = 'research_batch'
+            WHERE researcher_id = %s AND id = ANY(%s)
+              AND execution_owner = 'research_batch'
               AND status = ANY(ARRAY['queued'::text, 'running'::text])
             """,
-            (target_status, selected_ids),
+            (target_status, researcher_id, selected_ids),
         )
         if updated.rowcount != len(run_ids):
             raise ResearchRunFenced
@@ -461,6 +472,7 @@ class ResearchRunService:
     def fail_recovered_batch_owned_item_in_transaction(
         self,
         transaction: PostgresTransaction,
+        researcher_id: UUID,
         run_id: str,
         *,
         public_reason: str,
@@ -469,10 +481,10 @@ class ResearchRunService:
             """
             UPDATE research_runs.runs
             SET status = 'failed', failure_reason = %s, updated_at = now()
-            WHERE id = %s AND status = 'queued'
+            WHERE researcher_id = %s AND id = %s AND status = 'queued'
               AND execution_owner = 'research_batch'
             """,
-            (public_reason, run_id),
+            (public_reason, researcher_id, run_id),
         )
         if updated.rowcount != 1:
             raise ResearchRunFenced
@@ -526,13 +538,14 @@ class ResearchRunService:
                 SET status = 'succeeded', result_manifest_sha256 = %s,
                     result_provenance = %s, key_metrics = %s,
                     failure_reason = NULL, updated_at = now()
-                WHERE id = %s AND status = 'running'
+                WHERE researcher_id = %s AND id = %s AND status = 'running'
                   AND execution_owner = 'research_batch' AND execution_fence = %s
                 """,
                 (
                     published.manifest_sha256,
                     Jsonb(provenance),
                     Jsonb(key_metrics.model_dump(mode="json")),
+                    claim.researcher_id,
                     claim.run_id,
                     claim.fence,
                 ),
@@ -573,10 +586,11 @@ class ResearchRunService:
                 """
                 SELECT status, execution_fence
                 FROM research_runs.runs
-                WHERE id = %s AND execution_owner = 'research_batch'
+                WHERE researcher_id = %s AND id = %s
+                  AND execution_owner = 'research_batch'
                 FOR UPDATE
                 """,
-                (claim.run_id,),
+                (claim.researcher_id, claim.run_id),
             ).fetchone()
             if current is None or current["execution_fence"] != claim.fence:
                 raise ResearchRunFenced
@@ -588,10 +602,15 @@ class ResearchRunService:
                 """
                 UPDATE research_runs.runs
                 SET status = 'failed', failure_reason = %s, updated_at = now()
-                WHERE id = %s AND status = 'running'
+                WHERE researcher_id = %s AND id = %s AND status = 'running'
                   AND execution_owner = 'research_batch' AND execution_fence = %s
                 """,
-                (policy.public_reason, claim.run_id, claim.fence),
+                (
+                    policy.public_reason,
+                    claim.researcher_id,
+                    claim.run_id,
+                    claim.fence,
+                ),
             )
             if updated.rowcount != 1:
                 raise ResearchRunFenced
@@ -680,13 +699,14 @@ class ResearchRunService:
                 SET status = 'succeeded', result_manifest_sha256 = %s,
                     result_provenance = %s, key_metrics = %s,
                     failure_reason = NULL, updated_at = now()
-                WHERE id = %s AND status = 'running'
+                WHERE researcher_id = %s AND id = %s AND status = 'running'
                   AND execution_owner = 'research_batch' AND execution_fence = %s
                 """,
                 (
                     published.manifest_sha256,
                     Jsonb(provenance),
                     Jsonb(key_metrics.model_dump(mode="json")),
+                    claim.researcher_id,
                     claim.run_id,
                     claim.fence,
                 ),
@@ -798,10 +818,11 @@ class ResearchRunService:
             """
             SELECT status, execution_fence
             FROM research_runs.runs
-            WHERE id = %s AND execution_owner = 'research_batch'
+            WHERE researcher_id = %s AND id = %s
+              AND execution_owner = 'research_batch'
             FOR UPDATE
             """,
-            (claim.run_id,),
+            (claim.researcher_id, claim.run_id),
         ).fetchone()
         if current != {"status": "running", "execution_fence": claim.fence}:
             raise ResearchRunFenced
@@ -820,6 +841,7 @@ class ResearchRunService:
 
     def prepare_child_admission(
         self,
+        researcher_id: UUID,
         command: ResearchRunAdmissionCommand,
         *,
         dataset: DatasetAdmissionSnapshot | None,
@@ -850,6 +872,7 @@ class ResearchRunService:
         run_id = f"run_{uuid4().hex[:20]}"
         submitted_name = (command.name or "").strip()
         return PreparedResearchRunAdmission(
+            researcher_id=researcher_id,
             run_id=run_id,
             folder_id=command.folder_id,
             name=submitted_name or f"Research {run_id[-8:].upper()}",
@@ -867,16 +890,24 @@ class ResearchRunService:
         if execution_owner not in {"ordinary", "research_batch"}:
             raise ValueError("ResearchRun execution owner is invalid")
         immutable_input = prepared.immutable_input
+        transaction.execute(
+            """
+            INSERT INTO research_runs.run_ownership (researcher_id, run_id)
+            VALUES (%s, %s)
+            """,
+            (prepared.researcher_id, prepared.run_id),
+        )
         row = transaction.execute(
             """
             INSERT INTO research_runs.runs (
-                id, folder_id, name, requested_start_date,
+                researcher_id, id, folder_id, name, requested_start_date,
                 requested_end_date, status, execution_owner, immutable_input
-            ) VALUES (%s, %s, %s, %s, %s, 'queued', %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, 'queued', %s, %s)
             RETURNING id, name, folder_id, status, requested_start_date,
                       requested_end_date, created_at, immutable_input, failure_reason
             """,
             (
+                prepared.researcher_id,
                 prepared.run_id,
                 prepared.folder_id,
                 prepared.name,
@@ -918,6 +949,7 @@ class ResearchRunService:
     def project_child_statuses_in_transaction(
         self,
         transaction: PostgresTransaction,
+        researcher_id: UUID,
         run_ids: Sequence[str],
     ) -> dict[str, str]:
         if not run_ids:
@@ -926,9 +958,9 @@ class ResearchRunService:
             """
             SELECT id, status
             FROM research_runs.runs
-            WHERE id = ANY(%s)
+            WHERE researcher_id = %s AND id = ANY(%s)
             """,
-            (list(run_ids),),
+            (researcher_id, list(run_ids)),
         ).fetchall()
         statuses = {str(row["id"]): str(row["status"]) for row in rows}
         if set(statuses) != set(run_ids):
@@ -937,6 +969,7 @@ class ResearchRunService:
 
     def admit(
         self,
+        researcher_id: UUID,
         command: ResearchRunAdmissionCommand,
     ) -> ResearchRunSummary:
         if self._compile_formula is None or self._current_dataset is None:
@@ -945,30 +978,36 @@ class ResearchRunService:
         with self._database.transaction() as transaction:
             transaction.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"research_runs.admit:{command.request_id}",),
+                (f"research_runs.admit:{researcher_id}:{command.request_id}",),
             ).fetchone()
-            receipt = _admission_receipt(transaction, command.request_id)
+            receipt = _admission_receipt(transaction, researcher_id, command.request_id)
             if receipt is not None:
                 if receipt["request_fingerprint"] != fingerprint:
                     raise ResearchRunAdmissionConflict("ResearchRun request_id conflicts")
                 return _summary(receipt)
         prepared = self.prepare_child_admission(
+            researcher_id,
             command,
             dataset=self.current_admission_dataset(),
         )
         with self._database.transaction() as transaction:
             transaction.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"research_runs.admit:{command.request_id}",),
+                (f"research_runs.admit:{researcher_id}:{command.request_id}",),
             ).fetchone()
-            receipt = _admission_receipt(transaction, command.request_id)
+            receipt = _admission_receipt(transaction, researcher_id, command.request_id)
             if receipt is not None:
                 if receipt["request_fingerprint"] != fingerprint:
                     raise ResearchRunAdmissionConflict("ResearchRun request_id conflicts")
                 return _summary(receipt)
             folder = transaction.execute(
-                "SELECT id FROM research_folders.folders WHERE id = %s FOR KEY SHARE",
-                (command.folder_id,),
+                """
+                SELECT id
+                FROM research_folders.folders
+                WHERE researcher_id = %s AND id = %s
+                FOR KEY SHARE
+                """,
+                (researcher_id, command.folder_id),
             ).fetchone()
             if folder is None:
                 raise ResearchRunAdmissionRejected(
@@ -989,10 +1028,10 @@ class ResearchRunService:
             transaction.execute(
                 """
                 INSERT INTO research_runs.admission_requests (
-                    request_id, request_fingerprint, run_id
-                ) VALUES (%s, %s, %s)
+                    researcher_id, request_id, request_fingerprint, run_id
+                ) VALUES (%s, %s, %s, %s)
                 """,
-                (command.request_id, fingerprint, prepared.run_id),
+                (researcher_id, command.request_id, fingerprint, prepared.run_id),
             )
         assert row is not None
         return _summary(row)
@@ -1230,13 +1269,19 @@ class ResearchRunService:
 
     def list(
         self,
+        researcher_id: UUID,
         *,
         folder_id: str | None = None,
         research_kind: ResearchKind | None = None,
         cursor: str | None = None,
         limit: int = 50,
     ) -> ResearchRunList:
-        cursor_created_at, cursor_id = _decode_list_cursor(cursor)
+        cursor_created_at, cursor_id = _decode_list_cursor(
+            cursor,
+            researcher_id=researcher_id,
+            folder_id=folder_id,
+            research_kind=research_kind,
+        )
         with self._database.transaction() as transaction:
             rows = transaction.execute(
                 """
@@ -1244,7 +1289,8 @@ class ResearchRunService:
                        requested_end_date, created_at, immutable_input,
                        key_metrics, failure_reason
                 FROM research_runs.runs
-                WHERE (%s::text IS NULL OR folder_id = %s::text)
+                WHERE researcher_id = %s
+                  AND (%s::text IS NULL OR folder_id = %s::text)
                   AND (%s::text IS NULL OR immutable_input->>'research_kind' = %s::text)
                   AND (
                     %s::timestamptz IS NULL
@@ -1255,6 +1301,7 @@ class ResearchRunService:
                 LIMIT %s::integer
                 """,
                 (
+                    researcher_id,
                     folder_id,
                     folder_id,
                     research_kind,
@@ -1268,13 +1315,22 @@ class ResearchRunService:
             ).fetchall()
         has_more = len(rows) > limit
         selected = rows[:limit]
-        next_cursor = _encode_list_cursor(selected[-1]) if has_more else None
+        next_cursor = (
+            _encode_list_cursor(
+                selected[-1],
+                researcher_id=researcher_id,
+                folder_id=folder_id,
+                research_kind=research_kind,
+            )
+            if has_more
+            else None
+        )
         return ResearchRunList(
             items=[_summary(row) for row in selected],
             next_cursor=next_cursor,
         )
 
-    def get(self, run_id: str) -> ResearchRunSummary | None:
+    def get(self, researcher_id: UUID, run_id: str) -> ResearchRunSummary | None:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
@@ -1282,27 +1338,38 @@ class ResearchRunService:
                        requested_end_date, created_at, immutable_input,
                        key_metrics, failure_reason
                 FROM research_runs.runs
-                WHERE id = %s
+                WHERE researcher_id = %s AND id = %s
                 """,
-                (run_id,),
+                (researcher_id, run_id),
             ).fetchone()
         return None if row is None else _summary(row)
 
     def organize(
         self,
+        researcher_id: UUID,
         run_id: str,
         command: OrganizeResearchRunCommand,
     ) -> ResearchRunSummary | None:
         with self._database.transaction() as transaction:
+            owned = transaction.execute(
+                """
+                SELECT 1
+                FROM research_runs.runs
+                WHERE researcher_id = %s AND id = %s
+                """,
+                (researcher_id, run_id),
+            ).fetchone()
+            if owned is None:
+                return None
             if command.folder_id is not None:
                 folder = transaction.execute(
                     """
                     SELECT id
                     FROM research_folders.folders
-                    WHERE id = %s
+                    WHERE researcher_id = %s AND id = %s
                     FOR KEY SHARE
                     """,
-                    (command.folder_id,),
+                    (researcher_id, command.folder_id),
                 ).fetchone()
                 if folder is None:
                     raise ResearchRunOrganizationConflict("Research Folder does not exist")
@@ -1312,7 +1379,7 @@ class ResearchRunService:
                 SET name = CASE WHEN %s THEN %s ELSE name END,
                     folder_id = CASE WHEN %s THEN %s ELSE folder_id END,
                     updated_at = now()
-                WHERE id = %s
+                WHERE researcher_id = %s AND id = %s
                 RETURNING id, name, folder_id, status, requested_start_date,
                           requested_end_date, created_at, immutable_input,
                           key_metrics, failure_reason
@@ -1322,12 +1389,13 @@ class ResearchRunService:
                     command.name,
                     command.folder_id is not None,
                     command.folder_id,
+                    researcher_id,
                     run_id,
                 ),
             ).fetchone()
         return None if row is None else _summary(row)
 
-    def delete(self, run_id: str) -> bool:
+    def delete(self, researcher_id: UUID, run_id: str) -> bool:
         if self._publication is None:
             raise RuntimeError("ResearchRun deletion is not configured")
         with self._database.transaction() as transaction:
@@ -1336,10 +1404,10 @@ class ResearchRunService:
                 """
                 SELECT status, result_manifest_sha256
                 FROM research_runs.runs
-                WHERE id = %s
+                WHERE researcher_id = %s AND id = %s
                 FOR UPDATE
                 """,
-                (run_id,),
+                (researcher_id, run_id),
             ).fetchone()
             if row is None:
                 return False
@@ -1347,16 +1415,25 @@ class ResearchRunService:
                 raise ResearchRunDeleteConflict("ResearchRun deletion requires terminal status")
             manifest_sha256 = row.get("result_manifest_sha256")
             transaction.execute(
-                "DELETE FROM research_runs.start_tracking_receipts WHERE seed_run_id = %s",
-                (run_id,),
+                """
+                DELETE FROM research_runs.start_tracking_receipts
+                WHERE researcher_id = %s AND seed_run_id = %s
+                """,
+                (researcher_id, run_id),
             )
             transaction.execute(
-                "DELETE FROM research_runs.cancel_receipts WHERE run_id = %s",
-                (run_id,),
+                """
+                DELETE FROM research_runs.cancel_receipts
+                WHERE researcher_id = %s AND run_id = %s
+                """,
+                (researcher_id, run_id),
             )
             transaction.execute(
-                "DELETE FROM research_runs.admission_requests WHERE run_id = %s",
-                (run_id,),
+                """
+                DELETE FROM research_runs.admission_requests
+                WHERE researcher_id = %s AND run_id = %s
+                """,
+                (researcher_id, run_id),
             )
             transaction.execute(
                 "DELETE FROM research_runs.execution_checkpoints WHERE run_id = %s",
@@ -1367,10 +1444,13 @@ class ResearchRunService:
                 (run_id,),
             )
             if self._preserve_dependent_run_history is not None:
-                self._preserve_dependent_run_history(transaction, run_id)
+                self._preserve_dependent_run_history(transaction, researcher_id, run_id)
             transaction.execute(
-                "DELETE FROM research_runs.runs WHERE id = %s",
-                (run_id,),
+                """
+                DELETE FROM research_runs.runs
+                WHERE researcher_id = %s AND id = %s
+                """,
+                (researcher_id, run_id),
             )
             if isinstance(manifest_sha256, str):
                 still_referenced = research_result_manifest_is_referenced(
@@ -1394,6 +1474,7 @@ class ResearchRunService:
 
     def cancel(
         self,
+        researcher_id: UUID,
         run_id: str,
         command: ResearchRunCancelCommand,
     ) -> ResearchRunSummary | None:
@@ -1406,15 +1487,25 @@ class ResearchRunService:
         with self._database.transaction() as transaction:
             transaction.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"research_runs.cancel:{request_id}",),
+                (f"research_runs.cancel:{researcher_id}:{request_id}",),
             ).fetchone()
+            owned = transaction.execute(
+                """
+                SELECT 1
+                FROM research_runs.runs
+                WHERE researcher_id = %s AND id = %s
+                """,
+                (researcher_id, run_id),
+            ).fetchone()
+            if owned is None:
+                return None
             receipt = transaction.execute(
                 """
                 SELECT request_fingerprint, outcome
                 FROM research_runs.cancel_receipts
-                WHERE request_id = %s
+                WHERE researcher_id = %s AND request_id = %s
                 """,
-                (request_id,),
+                (researcher_id, request_id),
             ).fetchone()
             if receipt is not None:
                 if receipt["request_fingerprint"] != fingerprint:
@@ -1429,10 +1520,10 @@ class ResearchRunService:
                        requested_end_date, created_at, immutable_input,
                        failure_reason
                 FROM research_runs.runs
-                WHERE id = %s
+                WHERE researcher_id = %s AND id = %s
                 FOR UPDATE
                 """,
-                (run_id,),
+                (researcher_id, run_id),
             ).fetchone()
             if row is None:
                 return None
@@ -1458,12 +1549,12 @@ class ResearchRunService:
                         SET status = 'cancelled',
                             execution_fence = execution_fence + 1,
                             failure_reason = NULL, updated_at = now()
-                        WHERE id = %s AND status = 'running'
+                        WHERE researcher_id = %s AND id = %s AND status = 'running'
                         RETURNING id, name, folder_id, status,
                                   requested_start_date, requested_end_date,
                                   created_at, immutable_input, failure_reason
                         """,
-                        (run_id,),
+                        (researcher_id, run_id),
                     ).fetchone()
                     if updated is not None and self._dataset_lifecycle is not None:
                         self._dataset_lifecycle.release_retention_in_transaction(
@@ -1479,12 +1570,12 @@ class ResearchRunService:
                         SET status = 'cancelling',
                             execution_fence = execution_fence + 1,
                             failure_reason = NULL, updated_at = now()
-                        WHERE id = %s AND status = 'running'
+                        WHERE researcher_id = %s AND id = %s AND status = 'running'
                         RETURNING id, name, folder_id, status,
                                   requested_start_date, requested_end_date,
                                   created_at, immutable_input, failure_reason
                         """,
-                        (run_id,),
+                        (researcher_id, run_id),
                     ).fetchone()
                 if updated is None:
                     raise ResearchRunFenced
@@ -1496,12 +1587,12 @@ class ResearchRunService:
                     SET status = 'cancelled',
                         execution_fence = execution_fence + 1,
                         failure_reason = NULL, updated_at = now()
-                    WHERE id = %s AND status = 'queued'
+                    WHERE researcher_id = %s AND id = %s AND status = 'queued'
                     RETURNING id, name, folder_id, status,
                               requested_start_date, requested_end_date,
                               created_at, immutable_input, failure_reason
                     """,
-                    (run_id,),
+                    (researcher_id, run_id),
                 ).fetchone()
                 if updated is None:
                     raise ResearchRunFenced
@@ -1516,10 +1607,11 @@ class ResearchRunService:
             transaction.execute(
                 """
                 INSERT INTO research_runs.cancel_receipts (
-                    request_id, request_fingerprint, run_id, outcome
-                ) VALUES (%s, %s, %s, %s)
+                    researcher_id, request_id, request_fingerprint, run_id, outcome
+                ) VALUES (%s, %s, %s, %s, %s)
                 """,
                 (
+                    researcher_id,
                     request_id,
                     fingerprint,
                     run_id,
@@ -1548,9 +1640,15 @@ class ResearchRunService:
                 SELECT run.status AS run_status, attempt.status AS attempt_status
                 FROM research_runs.runs AS run
                 JOIN research_runs.attempts AS attempt ON attempt.run_id = run.id
-                WHERE run.id = %s AND attempt.id = %s AND attempt.fence = %s
+                WHERE run.researcher_id = %s AND run.id = %s
+                  AND attempt.id = %s AND attempt.fence = %s
                 """,
-                (claim.run_id, claim.attempt_id, claim.fence),
+                (
+                    claim.researcher_id,
+                    claim.run_id,
+                    claim.attempt_id,
+                    claim.fence,
+                ),
             ).fetchone()
         return row == {"run_status": "cancelling", "attempt_status": "cancelling"}
 
@@ -1561,10 +1659,10 @@ class ResearchRunService:
                 """
                 SELECT status
                 FROM research_runs.runs
-                WHERE id = %s
+                WHERE researcher_id = %s AND id = %s
                 FOR UPDATE
                 """,
-                (claim.run_id,),
+                (claim.researcher_id, claim.run_id),
             ).fetchone()
             if run != {"status": "cancelling"}:
                 return False
@@ -1584,9 +1682,9 @@ class ResearchRunService:
                 """
                 UPDATE research_runs.runs
                 SET status = 'cancelled', updated_at = now()
-                WHERE id = %s AND status = 'cancelling'
+                WHERE researcher_id = %s AND id = %s AND status = 'cancelling'
                 """,
-                (claim.run_id,),
+                (claim.researcher_id, claim.run_id),
             )
             self._release_execution_checkpoints(transaction, claim.run_id)
             self._dataset_lifecycle.release_pin_in_transaction(
@@ -1645,6 +1743,7 @@ class ResearchRunService:
 
     def start_tracking(
         self,
+        researcher_id: UUID,
         run_id: str,
         command: StartTrackingCommand,
     ) -> DailyTrackSummary | None:
@@ -1656,18 +1755,28 @@ class ResearchRunService:
         fingerprint = _start_tracking_fingerprint(run_id)
         try:
             with self._database.transaction() as transaction:
+                owned = transaction.execute(
+                    """
+                    SELECT 1
+                    FROM research_runs.runs
+                    WHERE researcher_id = %s AND id = %s
+                    """,
+                    (researcher_id, run_id),
+                ).fetchone()
+                if owned is None:
+                    return None
                 lock_publication_mutation(transaction)
                 transaction.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    (f"research_runs.start_tracking:{request_id}",),
+                    (f"research_runs.start_tracking:{researcher_id}:{request_id}",),
                 ).fetchone()
                 receipt = transaction.execute(
                     """
                     SELECT request_fingerprint, outcome
                     FROM research_runs.start_tracking_receipts
-                    WHERE request_id = %s
+                    WHERE researcher_id = %s AND request_id = %s
                     """,
-                    (request_id,),
+                    (researcher_id, request_id),
                 ).fetchone()
                 if receipt is not None:
                     if receipt["request_fingerprint"] != fingerprint:
@@ -1682,10 +1791,10 @@ class ResearchRunService:
                            immutable_input,
                            result_manifest_sha256, result_provenance
                     FROM research_runs.runs
-                    WHERE id = %s
+                    WHERE researcher_id = %s AND id = %s
                     FOR SHARE
                     """,
-                    (run_id,),
+                    (researcher_id, run_id),
                 ).fetchone()
                 if row is None:
                     return None
@@ -1714,15 +1823,16 @@ class ResearchRunService:
                     raise ResearchRunTrackingUnavailable(
                         "Start Tracking requires a complete verified Result"
                     ) from error
-                outcome = self._activate_track(transaction, origin)
+                outcome = self._activate_track(transaction, researcher_id, origin)
                 transaction.execute(
                     """
                     INSERT INTO research_runs.start_tracking_receipts (
-                        request_id, request_fingerprint, seed_run_id,
+                        researcher_id, request_id, request_fingerprint, seed_run_id,
                         track_id, outcome
-                    ) VALUES (%s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
+                        researcher_id,
                         request_id,
                         fingerprint,
                         run_id,
@@ -1736,7 +1846,7 @@ class ResearchRunService:
                 "Start Tracking is temporarily unavailable"
             ) from error
 
-    def get_detail(self, run_id: str) -> ResearchRunDetail | None:
+    def get_detail(self, researcher_id: UUID, run_id: str) -> ResearchRunDetail | None:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
@@ -1765,9 +1875,9 @@ class ResearchRunService:
                     FROM research_runs.attempts AS attempt
                     WHERE attempt.run_id = run.id
                 ) AS timing ON true
-                WHERE run.id = %s
+                WHERE run.researcher_id = %s AND run.id = %s
                 """,
-                (run_id,),
+                (researcher_id, run_id),
             ).fetchone()
         if row is None:
             return None
@@ -1895,7 +2005,7 @@ class ResearchRunService:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT run.id, run.status, run.immutable_input,
+                SELECT run.researcher_id, run.id, run.status, run.immutable_input,
                        run.execution_fence,
                        attempt.id AS latest_attempt_id,
                        attempt.ordinal AS latest_attempt_ordinal,
@@ -1935,6 +2045,7 @@ class ResearchRunService:
             ).fetchone()
             if row is None:
                 return _ClaimResult(claim=None)
+            researcher_id = UUID(str(row["researcher_id"]))
             run_id = str(row["id"])
             worker_loss: _WorkerLossRecovery | None = None
             if row["latest_attempt_status"] == "running":
@@ -1970,11 +2081,12 @@ class ResearchRunService:
                         UPDATE research_runs.runs
                         SET status = 'failed',
                             failure_reason = %s, updated_at = now()
-                        WHERE id = %s AND status = 'running'
+                        WHERE researcher_id = %s AND id = %s AND status = 'running'
                           AND execution_fence = %s
                         """,
                         (
                             AUTOMATIC_RETRIES_PUBLIC_REASON,
+                            researcher_id,
                             run_id,
                             row["execution_fence"],
                         ),
@@ -2024,9 +2136,9 @@ class ResearchRunService:
                 UPDATE research_runs.runs
                 SET status = 'running', execution_fence = %s,
                     failure_reason = NULL, updated_at = now()
-                WHERE id = %s
+                WHERE researcher_id = %s AND id = %s
                 """,
-                (fence, run_id),
+                (fence, researcher_id, run_id),
             )
             transaction.execute(
                 """
@@ -2052,6 +2164,7 @@ class ResearchRunService:
             )
         return _ClaimResult(
             claim=ResearchRunExecutionClaim(
+                researcher_id=researcher_id,
                 run_id=run_id,
                 attempt_id=attempt_id,
                 attempt_number=int(ordinal_row["ordinal"]),
@@ -2105,7 +2218,8 @@ class ResearchRunService:
                           AND EXISTS (
                               SELECT 1
                               FROM research_runs.runs AS run
-                              WHERE run.id = attempt.run_id
+                              WHERE run.researcher_id = %s
+                                AND run.id = attempt.run_id
                                 AND run.status = 'running'
                                 AND run.execution_fence = attempt.fence
                           )
@@ -2115,6 +2229,7 @@ class ResearchRunService:
                             claim.attempt_id,
                             claim.run_id,
                             claim.fence,
+                            claim.researcher_id,
                         ),
                     )
                     if renewed.rowcount == 1:
@@ -2691,10 +2806,10 @@ class ResearchRunService:
             """
             SELECT status, execution_fence
             FROM research_runs.runs
-            WHERE id = %s
+            WHERE researcher_id = %s AND id = %s
             FOR UPDATE
             """,
-            (claim.run_id,),
+            (claim.researcher_id, claim.run_id),
         ).fetchone()
         if current != {"status": "running", "execution_fence": claim.fence}:
             raise ResearchRunFenced
@@ -2744,10 +2859,10 @@ class ResearchRunService:
                 """
                 SELECT status, execution_fence
                 FROM research_runs.runs
-                WHERE id = %s
+                WHERE researcher_id = %s AND id = %s
                 FOR UPDATE
                 """,
-                (claim.run_id,),
+                (claim.researcher_id, claim.run_id),
             ).fetchone()
             if current != {"status": "running", "execution_fence": claim.fence}:
                 raise ResearchRunFenced
@@ -2770,12 +2885,14 @@ class ResearchRunService:
                 SET status = 'succeeded', result_manifest_sha256 = %s,
                     result_provenance = %s, key_metrics = %s, failure_reason = NULL,
                     updated_at = now()
-                WHERE id = %s AND status = 'running' AND execution_fence = %s
+                WHERE researcher_id = %s AND id = %s
+                  AND status = 'running' AND execution_fence = %s
                 """,
                 (
                     published.manifest_sha256,
                     Jsonb(provenance),
                     Jsonb(key_metrics.model_dump(mode="json")),
+                    claim.researcher_id,
                     claim.run_id,
                     claim.fence,
                 ),
@@ -2808,10 +2925,10 @@ class ResearchRunService:
                 """
                 SELECT status, execution_fence
                 FROM research_runs.runs
-                WHERE id = %s
+                WHERE researcher_id = %s AND id = %s
                 FOR UPDATE
                 """,
-                (claim.run_id,),
+                (claim.researcher_id, claim.run_id),
             ).fetchone()
             if current != {"status": "running", "execution_fence": claim.fence}:
                 return None
@@ -2856,11 +2973,13 @@ class ResearchRunService:
                 """
                 UPDATE research_runs.runs
                 SET status = %s, failure_reason = %s, updated_at = now()
-                WHERE id = %s AND status = 'running' AND execution_fence = %s
+                WHERE researcher_id = %s AND id = %s
+                  AND status = 'running' AND execution_fence = %s
                 """,
                 (
                     "running" if retry else "failed",
                     None if retry else policy.public_reason,
+                    claim.researcher_id,
                     claim.run_id,
                     claim.fence,
                 ),
@@ -2918,6 +3037,7 @@ class ResearchRunService:
 
 def _admission_receipt(
     transaction: PostgresTransaction,
+    researcher_id: UUID,
     request_id: str,
 ) -> dict[str, object] | None:
     return transaction.execute(
@@ -2927,36 +3047,76 @@ def _admission_receipt(
                run.requested_start_date, run.requested_end_date,
                run.created_at, run.immutable_input, run.failure_reason
         FROM research_runs.admission_requests AS request
-        JOIN research_runs.runs AS run ON run.id = request.run_id
-        WHERE request.request_id = %s
+        JOIN research_runs.runs AS run
+          ON (run.researcher_id, run.id) = (request.researcher_id, request.run_id)
+        WHERE request.researcher_id = %s AND request.request_id = %s
         """,
-        (request_id,),
+        (researcher_id, request_id),
     ).fetchone()
 
 
-def _encode_list_cursor(row: Mapping[str, object]) -> str:
+def _encode_list_cursor(
+    row: Mapping[str, object],
+    *,
+    researcher_id: UUID,
+    folder_id: str | None,
+    research_kind: ResearchKind | None,
+) -> str:
     created_at = row["created_at"]
     if not isinstance(created_at, datetime):
         raise TypeError("ResearchRun created_at must be a datetime")
     payload = json.dumps(
-        {"created_at": created_at.isoformat(), "id": row["id"]},
+        {
+            "created_at": created_at.isoformat(),
+            "folder_id": folder_id,
+            "id": row["id"],
+            "research_kind": research_kind,
+            "researcher_id": str(researcher_id),
+        },
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
     return urlsafe_b64encode(payload).decode("ascii").rstrip("=")
 
 
-def _decode_list_cursor(cursor: str | None) -> tuple[datetime | None, str | None]:
+def _decode_list_cursor(
+    cursor: str | None,
+    *,
+    researcher_id: UUID,
+    folder_id: str | None,
+    research_kind: ResearchKind | None,
+) -> tuple[datetime | None, str | None]:
     if cursor is None:
         return None, None
     try:
-        padded = cursor + "=" * (-len(cursor) % 4)
-        decoded: object = json.loads(urlsafe_b64decode(padded).decode("utf-8"))
-        if not isinstance(decoded, dict) or set(decoded) != {"created_at", "id"}:
+        if not cursor:
             raise ValueError
-        created_at = datetime.fromisoformat(str(decoded["created_at"]))
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = urlsafe_b64decode(padded)
+        if urlsafe_b64encode(payload).decode("ascii").rstrip("=") != cursor:
+            raise ValueError
+        decoded: object = json.loads(payload.decode("utf-8"))
+        if not isinstance(decoded, dict) or set(decoded) != {
+            "created_at",
+            "folder_id",
+            "id",
+            "research_kind",
+            "researcher_id",
+        }:
+            raise ValueError
+        created_at_value = decoded["created_at"]
         run_id = decoded["id"]
-        if created_at.tzinfo is None or not isinstance(run_id, str) or not run_id:
+        if not isinstance(created_at_value, str):
+            raise ValueError
+        created_at = datetime.fromisoformat(created_at_value)
+        if (
+            created_at.tzinfo is None
+            or not isinstance(run_id, str)
+            or not run_id
+            or decoded["researcher_id"] != str(researcher_id)
+            or decoded["folder_id"] != folder_id
+            or decoded["research_kind"] != research_kind
+        ):
             raise ValueError
     except (ValueError, UnicodeDecodeError, Base64DecodeError) as error:
         raise ValueError("ResearchRun cursor is invalid") from error
@@ -3337,8 +3497,6 @@ def _cancel_fingerprint(run_id: str) -> str:
 
 
 def _start_tracking_fingerprint(run_id: str) -> str:
-    # Keep the original wire fingerprint stable while receipt ownership moves
-    # from DailyTracks to ResearchRuns.
     value = {"action": "research-runs.start-tracking/v1", "seed_run_id": run_id}
     serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(serialized).hexdigest()
@@ -3701,11 +3859,19 @@ def _collect_publication_deletions(
         )
 
 
-def research_run_exists(transaction: PostgresTransaction, run_id: str) -> bool:
+def research_run_exists(
+    transaction: PostgresTransaction,
+    researcher_id: UUID,
+    run_id: str,
+) -> bool:
     return (
         transaction.execute(
-            "SELECT 1 FROM research_runs.runs WHERE id = %s",
-            (run_id,),
+            """
+            SELECT 1
+            FROM research_runs.runs
+            WHERE researcher_id = %s AND id = %s
+            """,
+            (researcher_id, run_id),
         ).fetchone()
         is not None
     )

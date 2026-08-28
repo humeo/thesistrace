@@ -29,11 +29,15 @@ services:
       retries: 60
     volumes:
       - ../../auth/test-fixtures:/test-fixtures:ro
+    ports:
+      - 127.0.0.1::8300
 
   auth:
     depends_on:
       resend-fake:
         condition: service_healthy
+    ports:
+      - 127.0.0.1::8200
 
   postgres:
     command:
@@ -57,6 +61,7 @@ services:
   api:
     environment:
       <<: *test-environment
+      THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth:8200
     volumes:
       - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data
 

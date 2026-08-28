@@ -88,6 +88,13 @@ def test_batch_history_schema_rejects_contradictory_attempts_and_item_outcomes(
             json=_factor_command("batch-history-schema-invariants"),
         ).json()
         runtime = client.app.state.core_runtime
+        with runtime.database.transaction() as transaction:
+            stored = transaction.execute(
+                "SELECT scope FROM research_batches.batches WHERE id = %s",
+                (admitted["id"],),
+            ).fetchone()
+        assert stored is not None
+        stored_generation_id = str(stored["scope"]["data_generation_id"])
         invalid_attempts = (
             (
                 "invalid_attempt_succeeded_without_finish",
@@ -134,7 +141,7 @@ def test_batch_history_schema_rejects_contradictory_attempts_and_item_outcomes(
                             admitted["id"],
                             ordinal,
                             f"invalid-pin-{ordinal}",
-                            admitted["scope"]["data_generation_id"],
+                            stored_generation_id,
                             admitted["scope"]["data_through_session"],
                             status,
                             finished_expression,
@@ -159,7 +166,7 @@ def test_batch_history_schema_rejects_contradictory_attempts_and_item_outcomes(
                 """,
                 (
                     admitted["id"],
-                    admitted["scope"]["data_generation_id"],
+                    stored_generation_id,
                     admitted["scope"]["data_through_session"],
                 ),
             )

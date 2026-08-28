@@ -16,6 +16,7 @@ CREATE SEQUENCE daily_tracks.work_queue_sequence;
 --
 
 CREATE TABLE daily_tracks.retry_receipts (
+    researcher_id uuid NOT NULL,
     request_id text NOT NULL,
     request_fingerprint text NOT NULL,
     track_id text NOT NULL,
@@ -126,6 +127,7 @@ CREATE TABLE daily_tracks.session_tracking_states (
 --
 
 CREATE TABLE daily_tracks.stop_receipts (
+    researcher_id uuid NOT NULL,
     request_id text NOT NULL,
     request_fingerprint text NOT NULL,
     track_id text NOT NULL,
@@ -140,6 +142,7 @@ CREATE TABLE daily_tracks.stop_receipts (
 --
 
 CREATE TABLE daily_tracks.tracks (
+    researcher_id uuid NOT NULL,
     id text NOT NULL,
     status text NOT NULL,
     seed_run_id text NOT NULL,
@@ -160,7 +163,7 @@ CREATE TABLE daily_tracks.tracks (
 --
 
 ALTER TABLE ONLY daily_tracks.retry_receipts
-    ADD CONSTRAINT retry_receipts_pkey PRIMARY KEY (request_id);
+    ADD CONSTRAINT retry_receipts_pkey PRIMARY KEY (researcher_id, request_id);
 
 
 --
@@ -280,7 +283,7 @@ ALTER TABLE ONLY daily_tracks.session_tracking_states
 --
 
 ALTER TABLE ONLY daily_tracks.stop_receipts
-    ADD CONSTRAINT stop_receipts_pkey PRIMARY KEY (request_id);
+    ADD CONSTRAINT stop_receipts_pkey PRIMARY KEY (researcher_id, request_id);
 
 
 --
@@ -289,6 +292,9 @@ ALTER TABLE ONLY daily_tracks.stop_receipts
 
 ALTER TABLE ONLY daily_tracks.tracks
     ADD CONSTRAINT tracks_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY daily_tracks.tracks
+    ADD CONSTRAINT tracks_researcher_id_id_key UNIQUE (researcher_id, id);
 
 
 --
@@ -303,7 +309,7 @@ ALTER TABLE ONLY daily_tracks.tracks
 -- Name: daily_tracks_created_idx; Type: INDEX; Schema: daily_tracks; Owner: -
 --
 
-CREATE INDEX daily_tracks_created_idx ON daily_tracks.tracks USING btree (created_at DESC, id);
+CREATE INDEX daily_tracks_created_idx ON daily_tracks.tracks USING btree (researcher_id, created_at DESC, id);
 
 
 --
@@ -325,7 +331,9 @@ CREATE UNIQUE INDEX daily_tracks_one_unresolved_session_progression_idx ON daily
 --
 
 ALTER TABLE ONLY daily_tracks.retry_receipts
-    ADD CONSTRAINT retry_receipts_progression_id_fkey FOREIGN KEY (progression_id) REFERENCES daily_tracks.session_progressions(id) ON DELETE CASCADE;
+    ADD CONSTRAINT retry_receipts_track_progression_fkey
+    FOREIGN KEY (track_id, progression_id)
+    REFERENCES daily_tracks.session_progressions(track_id, id) ON DELETE CASCADE;
 
 
 --
@@ -333,7 +341,9 @@ ALTER TABLE ONLY daily_tracks.retry_receipts
 --
 
 ALTER TABLE ONLY daily_tracks.retry_receipts
-    ADD CONSTRAINT retry_receipts_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id) ON DELETE CASCADE;
+    ADD CONSTRAINT retry_receipts_track_fkey
+    FOREIGN KEY (researcher_id, track_id)
+    REFERENCES daily_tracks.tracks(researcher_id, id) ON DELETE CASCADE;
 
 
 --
@@ -421,7 +431,14 @@ ALTER TABLE ONLY daily_tracks.session_tracking_states
 --
 
 ALTER TABLE ONLY daily_tracks.stop_receipts
-    ADD CONSTRAINT stop_receipts_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id) ON DELETE CASCADE;
+    ADD CONSTRAINT stop_receipts_track_fkey
+    FOREIGN KEY (researcher_id, track_id)
+    REFERENCES daily_tracks.tracks(researcher_id, id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY daily_tracks.tracks
+    ADD CONSTRAINT tracks_seed_run_fkey
+    FOREIGN KEY (researcher_id, seed_run_id)
+    REFERENCES research_runs.run_ownership(researcher_id, run_id);
 
 
 --
@@ -429,4 +446,11 @@ ALTER TABLE ONLY daily_tracks.stop_receipts
 --
 
 ALTER TABLE ONLY daily_tracks.tracks
-    ADD CONSTRAINT tracks_blocked_progression_id_fkey FOREIGN KEY (blocked_progression_id) REFERENCES daily_tracks.session_progressions(id);
+    ADD CONSTRAINT tracks_blocked_progression_fkey
+    FOREIGN KEY (id, blocked_progression_id)
+    REFERENCES daily_tracks.session_progressions(track_id, id);
+
+ALTER TABLE ONLY research_runs.start_tracking_receipts
+    ADD CONSTRAINT start_tracking_receipts_track_fkey
+    FOREIGN KEY (researcher_id, track_id)
+    REFERENCES daily_tracks.tracks(researcher_id, id) ON DELETE CASCADE;

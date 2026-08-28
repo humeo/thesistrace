@@ -6,6 +6,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from threading import Event
+from uuid import UUID
 
 import pytest
 from psycopg.errors import ForeignKeyViolation
@@ -26,6 +27,13 @@ from thesistrace.research_kernel.strategy import advance_strategy_metric_state
 from thesistrace.research_kernel.terminal_state_schema import (
     LAST_DAILY_OBSERVATION_KEYS,
     OPTIONAL_METRIC_ACCUMULATORS,
+)
+from thesistrace.researcher import ResearcherIdentity, ResearcherService
+
+TEST_RESEARCHER = ResearcherIdentity(
+    researcher_id=UUID("20000000-0000-4000-8000-000000000002"),
+    email="session-coordinates@example.test",
+    display_label="Session Coordinates",
 )
 
 
@@ -563,14 +571,27 @@ def _insert_parent_track(database: PostgresDatabase, *, track_id: str) -> None:
         "initial_strategy_state": _strategy_state("2026-08-03", "10000000"),
         "calculation_contracts": {},
     }
+    ResearcherService(database).bootstrap(TEST_RESEARCHER)
     with database.transaction() as transaction:
         transaction.execute(
             """
-            INSERT INTO daily_tracks.tracks (
-                id, status, seed_run_id, origin
-            ) VALUES (%s, 'active', %s, %s)
+            INSERT INTO research_runs.run_ownership (researcher_id, run_id)
+            VALUES (%s, %s)
             """,
-            (track_id, f"run_{track_id}", Jsonb(origin)),
+            (TEST_RESEARCHER.researcher_id, f"run_{track_id}"),
+        )
+        transaction.execute(
+            """
+            INSERT INTO daily_tracks.tracks (
+                researcher_id, id, status, seed_run_id, origin
+            ) VALUES (%s, %s, 'active', %s, %s)
+            """,
+            (
+                TEST_RESEARCHER.researcher_id,
+                track_id,
+                f"run_{track_id}",
+                Jsonb(origin),
+            ),
         )
 
 

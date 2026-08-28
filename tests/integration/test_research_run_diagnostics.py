@@ -7,6 +7,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
@@ -14,8 +15,14 @@ from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.research_run.diagnostics import ResearchRunDiagnostics
+from thesistrace.researcher import ResearcherIdentity, ResearcherService
 
 TEST_NOW = datetime.now(UTC)
+TEST_RESEARCHER = ResearcherIdentity(
+    researcher_id=UUID("30000000-0000-4000-8000-000000000003"),
+    email="research-run-diagnostics@example.test",
+    display_label="Research Run Diagnostics",
+)
 
 
 def test_research_run_diagnostic_reports_the_postgresql_state_matrix(
@@ -334,13 +341,21 @@ def _insert_run(
         )
     transaction.execute(
         """
+        INSERT INTO research_runs.run_ownership (researcher_id, run_id)
+        VALUES (%s, %s)
+        """,
+        (TEST_RESEARCHER.researcher_id, run_id),
+    )
+    transaction.execute(
+        """
         INSERT INTO research_runs.runs (
-            id, folder_id, name, requested_start_date, requested_end_date,
+            researcher_id, id, folder_id, name, requested_start_date, requested_end_date,
             status, immutable_input, result_manifest_sha256, failure_reason
-        ) VALUES (%s, 'folder_default', %s, '2026-01-01', '2026-01-31',
+        ) VALUES (%s, %s, 'folder_default', %s, '2026-01-01', '2026-01-31',
                   %s, %s, %s, %s)
         """,
         (
+            TEST_RESEARCHER.researcher_id,
             run_id,
             run_id,
             status,
@@ -438,4 +453,5 @@ def _database(settings: CoreSettings) -> PostgresDatabase:
     initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
     database.open()
+    ResearcherService(database).bootstrap(TEST_RESEARCHER)
     return database

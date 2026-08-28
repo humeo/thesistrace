@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import boto3
+import httpx
 from botocore.config import Config
 
 from thesistrace._postgres import PostgresDatabase
@@ -20,6 +21,7 @@ def main(arguments: list[str] | None = None) -> None:
         "postgresql",
         "rustfs",
         "dataset_store",
+        "auth",
     }:
         raise SystemExit(2)
     try:
@@ -30,6 +32,13 @@ def main(arguments: list[str] | None = None) -> None:
 
 
 def _probe(name: str) -> bool:
+    if name == "auth":
+        response = httpx.get(
+            f"{os.environ['THESISTRACE_AUTH_INTERNAL_ORIGIN']}/health/ready",
+            follow_redirects=False,
+            timeout=_PROBE_TIMEOUT_SECONDS,
+        )
+        return response.status_code == 200
     if name == "postgresql":
         database = PostgresDatabase(
             os.environ["THESISTRACE_DATABASE_URL"],

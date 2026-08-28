@@ -1,8 +1,8 @@
 from datetime import date
 
 import pytest
+from core_runtime import TEST_RESEARCHER, drop_product_schemas
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
@@ -122,6 +122,7 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
             compile_formula=alpha_language.compile,
             current_dataset=lambda: snapshot,
         ).admit(
+            TEST_RESEARCHER.researcher_id,
             TypeAdapter(ResearchRunAdmissionCommand).validate_python(
                 {
                     "request_id": "folder-guard",
@@ -169,6 +170,7 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
                     (admitted.id,),
                 ).fetchone()
             assert [row["column_name"] for row in columns] == [
+                "researcher_id",
                 "id",
                 "name",
                 "is_default",

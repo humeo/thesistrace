@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from typing import Literal, Protocol
+
+import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+from thesistrace.researcher import ResearcherIdentity
+
+AUTH_VERIFY_TIMEOUT_SECONDS = 1.0
+
+
+class InvalidLoginSession(RuntimeError):
+    pass
+
+
+class AuthSessionUnavailable(RuntimeError):
+    pass
+
+
+class SessionVerifier(Protocol):
+    async def verify(self, cookie: str | None) -> ResearcherIdentity: ...
+
+
+class _VerifiedSession(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    active: Literal[True]
+    display_label: str
+    email: str
+    researcher_id: str
+
+
+@dataclass(frozen=True)
+class CoreHttpSettings:
+    auth_internal_origin: str
+    public_origin: str
+
+    @classmethod
+    def from_environment(cls) -> CoreHttpSettings:
+        auth_internal_origin = os.environ.get(
+            "THESISTRACE_AUTH_INTERNAL_ORIGIN", ""
+        ).strip()
+        public_origin = os.environ.get("THESISTRACE_PUBLIC_ORIGIN", "").strip()
+        if not auth_internal_origin:
+            raise RuntimeError(
+                "missing Core HTTP configuration: THESISTRACE_AUTH_INTERNAL_ORIGIN"
+            )
+        if not public_origin:
+            raise RuntimeError(
+                "missing Core HTTP configuration: THESISTRACE_PUBLIC_ORIGIN"
+            )
+        return cls(
+            auth_internal_origin=_exact_origin(
+                auth_internal_origin,
+                "THESISTRACE_AUTH_INTERNAL_ORIGIN",
+            ),
+            public_origin=_exact_origin(
+                public_origin,
+                "THESISTRACE_PUBLIC_ORIGIN",
+            ),
+        )
+
+
+class CoreAuthVerifier:
+    def __init__(
+        self,
+        internal_origin: str,
+        *,
+        timeout_seconds: float = AUTH_VERIFY_TIMEOUT_SECONDS,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("Auth verification timeout must be positive")
+        self._client = httpx.AsyncClient(
+            base_url=_exact_origin(
+                internal_origin,
+                "THESISTRACE_AUTH_INTERNAL_ORIGIN",
+            ),
+            follow_redirects=False,
+            timeout=timeout_seconds,
+            transport=transport,
+        )
+
+    async def verify(self, cookie: str | None) -> ResearcherIdentity:
+        headers = {} if cookie is None or not cookie.strip() else {"cookie": cookie}
+        try:
+            response = await self._client.post(
+                "/internal/session/verify",
+                headers=headers,
+            )
+        except (httpx.HTTPError, OSError) as error:
+            raise AuthSessionUnavailable() from error
+        if response.status_code == 401:
+            raise InvalidLoginSession()
+        if response.status_code != 200:
+            raise AuthSessionUnavailable()
+        try:
+            verified = _VerifiedSession.model_validate(response.json())
+            return ResearcherIdentity(
+                researcher_id=verified.researcher_id,
+                email=verified.email,
+                display_label=verified.display_label,
+            )
+        except (ValidationError, ValueError) as error:
+            raise AuthSessionUnavailable() from error
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
+def _exact_origin(value: str, variable_name: str) -> str:
+    try:
+        parsed = httpx.URL(value)
+    except Exception as error:
+        raise RuntimeError(f"{variable_name} must be an exact HTTP origin") from error
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.host is None
+        or parsed.userinfo
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise RuntimeError(f"{variable_name} must be an exact HTTP origin")
+    return str(parsed.copy_with(path="")).rstrip("/")
+
+
+__all__ = (
+    "AUTH_VERIFY_TIMEOUT_SECONDS",
+    "AuthSessionUnavailable",
+    "CoreAuthVerifier",
+    "CoreHttpSettings",
+    "InvalidLoginSession",
+    "SessionVerifier",
+)

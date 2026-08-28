@@ -36,6 +36,7 @@ from thesistrace.research_run import (
 from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.planning import DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES
 from thesistrace.research_run.result import read_result_bundle
+from thesistrace.researcher import ResearcherService
 
 CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_DATABASE_URL",
@@ -149,6 +150,7 @@ def core_environment_is_configured(
 class CoreRuntime:
     database: PostgresDatabase
     data_overview: DatasetOverviewService
+    researchers: ResearcherService
     research_folders: ResearchFolderService
     research_batches: ResearchBatchService
     research_runs: ResearchRunService
@@ -159,7 +161,11 @@ class CoreRuntime:
 
 
 @contextmanager
-def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
+def open_core_runtime(
+    settings: CoreSettings,
+    *,
+    auth_readiness_origin: str | None = None,
+) -> Iterator[CoreRuntime]:
     working_cache = TemporaryDirectory(prefix="thesistrace-core-working-cache-")
     database = PostgresDatabase(settings.database_url)
     try:
@@ -227,6 +233,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         yield CoreRuntime(
             database=database,
             data_overview=data_overview,
+            researchers=ResearcherService(database),
             research_folders=ResearchFolderService(database),
             research_batches=research_batches,
             research_runs=research_runs,
@@ -234,6 +241,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             daily_track_sessions=SessionCoordinateRepository(database),
             publication=publication,
             readiness=CoreReadiness(
+                auth_internal_origin=auth_readiness_origin,
                 database_url=settings.database_url,
                 s3_endpoint_url=settings.s3_endpoint_url,
                 s3_access_key_id=settings.s3_access_key_id,

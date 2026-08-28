@@ -116,6 +116,9 @@ services:
   api:
     <<: *backend
     logging: *bounded-logging
+    environment:
+      <<: *core-environment
+      THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth:8200
     depends_on:
       initialize:
         condition: service_completed_successfully

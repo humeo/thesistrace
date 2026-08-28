@@ -226,7 +226,12 @@ class _ChildHeartbeat:
         self._thread.join(timeout=2)
         with self._stdin_lock:
             if self._process.stdin is not None and not self._process.stdin.closed:
-                self._process.stdin.close()
+                try:
+                    self._process.stdin.close()
+                except (BrokenPipeError, OSError):
+                    # Preserve the execution failure that made the child exit;
+                    # closing an already-broken control pipe is only cleanup.
+                    pass
 
     def cancel(self) -> None:
         self._stopped.set()

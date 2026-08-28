@@ -11,8 +11,8 @@ from threading import Event
 
 import boto3
 import pytest
+from core_runtime import TEST_RESEARCHER, drop_product_schemas, isolated_core_settings
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 from test_core_research_batch_admission import _publish_current_data, _strategy_command
@@ -581,12 +581,18 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         deletion_hook_entered = Event()
 
         class _ProjectionBarrier:
-            def project_child_statuses_in_transaction(self, transaction, run_ids):
+            def project_child_statuses_in_transaction(
+                self,
+                transaction,
+                researcher_id,
+                run_ids,
+            ):
                 projection_entered.set()
                 if not release_projection.wait(timeout=10):
                     raise TimeoutError("Batch detail projection barrier timed out")
                 return runtime.research_runs.project_child_statuses_in_transaction(
                     transaction,
+                    researcher_id,
                     run_ids,
                 )
 
@@ -598,9 +604,9 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
             attempt_control_directory=settings.batch_attempt_control_directory,
         )
 
-        def preserve_history(transaction, run_id):
+        def preserve_history(transaction, researcher_id, run_id):
             deletion_hook_entered.set()
-            preserve_deleted_run_history(transaction, run_id)
+            preserve_deleted_run_history(transaction, researcher_id, run_id)
 
         concurrent_deleter = ResearchRunService(
             runtime.database,
@@ -609,9 +615,17 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
             preserve_dependent_run_history=preserve_history,
         )
         with ThreadPoolExecutor(max_workers=2) as executor:
-            detail_future = executor.submit(consistent_reader.get, batch["id"])
+            detail_future = executor.submit(
+                consistent_reader.get,
+                TEST_RESEARCHER.researcher_id,
+                batch["id"],
+            )
             assert projection_entered.wait(timeout=10)
-            delete_future = executor.submit(concurrent_deleter.delete, child_ids[0])
+            delete_future = executor.submit(
+                concurrent_deleter.delete,
+                TEST_RESEARCHER.researcher_id,
+                child_ids[0],
+            )
             assert deletion_hook_entered.wait(timeout=10)
             assert delete_future.done() is False
             release_projection.set()
@@ -1503,6 +1517,7 @@ def _assert_widest_strategy_capacity_boundary(
         for start_index in range(effective_lookback, len(sessions)):
             start_session = sessions[start_index]
             prepared = runtime.research_runs.prepare_child_admission(
+                TEST_RESEARCHER.researcher_id,
                 StrategyBacktestAdmissionCommand.model_validate(
                     {
                         **_ordinary_strategy_command(

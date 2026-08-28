@@ -50,6 +50,11 @@ export type OperatorCommandDependencies = Readonly<{
 
 export type OperatorCommandResult =
   | Readonly<{
+      command: "resolve";
+      researcher_id: string;
+      status: "resolved";
+    }>
+  | Readonly<{
       command: "invite" | "reissue";
       email: string;
       invitation_id: string;
@@ -80,6 +85,24 @@ export async function runOperatorCommand(
       ? dependencies.invitations.issue(email)
       : dependencies.invitations.reissue(email));
     return invitationResult(command, result);
+  }
+
+  if (command === "resolve") {
+    const flags = parseFlags(
+      args.slice(1),
+      new Set(["--email", "--researcher-id"]),
+    );
+    if (flags.size !== 1) {
+      throw new OperatorArgumentError();
+    }
+    const researcherId = await dependencies.access.resolveResearcherId(
+      parseIdentity(flags),
+    );
+    return {
+      command,
+      researcher_id: researcherId,
+      status: "resolved",
+    };
   }
 
   if (!isAccessCommand(command)) {

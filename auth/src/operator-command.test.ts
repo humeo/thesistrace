@@ -39,6 +39,27 @@ function dependencies(): OperatorCommandDependencies {
 }
 
 describe("Auth operator command contract", () => {
+  it("resolves an email without mutating Auth state", async () => {
+    const commandDependencies = dependencies();
+
+    const result = await runOperatorCommand(
+      ["resolve", "--email", " Researcher@Example.COM "],
+      commandDependencies,
+    );
+
+    expect(commandDependencies.access.resolveResearcherId).toHaveBeenCalledWith({
+      email: " Researcher@Example.COM ",
+    });
+    expect(commandDependencies.access.deactivate).not.toHaveBeenCalled();
+    expect(commandDependencies.access.reactivate).not.toHaveBeenCalled();
+    expect(commandDependencies.access.revokeSessions).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      command: "resolve",
+      researcher_id: researcherId,
+      status: "resolved",
+    });
+  });
+
   it.each(["invite", "reissue"])(
     "returns a token-free structured %s result",
     async (command) => {

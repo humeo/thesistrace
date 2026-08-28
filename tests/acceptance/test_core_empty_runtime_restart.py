@@ -10,10 +10,11 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import pytest
 from core_runtime import drop_product_schemas
+from live_auth import create_live_login_session
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
@@ -30,12 +31,13 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def _request_json(url: str) -> object:
+def _request_json(url: str, *, headers: dict[str, str] | None = None) -> object:
     deadline = time.monotonic() + 15
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         try:
-            with urlopen(url, timeout=1) as response:  # noqa: S310 - fixed loopback URL
+            request = Request(url, headers=headers or {})
+            with urlopen(request, timeout=1) as response:  # noqa: S310 - fixed loopback URL
                 return json.load(response)
         except Exception as error:  # noqa: BLE001 - polling a child process boundary
             last_error = error
@@ -43,9 +45,10 @@ def _request_json(url: str) -> object:
     raise AssertionError(f"HTTP process did not become ready: {last_error}")
 
 
-def _request_status(url: str) -> int:
+def _request_status(url: str, *, headers: dict[str, str] | None = None) -> int:
     try:
-        with urlopen(url, timeout=2) as response:  # noqa: S310 - fixed loopback URL
+        request = Request(url, headers=headers or {})
+        with urlopen(request, timeout=2) as response:  # noqa: S310 - fixed loopback URL
             return response.status
     except HTTPError as error:
         return error.code
@@ -81,6 +84,8 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
         )
     finally:
         database.close()
+    login = create_live_login_session("process-restart@example.test")
+    auth_headers = {"cookie": login.cookie}
 
     environment = {
         **os.environ,
@@ -136,9 +141,18 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
             text=True,
         )
         try:
-            assert _request_json(f"http://127.0.0.1:{port}/api/data") == expected_overview
-            assert _request_status(f"http://127.0.0.1:{port}/api/data/releases") == 404
-            assert _request_status(f"http://127.0.0.1:{port}/api/data/update") == 404
+            assert _request_json(
+                f"http://127.0.0.1:{port}/api/data",
+                headers=auth_headers,
+            ) == expected_overview
+            assert _request_status(
+                f"http://127.0.0.1:{port}/api/data/releases",
+                headers=auth_headers,
+            ) == 404
+            assert _request_status(
+                f"http://127.0.0.1:{port}/api/data/update",
+                headers=auth_headers,
+            ) == 404
         finally:
             http.terminate()
             _, stderr = http.communicate(timeout=10)

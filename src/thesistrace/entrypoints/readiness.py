@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
@@ -10,13 +11,15 @@ from time import monotonic
 
 POSTGRESQL_READY = "POSTGRESQL_READY"
 POSTGRESQL_UNAVAILABLE = "POSTGRESQL_UNAVAILABLE"
+AUTH_READY = "AUTH_READY"
+AUTH_UNAVAILABLE = "AUTH_UNAVAILABLE"
 RUSTFS_READY = "RUSTFS_READY"
 RUSTFS_UNAVAILABLE = "RUSTFS_UNAVAILABLE"
 DATASET_STORE_READY = "DATASET_STORE_READY"
 DATASET_STORE_UNAVAILABLE = "DATASET_STORE_UNAVAILABLE"
 READINESS_DEADLINE_SECONDS = 2.0
 
-_DEPENDENCIES = {
+_BASE_DEPENDENCIES = {
     "postgresql": (POSTGRESQL_READY, POSTGRESQL_UNAVAILABLE),
     "rustfs": (RUSTFS_READY, RUSTFS_UNAVAILABLE),
     "dataset_store": (DATASET_STORE_READY, DATASET_STORE_UNAVAILABLE),
@@ -32,6 +35,7 @@ class CoreReadiness:
     s3_bucket: str = field(repr=False)
     s3_region: str
     data_mount: Path
+    auth_internal_origin: str | None = None
     deadline_seconds: float = READINESS_DEADLINE_SECONDS
     probe_command: tuple[str, ...] = (
         sys.executable,
@@ -54,7 +58,7 @@ class CoreReadiness:
 
     def snapshot(self) -> dict[str, object]:
         if not self._probe_lock.acquire(blocking=False):
-            return _unavailable_snapshot()
+            return _unavailable_snapshot(self._dependencies())
         try:
             return self._snapshot()
         finally:
@@ -62,6 +66,7 @@ class CoreReadiness:
 
     def _snapshot(self) -> dict[str, object]:
         deadline = monotonic() + self.deadline_seconds
+        dependencies_contract = self._dependencies()
         environment = {
             **os.environ,
             "THESISTRACE_DATABASE_URL": self.database_url,
@@ -72,8 +77,12 @@ class CoreReadiness:
             "THESISTRACE_S3_REGION": self.s3_region,
             "THESISTRACE_DATA_MOUNT": os.fspath(self.data_mount),
         }
+        if self.auth_internal_origin is not None:
+            environment["THESISTRACE_AUTH_INTERNAL_ORIGIN"] = (
+                self.auth_internal_origin
+            )
         probes: dict[str, subprocess.Popen[bytes] | None] = {}
-        for name in _DEPENDENCIES:
+        for name in dependencies_contract:
             lingering = self._lingering_probes.get(name)
             if lingering is not None:
                 try:
@@ -102,14 +111,16 @@ class CoreReadiness:
 
         dependencies: dict[str, dict[str, str]] = {}
         try:
-            for name, codes in _DEPENDENCIES.items():
+            for name, codes in dependencies_contract.items():
                 process = probes[name]
                 ready = False
                 if process is not None:
                     try:
                         ready = process.wait(timeout=max(0, deadline - monotonic())) == 0
                     except subprocess.TimeoutExpired:
-                        ready = False
+                        # Another dependency may consume the shared deadline while
+                        # this independent probe has already completed successfully.
+                        ready = process.poll() == 0
                 dependencies[name] = {
                     "status": "ready" if ready else "unavailable",
                     "code": codes[0] if ready else codes[1],
@@ -134,18 +145,28 @@ class CoreReadiness:
             "dependencies": dependencies,
         }
 
+    def _dependencies(self) -> dict[str, tuple[str, str]]:
+        dependencies = dict(_BASE_DEPENDENCIES)
+        if self.auth_internal_origin is not None:
+            dependencies["auth"] = (AUTH_READY, AUTH_UNAVAILABLE)
+        return dependencies
 
-def _unavailable_snapshot() -> dict[str, object]:
+
+def _unavailable_snapshot(
+    dependencies: Mapping[str, tuple[str, str]],
+) -> dict[str, object]:
     return {
         "status": "unavailable",
         "dependencies": {
             name: {"status": "unavailable", "code": codes[1]}
-            for name, codes in _DEPENDENCIES.items()
+            for name, codes in dependencies.items()
         },
     }
 
 
 __all__ = (
+    "AUTH_READY",
+    "AUTH_UNAVAILABLE",
     "CoreReadiness",
     "DATASET_STORE_READY",
     "DATASET_STORE_UNAVAILABLE",

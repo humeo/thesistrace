@@ -16,13 +16,14 @@ from io import StringIO
 from pathlib import Path
 from threading import Barrier, Event, Thread
 from time import monotonic
+from uuid import UUID
 
 import boto3
 import pytest
 from botocore.config import Config
 from canonical_store import align_canonical_market_data, open_complete_refresh_basis
+from core_runtime import TEST_RESEARCHER, drop_product_schemas
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
@@ -558,6 +559,7 @@ def test_immediate_research_cancellation_event_follows_commit_without_attempt(
             lifecycle_event=lossy_sink,
         )
         outcome = canceller.cancel(
+            TEST_RESEARCHER.researcher_id,
             run_id,
             ResearchRunCancelCommand(
                 request_id=f"observability-immediate-cancel-{initial_status}-request"
@@ -1391,6 +1393,7 @@ def test_tracking_advance_blocks_one_session_before_creating_an_attempt(
             lifecycle_event=unchanged_retry_events.append,
         )
         retry = unchanged_retrier.retry(
+            _stored_daily_track_researcher_id(runtime.database, str(track_id)),
             str(track_id),
             RetryDailyTrackCommand(request_id="tracking-capacity-block-retry"),
         )
@@ -1445,6 +1448,7 @@ def test_tracking_advance_blocks_one_session_before_creating_an_attempt(
             lifecycle_event=lossy_retry_event,
         )
         retry = retrier.retry(
+            _stored_daily_track_researcher_id(runtime.database, str(track_id)),
             str(track_id),
             RetryDailyTrackCommand(request_id="tracking-capacity-fit-retry"),
         )
@@ -1727,6 +1731,7 @@ def test_blocked_and_retry_wait_tracks_stop_without_future_attempts(
             lifecycle_event=lossy_stop_event,
         )
         blocked_stop = stopper.stop(
+            _stored_daily_track_researcher_id(runtime.database, blocked_track),
             blocked_track,
             StopDailyTrackCommand(request_id="stop-capacity-blocked-track"),
         )
@@ -2576,7 +2581,10 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         assert progressed["checkpoint_count"] == 3
         assert progressed["progression_count"] == 2
         assert progressed["active_pin_count"] == 0
-        proof = runtime.daily_tracks.verify_persisted_equivalence(track["id"])
+        proof = runtime.daily_tracks.verify_persisted_equivalence(
+            _stored_daily_track_researcher_id(runtime.database, track["id"]),
+            track["id"],
+        )
         assert proof.status == "equivalent"
         assert proof.head_session == latest_sessions[-1]
         assert proof.session_sequence == (
@@ -5518,6 +5526,25 @@ def _stored_execution(settings: CoreSettings, run_id: str) -> dict[str, object]:
         database.close()
 
 
+def _stored_daily_track_researcher_id(
+    database: PostgresDatabase,
+    track_id: str,
+) -> UUID:
+    with database.transaction() as transaction:
+        row = transaction.execute(
+            """
+            SELECT researcher_id
+            FROM daily_tracks.tracks
+            WHERE id = %s
+            """,
+            (track_id,),
+        ).fetchone()
+    assert row is not None
+    researcher_id = row["researcher_id"]
+    assert isinstance(researcher_id, UUID)
+    return researcher_id
+
+
 def _replace_research_numeric_contract(
     settings: CoreSettings,
     run_id: str,
@@ -6018,7 +6045,7 @@ def _run_worker_once(
 
 
 def _worker_environment(settings: CoreSettings) -> dict[str, str]:
-    return {
+    environment = {
         **os.environ,
         "THESISTRACE_DATABASE_URL": settings.database_url,
         "THESISTRACE_S3_ENDPOINT_URL": settings.s3_endpoint_url,
@@ -6031,6 +6058,9 @@ def _worker_environment(settings: CoreSettings) -> dict[str, str]:
             settings.batch_attempt_control_directory
         ),
     }
+    environment.pop("THESISTRACE_AUTH_INTERNAL_ORIGIN", None)
+    environment.pop("THESISTRACE_PUBLIC_ORIGIN", None)
+    return environment
 
 
 def _run_worker_replicas(

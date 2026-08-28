@@ -11,9 +11,12 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
 from statistics import median
 from threading import Event, Thread
+from urllib.parse import urlsplit
+from uuid import UUID
 
 import boto3
 
@@ -59,11 +62,13 @@ READY_DEPENDENCIES = {
     "postgresql": {"status": "ready", "code": "POSTGRESQL_READY"},
     "rustfs": {"status": "ready", "code": "RUSTFS_READY"},
     "dataset_store": {"status": "ready", "code": "DATASET_STORE_READY"},
+    "auth": {"status": "ready", "code": "AUTH_READY"},
 }
 UNAVAILABLE_DEPENDENCY_CODES = {
     "postgresql": "POSTGRESQL_UNAVAILABLE",
     "rustfs": "RUSTFS_UNAVAILABLE",
     "dataset_store": "DATASET_STORE_UNAVAILABLE",
+    "auth": "AUTH_UNAVAILABLE",
 }
 
 BATCH_PERFORMANCE_WARMUP_SAMPLES = 1
@@ -96,6 +101,16 @@ def main() -> None:
     assert "THESISTRACE_TUSHARE_TOKEN" not in os.environ
     phase = sys.argv[1]
     _assert_web_image(web_origin)
+    if phase in {
+        "before",
+        "checkpointed",
+        "recovered",
+        "persisted",
+        "after",
+        "reset-ready",
+        "reset",
+    }:
+        _ensure_researcher_bootstrap(api_origin)
     if phase == "health":
         result = _verify_health(api_origin)
     elif phase == "readiness-outage":
@@ -474,6 +489,7 @@ def _before_restart(
     )
     canonical_identity = _canonical_identity(settings)
     return {
+        "researcher_id": _auth_session()["researcher_id"],
         "image_identity": image_identity,
         "canonical_identity": canonical_identity,
         "factor_run_id": factor_run_id,
@@ -1358,7 +1374,10 @@ def _after_restart(
     stopped = _retry_and_stop_running_track(api_origin, stop_track_id)
     assert stopped["status"] == "stopped"
     with open_core_runtime(settings) as runtime:
-        equivalence = runtime.daily_tracks.verify_persisted_equivalence(track_id)
+        equivalence = runtime.daily_tracks.verify_persisted_equivalence(
+            UUID(str(expected["researcher_id"])),
+            track_id,
+        )
     assert equivalence.status == "equivalent"
     assert equivalence.head_session == "2026-08-11"
     stopped = _request_json(
@@ -2032,10 +2051,7 @@ def _verify_readiness_outage(
     assert unavailable in READY_DEPENDENCIES
     status, payload, elapsed = _wait_for_readiness(api_origin, unavailable=unavailable)
     expected_dependencies = json.loads(json.dumps(READY_DEPENDENCIES))
-    expected_dependencies[unavailable] = {
-        "status": "unavailable",
-        "code": UNAVAILABLE_DEPENDENCY_CODES[unavailable],
-    }
+    _apply_expected_readiness_outage(expected_dependencies, unavailable)
     assert status == 503
     assert payload == {"status": "unavailable", "dependencies": expected_dependencies}
     liveness_status, liveness, liveness_elapsed = _request_health(
@@ -2061,10 +2077,7 @@ def _wait_for_readiness(
     expected_status = 200 if unavailable is None else 503
     expected_dependencies = json.loads(json.dumps(READY_DEPENDENCIES))
     if unavailable is not None:
-        expected_dependencies[unavailable] = {
-            "status": "unavailable",
-            "code": UNAVAILABLE_DEPENDENCY_CODES[unavailable],
-        }
+        _apply_expected_readiness_outage(expected_dependencies, unavailable)
     expected_payload = {
         "status": "ready" if unavailable is None else "unavailable",
         "dependencies": expected_dependencies,
@@ -2075,6 +2088,20 @@ def _wait_for_readiness(
             return last
         interval.wait(0.05)
     raise AssertionError({"readiness_timeout": unavailable, "last": last})
+
+
+def _apply_expected_readiness_outage(
+    dependencies: dict[str, dict[str, str]],
+    unavailable: str,
+) -> None:
+    affected = {unavailable}
+    if unavailable == "postgresql":
+        affected.add("auth")
+    for dependency in affected:
+        dependencies[dependency] = {
+            "status": "unavailable",
+            "code": UNAVAILABLE_DEPENDENCY_CODES[dependency],
+        }
 
 
 def _request_health(
@@ -2217,11 +2244,14 @@ def _verify_packaged_diagnostics(
 
 
 def _request_with_secret_canary(api_origin: str) -> None:
+    session_cookie = str(_auth_session()["cookie"])
     request = urllib.request.Request(
         f"{api_origin}/api/data?token=observability-request-canary",
         headers={
             "Authorization": "Bearer observability-request-canary",
-            "Cookie": "session=observability-request-canary",
+            "Cookie": (
+                f"observability=observability-request-canary; {session_cookie}"
+            ),
         },
         method="GET",
     )
@@ -2756,10 +2786,11 @@ def _request_json(
     body: dict[str, object] | None = None,
 ) -> dict[str, object]:
     payload = None if body is None else json.dumps(body).encode()
+    headers = _authenticated_headers(method, has_body=payload is not None)
     request = urllib.request.Request(
         f"{api_origin}{path}",
         data=payload,
-        headers={"Content-Type": "application/json"} if payload is not None else {},
+        headers=headers,
         method=method,
     )
     try:
@@ -2784,7 +2815,7 @@ def _request_status(
     request = urllib.request.Request(
         f"{api_origin}{path}",
         data=payload,
-        headers={"Content-Type": "application/json"} if payload is not None else {},
+        headers=_authenticated_headers(method, has_body=payload is not None),
         method=method,
     )
     try:
@@ -2805,7 +2836,7 @@ def _request_error_json(
     request = urllib.request.Request(
         f"{api_origin}{path}",
         data=payload,
-        headers={"Content-Type": "application/json"} if payload is not None else {},
+        headers=_authenticated_headers(method, has_body=payload is not None),
         method=method,
     )
     try:
@@ -2819,8 +2850,48 @@ def _request_error_json(
         return error.code, value
 
 
+def _ensure_researcher_bootstrap(api_origin: str) -> None:
+    response = _request_json(api_origin, "POST", "/api/researcher/bootstrap")
+    assert response == {
+        "researcher_id": _auth_session()["researcher_id"],
+        "system_folders": {
+            "default": "folder_default",
+            "batch_research": "folder_batch_research",
+        },
+    }
+
+
+def _authenticated_headers(method: str, *, has_body: bool) -> dict[str, str]:
+    headers = {"Cookie": str(_auth_session()["cookie"])}
+    if method in {"POST", "PATCH", "DELETE"}:
+        headers["Origin"] = _required_environment("THESISTRACE_PUBLIC_ORIGIN")
+    if has_body:
+        headers["Content-Type"] = "application/json"
+    return headers
+
+
+@lru_cache(maxsize=1)
+def _auth_session() -> dict[str, str]:
+    path = Path(_required_environment("THESISTRACE_TEST_AUTH_SESSION_FILE"))
+    value = json.loads(path.read_text())
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"cookie", "researcher_id"}
+        or not all(isinstance(item, str) and item for item in value.values())
+    ):
+        raise RuntimeError("Production Image Smoke Auth Session is invalid")
+    return value
+
+
 def _assert_web_image(web_origin: str) -> None:
-    with urllib.request.urlopen(f"{web_origin}/data", timeout=5) as response:
+    public_origin = urlsplit(_required_environment("THESISTRACE_PUBLIC_ORIGIN"))
+    if not public_origin.netloc:
+        raise RuntimeError("THESISTRACE_PUBLIC_ORIGIN has no host")
+    request = urllib.request.Request(
+        f"{web_origin}/data",
+        headers={"Host": public_origin.netloc},
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
         assert response.status == 200
         assert response.headers.get("Cache-Control") == "no-cache"
         body = response.read().decode()

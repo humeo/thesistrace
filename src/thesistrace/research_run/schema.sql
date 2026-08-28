@@ -9,6 +9,14 @@ SET default_tablespace = '';
 
 SET default_table_access_method = heap;
 
+CREATE TABLE research_runs.run_ownership (
+    researcher_id uuid NOT NULL,
+    run_id text PRIMARY KEY,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    UNIQUE (researcher_id, run_id),
+    FOREIGN KEY (researcher_id) REFERENCES researchers.researchers(id)
+);
+
 --
 -- Name: attempts; Type: TABLE; Schema: research_runs; Owner: -
 --
@@ -38,6 +46,7 @@ CREATE TABLE research_runs.attempts (
 --
 
 CREATE TABLE research_runs.cancel_receipts (
+    researcher_id uuid NOT NULL,
     request_id text NOT NULL,
     request_fingerprint text NOT NULL,
     run_id text NOT NULL,
@@ -52,6 +61,7 @@ CREATE TABLE research_runs.cancel_receipts (
 --
 
 CREATE TABLE research_runs.runs (
+    researcher_id uuid NOT NULL,
     id text NOT NULL,
     folder_id text NOT NULL,
     name text NOT NULL,
@@ -194,6 +204,7 @@ CREATE TABLE research_runs.execution_checkpoints (
 
 
 CREATE TABLE research_runs.admission_requests (
+    researcher_id uuid NOT NULL,
     request_id text NOT NULL,
     request_fingerprint text NOT NULL,
     run_id text NOT NULL,
@@ -206,6 +217,7 @@ CREATE TABLE research_runs.admission_requests (
 --
 
 CREATE TABLE research_runs.start_tracking_receipts (
+    researcher_id uuid NOT NULL,
     request_id text NOT NULL,
     request_fingerprint text NOT NULL,
     seed_run_id text NOT NULL,
@@ -239,17 +251,20 @@ ALTER TABLE ONLY research_runs.attempts
 ALTER TABLE ONLY research_runs.attempts
     ADD CONSTRAINT attempts_run_id_ordinal_key UNIQUE (run_id, ordinal);
 
+ALTER TABLE ONLY research_runs.attempts
+    ADD CONSTRAINT attempts_run_id_id_key UNIQUE (run_id, id);
+
 
 --
 -- Name: cancel_receipts cancel_receipts_pkey; Type: CONSTRAINT; Schema: research_runs; Owner: -
 --
 
 ALTER TABLE ONLY research_runs.cancel_receipts
-    ADD CONSTRAINT cancel_receipts_pkey PRIMARY KEY (request_id);
+    ADD CONSTRAINT cancel_receipts_pkey PRIMARY KEY (researcher_id, request_id);
 
 
 ALTER TABLE ONLY research_runs.admission_requests
-    ADD CONSTRAINT admission_requests_pkey PRIMARY KEY (request_id);
+    ADD CONSTRAINT admission_requests_pkey PRIMARY KEY (researcher_id, request_id);
 
 ALTER TABLE ONLY research_runs.admission_requests
     ADD CONSTRAINT admission_requests_run_id_key UNIQUE (run_id);
@@ -262,6 +277,9 @@ ALTER TABLE ONLY research_runs.admission_requests
 ALTER TABLE ONLY research_runs.runs
     ADD CONSTRAINT runs_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY research_runs.runs
+    ADD CONSTRAINT runs_researcher_id_id_key UNIQUE (researcher_id, id);
+
 ALTER TABLE ONLY research_runs.progress
     ADD CONSTRAINT progress_pkey PRIMARY KEY (run_id);
 
@@ -273,7 +291,14 @@ ALTER TABLE ONLY research_runs.execution_checkpoints
 
 
 ALTER TABLE ONLY research_runs.runs
-    ADD CONSTRAINT runs_folder_id_fkey FOREIGN KEY (folder_id) REFERENCES research_folders.folders(id);
+    ADD CONSTRAINT runs_ownership_fkey
+    FOREIGN KEY (researcher_id, id)
+    REFERENCES research_runs.run_ownership(researcher_id, run_id);
+
+ALTER TABLE ONLY research_runs.runs
+    ADD CONSTRAINT runs_folder_fkey
+    FOREIGN KEY (researcher_id, folder_id)
+    REFERENCES research_folders.folders(researcher_id, id);
 
 
 --
@@ -281,7 +306,7 @@ ALTER TABLE ONLY research_runs.runs
 --
 
 ALTER TABLE ONLY research_runs.start_tracking_receipts
-    ADD CONSTRAINT start_tracking_receipts_pkey PRIMARY KEY (request_id);
+    ADD CONSTRAINT start_tracking_receipts_pkey PRIMARY KEY (researcher_id, request_id);
 
 
 --
@@ -295,13 +320,13 @@ CREATE UNIQUE INDEX research_runs_one_running_attempt_idx ON research_runs.attem
 -- Name: research_runs_runs_created_idx; Type: INDEX; Schema: research_runs; Owner: -
 --
 
-CREATE INDEX research_runs_runs_created_idx ON research_runs.runs USING btree (created_at DESC, id);
+CREATE INDEX research_runs_runs_created_idx ON research_runs.runs USING btree (researcher_id, created_at DESC, id);
 
-CREATE INDEX research_runs_runs_folder_created_idx ON research_runs.runs USING btree (folder_id, created_at DESC, id);
+CREATE INDEX research_runs_runs_folder_created_idx ON research_runs.runs USING btree (researcher_id, folder_id, created_at DESC, id);
 
-CREATE INDEX research_runs_runs_kind_created_idx ON research_runs.runs USING btree ((immutable_input->>'research_kind'), created_at DESC, id);
+CREATE INDEX research_runs_runs_kind_created_idx ON research_runs.runs USING btree (researcher_id, (immutable_input->>'research_kind'), created_at DESC, id);
 
-CREATE INDEX research_runs_runs_folder_kind_created_idx ON research_runs.runs USING btree (folder_id, (immutable_input->>'research_kind'), created_at DESC, id);
+CREATE INDEX research_runs_runs_folder_kind_created_idx ON research_runs.runs USING btree (researcher_id, folder_id, (immutable_input->>'research_kind'), created_at DESC, id);
 
 
 --
@@ -313,7 +338,19 @@ ALTER TABLE ONLY research_runs.attempts
 
 
 ALTER TABLE ONLY research_runs.admission_requests
-    ADD CONSTRAINT admission_requests_run_id_fkey FOREIGN KEY (run_id) REFERENCES research_runs.runs(id);
+    ADD CONSTRAINT admission_requests_run_fkey
+    FOREIGN KEY (researcher_id, run_id)
+    REFERENCES research_runs.runs(researcher_id, id);
+
+ALTER TABLE ONLY research_runs.cancel_receipts
+    ADD CONSTRAINT cancel_receipts_run_fkey
+    FOREIGN KEY (researcher_id, run_id)
+    REFERENCES research_runs.runs(researcher_id, id);
+
+ALTER TABLE ONLY research_runs.start_tracking_receipts
+    ADD CONSTRAINT start_tracking_receipts_seed_run_fkey
+    FOREIGN KEY (researcher_id, seed_run_id)
+    REFERENCES research_runs.runs(researcher_id, id);
 
 ALTER TABLE ONLY research_runs.progress
     ADD CONSTRAINT progress_run_id_fkey FOREIGN KEY (run_id) REFERENCES research_runs.runs(id) ON DELETE CASCADE;
@@ -322,4 +359,6 @@ ALTER TABLE ONLY research_runs.execution_checkpoints
     ADD CONSTRAINT execution_checkpoints_run_id_fkey FOREIGN KEY (run_id) REFERENCES research_runs.runs(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY research_runs.execution_checkpoints
-    ADD CONSTRAINT execution_checkpoints_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES research_runs.attempts(id);
+    ADD CONSTRAINT execution_checkpoints_run_attempt_fkey
+    FOREIGN KEY (run_id, attempt_id)
+    REFERENCES research_runs.attempts(run_id, id);

@@ -79,10 +79,23 @@ def test_base_compose_has_independent_auth_and_core_identities() -> None:
 
     auth_initializer = _service(compose, "auth-initialize", "auth")
     auth = _service(compose, "auth", "web")
+    api = _service(compose, "api", "research-worker")
+    research_worker = _service(
+        compose, "research-worker", "batch-research-worker"
+    )
+    batch_worker = _service(
+        compose, "batch-research-worker", "tracking-worker"
+    )
+    tracking_worker = _service(compose, "tracking-worker", "web")
     web = _service(compose, "web")
     assert "THESISTRACE_OWNER_DATABASE_URL" in auth_initializer
     assert "condition: service_healthy" in auth_initializer
     assert "THESISTRACE_AUTH_DATABASE_URL" in auth
+    assert "THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth:8200" in api
+    assert all(
+        "THESISTRACE_AUTH_INTERNAL_ORIGIN" not in worker
+        for worker in (research_worker, batch_worker, tracking_worker)
+    )
     assert "condition: service_completed_successfully" in auth
     assert "depends_on:" not in web
     assert "THESISTRACE_API_ORIGIN" not in web
@@ -161,6 +174,15 @@ def test_release_image_gate_uses_the_same_caddyfile_with_an_internal_test_ca() -
         "final-status.txt",
     ):
         assert evidence_name in smoke
+
+
+def test_image_smoke_exposes_only_caddy_through_a_noninternal_edge_network() -> None:
+    overlay = (DEPLOY / "compose.image-smoke.yaml").read_text()
+
+    assert "  default:\n    internal: true" in overlay
+    assert "  edge:\n" in overlay
+    web = _service(overlay, "web")
+    assert "    networks:\n      - default\n      - edge\n" in web
 
 
 def test_failed_caddy_image_smoke_captures_evidence_before_cleanup(

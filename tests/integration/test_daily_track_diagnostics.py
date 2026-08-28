@@ -8,11 +8,19 @@ import subprocess
 import sys
 from datetime import date
 from pathlib import Path
+from uuid import UUID
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.daily_track.diagnostics import DailyTrackDiagnostics
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
+from thesistrace.researcher import ResearcherIdentity, ResearcherService
+
+TEST_RESEARCHER = ResearcherIdentity(
+    researcher_id=UUID("10000000-0000-4000-8000-000000000001"),
+    email="daily-track-diagnostics@example.test",
+    display_label="Daily Track Diagnostics",
+)
 
 
 def test_daily_track_diagnostic_reports_the_postgresql_state_matrix(
@@ -445,10 +453,18 @@ def _insert_track(transaction: PostgresTransaction, track_id: str) -> None:
     origin_manifest = _digest(f"{track_id}:origin")
     transaction.execute(
         """
-        INSERT INTO daily_tracks.tracks (id, status, seed_run_id, origin)
-        VALUES (%s, 'active', %s, '{}'::jsonb)
+        INSERT INTO research_runs.run_ownership (researcher_id, run_id)
+        VALUES (%s, %s)
         """,
-        (track_id, f"seed-{track_id}"),
+        (TEST_RESEARCHER.researcher_id, f"seed-{track_id}"),
+    )
+    transaction.execute(
+        """
+        INSERT INTO daily_tracks.tracks (
+            researcher_id, id, status, seed_run_id, origin
+        ) VALUES (%s, %s, 'active', %s, '{}'::jsonb)
+        """,
+        (TEST_RESEARCHER.researcher_id, track_id, f"seed-{track_id}"),
     )
     transaction.execute(
         """
@@ -648,4 +664,5 @@ def _database(settings: CoreSettings) -> PostgresDatabase:
     initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
     database.open()
+    ResearcherService(database).bootstrap(TEST_RESEARCHER)
     return database

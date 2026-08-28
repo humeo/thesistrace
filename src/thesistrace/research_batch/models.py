@@ -134,8 +134,11 @@ class ResearchBatchScope(BaseModel):
     neutralization: Literal["none", "industry"]
     numeric_execution_contract: str
     semantic_versions: dict[str, str]
-    data_generation_id: str
     data_through_session: date
+
+
+class ResearchBatchStorageScope(ResearchBatchScope):
+    data_generation_id: str
 
 
 class ResearchBatchItemSummary(BaseModel):

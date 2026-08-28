@@ -21,6 +21,7 @@ READY = {
         "postgresql": {"status": "ready", "code": "POSTGRESQL_READY"},
         "rustfs": {"status": "ready", "code": "RUSTFS_READY"},
         "dataset_store": {"status": "ready", "code": "DATASET_STORE_READY"},
+        "auth": {"status": "ready", "code": "AUTH_READY"},
     },
 }
 
@@ -31,6 +32,7 @@ def test_core_readiness_fails_and_recovers_each_real_dependency_independently(
 ) -> None:
     postgres = _controlled_container("postgres")
     rustfs = _controlled_container("rustfs")
+    auth = _controlled_container("auth")
     initialize_core(core_settings.database_url)
     settings = replace(core_settings, data_mount=tmp_path)
     events: list[object] = []
@@ -44,12 +46,19 @@ def test_core_readiness_fails_and_recovers_each_real_dependency_independently(
             container=postgres,
             name="postgresql",
             code="POSTGRESQL_UNAVAILABLE",
+            additional_unavailable={"auth": "AUTH_UNAVAILABLE"},
         )
         _assert_dependency_outage(
             client,
             container=rustfs,
             name="rustfs",
             code="RUSTFS_UNAVAILABLE",
+        )
+        _assert_dependency_outage(
+            client,
+            container=auth,
+            name="auth",
+            code="AUTH_UNAVAILABLE",
         )
 
         unavailable_root = tmp_path.with_name(f"{tmp_path.name}-offline")
@@ -104,10 +113,11 @@ def _assert_dependency_outage(
     container: str,
     name: str,
     code: str,
+    additional_unavailable: dict[str, str] | None = None,
 ) -> None:
     subprocess.run(["docker", "pause", container], check=True, capture_output=True)
     try:
-        expected = _unavailable(name, code)
+        expected = _unavailable(name, code, **(additional_unavailable or {}))
         response = _await_readiness(client, expected=expected)
         assert response.json() == expected
         assert client.get("/health/live").status_code == 200
@@ -138,8 +148,13 @@ def _await_readiness(
         Event().wait(0.05)
 
 
-def _unavailable(name: str, code: str) -> dict[str, object]:
+def _unavailable(name: str, code: str, **additional: str) -> dict[str, object]:
     value = json.loads(json.dumps(READY))
     value["status"] = "unavailable"
     value["dependencies"][name] = {"status": "unavailable", "code": code}
+    for dependency, unavailable_code in additional.items():
+        value["dependencies"][dependency] = {
+            "status": "unavailable",
+            "code": unavailable_code,
+        }
     return value

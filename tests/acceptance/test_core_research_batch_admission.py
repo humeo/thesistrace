@@ -230,6 +230,7 @@ def test_factor_and_strategy_batch_admission_is_atomic_idempotent_and_queryable(
         assert {response.status_code for response in responses} == {202}
         assert len({response.json()["id"] for response in responses}) == 1
         factor = responses[0].json()
+        assert "data_generation_id" not in factor["scope"]
         assert factor["batch_kind"] == "factor_evaluation"
         assert factor["status"] == "queued"
         assert factor["progress"] == {
@@ -297,7 +298,7 @@ def test_factor_and_strategy_batch_admission_is_atomic_idempotent_and_queryable(
         assert [item["id"] for item in second_page.json()["items"]] == [factor["id"]]
         assert client.get(f"/api/research-batches/{factor['id']}").json() == factor
         assert client.get("/api/research-batches/batch_missing").status_code == 404
-        assert client.get("/api/research-batches", params={"cursor": "bad"}).status_code == 422
+        assert client.get("/api/research-batches", params={"cursor": "bad"}).status_code == 400
         empty_id_cursor = urlsafe_b64encode(
             json.dumps(
                 {"created_at": datetime.now(UTC).isoformat(), "id": ""}
@@ -308,7 +309,7 @@ def test_factor_and_strategy_batch_admission_is_atomic_idempotent_and_queryable(
                 "/api/research-batches",
                 params={"cursor": empty_id_cursor},
             ).status_code
-            == 422
+            == 400
         )
         assert client.delete(f"/api/research-batches/{factor['id']}").status_code == 405
 
@@ -320,7 +321,14 @@ def test_factor_and_strategy_batch_admission_is_atomic_idempotent_and_queryable(
         protected = client.delete("/api/research-folders/folder_batch_research")
         assert protected.status_code == 409
 
-    frozen_generation = str(factor["scope"]["data_generation_id"])
+        with client.app.state.core_runtime.database.transaction() as transaction:
+            stored = transaction.execute(
+                "SELECT scope FROM research_batches.batches WHERE id = %s",
+                (factor["id"],),
+            ).fetchone()
+        assert stored is not None
+        frozen_generation = str(stored["scope"]["data_generation_id"])
+
     _expire_batch_retention_leases(settings)
     replacement_generation = _publish_current_data(
         settings,
