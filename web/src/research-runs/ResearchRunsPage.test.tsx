@@ -10,7 +10,6 @@ import {
   ResearchRunProgressView,
   ResearchRunHistory,
   ResearchRunPagination,
-  TerminalStrategyStateView,
   UseAsDraftPanel,
   formatResearchRunCreatedAt,
   isTerminalResearch,
@@ -202,58 +201,6 @@ const TERMINAL_STATE: TerminalStrategyState = {
   },
 };
 
-describe("TerminalStrategyStateView", () => {
-  it("renders the retained terminal account and holdings", () => {
-    const markup = renderToStaticMarkup(
-      <TerminalStrategyStateView state={TERMINAL_STATE} />,
-    );
-
-    expect(markup).toContain("Final Portfolio");
-    expect(markup).toContain("As of");
-    expect(markup).toContain("Portfolio value");
-    expect(markup).not.toContain("Terminal Strategy State");
-    expect(markup).toContain("2026-08-05");
-    expect(markup).toContain("10000995");
-    expect(markup).toContain("8999995");
-    expect(markup).toContain("cn.stock.000001");
-    expect(markup).toContain("remains pending");
-    expect(markup).not.toContain("Retained account at the Research Period boundary");
-    expect(markup).not.toMatch(/Generation|manifest|checkpoint|fence|object location/i);
-  });
-  it("does not add empty boundary commentary when no signal is pending", () => {
-    const markup = renderToStaticMarkup(
-      <TerminalStrategyStateView state={{ ...TERMINAL_STATE, pending_signal: null }} />,
-    );
-
-    expect(markup).not.toContain("No pending signal at this boundary.");
-    expect(markup).not.toContain("Retained account at the Research Period boundary");
-  });
-
-  it("formats high-precision terminal decimals without losing the exact value", () => {
-    const state = {
-      ...TERMINAL_STATE,
-      net_nav: "30752.034497893580384922868008825220680825475",
-      net_cash: "29375803.841923",
-      cumulative_transaction_cost: "2048185.34275",
-      positions: [{
-        ...TERMINAL_STATE.positions[0],
-        adjusted_units: "32282994090610636900853578463558766e-32",
-        last_adjusted_price: "918646e-5",
-      }],
-    };
-
-    const markup = renderToStaticMarkup(<TerminalStrategyStateView state={state} />);
-
-    expect(markup).toContain("CN¥30,752.03");
-    expect(markup).toContain("CN¥29,375,803.84");
-    expect(markup).toContain("CN¥2,048,185.34");
-    expect(markup).toContain("322.829941");
-    expect(markup).toContain("9.18646");
-    expect(markup).toContain(`title="${state.net_nav}"`);
-    expect(markup).toContain(`title="${state.positions[0].adjusted_units}"`);
-  });
-});
-
 describe("ResearchResultView", () => {
   it("keeps result summaries and coverage while removing low-value detail sections", () => {
     const correlation = {
@@ -370,12 +317,16 @@ describe("ResearchResultView", () => {
     expect(markup).toContain("Factor Summary");
     expect(markup).toContain("Strategy Summary");
     expect(markup).toContain("Rank IC coverage 1/2");
-    expect(markup).toContain("沪深300");
-    expect(markup).toContain("数据截至 <time dateTime=\"2026-08-13\">2026-08-13</time>");
-    expect(markup).toContain("c".repeat(64));
-    expect(markup).toContain("Entry Open");
-    expect(markup).toContain("Terminal Open");
-    expect(markup).toContain("Net Excess");
+    expect(markup).toContain("CSI 300");
+    expect(markup).not.toContain("沪深300");
+    expect(markup).not.toContain("Fixed Strategy Benchmark");
+    expect(markup).not.toContain("数据截至");
+    expect(markup).not.toContain("c".repeat(64));
+    expect(markup).not.toContain("Entry Open");
+    expect(markup).not.toContain("Terminal Open");
+    expect(markup).not.toContain("Net Excess");
+    expect(markup).not.toContain("Final Portfolio");
+    expect(markup).not.toContain("cn.stock.000001");
     expect(markup).not.toMatch(
       /Predictive evidence|One fill path|Research-period account observations|signal sessions|Daily Observations|Provenance|Input digest/i,
     );
@@ -394,7 +345,7 @@ describe("ResearchResultView", () => {
         }}
       />,
     );
-    expect(unavailableMarkup).toContain("沪深300 comparison unavailable");
+    expect(unavailableMarkup).toContain("CSI 300 comparison unavailable");
     expect(unavailableMarkup).toContain("No comparison chart is shown");
     expect(unavailableMarkup).not.toContain("<figure");
   });

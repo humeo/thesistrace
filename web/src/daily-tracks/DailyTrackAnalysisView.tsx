@@ -1,5 +1,6 @@
 import { StrategyComparisonPanel } from "../analysis/StrategyComparisonPanel";
 import type { StrategyComparison } from "../analysis/strategyComparison";
+import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
 
 type CorrelationSummary = {
   mean: number | null;
@@ -83,7 +84,7 @@ export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnaly
         <div className="strategy-metrics">
           <Metric label="Net cumulative" value={formatPercent(metrics.net_cumulative_return)} />
           <Metric
-            label="沪深300 cumulative"
+            label={`${STRATEGY_BENCHMARK_DISPLAY_NAME} cumulative`}
             value={formatPercent(metrics.benchmark_cumulative_return)}
           />
           <Metric

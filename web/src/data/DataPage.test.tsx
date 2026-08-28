@@ -89,7 +89,7 @@ describe("DataOverviewView", () => {
     expect(markup).toContain("Market data");
     expect(markup).toContain("Market ready");
     expect(markup).toContain("Strategy Benchmark");
-    expect(markup).toContain("沪深300 ready");
+    expect(markup).toContain("CSI 300 ready");
     expect(markup).toContain(
       'aria-hidden="true" class="health-dot"></span> Strategy Benchmark',
     );
@@ -155,7 +155,7 @@ describe("DataOverviewView", () => {
     }));
 
     expect(markup).toContain("Market not ready");
-    expect(markup).toContain("沪深300 not ready");
+    expect(markup).toContain("CSI 300 not ready");
     expect(markup).toContain(
       'aria-hidden="true" class="health-dot health-dot-warning"></span> Strategy Benchmark',
     );

@@ -3,7 +3,6 @@ import {
   ColorType,
   CrosshairMode,
   LineSeries,
-  LineStyle,
   createChart,
   type IChartApi,
   type LineData,
@@ -11,6 +10,7 @@ import {
   type Time,
 } from "lightweight-charts";
 
+import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
 import type { StrategyComparisonCurvePoint } from "./strategyComparison";
 
 // TradingView Lightweight Charts™
@@ -20,7 +20,6 @@ export type StrategyChartPoint = {
   time: string;
   strategy: number;
   benchmark: number;
-  netExcess: number;
 };
 
 type VisibleRange = "1Y" | "3Y" | "5Y" | "All";
@@ -33,7 +32,6 @@ const RANGE_SESSIONS: Record<Exclude<VisibleRange, "All">, number> = {
 
 const STRATEGY_COLOR = "#828fff";
 const BENCHMARK_COLOR = "#777b84";
-const NET_EXCESS_COLOR = "#d0d6e0";
 
 export function strategyChartPoints(
   curves: StrategyComparisonCurvePoint[],
@@ -42,7 +40,6 @@ export function strategyChartPoints(
     time: point.session,
     strategy: point.net_strategy_return,
     benchmark: point.benchmark_relative_return,
-    netExcess: point.net_excess_return,
   }));
 }
 
@@ -105,13 +102,6 @@ export function StrategyPerformanceChart({
       priceLineVisible: false,
       lastValueVisible: false,
     });
-    const netExcessSeries = chart.addSeries(LineSeries, {
-      color: NET_EXCESS_COLOR,
-      lineStyle: LineStyle.Dashed,
-      lineWidth: 2,
-      priceLineVisible: false,
-      lastValueVisible: false,
-    });
     strategySeries.setData(points.map((point) => ({
       time: point.time as Time,
       value: point.strategy,
@@ -119,10 +109,6 @@ export function StrategyPerformanceChart({
     benchmarkSeries.setData(points.map((point) => ({
       time: point.time as Time,
       value: point.benchmark,
-    })));
-    netExcessSeries.setData(points.map((point) => ({
-      time: point.time as Time,
-      value: point.netExcess,
     })));
     strategySeries.createPriceLine({
       price: 0,
@@ -141,12 +127,11 @@ export function StrategyPerformanceChart({
       }
       const strategy = seriesValue(event.seriesData.get(strategySeries));
       const benchmark = seriesValue(event.seriesData.get(benchmarkSeries));
-      const netExcess = seriesValue(event.seriesData.get(netExcessSeries));
-      if (strategy === null || benchmark === null || netExcess === null) {
+      if (strategy === null || benchmark === null) {
         setTooltip(null);
         return;
       }
-      setTooltip({ time: timeLabel(event.time), strategy, benchmark, netExcess });
+      setTooltip({ time: timeLabel(event.time), strategy, benchmark });
     };
     chart.subscribeCrosshairMove(onCrosshairMove);
     const observer = new ResizeObserver(([entry]) => {
@@ -186,12 +171,11 @@ export function StrategyPerformanceChart({
   return (
     <figure
       className="strategy-chart"
-      aria-label="Net Strategy, 沪深300, and Net Excess performance chart"
+      aria-label={`Net Strategy and ${STRATEGY_BENCHMARK_DISPLAY_NAME} performance chart`}
     >
       <figcaption>
         <span><i className="strategy-swatch" /> Net Strategy</span>
-        <span><i className="benchmark-swatch" /> 沪深300</span>
-        <span><i className="net-excess-swatch" /> Net Excess</span>
+        <span><i className="benchmark-swatch" /> {STRATEGY_BENCHMARK_DISPLAY_NAME}</span>
         <span className="strategy-chart-session-count">{points.length} Research Sessions</span>
       </figcaption>
       <div className="strategy-chart-toolbar" aria-label="Chart range">
@@ -214,8 +198,7 @@ export function StrategyPerformanceChart({
           <>
             <time dateTime={tooltip.time}>{tooltip.time}</time>
             <span>Net Strategy {formatPercent(tooltip.strategy)}</span>
-            <span>沪深300 {formatPercent(tooltip.benchmark)}</span>
-            <span>Net Excess {formatPercent(tooltip.netExcess)}</span>
+            <span>{STRATEGY_BENCHMARK_DISPLAY_NAME} {formatPercent(tooltip.benchmark)}</span>
           </>
         )}
       </div>

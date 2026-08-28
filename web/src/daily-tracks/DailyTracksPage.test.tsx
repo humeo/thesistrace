@@ -106,10 +106,13 @@ describe("DailyTrackAnalysisView", () => {
     expect(markup).toContain("Factor Summary");
     expect(markup).toContain("Strategy Summary");
     expect(markup).toContain("Rank IC coverage 1/2");
-    expect(markup).toContain("沪深300");
-    expect(markup).toContain("数据截至 <time dateTime=\"2026-08-13\">2026-08-13</time>");
+    expect(markup).toContain("CSI 300");
+    expect(markup).not.toContain("沪深300");
+    expect(markup).not.toContain("Fixed Strategy Benchmark");
+    expect(markup).not.toContain("数据截至");
+    expect(markup).not.toContain("d".repeat(64));
     expect(markup).toContain("504 Research Sessions");
-    expect(markup).toContain("Net Excess");
+    expect(markup).not.toContain("Net Excess");
     expect(markup).not.toMatch(/Predictive evidence|Fixed origin|signal sessions/i);
 
     const unavailableMarkup = renderToStaticMarkup(
@@ -126,7 +129,7 @@ describe("DailyTrackAnalysisView", () => {
         }}
       />,
     );
-    expect(unavailableMarkup).toContain("沪深300 comparison unavailable");
+    expect(unavailableMarkup).toContain("CSI 300 comparison unavailable");
     expect(unavailableMarkup).not.toContain("<figure");
   });
 });

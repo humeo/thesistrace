@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { strategyChartPoints } from "./StrategyPerformanceChart";
 
 describe("strategyChartPoints", () => {
-  it("passes through backend-aligned Strategy, 沪深300, and Net Excess returns", () => {
+  it("projects only the Strategy and CSI 300 returns shown by the chart", () => {
     const points = strategyChartPoints([
       {
         session: "2026-08-04",
@@ -26,13 +26,11 @@ describe("strategyChartPoints", () => {
         time: "2026-08-04",
         strategy: -0.001,
         benchmark: 0.0125,
-        netExcess: -0.0138271605,
       },
       {
         time: "2026-08-05",
         strategy: 0.01,
         benchmark: 0.02,
-        netExcess: -0.0098039216,
       },
     ]);
   });
@@ -53,7 +51,6 @@ describe("strategyChartPoints", () => {
       time: curves[0]?.session,
       strategy: 0.25,
       benchmark: 0.2,
-      netExcess: 0.0416666667,
     });
     expect(points[0]?.strategy).not.toBe(0);
     expect(points[0]?.benchmark).not.toBe(0);

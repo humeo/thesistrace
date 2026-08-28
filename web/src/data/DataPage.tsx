@@ -2,6 +2,7 @@ import { ArrowClockwise } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 
 import type { AlphaCatalog, AlphaCatalogField } from "../alphaCatalog";
+import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
 
 type FinancialResearchReadiness =
   | "ready"
@@ -158,7 +159,11 @@ export function DataOverviewView({
               : "health-dot health-dot-warning"}
           /> Strategy Benchmark
         </span>
-        <strong>{overview.benchmark_research_readiness ? "沪深300 ready" : "沪深300 not ready"}</strong>
+        <strong>
+          {overview.benchmark_research_readiness
+            ? `${STRATEGY_BENCHMARK_DISPLAY_NAME} ready`
+            : `${STRATEGY_BENCHMARK_DISPLAY_NAME} not ready`}
+        </strong>
       </div>
       <dl className="data-overview-stats" aria-label="Strategy Benchmark snapshot">
         <div>
