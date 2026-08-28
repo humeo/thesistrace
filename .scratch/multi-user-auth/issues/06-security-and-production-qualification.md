@@ -1,6 +1,6 @@
 # 06 — Cross-stack security and Production qualification
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Blocked by:** 05
 
