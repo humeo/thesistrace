@@ -1,6 +1,6 @@
 # 02 — Caddy single-origin Compose topology
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Blocked by:** 01
 
