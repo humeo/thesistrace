@@ -8,6 +8,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { StrategyPerformanceChart } from "../analysis/StrategyPerformanceChart";
+import { coreFetch } from "../auth/coreFetch";
 import {
   useResearchAsDraft,
   type FrozenResearchAuthorableInput,
@@ -192,7 +193,10 @@ const ACTIVE_TRACK_LIMIT_MESSAGE =
 const RESEARCH_RUN_PAGE_SIZE = 20;
 type ResearchKindFilter = "" | ResearchRun["research_kind"];
 
-export function ResearchRunsPage({ runId }: { runId?: string }) {
+export function ResearchRunsPage({ researcherId, runId }: {
+  researcherId: string;
+  runId?: string;
+}) {
   const [run, setRun] = useState<ResearchRun | null>(null);
   const [items, setItems] = useState<ResearchRun[] | null>(null);
   const [folders, setFolders] = useState<ResearchFolderOption[]>([]);
@@ -224,7 +228,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   useEffect(() => {
     const controller = new AbortController();
     setFolderError(null);
-    void fetch("/api/research-folders", { signal: controller.signal })
+    void coreFetch("/api/research-folders", { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error("Research Folders unavailable");
         const payload = (await response.json()) as ResearchFolderList;
@@ -253,7 +257,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
 
     async function load(polling = false) {
       try {
-        const response = await fetch(path, { signal: controller.signal });
+        const response = await coreFetch(path, { signal: controller.signal });
         if (!response.ok) throw new Error("ResearchRun unavailable");
         if (generation !== loadGeneration.current) return;
         if (runId) {
@@ -378,7 +382,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       : `cancel_${crypto.randomUUID()}`;
     cancelRequest.current = { runId: targetRun.id, requestId };
     try {
-      const response = await fetch(`/api/research-runs/${targetRun.id}/cancel`, {
+      const response = await coreFetch(`/api/research-runs/${targetRun.id}/cancel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ request_id: requestId }),
@@ -421,7 +425,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       : `track_${crypto.randomUUID()}`;
     trackingRequest.current = { runId: targetRun.id, requestId };
     try {
-      const response = await fetch(`/api/research-runs/${targetRun.id}/daily-tracks`, {
+      const response = await coreFetch(`/api/research-runs/${targetRun.id}/daily-tracks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ request_id: requestId }),
@@ -471,7 +475,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     setDeleting(true);
     setDeleteError(null);
     try {
-      const response = await fetch(`/api/research-runs/${run.id}`, {
+      const response = await coreFetch(`/api/research-runs/${run.id}`, {
         method: "DELETE",
         signal: controller.signal,
       });
@@ -574,7 +578,12 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
         ) : null}
         {terminal ? progressView : null}
         {!deleting && folders.length > 0 && run.input !== undefined ? (
-          <UseAsDraftPanel folders={folders} input={run.input} sourceFolderId={run.folder_id} />
+          <UseAsDraftPanel
+            folders={folders}
+            input={run.input}
+            researcherId={researcherId}
+            sourceFolderId={run.folder_id}
+          />
         ) : null}
       </section>
     );
@@ -838,6 +847,7 @@ export function isTerminalResearch(status: ResearchRun["status"]): boolean {
 export function UseAsDraftPanel({
   folders,
   input,
+  researcherId,
   sourceFolderId,
   storage = window.localStorage,
   confirmDiscard = (message) => window.confirm(message),
@@ -845,6 +855,7 @@ export function UseAsDraftPanel({
 }: {
   folders: ResearchFolderOption[];
   input: FrozenResearchAuthorableInput;
+  researcherId: string;
   sourceFolderId: string;
   storage?: Pick<Storage, "getItem" | "setItem">;
   confirmDiscard?: (message: string) => boolean;
@@ -856,7 +867,13 @@ export function UseAsDraftPanel({
   function useAsDraft(): void {
     setError(null);
     try {
-      if (!useResearchAsDraft(storage, targetFolderId, input, confirmDiscard)) return;
+      if (!useResearchAsDraft(
+        storage,
+        researcherId,
+        targetFolderId,
+        input,
+        confirmDiscard,
+      )) return;
       navigate(targetFolderId === "folder_default"
         ? "/research"
         : `/research?folder=${encodeURIComponent(targetFolderId)}`);
@@ -926,7 +943,7 @@ export function ResearchOrganizationPanel({
     if (nameChanged) body.name = normalizedName;
     if (folderChanged) body.folder_id = folderId;
     try {
-      const response = await fetch(`/api/research-runs/${run.id}`, {
+      const response = await coreFetch(`/api/research-runs/${run.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

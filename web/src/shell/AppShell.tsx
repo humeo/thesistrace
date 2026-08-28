@@ -9,6 +9,8 @@ import {
 } from "@phosphor-icons/react";
 import { useState, type ReactNode } from "react";
 
+import { AccountMenu } from "../auth/AccountMenu";
+
 const resourceRoutes = [
   { path: "/data", label: "Data", icon: Database },
   { path: "/research", label: "Research", icon: Flask },
@@ -91,6 +93,7 @@ export function AppShell({ currentPath, children }: AppShellProps) {
               <strong>{currentResource?.label ?? "Resource"}</strong>
             </div>
           </div>
+          <AccountMenu />
         </header>
         <main className="main-content">{children}</main>
       </div>

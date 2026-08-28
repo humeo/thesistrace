@@ -9,6 +9,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AlphaCatalog } from "../alphaCatalog";
+import { coreFetch } from "../auth/coreFetch";
 import type { DataOverview } from "../data/DataPage";
 import { AlphaFormulaEditor } from "./AlphaFormulaEditor";
 import { buildResearchDatePresets } from "./dateRange";
@@ -45,7 +46,7 @@ type WorkspaceResources = {
   data: DataOverview;
 };
 
-export function ResearchWorkspacePage() {
+export function ResearchWorkspacePage({ researcherId }: { researcherId: string }) {
   const [resources, setResources] = useState<WorkspaceResources | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
@@ -54,9 +55,9 @@ export function ResearchWorkspacePage() {
     setError(null);
     try {
       const [folderResponse, catalogResponse, dataResponse] = await Promise.all([
-        fetch("/api/research-folders"),
-        fetch("/api/alpha/catalog"),
-        fetch("/api/data"),
+        coreFetch("/api/research-folders"),
+        coreFetch("/api/alpha/catalog"),
+        coreFetch("/api/data"),
       ]);
       if (!folderResponse.ok || !catalogResponse.ok || !dataResponse.ok) {
         throw new Error("Research workspace unavailable");
@@ -94,41 +95,49 @@ export function ResearchWorkspacePage() {
   );
   async function createFolder(name: string): Promise<void> {
     setFolderError(null);
-    const response = await fetch("/api/research-folders", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    if (!response.ok) {
-      setFolderError(await folderMutationError(response));
-      return;
+    try {
+      const response = await coreFetch("/api/research-folders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!response.ok) {
+        setFolderError(await folderMutationError(response));
+        return;
+      }
+      const folder = (await response.json()) as ResearchFolder;
+      setResources((current) => current === null ? current : {
+        ...current,
+        folder,
+        folders: [...current.folders, folder],
+      });
+      window.history.replaceState(null, "", `/research?folder=${folder.id}`);
+    } catch {
+      setFolderError("Research Folders unavailable");
     }
-    const folder = (await response.json()) as ResearchFolder;
-    setResources((current) => current === null ? current : {
-      ...current,
-      folder,
-      folders: [...current.folders, folder],
-    });
-    window.history.replaceState(null, "", `/research?folder=${folder.id}`);
   }
 
   async function renameFolder(folderId: string, name: string): Promise<void> {
     setFolderError(null);
-    const response = await fetch(`/api/research-folders/${folderId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    if (!response.ok) {
-      setFolderError(await folderMutationError(response));
-      return;
+    try {
+      const response = await coreFetch(`/api/research-folders/${folderId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!response.ok) {
+        setFolderError(await folderMutationError(response));
+        return;
+      }
+      const renamed = (await response.json()) as ResearchFolder;
+      setResources((current) => current === null ? current : {
+        ...current,
+        folder: current.folder.id === renamed.id ? renamed : current.folder,
+        folders: current.folders.map((folder) => folder.id === renamed.id ? renamed : folder),
+      });
+    } catch {
+      setFolderError("Research Folders unavailable");
     }
-    const renamed = (await response.json()) as ResearchFolder;
-    setResources((current) => current === null ? current : {
-      ...current,
-      folder: current.folder.id === renamed.id ? renamed : current.folder,
-      folders: current.folders.map((folder) => folder.id === renamed.id ? renamed : folder),
-    });
   }
 
   async function deleteFolder(folder: ResearchFolder): Promise<void> {
@@ -136,20 +145,24 @@ export function ResearchWorkspacePage() {
     if (currentResources === null) return;
     if (!window.confirm(`Delete the empty ${folder.name} Folder and its browser Draft?`)) return;
     setFolderError(null);
-    const response = await fetch(`/api/research-folders/${folder.id}`, { method: "DELETE" });
-    if (!response.ok) {
-      setFolderError(await folderMutationError(response));
-      return;
+    try {
+      const response = await coreFetch(`/api/research-folders/${folder.id}`, { method: "DELETE" });
+      if (!response.ok) {
+        setFolderError(await folderMutationError(response));
+        return;
+      }
+      window.localStorage.removeItem(researchDraftKey(researcherId, folder.id));
+      const defaultFolder = currentResources.folders.find((item) => item.is_default);
+      if (defaultFolder === undefined) throw new Error("Default Folder unavailable");
+      setResources({
+        ...currentResources,
+        folder: defaultFolder,
+        folders: currentResources.folders.filter((item) => item.id !== folder.id),
+      });
+      window.history.replaceState(null, "", "/research");
+    } catch {
+      setFolderError("Research Folders unavailable");
     }
-    window.localStorage.removeItem(researchDraftKey(folder.id));
-    const defaultFolder = currentResources.folders.find((item) => item.is_default);
-    if (defaultFolder === undefined) throw new Error("Default Folder unavailable");
-    setResources({
-      ...currentResources,
-      folder: defaultFolder,
-      folders: currentResources.folders.filter((item) => item.id !== folder.id),
-    });
-    window.history.replaceState(null, "", "/research");
   }
 
   return (
@@ -162,7 +175,11 @@ export function ResearchWorkspacePage() {
         onDelete={deleteFolder}
         onRename={renameFolder}
       />
-      <ResearchDraftWorkspace key={resources.folder.id} {...resources} />
+      <ResearchDraftWorkspace
+        key={`${researcherId}:${resources.folder.id}`}
+        researcherId={researcherId}
+        {...resources}
+      />
     </section>
   );
 }
@@ -327,6 +344,7 @@ function ResearchNumberStepper({
 }
 
 export function ResearchDraftWorkspace({
+  researcherId,
   folder,
   catalog,
   data,
@@ -334,11 +352,13 @@ export function ResearchDraftWorkspace({
   confirmDiscard = (message) => window.confirm(message),
   startNewOnOpen = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("new"),
 }: Omit<WorkspaceResources, "folders"> & {
+  researcherId: string;
   storage?: Storage;
   confirmDiscard?: (message: string) => boolean;
   startNewOnOpen?: boolean;
 }) {
-  const [draft, setDraft] = useState<ResearchDraft>(() => loadResearchDraft(storage, folder.id));
+  const [draft, setDraft] = useState<ResearchDraft>(() =>
+    loadResearchDraft(storage, researcherId, folder.id));
   const [storageError, setStorageError] = useState<string | null>(null);
   const [diagnosticState, setDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
   const [admissionFeedback, setAdmissionFeedback] = useState<AdmissionFeedback | null>(null);
@@ -367,7 +387,7 @@ export function ResearchDraftWorkspace({
     setDraft((current) => {
       const next = change(current);
       try {
-        persistResearchDraft(storage, folder.id, next);
+        persistResearchDraft(storage, researcherId, folder.id, next);
         setStorageError(null);
       } catch {
         setStorageError("This Draft could not be retained in this browser.");
@@ -381,7 +401,7 @@ export function ResearchDraftWorkspace({
       hasUnexecutedChanges(draft) &&
       !confirmDiscard("Start a new Research and discard unexecuted browser changes?")
     ) return;
-    storage.removeItem(researchDraftKey(folder.id));
+    storage.removeItem(researchDraftKey(researcherId, folder.id));
     setDraft(emptyResearchDraft());
     setStorageError(null);
     setAdmissionFeedback(null);
@@ -396,7 +416,7 @@ export function ResearchDraftWorkspace({
       () => `research_${crypto.randomUUID()}`,
     );
     try {
-      persistResearchDraft(storage, folder.id, begun.draft);
+      persistResearchDraft(storage, researcherId, folder.id, begun.draft);
       setStorageError(null);
     } catch {
       setStorageError("This Draft could not be retained in this browser.");
@@ -410,7 +430,7 @@ export function ResearchDraftWorkspace({
     const controller = new AbortController();
     admissionController.current = controller;
     try {
-      const response = await fetch("/api/research-runs", {
+      const response = await coreFetch("/api/research-runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(begun.command),
@@ -428,7 +448,12 @@ export function ResearchDraftWorkspace({
       if (generation !== admissionGeneration.current) return;
       let next: ResearchDraft | null;
       try {
-        next = finishResearchRun(storage, folder.id, begun.command.request_id);
+        next = finishResearchRun(
+          storage,
+          researcherId,
+          folder.id,
+          begun.command.request_id,
+        );
       } catch {
         setStorageError("The accepted Run is safe, but this Draft could not be retained in this browser.");
         return;

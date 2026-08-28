@@ -612,6 +612,7 @@ describe("UseAsDraftPanel", () => {
         }}
         confirmDiscard={() => true}
         navigate={() => undefined}
+        researcherId="00000000-0000-4000-8000-000000000001"
         sourceFolderId="folder_default"
         storage={{ getItem: () => null, setItem: () => undefined }}
       />,

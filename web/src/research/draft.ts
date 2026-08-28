@@ -87,12 +87,16 @@ export function emptyResearchDraft(): ResearchDraft {
   };
 }
 
-export function researchDraftKey(folderId: string): string {
-  return `thesistrace.research-draft.${folderId}`;
+export function researchDraftKey(researcherId: string, folderId: string): string {
+  return `thesistrace.research-draft.${researcherId}.${folderId}`;
 }
 
-export function loadResearchDraft(storage: Pick<Storage, "getItem">, folderId: string): ResearchDraft {
-  const stored = storage.getItem(researchDraftKey(folderId));
+export function loadResearchDraft(
+  storage: Pick<Storage, "getItem">,
+  researcherId: string,
+  folderId: string,
+): ResearchDraft {
+  const stored = storage.getItem(researchDraftKey(researcherId, folderId));
   if (stored === null || new TextEncoder().encode(stored).byteLength > MAX_DRAFT_BYTES) {
     return emptyResearchDraft();
   }
@@ -106,6 +110,7 @@ export function loadResearchDraft(storage: Pick<Storage, "getItem">, folderId: s
 
 export function persistResearchDraft(
   storage: Pick<Storage, "setItem">,
+  researcherId: string,
   folderId: string,
   draft: ResearchDraft,
 ): void {
@@ -113,7 +118,7 @@ export function persistResearchDraft(
   if (new TextEncoder().encode(encoded).byteLength > MAX_DRAFT_BYTES) {
     throw new Error("Research Draft exceeds the browser storage limit");
   }
-  storage.setItem(researchDraftKey(folderId), encoded);
+  storage.setItem(researchDraftKey(researcherId, folderId), encoded);
 }
 
 export function researchInputs(draft: ResearchDraft): ResearchInputs {
@@ -197,13 +202,14 @@ export function acceptPendingResearchRun(
 
 export function finishResearchRun(
   storage: Pick<Storage, "getItem" | "setItem">,
+  researcherId: string,
   folderId: string,
   requestId: string,
 ): ResearchDraft | null {
-  const latest = loadResearchDraft(storage, folderId);
+  const latest = loadResearchDraft(storage, researcherId, folderId);
   if (latest.pendingAdmission?.requestId !== requestId) return null;
   const accepted = acceptPendingResearchRun(latest, requestId);
-  persistResearchDraft(storage, folderId, accepted);
+  persistResearchDraft(storage, researcherId, folderId, accepted);
   return accepted;
 }
 
@@ -233,11 +239,12 @@ export function hasUnexecutedChanges(draft: ResearchDraft): boolean {
 
 export function useResearchAsDraft(
   storage: Pick<Storage, "getItem" | "setItem">,
+  researcherId: string,
   folderId: string,
   input: FrozenResearchAuthorableInput,
   confirmDiscard: (message: string) => boolean,
 ): boolean {
-  const current = loadResearchDraft(storage, folderId);
+  const current = loadResearchDraft(storage, researcherId, folderId);
   const nextInputs: ResearchInputs = {
     ...researchInputs(current),
     formula: input.formula,
@@ -258,7 +265,7 @@ export function useResearchAsDraft(
     wouldOverwriteUnexecutedAuthorableValue(current, nextInputs) &&
     !confirmDiscard("Use this Research as Draft and discard unexecuted browser changes?")
   ) return false;
-  persistResearchDraft(storage, folderId, {
+  persistResearchDraft(storage, researcherId, folderId, {
     ...current,
     ...nextInputs,
     editor: { anchor: input.formula.length, head: input.formula.length },

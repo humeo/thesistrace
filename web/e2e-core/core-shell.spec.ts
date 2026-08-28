@@ -1,5 +1,7 @@
-import { expect, test, type Page, type Route, type TestInfo } from "@playwright/test";
+import { type Page, type Route, type TestInfo } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+
+import { expect, sameOriginHeaders, test } from "./auth-fixture";
 
 test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
   const documentRequests: string[] = [];
@@ -87,6 +89,10 @@ test("Notes keeps multiline research context visible", async ({ page }) => {
 test("date inputs retain a browser-populated value when focus leaves the field", async ({ page }) => {
   await page.route("**/api/**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
+    if (pathname.startsWith("/api/auth/") || pathname === "/api/researcher/bootstrap") {
+      await route.continue();
+      return;
+    }
     if (pathname === "/api/research-folders") {
       await route.fulfill({ json: { items: [{ id: "folder_default", name: "Default", is_default: true, created_at: "2026-08-13T00:00:00Z" }], next_cursor: null } });
       return;
@@ -139,8 +145,9 @@ test("date inputs retain a browser-populated value when focus leaves the field",
   await expect(page.getByRole("button", { name: "Run research" })).toBeEnabled();
 });
 
-test("Default Folder retains one local Research Draft with authoritative Formula diagnostics", async ({ page }, testInfo) => {
+test("Default Folder retains one local Research Draft with authoritative Formula diagnostics", async ({ page, researcher }, testInfo) => {
   test.setTimeout(90_000);
+  const defaultDraftKey = `thesistrace.research-draft.${researcher.id}.folder_default`;
   const responses: string[] = [];
   const externalRequests: string[] = [];
   page.on("request", (request) => {
@@ -268,10 +275,10 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.getByLabel("Rebalance sessions").fill("2");
 
     const browserKeys = await page.evaluate(() => Object.keys(localStorage));
-    expect(browserKeys).toEqual(["thesistrace.research-draft.folder_default"]);
-    const retainedDraft = await page.evaluate(() => JSON.parse(
-      localStorage.getItem("thesistrace.research-draft.folder_default") ?? "null",
-    ));
+    expect(browserKeys).toEqual([defaultDraftKey]);
+    const retainedDraft = await page.evaluate((draftKey) => JSON.parse(
+      localStorage.getItem(draftKey) ?? "null",
+    ), defaultDraftKey);
     expect(retainedDraft).toMatchObject({
       name: "Browser Mean Research",
       formula: "ts_mean(close, 2)",
@@ -297,7 +304,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await workspaceNew.click();
     await expect(page.getByLabel("Research name")).toHaveValue("");
     await expect(page.locator(".cm-placeholder")).toHaveText("Start with a field or function");
-    expect(await page.evaluate(() => localStorage.getItem("thesistrace.research-draft.folder_default"))).toBeNull();
+    expect(await page.evaluate((draftKey) => localStorage.getItem(draftKey), defaultDraftKey)).toBeNull();
 
     await openResearchFolderMenu(page);
     await page.getByLabel("New Folder").fill("Signals");
@@ -319,13 +326,18 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.getByRole("link", { name: "Research", exact: true }).click();
     await expect(page).toHaveURL(/\/research$/);
     await expect(page.getByLabel("Research name")).toHaveValue("");
-    expect(await page.evaluate((folderId) => localStorage.getItem(`thesistrace.research-draft.${folderId}`), customFolderId)).not.toBeNull();
+    expect(await page.evaluate(
+      ({ folderId, activeResearcherId }) => localStorage.getItem(
+        `thesistrace.research-draft.${activeResearcherId}.${folderId}`,
+      ),
+      { folderId: customFolderId, activeResearcherId: researcher.id },
+    )).not.toBeNull();
     await openResearchFolderMenu(page);
     await page.getByRole("link", { name: "Signals", exact: true }).click();
     await expect(page.getByLabel("Research name")).toHaveValue("Signals browser Draft");
     await expect(page.locator(".cm-content")).toHaveText("volume");
     expect(await page.evaluate(() => Object.keys(localStorage).sort())).toEqual([
-      `thesistrace.research-draft.${customFolderId}`,
+      `thesistrace.research-draft.${researcher.id}.${customFolderId}`,
     ]);
 
     await openResearchFolderMenu(page);
@@ -334,7 +346,9 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.getByRole("link", { name: "Momentum", exact: true })).toBeVisible();
     await expect(page.getByLabel("Research name")).toHaveValue("Signals browser Draft");
 
-    const protectedDefault = await page.request.delete("/api/research-folders/folder_default");
+    const protectedDefault = await page.request.delete("/api/research-folders/folder_default", {
+      headers: sameOriginHeaders(),
+    });
     expect(protectedDefault.status()).toBe(409);
     page.once("dialog", async (dialog) => dialog.dismiss());
     await page.getByRole("button", { name: "Delete Folder" }).click();
@@ -343,7 +357,12 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.getByRole("button", { name: "Delete Folder" }).click();
     await expect(page).toHaveURL(/\/research$/);
     await expect(page.getByRole("link", { name: "Momentum", exact: true })).toHaveCount(0);
-    expect(await page.evaluate((folderId) => localStorage.getItem(`thesistrace.research-draft.${folderId}`), customFolderId)).toBeNull();
+    expect(await page.evaluate(
+      ({ folderId, activeResearcherId }) => localStorage.getItem(
+        `thesistrace.research-draft.${activeResearcherId}.${folderId}`,
+      ),
+      { folderId: customFolderId, activeResearcherId: researcher.id },
+    )).toBeNull();
 
     const folderRead = await page.request.get("/api/research-folders");
     expect(folderRead.ok()).toBeTruthy();
@@ -540,12 +559,15 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
         if (trackId === undefined) return;
         const stop = await page.request.post(`/api/daily-tracks/${trackId}/stop`, {
           data: { request_id: `financial-e2e-stop-${trackId}` },
+          headers: sameOriginHeaders(),
         });
         expect(stop.status()).toBe(202);
       });
       await cleanup(async () => {
         if (trackId === undefined) return;
-        expect((await page.request.delete(`/api/daily-tracks/${trackId}`)).status()).toBe(204);
+        expect((await page.request.delete(`/api/daily-tracks/${trackId}`, {
+          headers: sameOriginHeaders(),
+        })).status()).toBe(204);
       });
       let runStatus: string | undefined;
       await cleanup(async () => {
@@ -559,6 +581,7 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
         if (runId === undefined || (runStatus !== "queued" && runStatus !== "running")) return;
         const cancel = await page.request.post(`/api/research-runs/${runId}/cancel`, {
           data: { request_id: `financial-e2e-cancel-${runId}` },
+          headers: sameOriginHeaders(),
         });
         expect(cancel.status()).toBe(200);
         await expect.poll(async () => {
@@ -569,7 +592,9 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
       });
       await cleanup(async () => {
         if (runId === undefined) return;
-        const deleted = await page.request.delete(`/api/research-runs/${runId}`);
+        const deleted = await page.request.delete(`/api/research-runs/${runId}`, {
+          headers: sameOriginHeaders(),
+        });
         expect([204, 404]).toContain(deleted.status());
       });
       if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, "E2E cleanup failed");
@@ -651,6 +676,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
         },
       ],
     },
+    headers: sameOriginHeaders(),
   });
   expect(admitted.status()).toBe(202);
   const admittedBatch = await admitted.json() as {
@@ -678,6 +704,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
 
   const folderResponse = await page.request.post("/api/research-folders", {
     data: { name: "Browser Batch Review" },
+    headers: sameOriginHeaders(),
   });
   expect(folderResponse.status()).toBe(201);
   const folderId = ((await folderResponse.json()) as { id: string }).id;
@@ -743,11 +770,14 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   );
   page.once("dialog", async (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Delete DailyTrack" }).click();
-  expect((await page.request.delete(`/api/research-folders/${folderId}`)).status()).toBe(204);
+  expect((await page.request.delete(`/api/research-folders/${folderId}`, {
+    headers: sameOriginHeaders(),
+  })).status()).toBe(204);
 });
 
-test("Default and custom Folder Drafts run once, retain edits, reject safely, and publish results", async ({ page }, testInfo) => {
+test("Default and custom Folder Drafts run once, retain edits, reject safely, and publish results", async ({ page, researcher }, testInfo) => {
   test.setTimeout(120_000);
+  const defaultDraftKey = `thesistrace.research-draft.${researcher.id}.folder_default`;
   const responses: string[] = [];
   page.on("response", (response) => {
     if (response.url().includes("/api/")) {
@@ -820,9 +850,9 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(strategyConditions).toContainText("Rebalance Every 2 sessions");
     await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
 
-    const retainedAfterRun = await page.evaluate(() => JSON.parse(
-      localStorage.getItem("thesistrace.research-draft.folder_default") ?? "null",
-    ));
+    const retainedAfterRun = await page.evaluate((draftKey) => JSON.parse(
+      localStorage.getItem(draftKey) ?? "null",
+    ), defaultDraftKey);
     expect(retainedAfterRun).toMatchObject({
       formula: "ts_mean(close, 3)",
       lastAdmittedBaseline: { formula: "ts_mean(close, 2)" },

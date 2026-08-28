@@ -2,6 +2,7 @@ import { ArrowClockwise } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 
 import type { AlphaCatalog, AlphaCatalogField } from "../alphaCatalog";
+import { coreFetch } from "../auth/coreFetch";
 
 type FinancialResearchReadiness =
   | "ready"
@@ -64,7 +65,7 @@ const DATASET_FAMILIES = [
 ] as const;
 
 export async function loadDataPage(
-  request: typeof fetch = fetch,
+  request: typeof fetch = coreFetch,
 ): Promise<DataPageLoad> {
   try {
     const [overviewResponse, catalogResponse] = await Promise.all([

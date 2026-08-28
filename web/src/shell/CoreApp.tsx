@@ -21,7 +21,10 @@ const ResearchRunsPage = lazy(() =>
   })),
 );
 
-export function CoreApp({ currentPath }: { currentPath: string }) {
+export function CoreApp({ currentPath, researcherId }: {
+  currentPath: string;
+  researcherId: string;
+}) {
   const researchRunMatch = currentPath.match(/^\/research-runs\/(run_[a-f0-9]+)$/);
   const dailyTrackMatch = currentPath.match(/^\/daily-tracks\/(track_[a-f0-9]+)$/);
   return (
@@ -30,9 +33,11 @@ export function CoreApp({ currentPath }: { currentPath: string }) {
         fallback={<section className="state-section"><p>Loading workspace…</p></section>}
       >
         {currentPath === "/data" ? <DataPage /> : null}
-        {currentPath === "/research" ? <ResearchWorkspacePage /> : null}
+        {currentPath === "/research" ? (
+          <ResearchWorkspacePage researcherId={researcherId} />
+        ) : null}
         {currentPath === "/research-runs" || researchRunMatch ? (
-          <ResearchRunsPage runId={researchRunMatch?.[1]} />
+          <ResearchRunsPage researcherId={researcherId} runId={researchRunMatch?.[1]} />
         ) : null}
         {currentPath === "/daily-tracks" || dailyTrackMatch ? (
           <DailyTracksPage trackId={dailyTrackMatch?.[1]} />

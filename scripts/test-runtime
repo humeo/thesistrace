@@ -217,6 +217,7 @@ run_playwright() {
   THESISTRACE_TEST_WEB_ORIGIN="$public_origin" \
   THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
   THESISTRACE_TEST_PROJECT_NAME="$project_name" \
+  THESISTRACE_TEST_RESEND_ORIGIN="$resend_test_origin" \
   THESISTRACE_DATABASE_URL="postgresql://thesistrace_owner:$owner_database_password@127.0.0.1:$postgres_port/thesistrace" \
   THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
   THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
@@ -957,10 +958,12 @@ case "$command" in
     run_phase e2e-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
       auth api research-worker batch-research-worker tracking-worker web
-    printf 'postgres_port=%s\ns3_port=%s\n' \
-      "$postgres_port" "$s3_port" >>"$run_metadata"
+    resend_port=$(mapped_port resend-fake 8300)
+    resend_test_origin="http://127.0.0.1:$resend_port"
+    printf 'postgres_port=%s\ns3_port=%s\nresend_port=%s\n' \
+      "$postgres_port" "$s3_port" "$resend_port" >>"$run_metadata"
     run_phase e2e-caddy-single-origin verify_caddy_single_origin
-    run_phase e2e-playwright run_playwright bun run --cwd web test:e2e
+    run_phase e2e-playwright run_playwright pnpm --dir web test:e2e
     ;;
   image-smoke)
     smoke_state=/smoke-evidence/image-smoke-state.json

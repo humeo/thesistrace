@@ -1,14 +1,21 @@
 import { expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import { AuthProvider } from "../auth/AuthProvider";
 import { AppShell } from "./AppShell";
 
-test("renders four resources and composes only the active resource content", () => {
-  const markup = renderToStaticMarkup(
-    <AppShell currentPath="/research-runs">
-      <section aria-label="Active resource">Selected resource</section>
-    </AppShell>,
+function renderShell(currentPath: string, content = "Current resource"): string {
+  return renderToStaticMarkup(
+    <AuthProvider>
+      <AppShell currentPath={currentPath}>
+        <section>{content}</section>
+      </AppShell>
+    </AuthProvider>,
   );
+}
+
+test("renders four resources and composes only the active resource content", () => {
+  const markup = renderShell("/research-runs", "Selected resource");
 
   expect(markup.match(/<a /g)).toHaveLength(5);
   expect(markup).toContain('href="/data"');
@@ -24,11 +31,7 @@ test("renders four resources and composes only the active resource content", () 
 });
 
 test("keeps the Research header focused on navigation and folder context", () => {
-  const markup = renderToStaticMarkup(
-    <AppShell currentPath="/research">
-      <section aria-label="Research">Research workspace</section>
-    </AppShell>,
-  );
+  const markup = renderShell("/research", "Research workspace");
 
   expect(markup).not.toContain("Canonical data");
   expect(markup).not.toContain("Through ");
@@ -39,11 +42,7 @@ test("keeps the Research header focused on navigation and folder context", () =>
 test.each(["/data", "/research", "/research-runs", "/daily-tracks"])(
   "defaults the sidebar to expanded on %s",
   (currentPath) => {
-    const markup = renderToStaticMarkup(
-      <AppShell currentPath={currentPath}>
-        <section>Current resource</section>
-      </AppShell>,
-    );
+    const markup = renderShell(currentPath);
 
     expect(markup).not.toContain("app-shell-collapsed");
     expect(markup).toContain('aria-expanded="true" aria-label="Collapse sidebar"');

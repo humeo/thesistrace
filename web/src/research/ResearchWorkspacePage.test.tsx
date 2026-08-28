@@ -34,6 +34,7 @@ class MemoryStorage implements Storage {
 }
 
 const folder = { id: "folder_default", name: "Default", is_default: true, created_at: "2026-08-13T00:00:00Z" };
+const researcherId = "00000000-0000-4000-8000-000000000001";
 const catalog = {
   fields: [
     {
@@ -190,7 +191,7 @@ describe("browser Research Draft", () => {
 
   it("copies frozen authorable values into only the chosen Folder Draft", () => {
     const storage = new MemoryStorage();
-    persistResearchDraft(storage, "folder_target", {
+    persistResearchDraft(storage, researcherId, "folder_target", {
       ...emptyResearchDraft(),
       name: "Keep prospective name",
       formula: "volume",
@@ -200,14 +201,14 @@ describe("browser Research Draft", () => {
         formula: "volume",
       },
     });
-    persistResearchDraft(storage, "folder_other", {
+    persistResearchDraft(storage, researcherId, "folder_other", {
       ...emptyResearchDraft(),
       formula: "open",
     });
-    const otherBefore = storage.getItem(researchDraftKey("folder_other"));
+    const otherBefore = storage.getItem(researchDraftKey(researcherId, "folder_other"));
 
     const confirmDiscard = vi.fn(() => false);
-    const copied = useResearchAsDraft(storage, "folder_target", {
+    const copied = useResearchAsDraft(storage, researcherId, "folder_target", {
       formula: "ts_mean(close, 20)",
       hypothesis: "Frozen hypothesis",
       start_date: "2026-08-03",
@@ -221,7 +222,7 @@ describe("browser Research Draft", () => {
 
     expect(copied).toBe(true);
     expect(confirmDiscard).not.toHaveBeenCalled();
-    expect(loadResearchDraft(storage, "folder_target")).toMatchObject({
+    expect(loadResearchDraft(storage, researcherId, "folder_target")).toMatchObject({
       name: "Keep prospective name",
       formula: "ts_mean(close, 20)",
       hypothesis: "Frozen hypothesis",
@@ -234,19 +235,19 @@ describe("browser Research Draft", () => {
       editor: { anchor: 18, head: 18 },
       pendingAdmission: null,
     });
-    expect(storage.getItem(researchDraftKey("folder_other"))).toBe(otherBefore);
+    expect(storage.getItem(researchDraftKey(researcherId, "folder_other"))).toBe(otherBefore);
   });
 
   it("reuses Factor Evaluation without retaining Strategy-only values", () => {
     const storage = new MemoryStorage();
-    persistResearchDraft(storage, folder.id, {
+    persistResearchDraft(storage, researcherId, folder.id, {
       ...emptyResearchDraft(),
       researchKind: "strategy_backtest",
       holdingsCount: "25",
       rebalanceEverySessions: "5",
     });
 
-    expect(useResearchAsDraft(storage, folder.id, {
+    expect(useResearchAsDraft(storage, researcherId, folder.id, {
       formula: "rank(close)",
       hypothesis: null,
       start_date: "2026-08-03",
@@ -255,7 +256,7 @@ describe("browser Research Draft", () => {
       neutralization: "industry",
       research_kind: "factor_evaluation",
     }, () => true)).toBe(true);
-    expect(loadResearchDraft(storage, folder.id)).toMatchObject({
+    expect(loadResearchDraft(storage, researcherId, folder.id)).toMatchObject({
       researchKind: "factor_evaluation",
       formula: "rank(close)",
       holdingsCount: "",
@@ -267,7 +268,7 @@ describe("browser Research Draft", () => {
   it("copies a Batch Research child into an ordinary browser Draft", () => {
     const storage = new MemoryStorage();
 
-    expect(useResearchAsDraft(storage, "folder_batch_research", {
+    expect(useResearchAsDraft(storage, researcherId, "folder_batch_research", {
       formula: "rank(close)",
       hypothesis: "Batch hypothesis",
       start_date: "2026-08-03",
@@ -279,7 +280,7 @@ describe("browser Research Draft", () => {
       rebalance_every_sessions: 5,
     }, () => true)).toBe(true);
 
-    expect(loadResearchDraft(storage, "folder_batch_research")).toMatchObject({
+    expect(loadResearchDraft(storage, researcherId, "folder_batch_research")).toMatchObject({
       researchKind: "strategy_backtest",
       formula: "rank(close)",
       hypothesis: "Batch hypothesis",
@@ -299,10 +300,10 @@ describe("browser Research Draft", () => {
       ...emptyResearchDraft(),
       formula: "volume",
     };
-    persistResearchDraft(storage, "folder_target", target);
+    persistResearchDraft(storage, researcherId, "folder_target", target);
     const confirmDiscard = vi.fn(() => false);
 
-    const copied = useResearchAsDraft(storage, "folder_target", {
+    const copied = useResearchAsDraft(storage, researcherId, "folder_target", {
       formula: "close",
       hypothesis: null,
       start_date: "2026-08-03",
@@ -316,7 +317,7 @@ describe("browser Research Draft", () => {
 
     expect(copied).toBe(false);
     expect(confirmDiscard).toHaveBeenCalledOnce();
-    expect(loadResearchDraft(storage, "folder_target")).toEqual(target);
+    expect(loadResearchDraft(storage, researcherId, "folder_target")).toEqual(target);
   });
 
   it("reuses one request ID for the same pending snapshot and preserves later edits on acceptance", () => {
@@ -371,51 +372,51 @@ describe("browser Research Draft", () => {
       rebalanceEverySessions: "2",
     };
     const begun = beginResearchRun(initial, folder.id, () => "run-request-1");
-    persistResearchDraft(storage, folder.id, {
+    persistResearchDraft(storage, researcherId, folder.id, {
       ...begun.draft,
       formula: "ts_mean(close, 3)",
     });
 
-    const finished = finishResearchRun(storage, folder.id, "run-request-1");
+    const finished = finishResearchRun(storage, researcherId, folder.id, "run-request-1");
     expect(finished).not.toBeNull();
     if (finished === null) throw new Error("Accepted Research was not finished");
     expect(finished.formula).toBe("ts_mean(close, 3)");
     expect(finished.lastAdmittedBaseline?.formula).toBe("ts_mean(close, 2)");
-    expect(loadResearchDraft(storage, folder.id)).toEqual(finished);
+    expect(loadResearchDraft(storage, researcherId, folder.id)).toEqual(finished);
   });
 
   it("does not accept or persist a stale response after its pending Draft was replaced", () => {
     const storage = new MemoryStorage();
     const replacement = { ...emptyResearchDraft(), formula: "close" };
-    persistResearchDraft(storage, folder.id, replacement);
+    persistResearchDraft(storage, researcherId, folder.id, replacement);
 
-    expect(finishResearchRun(storage, folder.id, "stale-request")).toBeNull();
-    expect(loadResearchDraft(storage, folder.id)).toEqual(replacement);
+    expect(finishResearchRun(storage, researcherId, folder.id, "stale-request")).toBeNull();
+    expect(loadResearchDraft(storage, researcherId, folder.id)).toEqual(replacement);
   });
 
   it("opens empty when its one Folder key is absent and round-trips the bounded payload", () => {
     const storage = new MemoryStorage();
-    const empty = loadResearchDraft(storage, folder.id);
+    const empty = loadResearchDraft(storage, researcherId, folder.id);
     expect(empty).toEqual(emptyResearchDraft());
     expect(storage.length).toBe(0);
 
     const draft = { ...empty, name: "Mean reversion", formula: "ts_mean(close, 20)", editor: { anchor: 8, head: 8 } };
-    persistResearchDraft(storage, folder.id, draft);
+    persistResearchDraft(storage, researcherId, folder.id, draft);
     expect(storage.length).toBe(1);
-    expect(storage.key(0)).toBe(researchDraftKey(folder.id));
-    expect(loadResearchDraft(storage, folder.id)).toEqual(draft);
+    expect(storage.key(0)).toBe(researchDraftKey(researcherId, folder.id));
+    expect(loadResearchDraft(storage, researcherId, folder.id)).toEqual(draft);
   });
 
   it("keeps independent Draft values under distinct Folder keys", () => {
     const storage = new MemoryStorage();
-    persistResearchDraft(storage, "folder_default", { ...emptyResearchDraft(), formula: "close" });
-    persistResearchDraft(storage, "folder_signals", { ...emptyResearchDraft(), formula: "volume" });
+    persistResearchDraft(storage, researcherId, "folder_default", { ...emptyResearchDraft(), formula: "close" });
+    persistResearchDraft(storage, researcherId, "folder_signals", { ...emptyResearchDraft(), formula: "volume" });
 
-    expect(loadResearchDraft(storage, "folder_default").formula).toBe("close");
-    expect(loadResearchDraft(storage, "folder_signals").formula).toBe("volume");
-    storage.removeItem(researchDraftKey("folder_signals"));
-    expect(loadResearchDraft(storage, "folder_default").formula).toBe("close");
-    expect(loadResearchDraft(storage, "folder_signals")).toEqual(emptyResearchDraft());
+    expect(loadResearchDraft(storage, researcherId, "folder_default").formula).toBe("close");
+    expect(loadResearchDraft(storage, researcherId, "folder_signals").formula).toBe("volume");
+    storage.removeItem(researchDraftKey(researcherId, "folder_signals"));
+    expect(loadResearchDraft(storage, researcherId, "folder_default").formula).toBe("close");
+    expect(loadResearchDraft(storage, researcherId, "folder_signals")).toEqual(emptyResearchDraft());
   });
 
   it("requires confirmation only when New would discard unexecuted inputs", () => {
@@ -428,7 +429,7 @@ describe("browser Research Draft", () => {
   });
 
   it("renders the DSL as the only Alpha surface without server-edit controls", () => {
-    const markup = renderToStaticMarkup(<ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} storage={new MemoryStorage()} />);
+    const markup = renderToStaticMarkup(<ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={new MemoryStorage()} />);
     expect(markup).toContain("Alpha formula editor");
     expect(markup).toContain('class="formula-workbench"');
     expect(markup).toContain('id="alpha-formula-title">Alpha formula</h2>');
@@ -481,13 +482,13 @@ describe("browser Research Draft", () => {
 
   it("renders required bounded Strategy inputs only for Strategy Backtest", () => {
     const storage = new MemoryStorage();
-    persistResearchDraft(storage, folder.id, {
+    persistResearchDraft(storage, researcherId, folder.id, {
       ...emptyResearchDraft(),
       researchKind: "strategy_backtest",
     });
 
     const markup = renderToStaticMarkup(
-      <ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} storage={storage} />,
+      <ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={storage} />,
     );
     expect(markup).toMatch(/<input[^>]*checked=""[^>]*value="strategy_backtest"/);
     expect(markup).toContain("Holdings count");
@@ -503,7 +504,7 @@ describe("browser Research Draft", () => {
 
   it("enables Run for one complete retained Draft", () => {
     const storage = new MemoryStorage();
-    persistResearchDraft(storage, folder.id, {
+    persistResearchDraft(storage, researcherId, folder.id, {
       ...emptyResearchDraft(),
       formula: "close",
       startDate: "2026-08-03",
@@ -515,7 +516,7 @@ describe("browser Research Draft", () => {
     });
 
     const markup = renderToStaticMarkup(
-      <ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} storage={storage} />,
+      <ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} researcherId={researcherId} storage={storage} />,
     );
     expect(markup).toContain("Run research");
     expect(markup).not.toContain('disabled="" type="button"><svg');

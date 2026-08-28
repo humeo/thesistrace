@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { coreFetch } from "../auth/coreFetch";
 import {
   DailyTrackAnalysisView,
   type DailyTrackAnalysis,
@@ -92,7 +93,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
 
     async function load(polling = false) {
       try {
-        const response = await fetch(path, { signal: controller.signal });
+        const response = await coreFetch(path, { signal: controller.signal });
         if (!response.ok) throw new Error("DailyTrack unavailable");
         if (trackId) {
           const nextTrack = (await response.json()) as DailyTrackDetail;
@@ -134,7 +135,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     if (!trackId) return;
     setRetryState("submitting");
     try {
-      const response = await fetch(`/api/daily-tracks/${trackId}/retry`, {
+      const response = await coreFetch(`/api/daily-tracks/${trackId}/retry`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ request_id: `retry_${crypto.randomUUID()}` }),
@@ -153,7 +154,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     if (!trackId) return;
     setStopState("submitting");
     try {
-      const response = await fetch(`/api/daily-tracks/${trackId}/stop`, {
+      const response = await coreFetch(`/api/daily-tracks/${trackId}/stop`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ request_id: `stop_${crypto.randomUUID()}` }),
@@ -178,7 +179,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     setDeleting(true);
     setDeleteError(null);
     try {
-      const response = await fetch(`/api/daily-tracks/${trackId}`, {
+      const response = await coreFetch(`/api/daily-tracks/${trackId}`, {
         method: "DELETE",
         signal: controller.signal,
       });

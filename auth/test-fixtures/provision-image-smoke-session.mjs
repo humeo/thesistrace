@@ -1,13 +1,23 @@
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+
+const { Client } = createRequire("/app/auth/package.json")("pg");
 
 const authOrigin = "http://127.0.0.1:8200";
 const resendOrigin = "http://resend-fake:8300";
-const password = "correct-horse-battery-staple";
+const password = process.argv[3] ?? "correct-horse-battery-staple";
+const clientIp = process.argv[4] ?? "127.0.0.1";
 const email = process.argv[2];
 
 try {
   if (typeof email !== "string" || email.length === 0) {
     throw new Error("EMAIL_REQUIRED");
+  }
+  if (password.length < 12 || password.length > 128) {
+    throw new Error("PASSWORD_INVALID");
+  }
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(clientIp)) {
+    throw new Error("CLIENT_IP_INVALID");
   }
   const publicOrigin = process.env.THESISTRACE_PUBLIC_ORIGIN;
   if (typeof publicOrigin !== "string" || publicOrigin.length === 0) {
@@ -40,7 +50,7 @@ try {
       headers: {
         "content-type": "application/json",
         origin: publicOrigin,
-        "x-thesistrace-client-ip": "127.0.0.1",
+        "x-thesistrace-client-ip": clientIp,
       },
       body: JSON.stringify({ token, password }),
     },
@@ -72,6 +82,7 @@ try {
   ) {
     throw new Error("SESSION_RESEARCHER_INVALID");
   }
+  await resetTestRateLimits();
   process.stdout.write(
     `${JSON.stringify({ cookie, researcher_id: body.researcher_id })}\n`,
   );
@@ -79,6 +90,19 @@ try {
   const code = error instanceof Error ? error.message : "SESSION_PROVISION_FAILED";
   process.stderr.write(`${JSON.stringify({ code, status: "failed" })}\n`);
   process.exitCode = 1;
+}
+
+async function resetTestRateLimits() {
+  if (process.env.THESISTRACE_ENVIRONMENT !== "test") {
+    throw new Error("RATE_LIMIT_RESET_REQUIRES_TEST_ENVIRONMENT");
+  }
+  const client = new Client({ connectionString: process.env.THESISTRACE_AUTH_DATABASE_URL });
+  try {
+    await client.connect();
+    await client.query('DELETE FROM auth."rateLimit"');
+  } finally {
+    await client.end();
+  }
 }
 
 async function expectStatus(responsePromise, expected, code) {

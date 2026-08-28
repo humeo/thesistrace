@@ -257,10 +257,10 @@ exit 0
 """
     )
     uv.chmod(0o755)
-    bun = tmp_path / "bun"
-    bun.write_text(
+    pnpm = tmp_path / "pnpm"
+    pnpm.write_text(
         """#!/bin/sh
-printf 'bun %s origin=%s evidence=%s\\n' \
+printf 'pnpm %s origin=%s evidence=%s\\n' \
   "$*" "$THESISTRACE_TEST_WEB_ORIGIN" "$THESISTRACE_TEST_EVIDENCE_DIR" \
   >> "$TEST_COMMAND_LOG"
 mkdir -p "$THESISTRACE_TEST_EVIDENCE_DIR/playwright-report"
@@ -276,7 +276,7 @@ fi
 exit "${FAKE_PLAYWRIGHT_STATUS:-0}"
 """
     )
-    bun.chmod(0o755)
+    pnpm.chmod(0o755)
     curl = tmp_path / "curl"
     curl.write_text(
         """#!/bin/sh
@@ -1107,7 +1107,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
         for line in metadata.splitlines()
         if line.startswith("public_origin=")
     )
-    assert f"bun run --cwd web test:e2e origin={public_origin}" in commands
+    assert f"pnpm --dir web test:e2e origin={public_origin}" in commands
     assert "thesistrace-api" not in commands
     assert "thesistrace-worker" not in commands
     assert "vite --host" not in commands
@@ -1343,7 +1343,7 @@ def test_failed_e2e_groups_playwright_and_compose_evidence_before_cleanup(
     assert (evidence / "compose-logs.txt").exists()
     assert (evidence / "container-inspect.txt").exists()
     commands = command_log.read_text()
-    assert commands.index("bun run --cwd web test:e2e") < commands.index("ps --all")
+    assert commands.index("pnpm --dir web test:e2e") < commands.index("ps --all")
     assert commands.index("ps --all") < commands.index("down --volumes")
 
 

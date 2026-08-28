@@ -1,3 +1,5 @@
+import { coreFetch } from "../auth/coreFetch";
+
 export type SourcePosition = { offset: number; line: number; column: number };
 export type FormulaDiagnostic = {
   code: string;
@@ -13,7 +15,7 @@ export type DiagnosticState =
   | { kind: "unavailable"; result: null };
 
 export function createDiagnosticsScheduler(
-  request: typeof fetch = fetch,
+  request: typeof fetch = coreFetch,
   delayMilliseconds = 300,
 ) {
   let generation = 0;
