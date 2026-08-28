@@ -623,6 +623,17 @@ def test_development_watch_assigns_service_appropriate_actions() -> None:
     assert "target: /app/src" in development
     assert "path: ../../auth" in development
     assert "path: ./Dockerfile.auth" in development
+    for service, next_service in (
+        ("research-worker", "batch-research-worker"),
+        ("batch-research-worker", "tracking-worker"),
+        ("tracking-worker", "web"),
+    ):
+        assert f"  {service}:\n" in development
+        section = development.split(f"  {service}:\n", maxsplit=1)[1].split(
+            f"  {next_service}:\n", maxsplit=1
+        )[0]
+        assert "action: sync+restart" in section
+        assert "target: /app/src" in section
 
 
 @pytest.mark.parametrize("wrapper_signal", (signal.SIGINT, signal.SIGTERM))
