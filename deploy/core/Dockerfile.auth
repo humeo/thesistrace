@@ -12,7 +12,8 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 COPY auth ./auth
 RUN rm -rf /app/auth/dist /app/auth/tsconfig.tsbuildinfo \
     && pnpm --dir auth build
-RUN pnpm --filter thesistrace-auth deploy --prod /auth-runtime
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm --filter thesistrace-auth deploy --prod /auth-runtime
 
 FROM node:24.14.0-bookworm-slim
 

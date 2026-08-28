@@ -1,0 +1,34 @@
+{$THESISTRACE_PUBLIC_ORIGIN} {
+	{$THESISTRACE_CADDY_TLS_DIRECTIVE}
+
+	root * /srv
+
+	@private_backend {
+		path /health /health/* /internal /internal/*
+	}
+	handle @private_backend {
+		respond 404
+	}
+
+	handle /api/auth/* {
+		header Cache-Control "no-store"
+		reverse_proxy auth:8200
+	}
+
+	handle /api/* {
+		header Cache-Control "no-store"
+		reverse_proxy api:8100
+	}
+
+	@hashed_assets path_regexp hashed ^/assets/.+-[A-Za-z0-9_-]{8,}\.[^/]+$
+	handle @hashed_assets {
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	handle {
+		header Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}

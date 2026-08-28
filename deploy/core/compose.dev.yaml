@@ -37,6 +37,20 @@ services:
         - path: ./Dockerfile.backend
           action: rebuild
 
+  auth:
+    develop:
+      watch:
+        - path: ../../auth
+          action: rebuild
+        - path: ../../package.json
+          action: rebuild
+        - path: ../../pnpm-lock.yaml
+          action: rebuild
+        - path: ../../pnpm-workspace.yaml
+          action: rebuild
+        - path: ./Dockerfile.auth
+          action: rebuild
+
   research-worker:
     develop:
       watch:
@@ -77,15 +91,7 @@ services:
     develop:
       watch:
         - path: ../../web
-          action: sync
-          target: /app/web
-          initial_sync: true
-          ignore:
-            - package.json
-            - node_modules/
-            - dist/
-            - test-results/
-            - playwright-report/
+          action: rebuild
         - path: ../../package.json
           action: rebuild
         - path: ../../pnpm-lock.yaml

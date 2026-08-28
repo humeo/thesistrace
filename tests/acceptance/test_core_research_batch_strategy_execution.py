@@ -403,7 +403,7 @@ def test_real_postgres_loss_reuses_acknowledged_private_artifact(
     restarted_settings = replace(
         settings,
         database_url=(
-            "postgresql://thesistrace:thesistrace-test@127.0.0.1:"
+            "postgresql://thesistrace_owner:owner-test-password@127.0.0.1:"
             f"{restarted_postgres_port}/thesistrace"
         ),
     )

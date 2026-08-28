@@ -7,6 +7,14 @@ test_file="$repo_root/deploy/core/compose.test-run.yaml"
 image_smoke_file="$repo_root/deploy/core/compose.image-smoke.yaml"
 state_root=${THESISTRACE_TEST_STATE_ROOT:-"$repo_root/.local/test-runs"}
 canonical_prefix=thesistrace-test-
+locked_port_allocator="$repo_root/scripts/locked-loopback-port"
+rustfs_readiness_probe="$repo_root/scripts/probe-rustfs-ready"
+runtime_root=${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}
+port_lock_root=${THESISTRACE_TEST_PORT_LOCK_ROOT:-"$runtime_root/thesistrace-$(id -u)/caddy-port-locks"}
+owner_database_password=owner-test-password
+core_database_password=core-test-password
+auth_database_password=auth-test-password
+compose_cleanup_required=true
 
 new_run_id() {
   timestamp=$(date -u +%Y%m%dt%H%M%Sz)
@@ -42,6 +50,37 @@ validate_cleanup_target() {
   fi
 }
 
+set_test_origin() {
+  case "${caddy_port:-}" in
+    '' | *[!0-9]*)
+      echo "invalid Test Caddy port" >&2
+      exit 2
+      ;;
+  esac
+  public_origin="http://127.0.0.1:$caddy_port"
+  auth_secret="test-only-$run_id-auth-secret-with-at-least-32-characters"
+}
+
+load_test_origin() {
+  caddy_port=$(sed -n 's/^caddy_port=//p' "$target_metadata")
+  test -n "$caddy_port" || {
+    echo "missing Test Caddy port metadata: $project_name" >&2
+    exit 2
+  }
+  set_test_origin
+}
+
+acquire_test_origin() {
+  caddy_port=$(uv run python "$locked_port_allocator" acquire \
+    --lock-root "$port_lock_root" --owner "$project_name")
+  set_test_origin
+}
+
+release_test_origin() {
+  uv run python "$locked_port_allocator" release \
+    --lock-root "$port_lock_root" --owner "$project_name" --port "$caddy_port"
+}
+
 compose() {
   validate_test_project
   if [ "${command:-}" = image-smoke ] \
@@ -52,6 +91,14 @@ compose() {
       THESISTRACE_TEST_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
       THESISTRACE_TEST_RUN_ROOT="$run_root" \
       THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
+      THESISTRACE_TEST_CADDY_PORT="$caddy_port" \
+      THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
+      THESISTRACE_ENVIRONMENT=test \
+      THESISTRACE_OWNER_DATABASE_PASSWORD="$owner_database_password" \
+      THESISTRACE_CORE_DATABASE_PASSWORD="$core_database_password" \
+      THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
+      THESISTRACE_AUTH_IMAGE="$project_name-auth" \
+      BETTER_AUTH_SECRET="$auth_secret" \
       docker compose \
       --project-name "$project_name" \
       --file "$base_file" \
@@ -63,6 +110,14 @@ compose() {
       THESISTRACE_TEST_BUCKET="$bucket_name" \
       THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
       THESISTRACE_TEST_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
+      THESISTRACE_TEST_CADDY_PORT="$caddy_port" \
+      THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
+      THESISTRACE_ENVIRONMENT=test \
+      THESISTRACE_OWNER_DATABASE_PASSWORD="$owner_database_password" \
+      THESISTRACE_CORE_DATABASE_PASSWORD="$core_database_password" \
+      THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
+      THESISTRACE_AUTH_IMAGE="$project_name-auth" \
+      BETTER_AUTH_SECRET="$auth_secret" \
       docker compose \
       --project-name "$project_name" \
       --file "$base_file" \
@@ -74,6 +129,14 @@ compose() {
 base_compose() {
   validate_test_project
   COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
+    THESISTRACE_TEST_CADDY_PORT="$caddy_port" \
+    THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
+    THESISTRACE_ENVIRONMENT=test \
+    THESISTRACE_OWNER_DATABASE_PASSWORD="$owner_database_password" \
+    THESISTRACE_CORE_DATABASE_PASSWORD="$core_database_password" \
+    THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
+    THESISTRACE_AUTH_IMAGE="$project_name-auth" \
+    BETTER_AUTH_SECRET="$auth_secret" \
     docker compose \
     --project-name "$project_name" \
     --file "$base_file" \
@@ -85,8 +148,21 @@ runtime_image_name() {
   printf '%s-%s\n' "$project_name" "$image_service"
 }
 
+cleanup_runtime_images() {
+  runtime_images_status=0
+  for image_service in \
+    api research-worker batch-research-worker tracking-worker \
+    initialize auth web; do
+    image_name=$(runtime_image_name "$image_service")
+    if docker image inspect "$image_name" >/dev/null 2>&1; then
+      docker image rm "$image_name" >/dev/null || runtime_images_status=$?
+    fi
+  done
+  return "$runtime_images_status"
+}
+
 build_runtime_images() {
-  compose build initialize web
+  compose build initialize auth-initialize web
   built_backend_image=$(runtime_image_name initialize)
   docker image tag "$built_backend_image" "$(runtime_image_name api)"
   docker image tag "$built_backend_image" "$(runtime_image_name research-worker)"
@@ -109,7 +185,8 @@ mapped_port() {
 }
 
 run_with_environment() {
-  THESISTRACE_DATABASE_URL="postgresql://thesistrace:thesistrace-test@127.0.0.1:$postgres_port/thesistrace" \
+  THESISTRACE_DATABASE_URL="postgresql://thesistrace_owner:$owner_database_password@127.0.0.1:$postgres_port/thesistrace" \
+  THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
   THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
   THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
   THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
@@ -122,10 +199,11 @@ run_with_environment() {
 }
 
 run_playwright() {
-  THESISTRACE_TEST_WEB_ORIGIN="http://127.0.0.1:$web_port" \
+  THESISTRACE_TEST_WEB_ORIGIN="$public_origin" \
   THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
   THESISTRACE_TEST_PROJECT_NAME="$project_name" \
-  THESISTRACE_DATABASE_URL="postgresql://thesistrace:thesistrace-test@127.0.0.1:$postgres_port/thesistrace" \
+  THESISTRACE_DATABASE_URL="postgresql://thesistrace_owner:$owner_database_password@127.0.0.1:$postgres_port/thesistrace" \
+  THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
   THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
   THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
   THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
@@ -177,11 +255,45 @@ verify_image_health() {
   suffix=$1
   compose run --rm --no-deps -T \
     -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-    -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+    -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
     -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
     initialize python /smoke/production_image_smoke.py health \
     >"$evidence_dir/health-$suffix.json" \
     2>"$evidence_dir/health-$suffix.stderr.log"
+}
+
+verify_caddy_single_origin() {
+  curl --fail --silent --show-error "$public_origin/data" \
+    >"$evidence_dir/caddy-spa.html"
+  curl --fail --silent --show-error "$public_origin/login" \
+    >"$evidence_dir/caddy-spa-fallback.html"
+  cmp "$evidence_dir/caddy-spa.html" "$evidence_dir/caddy-spa-fallback.html"
+  curl --fail --silent --show-error "$public_origin/api/auth/ok" \
+    >"$evidence_dir/caddy-auth.json"
+  grep -Fqx '{"ok":true}' "$evidence_dir/caddy-auth.json"
+  curl --fail --silent --show-error "$public_origin/api/data" \
+    >"$evidence_dir/caddy-core.json"
+
+  for private_path in /health/live /health/ready /internal/session/verify; do
+    private_status=$(curl --silent --show-error \
+      --output /dev/null --write-out '%{http_code}' \
+      "$public_origin$private_path")
+    test "$private_status" = 404
+  done
+}
+
+verify_caddy_backend_independence() {
+  compose stop auth api >/dev/null
+  curl --fail --silent --show-error "$public_origin/data" \
+    >"$evidence_dir/caddy-backends-unavailable.html"
+  auth_status=$(curl --silent --show-error \
+    --output /dev/null --write-out '%{http_code}' "$public_origin/api/auth/ok")
+  core_status=$(curl --silent --show-error \
+    --output /dev/null --write-out '%{http_code}' "$public_origin/api/data")
+  test "$auth_status" = 502
+  test "$core_status" = 502
+  compose up --detach --no-build --wait --wait-timeout 120 auth api
+  verify_caddy_single_origin
 }
 
 verify_service_readiness_outage() {
@@ -192,7 +304,7 @@ verify_service_readiness_outage() {
   compose stop "$service" >/dev/null
   compose run --rm --no-deps -T \
     -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-    -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+    -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
     -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
     -e THESISTRACE_TEST_UNAVAILABLE_DEPENDENCY="$dependency" \
     initialize python /smoke/production_image_smoke.py readiness-outage \
@@ -220,7 +332,7 @@ verify_dataset_readiness_outage() {
   mv "$data_mount" "$unavailable_mount"
   compose run --rm --no-deps -T \
     -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-    -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+    -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
     -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
     -e THESISTRACE_TEST_UNAVAILABLE_DEPENDENCY=dataset_store \
     initialize python /smoke/production_image_smoke.py readiness-outage \
@@ -357,29 +469,49 @@ print(json.dumps({
 }
 
 reset_product_state() {
-  compose stop api research-worker batch-research-worker tracking-worker postgres rustfs >/dev/null 2>&1 || true
-  compose rm --force api research-worker batch-research-worker tracking-worker initialize postgres rustfs \
+  compose stop auth api research-worker batch-research-worker tracking-worker postgres rustfs \
+    >/dev/null 2>&1 || true
+  compose rm --force auth auth-initialize api research-worker batch-research-worker \
+    tracking-worker initialize postgres rustfs \
     >/dev/null 2>&1 || true
   "$repo_root/scripts/product-state-volumes" reset "$project_name"
-  compose up --detach --no-build --wait --wait-timeout 300 postgres rustfs initialize
-  compose wait initialize
+  compose up --detach --no-build --wait --wait-timeout 300 postgres rustfs
+  compose up --detach --no-build initialize auth-initialize
+  compose wait initialize auth-initialize
 }
 
 cleanup_project() {
   validate_cleanup_target
+  load_test_origin
   compose_status=0
-  compose down --volumes --remove-orphans || compose_status=$?
   product_state_status=0
-  "$repo_root/scripts/product-state-volumes" reset "$project_name" \
-    || product_state_status=$?
+  image_status=0
+  if [ "$compose_cleanup_required" = true ]; then
+    compose down --volumes --remove-orphans || compose_status=$?
+    "$repo_root/scripts/product-state-volumes" reset "$project_name" \
+      || product_state_status=$?
+    if [ "$compose_status" -eq 0 ]; then
+      cleanup_runtime_images || image_status=$?
+    fi
+  fi
   mount_status=0
   rm -rf -- "$state_root/$run_id/canonical-data" || mount_status=$?
   rm -rf -- "$state_root/$run_id/batch-attempt-control" || mount_status=$?
+  port_lock_status=0
+  if [ "$compose_status" -eq 0 ]; then
+    release_test_origin || port_lock_status=$?
+  fi
   if [ "$compose_status" -ne 0 ]; then
     return "$compose_status"
   fi
   if [ "$product_state_status" -ne 0 ]; then
     return "$product_state_status"
+  fi
+  if [ "$image_status" -ne 0 ]; then
+    return "$image_status"
+  fi
+  if [ "$port_lock_status" -ne 0 ]; then
+    return "$port_lock_status"
   fi
   return "$mount_status"
 }
@@ -449,7 +581,9 @@ finish() {
     printf 'failure_canary_scan_status=%s\n' \
       "$failure_canary_scan_status" >>"$run_metadata"
   fi
-  if [ "$status" -ne 0 ] && [ "$keep_environment" = true ]; then
+  if [ "$status" -ne 0 ] \
+    && [ "$keep_environment" = true ] \
+    && [ "$compose_cleanup_required" = true ]; then
     echo "preserved failing Test project $project_name" >&2
     printf 'cleanup_status=kept\n' >>"$run_metadata"
   else
@@ -489,6 +623,7 @@ case "$command" in
     data_mount="$state_root/$run_id/canonical-data"
     batch_attempt_control_directory="$state_root/$run_id/batch-attempt-control/.batch-attempts"
     validate_cleanup_target
+    load_test_origin
     service=postgres
     if [ "$command" = stop-rustfs ] || [ "$command" = restart-rustfs ]; then
       service=rustfs
@@ -501,7 +636,8 @@ case "$command" in
     readiness_attempt=0
     until {
       if [ "$service" = postgres ]; then
-        compose exec -T postgres pg_isready -U thesistrace -d thesistrace >/dev/null 2>&1
+        compose exec -T postgres pg_isready -U thesistrace_owner -d thesistrace \
+          >/dev/null 2>&1
       else
         compose exec -T rustfs sh -c \
           'curl -fsS http://127.0.0.1:9000/health' >/dev/null 2>&1
@@ -517,7 +653,20 @@ case "$command" in
     if [ "$service" = postgres ]; then
       mapped_port postgres 5432
     else
-      mapped_port rustfs 9000
+      s3_port=$(mapped_port rustfs 9000)
+      s3_readiness_attempt=0
+      until THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
+        THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
+        THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
+        uv run python "$rustfs_readiness_probe" >/dev/null 2>&1; do
+        s3_readiness_attempt=$((s3_readiness_attempt + 1))
+        if [ "$s3_readiness_attempt" -ge 60 ]; then
+          echo "RustFS S3 API did not become ready after restart" >&2
+          exit 1
+        fi
+        sleep 0.25
+      done
+      printf '%s\n' "$s3_port"
     fi
     exit 0
     ;;
@@ -567,6 +716,11 @@ fi
 printf 'run_id=%s\nproject_name=%s\ngit_revision=%s\ngit_worktree_dirty=%s\n' \
   "$run_id" "$project_name" "$git_revision" "$git_worktree_dirty" >"$run_metadata"
 printf 'test_kind=%s\n' "$command" >>"$run_metadata"
+compose_cleanup_required=false
+acquire_test_origin
+trap release_test_origin EXIT
+printf 'caddy_port=%s\npublic_origin=%s\n' \
+  "$caddy_port" "$public_origin" >>"$run_metadata"
 echo "Test run: $run_id"
 echo "Compose project: $project_name"
 
@@ -577,6 +731,7 @@ trap 'handle_signal 130' INT
 trap 'handle_signal 143' TERM
 
 compose config --quiet
+compose_cleanup_required=true
 case "$command" in
   integration-batch-cancel)
     run_phase integration-batch-cancel-infrastructure compose up --detach \
@@ -726,9 +881,10 @@ case "$command" in
   e2e)
     run_phase e2e-images build_runtime_images
     run_phase e2e-infrastructure compose up --detach --no-build \
-      --wait --wait-timeout 300 \
-      postgres rustfs initialize
-    run_phase e2e-initialization compose wait initialize
+      --wait --wait-timeout 300 postgres rustfs
+    run_phase e2e-initializers compose up --detach --no-build \
+      initialize auth-initialize
+    run_phase e2e-initialization compose wait initialize auth-initialize
     postgres_port=$(mapped_port postgres 5432)
     s3_port=$(mapped_port rustfs 9000)
     run_phase e2e-operator-bootstrap run_with_environment uv run \
@@ -741,11 +897,10 @@ case "$command" in
       tests/browser/prepare_current_data.py
     run_phase e2e-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
-      api research-worker batch-research-worker tracking-worker web
-    api_port=$(mapped_port api 8100)
-    web_port=$(mapped_port web 5173)
-    printf 'postgres_port=%s\ns3_port=%s\napi_port=%s\nweb_port=%s\n' \
-      "$postgres_port" "$s3_port" "$api_port" "$web_port" >>"$run_metadata"
+      auth api research-worker batch-research-worker tracking-worker web
+    printf 'postgres_port=%s\ns3_port=%s\n' \
+      "$postgres_port" "$s3_port" >>"$run_metadata"
+    run_phase e2e-caddy-single-origin verify_caddy_single_origin
     run_phase e2e-playwright run_playwright bun run --cwd web test:e2e
     ;;
   image-smoke)
@@ -758,9 +913,10 @@ case "$command" in
     run_phase image-smoke-research-child-cgroup-oom \
       verify_research_child_cgroup_oom_detection
     run_phase image-smoke-infrastructure compose up --detach --no-build \
-      --wait --wait-timeout 300 \
-      postgres rustfs initialize
-    run_phase image-smoke-initialization compose wait initialize
+      --wait --wait-timeout 300 postgres rustfs
+    run_phase image-smoke-initializers compose up --detach --no-build \
+      initialize auth-initialize
+    run_phase image-smoke-initialization compose wait initialize auth-initialize
     run_phase image-smoke-operator-bootstrap compose run --rm --no-deps -T initialize \
       thesistrace-data-operator bootstrap \
       --idempotency-key financial-release-bootstrap \
@@ -771,8 +927,11 @@ case "$command" in
       python /smoke/browser/prepare_image_smoke_data.py
     run_phase image-smoke-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
-      api web
+      auth api web
     run_phase image-smoke-health verify_image_health initial
+    run_phase image-smoke-caddy-single-origin verify_caddy_single_origin
+    run_phase image-smoke-caddy-backend-independence \
+      verify_caddy_backend_independence
     run_phase image-smoke-postgresql-readiness \
       verify_service_readiness_outage postgres postgresql
     run_phase image-smoke-rustfs-readiness \
@@ -791,7 +950,7 @@ case "$command" in
     compose ps --all >"$evidence_dir/compose-ps-before-restart.txt"
     run_phase image-smoke-before compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
       -e THESISTRACE_TEST_IMAGE_ID="$image_revision" \
       initialize python /smoke/production_image_smoke.py before \
@@ -800,7 +959,7 @@ case "$command" in
     run_phase image-smoke-worker-loss compose kill research-worker
     run_phase image-smoke-expire-worker-loss compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
       initialize python /smoke/production_image_smoke.py expire-worker-loss \
       >"$evidence_dir/smoke-expire-worker-loss.json" \
@@ -814,7 +973,7 @@ case "$command" in
       --wait --wait-timeout 120 api tracking-worker
     run_phase image-smoke-checkpointed compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
       initialize python /smoke/production_image_smoke.py checkpointed \
       >"$evidence_dir/smoke-checkpointed.json" \
@@ -823,7 +982,7 @@ case "$command" in
       --wait --wait-timeout 120 research-worker
     run_phase image-smoke-recovered compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
       initialize python /smoke/production_image_smoke.py recovered \
       >"$evidence_dir/smoke-recovered.json" \
@@ -837,7 +996,7 @@ case "$command" in
       --wait --wait-timeout 120 api research-worker batch-research-worker tracking-worker
     run_phase image-smoke-persisted compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
       initialize python /smoke/production_image_smoke.py persisted \
       >"$evidence_dir/smoke-persisted.json" \
@@ -849,7 +1008,7 @@ case "$command" in
       2>"$evidence_dir/transient-target.stderr.log"
     run_phase image-smoke-transient-failed compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
       initialize python /smoke/production_image_smoke.py transient-failed \
       >"$evidence_dir/smoke-transient-failed.json" \
@@ -858,7 +1017,7 @@ case "$command" in
       --wait --wait-timeout 120 rustfs
     run_phase image-smoke-after compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
       initialize python /smoke/production_image_smoke.py after \
       >"$evidence_dir/smoke-after.json" \
@@ -866,7 +1025,7 @@ case "$command" in
     run_phase image-smoke-reset-worker-stop compose stop research-worker batch-research-worker
     run_phase image-smoke-reset-ready compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
       initialize python /smoke/production_image_smoke.py reset-ready \
       >"$evidence_dir/smoke-reset-ready.json" \
@@ -875,7 +1034,7 @@ case "$command" in
     run_phase image-smoke-api-logs capture_api_log_evidence
     run_phase image-smoke-worker-event-contract compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
       -e THESISTRACE_TEST_WORKER_EVENTS=/smoke-evidence/worker-events.jsonl \
       initialize python /smoke/production_image_smoke.py worker-events \
@@ -883,10 +1042,10 @@ case "$command" in
       2>"$evidence_dir/smoke-worker-events.stderr.log"
     run_phase image-smoke-product-state-reset reset_product_state
     run_phase image-smoke-reset-api compose up --detach --no-build \
-      --wait --wait-timeout 120 api
+      --wait --wait-timeout 120 auth api
     run_phase image-smoke-reset-verified compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
       initialize python /smoke/production_image_smoke.py reset \
       >"$evidence_dir/smoke-reset.json" \
@@ -895,7 +1054,7 @@ case "$command" in
     run_phase image-smoke-bounded-evidence capture_evidence
     run_phase image-smoke-observability compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
       -e THESISTRACE_TEST_API_EVENTS=/smoke-evidence/api-events.jsonl \
       -e THESISTRACE_TEST_WORKER_EVENTS=/smoke-evidence/worker-events.jsonl \

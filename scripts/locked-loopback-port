@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import re
+import socket
+from pathlib import Path
+
+FIRST_PORT = 42000
+PORT_COUNT = 8000
+OWNER_PATTERN = re.compile(r"^thesistrace-test-[a-z0-9-]+$")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    acquire = subparsers.add_parser("acquire")
+    acquire.add_argument("--lock-root", required=True, type=Path)
+    acquire.add_argument("--owner", required=True)
+
+    release = subparsers.add_parser("release")
+    release.add_argument("--lock-root", required=True, type=Path)
+    release.add_argument("--owner", required=True)
+    release.add_argument("--port", required=True, type=int)
+
+    arguments = parser.parse_args()
+    _validate_owner(arguments.owner)
+    if arguments.command == "acquire":
+        print(_acquire(arguments.lock_root, arguments.owner))
+        return
+    _release(arguments.lock_root, arguments.owner, arguments.port)
+
+
+def _acquire(lock_root: Path, owner: str) -> int:
+    lock_root.mkdir(parents=True, exist_ok=True)
+    start = int.from_bytes(hashlib.sha256(owner.encode()).digest()[:4]) % PORT_COUNT
+    for offset in range(PORT_COUNT):
+        port = FIRST_PORT + ((start + offset) % PORT_COUNT)
+        lock = lock_root / str(port)
+        try:
+            lock.mkdir()
+        except FileExistsError:
+            continue
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(("127.0.0.1", port))
+            (lock / "owner").write_text(f"{owner}\n")
+            return port
+        except OSError:
+            lock.rmdir()
+    raise RuntimeError("no locked loopback port is available")
+
+
+def _release(lock_root: Path, owner: str, port: int) -> None:
+    if port < FIRST_PORT or port >= FIRST_PORT + PORT_COUNT:
+        raise RuntimeError("refusing loopback port outside the allocator range")
+    lock = lock_root / str(port)
+    owner_file = lock / "owner"
+    if lock.is_symlink() or owner_file.is_symlink():
+        raise RuntimeError("refusing symbolic-link loopback port lock")
+    if owner_file.read_text() != f"{owner}\n":
+        raise RuntimeError("refusing loopback port lock owned by another project")
+    owner_file.unlink()
+    lock.rmdir()
+
+
+def _validate_owner(owner: str) -> None:
+    if OWNER_PATTERN.fullmatch(owner) is None:
+        raise RuntimeError("invalid loopback port lock owner")
+
+
+if __name__ == "__main__":
+    main()

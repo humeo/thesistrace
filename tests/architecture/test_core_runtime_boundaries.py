@@ -387,8 +387,10 @@ def test_canonical_compose_pins_external_infrastructure_images() -> None:
     assert "postgres:16.10-alpine" in compose
     assert "rustfs/rustfs:1.0.0-beta.12" in compose
     assert ":latest" not in compose
-    for forbidden in ("sqlite", "temporal", "object-store", "auth"):
+    for forbidden in ("sqlite", "temporal", "object-store"):
         assert forbidden not in compose.lower()
+    assert "  auth-initialize:\n" in compose
+    assert "  auth:\n" in compose
 
 
 def test_web_shell_declares_only_the_four_product_resources() -> None:
@@ -576,7 +578,6 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
     retired_tokens = (
         "ins" + "forge",
         "cloud" + "flare",
-        "cad" + "dy",
         "personal " + "workspace",
         "thesistrace_auth_" + "mode",
         "auth_" + "mode",

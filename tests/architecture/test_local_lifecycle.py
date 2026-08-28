@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -87,6 +88,11 @@ arguments = sys.argv[1:]
 log = Path(os.environ["TEST_COMMAND_LOG"])
 with log.open("a") as stream:
     stream.write(f"docker {' '.join(arguments)}\\n")
+backend_marker = Path(os.environ["FAKE_BACKEND_MARKER"])
+if "stop" in arguments and "auth" in arguments and "api" in arguments:
+    backend_marker.write_text("stopped")
+if "up" in arguments and "auth" in arguments and "api" in arguments:
+    backend_marker.unlink(missing_ok=True)
 if arguments[0] == "inspect":
     print("container inspection")
     raise SystemExit(0)
@@ -98,9 +104,13 @@ if arguments[:2] == ["image", "tag"]:
 if arguments[:2] == ["image", "inspect"]:
     print("sha256:test-image")
     raise SystemExit(0)
+if arguments[:2] == ["image", "rm"]:
+    raise SystemExit(0)
 if arguments[0] == "run" and "--project-name" not in arguments:
     print('{"classified":true,"child_returncode":-9}')
     raise SystemExit(0)
+if "config" in arguments and os.environ.get("FAKE_CONFIG_STATUS"):
+    raise SystemExit(int(os.environ["FAKE_CONFIG_STATUS"]))
 
 project = arguments[arguments.index("--project-name") + 1]
 if "up" in arguments:
@@ -191,6 +201,12 @@ terminate_fake_pytest() {
   exit 143
 }
 trap terminate_fake_pytest TERM
+case "${3:-}" in
+  */locked-loopback-port)
+    shift 2
+    exec python3 "$@"
+    ;;
+esac
 printf 'uv %s db=%s s3=%s bucket=%s\\n' \
   "$*" "$THESISTRACE_DATABASE_URL" "$THESISTRACE_S3_ENDPOINT_URL" \
   "$THESISTRACE_S3_BUCKET" >> "$TEST_COMMAND_LOG"
@@ -241,12 +257,71 @@ exit "${FAKE_PLAYWRIGHT_STATUS:-0}"
 """
     )
     bun.chmod(0o755)
+    curl = tmp_path / "curl"
+    curl.write_text(
+        """#!/bin/sh
+set -eu
+output=
+write_out=false
+fail=false
+url=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output|-o)
+      output=$2
+      shift 2
+      ;;
+    --write-out|-w)
+      write_out=true
+      shift 2
+      ;;
+    --fail|-f)
+      fail=true
+      shift
+      ;;
+    http://*)
+      url=$1
+      shift
+      ;;
+    *) shift ;;
+  esac
+done
+status=200
+body='<html><div id="root"></div></html>'
+case "$url" in
+  */health/*|*/internal/*) status=404; body='' ;;
+  */api/auth/ok) body='{"ok":true}' ;;
+  */api/data) body='{}' ;;
+esac
+if [ -f "$FAKE_BACKEND_MARKER" ]; then
+  case "$url" in
+    */api/auth/*|*/api/*) status=502; body='' ;;
+  esac
+fi
+if [ -n "$output" ]; then
+  if [ "$output" != /dev/null ]; then
+    printf '%s\\n' "$body" >"$output"
+  fi
+else
+  printf '%s\\n' "$body"
+fi
+if [ "$write_out" = true ]; then
+  printf '%s' "$status"
+fi
+if [ "$fail" = true ] && [ "$status" -ge 400 ]; then
+  exit 22
+fi
+"""
+    )
+    curl.chmod(0o755)
     environment = {
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "FAKE_BACKEND_MARKER": str(tmp_path / "backends-stopped"),
         "TEST_COMMAND_LOG": str(command_log),
         "TEST_PORT_MAP": str(tmp_path / "ports.json"),
         "THESISTRACE_TEST_STATE_ROOT": str(tmp_path / "runs"),
+        "THESISTRACE_TEST_PORT_LOCK_ROOT": str(tmp_path / "port-locks"),
     }
     return command_log, environment
 
@@ -366,6 +441,8 @@ def test_development_topology_declares_every_core_service_and_pinned_infrastruct
     for service in (
         "postgres",
         "rustfs",
+        "auth-initialize",
+        "auth",
         "initialize",
         "api",
         "research-worker",
@@ -419,9 +496,12 @@ def test_every_compose_service_uses_bounded_docker_json_logs() -> None:
     for service in (
         "postgres",
         "rustfs",
+        "auth-initialize",
+        "auth",
         "initialize",
         "api",
         "research-worker",
+        "batch-research-worker",
         "tracking-worker",
         "web",
     ):
@@ -504,11 +584,12 @@ def test_container_builds_exclude_host_dependency_directories() -> None:
     assert backend.index("COPY src ./src") < backend.rindex("uv sync --frozen --no-dev")
     assert "--mount=type=cache,target=/root/.cache/uv" in backend
     assert "node:24.14.0-bookworm-slim" in web
-    assert "nginx:1.27.5-alpine" in web
+    assert "caddy:2.11.4-alpine" in web
     assert "pnpm@11.9.0" in web
     assert "--mount=type=cache,target=/root/.local/share/pnpm/store" in web
     assert "pnpm --dir web build" in web
-    assert "COPY --from=build /app/web/dist" in web
+    assert "COPY --from=build /app/web/dist /srv" in web
+    assert "caddy validate --config /etc/caddy/Caddyfile" in web
 
 
 def test_development_watch_assigns_service_appropriate_actions() -> None:
@@ -519,9 +600,9 @@ def test_development_watch_assigns_service_appropriate_actions() -> None:
     assert "action: sync+restart" in development
     assert "action: sync" in development
     assert "action: rebuild" in development
-    assert "node_modules/" in development
     assert "target: /app/src" in development
-    assert "target: /app/web" in development
+    assert "path: ../../auth" in development
+    assert "path: ./Dockerfile.auth" in development
 
 
 @pytest.mark.parametrize("wrapper_signal", (signal.SIGINT, signal.SIGTERM))
@@ -674,12 +755,103 @@ def test_integration_command_generates_unique_test_identities() -> None:
     assert "thesistrace-dev" not in projects
 
 
+def test_parallel_worktrees_share_one_caddy_port_lock_namespace(
+    tmp_path: Path,
+) -> None:
+    first_root = tmp_path / "first-worktree"
+    second_root = tmp_path / "second-worktree"
+    first_root.mkdir()
+    second_root.mkdir()
+    _, first_environment = _fake_test_runtime_commands(first_root)
+    _, second_environment = _fake_test_runtime_commands(second_root)
+    command_log = tmp_path / "commands.log"
+    shared_lock_root = tmp_path / "host-port-locks"
+    ready_dir = tmp_path / "pytest-ready"
+    release_dir = tmp_path / "pytest-release"
+    for environment, state_root in (
+        (first_environment, first_root / "state"),
+        (second_environment, second_root / "state"),
+    ):
+        environment["THESISTRACE_TEST_STATE_ROOT"] = str(state_root)
+        environment["THESISTRACE_TEST_PORT_LOCK_ROOT"] = str(shared_lock_root)
+        environment["FAKE_PYTEST_READY_DIR"] = str(ready_dir)
+        environment["FAKE_PYTEST_RELEASE_DIR"] = str(release_dir)
+        environment["TEST_COMMAND_LOG"] = str(command_log)
+
+    processes = [
+        subprocess.Popen(
+            [ROOT / "scripts" / "test-runtime", "integration"],
+            cwd=ROOT,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for environment in (first_environment, second_environment)
+    ]
+    try:
+        worker_pids = _wait_for_fake_pytest_workers(
+            ready_dir,
+            count=2,
+            command_log=command_log,
+        )
+
+        ports: list[str] = []
+        for state_root in (first_root / "state", second_root / "state"):
+            runs = list(state_root.iterdir())
+            assert len(runs) == 1
+            metadata = (runs[0] / "run.txt").read_text().splitlines()
+            ports.append(
+                next(
+                    line.removeprefix("caddy_port=")
+                    for line in metadata
+                    if line.startswith("caddy_port=")
+                )
+            )
+        assert len(set(ports)) == 2
+
+        _release_fake_pytest_workers(
+            release_dir,
+            worker_pids,
+            command_log=command_log,
+        )
+        results = [process.communicate(timeout=10) for process in processes]
+    except BaseException:
+        for process in processes:
+            process.kill()
+            process.communicate()
+        raise
+
+    for process, (_, stderr) in zip(processes, results, strict=True):
+        assert process.returncode == 0, stderr
+    assert list(shared_lock_root.iterdir()) == []
+
+
+def test_rustfs_restart_waits_for_the_authenticated_s3_api() -> None:
+    runtime = (ROOT / "scripts" / "test-runtime").read_text()
+    probe = (ROOT / "scripts" / "probe-rustfs-ready").read_text()
+
+    assert "uv run python \"$rustfs_readiness_probe\"" in runtime
+    assert "RustFS S3 API did not become ready after restart" in runtime
+    assert runtime.index("curl -fsS http://127.0.0.1:9000/health") < runtime.index(
+        "uv run python \"$rustfs_readiness_probe\""
+    )
+    assert "client.list_buckets()" in probe
+    assert 'retries={"max_attempts": 0, "mode": "standard"}' in probe
+
+
 def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() -> None:
     overlay = (ROOT / "deploy" / "core" / "compose.test-run.yaml").read_text()
     base = (ROOT / "deploy" / "core" / "compose.yaml").read_text()
 
-    for port in (5432, 9000, 8100, 5173):
+    for port in (5432, 9000):
         assert f"127.0.0.1::{port}" in overlay
+    assert (
+        "127.0.0.1:${THESISTRACE_TEST_CADDY_PORT}:"
+        "${THESISTRACE_TEST_CADDY_PORT}" in overlay
+    )
+    assert "127.0.0.1::8100" not in overlay
+    assert "127.0.0.1::5173" not in overlay
     for development_port in (55432, 59010, 8101, 5274):
         assert str(development_port) not in overlay
     assert "checkpoint_timeout=30min" in overlay
@@ -740,7 +912,25 @@ def test_test_cleanup_accepts_only_an_identity_with_matching_run_metadata(
     run_id = project_name.removeprefix("thesistrace-test-")
     run_root = tmp_path / "runs" / run_id
     run_root.mkdir(parents=True)
-    (run_root / "run.txt").write_text(f"run_id={run_id}\nproject_name={project_name}\n")
+    port_lock_root = tmp_path / "port-locks"
+    allocator = subprocess.run(
+        [
+            sys.executable,
+            ROOT / "scripts" / "locked-loopback-port",
+            "acquire",
+            "--lock-root",
+            port_lock_root,
+            "--owner",
+            project_name,
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    caddy_port = allocator.stdout.strip()
+    (run_root / "run.txt").write_text(
+        f"run_id={run_id}\nproject_name={project_name}\ncaddy_port={caddy_port}\n"
+    )
     (run_root / "canonical-data").mkdir()
     (run_root / "canonical-data" / "HEAD.json").write_text("test data")
     marker = tmp_path / "docker-invoked"
@@ -752,6 +942,7 @@ def test_test_cleanup_accepts_only_an_identity_with_matching_run_metadata(
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "THESISTRACE_TEST_PROJECT_NAME": project_name,
         "THESISTRACE_TEST_STATE_ROOT": str(tmp_path / "runs"),
+        "THESISTRACE_TEST_PORT_LOCK_ROOT": str(port_lock_root),
     }
 
     completed = subprocess.run(
@@ -766,6 +957,31 @@ def test_test_cleanup_accepts_only_an_identity_with_matching_run_metadata(
     assert completed.returncode == 0, completed.stderr
     assert marker.exists()
     assert not (run_root / "canonical-data").exists()
+    assert list(port_lock_root.iterdir()) == []
+
+
+def test_compose_preflight_failure_releases_the_caddy_port_lock(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_CONFIG_STATUS"] = "11"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "integration"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 11
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
+    assert "cleanup_status=0\n" in metadata
+    assert metadata.endswith("status=11\n")
+    assert list((tmp_path / "port-locks").iterdir()) == []
+    assert "down --volumes --remove-orphans" not in command_log.read_text()
 
 
 def test_integration_runtime_validates_starts_host_tests_and_cleans(
@@ -810,7 +1026,10 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     assert "--build" not in commands
     assert "uv run thesistrace-initialize" in commands
     assert "uv run pytest -q tests/integration tests/acceptance" in commands
-    assert "db=postgresql://thesistrace:thesistrace-test@127.0.0.1:41001" in commands
+    assert (
+        "db=postgresql://thesistrace_owner:owner-test-password@127.0.0.1:41001"
+        in commands
+    )
     assert "s3=http://127.0.0.1:41002" in commands
     assert "down --volumes --remove-orphans" in commands
 
@@ -835,7 +1054,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     project_name = completed.stdout.splitlines()[1].removeprefix("Compose project: ")
     commands = command_log.read_text()
     assert commands.index("config --quiet") < commands.index("up --detach")
-    assert commands.count("build initialize web\n") == 1
+    assert commands.count("build initialize auth-initialize web\n") == 1
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
@@ -845,20 +1064,39 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
             in commands
         )
     assert (
-        "up --detach --no-build --wait --wait-timeout 300 postgres rustfs initialize\n"
+        "up --detach --no-build --wait --wait-timeout 300 postgres rustfs\n"
         in commands
     )
-    assert "wait initialize\n" in commands
+    assert "up --detach --no-build initialize auth-initialize\n" in commands
+    assert "wait initialize auth-initialize\n" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 300 "
-        "api research-worker batch-research-worker tracking-worker web\n" in commands
+        "auth api research-worker batch-research-worker tracking-worker web\n"
+        in commands
     )
     assert "--build" not in commands
     assert "uv run thesistrace-initialize" not in commands
-    assert "bun run --cwd web test:e2e origin=http://127.0.0.1:41004" in commands
+    run_id = project_name.removeprefix("thesistrace-test-")
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
+    public_origin = next(
+        line.removeprefix("public_origin=")
+        for line in metadata.splitlines()
+        if line.startswith("public_origin=")
+    )
+    assert f"bun run --cwd web test:e2e origin={public_origin}" in commands
     assert "thesistrace-api" not in commands
     assert "thesistrace-worker" not in commands
     assert "vite --host" not in commands
+    for service in (
+        "api",
+        "research-worker",
+        "batch-research-worker",
+        "tracking-worker",
+        "initialize",
+        "auth",
+        "web",
+    ):
+        assert f"docker image rm {project_name}-{service}\n" in commands
     assert "down --volumes --remove-orphans" in commands
 
 
@@ -885,8 +1123,10 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
     )
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
     assert scripts["test:image-smoke"] == (
-        "./scripts/test-runtime image-smoke && pnpm --dir auth test:image-smoke"
+        "./scripts/test-runtime image-smoke && pnpm --dir auth test:image-smoke "
+        "&& pnpm test:caddy-image-smoke"
     )
+    assert scripts["test:caddy-image-smoke"] == "./scripts/test-caddy-production-image"
     assert scripts["test:cleanup"] == "./scripts/test-runtime cleanup"
 
 
@@ -907,7 +1147,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert completed.returncode == 0, completed.stderr
     project_name = completed.stdout.splitlines()[1].removeprefix("Compose project: ")
     commands = command_log.read_text()
-    assert commands.count("build initialize web\n") == 1
+    assert commands.count("build initialize auth-initialize web\n") == 1
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
@@ -917,13 +1157,14 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
             in commands
         )
     assert (
-        "up --detach --no-build --wait --wait-timeout 300 postgres rustfs initialize\n"
+        "up --detach --no-build --wait --wait-timeout 300 postgres rustfs\n"
         in commands
     )
-    assert "wait initialize\n" in commands
+    assert "up --detach --no-build initialize auth-initialize\n" in commands
+    assert "wait initialize auth-initialize\n" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 300 "
-        "api web\n" in commands
+        "auth api web\n" in commands
     )
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "

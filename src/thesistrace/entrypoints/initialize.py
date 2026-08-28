@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 
-from thesistrace.entrypoints.schema import initialize_core
+from thesistrace.entrypoints.schema import (
+    configure_core_runtime_access,
+    initialize_core,
+)
 
 
 def main() -> None:
@@ -10,6 +13,7 @@ def main() -> None:
     if database_url is None:
         raise RuntimeError("THESISTRACE_DATABASE_URL is required")
     initialize_core(database_url)
+    configure_core_runtime_access(database_url)
 
 
 if __name__ == "__main__":

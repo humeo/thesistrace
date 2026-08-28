@@ -708,7 +708,7 @@ def test_cancel_check_fails_closed_during_postgres_outage_and_reconciles_after_r
     restarted_settings = replace(
         settings,
         database_url=(
-            "postgresql://thesistrace:thesistrace-test@127.0.0.1:"
+            "postgresql://thesistrace_owner:owner-test-password@127.0.0.1:"
             f"{restarted_postgres_port}/thesistrace"
         ),
     )

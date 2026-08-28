@@ -654,7 +654,8 @@ def test_research_kinds_and_factor_checkpoint_resume_after_database_restart(
     restarted_settings = replace(
         settings,
         database_url=(
-            f"postgresql://thesistrace:thesistrace-test@127.0.0.1:{restarted_port}/thesistrace"
+                "postgresql://thesistrace_owner:owner-test-password@127.0.0.1:"
+                f"{restarted_port}/thesistrace"
         ),
     )
     monkeypatch.setenv("THESISTRACE_DATABASE_URL", restarted_settings.database_url)

@@ -11,9 +11,12 @@ RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
 COPY web ./web
 RUN pnpm --dir web build
 
-FROM nginx:1.27.5-alpine
+FROM caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
 
-ENV NGINX_ENVSUBST_FILTER=THESISTRACE_API_ORIGIN
+COPY deploy/core/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /app/web/dist /srv
 
-COPY deploy/core/nginx.conf.template /etc/nginx/templates/default.conf.template
-COPY --from=build /app/web/dist /usr/share/nginx/html
+RUN THESISTRACE_PUBLIC_ORIGIN=http://127.0.0.1:5173 \
+    caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+EXPOSE 80 443 5173

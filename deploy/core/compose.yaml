@@ -5,7 +5,8 @@ x-bounded-logging: &bounded-logging
     max-file: "3"
 
 x-core-environment: &core-environment
-  THESISTRACE_DATABASE_URL: postgresql://thesistrace:thesistrace-local@postgres:5432/thesistrace
+  THESISTRACE_DATABASE_URL: postgresql://core_runtime:${THESISTRACE_CORE_DATABASE_PASSWORD:?THESISTRACE_CORE_DATABASE_PASSWORD is required}@postgres:5432/thesistrace
+  THESISTRACE_PUBLIC_ORIGIN: ${THESISTRACE_PUBLIC_ORIGIN:?THESISTRACE_PUBLIC_ORIGIN is required}
   THESISTRACE_S3_ENDPOINT_URL: http://rustfs:9000
   THESISTRACE_S3_ACCESS_KEY_ID: rustfsadmin
   THESISTRACE_S3_SECRET_ACCESS_KEY: rustfsadmin
@@ -25,21 +26,30 @@ x-backend: &backend
   volumes:
     - canonical-data:/var/lib/thesistrace/canonical-data
 
+x-auth-image: &auth-image
+  build:
+    context: ../..
+    dockerfile: deploy/core/Dockerfile.auth
+  image: ${THESISTRACE_AUTH_IMAGE:?THESISTRACE_AUTH_IMAGE is required}
+
 services:
   postgres:
     logging: *bounded-logging
     image: postgres:16.10-alpine
     environment:
       POSTGRES_DB: thesistrace
-      POSTGRES_USER: thesistrace
-      POSTGRES_PASSWORD: thesistrace-local
+      POSTGRES_USER: thesistrace_owner
+      POSTGRES_PASSWORD: ${THESISTRACE_OWNER_DATABASE_PASSWORD:?THESISTRACE_OWNER_DATABASE_PASSWORD is required}
+      THESISTRACE_CORE_DATABASE_PASSWORD: ${THESISTRACE_CORE_DATABASE_PASSWORD:?THESISTRACE_CORE_DATABASE_PASSWORD is required}
+      THESISTRACE_AUTH_DATABASE_PASSWORD: ${THESISTRACE_AUTH_DATABASE_PASSWORD:?THESISTRACE_AUTH_DATABASE_PASSWORD is required}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U thesistrace -d thesistrace"]
+      test: ["CMD-SHELL", "pg_isready -U thesistrace_owner -d thesistrace"]
       interval: 1s
       timeout: 5s
       retries: 180
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init/010-runtime-roles.sh:/docker-entrypoint-initdb.d/010-runtime-roles.sh:ro
 
   rustfs:
     logging: *bounded-logging
@@ -55,10 +65,46 @@ services:
     volumes:
       - rustfs-data:/data
 
+  auth-initialize:
+    <<: *auth-image
+    logging: *bounded-logging
+    command: ["node", "dist/initialize.js"]
+    environment:
+      THESISTRACE_OWNER_DATABASE_URL: postgresql://thesistrace_owner:${THESISTRACE_OWNER_DATABASE_PASSWORD:?THESISTRACE_OWNER_DATABASE_PASSWORD is required}@postgres:5432/thesistrace
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  auth:
+    <<: *auth-image
+    logging: *bounded-logging
+    environment:
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
+      THESISTRACE_AUTH_DATABASE_URL: postgresql://auth_runtime:${THESISTRACE_AUTH_DATABASE_PASSWORD:?THESISTRACE_AUTH_DATABASE_PASSWORD is required}@postgres:5432/thesistrace
+      THESISTRACE_ENVIRONMENT: ${THESISTRACE_ENVIRONMENT:?THESISTRACE_ENVIRONMENT is required}
+      THESISTRACE_PUBLIC_ORIGIN: ${THESISTRACE_PUBLIC_ORIGIN:?THESISTRACE_PUBLIC_ORIGIN is required}
+    depends_on:
+      auth-initialize:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - --input-type=module
+        - --eval
+        - fetch('http://127.0.0.1:8200/health/live').then((response) => { if (!response.ok) process.exit(1) })
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
   initialize:
     <<: *backend
     logging: *bounded-logging
     command: ["thesistrace-initialize"]
+    environment:
+      <<: *core-environment
+      THESISTRACE_DATABASE_URL: postgresql://thesistrace_owner:${THESISTRACE_OWNER_DATABASE_PASSWORD:?THESISTRACE_OWNER_DATABASE_PASSWORD is required}@postgres:5432/thesistrace
     depends_on:
       postgres:
         condition: service_healthy
@@ -115,6 +161,7 @@ services:
 
   batch-research-worker:
     <<: *backend
+    logging: *bounded-logging
     volumes:
       - canonical-data:/var/lib/thesistrace/canonical-data:ro
       - batch-attempt-control:/var/lib/thesistrace/.batch-attempts
@@ -179,12 +226,11 @@ services:
       context: ../..
       dockerfile: deploy/core/Dockerfile.web
     environment:
-      THESISTRACE_API_ORIGIN: http://api:8100
-    depends_on:
-      api:
-        condition: service_healthy
+      THESISTRACE_PUBLIC_ORIGIN: ${THESISTRACE_PUBLIC_ORIGIN:?THESISTRACE_PUBLIC_ORIGIN is required}
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:5173/data"]
+      test:
+        - CMD-SHELL
+        - test -r /srv/index.html && wget -q -O /dev/null http://127.0.0.1:2019/config/
       interval: 2s
       timeout: 5s
       retries: 60
