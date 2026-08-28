@@ -1,6 +1,6 @@
 # 03 — Invitation, credential, and access lifecycle
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Blocked by:** 01, 02
 
