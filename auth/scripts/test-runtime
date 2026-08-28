@@ -1,0 +1,231 @@
+#!/bin/sh
+set -eu
+
+auth_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+compose_file="$auth_root/compose.test.yaml"
+command=${1:-}
+
+case "$command" in
+  integration | image-smoke | runner-contract-self-check) ;;
+  *)
+    echo "usage: $0 {integration|image-smoke}" >&2
+    exit 2
+    ;;
+esac
+
+timestamp=$(date -u +%Y%m%dt%H%M%Sz)
+random_suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
+run_id="$timestamp-$$-$random_suffix"
+project_name="thesistrace-auth-test-$run_id"
+image_name="thesistrace-auth-test:$run_id"
+evidence_root=$(mktemp -d "${TMPDIR:-/tmp}/thesistrace-auth-test.XXXXXX")
+test_secret=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
+stale_image_canary="$auth_root/dist/stale-image-canary.js"
+
+compose() {
+  COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
+    THESISTRACE_AUTH_TEST_IMAGE="$image_name" \
+    THESISTRACE_AUTH_TEST_SECRET="$test_secret" \
+    docker compose \
+      --project-name "$project_name" \
+      --file "$compose_file" \
+      "$@"
+}
+
+cleanup() {
+  run_status=$?
+  trap - EXIT INT TERM
+  if [ "$run_status" -ne 0 ]; then
+    compose ps --all >"$evidence_root/compose-ps.txt" 2>&1 || true
+    compose logs --no-color >"$evidence_root/compose-logs.txt" 2>&1 || true
+  fi
+
+  cleanup_status=0
+  compose down --volumes --remove-orphans \
+    >"$evidence_root/cleanup.stdout.log" \
+    2>"$evidence_root/cleanup.stderr.log" \
+    || cleanup_status=$?
+  stale_cleanup_status=0
+  rm -f -- "$stale_image_canary" \
+    >>"$evidence_root/cleanup.stdout.log" \
+    2>>"$evidence_root/cleanup.stderr.log" \
+    || stale_cleanup_status=$?
+
+  if [ "$cleanup_status" -ne 0 ] || [ "$stale_cleanup_status" -ne 0 ]; then
+    if [ "$run_status" -eq 0 ]; then
+      if [ "$cleanup_status" -ne 0 ]; then
+        run_status=$cleanup_status
+      else
+        run_status=$stale_cleanup_status
+      fi
+      compose ps --all >"$evidence_root/compose-ps.txt" 2>&1 || true
+      compose logs --no-color >"$evidence_root/compose-logs.txt" 2>&1 || true
+    fi
+    echo "Auth test cleanup failed" >&2
+  fi
+
+  if [ "$run_status" -eq 0 ]; then
+    evidence_cleanup_status=0
+    rm -rf -- "$evidence_root" || evidence_cleanup_status=$?
+    if [ "$evidence_cleanup_status" -ne 0 ]; then
+      run_status=$evidence_cleanup_status
+      echo "Auth test evidence cleanup failed: $evidence_root" >&2
+    fi
+  fi
+  if [ "$run_status" -ne 0 ]; then
+    echo "Auth test evidence: $evidence_root" >&2
+  fi
+  exit "$run_status"
+}
+
+terminate() {
+  signal_status=$1
+  trap - INT TERM
+  exit "$signal_status"
+}
+
+trap cleanup EXIT
+trap 'terminate 130' INT
+trap 'terminate 143' TERM
+
+if [ "$command" = runner-contract-self-check ]; then
+  case "${2:-}" in
+    success) exit 0 ;;
+    int)
+      kill -INT "$$"
+      exit 70
+      ;;
+    term)
+      kill -TERM "$$"
+      exit 70
+      ;;
+    *)
+      echo "usage: $0 runner-contract-self-check {success|int|term}" >&2
+      exit 2
+      ;;
+  esac
+fi
+
+compose config --quiet
+
+start_postgres() {
+  compose up --detach postgres
+  attempt=0
+  until compose exec -T postgres \
+    test -e /tmp/thesistrace-auth-test-initialization-held >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 400 ]; then
+      echo "PostgreSQL did not enter the held initialization phase" >&2
+      exit 1
+    fi
+    sleep 0.05
+  done
+
+  postgres_container=$(compose ps --quiet postgres)
+  health_status=$(docker inspect \
+    --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+    "$postgres_container")
+  test "$health_status" != healthy
+  pid_one=$(compose exec -T postgres cat /proc/1/comm)
+  test "$pid_one" != postgres
+
+  compose exec -T postgres \
+    touch /tmp/thesistrace-auth-test-initialization-release
+  compose up --detach --wait --wait-timeout 120 postgres
+}
+
+case "$command" in
+  integration)
+    start_postgres
+    address=$(compose port postgres 5432)
+    postgres_port=${address##*:}
+    case "$postgres_port" in
+      '' | *[!0-9]*)
+        echo "could not resolve PostgreSQL port from: $address" >&2
+        exit 1
+        ;;
+    esac
+    THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL="postgresql://thesistrace_owner:owner-test-password@127.0.0.1:$postgres_port/thesistrace" \
+      "$auth_root/node_modules/.bin/vitest" run \
+        --config "$auth_root/vitest.integration.config.ts"
+    ;;
+  image-smoke)
+    mkdir -p "$(dirname -- "$stale_image_canary")"
+    printf '%s\n' 'throw new Error("stale image canary executed")' \
+      >"$stale_image_canary"
+    compose build auth
+    start_postgres
+    compose up --detach --no-build --wait --wait-timeout 180 auth
+    address=$(compose port auth 8200)
+    auth_port=${address##*:}
+    case "$auth_port" in
+      '' | *[!0-9]*)
+        echo "could not resolve Auth port from: $address" >&2
+        exit 1
+        ;;
+    esac
+    curl --fail --silent --show-error "http://127.0.0.1:$auth_port/health/live" \
+      >"$evidence_root/liveness.json"
+    curl --fail --silent --show-error "http://127.0.0.1:$auth_port/health/ready" \
+      >"$evidence_root/readiness.json"
+    curl --fail --silent --show-error "http://127.0.0.1:$auth_port/api/auth/ok" \
+      >"$evidence_root/auth-ok.json"
+    grep -Fqx '{"status":"ok"}' "$evidence_root/liveness.json"
+    grep -Fqx '{"status":"ready"}' "$evidence_root/readiness.json"
+    grep -Fqx '{"ok":true}' "$evidence_root/auth-ok.json"
+    test "$(compose exec -T auth id -u)" -ne 0
+    test "$(compose exec -T auth node --version)" = v24.14.0
+    compose exec -T auth test ! -e /app/auth/dist/stale-image-canary.js
+
+    curl --fail --silent --show-error \
+      -H 'Cookie: cookie-canary=do-not-log' \
+      "http://127.0.0.1:$auth_port/api/auth/ok?query-canary=do-not-log" \
+      >"$evidence_root/auth-ok-canary.json"
+    signup_status=$(curl --silent --show-error \
+      --output "$evidence_root/signup-rejected.json" \
+      --write-out '%{http_code}' \
+      -H 'Content-Type: application/json' \
+      -H 'Cookie: token-canary=do-not-log' \
+      --data '{"email":"body-canary@example.test","password":"credential-canary-do-not-log"}' \
+      "http://127.0.0.1:$auth_port/api/auth/sign-up/email")
+    test "$signup_status" = 403
+    compose logs --no-color auth auth-initialize >"$evidence_root/auth-services.log"
+
+    if compose run --rm --no-deps -T \
+      -e BETTER_AUTH_SECRET= \
+      auth >"$evidence_root/invalid.stdout.log" 2>"$evidence_root/invalid.stderr.log"; then
+      echo "Auth image accepted a missing BETTER_AUTH_SECRET" >&2
+      exit 1
+    fi
+    grep -Fqx \
+      '{"code":"AUTH_STARTUP_INVALID","event":"auth_startup_failed","reason":"CONFIGURATION_INVALID"}' \
+      "$evidence_root/invalid.stderr.log"
+    test ! -s "$evidence_root/invalid.stdout.log"
+
+    compose exec -T postgres psql \
+      --username thesistrace_owner \
+      --dbname thesistrace \
+      --set ON_ERROR_STOP=1 \
+      --command 'ALTER TABLE auth."session" ENABLE ROW LEVEL SECURITY' \
+      >"$evidence_root/schema-drift-setup.log"
+    if compose run --rm --no-deps -T \
+      auth >"$evidence_root/drift.stdout.log" 2>"$evidence_root/drift.stderr.log"; then
+      echo "Auth image accepted a row-security schema drift" >&2
+      exit 1
+    fi
+    grep -Fqx \
+      '{"code":"AUTH_STARTUP_INVALID","event":"auth_startup_failed","reason":"SCHEMA_CATALOG_DRIFT"}' \
+      "$evidence_root/drift.stderr.log"
+    test ! -s "$evidence_root/drift.stdout.log"
+    if grep -R -E -q \
+      'owner-test-password|auth-test-password|core-test-password|query-canary|cookie-canary|token-canary|body-canary|credential-canary' \
+      "$evidence_root"; then
+      echo "Auth image-smoke evidence exposed a credential" >&2
+      exit 1
+    fi
+    if grep -R -F -q "$test_secret" "$evidence_root"; then
+      echo "Auth image-smoke evidence exposed BETTER_AUTH_SECRET" >&2
+      exit 1
+    fi
+    ;;
+esac

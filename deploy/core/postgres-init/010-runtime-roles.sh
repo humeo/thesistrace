@@ -1,0 +1,29 @@
+#!/bin/sh
+set -eu
+
+: "${POSTGRES_DB:?POSTGRES_DB is required}"
+: "${POSTGRES_USER:?POSTGRES_USER is required}"
+: "${THESISTRACE_CORE_DATABASE_PASSWORD:?THESISTRACE_CORE_DATABASE_PASSWORD is required}"
+: "${THESISTRACE_AUTH_DATABASE_PASSWORD:?THESISTRACE_AUTH_DATABASE_PASSWORD is required}"
+
+if [ "$POSTGRES_USER" != "thesistrace_owner" ]; then
+  echo "POSTGRES_USER=thesistrace_owner is required" >&2
+  exit 2
+fi
+
+psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 <<'SQL'
+\getenv database_name POSTGRES_DB
+\getenv core_password THESISTRACE_CORE_DATABASE_PASSWORD
+\getenv auth_password THESISTRACE_AUTH_DATABASE_PASSWORD
+
+CREATE ROLE core_runtime LOGIN
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
+  PASSWORD :'core_password';
+CREATE ROLE auth_runtime LOGIN
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS
+  PASSWORD :'auth_password';
+
+REVOKE CONNECT ON DATABASE :"database_name" FROM PUBLIC;
+GRANT CONNECT ON DATABASE :"database_name" TO core_runtime, auth_runtime;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+SQL

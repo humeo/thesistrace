@@ -1,0 +1,28 @@
+{
+  "name": "thesistrace-auth",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "test:integration": "./scripts/test-runtime integration",
+    "test:image-smoke": "./scripts/test-runtime image-smoke",
+    "start": "node dist/server.js",
+    "initialize": "node dist/initialize.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.1",
+    "better-auth": "1.7.2",
+    "hono": "4.13.5",
+    "pg": "8.23.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@types/pg": "8.23.1",
+    "typescript": "5.7.3",
+    "vitest": "3.2.7"
+  }
+}

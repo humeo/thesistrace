@@ -19,6 +19,7 @@
     "@lezer/highlight": "^1.2.3",
     "@lezer/lr": "^1.4.10",
     "@phosphor-icons/react": "^2.1.10",
+    "better-auth": "1.7.2",
     "lightweight-charts": "5.2.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

@@ -654,7 +654,9 @@ signal.pause()
 
 def test_integration_command_generates_unique_test_identities() -> None:
     package = json.loads((ROOT / "package.json").read_text())
-    assert package["scripts"]["test:integration"] == "./scripts/test-runtime integration"
+    assert package["scripts"]["test:integration"] == (
+        "./scripts/test-runtime integration && pnpm --dir auth test:integration"
+    )
 
     projects = {
         subprocess.run(
@@ -878,9 +880,13 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
         "pnpm test:image-smoke",
         "pnpm test:benchmark",
     ]
-    assert scripts["test:integration"] == "./scripts/test-runtime integration"
+    assert scripts["test:integration"] == (
+        "./scripts/test-runtime integration && pnpm --dir auth test:integration"
+    )
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
-    assert scripts["test:image-smoke"] == "./scripts/test-runtime image-smoke"
+    assert scripts["test:image-smoke"] == (
+        "./scripts/test-runtime image-smoke && pnpm --dir auth test:image-smoke"
+    )
     assert scripts["test:cleanup"] == "./scripts/test-runtime cleanup"
 
 

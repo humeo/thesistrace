@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+hold_marker=/tmp/thesistrace-auth-test-initialization-held
+release_marker=/tmp/thesistrace-auth-test-initialization-release
+: >"$hold_marker"
+
+attempt=0
+while [ ! -e "$release_marker" ]; do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 600 ]; then
+    echo "timed out waiting for the Auth test initialization release" >&2
+    exit 1
+  fi
+  sleep 0.05
+done

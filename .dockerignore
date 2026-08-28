@@ -3,6 +3,9 @@
 .local
 .venv
 node_modules
+auth/dist
+auth/node_modules
+auth/*.tsbuildinfo
 web/dist
 web/node_modules
 web/.test-workspace

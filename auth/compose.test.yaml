@@ -1,0 +1,73 @@
+x-bounded-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-auth-image: &auth-image
+  build:
+    context: ..
+    dockerfile: deploy/core/Dockerfile.auth
+  image: ${THESISTRACE_AUTH_TEST_IMAGE}
+
+services:
+  postgres:
+    image: postgres:16.10-alpine
+    logging: *bounded-logging
+    environment:
+      POSTGRES_DB: thesistrace
+      POSTGRES_USER: thesistrace_owner
+      POSTGRES_PASSWORD: owner-test-password
+      THESISTRACE_CORE_DATABASE_PASSWORD: core-test-password
+      THESISTRACE_AUTH_DATABASE_PASSWORD: auth-test-password
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test "$$(cat /proc/1/comm)" = postgres && pg_isready -U thesistrace_owner -d thesistrace
+      interval: 1s
+      timeout: 5s
+      retries: 60
+    ports:
+      - 127.0.0.1::5432
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../deploy/core/postgres-init/010-runtime-roles.sh:/docker-entrypoint-initdb.d/010-runtime-roles.sh:ro
+      - ./test-fixtures/hold-postgres-initialization:/docker-entrypoint-initdb.d/099-hold-postgres-initialization.sh:ro
+
+  auth-initialize:
+    <<: *auth-image
+    logging: *bounded-logging
+    command: ["node", "dist/initialize.js"]
+    environment:
+      THESISTRACE_OWNER_DATABASE_URL: postgresql://thesistrace_owner:owner-test-password@postgres:5432/thesistrace
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  auth:
+    <<: *auth-image
+    logging: *bounded-logging
+    environment:
+      BETTER_AUTH_SECRET: ${THESISTRACE_AUTH_TEST_SECRET:?THESISTRACE_AUTH_TEST_SECRET is required}
+      THESISTRACE_AUTH_DATABASE_URL: postgresql://auth_runtime:auth-test-password@postgres:5432/thesistrace
+      THESISTRACE_ENVIRONMENT: production
+      THESISTRACE_PUBLIC_ORIGIN: https://thesistrace.test
+    depends_on:
+      auth-initialize:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - --input-type=module
+        - --eval
+        - fetch('http://127.0.0.1:8200/health/ready').then((response) => { if (!response.ok) process.exit(1) })
+      interval: 1s
+      timeout: 5s
+      retries: 60
+    ports:
+      - 127.0.0.1::8200
+
+volumes:
+  postgres-data:

@@ -11,6 +11,9 @@ __pycache__/
 web/dist/
 web/node_modules/
 node_modules/
+auth/dist/
+auth/tsconfig.tsbuildinfo
+auth/tsconfig.build.tsbuildinfo
 .pnpm-store/
 test-results/
 

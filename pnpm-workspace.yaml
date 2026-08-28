@@ -1,5 +1,10 @@
 packages:
+  - auth
   - web
+
+injectWorkspacePackages: true
 
 allowBuilds:
   esbuild: true
+
+minimumReleaseAge: 1440
