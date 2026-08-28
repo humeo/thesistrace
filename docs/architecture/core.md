@@ -1,14 +1,11 @@
 # ThesisTrace Core Architecture
 
-> Status: current module-first product boundary plus the accepted long-run
-> executor target from ADR-0194 through ADR-0211 and the accepted identity,
-> ownership, and public-entry target from ADR-0233. Target sections are not
-> current runtime behavior until their implementation and acceptance
-> verification complete.
+> Status: current module-first product, execution, identity, ownership, and
+> public-entry boundary from ADR-0194 through ADR-0211 and ADR-0233.
 
 ## Product boundary
 
-The active checkout currently closes one local, single-operator research loop:
+The active checkout closes one invite-only, multi-Researcher research loop:
 
 ```text
 Data Operator prepares the current Dataset Head
@@ -29,27 +26,26 @@ server resource. Data Generation, execution Attempt, Tracking Checkpoint,
 Working Cache, publication manifest, and schema fingerprint are implementation
 concepts, not additional product resources.
 
-The accepted ADR-0233 target places that same research loop behind invite-only
-Researcher authentication and direct per-Researcher Research Ownership. It does
-not add a Workspace, Organization, role hierarchy, collaboration model, or
-Local/Hosted product mode. The active checkout has not implemented that target
-yet.
+ADR-0233 places that research loop behind invite-only Researcher authentication
+and direct per-Researcher Research Ownership. It adds no Workspace,
+Organization, role hierarchy, collaboration model, or Local/Hosted product
+mode.
 
 ## Runtime topology
 
-The active Compose topology contains Web, API, three fixed-role Worker pools,
-PostgreSQL, RustFS, and a one-shot schema initializer. The ordinary Research,
-Batch Research, and Tracking roles start from the same Production Image and
-executable. Persistent Development and disposable Test use the same product
-implementation with different Compose identities, ports, volumes, and data
-mounts.
+The active Compose topology contains Caddy Web, Auth, API, three fixed-role
+Worker pools, PostgreSQL, RustFS, and two one-shot schema initializers. The
+ordinary Research, Batch Research, and Tracking roles start from the same
+Production Image and executable. Persistent Development, disposable Test, and
+single-node Production use the same product implementation with distinct
+Compose identities, ports, volumes, data mounts, and environment contracts.
 
-The accepted target replaces the Web image's Nginx runtime with Caddy, adds one
-Hono and Better Auth service plus its schema initializer, and uses Caddy as the
-only browser origin. Production publishes only Caddy on ports 80 and 443;
-Auth, Core, PostgreSQL, RustFS, and Workers remain on the private Compose
-network. Development and Test use the same route graph over loopback HTTP and
-may retain explicit loopback-only diagnostic ports.
+The Web image uses Caddy, and a separate Hono and Better Auth service owns
+authentication alongside its schema initializer. Caddy is the only browser
+origin. Production publishes only Caddy on ports 80 and 443; Auth, Core,
+PostgreSQL, RustFS, and Workers remain on the private Compose network.
+Development and Test use the same route graph over loopback HTTP and retain
+explicit loopback-only diagnostic ports where the local lifecycle needs them.
 
 ```mermaid
 flowchart LR
@@ -87,7 +83,7 @@ The mounted Canonical Data Store contains the current Dataset Head and
 immutable-while-referenced Data Generation files. No runtime downloads data
 during API or Worker startup.
 
-## Accepted identity and access target
+## Identity and access
 
 ### Authority boundary
 
@@ -223,10 +219,10 @@ evaluation, disallows framing, objects, and base URLs, and sets no-referrer,
 nosniff, and a restrictive Permissions Policy. Styles remain self-only except
 for `style-src-attr 'unsafe-inline'`, which the current chart library requires.
 Production alone adds one-year HSTS without preload or `includeSubDomains`.
-The final image gate must prove the chart, editor, and Auth pages under this
+The release image gate proves the chart, editor, and Auth pages under this
 policy.
 
-The accepted deployment is one node and one replica per service, uses
+The Production deployment is one node and one replica per service, uses
 `restart: unless-stopped`, and permits planned short maintenance downtime. It
 makes no high-availability or zero-downtime claim.
 
@@ -253,7 +249,7 @@ pretty JSON snapshot; their operational events use stderr. No Core process
 owns a log file. Docker Compose collects all container output with bounded
 local rotation.
 
-The accepted gateway and Auth target keeps only request ID, method, normalized
+The gateway and Auth boundary keeps only request ID, method, normalized
 path without query, status, duration, and explicitly allowlisted operational
 context. Caddy overwrites one trusted client-IP header before proxying to Auth;
 Auth never trusts a browser-supplied forwarding chain. Cookies, authorization
@@ -275,8 +271,8 @@ Dataset coverage, and Result or Checkpoint presence. The private
 `thesistrace-core-diagnose` command reads either one ResearchRun or one
 DailyTrack from PostgreSQL only.
 
-Under the accepted target, Core readiness additionally probes Auth, while Core
-liveness stays dependency-free. Auth readiness probes only its database,
+Core readiness additionally probes Auth, while Core liveness stays
+dependency-free. Auth readiness probes only its database,
 schema fingerprint, and Session store; it excludes Resend, Core, Workers, and
 RustFS. Caddy readiness and liveness cover only its listener, configuration, and
 static files, and Caddy does not wait for Auth or Core before serving the SPA.
@@ -292,6 +288,7 @@ permanent retention.
 
 ```text
 src/thesistrace/
+├── researcher/
 ├── alpha_language/
 ├── data/
 ├── research_folder/
@@ -312,6 +309,7 @@ PostgreSQL, S3, HTTP, Worker, or Data Operator concepts.
 ```mermaid
 flowchart LR
     E["HTTP and Worker entrypoints"] --> F["Research Folders"]
+    E --> U["Researchers"]
     E --> R["ResearchRuns"]
     E --> B["Research Batches"]
     E --> T["DailyTracks"]
@@ -319,6 +317,10 @@ flowchart LR
     E --> L["Alpha Language"]
     L --> A
     L --> K["Research Kernel"]
+    F --> U
+    R --> U
+    B --> U
+    T --> U
     R --> F
     R --> A
     R --> K
@@ -338,9 +340,9 @@ Cross-module writes happen only through explicit private interfaces inside one
 concrete PostgreSQL transaction. Product modules do not reach into another
 module's tables to implement product rules.
 
-The accepted identity target adds one `researcher` module that owns the Core
-Researcher anchor and idempotent bootstrap transaction. Auth remains a separate
-service rather than a Core module. HTTP adapters pass an authenticated
+The `researcher` module owns the Core Researcher anchor and idempotent bootstrap
+transaction. Auth remains a separate service rather than a Core module. HTTP
+adapters pass an authenticated
 Researcher context into every product interface; Worker interfaces continue to
 operate on already-owned durable resources without an Auth dependency.
 
@@ -350,9 +352,10 @@ offers no migration history or compatibility machinery.
 
 ## Schema lifecycle
 
-The active checkout defines exactly six Core product schemas:
+The active checkout defines exactly seven Core product schemas:
 
 ```text
+researchers
 publication
 data
 research_folders
@@ -372,9 +375,9 @@ mismatch with the destructive `pnpm dev:reset`; Test always starts from an empty
 isolated database. There is no upgrade, downgrade, fallback, or compatibility
 path.
 
-The accepted identity hard cut adds `researchers` as the seventh Core product
-schema and creates an independent Better Auth-owned `auth` schema in the same
-PostgreSQL database. The Core initializer owns only the seven Core schemas and
+An independent Better Auth-owned `auth` schema shares the same PostgreSQL
+database without sharing runtime privileges. The Core initializer owns only the
+seven Core schemas and
 `thesistrace_meta`; `auth-initialize` owns only an empty `auth` schema and its
 independent reviewed SQL snapshot and fingerprint. Both initializers either
 create their complete current contract in empty scope or verify an exact match.
@@ -568,7 +571,7 @@ referenced object.
 
 ## Product routes
 
-The accepted browser route boundary is:
+The browser route boundary is:
 
 ```text
 /login
@@ -682,8 +685,8 @@ The active local gates are documented in the
    `mise exec -- pnpm check:release` adds image smoke and long-Research
    qualification.
 
-The identity target extends those same gates rather than creating a second test
-topology. Test uses a local Resend-compatible HTTP fake and never the public
+Identity and ownership use those same gates rather than a second test topology.
+Test uses a local Resend-compatible HTTP fake and never the public
 service. Browser acceptance covers Invitation acceptance, replay and expiry;
 login, logout, reset, revoke, deactivate, and reactivate; two Researchers with
 identical system Folder IDs; cross-Researcher Folder, Run, Batch, and Track

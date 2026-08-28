@@ -4,23 +4,24 @@
 
 ## Outcome
 
-Add invite-only email/password authentication for multiple Web Researchers while
-preserving the module-first Core and its Worker execution model. Caddy becomes
-the single public origin, Hono and Better Auth own authentication, and FastAPI
-Core owns every product authorization decision.
+ThesisTrace provides invite-only email/password authentication for multiple Web
+Researchers while preserving the module-first Core and its Worker execution
+model. Caddy is the single public origin, Hono and Better Auth own
+authentication, and FastAPI Core owns every product authorization decision.
 
 The accepted architectural decision is
 [ADR-0233](../../docs/adr/0233-separate-better-auth-identity-from-core-research-authorization.md).
-The complete target contract is recorded in
-[Core architecture](../../docs/architecture/core.md#accepted-identity-and-access-target).
+The implemented contract is recorded in
+[Core architecture](../../docs/architecture/core.md#identity-and-access).
 
-## Current boundary
+## Implemented boundary
 
-The current checkout has an Nginx Web image, no Auth service, ownerless product
-state, six Core schemas, direct loopback Development API access, and a custom
-pathname-only React router. The ownership cut is intentionally destructive for
-Product State; it preserves mounted Canonical Data and does not migrate or
-adopt ownerless resources.
+The current checkout has a Caddy Web image, a dedicated Hono and Better Auth
+service, seven owner-scoped Core schemas plus an independent `auth` schema, one
+same-origin browser route graph, and a pathname/search/hash React router. The
+completed ownership cut is intentionally destructive for old Product State; it
+preserves mounted Canonical Data and neither migrates nor adopts ownerless
+resources or legacy Draft keys.
 
 ## Non-negotiable invariants
 
@@ -40,7 +41,7 @@ adopt ownerless resources.
 - Every implementation ticket lands with its lowest sufficient real tests and
   remains an independently reviewable commit.
 
-## Target topology
+## Runtime topology
 
 ```text
 Internet

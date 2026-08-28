@@ -1,9 +1,12 @@
 # Local Development and Test lifecycle
 
-ThesisTrace currently has only local Development and local Test. Development
-is one persistent canonical Compose project. Each Test command creates a new,
-isolated, disposable Compose project. Local evidence is not Production readiness.
-This lifecycle defines no remote environment or release process.
+Development is one persistent canonical Compose project. Each Test command
+creates a new, isolated, disposable Compose project. Both run the same
+Caddy/Auth/Core/Worker route graph used by the single-node Production topology,
+with loopback ports and disposable Test mail replacing the external edge.
+Local evidence qualifies code, images, and configuration; it is not a health
+claim about any deployed host. The deployment contract is in the
+[single-node Production runbook](single-node-production.md).
 
 ## Prerequisites and bootstrap
 
@@ -17,8 +20,9 @@ mise exec -- pnpm bootstrap
 ```
 
 Bootstrap runs frozen Python and pnpm dependency sync, validates the resolved
-Compose configuration, pulls PostgreSQL and RustFS, and builds the application
-images. It changes no Development database and publishes no Seed data.
+Compose configuration, pulls PostgreSQL and RustFS, and builds the Core, Auth,
+and Caddy Web application images. It changes no Development database and
+publishes no Seed data.
 
 The examples below keep `mise exec --` explicit so that the pinned Node.js and
 pnpm versions are used even when shell activation is not configured.
@@ -31,17 +35,16 @@ The foreground edit loop uses Compose Watch:
 mise exec -- pnpm dev
 ```
 
-Web changes are synchronized for Vite HMR, API changes reload Uvicorn, Worker
-changes restart both fixed-role Workers, and dependency manifest changes rebuild
-the affected image. Pressing Ctrl-C exits the foreground command without deleting
-Development volumes.
+Web and Auth changes rebuild their image, API changes reload Uvicorn, changes
+under `src/` restart all three fixed-role Workers, and dependency manifest
+changes rebuild the affected image. Pressing Ctrl-C exits the foreground command
+without deleting Development volumes.
 
-Development runs one `research-worker` and one `tracking-worker`. Each process has
-one execution slot, 2 vCPU, 2 GiB hard memory, a 1.5-GiB execution-planning budget,
-and at most two calculation threads. The role-specific Compose variables can change
-capacity independently, and Compose `--scale research-worker=N` or
-`--scale tracking-worker=N` changes concurrency by replica count; a process never
-adds a second execution slot or switches roles.
+Development runs one `research-worker`, one `batch-research-worker`, and one
+`tracking-worker`. Each process has one execution slot, 2 vCPU, 2 GiB hard
+memory, a 1.5-GiB execution-planning budget, and at most two calculation
+threads. Role-specific Compose variables can change capacity independently; a
+process never adds a second execution slot or switches roles.
 
 For a background runtime that waits for health:
 
@@ -56,11 +59,11 @@ terminal with:
 mise exec -- pnpm dev:logs
 ```
 
-This streams current API, Research Worker, Tracking Worker, schema initializer,
-PostgreSQL, RustFS, and Web container output. A Data Operator invocation writes
-its machine-readable result to that command's stdout and operational JSONL to
-its stderr, so its current output is visible in the invoking terminal without
-mixing the two streams.
+This streams current Caddy Web, Auth, API, all three Workers, both schema
+initializers, PostgreSQL, and RustFS container output. A Data Operator or
+Auth Operator invocation writes its machine-readable result to that command's
+stdout and operational JSONL to its stderr, so its current output is visible in
+the invoking terminal without mixing the two streams.
 
 Compose uses Docker's `json-file` driver for every managed service with
 `max-size=10m` and `max-file=3`. The bytes live in Docker-managed container
@@ -84,11 +87,40 @@ curl -fsS http://127.0.0.1:8100/health/live
 curl -fsS http://127.0.0.1:8100/health/ready
 ```
 
-Liveness checks only that the API can serve. Readiness checks PostgreSQL,
-RustFS, and readability of the mounted Dataset root under a bounded deadline.
-It does not inspect Worker capacity, queue depth, Dataset coverage, bootstrap
-completion, Results, or Tracking Checkpoints. Compose continues to restart the
-API from liveness rather than dependency readiness.
+These direct API ports are Development-only diagnostics; Caddy returns `404`
+for public `/health/*` and `/internal/*`. Core liveness checks only that the API
+can serve. Core readiness checks Auth, PostgreSQL, RustFS, and readability of
+the mounted Dataset root under a bounded deadline. Auth readiness checks its
+database, exact schema fingerprint, and Session storage. Neither readiness
+contract inspects Worker capacity, queue depth, Dataset coverage, Results, or
+Tracking Checkpoints. Compose restarts API and Auth from dependency-free
+liveness rather than dependency readiness.
+
+## Local Researcher access
+
+Development has no public signup. Before `pnpm dev` or `pnpm dev:up`, ensure
+the current shell exports the already-configured `RESEND_API_KEY` and
+`RESEND_FROM_EMAIL`; shell values override the non-Production values in
+`deploy/core/dev.env`. Development sends real invitation and reset mail, while
+all automated tests use the private local fake.
+
+Issue the first 48-hour invitation from the canonical Development project:
+
+```sh
+mise exec -- docker compose \
+  --project-name thesistrace-dev \
+  --env-file deploy/core/dev.env \
+  --file deploy/core/compose.yaml \
+  --file deploy/core/compose.dev.yaml \
+  run --rm --no-deps -T auth \
+  node dist/operator.js invite --email researcher@example.com
+```
+
+The command prints an Invitation ID but never the token or link. Resend delivers
+the fragment-bearing link, and the Researcher supplies only a password on the
+acceptance page. Reissue and the remaining private access operations use the
+same Auth command contract documented in the
+[Production runbook](single-node-production.md#researcher-access-operations).
 
 Inspect authoritative Product State without RustFS or the Dataset Store:
 
@@ -127,12 +159,13 @@ ordinary Product State hard-cut command:
 mise exec -- pnpm dev:reset
 ```
 
-Reset accepts only the canonical `thesistrace-dev` project, deletes and recreates
-its PostgreSQL, RustFS, and Batch Attempt Control runtime volumes, preserves the
-canonical-data volume and exact Dataset Head, runs the one-shot schema
-initializer, and waits for health. It does not contact Tushare, migrate old
-Product State, or publish Fixture data. The initialized runtime validates and
-immediately reuses the preserved mounted Canonical Data Store.
+Reset accepts only the canonical `thesistrace-dev` project, deletes and
+recreates its PostgreSQL, RustFS, and Batch Attempt Control runtime volumes,
+including Core Product State and Auth state. It preserves the canonical-data
+volume and exact Dataset Head, runs both one-shot schema initializers, and waits
+for health. It does not contact Tushare, migrate old Product State, or publish
+Fixture data. The initialized runtime validates and immediately reuses the
+preserved mounted Canonical Data Store.
 
 Complete deletion of Product State and downloaded Canonical Data is a separate
 explicit operation:
@@ -153,31 +186,37 @@ Run the inexpensive host checks first during ordinary edits:
 mise exec -- pnpm test
 ```
 
-Run real PostgreSQL and RustFS integration and acceptance tests in a fresh Test
-project:
+Run real PostgreSQL, Auth-schema, and RustFS integration and acceptance tests in
+a fresh Test project:
 
 ```sh
 mise exec -- pnpm test:integration
 ```
 
-Run host Playwright against a fresh complete Web/API/fixed-role
-Workers/PostgreSQL/RustFS topology:
+Run host Playwright against a fresh complete Caddy/Auth/API/fixed-role
+Workers/PostgreSQL/RustFS topology with a private Resend-compatible fake:
 
 ```sh
 mise exec -- pnpm test:e2e
 ```
 
-Qualify the built Backend and Nginx Web images against a prepared Canonical
+The browser gate sends every request through Caddy and uses two Researchers to
+cover Invitation acceptance/replay/expiry/reissue, login/logout/reset/password
+change, Session revocation, deactivate/reactivate, bootstrap retry, Auth
+unavailability, CSP compatibility, and Folder/Run/Batch/Track/receipt/cursor/
+Draft isolation.
+
+Qualify the built Core, Auth, and Caddy Web images against a prepared Canonical
 Data mount on an internal-only Compose network:
 
 ```sh
 mise exec -- pnpm test:image-smoke
 ```
 
-The image smoke initializes a fresh database, prepares deterministic mounted
-data, and executes ordinary Research, both Research Batch Kinds, and Tracking
-through the three real fixed-role Workers. It compares Batch Results and elapsed
-time with strictly serial ordinary Runs, exercises Batch cancellation, restarts
+The image smoke initializes fresh Core and Auth schemas, prepares deterministic
+mounted data, and executes ordinary Research, both Research Batch Kinds, and
+Tracking through the three real fixed-role Workers. It compares Batch Results
+and elapsed time with strictly serial ordinary Runs, exercises Batch cancellation, restarts
 API, PostgreSQL, RustFS, the mounted Dataset root, and all Workers at their real
 boundaries, and verifies the same Head, Results, Batch history, readiness, and
 Attempts remain authoritative. It executes both packaged PostgreSQL-only
@@ -186,7 +225,10 @@ Data Refresh events, and scans collected evidence for secret canaries. It also
 rejects capacity declarations above actual cgroup limits and records structured
 Worker events, image identity, timing, RSS, object bytes, health/exit state,
 network isolation, and Product State before and after cleanup under the run
-evidence directory.
+evidence directory. Its Caddy segment uses the same Production Caddyfile with a
+test-only internal CA and `.test` hostname to prove HTTP-to-HTTPS redirect,
+HSTS, private-path rejection, trusted header overwrite, sanitized logs, and
+persistent certificate state without reaching the public internet.
 
 Publication uses one S3 request attempt with a five-second connect/read bound.
 The bound covers observed immutable Result uploads under the full long-range

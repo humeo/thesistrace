@@ -1624,8 +1624,11 @@ def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None
     readme = (ROOT / "README.md").read_text()
     architecture = (ROOT / "docs" / "architecture" / "core.md").read_text()
     guide = (ROOT / "docs" / "runbook" / "local-lifecycle.md").read_text()
+    production = (
+        ROOT / "docs" / "runbook" / "single-node-production.md"
+    ).read_text()
     tushare = (ROOT / "docs" / "runbook" / "tushare-live-bootstrap.md").read_text()
-    active_docs = "\n".join((readme, architecture, guide, tushare))
+    active_docs = "\n".join((readme, architecture, guide, production, tushare))
 
     for command in (
         "mise exec -- pnpm bootstrap",
@@ -1650,7 +1653,9 @@ def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None
     assert "mise exec -- pnpm test:cleanup" in guide
     assert "./scripts/test-runtime cleanup" not in guide
     assert " -- --keep-environment" not in guide
-    assert "only local Development and local Test" in guide
+    assert "./scripts/production-runtime validate" in production
+    assert "./scripts/production-runtime up" in production
+    assert "root with mode `0600`" in production
     assert "not Production readiness" in active_docs
     for command in (
         "mise exec -- pnpm test",
@@ -1705,7 +1710,7 @@ def test_current_architecture_documents_only_the_active_data_and_schema_contract
     architecture = (ROOT / "docs" / "architecture" / "core.md").read_text()
 
     for current in (
-        "one-shot schema initializer",
+        "two one-shot schema initializers",
         "thesistrace_meta.schema_contract",
         "private `thesistrace-data-operator`",
         "one browser-local Draft per Research Folder",
