@@ -10,6 +10,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import UTC, date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from threading import Event
 
@@ -144,6 +145,7 @@ def _execute_sample(
 ) -> dict[str, object]:
     profile = _read_json(_PROFILE_PATH)
     api_origin = _required_environment("THESISTRACE_TEST_API_ORIGIN").rstrip("/")
+    _ensure_researcher_bootstrap(api_origin)
     fresh_product_state: dict[str, int] | None = None
     if require_fresh_product_state:
         fresh_product_state = _require_fresh_product_state()
@@ -287,6 +289,7 @@ def _preload_canonical_objects() -> dict[str, object]:
 def _cancel_sample(log_path: Path, *, research_kind: str) -> dict[str, object]:
     profile = _read_json(_PROFILE_PATH)
     api_origin = _required_environment("THESISTRACE_TEST_API_ORIGIN").rstrip("/")
+    _ensure_researcher_bootstrap(api_origin)
     fresh_product_state = _require_fresh_product_state()
     accepted = _admit(
         api_origin,
@@ -651,7 +654,7 @@ def _wait_for_child_start(
     while time.monotonic() < deadline:
         if any(
             event.get("event") == "research_execution_child_started"
-            and event.get("resource_id") == run_id
+            and event.get("run_id") == run_id
             for event in _read_events(log_path)
         ):
             return
@@ -710,7 +713,7 @@ def _request_json(
         f"{origin}{path}",
         data=data,
         method=method,
-        headers={"Content-Type": "application/json"},
+        headers=_authenticated_headers(method, has_body=data is not None),
     )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
@@ -721,6 +724,41 @@ def _request_json(
         ) from error
     if not isinstance(value, dict):
         raise RuntimeError(f"qualification API {method} {path} returned no object")
+    return value
+
+
+def _ensure_researcher_bootstrap(api_origin: str) -> None:
+    response = _request_json(api_origin, "POST", "/api/researcher/bootstrap")
+    expected = {
+        "researcher_id": _auth_session()["researcher_id"],
+        "system_folders": {
+            "default": "folder_default",
+            "batch_research": "folder_batch_research",
+        },
+    }
+    if response != expected:
+        raise RuntimeError(f"qualification Researcher bootstrap is invalid: {response}")
+
+
+def _authenticated_headers(method: str, *, has_body: bool) -> dict[str, str]:
+    headers = {"Cookie": _auth_session()["cookie"]}
+    if method in {"POST", "PATCH", "DELETE"}:
+        headers["Origin"] = _required_environment("THESISTRACE_PUBLIC_ORIGIN")
+    if has_body:
+        headers["Content-Type"] = "application/json"
+    return headers
+
+
+@lru_cache(maxsize=1)
+def _auth_session() -> dict[str, str]:
+    path = Path(_required_environment("THESISTRACE_TEST_AUTH_SESSION_FILE"))
+    value = json.loads(path.read_text())
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"cookie", "researcher_id"}
+        or not all(isinstance(item, str) and item for item in value.values())
+    ):
+        raise RuntimeError("Long Research Qualification Auth Session is invalid")
     return value
 
 

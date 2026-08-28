@@ -1188,6 +1188,49 @@ def test_image_smoke_provisions_auth_inside_the_private_compose_network() -> Non
     assert "../../auth/test-fixtures:/test-fixtures:ro" in overlay
 
 
+def test_benchmark_reprovisions_an_authenticated_researcher_after_each_reset(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "benchmark"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    commands = command_log.read_text()
+    benchmark_samples = 2 * 5 * 2 + 2
+    assert commands.count(
+        "up --detach --no-build --wait --wait-timeout 120 auth api\n"
+    ) == benchmark_samples
+    provision_lines = [
+        line
+        for line in commands.splitlines()
+        if "provision_image_smoke_auth.py" in line
+    ]
+    assert len(provision_lines) == benchmark_samples
+
+    overlay = (ROOT / "deploy" / "core" / "compose.image-smoke.yaml").read_text()
+    qualification = (ROOT / "scripts" / "long_research_qualification.py").read_text()
+    research_worker = overlay.split("  research-worker:\n", maxsplit=1)[1].split(
+        "  batch-research-worker:\n", maxsplit=1
+    )[0]
+    assert "THESISTRACE_TEST_AUTH_SESSION_FILE: /smoke-secrets/auth-session.json" in (
+        research_worker
+    )
+    assert "${THESISTRACE_TEST_SECRET_DIR}:/smoke-secrets:ro" in research_worker
+    assert "_ensure_researcher_bootstrap(api_origin)" in qualification
+    assert 'headers = {"Cookie": _auth_session()["cookie"]}' in qualification
+    assert 'headers["Origin"]' in qualification
+    assert 'event.get("run_id") == run_id' in qualification
+    assert 'event.get("resource_id") == run_id' not in qualification
+
+
 def test_production_image_smoke_builds_once_and_reuses_the_images(
     tmp_path: Path,
 ) -> None:

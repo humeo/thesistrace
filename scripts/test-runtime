@@ -539,6 +539,13 @@ provision_image_smoke_auth() {
     tests/acceptance/provision_image_smoke_auth.py "$auth_session_file"
 }
 
+prepare_benchmark_api() {
+  compose up --detach --no-build --wait --wait-timeout 120 auth api
+  postgres_port=$(mapped_port postgres 5432)
+  s3_port=$(mapped_port rustfs 9000)
+  provision_image_smoke_auth
+}
+
 cleanup_runtime_secrets() {
   test -n "${secret_dir:-}" || return 0
   if [ -n "${auth_session_file:-}" ]; then
@@ -860,7 +867,7 @@ case "$command" in
         run_phase "benchmark-$research_kind-cold-$sample_index-product-state-reset" \
           reset_product_state
         run_phase "benchmark-$research_kind-cold-$sample_index-api" \
-          compose up --detach --no-build --wait --wait-timeout 120 api
+          prepare_benchmark_api
         run_phase "benchmark-$research_kind-cold-$sample_index" \
           compose run --rm --no-deps -T \
           -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
@@ -882,7 +889,7 @@ case "$command" in
         run_phase "benchmark-$research_kind-warm-$sample_index-product-state-reset" \
           reset_product_state
         run_phase "benchmark-$research_kind-warm-$sample_index-api" \
-          compose up --detach --no-build --wait --wait-timeout 120 api
+          prepare_benchmark_api
         run_phase "benchmark-$research_kind-warm-$sample_index" \
           compose run --rm --no-deps -T \
           -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
@@ -898,7 +905,7 @@ case "$command" in
       run_phase "benchmark-$research_kind-cancellation-product-state-reset" \
         reset_product_state
       run_phase "benchmark-$research_kind-cancellation-api" \
-        compose up --detach --no-build --wait --wait-timeout 120 api
+        prepare_benchmark_api
       run_phase "benchmark-$research_kind-cancellation" compose run --rm --no-deps -T \
         -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
         research-worker python /qualification/long_research_qualification.py cancel \
