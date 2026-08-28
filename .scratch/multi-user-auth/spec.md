@@ -1,6 +1,6 @@
 # Multi-user Researcher authentication and ownership
 
-**Status:** ready-for-agent
+**Status:** complete
 
 ## Outcome
 
