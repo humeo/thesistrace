@@ -155,6 +155,21 @@ case "$auth_image" in
     ;;
 esac
 
+# Docker Compose gives the ambient shell precedence over --env-file. Remove
+# every security-sensitive value that was validated above so the root-owned
+# file remains the sole source passed to Compose.
+unset \
+  THESISTRACE_ENVIRONMENT \
+  THESISTRACE_PUBLIC_ORIGIN \
+  THESISTRACE_RESEND_API_URL \
+  THESISTRACE_OWNER_DATABASE_PASSWORD \
+  THESISTRACE_CORE_DATABASE_PASSWORD \
+  THESISTRACE_AUTH_DATABASE_PASSWORD \
+  BETTER_AUTH_SECRET \
+  RESEND_API_KEY \
+  RESEND_FROM_EMAIL \
+  THESISTRACE_AUTH_IMAGE
+
 compose() {
   docker compose \
     --project-name thesistrace \

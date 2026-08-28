@@ -49,6 +49,33 @@ def test_production_runtime_validates_before_rendering_or_starting(
     assert completed.stderr == ""
 
 
+def test_production_runtime_prevents_ambient_security_overrides(
+    tmp_path: Path,
+) -> None:
+    environment_file = tmp_path / "production.env"
+    environment_file.write_text(VALID_ENVIRONMENT)
+    environment_file.chmod(0o600)
+    environment_log = tmp_path / "docker-environment.log"
+
+    completed = _run(
+        tmp_path,
+        environment_file,
+        "validate",
+        stat_result="0:600",
+        environment_log=environment_log,
+        ambient_overrides={
+            "BETTER_AUTH_SECRET": "ambient-secret-must-not-override",
+            "THESISTRACE_PUBLIC_ORIGIN": "http://ambient.invalid",
+        },
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert environment_log.read_text().splitlines() == [
+        "public_origin=unset",
+        "auth_secret=unset",
+    ]
+
+
 @pytest.mark.parametrize("metadata", ["501:600", "0:640"])
 def test_production_runtime_rejects_non_root_or_non_0600_environment(
     tmp_path: Path,
@@ -170,6 +197,8 @@ def _run(
     *,
     stat_result: str,
     command_log: Path | None = None,
+    environment_log: Path | None = None,
+    ambient_overrides: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -179,6 +208,11 @@ def _run(
     docker = bin_dir / "docker"
     docker.write_text(
         "#!/bin/sh\n"
+        "if [ -n \"${PRODUCTION_RUNTIME_ENV_LOG-}\" ]; then\n"
+        "  printf 'public_origin=%s\\nauth_secret=%s\\n' "
+        "\"${THESISTRACE_PUBLIC_ORIGIN-unset}\" "
+        "\"${BETTER_AUTH_SECRET-unset}\" >>\"$PRODUCTION_RUNTIME_ENV_LOG\"\n"
+        "fi\n"
         "if [ -n \"${PRODUCTION_RUNTIME_COMMAND_LOG-}\" ]; then\n"
         "  printf '%s\\n' \"docker $*\" >>\"$PRODUCTION_RUNTIME_COMMAND_LOG\"\n"
         "fi\n"
@@ -191,6 +225,10 @@ def _run(
     }
     if command_log is not None:
         environment["PRODUCTION_RUNTIME_COMMAND_LOG"] = str(command_log)
+    if environment_log is not None:
+        environment["PRODUCTION_RUNTIME_ENV_LOG"] = str(environment_log)
+    if ambient_overrides is not None:
+        environment.update(ambient_overrides)
     return subprocess.run(
         [SCRIPT, action],
         cwd=ROOT,
