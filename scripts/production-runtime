@@ -129,6 +129,36 @@ resend_from=$(required_value RESEND_FROM_EMAIL)
 printf '%s\n' "$resend_from" | grep -Eq '^[^[:cntrl:]]+@[^[:cntrl:]<> ]+>?$' \
   || fail PRODUCTION_RESEND_FROM_INVALID
 
+agent_model_registry=$(required_value THESISTRACE_AGENT_MODEL_REGISTRY)
+test "${#agent_model_registry}" -le 65536 \
+  || fail PRODUCTION_AGENT_MODEL_REGISTRY_INVALID
+printf '%s\n' "$agent_model_registry" | grep -Eq '^\{.*\}$' \
+  || fail PRODUCTION_AGENT_MODEL_REGISTRY_INVALID
+
+agent_provider_secret_present=false
+for agent_provider_secret_name in \
+  THESISTRACE_AGENT_ANTHROPIC_API_KEY \
+  THESISTRACE_AGENT_GOOGLE_API_KEY \
+  THESISTRACE_AGENT_OPENAI_API_KEY \
+  THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET; do
+  agent_provider_secret=$(env_value "$agent_provider_secret_name")
+  test -n "$agent_provider_secret" || continue
+  test "${#agent_provider_secret}" -ge 16 \
+    || fail PRODUCTION_AGENT_PROVIDER_SECRET_INVALID
+  test "${#agent_provider_secret}" -le 512 \
+    || fail PRODUCTION_AGENT_PROVIDER_SECRET_INVALID
+  printf '%s\n' "$agent_provider_secret" | grep -Eq '^[^[:space:]]+$' \
+    || fail PRODUCTION_AGENT_PROVIDER_SECRET_INVALID
+  case "$agent_provider_secret" in
+    test-* | development-* | placeholder*)
+      fail PRODUCTION_AGENT_PROVIDER_SECRET_INVALID
+      ;;
+  esac
+  agent_provider_secret_present=true
+done
+test "$agent_provider_secret_present" = true \
+  || fail PRODUCTION_AGENT_PROVIDER_SECRET_INVALID
+
 auth_image=$(required_value THESISTRACE_AUTH_IMAGE)
 case "$auth_image" in
   *@*)
@@ -168,7 +198,12 @@ unset \
   BETTER_AUTH_SECRET \
   RESEND_API_KEY \
   RESEND_FROM_EMAIL \
-  THESISTRACE_AUTH_IMAGE
+  THESISTRACE_AUTH_IMAGE \
+  THESISTRACE_AGENT_MODEL_REGISTRY \
+  THESISTRACE_AGENT_ANTHROPIC_API_KEY \
+  THESISTRACE_AGENT_GOOGLE_API_KEY \
+  THESISTRACE_AGENT_OPENAI_API_KEY \
+  THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET
 
 compose() {
   docker compose \

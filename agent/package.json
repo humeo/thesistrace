@@ -1,0 +1,22 @@
+{
+  "name": "thesistrace-agent-host",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.1",
+    "hono": "4.13.5",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "5.7.3",
+    "vitest": "3.2.7"
+  }
+}

@@ -554,6 +554,7 @@ def test_development_topology_declares_every_core_service_and_pinned_infrastruct
         "rustfs",
         "auth-initialize",
         "auth",
+        "agent",
         "initialize",
         "api",
         "research-worker",
@@ -609,6 +610,7 @@ def test_every_compose_service_uses_bounded_docker_json_logs() -> None:
         "rustfs",
         "auth-initialize",
         "auth",
+        "agent",
         "initialize",
         "api",
         "research-worker",
@@ -678,22 +680,29 @@ def test_development_api_disables_duplicate_uvicorn_access_logs() -> None:
 
 def test_container_builds_exclude_host_dependency_directories() -> None:
     dockerignore = (ROOT / ".dockerignore").read_text().splitlines()
+    agent = (ROOT / "deploy" / "core" / "Dockerfile.agent").read_text()
     backend = (ROOT / "deploy" / "core" / "Dockerfile.backend").read_text()
     web = (ROOT / "deploy" / "core" / "Dockerfile.web").read_text()
 
     assert ".venv" in dockerignore
     assert "node_modules" in dockerignore
+    assert "agent/dist" in dockerignore
+    assert "agent/node_modules" in dockerignore
+    assert "agent/*.tsbuildinfo" in dockerignore
     assert "web/node_modules" in dockerignore
     assert "web/.test-workspace" in dockerignore
     assert "web/test-results" in dockerignore
     assert "web/playwright-report" in dockerignore
     assert "node_modules" not in backend
+    assert "COPY agent/node_modules" not in agent
     assert "node_modules" not in web
     assert backend.index("uv sync --frozen --no-dev --no-install-project") < backend.index(
         "COPY src ./src"
     )
     assert backend.index("COPY src ./src") < backend.rindex("uv sync --frozen --no-dev")
     assert "--mount=type=cache,target=/root/.cache/uv" in backend
+    assert "pnpm --dir agent build" in agent
+    assert "pnpm --filter thesistrace-agent-host deploy --prod /agent-runtime" in agent
     assert "node:24.14.0-bookworm-slim" in web
     assert "caddy:2.11.4-alpine" in web
     assert "pnpm@11.9.0" in web
@@ -1304,7 +1313,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     project_name = completed.stdout.splitlines()[1].removeprefix("Compose project: ")
     commands = command_log.read_text()
     assert commands.index("config --quiet") < commands.index("up --detach")
-    assert commands.count("build initialize auth-initialize web\n") == 1
+    assert commands.count("build initialize auth-initialize agent web\n") == 1
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
@@ -1321,7 +1330,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert "wait initialize auth-initialize\n" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 300 "
-        "auth api research-worker batch-research-worker tracking-worker web\n"
+        "auth agent api research-worker batch-research-worker tracking-worker web\n"
         in commands
     )
     assert "--build" not in commands
@@ -1343,6 +1352,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
         "batch-research-worker",
         "tracking-worker",
         "initialize",
+        "agent",
         "auth",
         "web",
     ):
@@ -1504,7 +1514,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert completed.returncode == 0, completed.stderr
     project_name = completed.stdout.splitlines()[1].removeprefix("Compose project: ")
     commands = command_log.read_text()
-    assert commands.count("build initialize auth-initialize web\n") == 1
+    assert commands.count("build initialize auth-initialize agent web\n") == 1
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
@@ -1521,7 +1531,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert "wait initialize auth-initialize\n" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 300 "
-        "auth api web\n" in commands
+        "auth agent api web\n" in commands
     )
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
@@ -1582,9 +1592,10 @@ def test_image_smoke_mounts_explicit_local_mcp_api_without_changing_production_i
 
 def test_production_image_base_tags_are_locked_to_content_digests() -> None:
     backend = (ROOT / "deploy" / "core" / "Dockerfile.backend").read_text()
+    agent = (ROOT / "deploy" / "core" / "Dockerfile.agent").read_text()
     web = (ROOT / "deploy" / "core" / "Dockerfile.web").read_text()
 
-    for dockerfile in (backend, web):
+    for dockerfile in (backend, agent, web):
         from_lines = [line for line in dockerfile.splitlines() if line.startswith("FROM ")]
         assert from_lines
         assert all("@sha256:" in line for line in from_lines)
@@ -1606,7 +1617,7 @@ def test_failed_image_build_stops_smoke_before_runtime_phases(tmp_path: Path) ->
 
     assert completed.returncode == 7
     commands = command_log.read_text()
-    assert "build initialize auth-initialize web\n" in commands
+    assert "build initialize auth-initialize agent web\n" in commands
     assert "entrypoint /bin/true batch-research-worker" not in commands
     assert "production_image_smoke.py" not in commands
 
@@ -1694,7 +1705,7 @@ def test_failed_image_build_stops_before_infrastructure_and_preserves_status(
     assert "phase=image-smoke-images " in metadata
     assert "status=12" in metadata
     commands = command_log.read_text()
-    assert "build initialize auth-initialize web" in commands
+    assert "build initialize auth-initialize agent web" in commands
     assert "image tag" not in commands
     assert "up --detach" not in commands
 

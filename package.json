@@ -14,7 +14,7 @@
     "dev:reset": "./scripts/dev-runtime reset",
     "dev:erase": "./scripts/dev-runtime erase",
     "dev:stop": "./scripts/dev-runtime stop",
-    "test": "uv run ruff check src tests && uv run pytest -q -n 4 tests/kernel tests/architecture tests/adapters tests/data tests/entrypoints && pnpm --dir auth typecheck && pnpm --dir auth test && pnpm --dir web typecheck && pnpm --dir web test:shell",
+    "test": "uv run ruff check src tests && uv run pytest -q -n 4 tests/kernel tests/architecture tests/adapters tests/data tests/entrypoints && pnpm --dir agent typecheck && pnpm --dir agent test && pnpm --dir auth typecheck && pnpm --dir auth test && pnpm --dir web typecheck && pnpm --dir web test:shell",
     "test:cleanup": "./scripts/test-runtime cleanup",
     "test:e2e": "./scripts/test-runtime e2e",
     "test:benchmark": "./scripts/test-runtime benchmark",

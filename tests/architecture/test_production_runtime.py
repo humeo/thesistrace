@@ -9,7 +9,16 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "production-runtime"
 
-VALID_ENVIRONMENT = """\
+VALID_AGENT_REGISTRY = (
+    '{"default_model_key":"openai-research","models":['
+    '{"default_reasoning_effort":"medium","display_name":"OpenAI Research",'
+    '"enabled":true,"key":"openai-research","provider_adapter":"openai",'
+    '"provider_model_id":"gpt-research",'
+    '"reasoning_efforts":["low","medium","high"],'
+    '"secret_env":"THESISTRACE_AGENT_OPENAI_API_KEY"}]}'
+)
+
+VALID_ENVIRONMENT = f"""\
 THESISTRACE_ENVIRONMENT=production
 THESISTRACE_PUBLIC_ORIGIN=https://research.thesistrace.com
 THESISTRACE_RESEND_API_URL=https://api.resend.com
@@ -20,6 +29,8 @@ BETTER_AUTH_SECRET=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00
 RESEND_API_KEY=re_production_7Kp4mN9vQ2sL6xT8
 RESEND_FROM_EMAIL=ThesisTrace <noreply@thesistrace.com>
 THESISTRACE_AUTH_IMAGE=ghcr.io/thesistrace/auth:2026-08-29
+THESISTRACE_AGENT_MODEL_REGISTRY={VALID_AGENT_REGISTRY}
+THESISTRACE_AGENT_OPENAI_API_KEY=sk-production-agent-7Kp4mN9vQ2sL6xT8
 """
 
 
@@ -65,6 +76,8 @@ def test_production_runtime_prevents_ambient_security_overrides(
         environment_log=environment_log,
         ambient_overrides={
             "BETTER_AUTH_SECRET": "ambient-secret-must-not-override",
+            "THESISTRACE_AGENT_MODEL_REGISTRY": "ambient-registry-must-not-override",
+            "THESISTRACE_AGENT_OPENAI_API_KEY": "ambient-provider-must-not-override",
             "THESISTRACE_PUBLIC_ORIGIN": "http://ambient.invalid",
         },
     )
@@ -73,6 +86,8 @@ def test_production_runtime_prevents_ambient_security_overrides(
     assert environment_log.read_text().splitlines() == [
         "public_origin=unset",
         "auth_secret=unset",
+        "agent_registry=unset",
+        "agent_provider=unset",
     ]
 
 
@@ -136,6 +151,14 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
         (
             "THESISTRACE_AUTH_IMAGE=ghcr.io/thesistrace/auth:latest",
             "PRODUCTION_AUTH_IMAGE_INVALID",
+        ),
+        (
+            "THESISTRACE_AGENT_MODEL_REGISTRY=not-json",
+            "PRODUCTION_AGENT_MODEL_REGISTRY_INVALID",
+        ),
+        (
+            "THESISTRACE_AGENT_OPENAI_API_KEY=test-provider-key",
+            "PRODUCTION_AGENT_PROVIDER_SECRET_INVALID",
         ),
     ],
 )
@@ -212,6 +235,9 @@ def _run(
         "  printf 'public_origin=%s\\nauth_secret=%s\\n' "
         "\"${THESISTRACE_PUBLIC_ORIGIN-unset}\" "
         "\"${BETTER_AUTH_SECRET-unset}\" >>\"$PRODUCTION_RUNTIME_ENV_LOG\"\n"
+        "  printf 'agent_registry=%s\\nagent_provider=%s\\n' "
+        "\"${THESISTRACE_AGENT_MODEL_REGISTRY-unset}\" "
+        "\"${THESISTRACE_AGENT_OPENAI_API_KEY-unset}\" >>\"$PRODUCTION_RUNTIME_ENV_LOG\"\n"
         "fi\n"
         "if [ -n \"${PRODUCTION_RUNTIME_COMMAND_LOG-}\" ]; then\n"
         "  printf '%s\\n' \"docker $*\" >>\"$PRODUCTION_RUNTIME_COMMAND_LOG\"\n"

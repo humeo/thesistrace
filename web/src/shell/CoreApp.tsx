@@ -5,6 +5,9 @@ import { AppShell } from "./AppShell";
 const DataPage = lazy(() =>
   import("../data/DataPage").then(({ DataPage }) => ({ default: DataPage })),
 );
+const ChatPage = lazy(() =>
+  import("../chat/ChatPage").then(({ ChatPage }) => ({ default: ChatPage })),
+);
 const DailyTracksPage = lazy(() =>
   import("../daily-tracks/DailyTracksPage").then(({ DailyTracksPage }) => ({
     default: DailyTracksPage,
@@ -25,6 +28,15 @@ export function CoreApp({ currentPath, researcherId }: {
   currentPath: string;
   researcherId: string;
 }) {
+  if (currentPath === "/chat") {
+    return (
+      <Suspense
+        fallback={<section className="state-section chat-route-loading"><p>Loading Chat…</p></section>}
+      >
+        <ChatPage />
+      </Suspense>
+    );
+  }
   const researchRunMatch = currentPath.match(/^\/research-runs\/(run_[a-f0-9]+)$/);
   const dailyTrackMatch = currentPath.match(/^\/daily-tracks\/(track_[a-f0-9]+)$/);
   return (

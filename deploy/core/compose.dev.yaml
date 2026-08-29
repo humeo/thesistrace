@@ -51,6 +51,20 @@ services:
         - path: ./Dockerfile.auth
           action: rebuild
 
+  agent:
+    develop:
+      watch:
+        - path: ../../agent
+          action: rebuild
+        - path: ../../package.json
+          action: rebuild
+        - path: ../../pnpm-lock.yaml
+          action: rebuild
+        - path: ../../pnpm-workspace.yaml
+          action: rebuild
+        - path: ./Dockerfile.agent
+          action: rebuild
+
   research-worker:
     develop:
       watch:

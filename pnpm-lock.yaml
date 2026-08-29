@@ -9,6 +9,28 @@ importers:
 
   .: {}
 
+  agent:
+    dependencies:
+      '@hono/node-server':
+        specifier: 2.1.1
+        version: 2.1.1(hono@4.13.5)
+      hono:
+        specifier: 4.13.5
+        version: 4.13.5
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.3
+        version: 24.13.3
+      typescript:
+        specifier: 5.7.3
+        version: 5.7.3
+      vitest:
+        specifier: 3.2.7
+        version: 3.2.7(@types/node@24.13.3)
+
   auth:
     dependencies:
       '@hono/node-server':

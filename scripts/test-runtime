@@ -17,6 +17,8 @@ auth_database_password=auth-test-password
 resend_api_key=resend-test-key
 resend_from_email='ThesisTrace <noreply@thesistrace.test>'
 resend_api_url=http://resend-fake:8300
+agent_model_registry='{"default_model_key":"scripted-research","models":[{"default_reasoning_effort":"medium","display_name":"Scripted Research","enabled":true,"key":"scripted-research","provider_adapter":"scripted","provider_model_id":"scripted-v1","reasoning_efforts":["low","medium","high"],"secret_env":"THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"},{"default_reasoning_effort":"high","display_name":"Scripted Deep Research","enabled":true,"key":"scripted-deep-research","provider_adapter":"scripted","provider_model_id":"scripted-v2","reasoning_efforts":["high"],"secret_env":"THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"}]}'
+agent_scripted_model_secret=scripted-test-provider-secret
 compose_cleanup_required=true
 
 new_run_id() {
@@ -104,6 +106,8 @@ compose() {
       THESISTRACE_CORE_DATABASE_PASSWORD="$core_database_password" \
       THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
       THESISTRACE_AUTH_IMAGE="$project_name-auth" \
+      THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
+      THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET="$agent_scripted_model_secret" \
       BETTER_AUTH_SECRET="$auth_secret" \
       RESEND_API_KEY="$resend_api_key" \
       RESEND_FROM_EMAIL="$resend_from_email" \
@@ -127,6 +131,8 @@ compose() {
       THESISTRACE_CORE_DATABASE_PASSWORD="$core_database_password" \
       THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
       THESISTRACE_AUTH_IMAGE="$project_name-auth" \
+      THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
+      THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET="$agent_scripted_model_secret" \
       BETTER_AUTH_SECRET="$auth_secret" \
       RESEND_API_KEY="$resend_api_key" \
       RESEND_FROM_EMAIL="$resend_from_email" \
@@ -149,6 +155,8 @@ base_compose() {
     THESISTRACE_CORE_DATABASE_PASSWORD="$core_database_password" \
     THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
     THESISTRACE_AUTH_IMAGE="$project_name-auth" \
+    THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
+    THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET="$agent_scripted_model_secret" \
     BETTER_AUTH_SECRET="$auth_secret" \
     RESEND_API_KEY="$resend_api_key" \
     RESEND_FROM_EMAIL="$resend_from_email" \
@@ -176,7 +184,7 @@ cleanup_runtime_images() {
   runtime_images_status=0
   for image_service in \
     api research-worker batch-research-worker tracking-worker \
-    initialize auth web; do
+    initialize agent auth web; do
     image_name=$(runtime_image_name "$image_service")
     if docker image inspect "$image_name" >/dev/null 2>&1; then
       docker image rm "$image_name" >/dev/null || runtime_images_status=$?
@@ -186,7 +194,7 @@ cleanup_runtime_images() {
 }
 
 build_runtime_images() {
-  compose build initialize auth-initialize web || return $?
+  compose build initialize auth-initialize agent web || return $?
   built_backend_image=$(runtime_image_name initialize)
   docker image tag "$built_backend_image" "$(runtime_image_name api)" || return $?
   docker image tag "$built_backend_image" "$(runtime_image_name research-worker)" \
@@ -315,6 +323,9 @@ verify_caddy_single_origin() {
   curl --fail --silent --show-error "$public_origin/login" \
     >"$evidence_dir/caddy-spa-fallback.html"
   cmp "$evidence_dir/caddy-spa.html" "$evidence_dir/caddy-spa-fallback.html"
+  curl --fail --silent --show-error "$public_origin/chat" \
+    >"$evidence_dir/caddy-chat-spa-fallback.html"
+  cmp "$evidence_dir/caddy-spa.html" "$evidence_dir/caddy-chat-spa-fallback.html"
   grep -Fi "Content-Security-Policy: default-src 'none'; script-src 'self';" \
     "$evidence_dir/caddy-security-headers.txt"
   grep -Fi "style-src 'self'; style-src-attr 'unsafe-inline'" \
@@ -336,6 +347,11 @@ verify_caddy_single_origin() {
     --output "$evidence_dir/caddy-core.json" --write-out '%{http_code}' \
     "$public_origin/api/data")
   test "$core_status" = 401
+  agent_status=$(curl --silent --show-error \
+    --header "Origin: $public_origin" \
+    --output "$evidence_dir/caddy-agent.json" --write-out '%{http_code}' \
+    "$public_origin/api/agent/models")
+  test "$agent_status" = 401
 
   auth_canary_status=$(curl --silent --show-error \
     --header "Origin: $public_origin" \
@@ -1122,7 +1138,7 @@ case "$command" in
       tests/browser/prepare_current_data.py
     run_phase e2e-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
-      auth api research-worker batch-research-worker tracking-worker web
+      auth agent api research-worker batch-research-worker tracking-worker web
     resend_port=$(mapped_port resend-fake 8300)
     resend_test_origin="http://127.0.0.1:$resend_port"
     printf 'postgres_port=%s\ns3_port=%s\nresend_port=%s\n' \
@@ -1164,7 +1180,7 @@ case "$command" in
       2>"$evidence_dir/mcp-preflight.stderr.log"
     run_phase image-smoke-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
-      auth api web
+      auth agent api web
     postgres_port=$(mapped_port postgres 5432)
     s3_port=$(mapped_port rustfs 9000)
     run_phase image-smoke-auth-session provision_image_smoke_auth

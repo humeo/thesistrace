@@ -64,6 +64,21 @@
 		reverse_proxy auth:8200 {
 			header_up X-ThesisTrace-Client-IP {remote_host}
 			header_up X-Request-ID {http.request.uuid}
+			transport http {
+				keepalive 2s
+			}
+		}
+	}
+
+	handle /api/agent/* {
+		log_append path /api/agent/*
+		header Cache-Control "no-store"
+		reverse_proxy agent:8400 {
+			header_up X-ThesisTrace-Client-IP {remote_host}
+			header_up X-Request-ID {http.request.uuid}
+			transport http {
+				keepalive 2s
+			}
 		}
 	}
 
@@ -73,6 +88,9 @@
 		reverse_proxy api:8100 {
 			header_up X-ThesisTrace-Client-IP {remote_host}
 			header_up X-Request-ID {http.request.uuid}
+			transport http {
+				keepalive 2s
+			}
 		}
 	}
 

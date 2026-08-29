@@ -33,6 +33,7 @@ describe("browser auth routing", () => {
   });
 
   test.each([
+    "/chat",
     "/data",
     "/research",
     "/research-runs/run_feedface",
@@ -73,6 +74,7 @@ describe("browser auth routing", () => {
   });
 
   test.each([
+    ["/chat", "/chat"],
     ["/research?folder=folder_default#formula", "/research?folder=folder_default#formula"],
     ["/research-runs/run_feedface", "/research-runs/run_feedface"],
     ["//attacker.test/data", null],
