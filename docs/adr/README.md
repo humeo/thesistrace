@@ -90,6 +90,10 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0228 — Separate local, test, and production Research Agent authentication adapters](0228-separate-local-test-and-production-research-agent-authentication-adapters.md)
 - [ADR-0229 — Mount HTTP MCP in the Core API process](0229-mount-http-mcp-in-the-core-api-process.md)
 - [ADR-0230 — Keep MCP ingress protection outside Product quotas](0230-keep-mcp-ingress-protection-outside-product-quotas.md)
+- [ADR-0235 — Run the built-in Research Agent in a separate Host](0235-run-the-built-in-research-agent-in-a-separate-host.md)
+- [ADR-0236 — Keep Agent Chat separate from Research truth](0236-keep-agent-chat-separate-from-research-truth.md)
+- [ADR-0237 — Exchange Login Sessions for short-lived MCP tokens in Auth](0237-exchange-login-sessions-for-short-lived-mcp-tokens-in-auth.md)
+- [ADR-0238 — Keep Agent content out of operational telemetry](0238-keep-agent-content-out-of-operational-telemetry.md)
 
 ## Alpha language and authoring
 

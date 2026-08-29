@@ -48,6 +48,11 @@ An optional human-readable claim about a market relationship that motivates an
 Alpha.
 _Avoid_: Alpha, formula, Strategy
 
+**Alpha Proposal**:
+A non-authoritative structured Research Agent presentation of one prospective
+Alpha Formula and its research configuration inside an Agent Chat Session.
+_Avoid_: Alpha, Browser Draft, ResearchRun, Result Bundle
+
 **Alpha**:
 An executable scoring rule that produces one cross-sectional score per eligible
 instrument and Research Session.
@@ -155,6 +160,11 @@ The explicitly granted set of product actions a Research Agent may invoke.
 Authority to admit or observe Research does not imply authority to cancel it or
 irreversibly stop a DailyTrack.
 _Avoid_: Human confirmation, Tool visibility, Data Operator authority
+
+**Agent Chat Session**:
+A durable conversation owned by one Researcher that may produce multiple
+ResearchRuns without owning their inputs, lifecycle, or results.
+_Avoid_: Login Session, Research Session, ResearchRun, authoritative Research record
 
 **Research Folder**:
 A durable, one-level container owned by one Researcher that organizes
@@ -329,6 +339,11 @@ _Avoid_: New all-cash baseline, copied Result Bundle
 One idempotent unit of work that extends a DailyTrack through a frozen Tracking
 Advance Target and publishes at most one Tracking Checkpoint.
 _Avoid_: ResearchRun, Data Refresh, partial result
+
+**DailyTrack Refresh**:
+The explicit Researcher command that queues one new Tracking Advance for an
+active, lagging, idle DailyTrack.
+_Avoid_: Data Refresh, page Reload, Dataset Head trigger, automatic Advance
 
 **Tracking Advance Target**:
 The fixed contiguous set of oldest unpublished Research Sessions assigned to one
