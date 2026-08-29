@@ -1,8 +1,15 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { Pool, PoolClient } from "pg";
 
 import { recordSecurityAudit } from "./audit.js";
+import {
+  lockAuthMutationShared,
+  lockAuthMutationSharedSession,
+  unlockAuthMutationSharedSession,
+} from "./auth-mutation-lock.js";
 import { canonicalizeEmail } from "./identity.js";
-import { unknownEmailHmac } from "./security.js";
+import { sha256 } from "./security.js";
 
 type AuthDelegate = (request: Request) => Promise<Response> | Response;
 type SessionReader = (headers: Headers) => Promise<unknown>;
@@ -16,8 +23,9 @@ export class AuthCoordinationUnavailableError extends Error {
       operationCompleted: boolean;
       operationStarted: boolean;
     }> = { operationCompleted: false, operationStarted: false },
+    options?: ErrorOptions,
   ) {
-    super("AUTH_COORDINATION_UNAVAILABLE");
+    super("AUTH_COORDINATION_UNAVAILABLE", options);
     this.name = "AuthCoordinationUnavailableError";
     this.operationCompleted = progress.operationCompleted;
     this.operationStarted = progress.operationStarted;
@@ -46,6 +54,7 @@ export class AuthOperationCoordinator {
       throw new AuthCoordinationUnavailableError();
     }
     const lockedKeys: string[] = [];
+    let mutationLockHeld = false;
     let unsafeConnection = false;
     let operationCompleted = false;
     let operationStarted = false;
@@ -64,6 +73,13 @@ export class AuthOperationCoordinator {
     const guard = <T>(promise: Promise<T>): Promise<T> =>
       Promise.race([promise, connectionFailure]);
     try {
+      try {
+        await guard(lockAuthMutationSharedSession(client));
+        mutationLockHeld = true;
+      } catch (error) {
+        unsafeConnection = true;
+        throw error;
+      }
       for (const key of keys) {
         try {
           await guard(
@@ -102,6 +118,15 @@ export class AuthOperationCoordinator {
           unsafeConnection = true;
         }
       }
+      if (connectionError === undefined && mutationLockHeld) {
+        try {
+          if (!(await guard(unlockAuthMutationSharedSession(client)))) {
+            unsafeConnection = true;
+          }
+        } catch {
+          unsafeConnection = true;
+        }
+      }
       client.off("error", onClientError);
       const failClosed = unsafeConnection;
       const coordinationError = new AuthCoordinationUnavailableError({
@@ -124,11 +149,23 @@ export type CredentialOperationCoordinatorDependencies = Readonly<{
 
 export type CredentialOperationOptions = Readonly<{
   additionalLockKeys?: readonly string[];
-  compensateSessionUncertainty?: boolean;
+  compensateUncertainty?: "reset-credentials" | "sessions";
+  existingSession?: Readonly<{ researcherId: string; token: string }>;
 }>;
+
+type CredentialMutationArtifacts = {
+  cancelled: boolean;
+  readonly passwordResets: Map<
+    string,
+    Readonly<{ researcherId: string; tokenHash: Buffer }>
+  >;
+  readonly researcherIds: Set<string>;
+  readonly sessions: Map<string, string>;
+};
 
 export class CredentialOperationCoordinator {
   readonly #authSecret: string;
+  readonly #artifacts = new AsyncLocalStorage<CredentialMutationArtifacts>();
   readonly #coordination: AuthOperationCoordinator;
   readonly #pool: Pool;
   readonly #serial = new KeyedSerialExecutor();
@@ -139,14 +176,41 @@ export class CredentialOperationCoordinator {
     this.#pool = dependencies.pool;
   }
 
-  runForEmail<T>(
+  readonly recordPasswordResetCredential = (input: Readonly<{
+    identifier: string;
+    researcherId: string;
+    tokenHash: Buffer;
+  }>): void => {
+    const artifacts = this.#artifacts.getStore();
+    if (artifacts === undefined) return;
+    artifacts.passwordResets.set(input.identifier, {
+      researcherId: input.researcherId,
+      tokenHash: Buffer.from(input.tokenHash),
+    });
+    artifacts.researcherIds.add(input.researcherId);
+  };
+
+  readonly recordSession = (input: Readonly<{
+    researcherId: string;
+    token: string;
+  }>): void => {
+    const artifacts = this.#artifacts.getStore();
+    if (artifacts === undefined) return;
+    artifacts.sessions.set(input.token, input.researcherId);
+    artifacts.researcherIds.add(input.researcherId);
+  };
+
+  async runForEmail<T>(
     emailInput: string,
     operation: (client: PoolClient) => Promise<T>,
     options: CredentialOperationOptions = {},
   ): Promise<T> {
     const email = canonicalizeEmail(emailInput);
-    const lockKey = credentialLockKey(this.#authSecret, email);
-    return this.#serial.run(lockKey, async () => {
+    const lockKey = credentialLockKey(email);
+    const compensation = options.compensateUncertainty;
+    const inheritedArtifacts = this.#artifacts.getStore();
+    const artifacts = createCredentialMutationArtifacts(options.existingSession);
+    const coordinated = async (): Promise<T> => {
       try {
         return await this.#coordination.run(
           [lockKey, ...(options.additionalLockKeys ?? [])],
@@ -154,15 +218,37 @@ export class CredentialOperationCoordinator {
         );
       } catch (error) {
         if (
-          error instanceof AuthCoordinationUnavailableError &&
-          error.operationStarted &&
-          options.compensateSessionUncertainty === true
+          error instanceof AuthCoordinationUnavailableError
+          && error.operationStarted
+          && compensation !== undefined
         ) {
-          await this.#compensateSessionUncertainty(email);
+          artifacts.cancelled = true;
+          try {
+            await this.#compensateCredentialUncertainty(artifacts, compensation);
+          } catch (cause) {
+            throw new AuthCoordinationUnavailableError(
+              {
+                operationCompleted: error.operationCompleted,
+                operationStarted: error.operationStarted,
+              },
+              { cause },
+            );
+          }
         }
         throw error;
       }
-    });
+    };
+    return await this.#serial.run(
+      lockKey,
+      () => {
+        if (inheritedArtifacts?.cancelled === true) {
+          throw new AuthCoordinationUnavailableError();
+        }
+        return compensation === undefined
+          ? coordinated()
+          : this.#artifacts.run(artifacts, coordinated);
+      },
+    );
   }
 
   async handleAuthRequest(
@@ -177,34 +263,72 @@ export class CredentialOperationCoordinator {
     return await this.runForEmail(
       context.email,
       async () => await delegate(request),
-      { compensateSessionUncertainty: true },
+      {
+        compensateUncertainty: context.compensation,
+        existingSession: context.existingSession,
+      },
     );
   }
 
-  async #compensateSessionUncertainty(email: string): Promise<void> {
+  async #compensateCredentialUncertainty(
+    artifacts: CredentialMutationArtifacts,
+    compensation: "reset-credentials" | "sessions",
+  ): Promise<void> {
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
-      const researcher = await client.query<{ id: string }>(
-        'SELECT id FROM auth."user" WHERE email = $1 FOR UPDATE',
-        [email],
-      );
-      const researcherId = researcher.rows[0]?.id;
-      if (researcherId === undefined) {
-        await client.query("COMMIT");
-        return;
+      await lockAuthMutationShared(client);
+      const researcherIds = [...artifacts.researcherIds].sort();
+      for (const researcherId of researcherIds) {
+        await client.query(
+          "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))",
+          [researcherId],
+        );
       }
-      const revoked = await client.query(
-        'DELETE FROM auth."session" WHERE "userId" = $1',
-        [researcherId],
+      const revoked = await client.query<{ researcher_id: string }>(
+        `
+          DELETE FROM auth."session"
+          WHERE token = ANY($1::text[])
+          RETURNING "userId" AS researcher_id
+        `,
+        [[...artifacts.sessions.keys()]],
       );
-      await recordSecurityAudit(client, {
-        authSecret: this.#authSecret,
-        event: "sessions_revoked",
-        identity: { researcherId },
-        occurredAt: new Date(),
-        outcome: revoked.rowCount === 0 ? "no_change" : "succeeded",
-      });
+      const occurredAt = new Date();
+      if (compensation === "reset-credentials") {
+        for (const [identifier, reset] of artifacts.passwordResets) {
+          await client.query(
+            `
+              UPDATE auth.password_reset
+              SET status = 'revoked', terminal_at = $3
+              WHERE user_id = $1
+                AND token_hash = $2
+                AND status IN ('delivery_pending', 'delivered')
+            `,
+            [reset.researcherId, reset.tokenHash, occurredAt],
+          );
+          await client.query(
+            `
+              DELETE FROM auth."verification"
+              WHERE value = $1 AND identifier = $2
+            `,
+            [reset.researcherId, identifier],
+          );
+        }
+      }
+      const revokedResearcherIds = new Set(
+        revoked.rows.map((row) => row.researcher_id),
+      );
+      for (const researcherId of researcherIds) {
+        await recordSecurityAudit(client, {
+          authSecret: this.#authSecret,
+          event: "sessions_revoked",
+          identity: { researcherId },
+          occurredAt,
+          outcome: revokedResearcherIds.has(researcherId)
+            ? "succeeded"
+            : "no_change",
+        });
+      }
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
@@ -238,8 +362,9 @@ export class KeyedSerialExecutor {
   }
 }
 
-export function credentialLockKey(authSecret: string, email: string): string {
-  return `researcher-credential:${unknownEmailHmac(authSecret, email).toString("hex")}`;
+export function credentialLockKey(emailInput: string): string {
+  const email = canonicalizeEmail(emailInput);
+  return `researcher-credential:${sha256(`thesistrace:credential:${email}`).toString("hex")}`;
 }
 
 export function invitationTokenLockKey(tokenHash: Buffer): string {
@@ -249,18 +374,40 @@ export function invitationTokenLockKey(tokenHash: Buffer): string {
 async function credentialRequestContext(
   request: Request,
   getSession: SessionReader,
-): Promise<Readonly<{ email: string }> | undefined> {
+): Promise<Readonly<{
+  compensation: "reset-credentials" | "sessions";
+  email: string;
+  existingSession?: Readonly<{ researcherId: string; token: string }>;
+}> | undefined> {
   const path = new URL(request.url).pathname;
-  if (path === "/api/auth/sign-in/email") {
+  if (
+    path === "/api/auth/sign-in/email"
+    || path === "/api/auth/request-password-reset"
+  ) {
     const body = await jsonBody(request);
-    return typeof body?.email === "string" ? { email: body.email } : undefined;
+    if (typeof body?.email !== "string") return undefined;
+    return {
+      compensation:
+        path === "/api/auth/request-password-reset"
+          ? "reset-credentials"
+          : "sessions",
+      email: body.email,
+    };
   }
-  if (path !== "/api/auth/change-password") {
+  if (path !== "/api/auth/change-password" && path !== "/api/auth/sign-out") {
     return undefined;
   }
-  const session = await getSession(request.headers);
-  const email = sessionEmail(session);
-  return email === undefined ? undefined : { email };
+  const session = sessionCredential(await getSession(request.headers));
+  return session === undefined
+    ? undefined
+    : {
+        compensation: "sessions",
+        email: session.email,
+        existingSession: {
+          researcherId: session.researcherId,
+          token: session.sessionToken,
+        },
+      };
 }
 
 async function jsonBody(
@@ -276,17 +423,48 @@ async function jsonBody(
   }
 }
 
-function sessionEmail(session: unknown): string | undefined {
+function sessionCredential(session: unknown): Readonly<{
+  email: string;
+  researcherId: string;
+  sessionToken: string;
+}> | undefined {
   if (
     session === null ||
     typeof session !== "object" ||
+    !("session" in session) ||
+    session.session === null ||
+    typeof session.session !== "object" ||
+    !("token" in session.session) ||
+    typeof session.session.token !== "string" ||
     !("user" in session) ||
     session.user === null ||
     typeof session.user !== "object" ||
+    !("id" in session.user) ||
+    typeof session.user.id !== "string" ||
     !("email" in session.user) ||
     typeof session.user.email !== "string"
   ) {
     return undefined;
   }
-  return session.user.email;
+  return {
+    email: session.user.email,
+    researcherId: session.user.id,
+    sessionToken: session.session.token,
+  };
+}
+
+function createCredentialMutationArtifacts(
+  existingSession: Readonly<{ researcherId: string; token: string }> | undefined,
+): CredentialMutationArtifacts {
+  const artifacts: CredentialMutationArtifacts = {
+    cancelled: false,
+    passwordResets: new Map(),
+    researcherIds: new Set(),
+    sessions: new Map(),
+  };
+  if (existingSession !== undefined) {
+    artifacts.sessions.set(existingSession.token, existingSession.researcherId);
+    artifacts.researcherIds.add(existingSession.researcherId);
+  }
+  return artifacts;
 }

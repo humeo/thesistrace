@@ -1,7 +1,9 @@
 import type { Page } from "@playwright/test";
 
 import {
+  browserPassword,
   createResearcher,
+  emailToken,
   expect,
   issueInvitation,
   restoreResearcherSession,
@@ -13,6 +15,19 @@ import {
 } from "./auth-fixture";
 
 test("only the singleton Operator can open and read the Operator Console", async ({ page }) => {
+  const operatorMutationRequests: Array<Readonly<{ path: string; body: string }>> = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (
+      request.method() === "POST"
+      && (
+        path === "/api/auth/operator/proofs"
+        || path.startsWith("/api/auth/operator/invitations/")
+      )
+    ) {
+      operatorMutationRequests.push({ body: request.postData() ?? "", path });
+    }
+  });
   const operator = await createResearcher(page, "browser-operator@example.test");
   await bootstrapResearcher(page, operator);
   expect(runAuthOperator("assign-operator", "--researcher-id", operator.id)).toMatchObject({
@@ -64,6 +79,185 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(terminalInvitation).toHaveCount(1);
   await expect(terminalInvitation.locator("time")).toHaveCount(3);
 
+  const consoleInvitationEmail = "browser-console-invited@example.test";
+  const inviteResearcher = page.getByRole("button", { name: "Invite Researcher" });
+  await inviteResearcher.focus();
+  await inviteResearcher.press("Enter");
+  let confirmation = page.getByRole("dialog", { name: "Issue Invitation?" });
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation).toContainText("Target email");
+  await expect(confirmation).toContainText("A 48-hour Invitation");
+  const issueEmail = confirmation.getByLabel("Target email");
+  const issuePassword = confirmation.getByLabel("Current password");
+  await expect(issueEmail).toBeFocused();
+  await issueEmail.press("Shift+Tab");
+  expect(await confirmation.evaluate((element) =>
+    element.contains(document.activeElement)
+  )).toBe(true);
+  await page.keyboard.press("Tab");
+  expect(await confirmation.evaluate((element) =>
+    element.contains(document.activeElement)
+  )).toBe(true);
+  await issueEmail.fill(consoleInvitationEmail);
+  await issuePassword.fill(browserPassword);
+  await page.keyboard.press("Escape");
+  await expect(confirmation).toHaveCount(0);
+  await expect(inviteResearcher).toBeFocused();
+
+  await inviteResearcher.press("Enter");
+  confirmation = page.getByRole("dialog", { name: "Issue Invitation?" });
+  await expect(confirmation.getByLabel("Current password")).toHaveValue("");
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(inviteResearcher).toBeFocused();
+  const cancelFocusPagination = page.getByRole("navigation", {
+    name: "Invitations pagination",
+  });
+  await cancelFocusPagination.getByRole("button", { name: "Next" }).click();
+  await expect(cancelFocusPagination).toContainText("Page 2");
+  await expect(inviteResearcher).not.toBeFocused();
+  await cancelFocusPagination.getByRole("button", { name: "Previous" }).click();
+  await expect(cancelFocusPagination).toContainText("Page 1");
+  await expect(inviteResearcher).toBeEnabled();
+
+  await inviteResearcher.press("Enter");
+  confirmation = page.getByRole("dialog", { name: "Issue Invitation?" });
+  await confirmation.getByLabel("Target email").fill(consoleInvitationEmail);
+  await confirmation.getByLabel("Target email").press("Tab");
+  await expect(confirmation.getByLabel("Current password")).toBeFocused();
+  await confirmation.getByLabel("Current password").fill(browserPassword);
+  await confirmation.getByLabel("Current password").press("Enter");
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.getByRole("status").filter({
+    hasText: `Invitation sent to ${consoleInvitationEmail}.`,
+  })).toBeVisible();
+  const consoleInvitationTable = page.getByRole("table", { name: "Invitations" });
+  await expect(
+    consoleInvitationTable.getByText(consoleInvitationEmail, { exact: true }),
+  ).toBeVisible();
+  await expect(inviteResearcher).toBeFocused();
+  const oldConsoleToken = await emailToken(
+    consoleInvitationEmail,
+    "/accept-invitation#token=",
+  );
+
+  const reissueAction = page.getByRole("button", {
+    name: `Reissue invitation for ${consoleInvitationEmail}`,
+  });
+  await reissueAction.click();
+  const reissueConfirmation = page.getByRole("dialog", {
+    name: "Reissue Invitation?",
+  });
+  await expect(reissueConfirmation).toContainText(consoleInvitationEmail);
+  await expect(reissueConfirmation).toContainText(
+    "The old link becomes invalid only after delivery succeeds.",
+  );
+  await reissueConfirmation.getByLabel("Current password").fill(browserPassword);
+  await reissueConfirmation.getByLabel("Current password").press("Enter");
+  await expect(reissueConfirmation).toHaveCount(0);
+  await expect(page.getByRole("status").filter({
+    hasText: `Invitation reissued for ${consoleInvitationEmail}.`,
+  })).toBeVisible();
+  const reissuedRows = consoleInvitationTable.getByRole("row").filter({
+    hasText: consoleInvitationEmail,
+  });
+  await expect(reissuedRows).toHaveCount(2);
+  await expect(
+    reissuedRows.filter({ hasText: "Terminal · Revoked" }).getByRole(
+      "button",
+      { name: `Reissue invitation for ${consoleInvitationEmail}` },
+    ),
+  ).toBeFocused();
+  const newConsoleToken = await emailToken(
+    consoleInvitationEmail,
+    "/accept-invitation#token=",
+  );
+  expect(newConsoleToken).not.toBe(oldConsoleToken);
+  const oldInspection = await page.request.post(
+    "/api/auth/researcher-invitation/inspect",
+    {
+      data: { token: oldConsoleToken },
+      headers: sameOriginHeaders(),
+    },
+  );
+  expect(oldInspection.status()).toBe(400);
+  const newInspection = await page.request.post(
+    "/api/auth/researcher-invitation/inspect",
+    {
+      data: { token: newConsoleToken },
+      headers: sameOriginHeaders(),
+    },
+  );
+  expect(newInspection.status()).toBe(200);
+
+  const proofRequests = operatorMutationRequests.filter(
+    (request) => request.path === "/api/auth/operator/proofs",
+  );
+  const invitationMutations = operatorMutationRequests.filter(
+    (request) => request.path.startsWith("/api/auth/operator/invitations/"),
+  );
+  expect(proofRequests).toHaveLength(2);
+  expect(proofRequests.every((request) => request.body.includes(browserPassword)))
+    .toBe(true);
+  expect(invitationMutations).toHaveLength(2);
+  expect(invitationMutations.every((request) => !request.body.includes(browserPassword)))
+    .toBe(true);
+  expect(invitationMutations.map((request) => Object.keys(JSON.parse(request.body)).sort()))
+    .toEqual([["email", "proof"], ["email", "proof"]]);
+
+  const invitationPagination = page.getByRole("navigation", {
+    name: "Invitations pagination",
+  });
+  await invitationPagination.getByRole("button", { name: "Next" }).click();
+  await expect(invitationPagination).toContainText("Page 2");
+  const secondPageEmail = "browser-invitation-01@example.test";
+  await page.getByRole("button", {
+    name: `Reissue invitation for ${secondPageEmail}`,
+  }).click();
+  const secondPageConfirmation = page.getByRole("dialog", {
+    name: "Reissue Invitation?",
+  });
+  await secondPageConfirmation.getByLabel("Current password").fill(browserPassword);
+  await secondPageConfirmation.getByLabel("Current password").press("Enter");
+  await expect(secondPageConfirmation).toHaveCount(0);
+  await expect(invitationPagination).toContainText("Page 1");
+  await expect(inviteResearcher).toBeFocused();
+
+  const failedReloadEmail = "browser-invitation-55@example.test";
+  await page.getByRole("button", {
+    name: `Reissue invitation for ${failedReloadEmail}`,
+  }).click();
+  const failedReloadConfirmation = page.getByRole("dialog", {
+    name: "Reissue Invitation?",
+  });
+  await failedReloadConfirmation.getByLabel("Current password").fill(browserPassword);
+  let failInvitationReload = true;
+  await page.route("**/api/auth/operator/invitations*", async (route) => {
+    if (route.request().method() !== "GET" || !failInvitationReload) {
+      await route.continue();
+      return;
+    }
+    failInvitationReload = false;
+    await route.fulfill({
+      body: JSON.stringify({ code: "OPERATOR_UNAVAILABLE" }),
+      contentType: "application/json",
+      status: 503,
+    });
+  });
+  try {
+    await failedReloadConfirmation.getByLabel("Current password").press("Enter");
+    await expect(failedReloadConfirmation).toHaveCount(0);
+    await expect(page.getByRole("alert").filter({
+      hasText: "Operator Console unavailable.",
+    })).toBeVisible();
+    const retry = page.getByRole("button", { name: "Retry" });
+    await expect(retry).toBeFocused();
+  } finally {
+    await page.unroute("**/api/auth/operator/invitations*");
+  }
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByRole("table", { name: "Invitations" })).toBeVisible();
+
   const search = page.getByRole("searchbox", { name: "Search researchers" });
   await search.fill("browser-page-");
   await page.getByRole("button", { name: "Search", exact: true }).click();
@@ -99,7 +293,9 @@ test("only the singleton Operator can open and read the Operator Console", async
   try {
     await nextPage.click();
     await cursorRequestStarted;
-    await expect(page.getByRole("status")).toHaveText("Refreshing Operator Console…");
+    await expect(page.getByRole("status").filter({
+      hasText: "Refreshing Operator Console…",
+    })).toBeVisible();
     await expect(nextPage).toBeDisabled();
     await expect(previousPage).toBeDisabled();
     await expect(search).toBeDisabled();
@@ -134,6 +330,27 @@ test("only the singleton Operator can open and read the Operator Console", async
   const deniedApi = await page.request.get("/api/auth/operator/researchers");
   expect(deniedApi.status()).toBe(404);
   expect(await deniedApi.text()).toBe("");
+  for (const [path, data] of [
+    [
+      "/api/auth/operator/proofs",
+      {
+        email: "ordinary-denied@example.test",
+        operation: "invitation.issue",
+        password: browserPassword,
+      },
+    ],
+    [
+      "/api/auth/operator/invitations/issue",
+      { email: "ordinary-denied@example.test", proof: oldConsoleToken },
+    ],
+  ] as const) {
+    const deniedMutation = await page.request.post(path, {
+      data,
+      headers: sameOriginHeaders(),
+    });
+    expect(deniedMutation.status()).toBe(404);
+    expect(await deniedMutation.text()).toBe("");
+  }
   const deniedDocument = await page.goto("/operator/researchers");
   expect(deniedDocument?.status()).toBe(404);
   expect(await deniedDocument?.text()).toBe("");

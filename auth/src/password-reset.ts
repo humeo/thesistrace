@@ -4,6 +4,7 @@ import { hashPassword } from "better-auth/crypto";
 import type { Pool, PoolClient } from "pg";
 
 import { recordSecurityAudit } from "./audit.js";
+import { lockAuthMutationShared } from "./auth-mutation-lock.js";
 import {
   type CredentialOperationCoordinator,
   KeyedSerialExecutor,
@@ -400,6 +401,7 @@ export class PasswordResetLifecycle {
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
+      await lockAuthMutationShared(client);
       const result = await operation(client);
       await client.query("COMMIT");
       return result;

@@ -67,6 +67,9 @@ const authLifecycle: AuthLifecycleDependencies = {
     );
     return result.rows[0]?.active === true;
   },
+  recordPasswordResetCredential:
+    credentialCoordinator.recordPasswordResetCredential,
+  recordSession: credentialCoordinator.recordSession,
   async sendResetPassword() {},
 };
 const ambientOverrideNames = [
@@ -792,10 +795,16 @@ function runtime() {
             query: { disableCookieCache: true, disableRefresh: true },
           }),
       ),
+    async confirmOperatorProof() {
+      throw new Error("OPERATOR_PROOF_UNAVAILABLE_IN_HTTP_CONTRACT_HARNESS");
+    },
     async consumeInvitationRateLimit() {
       return { allowed: true, retryAfterSeconds: 0 };
     },
     async consumePasswordResetRateLimit() {
+      return { allowed: true, retryAfterSeconds: 0 };
+    },
+    async consumeOperatorProofRateLimit() {
       return { allowed: true, retryAfterSeconds: 0 };
     },
     getSession: (input) => auth.api.getSession(input),
@@ -804,12 +813,18 @@ function runtime() {
     async inspectInvitation() {
       throw new InvitationRejectedError();
     },
+    async issueOperatorInvitation() {
+      throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_HTTP_CONTRACT_HARNESS");
+    },
     listOperatorInvitations: (principal, input) =>
       operatorDirectory.listInvitations(principal, input),
     listOperatorResearchers: (principal, input) =>
       operatorDirectory.listResearchers(principal, input),
     publicOrigin: settings.publicOrigin,
     readiness: () => checkAuthReadiness(runtimePool),
+    async reissueOperatorInvitation() {
+      throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_HTTP_CONTRACT_HARNESS");
+    },
     async resetPassword() {
       throw new Error("PASSWORD_RESET_UNAVAILABLE_IN_HTTP_CONTRACT_HARNESS");
     },

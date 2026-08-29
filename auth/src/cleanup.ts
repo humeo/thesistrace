@@ -1,5 +1,7 @@
 import type { Pool } from "pg";
 
+import { lockAuthMutationShared } from "./auth-mutation-lock.js";
+
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const TERMINAL_RETENTION_MS = 30 * DAY_MS;
 const AUDIT_RETENTION_MS = 180 * DAY_MS;
@@ -11,6 +13,7 @@ export type AuthCleanupResult =
       deleted: Readonly<{
         audits: number;
         invitations: number;
+        proofs: number;
         rateLimits: number;
         resets: number;
         sessions: number;
@@ -27,6 +30,7 @@ export async function runAuthCleanup(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await lockAuthMutationShared(client);
     const lock = await client.query<{ acquired: boolean }>(
       `
         SELECT pg_catalog.pg_try_advisory_xact_lock(
@@ -44,7 +48,9 @@ export async function runAuthCleanup(
       `
         UPDATE auth.researcher_invitation
         SET status = 'revoked', terminal_at = $1
-        WHERE status IN ('delivery_pending', 'delivered') AND expires_at <= $1
+        WHERE status IN (
+          'delivery_pending', 'replacement_pending', 'delivered'
+        ) AND expires_at <= $1
       `,
       [now],
     );
@@ -67,6 +73,10 @@ export async function runAuthCleanup(
           AND terminal_at < $1
       `,
       [new Date(now.getTime() - TERMINAL_RETENTION_MS)],
+    );
+    const proofs = await client.query(
+      "DELETE FROM auth.operator_proof WHERE expires_at <= $1",
+      [now],
     );
     const resets = await client.query(
       `
@@ -93,6 +103,7 @@ export async function runAuthCleanup(
       deleted: {
         audits: rowCount(audits),
         invitations: rowCount(invitations),
+        proofs: rowCount(proofs),
         rateLimits: rowCount(rateLimits),
         resets: rowCount(resets),
         sessions: rowCount(sessions),

@@ -39,7 +39,7 @@ async function seedOperatorDirectory() {
   }
   const pool = new Pool({ connectionString: databaseUrl, max: 1 });
   try {
-    const result = await pool.query(`
+    const researchers = await pool.query(`
       INSERT INTO auth."user" (
         id, name, email, "emailVerified", "createdAt", "updatedAt", active
       )
@@ -62,10 +62,45 @@ async function seedOperatorDirectory() {
         TRUE
       FROM pg_catalog.generate_series(1, 55) AS seed(index)
     `);
-    if (result.rowCount !== 55) {
+    const invitations = await pool.query(`
+      INSERT INTO auth.researcher_invitation (
+        id,
+        email,
+        token_hash,
+        status,
+        expires_at,
+        created_at,
+        delivered_at
+      )
+      SELECT
+        pg_catalog.format(
+          '00000000-0000-4000-8200-%s',
+          pg_catalog.lpad(seed.index::text, 12, '0')
+        )::uuid,
+        pg_catalog.format(
+          'browser-invitation-%s@example.test',
+          pg_catalog.lpad(seed.index::text, 2, '0')
+        ),
+        pg_catalog.decode(
+          pg_catalog.lpad(pg_catalog.to_hex(seed.index), 64, '0'),
+          'hex'
+        ),
+        'delivered',
+        TIMESTAMPTZ '2099-01-01T00:00:00.000Z',
+        TIMESTAMPTZ '2026-08-29T12:00:00.000Z'
+          + seed.index * INTERVAL '1 second',
+        TIMESTAMPTZ '2026-08-29T12:00:00.000Z'
+          + seed.index * INTERVAL '1 second'
+      FROM pg_catalog.generate_series(1, 55) AS seed(index)
+    `);
+    if (researchers.rowCount !== 55 || invitations.rowCount !== 55) {
       throw new Error("AUTH_TEST_OPERATOR_DIRECTORY_SEED_FAILED");
     }
-    process.stdout.write(`${JSON.stringify({ researchers: 55, status: "seeded" })}\n`);
+    process.stdout.write(`${JSON.stringify({
+      invitations: 55,
+      researchers: 55,
+      status: "seeded",
+    })}\n`);
   } finally {
     await pool.end();
   }

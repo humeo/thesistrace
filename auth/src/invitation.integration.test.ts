@@ -24,6 +24,7 @@ import {
 } from "./invitation.js";
 import type { ResendEmail } from "./resend.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
+import { enforceAuthSecretContract } from "./secret-contract.js";
 import { sha256, unknownEmailHmac } from "./security.js";
 
 const ownerDatabaseUrl = process.env.THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL;
@@ -72,6 +73,9 @@ const lifecycle: AuthLifecycleDependencies = {
     );
     return result.rows[0]?.active === true;
   },
+  recordPasswordResetCredential:
+    credentialCoordinator.recordPasswordResetCredential,
+  recordSession: credentialCoordinator.recordSession,
   async sendResetPassword() {},
 };
 
@@ -84,6 +88,7 @@ describe.sequential("Researcher Invitation lifecycle", () => {
   beforeEach(async () => {
     await owner.query(`
       TRUNCATE
+        auth.auth_secret_contract,
         auth.security_audit,
         auth.password_reset,
         auth.researcher_invitation,
@@ -264,8 +269,14 @@ describe.sequential("Researcher Invitation lifecycle", () => {
       acceptInvitation: (candidate, password, headers) =>
         harness.service.accept(candidate, password, headers),
       authHandler: (request) => harness.auth.handler(request),
+      async confirmOperatorProof() {
+        throw new Error("OPERATOR_PROOF_UNAVAILABLE_IN_INVITATION_HARNESS");
+      },
       consumeInvitationRateLimit: (candidate, headers) =>
         limiter.consume(candidate, headers),
+      async consumeOperatorProofRateLimit() {
+        return { allowed: true, retryAfterSeconds: 0 };
+      },
       async consumePasswordResetRateLimit() {
         return { allowed: true, retryAfterSeconds: 0 };
       },
@@ -274,6 +285,9 @@ describe.sequential("Researcher Invitation lifecycle", () => {
         return false;
       },
       inspectInvitation: (candidate) => harness.service.inspect(candidate),
+      async issueOperatorInvitation() {
+        throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_INVITATION_HARNESS");
+      },
       async listOperatorInvitations() {
         throw new Error("OPERATOR_DIRECTORY_UNAVAILABLE_IN_INVITATION_HARNESS");
       },
@@ -282,6 +296,9 @@ describe.sequential("Researcher Invitation lifecycle", () => {
       },
       publicOrigin: settings.publicOrigin,
       readiness: async () => true,
+      async reissueOperatorInvitation() {
+        throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_INVITATION_HARNESS");
+      },
       async resetPassword() {},
     });
 
@@ -510,15 +527,47 @@ describe.sequential("Researcher Invitation lifecycle", () => {
     ).toMatchObject({ rows: [{ status: "delivered" }] });
   });
 
-  it("revokes the old grant before delivering one replacement Invitation", async () => {
-    const harness = serviceHarness();
+  it("keeps the old grant effective until one replacement is delivered", async () => {
+    let deliveryCount = 0;
+    let markReplacementStarted: () => void = () => undefined;
+    const replacementStarted = new Promise<void>((resolve) => {
+      markReplacementStarted = resolve;
+    });
+    let releaseReplacement: () => void = () => undefined;
+    const replacementReleased = new Promise<void>((resolve) => {
+      releaseReplacement = resolve;
+    });
+    const harness = serviceHarness(async () => {
+      deliveryCount += 1;
+      if (deliveryCount === 2) {
+        markReplacementStarted();
+        await replacementReleased;
+      }
+    });
     await harness.service.issue("reissue@example.com");
     const firstToken = invitationToken(harness.sent[0]);
 
     await expect(harness.service.issue("reissue@example.com")).rejects.toEqual(
       new InvitationConflictError(),
     );
-    const replacement = await harness.service.reissue("reissue@example.com");
+    const reissuing = harness.service.reissue("reissue@example.com");
+    try {
+      await replacementStarted;
+      await expect(harness.service.inspect(firstToken)).resolves.toEqual({
+        email: "reissue@example.com",
+      });
+      expect(
+        await owner.query<{ status: string }>(
+          "SELECT status FROM auth.researcher_invitation ORDER BY created_at, id",
+        ),
+      ).toMatchObject({
+        rows: [{ status: "delivered" }, { status: "replacement_pending" }],
+      });
+    } finally {
+      releaseReplacement();
+    }
+
+    const replacement = await reissuing;
     const secondToken = invitationToken(harness.sent[1]);
     const invitations = await owner.query<{ status: string }>(
       "SELECT status FROM auth.researcher_invitation ORDER BY created_at, id",
@@ -535,6 +584,82 @@ describe.sequential("Researcher Invitation lifecycle", () => {
     );
     await expect(harness.service.inspect(secondToken)).resolves.toEqual({
       email: "reissue@example.com",
+    });
+  });
+
+  it("preserves the old effective Invitation when replacement delivery fails", async () => {
+    let deliveryCount = 0;
+    const harness = serviceHarness(async () => {
+      deliveryCount += 1;
+      if (deliveryCount === 2) throw new Error("replacement delivery failed");
+    });
+    await harness.service.issue("preserved@example.com");
+    const firstToken = invitationToken(harness.sent[0]);
+
+    await expect(harness.service.reissue("preserved@example.com")).rejects.toEqual(
+      new InvitationDeliveryError(),
+    );
+
+    await expect(harness.service.inspect(firstToken)).resolves.toEqual({
+      email: "preserved@example.com",
+    });
+    expect(
+      await owner.query<{ status: string }>(
+        "SELECT status FROM auth.researcher_invitation ORDER BY created_at, id",
+      ),
+    ).toMatchObject({
+      rows: [{ status: "delivered" }, { status: "delivery_failed" }],
+    });
+  });
+
+  it("hard secret rotation revokes an in-flight replacement before promotion", async () => {
+    await enforceAuthSecretContract(runtimePool, settings.secret, () => fixedNow);
+    let deliveryCount = 0;
+    let markReplacementStarted: () => void = () => undefined;
+    const replacementStarted = new Promise<void>((resolve) => {
+      markReplacementStarted = resolve;
+    });
+    let releaseReplacement: () => void = () => undefined;
+    const replacementReleased = new Promise<void>((resolve) => {
+      releaseReplacement = resolve;
+    });
+    const harness = serviceHarness(async () => {
+      deliveryCount += 1;
+      if (deliveryCount === 2) {
+        markReplacementStarted();
+        await replacementReleased;
+      }
+    });
+    await harness.service.issue("rotation@example.com");
+    const oldToken = invitationToken(harness.sent[0]);
+    const reissuing = harness.service.reissue("rotation@example.com");
+    try {
+      await replacementStarted;
+      await expect(
+        enforceAuthSecretContract(
+          runtimePool,
+          "abcdef0123456789abcdef0123456789",
+          () => new Date("2026-08-28T01:03:03.000Z"),
+        ),
+      ).resolves.toEqual({ status: "rotated" });
+    } finally {
+      releaseReplacement();
+    }
+
+    await expect(reissuing).rejects.toEqual(new InvitationDeliveryError());
+    const replacementToken = invitationToken(harness.sent[1]);
+    await expect(harness.service.inspect(oldToken)).rejects.toEqual(
+      new InvitationRejectedError(),
+    );
+    await expect(harness.service.inspect(replacementToken)).rejects.toEqual(
+      new InvitationRejectedError(),
+    );
+    expect(
+      await owner.query<{ status: string }>(
+        "SELECT status FROM auth.researcher_invitation ORDER BY created_at, id",
+      ),
+    ).toMatchObject({
+      rows: [{ status: "revoked" }, { status: "revoked" }],
     });
   });
 
@@ -608,7 +733,7 @@ describe.sequential("Researcher Invitation lifecycle", () => {
       return client;
     }) as typeof uncertainPool.connect;
     const email = "uncertain-unlock@example.com";
-    const lockKey = credentialLockKey(settings.secret, email);
+    const lockKey = credentialLockKey(email);
     const contender = await contenderPool.connect();
     try {
       await expect(

@@ -61,6 +61,50 @@ CREATE TABLE auth."account" (
         REFERENCES auth."user" ("id") ON DELETE CASCADE
 );
 
+CREATE TABLE auth.operator_proof (
+    id uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
+    token_hash bytea NOT NULL,
+    session_id uuid NOT NULL,
+    operation text NOT NULL,
+    request_hash bytea NOT NULL,
+    state text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    claimed_at timestamp with time zone,
+    consumed_at timestamp with time zone,
+    CONSTRAINT operator_proof_pkey PRIMARY KEY (id),
+    CONSTRAINT operator_proof_token_hash_key UNIQUE (token_hash),
+    CONSTRAINT operator_proof_session_id_fkey FOREIGN KEY (session_id)
+        REFERENCES auth."session" (id) ON DELETE CASCADE,
+    CONSTRAINT operator_proof_token_hash_check CHECK (
+        pg_catalog.octet_length(token_hash) = 32
+    ),
+    CONSTRAINT operator_proof_request_hash_check CHECK (
+        pg_catalog.octet_length(request_hash) = 32
+    ),
+    CONSTRAINT operator_proof_operation_check CHECK (
+        operation = ANY (ARRAY[
+            'invitation.issue'::text,
+            'invitation.reissue'::text
+        ])
+    ),
+    CONSTRAINT operator_proof_state_check CHECK (
+        state = ANY (ARRAY[
+            'available'::text,
+            'claimed'::text,
+            'consumed'::text
+        ])
+    ),
+    CONSTRAINT operator_proof_expiry_check CHECK (expires_at > created_at),
+    CONSTRAINT operator_proof_lifecycle_check CHECK (
+        (state = 'available' AND claimed_at IS NULL AND consumed_at IS NULL)
+        OR (state = 'claimed' AND claimed_at IS NOT NULL
+            AND consumed_at IS NULL)
+        OR (state = 'consumed' AND claimed_at IS NOT NULL
+            AND consumed_at IS NOT NULL)
+    )
+);
+
 CREATE TABLE auth."verification" (
     "id" uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
     "identifier" text NOT NULL,
@@ -104,6 +148,7 @@ CREATE TABLE auth.researcher_invitation (
     CONSTRAINT researcher_invitation_status_check CHECK (
         status = ANY (ARRAY[
             'delivery_pending'::text,
+            'replacement_pending'::text,
             'delivered'::text,
             'delivery_failed'::text,
             'consumed'::text,
@@ -112,6 +157,8 @@ CREATE TABLE auth.researcher_invitation (
     ),
     CONSTRAINT researcher_invitation_lifecycle_check CHECK (
         (status = 'delivery_pending' AND delivered_at IS NULL
+            AND terminal_at IS NULL AND user_id IS NULL)
+        OR (status = 'replacement_pending' AND delivered_at IS NULL
             AND terminal_at IS NULL AND user_id IS NULL)
         OR (status = 'delivered' AND delivered_at IS NOT NULL
             AND terminal_at IS NULL AND user_id IS NULL)
@@ -247,6 +294,10 @@ EXECUTE FUNCTION auth.enforce_active_session_owner();
 
 CREATE INDEX "session_userId_idx" ON auth."session" ("userId");
 CREATE INDEX "account_userId_idx" ON auth."account" ("userId");
+CREATE INDEX operator_proof_session_id_idx
+    ON auth.operator_proof (session_id);
+CREATE INDEX operator_proof_expires_at_idx
+    ON auth.operator_proof (expires_at);
 CREATE INDEX "verification_identifier_idx" ON auth."verification" ("identifier");
 CREATE UNIQUE INDEX "account_issuer_accountId_uidx"
     ON auth."account" ("issuer", "accountId");

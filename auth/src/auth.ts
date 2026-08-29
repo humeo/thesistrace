@@ -11,6 +11,7 @@ import {
   passwordResetIdentifier,
   rawPasswordResetToken,
 } from "./password-reset-token.js";
+import { sha256 } from "./security.js";
 
 const DAY_SECONDS = 60 * 60 * 24;
 const disabledBetterAuthPaths = [
@@ -48,6 +49,15 @@ export type AuthLifecycleDependencies = Readonly<{
   backgroundTask: (promise: Promise<unknown>) => void;
   invitationAdmission: InvitationAdmission;
   isResearcherActive: (userId: string) => Promise<boolean>;
+  recordPasswordResetCredential: (input: Readonly<{
+    identifier: string;
+    researcherId: string;
+    tokenHash: Buffer;
+  }>) => void;
+  recordSession: (input: Readonly<{
+    researcherId: string;
+    token: string;
+  }>) => void;
   sendResetPassword: (
     data: Readonly<{
       token: string;
@@ -67,6 +77,8 @@ export function createClosedAuthLifecycle(): AuthLifecycleDependencies {
     async isResearcherActive() {
       return false;
     },
+    recordPasswordResetCredential() {},
+    recordSession() {},
     async sendResetPassword() {
       throw new Error("PASSWORD_RESET_DELIVERY_UNAVAILABLE");
     },
@@ -106,10 +118,16 @@ export function createThesisTraceAuth(
           async before(verification) {
             const token = rawPasswordResetToken(verification.identifier);
             if (token === null) return true;
+            const identifier = passwordResetIdentifier(token);
+            lifecycle.recordPasswordResetCredential({
+              identifier,
+              researcherId: verification.value,
+              tokenHash: sha256(token),
+            });
             return {
               data: {
                 ...verification,
-                identifier: passwordResetIdentifier(token),
+                identifier,
               },
             };
           },
@@ -137,10 +155,17 @@ export function createThesisTraceAuth(
       session: {
         create: {
           async before(session) {
-            if (lifecycle.invitationAdmission.isActive()) {
-              return true;
+            if (
+              !lifecycle.invitationAdmission.isActive()
+              && !(await lifecycle.isResearcherActive(session.userId))
+            ) {
+              return false;
             }
-            return lifecycle.isResearcherActive(session.userId);
+            lifecycle.recordSession({
+              researcherId: session.userId,
+              token: session.token,
+            });
+            return true;
           },
         },
       },

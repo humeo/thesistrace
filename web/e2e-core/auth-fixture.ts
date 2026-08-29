@@ -184,6 +184,7 @@ export function seedOperatorDirectory(): void {
   const result = JSON.parse(output) as unknown;
   if (
     !isRecord(result)
+    || result.invitations !== 55
     || result.researchers !== 55
     || result.status !== "seeded"
   ) {

@@ -1,10 +1,11 @@
 import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
 
+import { lockAuthMutationShared } from "./auth-mutation-lock.js";
 import { canonicalizeEmail, InvalidEmailError } from "./identity.js";
+import { lockOperatorAssignment } from "./operator-lock.js";
 
 const researcherIdSchema = z.uuid();
-const assignmentLockKey = "thesistrace:operator-assignment";
 
 export type OperatorIdentity =
   | Readonly<{ email: string; researcherId?: never }>
@@ -64,7 +65,7 @@ export class OperatorAssignmentService {
 
   assign(identity: OperatorIdentity): Promise<OperatorAssignmentResult> {
     return this.#transaction(async (client) => {
-      await lockAssignment(client);
+      await lockOperatorAssignment(client);
       const target = await resolveActiveResearcher(client, identity);
       const current = await currentAssignment(client);
       if (current !== undefined) {
@@ -85,7 +86,7 @@ export class OperatorAssignmentService {
 
   transfer(identity: OperatorIdentity): Promise<OperatorTransferResult> {
     return this.#transaction(async (client) => {
-      await lockAssignment(client);
+      await lockOperatorAssignment(client);
       const current = await currentAssignment(client);
       if (current === undefined) {
         throw new OperatorAssignmentMissingError();
@@ -122,6 +123,7 @@ export class OperatorAssignmentService {
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
+      await lockAuthMutationShared(client);
       const result = await operation(client);
       await client.query("COMMIT");
       return result;
@@ -132,13 +134,6 @@ export class OperatorAssignmentService {
       client.release();
     }
   }
-}
-
-async function lockAssignment(client: PoolClient): Promise<void> {
-  await client.query(
-    "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))",
-    [assignmentLockKey],
-  );
 }
 
 async function currentAssignment(

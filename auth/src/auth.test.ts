@@ -29,6 +29,8 @@ function lifecycle(
     backgroundTask: vi.fn(),
     invitationAdmission: new InvitationAdmission(),
     isResearcherActive: vi.fn(async () => true),
+    recordPasswordResetCredential: vi.fn(),
+    recordSession: vi.fn(),
     sendResetPassword: vi.fn(async () => undefined),
     ...overrides,
   };

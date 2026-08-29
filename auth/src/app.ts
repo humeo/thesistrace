@@ -1,10 +1,18 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
 
-import { canonicalizeAuthEmailRequest } from "./identity.js";
+import {
+  canonicalizeAuthEmailRequest,
+  canonicalizeEmail,
+  InvalidEmailError,
+} from "./identity.js";
 import { isJsonContentType } from "./http-media-type.js";
 import type { AuthHttpObserver } from "./http-observability.js";
-import { InvitationRejectedError } from "./invitation.js";
+import {
+  InvitationConflictError,
+  InvitationDeliveryError,
+  InvitationRejectedError,
+} from "./invitation.js";
 import {
   OperatorAccessNotFoundError,
   OperatorCursorInvalidError,
@@ -15,6 +23,12 @@ import {
   type OperatorResearcherSummary,
 } from "./operator-directory.js";
 import { PasswordResetRejectedError } from "./password-reset.js";
+import {
+  OperatorPasswordInvalidError,
+  OperatorProofInvalidError,
+  OperatorProofNotFoundError,
+  type OperatorProofOperation,
+} from "./operator-proof.js";
 
 const invitationInspectSchema = z
   .object({ token: z.string().length(80) })
@@ -39,6 +53,19 @@ const changePasswordSchema = z
   .object({
     currentPassword: z.string().min(12).max(128),
     newPassword: z.string().min(12).max(128),
+  })
+  .strict();
+const operatorProofSchema = z
+  .object({
+    email: z.string().min(1).max(512),
+    operation: z.enum(["invitation.issue", "invitation.reissue"]),
+    password: z.string().min(12).max(128),
+  })
+  .strict();
+const operatorInvitationMutationSchema = z
+  .object({
+    email: z.string().min(1).max(512),
+    proof: z.string().length(80),
   })
   .strict();
 
@@ -80,6 +107,10 @@ export type AuthAppDependencies = Readonly<{
     token: string,
     headers: Headers,
   ) => Promise<Readonly<{ allowed: boolean; retryAfterSeconds: number }>>;
+  consumeOperatorProofRateLimit: (
+    sessionId: string,
+    headers: Headers,
+  ) => Promise<Readonly<{ allowed: boolean; retryAfterSeconds: number }>>;
   consumePasswordResetRateLimit: (
     token: string,
     headers: Headers,
@@ -88,6 +119,22 @@ export type AuthAppDependencies = Readonly<{
   hasOperatorCapability: (principal: OperatorPrincipal) => Promise<boolean>;
   httpObserver?: AuthHttpObserver;
   inspectInvitation: (token: string) => Promise<Readonly<{ email: string }>>;
+  confirmOperatorProof: (
+    principal: OperatorPrincipal,
+    input: Readonly<{
+      email: string;
+      operation: OperatorProofOperation;
+      password: string;
+    }>,
+  ) => Promise<Readonly<{ expiresAt: string; proof: string }>>;
+  issueOperatorInvitation: (
+    principal: OperatorPrincipal,
+    input: Readonly<{ email: string; proof: string }>,
+  ) => Promise<Readonly<{
+    email: string;
+    invitationId: string;
+    status: "delivered";
+  }>>;
   listOperatorInvitations: (
     principal: OperatorPrincipal,
     input: Readonly<{ cursor: string | null }>,
@@ -98,6 +145,14 @@ export type AuthAppDependencies = Readonly<{
   ) => Promise<OperatorPage<OperatorResearcherSummary>>;
   publicOrigin: string;
   readiness: () => Promise<boolean>;
+  reissueOperatorInvitation: (
+    principal: OperatorPrincipal,
+    input: Readonly<{ email: string; proof: string }>,
+  ) => Promise<Readonly<{
+    email: string;
+    invitationId: string;
+    status: "delivered";
+  }>>;
   resetPassword: (token: string, newPassword: string) => Promise<void>;
 }>;
 
@@ -228,6 +283,58 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
     }
   });
 
+  app.post("/api/auth/operator/proofs", async (context) => {
+    const principal = await requireOperator(
+      dependencies,
+      context.req.raw.headers,
+    );
+    if (principal instanceof Response) return principal;
+    if (context.req.header("origin") !== dependencies.publicOrigin) {
+      return context.json({ code: "ORIGIN_NOT_ALLOWED" }, 403);
+    }
+    const body = await exactJson(context.req.raw, operatorProofSchema);
+    if (body === null) {
+      return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
+    }
+    const rateLimit = await dependencies.consumeOperatorProofRateLimit(
+      principal.sessionId,
+      context.req.raw.headers,
+    );
+    if (!rateLimit.allowed) {
+      context.header("retry-after", String(rateLimit.retryAfterSeconds));
+      return context.json({ code: "AUTH_RATE_LIMITED" }, 429);
+    }
+    try {
+      const result = await dependencies.confirmOperatorProof(principal, {
+        email: canonicalizeEmail(body.email),
+        operation: body.operation,
+        password: body.password,
+      });
+      return context.json({
+        expires_at: result.expiresAt,
+        proof: result.proof,
+      });
+    } catch (error) {
+      if (error instanceof OperatorProofNotFoundError) {
+        return context.body(null, 404);
+      }
+      if (error instanceof OperatorPasswordInvalidError) {
+        return context.json({ code: "OPERATOR_PASSWORD_INVALID" }, 400);
+      }
+      if (error instanceof InvalidEmailError) {
+        return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
+      }
+      throw error;
+    }
+  });
+
+  app.post("/api/auth/operator/invitations/issue", async (context) =>
+    operatorInvitationMutation(context, dependencies, "issue")
+  );
+  app.post("/api/auth/operator/invitations/reissue", async (context) =>
+    operatorInvitationMutation(context, dependencies, "reissue")
+  );
+
   app.post("/api/auth/sign-up/email", (context) =>
     context.json({ code: "RESEARCHER_INVITATION_REQUIRED" }, 403),
   );
@@ -331,6 +438,59 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
   });
 
   return app;
+}
+
+async function operatorInvitationMutation(
+  context: Context,
+  dependencies: AuthAppDependencies,
+  operation: "issue" | "reissue",
+): Promise<Response> {
+  const principal = await requireOperator(
+    dependencies,
+    context.req.raw.headers,
+  );
+  if (principal instanceof Response) return principal;
+  if (context.req.header("origin") !== dependencies.publicOrigin) {
+    return context.json({ code: "ORIGIN_NOT_ALLOWED" }, 403);
+  }
+  const body = await exactJson(
+    context.req.raw,
+    operatorInvitationMutationSchema,
+  );
+  if (body === null) {
+    return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
+  }
+  try {
+    const input = { email: canonicalizeEmail(body.email), proof: body.proof };
+    const result = operation === "issue"
+      ? await dependencies.issueOperatorInvitation(principal, input)
+      : await dependencies.reissueOperatorInvitation(principal, input);
+    return context.json({
+      email: result.email,
+      invitation_id: result.invitationId,
+      status: result.status,
+    });
+  } catch (error) {
+    if (error instanceof OperatorProofNotFoundError) {
+      return context.body(null, 404);
+    }
+    if (error instanceof OperatorProofInvalidError) {
+      return context.json({ code: "OPERATOR_PROOF_INVALID" }, 400);
+    }
+    if (error instanceof InvalidEmailError) {
+      return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
+    }
+    if (error instanceof InvitationConflictError) {
+      return context.json({ code: "OPERATOR_INVITATION_CONFLICT" }, 409);
+    }
+    if (error instanceof InvitationDeliveryError) {
+      return context.json(
+        { code: "OPERATOR_INVITATION_DELIVERY_FAILED" },
+        502,
+      );
+    }
+    throw error;
+  }
 }
 
 async function normalizePublicAuthRequest(

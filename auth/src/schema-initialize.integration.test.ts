@@ -148,7 +148,7 @@ describe.sequential("Auth physical schema", () => {
 
   it("rejects unlogged relation durability drift", async () => {
     await initializeAuthSchema(owner);
-    await owner.query('ALTER TABLE auth."session" SET UNLOGGED');
+    await owner.query('ALTER TABLE auth."verification" SET UNLOGGED');
 
     await expect(verifyAuthSchema(owner)).rejects.toBeInstanceOf(
       AuthSchemaContractError,
@@ -266,6 +266,7 @@ describe.sequential("Auth physical schema", () => {
       "account",
       "auth_secret_contract",
       "operator_assignment",
+      "operator_proof",
       "password_reset",
       "rateLimit",
       "researcher_invitation",

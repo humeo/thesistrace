@@ -4,6 +4,7 @@ import type { Pool, PoolClient } from "pg";
 
 import type { ThesisTraceAuth } from "./auth.js";
 import { recordSecurityAudit } from "./audit.js";
+import { lockAuthMutationShared } from "./auth-mutation-lock.js";
 import {
   type CredentialOperationCoordinator,
   invitationTokenLockKey,
@@ -27,6 +28,7 @@ type InvitationStatus =
   | "delivered"
   | "delivery_failed"
   | "delivery_pending"
+  | "replacement_pending"
   | "revoked";
 
 type InvitationRow = Readonly<{
@@ -85,6 +87,15 @@ export class InvitationConflictError extends Error {
   }
 }
 
+export class InvitationAuthorizationError extends Error {
+  readonly code = "INVITATION_AUTHORIZATION_INVALID";
+
+  constructor() {
+    super("INVITATION_AUTHORIZATION_INVALID");
+    this.name = "InvitationAuthorizationError";
+  }
+}
+
 export type InvitationIssueResult = Readonly<{
   email: string;
   invitationId: string;
@@ -93,6 +104,11 @@ export type InvitationIssueResult = Readonly<{
 
 export type InvitationAcceptance = Readonly<{
   setCookies: string[];
+}>;
+
+export type InvitationMutationAuthorization = Readonly<{
+  consume: (client: PoolClient) => Promise<boolean>;
+  release: (client: PoolClient) => Promise<void>;
 }>;
 
 export type ResearcherInvitationDependencies = Readonly<{
@@ -135,11 +151,25 @@ export class ResearcherInvitationService {
   }
 
   issue(emailInput: string): Promise<InvitationIssueResult> {
-    return this.#issue(emailInput, false);
+    return this.#issue(emailInput, false, undefined);
   }
 
   reissue(emailInput: string): Promise<InvitationIssueResult> {
-    return this.#issue(emailInput, true);
+    return this.#issue(emailInput, true, undefined);
+  }
+
+  issueAuthorized(
+    emailInput: string,
+    authorization: InvitationMutationAuthorization,
+  ): Promise<InvitationIssueResult> {
+    return this.#issue(emailInput, false, authorization);
+  }
+
+  reissueAuthorized(
+    emailInput: string,
+    authorization: InvitationMutationAuthorization,
+  ): Promise<InvitationIssueResult> {
+    return this.#issue(emailInput, true, authorization);
   }
 
   async inspect(token: string): Promise<Readonly<{ email: string }>> {
@@ -285,7 +315,7 @@ export class ResearcherInvitationService {
         },
         {
           additionalLockKeys: [invitationTokenLockKey(parsedToken.hash)],
-          compensateSessionUncertainty: true,
+          compensateUncertainty: "sessions",
         },
       );
     } catch (error) {
@@ -504,6 +534,7 @@ export class ResearcherInvitationService {
   async #issue(
     emailInput: string,
     replaceExisting: boolean,
+    authorization: InvitationMutationAuthorization | undefined,
   ): Promise<InvitationIssueResult> {
     const email = canonicalizeEmail(emailInput);
     return await this.#deliverySerial.run(email, async () => {
@@ -531,23 +562,6 @@ export class ResearcherInvitationService {
           if (effective.rowCount !== 0 && !replaceExisting) {
             throw new InvitationConflictError();
           }
-          if (effective.rowCount !== 0) {
-            await client.query(
-              `
-                UPDATE auth.researcher_invitation
-                SET status = 'revoked', terminal_at = $2
-                WHERE email = $1 AND status IN ('delivery_pending', 'delivered')
-              `,
-              [email, now],
-            );
-            await recordSecurityAudit(client, {
-              authSecret: this.#authSecret,
-              event: "invitation_revoked",
-              identity: { email },
-              occurredAt: now,
-              outcome: "succeeded",
-            });
-          }
           await client.query(
             `
               INSERT INTO auth.researcher_invitation (
@@ -558,12 +572,13 @@ export class ResearcherInvitationService {
                 expires_at,
                 created_at
               )
-              VALUES ($1, $2, $3, 'delivery_pending', $4, $5)
+              VALUES ($1, $2, $3, $4, $5, $6)
             `,
             [
               invitationId,
               email,
               parsedToken.hash,
+              replaceExisting ? "replacement_pending" : "delivery_pending",
               new Date(now.getTime() + INVITATION_LIFETIME_MS),
               now,
             ],
@@ -585,6 +600,9 @@ export class ResearcherInvitationService {
         (client) =>
           inTransaction(client, async () => {
             const now = this.#clock();
+            const pendingStatus = replaceExisting
+              ? "replacement_pending"
+              : "delivery_pending";
             const pending = await client.query<{ id: string }>(
               `
                 SELECT id
@@ -592,39 +610,100 @@ export class ResearcherInvitationService {
                 WHERE id = $1
                   AND email = $2
                   AND token_hash = $3
-                  AND status = 'delivery_pending'
+                  AND status = $4
                 FOR UPDATE
               `,
-              [invitationId, email, parsedToken.hash],
+              [invitationId, email, parsedToken.hash, pendingStatus],
             );
             if (pending.rowCount !== 1) {
-              return false;
+              return "missing" as const;
             }
-            await client.query(
-              delivered
-                ? `
-                    UPDATE auth.researcher_invitation
-                    SET status = 'delivered', delivered_at = $2
-                    WHERE id = $1 AND status = 'delivery_pending'
-                  `
-                : `
-                    UPDATE auth.researcher_invitation
-                    SET status = 'delivery_failed', terminal_at = $2
-                    WHERE id = $1 AND status = 'delivery_pending'
-                  `,
-              [invitationId, now],
+            const conflict = await findUserByEmail(client, email, true);
+            if (conflict !== undefined) {
+              await failPendingInvitation(client, invitationId, pendingStatus, now);
+              await authorization?.release(client);
+              await recordSecurityAudit(client, {
+                authSecret: this.#authSecret,
+                event: "invitation_issued",
+                identity: { email },
+                occurredAt: now,
+                outcome: "rejected",
+              });
+              return "conflict" as const;
+            }
+            if (!delivered) {
+              await failPendingInvitation(client, invitationId, pendingStatus, now);
+              await authorization?.release(client);
+              await recordSecurityAudit(client, {
+                authSecret: this.#authSecret,
+                event: "invitation_issued",
+                identity: { email },
+                occurredAt: now,
+                outcome: "failed",
+              });
+              return "delivery_failed" as const;
+            }
+            if (authorization !== undefined && !(await authorization.consume(client))) {
+              await failPendingInvitation(client, invitationId, pendingStatus, now);
+              await authorization.release(client);
+              await recordSecurityAudit(client, {
+                authSecret: this.#authSecret,
+                event: "invitation_issued",
+                identity: { email },
+                occurredAt: now,
+                outcome: "rejected",
+              });
+              return "authorization_failed" as const;
+            }
+            if (replaceExisting) {
+              const revoked = await client.query(
+                `
+                  UPDATE auth.researcher_invitation
+                  SET status = 'revoked', terminal_at = $2
+                  WHERE email = $1
+                    AND id <> $3
+                    AND status IN ('delivery_pending', 'delivered')
+                `,
+                [email, now, invitationId],
+              );
+              if ((revoked.rowCount ?? 0) > 0) {
+                await recordSecurityAudit(client, {
+                  authSecret: this.#authSecret,
+                  event: "invitation_revoked",
+                  identity: { email },
+                  occurredAt: now,
+                  outcome: "succeeded",
+                });
+              }
+            }
+            const promoted = await client.query(
+              `
+                UPDATE auth.researcher_invitation
+                SET status = 'delivered', delivered_at = $2
+                WHERE id = $1 AND status = $3
+              `,
+              [invitationId, now, pendingStatus],
             );
+            if (promoted.rowCount !== 1) {
+              throw new InvitationServiceUnavailableError();
+            }
             await recordSecurityAudit(client, {
               authSecret: this.#authSecret,
               event: "invitation_issued",
               identity: { email },
               occurredAt: now,
-              outcome: delivered ? "succeeded" : "failed",
+              outcome: "succeeded",
             });
-            return delivered;
+            return "delivered" as const;
           }),
       );
-      if (!finalized) {
+      if (finalized === "authorization_failed") {
+        throw new InvitationAuthorizationError();
+      }
+      if (finalized === "conflict") {
+        throw new InvitationConflictError();
+      }
+      if (finalized !== "delivered") {
         throw new InvitationDeliveryError();
       }
       return { email, invitationId, status: "delivered" };
@@ -670,12 +749,32 @@ async function inTransaction<T>(
 ): Promise<T> {
   try {
     await client.query("BEGIN");
+    await lockAuthMutationShared(client);
     const result = await operation();
     await client.query("COMMIT");
     return result;
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
+  }
+}
+
+async function failPendingInvitation(
+  client: PoolClient,
+  invitationId: string,
+  pendingStatus: "delivery_pending" | "replacement_pending",
+  terminalAt: Date,
+): Promise<void> {
+  const failed = await client.query(
+    `
+      UPDATE auth.researcher_invitation
+      SET status = 'delivery_failed', terminal_at = $2
+      WHERE id = $1 AND status = $3
+    `,
+    [invitationId, terminalAt, pendingStatus],
+  );
+  if (failed.rowCount !== 1) {
+    throw new InvitationServiceUnavailableError();
   }
 }
 

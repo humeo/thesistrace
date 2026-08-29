@@ -97,16 +97,8 @@ test("Invitation, login, account password, reset, refresh, and access lifecycle 
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/research\?folder=folder_default#formula$/);
 
-  let sessionRefreshCount = 0;
-  page.on("response", (response) => {
-    if (new URL(response.url()).pathname === "/api/auth/get-session") sessionRefreshCount += 1;
-  });
-  const beforeFocus = sessionRefreshCount;
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect.poll(() => sessionRefreshCount).toBeGreaterThan(beforeFocus);
-  const beforeOnline = sessionRefreshCount;
-  await page.evaluate(() => window.dispatchEvent(new Event("online")));
-  await expect.poll(() => sessionRefreshCount).toBeGreaterThan(beforeOnline);
+  await refreshSessionOnBrowserEvent(page, "focus");
+  await refreshSessionOnBrowserEvent(page, "online");
 
   await openAccountMenu(page);
   await page.getByRole("button", { name: "Log out" }).click();
@@ -392,6 +384,31 @@ async function loginThroughUi(page: Page, email: string, password: string): Prom
   await emailInput.fill(email);
   await passwordInput.fill(password);
   await logIn.click();
+}
+
+async function refreshSessionOnBrowserEvent(
+  page: Page,
+  eventType: "focus" | "online",
+): Promise<void> {
+  const sessionResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/auth/get-session",
+  );
+  const capabilityResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/auth/operator/capability",
+  );
+
+  await page.evaluate(
+    (type) => window.dispatchEvent(new Event(type)),
+    eventType,
+  );
+  const responses = await Promise.all([sessionResponse, capabilityResponse]);
+  expect(responses[0].ok()).toBe(true);
+  expect(responses[1].status()).toBe(404);
+  await page.evaluate(
+    () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())),
+  );
 }
 
 async function openAccountMenu(page: Page): Promise<void> {

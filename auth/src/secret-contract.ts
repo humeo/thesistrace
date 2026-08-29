@@ -1,5 +1,7 @@
 import type { Pool } from "pg";
 
+import { lockAuthMutationExclusive } from "./auth-mutation-lock.js";
+
 import { secretFingerprint } from "./security.js";
 
 export type AuthSecretContractResult = Readonly<{
@@ -15,6 +17,7 @@ export async function enforceAuthSecretContract(
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await lockAuthMutationExclusive(client);
     await client.query(
       "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('thesistrace-auth-secret-contract', 0))",
     );
@@ -44,12 +47,13 @@ export async function enforceAuthSecretContract(
     }
 
     const now = clock();
-    await client.query('DELETE FROM auth."session"');
     await client.query(
       `
         UPDATE auth.researcher_invitation
         SET status = 'revoked', terminal_at = $1
-        WHERE status IN ('delivery_pending', 'delivered')
+        WHERE status IN (
+          'delivery_pending', 'replacement_pending', 'delivered'
+        )
       `,
       [now],
     );
@@ -67,6 +71,7 @@ export async function enforceAuthSecretContract(
         WHERE identifier LIKE 'reset-password:%'
       `,
     );
+    await client.query('DELETE FROM auth."session"');
     await client.query(
       `
         UPDATE auth.auth_secret_contract

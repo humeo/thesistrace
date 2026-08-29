@@ -20,6 +20,7 @@ import { PasswordResetLifecycle } from "./password-reset.js";
 import { passwordResetIdentifier } from "./password-reset-token.js";
 import type { ResendEmail } from "./resend.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
+import { enforceAuthSecretContract } from "./secret-contract.js";
 import { sha256 } from "./security.js";
 
 const ownerDatabaseUrl = process.env.THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL;
@@ -60,6 +61,7 @@ describe.sequential("Password Reset lifecycle", () => {
   beforeEach(async () => {
     await owner.query(`
       TRUNCATE
+        auth.auth_secret_contract,
         auth.security_audit,
         auth.password_reset,
         auth.researcher_invitation,
@@ -374,6 +376,64 @@ describe.sequential("Password Reset lifecycle", () => {
     });
   });
 
+  it("serializes a completed Reset before hard secret rotation", async () => {
+    await enforceAuthSecretContract(runtimePool, settings.secret, () => fixedNow);
+    const harness = resetHarness();
+    await createUser(harness, "rotation-reset@example.com");
+    await requestReset(harness, "rotation-reset@example.com");
+    await harness.tasks.drain();
+    const token = resetToken(harness.sent[0]);
+    const blocker = await owner.connect();
+    let resetting: Promise<Response> | undefined;
+    let rotating: Promise<unknown> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        `
+          SELECT id
+          FROM auth."verification"
+          WHERE identifier = $1
+          FOR UPDATE
+        `,
+        [passwordResetIdentifier(token)],
+      );
+      resetting = resetPassword(harness, token);
+      void resetting.catch(() => undefined);
+      await waitForCondition(() =>
+        hasBlockedRuntimeQuery('FROM auth."verification"')
+      );
+
+      rotating = enforceAuthSecretContract(
+        runtimePool,
+        "abcdef0123456789abcdef0123456789",
+        () => fixedNow,
+      );
+      void rotating.catch(() => undefined);
+      await waitForCondition(() =>
+        hasBlockedRuntimeQuery("pg_advisory_xact_lock(")
+      );
+
+      await blocker.query("COMMIT");
+      expect((await resetting).status).toBe(200);
+      await expect(rotating).resolves.toEqual({ status: "rotated" });
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+      await Promise.allSettled(
+        [resetting, rotating].filter(
+          (operation): operation is Promise<unknown> => operation !== undefined,
+        ),
+      );
+    }
+
+    expect(await sessionCount()).toBe(0);
+    expect(
+      await owner.query<{ status: string }>(
+        "SELECT status FROM auth.password_reset",
+      ),
+    ).toMatchObject({ rows: [{ status: "consumed" }] });
+  });
+
   it("revokes a Session whose old-password sign-in overlaps a successful Reset", async () => {
     const harness = resetHarness(
       undefined,
@@ -552,6 +612,285 @@ describe.sequential("Password Reset lifecycle", () => {
         DROP FUNCTION IF EXISTS auth.test_hold_coordination_loss_insert()
       `);
     }
+  });
+
+  it("compensates only the failed Reset before queued and rotated-instance work", async () => {
+    await enforceAuthSecretContract(runtimePool, settings.secret, () => fixedNow);
+    const rotatedSecret = "abcdef0123456789abcdef0123456789";
+    const harness = resetHarness(
+      undefined,
+      undefined,
+      { request: createCredentialCoordinator() },
+    );
+    await createUser(harness, "rotation-coordination-loss@example.com");
+    await owner.query('DELETE FROM auth."session"');
+    const blocker = await owner.connect();
+    const successorCoordinationPool = createAuthCoordinationPool(
+      authRuntimeDatabaseUrl,
+    );
+    const successor = resetHarness(
+      undefined,
+      undefined,
+      {
+        request: new CredentialOperationCoordinator({
+          authSecret: rotatedSecret,
+          coordination: new AuthOperationCoordinator(successorCoordinationPool),
+          pool: runtimePool,
+        }),
+      },
+    );
+    const insertHoldKey = "reset-verification-rotation-hold";
+    let requestPromise: Promise<Response> | undefined;
+    let queuedReset: Promise<Response> | undefined;
+    let rotating: Promise<unknown> | undefined;
+    try {
+      await blocker.query(
+        "SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtextextended($1, 0))",
+        [insertHoldKey],
+      );
+      await owner.query(`
+        CREATE FUNCTION auth.test_hold_reset_verification_insert()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        BEGIN
+          PERFORM pg_catalog.pg_advisory_xact_lock(
+            pg_catalog.hashtextextended('${insertHoldKey}', 0)
+          );
+          RETURN NEW;
+        END;
+        $function$;
+        CREATE TRIGGER test_hold_reset_verification_insert
+        BEFORE INSERT ON auth."verification"
+        FOR EACH ROW
+        EXECUTE FUNCTION auth.test_hold_reset_verification_insert()
+      `);
+
+      requestPromise = requestReset(
+        harness,
+        "rotation-coordination-loss@example.com",
+      );
+      void requestPromise.catch(() => undefined);
+      await waitForCondition(async () =>
+        hasAdvisoryWaiter("thesistrace_auth")
+      );
+      const terminated = await owner.query<{ terminated: boolean }>(`
+        SELECT pg_catalog.pg_terminate_backend(activity.pid) AS terminated
+        FROM pg_catalog.pg_stat_activity AS activity
+        WHERE activity.application_name = 'thesistrace_auth_coordination'
+          AND activity.usename = 'auth_runtime'
+          AND EXISTS (
+            SELECT 1
+            FROM pg_catalog.pg_locks AS held
+            WHERE held.pid = activity.pid
+              AND held.locktype = 'advisory'
+              AND held.granted
+          )
+        ORDER BY activity.backend_start DESC
+        LIMIT 1
+      `);
+      expect(terminated.rows).toEqual([{ terminated: true }]);
+
+      rotating = enforceAuthSecretContract(
+        runtimePool,
+        rotatedSecret,
+        () => fixedNow,
+      );
+      void rotating.catch(() => undefined);
+      await expect(rotating).resolves.toEqual({ status: "rotated" });
+
+      expect(
+        (
+          await publicSignIn(
+            successor,
+            "rotation-coordination-loss@example.com",
+            "correct-horse-battery-staple",
+          )
+        ).status,
+      ).toBe(200);
+      queuedReset = requestReset(
+        harness,
+        "rotation-coordination-loss@example.com",
+      );
+      void queuedReset.catch(() => undefined);
+      await blocker.query(
+        "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended($1, 0))",
+        [insertHoldKey],
+      );
+
+      expect((await requestPromise).status).toBe(503);
+      expect((await queuedReset).status).toBe(200);
+      await harness.tasks.drain();
+    } finally {
+      await blocker
+        .query(
+          "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended($1, 0))",
+          [insertHoldKey],
+        )
+        .catch(() => undefined);
+      blocker.release();
+      await Promise.allSettled([
+        requestPromise ?? Promise.resolve(),
+        queuedReset ?? Promise.resolve(),
+        rotating ?? Promise.resolve(),
+      ]);
+      await owner.query(`
+        DROP TRIGGER IF EXISTS test_hold_reset_verification_insert
+          ON auth."verification";
+        DROP FUNCTION IF EXISTS auth.test_hold_reset_verification_insert()
+      `);
+      await successorCoordinationPool.end();
+    }
+
+    expect(await sessionCount()).toBe(1);
+    expect(harness.sent).toHaveLength(1);
+    expect(
+      await owner.query<{ effective: string }>(
+        `
+          SELECT count(*) FILTER (
+            WHERE status IN ('delivery_pending', 'delivered')
+          ) AS effective
+          FROM auth.password_reset
+        `,
+      ),
+    ).toMatchObject({ rows: [{ effective: "1" }] });
+    expect(
+      await owner.query<{ count: string }>(
+        `
+          SELECT count(*)
+          FROM auth."verification"
+          WHERE identifier LIKE 'reset-password:%'
+        `,
+      ),
+    ).toMatchObject({ rows: [{ count: "1" }] });
+  });
+
+  it("cancels a failed Reset causal chain when compensation fails once", async () => {
+    await enforceAuthSecretContract(runtimePool, settings.secret, () => fixedNow);
+    const compensationPool = createAuthPool(authRuntimeDatabaseUrl);
+    const originalCompensationConnect = compensationPool.connect.bind(
+      compensationPool,
+    );
+    let compensationConnectAttempts = 0;
+    compensationPool.connect = (async () => {
+      compensationConnectAttempts += 1;
+      if (compensationConnectAttempts === 1) {
+        throw new Error("injected one-shot compensation failure");
+      }
+      return await originalCompensationConnect();
+    }) as typeof compensationPool.connect;
+    const failingCoordinator = new CredentialOperationCoordinator({
+      authSecret: settings.secret,
+      coordination,
+      pool: compensationPool,
+    });
+    const harness = resetHarness(
+      undefined,
+      undefined,
+      { delivery: failingCoordinator, request: failingCoordinator },
+    );
+    await createUser(harness, "compensation-failure@example.com");
+    await owner.query('DELETE FROM auth."session"');
+    const blocker = await owner.connect();
+    const insertHoldKey = "reset-verification-compensation-failure-hold";
+    let requestPromise: Promise<Response> | undefined;
+    let rotating: Promise<unknown> | undefined;
+    try {
+      await blocker.query(
+        "SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtextextended($1, 0))",
+        [insertHoldKey],
+      );
+      await owner.query(`
+        CREATE FUNCTION auth.test_hold_compensation_failure_insert()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        BEGIN
+          PERFORM pg_catalog.pg_advisory_xact_lock(
+            pg_catalog.hashtextextended('${insertHoldKey}', 0)
+          );
+          RETURN NEW;
+        END;
+        $function$;
+        CREATE TRIGGER test_hold_compensation_failure_insert
+        BEFORE INSERT ON auth."verification"
+        FOR EACH ROW
+        EXECUTE FUNCTION auth.test_hold_compensation_failure_insert()
+      `);
+
+      requestPromise = requestReset(
+        harness,
+        "compensation-failure@example.com",
+      );
+      void requestPromise.catch(() => undefined);
+      await waitForCondition(async () =>
+        hasAdvisoryWaiter("thesistrace_auth")
+      );
+      const terminated = await owner.query<{ terminated: boolean }>(`
+        SELECT pg_catalog.pg_terminate_backend(activity.pid) AS terminated
+        FROM pg_catalog.pg_stat_activity AS activity
+        WHERE activity.application_name = 'thesistrace_auth_coordination'
+          AND activity.usename = 'auth_runtime'
+          AND EXISTS (
+            SELECT 1
+            FROM pg_catalog.pg_locks AS held
+            WHERE held.pid = activity.pid
+              AND held.locktype = 'advisory'
+              AND held.granted
+          )
+        ORDER BY activity.backend_start DESC
+        LIMIT 1
+      `);
+      expect(terminated.rows).toEqual([{ terminated: true }]);
+
+      rotating = enforceAuthSecretContract(
+        runtimePool,
+        "abcdef0123456789abcdef0123456789",
+        () => fixedNow,
+      );
+      void rotating.catch(() => undefined);
+      await expect(rotating).resolves.toEqual({ status: "rotated" });
+      await blocker.query(
+        "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended($1, 0))",
+        [insertHoldKey],
+      );
+
+      expect((await requestPromise).status).toBe(503);
+      await harness.tasks.drain();
+      const recoveredClient = await compensationPool.connect();
+      recoveredClient.release();
+    } finally {
+      await blocker
+        .query(
+          "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended($1, 0))",
+          [insertHoldKey],
+        )
+        .catch(() => undefined);
+      blocker.release();
+      await Promise.allSettled([
+        requestPromise ?? Promise.resolve(),
+        rotating ?? Promise.resolve(),
+      ]);
+      await owner.query(`
+        DROP TRIGGER IF EXISTS test_hold_compensation_failure_insert
+          ON auth."verification";
+        DROP FUNCTION IF EXISTS auth.test_hold_compensation_failure_insert()
+      `);
+      await compensationPool.end();
+    }
+
+    expect(compensationConnectAttempts).toBe(2);
+    expect(harness.sent).toEqual([]);
+    expect(
+      await owner.query<{ effective: string }>(
+        `
+          SELECT count(*) FILTER (
+            WHERE status IN ('delivery_pending', 'delivered')
+          ) AS effective
+          FROM auth.password_reset
+        `,
+      ),
+    ).toMatchObject({ rows: [{ effective: "0" }] });
   });
 
   it("revokes and audits a completed sign-in when coordination release is uncertain", async () => {
@@ -838,6 +1177,7 @@ function resetHarness(
 ) {
   const sent: ResendEmail[] = [];
   const tasks = new AuthBackgroundTasks();
+  const requestCoordinator = coordinators.request ?? credentialCoordinator;
   let nextId = 1;
   const reset = new PasswordResetLifecycle({
     authSecret: settings.secret,
@@ -872,6 +1212,9 @@ function resetHarness(
     backgroundTask: tasks.handler,
     invitationAdmission,
     isResearcherActive: reset.isResearcherActive,
+    recordPasswordResetCredential:
+      requestCoordinator.recordPasswordResetCredential,
+    recordSession: requestCoordinator.recordSession,
     sendResetPassword: reset.sendResetPassword,
   };
   const auth = createThesisTraceAuth(settings, runtimePool, lifecycle);
@@ -880,7 +1223,7 @@ function resetHarness(
       throw new InvitationRejectedError();
     },
     authHandler: (request) =>
-      (coordinators.request ?? credentialCoordinator).handleAuthRequest(
+      requestCoordinator.handleAuthRequest(
         request,
         (coordinated) => auth.handler(coordinated),
         (headers) =>
@@ -889,16 +1232,25 @@ function resetHarness(
             query: { disableCookieCache: true, disableRefresh: true },
           }),
       ),
+    async confirmOperatorProof() {
+      throw new Error("OPERATOR_PROOF_UNAVAILABLE_IN_RESET_HARNESS");
+    },
     async consumeInvitationRateLimit() {
       return { allowed: true, retryAfterSeconds: 0 };
     },
     consumePasswordResetRateLimit,
+    async consumeOperatorProofRateLimit() {
+      return { allowed: true, retryAfterSeconds: 0 };
+    },
     getSession: (input) => auth.api.getSession(input),
     async hasOperatorCapability() {
       return false;
     },
     async inspectInvitation() {
       throw new InvitationRejectedError();
+    },
+    async issueOperatorInvitation() {
+      throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_RESET_HARNESS");
     },
     async listOperatorInvitations() {
       throw new Error("OPERATOR_DIRECTORY_UNAVAILABLE_IN_RESET_HARNESS");
@@ -908,6 +1260,9 @@ function resetHarness(
     },
     publicOrigin: settings.publicOrigin,
     readiness: async () => true,
+    async reissueOperatorInvitation() {
+      throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_RESET_HARNESS");
+    },
     resetPassword: completionReset.completeReset,
   });
   return { app, auth, invitationAdmission, reset, sent, tasks };
@@ -1037,6 +1392,21 @@ async function hasAdvisoryWaiter(applicationName: string): Promise<boolean> {
       ) AS waiting
     `,
     [applicationName],
+  );
+  return result.rows[0]?.waiting === true;
+}
+
+async function hasBlockedRuntimeQuery(fragment: string): Promise<boolean> {
+  const result = await owner.query<{ waiting: boolean }>(
+    `
+      SELECT pg_catalog.bool_or(
+        pg_catalog.cardinality(pg_catalog.pg_blocking_pids(pid)) > 0
+      ) AS waiting
+      FROM pg_catalog.pg_stat_activity
+      WHERE application_name = 'thesistrace_auth'
+        AND query ILIKE $1
+    `,
+    [`%${fragment}%`],
   );
   return result.rows[0]?.waiting === true;
 }

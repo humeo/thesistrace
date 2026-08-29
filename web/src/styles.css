@@ -427,7 +427,7 @@ select { color-scheme: dark; }
 .operator-table-scroll { width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
 .operator-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .operator-researcher-table { min-width: 1120px; }
-.operator-invitation-table { min-width: 940px; }
+.operator-invitation-table { min-width: 1060px; }
 .operator-table th,
 .operator-table td {
   padding: 13px 11px;
@@ -472,6 +472,55 @@ select { color-scheme: dark; }
 .operator-pagination button:first-child { justify-self: start; }
 .operator-pagination button:last-child { justify-self: end; }
 .operator-pagination span { color: var(--ink-soft); font-family: var(--mono); font-size: 12px; }
+.operator-row-action { min-height: 36px; padding: 5px 9px; }
+.operator-confirmation-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-width: none;
+  margin: auto;
+  padding: 0;
+  color: var(--ink-muted);
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+}
+.operator-confirmation-dialog::backdrop { background: rgb(0 0 0 / 72%); }
+.operator-confirmation-content { display: grid; gap: 18px; padding: 24px; }
+.operator-confirmation-content header { display: grid; gap: 3px; }
+.operator-confirmation-content p { margin: 0; }
+.operator-confirmation-content > p {
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.operator-confirmation-field { display: grid; gap: 7px; }
+.operator-confirmation-field > strong {
+  min-height: 40px;
+  padding: 10px 11px;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.operator-confirmation-effect {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border-left: 2px solid var(--primary);
+}
+.operator-confirmation-effect > span { color: var(--ink-soft); font-size: 12px; font-weight: 500; }
+.operator-confirmation-effect p { color: var(--ink-muted); font-size: 13px; line-height: 1.5; }
+.operator-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+.operator-confirmation-actions button { min-height: 44px; }
 
 /* Authentication and account access */
 .auth-page {
@@ -1341,7 +1390,10 @@ select { color-scheme: dark; }
   .account-action,
   .account-password-form input,
   .account-password-form .button-primary,
+  .operator-confirmation-field input,
   .operator-load-error button,
+  .operator-row-action,
+  .operator-section-header > button,
   .operator-search button,
   .operator-pagination button { min-height: 44px; }
   .account-menu > summary { min-width: 44px; }

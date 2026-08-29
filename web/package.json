@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "lezer-generator --typeScript --noTerms --output src/research/alpha-language-parser.ts src/research/alpha-language.grammar && tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "test:shell": "vitest run src/auth/routing.test.ts src/auth/session.test.ts src/auth/coreFetch.test.ts src/auth/draft-isolation.test.ts src/auth/operatorCapability.test.ts src/auth/AccountMenu.test.tsx src/shell/AppShell.test.tsx src/data/DataPage.test.tsx src/research/ResearchWorkspacePage.test.tsx src/research-runs/ResearchRunsPage.test.tsx src/daily-tracks/DailyTracksPage.test.tsx src/operator/OperatorResearchersPage.test.tsx src/analysis/StrategyPerformanceChart.test.ts",
+    "test:shell": "vitest run src/auth/routing.test.ts src/auth/session.test.ts src/auth/coreFetch.test.ts src/auth/draft-isolation.test.ts src/auth/operatorCapability.test.ts src/auth/AccountMenu.test.tsx src/shell/AppShell.test.tsx src/data/DataPage.test.tsx src/research/ResearchWorkspacePage.test.tsx src/research-runs/ResearchRunsPage.test.tsx src/daily-tracks/DailyTracksPage.test.tsx src/operator/OperatorResearchersPage.test.tsx src/operator/operatorMutationClient.test.ts src/analysis/StrategyPerformanceChart.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

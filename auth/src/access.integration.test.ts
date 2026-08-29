@@ -14,6 +14,7 @@ import {
 import { InvitationAdmission } from "./invitation-admission.js";
 import { OperatorAssignmentService } from "./operator-assignment.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
+import { enforceAuthSecretContract } from "./secret-contract.js";
 
 const ownerDatabaseUrl = process.env.THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL;
 if (ownerDatabaseUrl === undefined) {
@@ -53,6 +54,8 @@ const lifecycle: AuthLifecycleDependencies = {
     );
     return result.rows[0]?.active === true;
   },
+  recordPasswordResetCredential() {},
+  recordSession() {},
   async sendResetPassword() {},
 };
 
@@ -65,6 +68,7 @@ describe.sequential("Auth operator access lifecycle", () => {
   beforeEach(async () => {
     await owner.query(`
       TRUNCATE
+        auth.auth_secret_contract,
         auth.operator_assignment,
         auth.security_audit,
         auth.password_reset,
@@ -114,6 +118,61 @@ describe.sequential("Auth operator access lifecycle", () => {
         { event: "researcher_deactivated", outcome: "no_change" },
       ]),
     );
+  });
+
+  it("serializes deactivation before hard secret rotation", async () => {
+    await enforceAuthSecretContract(runtimePool, settings.secret, () => fixedNow);
+    const researcherId = await createUser("rotation-deactivate@example.com");
+    await insertEffectiveAccessState(
+      researcherId,
+      "rotation-deactivate@example.com",
+    );
+    const blocker = await owner.connect();
+    let deactivating: Promise<unknown> | undefined;
+    let rotating: Promise<unknown> | undefined;
+    try {
+      await blocker.query("BEGIN");
+      await blocker.query(
+        'SELECT id FROM auth."user" WHERE id = $1 FOR UPDATE',
+        [researcherId],
+      );
+      deactivating = service().deactivate(researcherId);
+      void deactivating.catch(() => undefined);
+      await waitForCondition(() => hasBlockedRuntimeQuery('FROM auth."user"'));
+
+      rotating = enforceAuthSecretContract(
+        runtimePool,
+        "abcdef0123456789abcdef0123456789",
+        () => fixedNow,
+      );
+      void rotating.catch(() => undefined);
+      await waitForCondition(() =>
+        hasBlockedRuntimeQuery("pg_advisory_xact_lock(")
+      );
+
+      await blocker.query("COMMIT");
+      await expect(deactivating).resolves.toEqual({
+        researcherId,
+        status: "updated",
+      });
+      await expect(rotating).resolves.toEqual({ status: "rotated" });
+    } finally {
+      await blocker.query("ROLLBACK").catch(() => undefined);
+      blocker.release();
+      await Promise.allSettled(
+        [deactivating, rotating].filter(
+          (operation): operation is Promise<unknown> => operation !== undefined,
+        ),
+      );
+    }
+
+    expect(await persistedAccessState(researcherId)).toEqual({
+      active: false,
+      effectiveInvitations: 0,
+      effectiveResets: 0,
+      resetVerifications: 0,
+      sessions: 0,
+    });
   });
 
   it("reactivates without creating or restoring a Session", async () => {
@@ -393,6 +452,32 @@ async function persistedAccessState(researcherId: string): Promise<{
     resetVerifications: Number(row.reset_verifications),
     sessions: Number(row.sessions),
   };
+}
+
+async function hasBlockedRuntimeQuery(fragment: string): Promise<boolean> {
+  const result = await owner.query<{ waiting: boolean }>(
+    `
+      SELECT pg_catalog.bool_or(
+        pg_catalog.cardinality(pg_catalog.pg_blocking_pids(pid)) > 0
+      ) AS waiting
+      FROM pg_catalog.pg_stat_activity
+      WHERE application_name = 'thesistrace_auth'
+        AND query ILIKE $1
+    `,
+    [`%${fragment}%`],
+  );
+  return result.rows[0]?.waiting === true;
+}
+
+async function waitForCondition(
+  condition: () => Promise<boolean>,
+): Promise<void> {
+  const deadline = performance.now() + 1_000;
+  while (performance.now() < deadline) {
+    if (await condition()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("condition was not reached before its deadline");
 }
 
 function requestHeaders(): Headers {

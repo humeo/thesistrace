@@ -64,6 +64,9 @@ async function main(): Promise<void> {
       backgroundTask: backgroundTasks.handler,
       invitationAdmission,
       isResearcherActive: passwordReset.isResearcherActive,
+      recordPasswordResetCredential:
+        credentialCoordinator.recordPasswordResetCredential,
+      recordSession: credentialCoordinator.recordSession,
       sendResetPassword: passwordReset.sendResetPassword,
     });
     const result = await runOperatorCommand(process.argv.slice(2), {

@@ -60,6 +60,7 @@ describe("Operator Researcher view", () => {
         invitations={{ items: [invitation], next_cursor: null }}
         onInvitationNext={() => undefined}
         onInvitationPrevious={() => undefined}
+        onInvitationAction={() => undefined}
         onResearcherNext={() => undefined}
         onResearcherPrevious={() => undefined}
         onSearch={() => undefined}
@@ -77,7 +78,9 @@ describe("Operator Researcher view", () => {
     expect(markup).toContain("Latest login");
     expect(markup).toContain("Effective invitation");
     expect(markup).toContain('aria-label="Search researchers"');
-    expect(markup).not.toMatch(/Revoke|Deactivate|Reissue|Export|IP address|User-Agent/);
+    expect(markup).toContain("Invite Researcher");
+    expect(markup).toContain("Reissue");
+    expect(markup).not.toMatch(/Revoke|Deactivate|Export|IP address|User-Agent/);
   });
 
   it("keeps the directory visible and disables every control while refreshing", () => {

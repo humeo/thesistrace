@@ -74,8 +74,6 @@ describe.sequential("Auth secret fingerprint contract", () => {
       enforceAuthSecretContract(runtimePool, rotatedSecret, () => fixedNow),
     ]);
     const persisted = await owner.query<{
-      invitation_status: string;
-      invitation_terminal_at: Date;
       reset_status: string;
       reset_terminal_at: Date;
       secret_fingerprint: string;
@@ -84,8 +82,6 @@ describe.sequential("Auth secret fingerprint contract", () => {
     }>(`
       SELECT
         c.secret_fingerprint,
-        i.status AS invitation_status,
-        i.terminal_at AS invitation_terminal_at,
         r.status AS reset_status,
         r.terminal_at AS reset_terminal_at,
         (SELECT count(*) FROM auth."session") AS sessions,
@@ -95,23 +91,34 @@ describe.sequential("Auth secret fingerprint contract", () => {
           WHERE identifier LIKE 'reset-password:%'
         ) AS verifications
       FROM auth.auth_secret_contract c
-      CROSS JOIN auth.researcher_invitation i
       CROSS JOIN auth.password_reset r
     `);
+    const invitations = await owner.query<{
+      status: string;
+      terminal_at: Date;
+    }>(
+      `
+        SELECT status, terminal_at
+        FROM auth.researcher_invitation
+        ORDER BY id
+      `,
+    );
 
     expect(results).toEqual(
       expect.arrayContaining([{ status: "rotated" }, { status: "unchanged" }]),
     );
     expect(persisted.rows).toEqual([
       {
-        invitation_status: "revoked",
-        invitation_terminal_at: fixedNow,
         reset_status: "revoked",
         reset_terminal_at: fixedNow,
         secret_fingerprint: secretFingerprint(rotatedSecret),
         sessions: "0",
         verifications: "0",
       },
+    ]);
+    expect(invitations.rows).toEqual([
+      { status: "revoked", terminal_at: fixedNow },
+      { status: "revoked", terminal_at: fixedNow },
     ]);
   });
 });
@@ -147,15 +154,25 @@ async function insertEffectiveCredentials(): Promise<void> {
       INSERT INTO auth.researcher_invitation (
         id, email, token_hash, status, expires_at, created_at, delivered_at
       )
-      VALUES (
-        '00000000-0000-4000-8000-000000000003',
-        'other@example.com',
-        decode(repeat('11', 32), 'hex'),
-        'delivered',
-        $1,
-        $2,
-        $2
-      )
+      VALUES
+        (
+          '00000000-0000-4000-8000-000000000003',
+          'other@example.com',
+          decode(repeat('11', 32), 'hex'),
+          'delivered',
+          $1,
+          $2,
+          $2
+        ),
+        (
+          '00000000-0000-4000-8000-000000000006',
+          'replacement@example.com',
+          decode(repeat('33', 32), 'hex'),
+          'replacement_pending',
+          $1,
+          $2,
+          NULL
+        )
     `,
     [new Date("2026-08-30T07:00:00.000Z"), fixedNow],
   );

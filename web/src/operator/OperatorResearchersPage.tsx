@@ -1,5 +1,5 @@
 import { MagnifyingGlass } from "@phosphor-icons/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   loadInvitationPage,
@@ -10,6 +10,17 @@ import {
   type OperatorPage,
   type OperatorResearcher,
 } from "./operatorDirectoryClient";
+import { OperatorInvitationDialog } from "./OperatorInvitationDialog";
+import type { InvitationMutationOperation } from "./operatorMutationClient";
+
+type InvitationAction = Readonly<{
+  email: string;
+  operation: InvitationMutationOperation;
+}>;
+
+const inviteResearcherButtonId = "operator-invite-researcher";
+const operatorRetryButtonId = "operator-console-retry";
+const operatorPageFallbackId = "operator-console-focus-fallback";
 
 export function OperatorResearchersPage() {
   const [researchers, setResearchers] = useState<OperatorPage<OperatorResearcher> | null>(null);
@@ -21,6 +32,10 @@ export function OperatorResearchersPage() {
   const [invitationHistory, setInvitationHistory] = useState<Array<string | null>>([]);
   const [reloadGeneration, setReloadGeneration] = useState(0);
   const [state, setState] = useState<"loading" | "not-found" | "ready" | "unavailable">("loading");
+  const [invitationAction, setInvitationAction] = useState<InvitationAction | null>(null);
+  const [mutationNotice, setMutationNotice] = useState<string | null>(null);
+  const mutationFocusTargetId = useRef<string | null>(null);
+  const restoreMutationFocusAfterLoad = useRef(false);
 
   const load = useCallback(async (signal: AbortSignal) => {
     setState("loading");
@@ -48,19 +63,59 @@ export function OperatorResearchersPage() {
     return () => controller.abort();
   }, [load, reloadGeneration]);
 
+  useEffect(() => {
+    if (state === "loading" || !restoreMutationFocusAfterLoad.current) return;
+    restoreMutationFocusAfterLoad.current = false;
+    const frame = window.requestAnimationFrame(() => {
+      restoreMutationFocus(mutationFocusTargetId.current);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [state]);
+
   if (state === "not-found") {
     return (
-      <section aria-label="Not found" className="page-section state-section">
+      <section
+        aria-label="Not found"
+        className="page-section state-section"
+        id={operatorPageFallbackId}
+        tabIndex={-1}
+      >
         <h1>Not found</h1>
         <p>The requested resource is not available.</p>
       </section>
     );
   }
 
+  function closeInvitationDialog(afterReload = false): void {
+    setInvitationAction(null);
+    if (afterReload) {
+      restoreMutationFocusAfterLoad.current = true;
+      return;
+    }
+    restoreMutationFocusAfterLoad.current = false;
+    window.requestAnimationFrame(() => {
+      restoreMutationFocus(mutationFocusTargetId.current);
+    });
+  }
+
+  function openInvitationDialog(
+    trigger: HTMLButtonElement,
+    action: InvitationAction,
+  ): void {
+    mutationFocusTargetId.current = trigger.id || null;
+    setMutationNotice(null);
+    setInvitationAction(action);
+  }
+
   return (
-    <OperatorResearchersView
+    <>
+      <OperatorResearchersView
       invitationCursorDepth={invitationHistory.length}
       invitations={invitations}
+      mutationNotice={mutationNotice}
+      onInvitationAction={(trigger, action) => {
+        openInvitationDialog(trigger, action);
+      }}
       onInvitationNext={() => {
         if (state !== "ready" || invitations === null || invitations.next_cursor === null) {
           return;
@@ -111,13 +166,35 @@ export function OperatorResearchersPage() {
       researchers={researchers}
       search={search}
       state={state}
-    />
+      />
+      {invitationAction === null ? null : (
+        <OperatorInvitationDialog
+          email={invitationAction.email}
+          onDismiss={closeInvitationDialog}
+          onSucceeded={({ email, operation }) => {
+            setMutationNotice(
+              operation === "issue"
+                ? `Invitation sent to ${email}.`
+                : `Invitation reissued for ${email}.`,
+            );
+            setInvitationCursor(null);
+            setInvitationHistory([]);
+            setState("loading");
+            setReloadGeneration((value) => value + 1);
+            closeInvitationDialog(true);
+          }}
+          operation={invitationAction.operation}
+        />
+      )}
+    </>
   );
 }
 
 export function OperatorResearchersView({
   invitationCursorDepth,
   invitations,
+  mutationNotice,
+  onInvitationAction,
   onInvitationNext,
   onInvitationPrevious,
   onResearcherNext,
@@ -131,6 +208,11 @@ export function OperatorResearchersView({
 }: Readonly<{
   invitationCursorDepth: number;
   invitations: OperatorPage<OperatorInvitation> | null;
+  mutationNotice?: string | null;
+  onInvitationAction?: (
+    trigger: HTMLButtonElement,
+    action: InvitationAction,
+  ) => void;
   onInvitationNext: () => void;
   onInvitationPrevious: () => void;
   onResearcherNext: () => void;
@@ -149,6 +231,8 @@ export function OperatorResearchersView({
       aria-busy={busy}
       aria-label="Operator Researchers"
       className="page-section operator-page"
+      id={operatorPageFallbackId}
+      tabIndex={-1}
     >
       <header className="page-hero">
         <div>
@@ -220,8 +304,37 @@ export function OperatorResearchersView({
             <h2 id="operator-invitations-title">Invitations</h2>
             <span>Effective and terminal within 30 days · 50 per page</span>
           </div>
+          {onInvitationAction === undefined ? null : (
+            <button
+              className="button-primary"
+              disabled={state !== "ready"}
+              id={inviteResearcherButtonId}
+              onClick={(event) => onInvitationAction(event.currentTarget, {
+                email: "",
+                operation: "issue",
+              })}
+              type="button"
+            >
+              Invite Researcher
+            </button>
+          )}
         </header>
-        <InvitationTable items={invitations?.items ?? null} state={state} />
+        {mutationNotice === null || mutationNotice === undefined ? null : (
+          <p aria-live="polite" className="inline-status" role="status">
+            {mutationNotice}
+          </p>
+        )}
+        <InvitationTable
+          disabled={state !== "ready"}
+          items={invitations?.items ?? null}
+          onReissue={onInvitationAction === undefined
+            ? undefined
+            : (trigger, email) => onInvitationAction(trigger, {
+                email,
+                operation: "reissue",
+              })}
+          state={state}
+        />
         <Pagination
           disabled={state !== "ready" || invitations === null}
           depth={invitationCursorDepth}
@@ -254,7 +367,7 @@ function OperatorLoadState({ hasData, onRetry, state }: Readonly<{
         Operator Console unavailable.{hasData ? " Displayed data may be stale." : ""}
       </p>
       {onRetry === undefined ? null : (
-        <button onClick={onRetry} type="button">Retry</button>
+        <button id={operatorRetryButtonId} onClick={onRetry} type="button">Retry</button>
       )}
     </div>
   );
@@ -327,8 +440,10 @@ function ResearcherTable({ items, state }: Readonly<{
   );
 }
 
-function InvitationTable({ items, state }: Readonly<{
+function InvitationTable({ disabled, items, onReissue, state }: Readonly<{
+  disabled: boolean;
   items: readonly OperatorInvitation[] | null;
+  onReissue?: (trigger: HTMLButtonElement, email: string) => void;
   state: "loading" | "ready" | "unavailable";
 }>) {
   if (items === null) {
@@ -351,6 +466,7 @@ function InvitationTable({ items, state }: Readonly<{
             <th scope="col">Created</th>
             <th scope="col">Expires</th>
             <th scope="col">Terminal</th>
+            {onReissue === undefined ? null : <th scope="col">Action</th>}
           </tr>
         </thead>
         <tbody>
@@ -377,6 +493,23 @@ function InvitationTable({ items, state }: Readonly<{
                   ? <span className="operator-muted">—</span>
                   : <Timestamp value={invitation.terminal_at} />}
               </td>
+              {onReissue === undefined ? null : (
+                <td data-label="Action">
+                  <button
+                    aria-label={`Reissue invitation for ${invitation.email}`}
+                    className="button-quiet operator-row-action"
+                    disabled={disabled}
+                    id={`operator-invitation-reissue-${invitation.invitation_id}`}
+                    onClick={(event) => onReissue(
+                      event.currentTarget,
+                      invitation.email,
+                    )}
+                    type="button"
+                  >
+                    Reissue
+                  </button>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -418,4 +551,20 @@ function formatTimestamp(value: string): string {
     timeStyle: "short",
     timeZone: "UTC",
   }).format(new Date(value));
+}
+
+function restoreMutationFocus(targetId: string | null): void {
+  const target = focusableElement(targetId)
+    ?? focusableElement(inviteResearcherButtonId)
+    ?? focusableElement(operatorRetryButtonId)
+    ?? document.getElementById(operatorPageFallbackId);
+  target?.focus();
+}
+
+function focusableElement(id: string | null): HTMLElement | null {
+  if (id === null) return null;
+  const element = document.getElementById(id);
+  if (element === null) return null;
+  if (element instanceof HTMLButtonElement && element.disabled) return null;
+  return element;
 }

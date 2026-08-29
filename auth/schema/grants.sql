@@ -12,6 +12,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
     auth."verification",
     auth."rateLimit",
     auth.operator_assignment,
+    auth.operator_proof,
     auth.researcher_invitation,
     auth.password_reset,
     auth.security_audit,

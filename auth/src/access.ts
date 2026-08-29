@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
 
 import { recordSecurityAudit, type SecurityAuditEvent } from "./audit.js";
+import { lockAuthMutationShared } from "./auth-mutation-lock.js";
 import { canonicalizeEmail } from "./identity.js";
 
 const researcherIdSchema = z.uuid();
@@ -205,6 +206,7 @@ export class ResearcherAccessService {
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
+      await lockAuthMutationShared(client);
       await client.query(
         "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))",
         [researcherId],

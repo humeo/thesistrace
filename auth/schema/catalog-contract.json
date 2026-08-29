@@ -157,6 +157,86 @@
       "name": "id",
       "notNull": true,
       "position": 1,
+      "relation": "operator_proof",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "token_hash",
+      "notNull": true,
+      "position": 2,
+      "relation": "operator_proof",
+      "type": "bytea"
+    },
+    {
+      "default": null,
+      "name": "session_id",
+      "notNull": true,
+      "position": 3,
+      "relation": "operator_proof",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "operation",
+      "notNull": true,
+      "position": 4,
+      "relation": "operator_proof",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "request_hash",
+      "notNull": true,
+      "position": 5,
+      "relation": "operator_proof",
+      "type": "bytea"
+    },
+    {
+      "default": null,
+      "name": "state",
+      "notNull": true,
+      "position": 6,
+      "relation": "operator_proof",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "expires_at",
+      "notNull": true,
+      "position": 7,
+      "relation": "operator_proof",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "created_at",
+      "notNull": true,
+      "position": 8,
+      "relation": "operator_proof",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "claimed_at",
+      "notNull": false,
+      "position": 9,
+      "relation": "operator_proof",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "consumed_at",
+      "notNull": false,
+      "position": 10,
+      "relation": "operator_proof",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
       "relation": "password_reset",
       "type": "uuid"
     },
@@ -617,6 +697,60 @@
       "type": "c"
     },
     {
+      "definition": "CHECK ((expires_at > created_at))",
+      "name": "operator_proof_expiry_check",
+      "relation": "operator_proof",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((((state = 'available'::text) AND (claimed_at IS NULL) AND (consumed_at IS NULL)) OR ((state = 'claimed'::text) AND (claimed_at IS NOT NULL) AND (consumed_at IS NULL)) OR ((state = 'consumed'::text) AND (claimed_at IS NOT NULL) AND (consumed_at IS NOT NULL))))",
+      "name": "operator_proof_lifecycle_check",
+      "relation": "operator_proof",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((operation = ANY (ARRAY['invitation.issue'::text, 'invitation.reissue'::text])))",
+      "name": "operator_proof_operation_check",
+      "relation": "operator_proof",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "operator_proof_pkey",
+      "relation": "operator_proof",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((octet_length(request_hash) = 32))",
+      "name": "operator_proof_request_hash_check",
+      "relation": "operator_proof",
+      "type": "c"
+    },
+    {
+      "definition": "FOREIGN KEY (session_id) REFERENCES auth.session(id) ON DELETE CASCADE",
+      "name": "operator_proof_session_id_fkey",
+      "relation": "operator_proof",
+      "type": "f"
+    },
+    {
+      "definition": "CHECK ((state = ANY (ARRAY['available'::text, 'claimed'::text, 'consumed'::text])))",
+      "name": "operator_proof_state_check",
+      "relation": "operator_proof",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((octet_length(token_hash) = 32))",
+      "name": "operator_proof_token_hash_check",
+      "relation": "operator_proof",
+      "type": "c"
+    },
+    {
+      "definition": "UNIQUE (token_hash)",
+      "name": "operator_proof_token_hash_key",
+      "relation": "operator_proof",
+      "type": "u"
+    },
+    {
       "definition": "CHECK ((((status = 'delivery_pending'::text) AND (delivered_at IS NULL) AND (terminal_at IS NULL)) OR ((status = 'delivered'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NULL)) OR ((status = ANY (ARRAY['delivery_failed'::text, 'revoked'::text])) AND (terminal_at IS NOT NULL)) OR ((status = 'consumed'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NOT NULL))))",
       "name": "password_reset_lifecycle_check",
       "relation": "password_reset",
@@ -671,7 +805,7 @@
       "type": "c"
     },
     {
-      "definition": "CHECK ((((status = 'delivery_pending'::text) AND (delivered_at IS NULL) AND (terminal_at IS NULL) AND (user_id IS NULL)) OR ((status = 'delivered'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NULL) AND (user_id IS NULL)) OR ((status = ANY (ARRAY['delivery_failed'::text, 'revoked'::text])) AND (terminal_at IS NOT NULL) AND (user_id IS NULL)) OR ((status = 'consumed'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NOT NULL) AND (user_id IS NOT NULL))))",
+      "definition": "CHECK ((((status = 'delivery_pending'::text) AND (delivered_at IS NULL) AND (terminal_at IS NULL) AND (user_id IS NULL)) OR ((status = 'replacement_pending'::text) AND (delivered_at IS NULL) AND (terminal_at IS NULL) AND (user_id IS NULL)) OR ((status = 'delivered'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NULL) AND (user_id IS NULL)) OR ((status = ANY (ARRAY['delivery_failed'::text, 'revoked'::text])) AND (terminal_at IS NOT NULL) AND (user_id IS NULL)) OR ((status = 'consumed'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NOT NULL) AND (user_id IS NOT NULL))))",
       "name": "researcher_invitation_lifecycle_check",
       "relation": "researcher_invitation",
       "type": "c"
@@ -683,7 +817,7 @@
       "type": "p"
     },
     {
-      "definition": "CHECK ((status = ANY (ARRAY['delivery_pending'::text, 'delivered'::text, 'delivery_failed'::text, 'consumed'::text, 'revoked'::text])))",
+      "definition": "CHECK ((status = ANY (ARRAY['delivery_pending'::text, 'replacement_pending'::text, 'delivered'::text, 'delivery_failed'::text, 'consumed'::text, 'revoked'::text])))",
       "name": "researcher_invitation_status_check",
       "relation": "researcher_invitation",
       "type": "c"
@@ -835,6 +969,26 @@
       "relation": "operator_assignment"
     },
     {
+      "definition": "CREATE INDEX operator_proof_expires_at_idx ON auth.operator_proof USING btree (expires_at)",
+      "name": "operator_proof_expires_at_idx",
+      "relation": "operator_proof"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX operator_proof_pkey ON auth.operator_proof USING btree (id)",
+      "name": "operator_proof_pkey",
+      "relation": "operator_proof"
+    },
+    {
+      "definition": "CREATE INDEX operator_proof_session_id_idx ON auth.operator_proof USING btree (session_id)",
+      "name": "operator_proof_session_id_idx",
+      "relation": "operator_proof"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX operator_proof_token_hash_key ON auth.operator_proof USING btree (token_hash)",
+      "name": "operator_proof_token_hash_key",
+      "relation": "operator_proof"
+    },
+    {
       "definition": "CREATE UNIQUE INDEX password_reset_effective_user_id_uidx ON auth.password_reset USING btree (user_id) WHERE (status = ANY (ARRAY['delivery_pending'::text, 'delivered'::text]))",
       "name": "password_reset_effective_user_id_uidx",
       "relation": "password_reset"
@@ -969,6 +1123,14 @@
     {
       "forceRowSecurity": false,
       "kind": "r",
+      "name": "operator_proof",
+      "rowSecurity": false,
+      "owner": "thesistrace_owner",
+      "persistence": "p"
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
       "name": "password_reset",
       "rowSecurity": false,
       "owner": "thesistrace_owner",
@@ -1050,6 +1212,9 @@
       "volatility": "v"
     }
   ],
+  "schema": {
+    "owner": "thesistrace_owner"
+  },
   "triggers": [
     {
       "definition": "CREATE TRIGGER session_active_researcher_trigger BEFORE INSERT ON auth.session FOR EACH ROW EXECUTE FUNCTION auth.enforce_active_session_owner()",
@@ -1057,8 +1222,5 @@
       "relation": "session"
     }
   ],
-  "types": [],
-  "schema": {
-    "owner": "thesistrace_owner"
-  }
+  "types": []
 }

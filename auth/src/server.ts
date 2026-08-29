@@ -17,6 +17,8 @@ import { createAuthHttpObserver } from "./http-observability.js";
 import { ResearcherInvitationService } from "./invitation.js";
 import { InvitationAdmission } from "./invitation-admission.js";
 import { OperatorDirectoryService } from "./operator-directory.js";
+import { OperatorInvitationService } from "./operator-invitation.js";
+import { OperatorProofService } from "./operator-proof.js";
 import { PasswordResetLifecycle } from "./password-reset.js";
 import { checkAuthReadiness } from "./readiness.js";
 import { sendResendEmail } from "./resend.js";
@@ -78,6 +80,9 @@ async function main(): Promise<void> {
       backgroundTask: backgroundTasks.handler,
       invitationAdmission,
       isResearcherActive: passwordReset.isResearcherActive,
+      recordPasswordResetCredential:
+        credentialCoordinator.recordPasswordResetCredential,
+      recordSession: credentialCoordinator.recordSession,
       sendResetPassword: passwordReset.sendResetPassword,
     });
     const invitations = new ResearcherInvitationService({
@@ -99,6 +104,11 @@ async function main(): Promise<void> {
       pool,
       scope: "password-reset",
     });
+    const operatorProofRateLimiter = new AuthEndpointRateLimiter({
+      authSecret: settings.secret,
+      pool,
+      scope: "operator-proof",
+    });
     const authEvents = new AuthEventRecorder({
       authSecret: settings.secret,
       backgroundTask: backgroundTasks.handler,
@@ -112,6 +122,11 @@ async function main(): Promise<void> {
     const operatorDirectory = new OperatorDirectoryService({
       authSecret: settings.secret,
       pool,
+    });
+    const operatorProofs = new OperatorProofService({ pool });
+    const operatorInvitations = new OperatorInvitationService({
+      invitations,
+      proofs: operatorProofs,
     });
     const app = createAuthApp({
       acceptInvitation: (token, password, headers) =>
@@ -129,6 +144,8 @@ async function main(): Promise<void> {
         ),
       consumeInvitationRateLimit: (token, headers) =>
         invitationRateLimiter.consume(token, headers),
+      consumeOperatorProofRateLimit: (sessionId, headers) =>
+        operatorProofRateLimiter.consume(sessionId, headers),
       consumePasswordResetRateLimit: (token, headers) =>
         passwordResetRateLimiter.consume(token, headers),
       getSession: (input) => auth.api.getSession(input),
@@ -136,12 +153,18 @@ async function main(): Promise<void> {
         operatorDirectory.hasCapability(principal),
       httpObserver: createAuthHttpObserver(),
       inspectInvitation: (token) => invitations.inspect(token),
+      confirmOperatorProof: (principal, input) =>
+        operatorProofs.confirm(principal, input),
+      issueOperatorInvitation: (principal, input) =>
+        operatorInvitations.issue(principal, input),
       listOperatorInvitations: (principal, input) =>
         operatorDirectory.listInvitations(principal, input),
       listOperatorResearchers: (principal, input) =>
         operatorDirectory.listResearchers(principal, input),
       publicOrigin: settings.publicOrigin,
       readiness: () => checkAuthReadiness(pool),
+      reissueOperatorInvitation: (principal, input) =>
+        operatorInvitations.reissue(principal, input),
       resetPassword: passwordReset.completeReset,
     });
     const server = serve({

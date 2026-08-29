@@ -52,6 +52,7 @@ describe.sequential("daily Auth cleanup", () => {
       deleted: {
         audits: 1,
         invitations: 1,
+        proofs: 1,
         rateLimits: 1,
         resets: 1,
         sessions: 1,
@@ -64,6 +65,7 @@ describe.sequential("daily Auth cleanup", () => {
     expect(await retainedState()).toEqual({
       audits: 1,
       invitationStatuses: ["delivered", "revoked"],
+      proofs: 1,
       rateLimits: 1,
       resetStatuses: ["delivered", "revoked"],
       sessions: 1,
@@ -165,6 +167,18 @@ async function insertCleanupFixture(): Promise<void> {
   );
   await owner.query(
     `
+      INSERT INTO auth.operator_proof (
+        id, token_hash, session_id, operation, request_hash, state,
+        expires_at, created_at
+      )
+      VALUES
+        ('00000000-0000-4000-8000-000000000071', decode(repeat('77', 32), 'hex'), '00000000-0000-4000-8000-000000000042', 'invitation.issue', decode(repeat('78', 32), 'hex'), 'available', $1, $2),
+        ('00000000-0000-4000-8000-000000000072', decode(repeat('88', 32), 'hex'), '00000000-0000-4000-8000-000000000042', 'invitation.reissue', decode(repeat('89', 32), 'hex'), 'available', $3, $2)
+    `,
+    [expired, new Date(fixedNow.getTime() - DAY_MS), current],
+  );
+  await owner.query(
+    `
       INSERT INTO auth."verification" (
         id, identifier, value, "expiresAt", "createdAt", "updatedAt"
       )
@@ -188,6 +202,7 @@ async function insertCleanupFixture(): Promise<void> {
 async function retainedState(): Promise<{
   audits: number;
   invitationStatuses: string[];
+  proofs: number;
   rateLimits: number;
   resetStatuses: string[];
   sessions: number;
@@ -196,6 +211,7 @@ async function retainedState(): Promise<{
   const result = await owner.query<{
     audits: string;
     invitation_statuses: string[];
+    proofs: string;
     rate_limits: string;
     reset_statuses: string[];
     sessions: string;
@@ -204,6 +220,7 @@ async function retainedState(): Promise<{
     SELECT
       (SELECT count(*) FROM auth.security_audit) AS audits,
       (SELECT array_agg(status ORDER BY status) FROM auth.researcher_invitation) AS invitation_statuses,
+      (SELECT count(*) FROM auth.operator_proof) AS proofs,
       (SELECT count(*) FROM auth."rateLimit") AS rate_limits,
       (SELECT array_agg(status ORDER BY status) FROM auth.password_reset) AS reset_statuses,
       (SELECT count(*) FROM auth."session") AS sessions,
@@ -216,6 +233,7 @@ async function retainedState(): Promise<{
   return {
     audits: Number(row.audits),
     invitationStatuses: row.invitation_statuses,
+    proofs: Number(row.proofs),
     rateLimits: Number(row.rate_limits),
     resetStatuses: row.reset_statuses,
     sessions: Number(row.sessions),
