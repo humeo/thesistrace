@@ -6,6 +6,7 @@ import os
 import re
 import sys
 from typing import NoReturn
+from uuid import UUID
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.daily_track.diagnostics import (
@@ -33,13 +34,21 @@ def main(arguments: list[str] | None = None) -> None:
         parser_class=_SafeArgumentParser,
     )
     research_run = subcommands.add_parser("research-run")
+    research_run.add_argument("researcher_id")
     research_run.add_argument("run_id")
     daily_track = subcommands.add_parser("daily-track")
+    daily_track.add_argument("researcher_id")
     daily_track.add_argument("track_id")
     parsed = parser.parse_args(arguments)
 
     resource_id = parsed.run_id if parsed.resource == "research-run" else parsed.track_id
     if _RESOURCE_ID_PATTERN.fullmatch(resource_id) is None:
+        _fail("INVALID_USAGE", 2)
+    try:
+        researcher_id = UUID(parsed.researcher_id)
+    except (TypeError, ValueError, AttributeError):
+        _fail("INVALID_USAGE", 2)
+    if str(researcher_id) != parsed.researcher_id:
         _fail("INVALID_USAGE", 2)
     database_url = os.environ.get("THESISTRACE_DATABASE_URL")
     if not database_url:
@@ -50,9 +59,13 @@ def main(arguments: list[str] | None = None) -> None:
         database = PostgresDatabase(database_url)
         database.open()
         if parsed.resource == "research-run":
-            snapshot = ResearchRunDiagnostics(database).inspect(resource_id)
+            snapshot = ResearchRunDiagnostics(database).inspect(
+                researcher_id, resource_id
+            )
         else:
-            snapshot = DailyTrackDiagnostics(database).inspect(resource_id)
+            snapshot = DailyTrackDiagnostics(database).inspect(
+                researcher_id, resource_id
+            )
     except ResearchRunDiagnosticNotFound:
         _fail("RESEARCH_RUN_NOT_FOUND", 3)
     except DailyTrackDiagnosticNotFound:

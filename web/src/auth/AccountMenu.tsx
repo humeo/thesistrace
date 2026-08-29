@@ -1,5 +1,10 @@
 import { SignOut, UserCircle } from "@phosphor-icons/react";
-import { useState, type FormEvent } from "react";
+import {
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 
 import { useAuth } from "./AuthProvider";
 import type { PublicSession } from "./session";
@@ -30,6 +35,7 @@ export function AccountMenuContent({
   session,
   signOut,
 }: AccountMenuContentProps) {
+  const [open, setOpen] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -37,6 +43,41 @@ export function AccountMenuContent({
   const [submitting, setSubmitting] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const summaryRef = useRef<HTMLElement>(null);
+
+  function handleMenuKeyDown(event: KeyboardEvent<HTMLDetailsElement>): void {
+    if (!open) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      summaryRef.current?.focus();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const summary = summaryRef.current;
+    const panel = panelRef.current;
+    if (summary === null || panel === null) return;
+    const focusable = [
+      summary,
+      ...panel.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), input:not([disabled])",
+      ),
+    ];
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (first === undefined || last === undefined) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   async function submitPassword(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (submitting) return;
@@ -70,12 +111,21 @@ export function AccountMenuContent({
   }
 
   return (
-    <details className="account-menu">
-      <summary aria-label="Account menu">
+    <details
+      className="account-menu"
+      onKeyDown={handleMenuKeyDown}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      open={open}
+    >
+      <summary
+        aria-expanded={open}
+        aria-label="Account menu"
+        ref={summaryRef}
+      >
         <UserCircle aria-hidden="true" size={18} />
         <span>{session.displayLabel}</span>
       </summary>
-      <div className="account-menu-panel">
+      <div className="account-menu-panel" ref={panelRef}>
         <div className="account-identity">
           <strong>{session.displayLabel}</strong>
           <span>{session.email}</span>

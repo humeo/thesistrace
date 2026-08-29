@@ -126,6 +126,9 @@ def test_auth_image_reuses_the_package_store_for_production_deploy() -> None:
 
 def test_base_compose_has_independent_auth_and_core_identities() -> None:
     compose = (DEPLOY / "compose.yaml").read_text()
+    core_environment = compose.split("x-core-environment:", 1)[1].split(
+        "\nx-backend:", 1
+    )[0]
 
     for service in ("auth-initialize", "auth", "web"):
         assert f"  {service}:\n" in compose
@@ -136,6 +139,7 @@ def test_base_compose_has_independent_auth_and_core_identities() -> None:
     assert "postgresql://thesistrace_owner:" in compose
     assert "THESISTRACE_PUBLIC_ORIGIN: ${THESISTRACE_PUBLIC_ORIGIN" in compose
     assert "THESISTRACE_ENVIRONMENT: ${THESISTRACE_ENVIRONMENT" in compose
+    assert "THESISTRACE_ENVIRONMENT: ${THESISTRACE_ENVIRONMENT" in core_environment
     assert "BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET" in compose
     assert "    ports:\n" not in compose
 

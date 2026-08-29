@@ -17,6 +17,7 @@ test("shows only the compact account identity and supported actions", () => {
   );
 
   expect(markup).toContain('aria-label="Account menu"');
+  expect(markup).not.toContain("aria-haspopup");
   expect(markup).toContain("researcher@example.test");
   expect(markup).toContain("Change password");
   expect(markup).toContain("Log out");

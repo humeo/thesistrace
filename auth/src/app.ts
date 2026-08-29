@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { canonicalizeAuthEmailRequest } from "./identity.js";
+import { isJsonContentType } from "./http-media-type.js";
 import type { AuthHttpObserver } from "./http-observability.js";
 import { InvitationRejectedError } from "./invitation.js";
 import { PasswordResetRejectedError } from "./password-reset.js";
@@ -267,12 +268,7 @@ async function normalizePublicAuthRequest(
   if (schema === null) {
     return request;
   }
-  if (
-    !request.headers
-      .get("content-type")
-      ?.toLowerCase()
-      .startsWith("application/json")
-  ) {
+  if (!isJsonContentType(request.headers.get("content-type"))) {
     return Response.json({ code: "AUTH_REQUEST_INVALID" }, { status: 400 });
   }
   try {
@@ -296,12 +292,7 @@ async function exactJson<T>(
   request: Request,
   schema: z.ZodType<T>,
 ): Promise<T | null> {
-  if (
-    !request.headers
-      .get("content-type")
-      ?.toLowerCase()
-      .startsWith("application/json")
-  ) {
+  if (!isJsonContentType(request.headers.get("content-type"))) {
     return null;
   }
   try {

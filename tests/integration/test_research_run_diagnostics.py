@@ -14,7 +14,10 @@ from psycopg.types.json import Jsonb
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
-from thesistrace.research_run.diagnostics import ResearchRunDiagnostics
+from thesistrace.research_run.diagnostics import (
+    ResearchRunDiagnosticNotFound,
+    ResearchRunDiagnostics,
+)
 from thesistrace.researcher import ResearcherIdentity, ResearcherService
 
 TEST_NOW = datetime.now(UTC)
@@ -23,6 +26,43 @@ TEST_RESEARCHER = ResearcherIdentity(
     email="research-run-diagnostics@example.test",
     display_label="Research Run Diagnostics",
 )
+FOREIGN_RESEARCHER = ResearcherIdentity(
+    researcher_id=UUID("30000000-0000-4000-8000-000000000004"),
+    email="foreign-research-run-diagnostics@example.test",
+    display_label="Foreign Research Run Diagnostics",
+)
+
+
+def test_research_run_diagnostic_hides_a_foreign_researcher_resource(
+    core_settings: CoreSettings,
+) -> None:
+    database = _database(core_settings)
+    try:
+        ResearcherService(database).bootstrap(FOREIGN_RESEARCHER)
+        with database.transaction() as transaction:
+            _insert_run(
+                transaction,
+                "diagnostic-private",
+                status="queued",
+                progress="queued",
+            )
+
+        snapshot = ResearchRunDiagnostics(database).inspect(
+            TEST_RESEARCHER.researcher_id,
+            "diagnostic-private",
+        )
+        assert snapshot["run"]["id"] == "diagnostic-private"  # type: ignore[index]
+        try:
+            ResearchRunDiagnostics(database).inspect(
+                FOREIGN_RESEARCHER.researcher_id,
+                "diagnostic-private",
+            )
+        except ResearchRunDiagnosticNotFound:
+            pass
+        else:
+            raise AssertionError("foreign Researcher diagnostic was disclosed")
+    finally:
+        database.close()
 
 
 def test_research_run_diagnostic_reports_the_postgresql_state_matrix(
@@ -133,7 +173,9 @@ def test_research_run_diagnostic_reports_the_postgresql_state_matrix(
             )
 
         snapshots = {
-            name: ResearchRunDiagnostics(database).inspect(f"diagnostic-{name}")
+            name: ResearchRunDiagnostics(database).inspect(
+                TEST_RESEARCHER.researcher_id, f"diagnostic-{name}"
+            )
             for name in (
                 "queued",
                 "active",
@@ -240,10 +282,16 @@ def test_research_run_diagnostic_cli_uses_only_postgresql_and_has_stable_exits(
             tmp_path / "unavailable" / "private" / "dataset"
         ),
     }
-    first = _diagnose(postgres_only_environment, "research-run", "diagnostic-cli")
+    first = _diagnose(
+        postgres_only_environment,
+        "research-run",
+        str(TEST_RESEARCHER.researcher_id),
+        "diagnostic-cli",
+    )
     second = _diagnose(
         unavailable_storage_environment,
         "research-run",
+        str(TEST_RESEARCHER.researcher_id),
         "diagnostic-cli",
     )
 
@@ -276,6 +324,7 @@ def test_research_run_diagnostic_cli_uses_only_postgresql_and_has_stable_exits(
     missing = _diagnose(
         unavailable_storage_environment,
         "research-run",
+        str(TEST_RESEARCHER.researcher_id),
         "diagnostic-missing",
     )
     assert missing.returncode == 3
@@ -285,6 +334,7 @@ def test_research_run_diagnostic_cli_uses_only_postgresql_and_has_stable_exits(
     invalid = _diagnose(
         unavailable_storage_environment,
         "research-run",
+        str(TEST_RESEARCHER.researcher_id),
         "/private/canary-secret",
     )
     assert invalid.returncode == 2
@@ -299,6 +349,7 @@ def test_research_run_diagnostic_cli_uses_only_postgresql_and_has_stable_exits(
     unavailable = _diagnose(
         unavailable_environment,
         "research-run",
+        str(TEST_RESEARCHER.researcher_id),
         "diagnostic-cli",
     )
     assert unavailable.returncode == 4
@@ -329,6 +380,7 @@ def _insert_run(
     progress: str | None,
     result_present: bool = False,
     research_kind: str = "factor_evaluation",
+    researcher_id: UUID = TEST_RESEARCHER.researcher_id,
 ) -> None:
     immutable_input: dict[str, object] = {"research_kind": research_kind}
     if research_kind == "strategy_backtest":
@@ -344,7 +396,7 @@ def _insert_run(
         INSERT INTO research_runs.run_ownership (researcher_id, run_id)
         VALUES (%s, %s)
         """,
-        (TEST_RESEARCHER.researcher_id, run_id),
+        (researcher_id, run_id),
     )
     transaction.execute(
         """
@@ -355,7 +407,7 @@ def _insert_run(
                   %s, %s, %s, %s)
         """,
         (
-            TEST_RESEARCHER.researcher_id,
+            researcher_id,
             run_id,
             run_id,
             status,

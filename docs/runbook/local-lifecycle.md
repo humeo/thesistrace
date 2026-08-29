@@ -130,14 +130,14 @@ mise exec -- docker compose --project-name thesistrace-dev \
   --file deploy/core/compose.yaml \
   --file deploy/core/compose.dev.yaml \
   run --rm --no-deps -T initialize \
-  thesistrace-core-diagnose research-run RUN_ID
+  thesistrace-core-diagnose research-run RESEARCHER_ID RUN_ID
 
 mise exec -- docker compose --project-name thesistrace-dev \
   --env-file deploy/core/dev.env \
   --file deploy/core/compose.yaml \
   --file deploy/core/compose.dev.yaml \
   run --rm --no-deps -T initialize \
-  thesistrace-core-diagnose daily-track TRACK_ID
+  thesistrace-core-diagnose daily-track RESEARCHER_ID TRACK_ID
 ```
 
 Both commands print one stable JSON snapshot to stdout. Exit code 3 means not

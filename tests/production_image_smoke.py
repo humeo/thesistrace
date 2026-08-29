@@ -383,6 +383,7 @@ def _before_restart(
     )
     assert track["status"] == "active"
     diagnostic_evidence = _verify_packaged_diagnostics(
+        str(_auth_session()["researcher_id"]),
         factor_run_id,
         str(track["id"]),
         evidence_dir,
@@ -2220,13 +2221,19 @@ def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
 
 
 def _verify_packaged_diagnostics(
+    researcher_id: str,
     run_id: str,
     track_id: str,
     evidence_dir: Path,
 ) -> dict[str, object]:
     for resource, resource_id in (("research-run", run_id), ("daily-track", track_id)):
         completed = subprocess.run(
-            ["thesistrace-core-diagnose", resource, resource_id],
+            [
+                "thesistrace-core-diagnose",
+                resource,
+                researcher_id,
+                resource_id,
+            ],
             capture_output=True,
             text=True,
             timeout=15,

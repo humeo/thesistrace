@@ -183,7 +183,7 @@ async function insertEffectiveCredentials(): Promise<void> {
       )
       VALUES (
         '00000000-0000-4000-8000-000000000005',
-        'reset-password:secret-token',
+        'reset-password:' || repeat('22', 32),
         $1,
         $2,
         $3,

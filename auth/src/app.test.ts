@@ -161,6 +161,29 @@ describe("Auth HTTP boundary", () => {
     expect(appDependencies.authHandler).not.toHaveBeenCalled();
   });
 
+  it.each(["application/jsonp", "application/jsonevil", "application/json; invalid"])(
+    "rejects the non-JSON Invitation media type %s before account work",
+    async (contentType) => {
+      const appDependencies = dependencies();
+      const response = await createAuthApp(appDependencies).request(
+        "http://auth.test/api/auth/researcher-invitation/inspect",
+        {
+          body: JSON.stringify({ token: opaqueInvitationToken }),
+          headers: {
+            "content-type": contentType,
+            origin: "http://auth.test",
+          },
+          method: "POST",
+        },
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ code: "INVITATION_INVALID" });
+      expect(appDependencies.inspectInvitation).not.toHaveBeenCalled();
+      expect(appDependencies.consumeInvitationRateLimit).not.toHaveBeenCalled();
+    },
+  );
+
   it("accepts an Invitation without client-supplied identity and forwards only Cookies", async () => {
     const appDependencies = dependencies();
     const response = await createAuthApp(appDependencies).request(
@@ -365,7 +388,7 @@ describe("Auth HTTP boundary", () => {
           email: "  Researcher@Example.COM  ",
           password: "correct-horse-battery-staple",
         }),
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": 'application/json; charset="utf-8"' },
         method: "POST",
       },
     );
@@ -376,6 +399,28 @@ describe("Auth HTTP boundary", () => {
       password: "correct-horse-battery-staple",
     });
   });
+
+  it.each(["application/jsonp", "application/jsonevil", "application/json; invalid"])(
+    "rejects the non-JSON email-password media type %s before Better Auth",
+    async (contentType) => {
+      const appDependencies = dependencies();
+      const response = await createAuthApp(appDependencies).request(
+        "http://auth.test/api/auth/sign-in/email",
+        {
+          body: JSON.stringify({
+            email: "researcher@example.com",
+            password: "correct-horse-battery-staple",
+          }),
+          headers: { "content-type": contentType },
+          method: "POST",
+        },
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ code: "AUTH_REQUEST_INVALID" });
+      expect(appDependencies.authHandler).not.toHaveBeenCalled();
+    },
+  );
 
   it("forces other-Session revocation on password change", async () => {
     let delegatedBody: unknown;

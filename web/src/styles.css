@@ -374,7 +374,7 @@ select { color-scheme: dark; }
   text-decoration: none;
 }
 .auth-panel > header { display: grid; gap: 7px; margin-bottom: 24px; }
-.auth-panel h1 { font-size: 24px; }
+.auth-panel h1 { font-size: 28px; }
 .auth-eyebrow {
   color: var(--ink-soft);
   font-size: 11px;
@@ -395,7 +395,7 @@ select { color-scheme: dark; }
   border-color: transparent;
 }
 .auth-error, .auth-success { margin: 10px 0 0; font-size: 12px; }
-.auth-success { color: #65c77a; }
+.auth-success { color: var(--success); }
 
 .account-menu { position: relative; flex: 0 0 auto; }
 .account-menu > summary {
@@ -1198,6 +1198,17 @@ select { color-scheme: dark; }
 .result-table-scroll tbody tr:hover { background: var(--surface-1); }
 
 /* Responsive */
+@media (any-pointer: coarse), (max-width: 768px) {
+  .auth-form input,
+  .auth-submit,
+  .auth-text-action,
+  .account-menu > summary,
+  .account-action,
+  .account-password-form input,
+  .account-password-form .button-primary { min-height: 44px; }
+  .account-menu > summary { min-width: 44px; }
+}
+
 @media (max-width: 1120px) {
   .main-content { padding-inline: 24px; }
   .data-overview-stats { grid-template-columns: repeat(2, 1fr); }

@@ -7,6 +7,10 @@ import {
 } from "./config.js";
 import { canonicalizeEmail } from "./identity.js";
 import { InvitationAdmission } from "./invitation-admission.js";
+import {
+  passwordResetIdentifier,
+  rawPasswordResetToken,
+} from "./password-reset-token.js";
 
 const DAY_SECONDS = 60 * 60 * 24;
 const disabledBetterAuthPaths = [
@@ -97,6 +101,20 @@ export function createThesisTraceAuth(
     baseURL: settings.publicOrigin,
     database: pool,
     databaseHooks: {
+      verification: {
+        create: {
+          async before(verification) {
+            const token = rawPasswordResetToken(verification.identifier);
+            if (token === null) return true;
+            return {
+              data: {
+                ...verification,
+                identifier: passwordResetIdentifier(token),
+              },
+            };
+          },
+        },
+      },
       user: {
         create: {
           async before(user) {

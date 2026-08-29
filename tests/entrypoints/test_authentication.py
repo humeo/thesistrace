@@ -139,6 +139,7 @@ def test_core_auth_verifier_maps_transport_and_non_401_status_to_unavailable() -
 
 
 def test_core_http_settings_require_two_exact_origins(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("THESISTRACE_ENVIRONMENT", "production")
     monkeypatch.setenv("THESISTRACE_AUTH_INTERNAL_ORIGIN", AUTH_ORIGIN)
     monkeypatch.setenv("THESISTRACE_PUBLIC_ORIGIN", PUBLIC_ORIGIN)
     assert CoreHttpSettings.from_environment() == CoreHttpSettings(
@@ -150,6 +151,10 @@ def test_core_http_settings_require_two_exact_origins(monkeypatch) -> None:  # t
         ("THESISTRACE_AUTH_INTERNAL_ORIGIN", "http://auth:8200/private"),
         ("THESISTRACE_PUBLIC_ORIGIN", "https://user@thesistrace.test"),
         ("THESISTRACE_PUBLIC_ORIGIN", "https://thesistrace.test?secret=value"),
+        ("THESISTRACE_PUBLIC_ORIGIN", " https://thesistrace.test"),
+        ("THESISTRACE_PUBLIC_ORIGIN", "https://thesistrace.test/"),
+        ("THESISTRACE_PUBLIC_ORIGIN", "http://localhost:5173"),
+        ("THESISTRACE_PUBLIC_ORIGIN", "https://127.0.0.1"),
     ):
         monkeypatch.setenv(name, value)
         try:
@@ -160,6 +165,14 @@ def test_core_http_settings_require_two_exact_origins(monkeypatch) -> None:  # t
             raise AssertionError(f"invalid {name} was accepted")
         monkeypatch.setenv("THESISTRACE_AUTH_INTERNAL_ORIGIN", AUTH_ORIGIN)
         monkeypatch.setenv("THESISTRACE_PUBLIC_ORIGIN", PUBLIC_ORIGIN)
+
+    monkeypatch.setenv("THESISTRACE_ENVIRONMENT", "invalid")
+    try:
+        CoreHttpSettings.from_environment()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("invalid THESISTRACE_ENVIRONMENT was accepted")
 
 
 def test_api_middleware_maps_authentication_and_exposes_researcher_context() -> None:

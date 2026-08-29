@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { isJsonContentType } from "./http-media-type.js";
+
 const canonicalEmailSchema = z
   .string()
   .trim()
@@ -36,7 +38,7 @@ export async function canonicalizeAuthEmailRequest(
   if (
     request.method !== "POST" ||
     !emailRequestPaths.has(path) ||
-    !request.headers.get("content-type")?.toLowerCase().startsWith("application/json")
+    !isJsonContentType(request.headers.get("content-type"))
   ) {
     return request;
   }

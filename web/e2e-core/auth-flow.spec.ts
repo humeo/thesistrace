@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 
 import {
   browserPassword,
@@ -26,13 +26,15 @@ test("Invitation, login, account password, reset, refresh, and access lifecycle 
   await expect(page.getByLabel(/name/i)).toHaveCount(0);
   const invitationPassword = page.getByLabel("Password", { exact: true });
   const invitationConfirmation = page.getByLabel("Confirm password");
+  const acceptInvitation = page.getByRole("button", { name: "Accept invitation" });
+  await expectTouchTargets(invitationPassword, invitationConfirmation, acceptInvitation);
   await expect(invitationPassword).toHaveAttribute("autocomplete", "new-password");
   await invitationPassword.focus();
   await page.keyboard.press("Tab");
   await expect(invitationConfirmation).toBeFocused();
   await invitationPassword.fill(browserPassword);
   await invitationConfirmation.fill(browserPassword);
-  await page.getByRole("button", { name: "Accept invitation" }).click();
+  await acceptInvitation.click();
 
   await expect(page).toHaveURL(/\/data$/);
   await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
@@ -41,13 +43,46 @@ test("Invitation, login, account password, reset, refresh, and access lifecycle 
   expect(await localStorageContains(page, "session_token")).toBe(false);
 
   await openAccountMenu(page);
+  const accountMenu = page.getByLabel("Account menu");
+  const changePasswordAction = page.getByRole("button", {
+    name: "Change password",
+    exact: true,
+  });
+  const logOutAction = page.getByRole("button", { name: "Log out" });
+  await expectTouchTargets(accountMenu, changePasswordAction, logOutAction);
+  await expect(accountMenu).not.toHaveAttribute("aria-haspopup");
   await expect(page.getByText(email, { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Change password", exact: true }).click();
+  await accountMenu.focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(logOutAction).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(accountMenu).toBeFocused();
+  await logOutAction.focus();
+  await page.keyboard.press("Escape");
+  await expect(accountMenu.locator("xpath=..")).not.toHaveAttribute("open", "");
+  await expect(accountMenu).toBeFocused();
+
+  await openAccountMenu(page);
+  await changePasswordAction.click();
   const changedPassword = "Browser-changed-password-2026";
-  await page.getByLabel("Current password").fill(browserPassword);
-  await page.getByLabel("New password", { exact: true }).fill(changedPassword);
-  await page.getByLabel("Confirm password").fill(changedPassword);
-  await page.getByRole("button", { name: "Change password", exact: true }).last().click();
+  const currentPassword = page.getByLabel("Current password");
+  const newPassword = page.getByLabel("New password", { exact: true });
+  const passwordConfirmation = page.getByLabel("Confirm password");
+  const submitPassword = page.getByRole("button", {
+    name: "Change password",
+    exact: true,
+  }).last();
+  await expectTouchTargets(
+    currentPassword,
+    newPassword,
+    passwordConfirmation,
+    submitPassword,
+    logOutAction,
+  );
+  await currentPassword.fill(browserPassword);
+  await newPassword.fill(changedPassword);
+  await passwordConfirmation.fill(changedPassword);
+  await submitPassword.click();
   await expect(page.getByText("Password changed. Other sessions were logged out.")).toBeVisible();
   await page.getByRole("button", { name: "Log out" }).click();
   await expect(page).toHaveURL(/\/login\?returnTo=/);
@@ -76,17 +111,26 @@ test("Invitation, login, account password, reset, refresh, and access lifecycle 
   await openAccountMenu(page);
   await page.getByRole("button", { name: "Log out" }).click();
   await expect(page.getByRole("heading", { name: "Log in to ThesisTrace" })).toBeVisible();
-  await page.getByRole("button", { name: "Forgot password?" }).click();
-  await page.getByLabel("Email").fill(email);
-  await page.getByRole("button", { name: "Send reset link" }).click();
+  const forgotPassword = page.getByRole("button", { name: "Forgot password?" });
+  await expectTouchTargets(forgotPassword);
+  await forgotPassword.click();
+  const forgotEmail = page.getByLabel("Email");
+  const sendResetLink = page.getByRole("button", { name: "Send reset link" });
+  await expectTouchTargets(forgotEmail, sendResetLink);
+  await forgotEmail.fill(email);
+  await sendResetLink.click();
   await expect(page.getByText("If the account exists, a reset link has been sent.")).toBeVisible();
   const resetToken = await emailToken(email, "/reset-password#token=");
   await page.goto(`/reset-password#token=${encodeURIComponent(resetToken)}`);
   await expect(page).toHaveURL(/\/reset-password$/);
   const resetPassword = "Browser-reset-password-2026";
-  await page.locator("#reset-password").fill(resetPassword);
-  await page.getByLabel("Confirm password").fill(resetPassword);
-  await page.getByRole("button", { name: "Reset password" }).click();
+  const resetPasswordInput = page.locator("#reset-password");
+  const resetConfirmation = page.getByLabel("Confirm password");
+  const resetPasswordAction = page.getByRole("button", { name: "Reset password" });
+  await expectTouchTargets(resetPasswordInput, resetConfirmation, resetPasswordAction);
+  await resetPasswordInput.fill(resetPassword);
+  await resetConfirmation.fill(resetPassword);
+  await resetPasswordAction.click();
   await expect(page).toHaveURL(/\/login\?reset=complete$/);
   await expect(page.getByText("Password reset. Log in with your new password.")).toBeVisible();
   expect(await localStorageContains(page, resetToken)).toBe(false);
@@ -219,6 +263,45 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
   await expect(page.getByLabel("Account menu")).toHaveCount(0);
 });
 
+test.describe("tablet touch presentation", () => {
+  test.use({
+    hasTouch: true,
+    viewport: { width: 820, height: 1180 },
+  });
+
+  test("Auth and account controls keep 44px touch targets above the mobile breakpoint", async ({ page }) => {
+    const email = "browser-tablet-touch@example.test";
+    const invitationToken = await issueInvitation(email);
+
+    await page.goto(`/accept-invitation#token=${encodeURIComponent(invitationToken)}`);
+    const password = page.getByLabel("Password", { exact: true });
+    const confirmation = page.getByLabel("Confirm password");
+    const acceptInvitation = page.getByRole("button", { name: "Accept invitation" });
+    await expectTouchTargets(password, confirmation, acceptInvitation);
+    await password.fill(browserPassword);
+    await confirmation.fill(browserPassword);
+    await acceptInvitation.click();
+
+    await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+    await openAccountMenu(page);
+    const accountMenu = page.getByLabel("Account menu");
+    const changePassword = page.getByRole("button", {
+      name: "Change password",
+      exact: true,
+    });
+    const logOut = page.getByRole("button", { name: "Log out" });
+    await expectTouchTargets(accountMenu, changePassword, logOut);
+
+    await changePassword.click();
+    await expectTouchTargets(
+      page.getByLabel("Current password"),
+      page.getByLabel("New password", { exact: true }),
+      page.getByLabel("Confirm password"),
+      page.getByRole("button", { name: "Change password", exact: true }).last(),
+    );
+  });
+});
+
 test("Two Researchers isolate Drafts, receipts, cursors, and system Folder identity", async ({ page }) => {
   test.setTimeout(180_000);
   const researcherA = await createResearcher(page, "browser-isolation-a@example.test");
@@ -302,14 +385,28 @@ test("Two Researchers isolate Drafts, receipts, cursors, and system Folder ident
 });
 
 async function loginThroughUi(page: Page, email: string, password: string): Promise<void> {
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Log in" }).click();
+  const emailInput = page.getByLabel("Email");
+  const passwordInput = page.getByLabel("Password");
+  const logIn = page.getByRole("button", { name: "Log in" });
+  await expectTouchTargets(emailInput, passwordInput, logIn);
+  await emailInput.fill(email);
+  await passwordInput.fill(password);
+  await logIn.click();
 }
 
 async function openAccountMenu(page: Page): Promise<void> {
   const menu = page.getByLabel("Account menu");
   if ((await menu.locator("xpath=..").getAttribute("open")) === null) await menu.click();
+}
+
+async function expectTouchTargets(...targets: Locator[]): Promise<void> {
+  for (const target of targets) {
+    await expect(target).toBeVisible();
+    const box = await target.boundingBox();
+    expect(box, "touch target should have a rendered bounding box").not.toBeNull();
+    expect(box?.height, "touch target height").toBeGreaterThanOrEqual(44);
+    expect(box?.width, "touch target width").toBeGreaterThanOrEqual(44);
+  }
 }
 
 async function localStorageContains(page: Page, value: string): Promise<boolean> {

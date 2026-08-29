@@ -17,6 +17,7 @@ import { createAuthCoordinationPool, createAuthPool } from "./database.js";
 import { InvitationRejectedError } from "./invitation.js";
 import { InvitationAdmission } from "./invitation-admission.js";
 import { PasswordResetLifecycle } from "./password-reset.js";
+import { passwordResetIdentifier } from "./password-reset-token.js";
 import type { ResendEmail } from "./resend.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
 import { sha256 } from "./security.js";
@@ -95,6 +96,11 @@ describe.sequential("Password Reset lifecycle", () => {
       SELECT delivered_at, expires_at, status, token_hash
       FROM auth.password_reset
     `);
+    const verification = await owner.query<{ identifier: string }>(`
+      SELECT identifier
+      FROM auth."verification"
+      WHERE identifier LIKE 'reset-password:%'
+    `);
 
     expect(known.status).toBe(200);
     expect(unknown.status).toBe(200);
@@ -111,6 +117,10 @@ describe.sequential("Password Reset lifecycle", () => {
         token_hash: sha256(token),
       },
     ]);
+    expect(verification.rows).toEqual([
+      { identifier: `reset-password:${sha256(token).toString("hex")}` },
+    ]);
+    expect(JSON.stringify(verification.rows)).not.toContain(token);
   });
 
   it("sends nothing and removes the Better Auth token for an inactive Researcher", async () => {
@@ -254,7 +264,7 @@ describe.sequential("Password Reset lifecycle", () => {
           VALUES ($1, $2, $3)
         `,
         [
-          `reset-password:${token}`,
+          passwordResetIdentifier(token),
           researcher.id,
           new Date(fixedNow.getTime() + 30 * 60 * 1_000),
         ],
@@ -284,7 +294,7 @@ describe.sequential("Password Reset lifecycle", () => {
         [researcher.id],
       ),
     ).toMatchObject({
-      rows: [{ identifier: `reset-password:${deliveredToken}` }],
+      rows: [{ identifier: passwordResetIdentifier(deliveredToken) }],
     });
     expect(
       await owner.query<{ status: string }>(
@@ -724,7 +734,7 @@ describe.sequential("Password Reset lifecycle", () => {
       expect(
         await owner.query<{ count: string }>(
           `SELECT count(*) FROM auth."verification" WHERE identifier = $1`,
-          [`reset-password:${token}`],
+          [passwordResetIdentifier(token)],
         ),
       ).toMatchObject({ rows: [{ count: "1" }] });
     } finally {
@@ -768,7 +778,7 @@ describe.sequential("Password Reset lifecycle", () => {
     expect(
       await owner.query<{ count: string }>(
         `SELECT count(*) FROM auth."verification" WHERE identifier = $1`,
-        [`reset-password:${token}`],
+        [passwordResetIdentifier(token)],
       ),
     ).toMatchObject({ rows: [{ count: "1" }] });
     expect(

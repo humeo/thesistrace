@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from typing import Any
+from uuid import UUID
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.daily_track.failure_policy import (
@@ -33,7 +34,7 @@ class DailyTrackDiagnostics:
     def __init__(self, database: PostgresDatabase) -> None:
         self._database = database
 
-    def inspect(self, track_id: str) -> dict[str, object]:
+    def inspect(self, researcher_id: UUID, track_id: str) -> dict[str, object]:
         with self._database.transaction() as transaction:
             transaction.execute(
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
@@ -103,9 +104,10 @@ class DailyTrackDiagnostics:
                     ORDER BY attempt.ordinal DESC, attempt.id DESC
                     LIMIT 1
                 ) AS latest ON true
-                WHERE track.id = %s
+                WHERE track.researcher_id = %s
+                  AND track.id = %s
                 """,
-                (track_id,),
+                (researcher_id, track_id),
             ).fetchone()
             if track is None:
                 raise DailyTrackDiagnosticNotFound
@@ -124,10 +126,15 @@ class DailyTrackDiagnostics:
                            attempt.heartbeat_at, attempt.lease_expires_at,
                            attempt.failure_reason
                     FROM daily_tracks.session_progression_attempts AS attempt
-                    WHERE attempt.progression_id = %s
+                    JOIN daily_tracks.session_progressions AS progression
+                      ON progression.id = attempt.progression_id
+                    JOIN daily_tracks.tracks AS owned_track
+                      ON owned_track.id = progression.track_id
+                    WHERE owned_track.researcher_id = %s
+                      AND attempt.progression_id = %s
                     ORDER BY attempt.ordinal, attempt.id
                     """,
-                    (progression_id,),
+                    (researcher_id, progression_id),
                 ).fetchall()
             )
         return _snapshot(track, attempts)

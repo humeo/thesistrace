@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from typing import Any
+from uuid import UUID
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.research_run.failure_policy import (
@@ -21,7 +22,7 @@ class ResearchRunDiagnostics:
     def __init__(self, database: PostgresDatabase) -> None:
         self._database = database
 
-    def inspect(self, run_id: str) -> dict[str, object]:
+    def inspect(self, researcher_id: UUID, run_id: str) -> dict[str, object]:
         with self._database.transaction() as transaction:
             transaction.execute(
                 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
@@ -51,9 +52,10 @@ class ResearchRunDiagnostics:
                        ) AS checkpoint_present
                 FROM research_runs.runs AS run
                 LEFT JOIN research_runs.progress AS progress ON progress.run_id = run.id
-                WHERE run.id = %s
+                WHERE run.researcher_id = %s
+                  AND run.id = %s
                 """,
-                (run_id,),
+                (researcher_id, run_id),
             ).fetchone()
             if run is None:
                 raise ResearchRunDiagnosticNotFound
@@ -65,6 +67,8 @@ class ResearchRunDiagnostics:
                        attempt.failure_reason,
                        checkpoint.phase AS checkpoint_phase
                 FROM research_runs.attempts AS attempt
+                JOIN research_runs.runs AS owned_run
+                  ON owned_run.id = attempt.run_id
                 LEFT JOIN LATERAL (
                     SELECT execution.phase
                     FROM research_runs.execution_checkpoints AS execution
@@ -72,10 +76,11 @@ class ResearchRunDiagnostics:
                     ORDER BY execution.ordinal DESC
                     LIMIT 1
                 ) AS checkpoint ON true
-                WHERE attempt.run_id = %s
+                WHERE owned_run.researcher_id = %s
+                  AND attempt.run_id = %s
                 ORDER BY attempt.ordinal, attempt.id
                 """,
-                (run_id,),
+                (researcher_id, run_id),
             ).fetchall()
         return _snapshot(run, attempts)
 

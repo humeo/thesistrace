@@ -312,7 +312,7 @@ async function insertEffectiveAccessState(
       )
       VALUES (
         '00000000-0000-4000-8000-000000000103',
-        'reset-password:secret-token',
+        'reset-password:' || repeat('22', 32),
         $1,
         $2,
         $3,

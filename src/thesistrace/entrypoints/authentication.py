@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from ipaddress import ip_address
 from typing import Literal, Protocol
 
 import httpx
@@ -40,10 +41,15 @@ class CoreHttpSettings:
 
     @classmethod
     def from_environment(cls) -> CoreHttpSettings:
+        environment = os.environ.get("THESISTRACE_ENVIRONMENT", "")
+        if environment not in {"development", "test", "production"}:
+            raise RuntimeError(
+                "THESISTRACE_ENVIRONMENT must be development, test, or production"
+            )
         auth_internal_origin = os.environ.get(
             "THESISTRACE_AUTH_INTERNAL_ORIGIN", ""
-        ).strip()
-        public_origin = os.environ.get("THESISTRACE_PUBLIC_ORIGIN", "").strip()
+        )
+        public_origin = os.environ.get("THESISTRACE_PUBLIC_ORIGIN", "")
         if not auth_internal_origin:
             raise RuntimeError(
                 "missing Core HTTP configuration: THESISTRACE_AUTH_INTERNAL_ORIGIN"
@@ -57,9 +63,10 @@ class CoreHttpSettings:
                 auth_internal_origin,
                 "THESISTRACE_AUTH_INTERNAL_ORIGIN",
             ),
-            public_origin=_exact_origin(
+            public_origin=_exact_public_origin(
                 public_origin,
                 "THESISTRACE_PUBLIC_ORIGIN",
+                environment,
             ),
         )
 
@@ -116,6 +123,7 @@ def _exact_origin(value: str, variable_name: str) -> str:
         parsed = httpx.URL(value)
     except Exception as error:
         raise RuntimeError(f"{variable_name} must be an exact HTTP origin") from error
+    canonical = str(parsed.copy_with(path=""))
     if (
         parsed.scheme not in {"http", "https"}
         or parsed.host is None
@@ -123,9 +131,50 @@ def _exact_origin(value: str, variable_name: str) -> str:
         or parsed.query
         or parsed.fragment
         or parsed.path not in {"", "/"}
+        or value != canonical
     ):
         raise RuntimeError(f"{variable_name} must be an exact HTTP origin")
-    return str(parsed.copy_with(path="")).rstrip("/")
+    return canonical
+
+
+def _exact_public_origin(
+    value: str,
+    variable_name: str,
+    environment: str,
+) -> str:
+    origin = _exact_origin(value, variable_name)
+    parsed = httpx.URL(origin)
+    assert parsed.host is not None
+    hostname = parsed.host.lower().removesuffix(".")
+    loopback = _is_loopback_hostname(hostname)
+    is_ip_address = _is_ip_address(hostname)
+    if environment == "production":
+        if parsed.scheme != "https" or loopback or is_ip_address:
+            raise RuntimeError(
+                f"{variable_name} must use HTTPS and a non-loopback hostname in Production"
+            )
+    elif parsed.scheme != "http" or not loopback:
+        raise RuntimeError(
+            f"{variable_name} must use an HTTP loopback origin outside Production"
+        )
+    return origin
+
+
+def _is_loopback_hostname(hostname: str) -> bool:
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    try:
+        return ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _is_ip_address(hostname: str) -> bool:
+    try:
+        ip_address(hostname)
+    except ValueError:
+        return False
+    return True
 
 
 __all__ = (

@@ -7,6 +7,7 @@ import {
 } from "./auth.js";
 import type { AuthSettings } from "./config.js";
 import { InvitationAdmission } from "./invitation-admission.js";
+import { passwordResetIdentifier } from "./password-reset-token.js";
 
 const settings: AuthSettings = {
   databaseUrl: "postgresql://auth_runtime:password@127.0.0.1:5432/thesistrace",
@@ -173,6 +174,32 @@ describe("ThesisTrace Better Auth configuration", () => {
       await invitationAdmission.run("other@example.com", async () => {
         expect(await before?.(user)).toBe(false);
       });
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("hashes a Password Reset identifier before the database adapter sees it", async () => {
+    const pool = new Pool({ connectionString: settings.databaseUrl });
+    try {
+      const auth = createThesisTraceAuth(settings, pool, lifecycle());
+      const before = auth.options.databaseHooks?.verification?.create?.before;
+      expect(before).toBeDefined();
+      const token = "reset-token-canary";
+      const verification = {
+        createdAt: new Date("2026-08-28T00:00:00.000Z"),
+        expiresAt: new Date("2026-08-28T00:30:00.000Z"),
+        id: "00000000-0000-4000-8000-000000000003",
+        identifier: `reset-password:${token}`,
+        updatedAt: new Date("2026-08-28T00:00:00.000Z"),
+        value: "00000000-0000-4000-8000-000000000001",
+      };
+
+      const result = await before?.(verification);
+      expect(result).toMatchObject({
+        data: { identifier: passwordResetIdentifier(token) },
+      });
+      expect(JSON.stringify(result)).not.toContain(token);
     } finally {
       await pool.end();
     }

@@ -9,6 +9,7 @@ import {
   KeyedSerialExecutor,
 } from "./coordination.js";
 import type { ResendEmail } from "./resend.js";
+import { passwordResetIdentifier } from "./password-reset-token.js";
 import { sha256 } from "./security.js";
 
 const RESET_LIFETIME_MS = 30 * 60 * 1_000;
@@ -134,7 +135,7 @@ export class PasswordResetLifecycle {
                   AND identifier LIKE 'reset-password:%'
                   AND identifier <> $2
               `,
-              [data.user.id, resetIdentifier(data.token)],
+              [data.user.id, passwordResetIdentifier(data.token)],
             );
             await client.query(
               `
@@ -255,7 +256,7 @@ export class PasswordResetLifecycle {
           WHERE verification.identifier = $1
             AND verification."expiresAt" > $2
         `,
-        [resetIdentifier(token), this.#clock()],
+        [passwordResetIdentifier(token), this.#clock()],
       );
       const email = candidate.rows[0]?.email;
       if (email === undefined) {
@@ -265,7 +266,7 @@ export class PasswordResetLifecycle {
         const passwordHash = await hashPassword(newPassword);
         await this.#transaction(async (client) => {
           const now = this.#clock();
-          const identifier = resetIdentifier(token);
+          const identifier = passwordResetIdentifier(token);
           const hinted = await client.query<{ value: string }>(
             `
               SELECT value
@@ -443,12 +444,8 @@ async function deleteResetVerification(
       DELETE FROM auth."verification"
       WHERE identifier = $1 AND value = $2
     `,
-    [resetIdentifier(token), userId],
+    [passwordResetIdentifier(token), userId],
   );
-}
-
-function resetIdentifier(token: string): string {
-  return `reset-password:${token}`;
 }
 
 async function hasEffectiveResetVerification(
@@ -466,7 +463,7 @@ async function hasEffectiveResetVerification(
         AND "expiresAt" > $3
       FOR UPDATE
     `,
-    [resetIdentifier(token), userId, now],
+    [passwordResetIdentifier(token), userId, now],
   );
   return result.rowCount === 1;
 }

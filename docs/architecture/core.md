@@ -153,8 +153,11 @@ Ordinary logout revokes only the current Session. Password change revokes all
 other Sessions, and password reset revokes every Session. Reset requests always
 return an enumeration-safe response; deactivated Researchers receive no email.
 Reset tokens are single-use, expire after 30 minutes, travel only in a URL
-fragment, and are revoked on Researcher Deactivation. Passwords use Better
-Auth's scrypt implementation with no composition rules or periodic expiry.
+fragment, and are revoked on Researcher Deactivation. Better Auth's
+pre-persistence verification hook replaces the bearer token with its SHA-256
+identifier before the database adapter writes it; the Auth lifecycle performs
+all lookup and consumption by that digest. Passwords use Better Auth's scrypt
+implementation with no composition rules or periodic expiry.
 
 Researcher Deactivation is reversible access revocation, not deletion or work
 cancellation. It revokes active Sessions and outstanding reset tokens, but
@@ -196,10 +199,12 @@ govern every read.
 ### Production security boundary
 
 Better Auth's CSRF and Origin checks stay enabled with exact per-environment
-trusted origins and no Production wildcard. Core separately requires the exact
-`THESISTRACE_PUBLIC_ORIGIN` on browser POST, PATCH, and DELETE requests and JSON
-content type on body-bearing writes. The browser uses one origin, so Core and
-Auth expose no browser CORS policy.
+trusted origins and no Production wildcard. Auth and Core each independently
+reject a missing, normalized, or environment-invalid public origin at startup;
+Production requires one canonical HTTPS non-loopback hostname. Core separately
+requires that exact `THESISTRACE_PUBLIC_ORIGIN` on browser POST, PATCH, and
+DELETE requests and JSON content type on body-bearing writes. The browser uses
+one origin, so Core and Auth expose no browser CORS policy.
 
 Better Auth rate limiting is explicit in every environment and persists in
 PostgreSQL, with stricter invitation, sign-in, and reset rules and no Redis.
@@ -268,8 +273,10 @@ under a PostgreSQL advisory lock, without Redis, Cron, or a generic scheduler.
 restart probe. `GET /health/ready` independently probes PostgreSQL, RustFS, and
 the mounted Dataset root under one hard deadline; it excludes Workers, queues,
 Dataset coverage, and Result or Checkpoint presence. The private
-`thesistrace-core-diagnose` command reads either one ResearchRun or one
-DailyTrack from PostgreSQL only.
+`thesistrace-core-diagnose` command requires an explicit Researcher ID and
+reads either one owner-scoped ResearchRun or one owner-scoped DailyTrack from
+PostgreSQL only. A known foreign resource ID is indistinguishable from a
+missing resource.
 
 Core readiness additionally probes Auth, while Core liveness stays
 dependency-free. Auth readiness probes only its database,

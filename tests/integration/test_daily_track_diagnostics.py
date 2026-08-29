@@ -11,7 +11,10 @@ from pathlib import Path
 from uuid import UUID
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
-from thesistrace.daily_track.diagnostics import DailyTrackDiagnostics
+from thesistrace.daily_track.diagnostics import (
+    DailyTrackDiagnosticNotFound,
+    DailyTrackDiagnostics,
+)
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.researcher import ResearcherIdentity, ResearcherService
@@ -21,6 +24,38 @@ TEST_RESEARCHER = ResearcherIdentity(
     email="daily-track-diagnostics@example.test",
     display_label="Daily Track Diagnostics",
 )
+FOREIGN_RESEARCHER = ResearcherIdentity(
+    researcher_id=UUID("10000000-0000-4000-8000-000000000002"),
+    email="foreign-daily-track-diagnostics@example.test",
+    display_label="Foreign Daily Track Diagnostics",
+)
+
+
+def test_daily_track_diagnostic_hides_a_foreign_researcher_resource(
+    core_settings: CoreSettings,
+) -> None:
+    database = _database(core_settings)
+    try:
+        ResearcherService(database).bootstrap(FOREIGN_RESEARCHER)
+        with database.transaction() as transaction:
+            _insert_track(transaction, "daily-diagnostic-private")
+
+        snapshot = DailyTrackDiagnostics(database).inspect(
+            TEST_RESEARCHER.researcher_id,
+            "daily-diagnostic-private",
+        )
+        assert snapshot["track"]["id"] == "daily-diagnostic-private"  # type: ignore[index]
+        try:
+            DailyTrackDiagnostics(database).inspect(
+                FOREIGN_RESEARCHER.researcher_id,
+                "daily-diagnostic-private",
+            )
+        except DailyTrackDiagnosticNotFound:
+            pass
+        else:
+            raise AssertionError("foreign Researcher diagnostic was disclosed")
+    finally:
+        database.close()
 
 
 def test_daily_track_diagnostic_reports_the_postgresql_state_matrix(
@@ -257,7 +292,9 @@ def test_daily_track_diagnostic_reports_the_postgresql_state_matrix(
             )
 
         snapshots = {
-            name: DailyTrackDiagnostics(database).inspect(f"daily-diagnostic-{name}")
+            name: DailyTrackDiagnostics(database).inspect(
+                TEST_RESEARCHER.researcher_id, f"daily-diagnostic-{name}"
+            )
             for name in (
                 "idle",
                 "advancing",
@@ -390,10 +427,16 @@ def test_daily_track_diagnostic_cli_uses_only_postgresql_and_preserves_run_contr
             tmp_path / "unavailable" / "private" / "dataset"
         ),
     }
-    first = _diagnose(postgres_only_environment, "daily-track", "daily-diagnostic-cli")
+    first = _diagnose(
+        postgres_only_environment,
+        "daily-track",
+        str(TEST_RESEARCHER.researcher_id),
+        "daily-diagnostic-cli",
+    )
     second = _diagnose(
         unavailable_storage_environment,
         "daily-track",
+        str(TEST_RESEARCHER.researcher_id),
         "daily-diagnostic-cli",
     )
 
@@ -410,6 +453,7 @@ def test_daily_track_diagnostic_cli_uses_only_postgresql_and_preserves_run_contr
     missing = _diagnose(
         unavailable_storage_environment,
         "daily-track",
+        str(TEST_RESEARCHER.researcher_id),
         "daily-diagnostic-missing",
     )
     assert missing.returncode == 3
@@ -419,6 +463,7 @@ def test_daily_track_diagnostic_cli_uses_only_postgresql_and_preserves_run_contr
     invalid = _diagnose(
         unavailable_storage_environment,
         "daily-track",
+        str(TEST_RESEARCHER.researcher_id),
         "/private/canary-secret",
     )
     assert invalid.returncode == 2
@@ -433,6 +478,7 @@ def test_daily_track_diagnostic_cli_uses_only_postgresql_and_preserves_run_contr
     unavailable = _diagnose(
         unavailable_environment,
         "daily-track",
+        str(TEST_RESEARCHER.researcher_id),
         "daily-diagnostic-cli",
     )
     assert unavailable.returncode == 4
@@ -442,6 +488,7 @@ def test_daily_track_diagnostic_cli_uses_only_postgresql_and_preserves_run_contr
     research_run_invalid = _diagnose(
         unavailable_storage_environment,
         "research-run",
+        str(TEST_RESEARCHER.researcher_id),
         "/private/canary-secret",
     )
     assert research_run_invalid.returncode == 2
@@ -449,14 +496,19 @@ def test_daily_track_diagnostic_cli_uses_only_postgresql_and_preserves_run_contr
     assert research_run_invalid.stderr == "INVALID_USAGE\n"
 
 
-def _insert_track(transaction: PostgresTransaction, track_id: str) -> None:
+def _insert_track(
+    transaction: PostgresTransaction,
+    track_id: str,
+    *,
+    researcher_id: UUID = TEST_RESEARCHER.researcher_id,
+) -> None:
     origin_manifest = _digest(f"{track_id}:origin")
     transaction.execute(
         """
         INSERT INTO research_runs.run_ownership (researcher_id, run_id)
         VALUES (%s, %s)
         """,
-        (TEST_RESEARCHER.researcher_id, f"seed-{track_id}"),
+        (researcher_id, f"seed-{track_id}"),
     )
     transaction.execute(
         """
@@ -464,7 +516,7 @@ def _insert_track(transaction: PostgresTransaction, track_id: str) -> None:
             researcher_id, id, status, seed_run_id, origin
         ) VALUES (%s, %s, 'active', %s, '{}'::jsonb)
         """,
-        (TEST_RESEARCHER.researcher_id, track_id, f"seed-{track_id}"),
+        (researcher_id, track_id, f"seed-{track_id}"),
     )
     transaction.execute(
         """
