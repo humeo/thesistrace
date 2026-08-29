@@ -14,7 +14,7 @@ from threading import Event
 
 import anyio
 import pytest
-from core_runtime import drop_product_schemas, isolated_core_settings
+from core_runtime import TEST_RESEARCHER, drop_product_schemas, isolated_core_settings
 from psycopg.errors import CheckViolation, ForeignKeyViolation
 from psycopg.types.json import Jsonb
 from research_agent_mcp_runtime import (
@@ -89,11 +89,12 @@ def test_daily_track_action_receipts_reject_malformed_durable_outcomes(tmp_path:
                     transaction.execute(
                         """
                         INSERT INTO research_runs.start_tracking_receipts (
-                            request_id, request_fingerprint, seed_run_id,
-                            track_id, outcome
-                        ) VALUES (%s, %s, %s, %s, %s)
+                            researcher_id, request_id, request_fingerprint,
+                            seed_run_id, track_id, outcome
+                        ) VALUES (%s, %s, %s, %s, %s, %s)
                         """,
                         (
+                            TEST_RESEARCHER.researcher_id,
                             f"malformed_start_tracking_{index}",
                             "f" * 64,
                             "run_missing",
@@ -118,11 +119,12 @@ def test_daily_track_action_receipts_reject_malformed_durable_outcomes(tmp_path:
                             transaction.execute(
                                 """
                                 INSERT INTO daily_tracks.retry_receipts (
-                                    request_id, request_fingerprint, track_id,
-                                    progression_id, outcome
-                                ) VALUES (%s, %s, %s, %s, %s)
+                                    researcher_id, request_id, request_fingerprint,
+                                    track_id, progression_id, outcome
+                                ) VALUES (%s, %s, %s, %s, %s, %s)
                                 """,
                                 (
+                                    TEST_RESEARCHER.researcher_id,
                                     f"malformed_retry_{index}",
                                     "f" * 64,
                                     "track_missing",
@@ -134,10 +136,12 @@ def test_daily_track_action_receipts_reject_malformed_durable_outcomes(tmp_path:
                             transaction.execute(
                                 """
                                 INSERT INTO daily_tracks.stop_receipts (
-                                    request_id, request_fingerprint, track_id, outcome
-                                ) VALUES (%s, %s, %s, %s)
+                                    researcher_id, request_id, request_fingerprint,
+                                    track_id, outcome
+                                ) VALUES (%s, %s, %s, %s, %s)
                                 """,
                                 (
+                                    TEST_RESEARCHER.researcher_id,
                                     f"malformed_stop_{index}",
                                     "f" * 64,
                                     "track_missing",
@@ -1413,11 +1417,12 @@ def _assert_retry_receipt_rejects_cross_track_progression(
                 transaction.execute(
                     """
                     INSERT INTO daily_tracks.retry_receipts (
-                        request_id, request_fingerprint, track_id,
-                        progression_id, outcome
-                    ) VALUES (%s, %s, %s, %s, %s)
+                        researcher_id, request_id, request_fingerprint,
+                        track_id, progression_id, outcome
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
+                        TEST_RESEARCHER.researcher_id,
                         "cross-track-progression",
                         "f" * 64,
                         track_id,
@@ -1526,7 +1531,7 @@ def _clone_tracks(
         with database.transaction() as transaction:
             source = transaction.execute(
                 """
-                SELECT track.origin, state.origin_session,
+                SELECT track.researcher_id, track.origin, state.origin_session,
                        checkpoint.terminal_strategy_state,
                        checkpoint.data_generation_id,
                        checkpoint.provenance
@@ -1551,11 +1556,25 @@ def _clone_tracks(
                 }
                 transaction.execute(
                     """
-                    INSERT INTO daily_tracks.tracks (
-                        id, status, seed_run_id, origin
-                    ) VALUES (%s, %s, %s, %s)
+                    INSERT INTO research_runs.run_ownership (
+                        researcher_id, run_id
+                    ) VALUES (%s, %s)
                     """,
-                    (track_id, status, seed_run_id, Jsonb(origin)),
+                    (source["researcher_id"], seed_run_id),
+                )
+                transaction.execute(
+                    """
+                    INSERT INTO daily_tracks.tracks (
+                        researcher_id, id, status, seed_run_id, origin
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        source["researcher_id"],
+                        track_id,
+                        status,
+                        seed_run_id,
+                        Jsonb(origin),
+                    ),
                 )
                 transaction.execute(
                     """

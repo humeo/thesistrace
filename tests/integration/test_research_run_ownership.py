@@ -128,8 +128,8 @@ def test_research_run_service_scopes_resources_receipts_and_cursors(
         run_b.id,
         ResearchRunCancelCommand(request_id="shared-cancel"),
     )
-    assert cancelled_a is not None and cancelled_a.status == "cancelled"
-    assert cancelled_b is not None and cancelled_b.status == "cancelled"
+    assert cancelled_a is not None and cancelled_a.run.status == "cancelled"
+    assert cancelled_b is not None and cancelled_b.run.status == "cancelled"
     assert service.cancel(
         RESEARCHER_A.researcher_id,
         run_b.id,

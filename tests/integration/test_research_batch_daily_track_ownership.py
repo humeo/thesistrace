@@ -121,7 +121,7 @@ def test_research_batch_cancel_hides_foreign_id_before_receipt_conflict(
             INSERT INTO research_batches.admission_receipts (
                 researcher_id, request_id, request_fingerprint, batch_id, outcome
             ) VALUES (%s, 'colliding-request', 'admission-fingerprint',
-                      'batch-alpha', '{}'::jsonb)
+                      'batch-alpha', '{"outcome":"accepted"}'::jsonb)
             """,
             (RESEARCHER_A.researcher_id,),
         )
@@ -175,10 +175,13 @@ def test_daily_track_browse_mutations_and_active_count_are_researcher_scoped(
                 track_id, progression_id, outcome
             ) VALUES (
                 %s, 'foreign-retry', 'own-track-fingerprint',
-                'track-alpha-active', 'progression-alpha-receipt', '{}'::jsonb
+                'track-alpha-active', 'progression-alpha-receipt', %s
             )
             """,
-            (RESEARCHER_A.researcher_id,),
+            (
+                RESEARCHER_A.researcher_id,
+                Jsonb(_track_outcome("track-alpha-active", "active")),
+            ),
         )
         transaction.execute(
             """
@@ -186,10 +189,13 @@ def test_daily_track_browse_mutations_and_active_count_are_researcher_scoped(
                 researcher_id, request_id, request_fingerprint, track_id, outcome
             ) VALUES (
                 %s, 'foreign-stop', 'own-track-fingerprint',
-                'track-alpha-stopped', '{}'::jsonb
+                'track-alpha-stopped', %s
             )
             """,
-            (RESEARCHER_A.researcher_id,),
+            (
+                RESEARCHER_A.researcher_id,
+                Jsonb(_track_outcome("track-alpha-stopped", "stopped")),
+            ),
         )
     service = DailyTrackService(
         ownership_database,
@@ -280,13 +286,14 @@ def _insert_track(
             "result_manifest_sha256": "a" * 64,
             "result_checksum_sha256": "b" * 64,
         },
+        "strategy_entry_session": "2026-08-01",
+        "strategy_initial_cash_cny": "1",
         "initial_strategy_state": {
             "session": "2026-08-01",
             "gross_cash": "1",
             "net_cash": "1",
             "gross_nav": "1",
             "net_nav": "1",
-            "benchmark_nav": "1",
             "cumulative_transaction_cost": "0",
             "positions": [],
             "rebalance_phase": {},
@@ -343,6 +350,17 @@ def _insert_track(
             """,
             (track_id, checkpoint_id, checkpoint_id),
         )
+
+
+def _track_outcome(track_id: str, status: str) -> dict[str, str]:
+    return {
+        "id": track_id,
+        "status": status,
+        "seed_run_id": f"seed-{track_id}",
+        "result_checksum_sha256": "b" * 64,
+        "origin_session": "2026-08-01",
+        "strategy_session": "2026-08-01",
+    }
 
 
 def _drop_core_schemas(database_url: str) -> None:

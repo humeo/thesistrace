@@ -7,8 +7,8 @@ from pathlib import Path
 
 import boto3
 import pytest
+from core_runtime import TEST_RESEARCHER, drop_product_schemas, isolated_core_settings
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
 from psycopg.errors import CheckViolation
 from psycopg.types.json import Jsonb
@@ -449,10 +449,12 @@ def test_batch_receipt_schema_rejects_malformed_durable_outcomes(tmp_path: Path)
                     transaction.execute(
                         """
                         INSERT INTO research_batches.admission_receipts (
-                            request_id, request_fingerprint, batch_id, outcome
-                        ) VALUES (%s, %s, %s, %s)
+                            researcher_id, request_id, request_fingerprint,
+                            batch_id, outcome
+                        ) VALUES (%s, %s, %s, %s, %s)
                         """,
                         (
+                            TEST_RESEARCHER.researcher_id,
                             f"malformed-admission-{index}",
                             "fingerprint",
                             batch_id,
@@ -472,10 +474,12 @@ def test_batch_receipt_schema_rejects_malformed_durable_outcomes(tmp_path: Path)
                     transaction.execute(
                         """
                         INSERT INTO research_batches.cancel_receipts (
-                            request_id, request_fingerprint, batch_id, outcome
-                        ) VALUES (%s, %s, %s, %s)
+                            researcher_id, request_id, request_fingerprint,
+                            batch_id, outcome
+                        ) VALUES (%s, %s, %s, %s, %s)
                         """,
                         (
+                            TEST_RESEARCHER.researcher_id,
                             f"malformed-cancel-{index}",
                             "fingerprint",
                             batch["id"],

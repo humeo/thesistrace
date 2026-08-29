@@ -256,10 +256,16 @@ def test_current_schema_rejects_missing_null_or_malformed_research_kind_contract
                         transaction.execute(
                             """
                             INSERT INTO research_runs.admission_requests (
-                                request_id, request_fingerprint, run_id, outcome
-                            ) VALUES (%s, %s, NULL, %s)
+                                researcher_id, request_id, request_fingerprint,
+                                run_id, outcome
+                            ) VALUES (%s, %s, %s, NULL, %s)
                             """,
-                            (f"malformed_receipt_{index}", "f" * 64, Jsonb(outcome)),
+                            (
+                                TEST_RESEARCHER.researcher_id,
+                                f"malformed_receipt_{index}",
+                                "f" * 64,
+                                Jsonb(outcome),
+                            ),
                         )
         finally:
             database.close()
@@ -677,7 +683,7 @@ def test_research_organization_updates_compose_concurrently_and_cursor_is_stable
                     "cursor": first_page["next_cursor"],
                 },
             ).status_code
-            == 422
+            == 400
         )
         assert (
             client.get(
@@ -688,7 +694,7 @@ def test_research_organization_updates_compose_concurrently_and_cursor_is_stable
                     "cursor": first_page["next_cursor"],
                 },
             ).status_code
-            == 422
+            == 400
         )
 
 

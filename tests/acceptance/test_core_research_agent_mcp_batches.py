@@ -6,7 +6,7 @@ from pathlib import Path
 
 import anyio
 import pytest
-from core_runtime import drop_product_schemas, isolated_core_settings
+from core_runtime import TEST_RESEARCHER, drop_product_schemas, isolated_core_settings
 from pydantic import TypeAdapter
 from research_agent_mcp_runtime import (
     assert_worker_succeeded,
@@ -126,7 +126,12 @@ def _prepare_tied_pagination_batches(settings: CoreSettings) -> list[str]:
                     end_date="2026-08-04",
                 )
             )
-            batch_ids.append(runtime.research_batches.admit(command).id)
+            batch_ids.append(
+                runtime.research_batches.admit(
+                    TEST_RESEARCHER.researcher_id,
+                    command,
+                ).id
+            )
         tied_created_at = datetime(2026, 8, 27, 0, 0, tzinfo=UTC)
         with runtime.database.transaction() as transaction:
             updated = transaction.execute(

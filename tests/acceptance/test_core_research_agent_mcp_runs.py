@@ -15,7 +15,7 @@ from pathlib import Path
 
 import anyio
 import pytest
-from core_runtime import drop_product_schemas, isolated_core_settings
+from core_runtime import TEST_RESEARCHER, drop_product_schemas, isolated_core_settings
 from mcp.client import Client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from pydantic import TypeAdapter
@@ -789,7 +789,10 @@ def _assert_polling_does_not_read_result(settings: CoreSettings, run_id: str) ->
             database,
             publication=_PublicationReadForbidden(),  # type: ignore[arg-type]
         )
-        detail = service.get_polling_detail(run_id)
+        detail = service.get_polling_detail(
+            TEST_RESEARCHER.researcher_id,
+            run_id,
+        )
         assert detail is not None
         assert detail.status == "succeeded"
         assert detail.result_available is True
@@ -844,7 +847,10 @@ def _seed_pagination_runs(settings: CoreSettings, count: int) -> None:
                     research_kind="factor_evaluation",
                 )
             )
-            outcome = runtime.research_runs.admit_with_outcome(command)
+            outcome = runtime.research_runs.admit_with_outcome(
+                TEST_RESEARCHER.researcher_id,
+                command,
+            )
             assert outcome.outcome == "accepted"
     database = PostgresDatabase(settings.database_url)
     database.open()
@@ -893,7 +899,10 @@ def _assert_concurrent_rejection_receipt(settings: CoreSettings) -> None:
         with ThreadPoolExecutor(max_workers=8) as executor:
             outcomes = list(
                 executor.map(
-                    lambda _index: runtime.research_runs.admit_with_outcome(command),
+                    lambda _index: runtime.research_runs.admit_with_outcome(
+                        TEST_RESEARCHER.researcher_id,
+                        command,
+                    ),
                     range(8),
                 )
             )

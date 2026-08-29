@@ -4,8 +4,10 @@ import json
 import os
 import subprocess
 import sys
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.util import module_from_spec, spec_from_file_location
+from io import BytesIO
 from pathlib import Path
 from threading import Thread
 from types import ModuleType, SimpleNamespace
@@ -63,6 +65,68 @@ def test_image_smoke_allows_one_bounded_slow_result_response() -> None:
     smoke = _load_smoke_module()
 
     assert smoke.HTTP_REQUEST_TIMEOUT_SECONDS == 10
+
+
+def test_image_smoke_run_polling_retries_exact_auth_unavailability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smoke = _load_smoke_module()
+    terminal = {
+        "status": "succeeded",
+        "research_kind": "factor_evaluation",
+        "result": {
+            "factor": {},
+            "provenance": {"research_kind": "factor_evaluation"},
+        },
+    }
+    responses = iter(
+        (
+            (503, {"detail": "Authentication unavailable"}, "unavailable"),
+            (200, terminal, "succeeded"),
+        )
+    )
+    monkeypatch.setattr(smoke, "_request_json_response", lambda *_args: next(responses))
+    monkeypatch.setattr(
+        smoke,
+        "Event",
+        lambda: SimpleNamespace(wait=lambda _seconds: None),
+    )
+
+    assert smoke._wait_for_run(
+        "http://api:8100",
+        "run_retryable_auth",
+        research_kind="factor_evaluation",
+    ) == terminal
+
+
+def test_image_smoke_wraps_empty_gateway_error_as_retryable_assertion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smoke = _load_smoke_module()
+
+    def unavailable(*_args: object, **_kwargs: object) -> object:
+        raise urllib.error.HTTPError(
+            "http://api:8100/api/data",
+            502,
+            "Bad Gateway",
+            {},
+            BytesIO(b""),
+        )
+
+    monkeypatch.setattr(smoke, "_authenticated_headers", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(smoke.urllib.request, "urlopen", unavailable)
+
+    with pytest.raises(AssertionError) as failure:
+        smoke._request_json("http://api:8100", "GET", "/api/data")
+
+    assert failure.value.args == (
+        {
+            "status": 502,
+            "method": "GET",
+            "path": "/api/data",
+            "body": "",
+        },
+    )
 
 
 def test_mounted_data_hash_detects_batch_attempt_control_pollution(tmp_path: Path) -> None:

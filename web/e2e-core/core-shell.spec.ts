@@ -451,13 +451,13 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({
       timeout: 90_000,
     });
-    const comparisonChartLabel = "Net Strategy, 沪深300, and Net Excess performance chart";
+    const comparisonChartLabel = "Net Strategy and CSI 300 performance chart";
     const performanceChart = page.getByLabel(comparisonChartLabel, { exact: true });
     await expect(performanceChart).toBeVisible();
     await expect(performanceChart.locator("canvas").first()).toBeVisible();
     await expect(performanceChart.getByText("Net Strategy", { exact: true })).toBeVisible();
-    await expect(performanceChart.getByText("沪深300", { exact: true })).toBeVisible();
-    await expect(performanceChart.getByText("Net Excess", { exact: true })).toBeVisible();
+    await expect(performanceChart.getByText("CSI 300", { exact: true })).toBeVisible();
+    await expect(performanceChart.getByText("Net Excess", { exact: true })).toHaveCount(0);
     await expect(
       performanceChart.getByRole("link", { name: "TradingView Lightweight Charts™" }),
     ).toHaveAttribute("href", "https://www.tradingview.com/");
@@ -476,8 +476,8 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     );
     const performanceReadout = performanceChart.locator(".strategy-chart-readout");
     await expect(performanceReadout).toContainText("Net Strategy");
-    await expect(performanceReadout).toContainText("沪深300");
-    await expect(performanceReadout).toContainText("Net Excess");
+    await expect(performanceReadout).toContainText("CSI 300");
+    await expect(performanceReadout).not.toContainText("Net Excess");
 
     const runDetailPath = `**/api/research-runs/${runId}`;
     await page.route(runDetailPath, async (route) => {
@@ -505,11 +505,11 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
       });
     });
     await page.reload();
-    const unavailableRunComparison = page.getByLabel("沪深300 Strategy Comparison", {
+    const unavailableRunComparison = page.getByLabel("CSI 300 Strategy Comparison", {
       exact: true,
     });
     await expect(unavailableRunComparison).toHaveAttribute("role", "status");
-    await expect(unavailableRunComparison).toContainText("沪深300 comparison unavailable");
+    await expect(unavailableRunComparison).toContainText("CSI 300 comparison unavailable");
     await expect(unavailableRunComparison.locator("figure")).toHaveCount(0);
     await expect(page.getByLabel(comparisonChartLabel, { exact: true })).toHaveCount(0);
     await page.unroute(runDetailPath);
@@ -561,8 +561,8 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     await expect(dailyTrackChart).toBeVisible();
     await expect(dailyTrackChart.locator("canvas").first()).toBeVisible();
     await expect(dailyTrackChart.getByText("Net Strategy", { exact: true })).toBeVisible();
-    await expect(dailyTrackChart.getByText("沪深300", { exact: true })).toBeVisible();
-    await expect(dailyTrackChart.getByText("Net Excess", { exact: true })).toBeVisible();
+    await expect(dailyTrackChart.getByText("CSI 300", { exact: true })).toBeVisible();
+    await expect(dailyTrackChart.getByText("Net Excess", { exact: true })).toHaveCount(0);
 
     const trackDetailPath = `**/api/daily-tracks/${trackId}`;
     await page.route(trackDetailPath, async (route) => {
@@ -585,11 +585,11 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
       });
     });
     await page.reload();
-    const unavailableTrackComparison = page.getByLabel("沪深300 Strategy Comparison", {
+    const unavailableTrackComparison = page.getByLabel("CSI 300 Strategy Comparison", {
       exact: true,
     });
     await expect(unavailableTrackComparison).toHaveAttribute("role", "status");
-    await expect(unavailableTrackComparison).toContainText("沪深300 comparison unavailable");
+    await expect(unavailableTrackComparison).toContainText("CSI 300 comparison unavailable");
     await expect(unavailableTrackComparison.locator("figure")).toHaveCount(0);
     await expect(page.getByLabel(comparisonChartLabel, { exact: true })).toHaveCount(0);
     await page.unroute(trackDetailPath);
@@ -925,7 +925,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     ).toContainText("2 / 2");
     await expect(page.locator("body")).not.toContainText(/checkpoint|staged payload/i);
     await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Final Portfolio" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Final Portfolio" })).toHaveCount(0);
     await expect(page.getByText("Retained account at the Research Period boundary", { exact: true })).toHaveCount(0);
     await expect(page.getByText("No pending signal at this boundary.", { exact: true })).toHaveCount(0);
     await expect(page.locator(".research-run-facts")).toContainText("Research type Strategy Backtest");
@@ -1032,7 +1032,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.locator(".research-run-facts")).toContainText("Research type Strategy Backtest");
     await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Daily Observations" })).toHaveCount(0);
-    await expect(page.getByRole("heading", { name: "Final Portfolio" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Final Portfolio" })).toHaveCount(0);
     const convertedDetail = await page.request.get(`/api/research-runs/${convertedRunId}`);
     expect(await convertedDetail.json()).toMatchObject({
       id: convertedRunId,

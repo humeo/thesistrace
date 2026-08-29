@@ -5,6 +5,7 @@ from uuid import UUID
 
 import pytest
 from psycopg.errors import ForeignKeyViolation, UniqueViolation
+from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase, SchemaError
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
@@ -195,10 +196,12 @@ def test_schema_constraints_reject_every_cross_researcher_relationship(
         transaction.execute(
             """
             INSERT INTO research_runs.admission_requests (
-                researcher_id, request_id, request_fingerprint, run_id
+                researcher_id, request_id, request_fingerprint, run_id, outcome
             ) VALUES
-                (%s, 'same-request', 'fingerprint-a', 'run-a'),
-                (%s, 'same-request', 'fingerprint-b', 'run-b')
+                (%s, 'same-request', 'fingerprint-a', 'run-a',
+                 '{"outcome":"accepted"}'::jsonb),
+                (%s, 'same-request', 'fingerprint-b', 'run-b',
+                 '{"outcome":"accepted"}'::jsonb)
             """,
             (RESEARCHER_A.researcher_id, RESEARCHER_B.researcher_id),
         )
@@ -207,8 +210,9 @@ def test_schema_constraints_reject_every_cross_researcher_relationship(
             transaction.execute(
                 """
                 INSERT INTO research_runs.admission_requests (
-                    researcher_id, request_id, request_fingerprint, run_id
-                ) VALUES (%s, 'same-request', 'duplicate', 'run-a')
+                    researcher_id, request_id, request_fingerprint, run_id, outcome
+                ) VALUES (%s, 'same-request', 'duplicate', 'run-a',
+                          '{"outcome":"accepted"}'::jsonb)
                 """,
                 (RESEARCHER_A.researcher_id,),
             )
@@ -277,9 +281,18 @@ def test_schema_rejects_cross_parent_receipts_checkpoints_and_blocked_links(
                     researcher_id, request_id, request_fingerprint,
                     seed_run_id, track_id, outcome
                 ) VALUES (%s, 'cross-track', 'fingerprint',
-                          'run-parent-a', 'track-parent-b', '{}'::jsonb)
+                          'run-parent-a', 'track-parent-b', %s)
                 """,
-                (RESEARCHER_A.researcher_id,),
+                (
+                    RESEARCHER_A.researcher_id,
+                    Jsonb(
+                        _track_outcome(
+                            track_id="track-parent-b",
+                            seed_run_id="run-parent-a",
+                            status="active",
+                        )
+                    ),
+                ),
             )
 
     with pytest.raises(ForeignKeyViolation):
@@ -308,9 +321,18 @@ def test_schema_rejects_cross_parent_receipts_checkpoints_and_blocked_links(
                     researcher_id, request_id, request_fingerprint,
                     track_id, outcome, progression_id
                 ) VALUES (%s, 'cross-progression', 'fingerprint',
-                          'track-parent-a', '{}'::jsonb, 'progression-parent-b')
+                          'track-parent-a', %s, 'progression-parent-b')
                 """,
-                (RESEARCHER_A.researcher_id,),
+                (
+                    RESEARCHER_A.researcher_id,
+                    Jsonb(
+                        _track_outcome(
+                            track_id="track-parent-a",
+                            seed_run_id="run-parent-a",
+                            status="active",
+                        )
+                    ),
+                ),
             )
 
     with pytest.raises(ForeignKeyViolation):
@@ -614,6 +636,22 @@ def _receipt_primary_keys(
     return {
         (row["schema_name"], row["table_name"]): list(row["columns"])
         for row in rows
+    }
+
+
+def _track_outcome(
+    *,
+    track_id: str,
+    seed_run_id: str,
+    status: str,
+) -> dict[str, str]:
+    return {
+        "id": track_id,
+        "status": status,
+        "seed_run_id": seed_run_id,
+        "result_checksum_sha256": "f" * 64,
+        "origin_session": "2026-08-01",
+        "strategy_session": "2026-08-01",
     }
 
 

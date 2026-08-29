@@ -2,15 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
-
-import boto3
-import httpx
-from botocore.config import Config
-
-from thesistrace._postgres import PostgresDatabase
-from thesistrace.data import MountedGenerationStore
-from thesistrace.publication import s3_storage_is_available
 
 _PROBE_TIMEOUT_SECONDS = 0.75
 
@@ -33,6 +24,8 @@ def main(arguments: list[str] | None = None) -> None:
 
 def _probe(name: str) -> bool:
     if name == "auth":
+        import httpx
+
         response = httpx.get(
             f"{os.environ['THESISTRACE_AUTH_INTERNAL_ORIGIN']}/health/ready",
             follow_redirects=False,
@@ -40,6 +33,8 @@ def _probe(name: str) -> bool:
         )
         return response.status_code == 200
     if name == "postgresql":
+        from thesistrace._postgres import PostgresDatabase
+
         database = PostgresDatabase(
             os.environ["THESISTRACE_DATABASE_URL"],
             pool_timeout_seconds=_PROBE_TIMEOUT_SECONDS,
@@ -50,6 +45,9 @@ def _probe(name: str) -> bool:
         finally:
             database.close()
     if name == "rustfs":
+        import boto3
+        from botocore.config import Config
+
         client = boto3.client(
             "s3",
             endpoint_url=os.environ["THESISTRACE_S3_ENDPOINT_URL"],
@@ -62,10 +60,20 @@ def _probe(name: str) -> bool:
                 retries={"total_max_attempts": 1, "mode": "standard"},
             ),
         )
-        return s3_storage_is_available(client)
-    return MountedGenerationStore(
-        Path(os.environ["THESISTRACE_DATA_MOUNT"])
-    ).storage_is_available()
+        response = client.list_buckets()
+        return response["ResponseMetadata"]["HTTPStatusCode"] == 200
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            os.environ["THESISTRACE_DATA_MOUNT"],
+            os.O_RDONLY | os.O_DIRECTORY,
+        )
+        return True
+    except OSError:
+        return False
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 if __name__ == "__main__":

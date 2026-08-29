@@ -2409,7 +2409,14 @@ def _wait_for_run(
     last: dict[str, object] | None = None
     poll_interval = Event()
     while time.monotonic() < deadline:
-        last = _request_json(api_origin, "GET", f"/api/research-runs/{run_id}")
+        current = _request_json_for_polling(
+            api_origin,
+            f"/api/research-runs/{run_id}",
+        )
+        if current is None:
+            poll_interval.wait(0.1)
+            continue
+        last = current
         if last["status"] == "succeeded":
             assert last["research_kind"] == research_kind
             if research_kind == "factor_evaluation":
@@ -2442,7 +2449,14 @@ def _wait_for_batch(
     last: dict[str, object] | None = None
     poll_interval = Event()
     while time.monotonic() < deadline:
-        last = _request_json(api_origin, "GET", f"/api/research-batches/{batch_id}")
+        current = _request_json_for_polling(
+            api_origin,
+            f"/api/research-batches/{batch_id}",
+        )
+        if current is None:
+            poll_interval.wait(0.1)
+            continue
+        last = current
         if last["status"] == "succeeded":
             if last["batch_kind"] == "factor_evaluation":
                 assert last["progress"] == {
@@ -2473,7 +2487,14 @@ def _wait_for_batch_status(
     last: dict[str, object] | None = None
     poll_interval = Event()
     while time.monotonic() < deadline:
-        last = _request_json(api_origin, "GET", f"/api/research-batches/{batch_id}")
+        current = _request_json_for_polling(
+            api_origin,
+            f"/api/research-batches/{batch_id}",
+        )
+        if current is None:
+            poll_interval.wait(0.01)
+            continue
+        last = current
         if last["status"] == expected_status:
             return last
         if last["status"] in {
@@ -2502,7 +2523,14 @@ def _wait_for_running_batch_attempt(
     last: dict[str, object] | None = None
     poll_interval = Event()
     while time.monotonic() < deadline:
-        last = _request_json(api_origin, "GET", f"/api/research-batches/{batch_id}")
+        current = _request_json_for_polling(
+            api_origin,
+            f"/api/research-batches/{batch_id}",
+        )
+        if current is None:
+            poll_interval.wait(0.01)
+            continue
+        last = current
         if last["status"] == "running" and last["attempt"] is not None:
             return last
         if last["status"] in {
@@ -2532,7 +2560,14 @@ def _wait_for_run_status(
     poll_interval = Event()
     last: dict[str, object] | None = None
     while time.monotonic() < deadline:
-        last = _request_json(api_origin, "GET", f"/api/research-runs/{run_id}")
+        current = _request_json_for_polling(
+            api_origin,
+            f"/api/research-runs/{run_id}",
+        )
+        if current is None:
+            poll_interval.wait(0.02)
+            continue
+        last = current
         if last["status"] == expected_status:
             return last
         if last["status"] in {"succeeded", "failed", "cancelled"}:
@@ -2546,7 +2581,14 @@ def _wait_for_checkpoint(api_origin: str, run_id: str) -> int:
     poll_interval = Event()
     last: dict[str, object] | None = None
     while time.monotonic() < deadline:
-        last = _request_json(api_origin, "GET", f"/api/research-runs/{run_id}")
+        current = _request_json_for_polling(
+            api_origin,
+            f"/api/research-runs/{run_id}",
+        )
+        if current is None:
+            poll_interval.wait(0.02)
+            continue
+        last = current
         committed = int(last["progress"]["committed_chunk_count"])
         if last["status"] == "running" and committed >= 1:
             return committed
@@ -2565,7 +2607,14 @@ def _wait_for_track(
     last: dict[str, object] | None = None
     poll_interval = Event()
     while time.monotonic() < deadline:
-        last = _request_json(api_origin, "GET", f"/api/daily-tracks/{track_id}")
+        current = _request_json_for_polling(
+            api_origin,
+            f"/api/daily-tracks/{track_id}",
+        )
+        if current is None:
+            poll_interval.wait(0.1)
+            continue
+        last = current
         if last["status"] == "active" and last["strategy_session"] == expected_session:
             return last
         if last["status"] in {"blocked", "stopped"}:
@@ -2583,7 +2632,14 @@ def _wait_for_track_status(
     last: dict[str, object] | None = None
     poll_interval = Event()
     while time.monotonic() < deadline:
-        last = _request_json(api_origin, "GET", f"/api/daily-tracks/{track_id}")
+        current = _request_json_for_polling(
+            api_origin,
+            f"/api/daily-tracks/{track_id}",
+        )
+        if current is None:
+            poll_interval.wait(0.1)
+            continue
+        last = current
         if last["status"] == expected_status:
             return last
         if last["status"] == "stopped":
@@ -2880,6 +2936,39 @@ def _request_json(
     path: str,
     body: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    status, value, response_body = _request_json_response(
+        api_origin,
+        method,
+        path,
+        body,
+    )
+    if status >= 300:
+        raise AssertionError(
+            {"status": status, "method": method, "path": path, "body": response_body}
+        )
+    return value
+
+
+def _request_json_for_polling(
+    api_origin: str,
+    path: str,
+) -> dict[str, object] | None:
+    status, value, response_body = _request_json_response(api_origin, "GET", path)
+    if status == 503 and value == {"detail": "Authentication unavailable"}:
+        return None
+    if status >= 300:
+        raise AssertionError(
+            {"status": status, "method": "GET", "path": path, "body": response_body}
+        )
+    return value
+
+
+def _request_json_response(
+    api_origin: str,
+    method: str,
+    path: str,
+    body: dict[str, object] | None = None,
+) -> tuple[int, dict[str, object], str]:
     payload = None if body is None else json.dumps(body).encode()
     headers = _authenticated_headers(method, has_body=payload is not None)
     request = urllib.request.Request(
@@ -2893,14 +2982,26 @@ def _request_json(
             request,
             timeout=HTTP_REQUEST_TIMEOUT_SECONDS,
         ) as response:
-            assert response.status < 300
-            value = json.loads(response.read())
+            status = response.status
+            response_body = response.read().decode()
     except urllib.error.HTTPError as error:
-        raise AssertionError(
-            {"status": error.code, "method": method, "path": path, "body": error.read().decode()}
-        ) from error
+        status = error.code
+        response_body = error.read().decode()
+    try:
+        value = json.loads(response_body)
+    except json.JSONDecodeError as error:
+        if status < 300:
+            raise AssertionError(
+                {
+                    "status": status,
+                    "method": method,
+                    "path": path,
+                    "body": response_body,
+                }
+            ) from error
+        value = {}
     assert isinstance(value, dict)
-    return value
+    return status, value, response_body
 
 
 def _request_status(

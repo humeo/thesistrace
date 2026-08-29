@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from thesistrace.researcher import ResearcherIdentity
 
-AUTH_VERIFY_TIMEOUT_SECONDS = 1.0
+AUTH_VERIFY_TIMEOUT_SECONDS = 2.0
 
 
 class InvalidLoginSession(RuntimeError):
