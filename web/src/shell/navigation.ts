@@ -1,5 +1,15 @@
 import type { MouseEvent } from "react";
 
+export function navigateCorePath(path: string): void {
+  const destination = new URL(path, window.location.href);
+  window.history.pushState(
+    null,
+    "",
+    `${destination.pathname}${destination.search}${destination.hash}`,
+  );
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
 export function followCoreLink(event: MouseEvent<HTMLAnchorElement>): void {
   const link = event.currentTarget;
   if (
@@ -17,10 +27,5 @@ export function followCoreLink(event: MouseEvent<HTMLAnchorElement>): void {
   if (destination.origin !== window.location.origin) return;
 
   event.preventDefault();
-  window.history.pushState(
-    null,
-    "",
-    `${destination.pathname}${destination.search}${destination.hash}`,
-  );
-  window.dispatchEvent(new PopStateEvent("popstate"));
+  navigateCorePath(`${destination.pathname}${destination.search}${destination.hash}`);
 }

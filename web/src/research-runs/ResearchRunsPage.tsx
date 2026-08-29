@@ -15,7 +15,7 @@ import {
   useResearchAsDraft,
   type FrozenResearchAuthorableInput,
 } from "../research/draft";
-import { followCoreLink } from "../shell/navigation";
+import { followCoreLink, navigateCorePath } from "../shell/navigation";
 
 type CorrelationSummary = {
   mean: number | null;
@@ -444,7 +444,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
       const track = (await response.json()) as { id: string };
       if (generation !== trackingGeneration.current) return;
       trackingRequest.current = null;
-      window.location.assign(`/daily-tracks/${track.id}`);
+      navigateCorePath(`/daily-tracks/${track.id}`);
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (generation !== trackingGeneration.current) return;

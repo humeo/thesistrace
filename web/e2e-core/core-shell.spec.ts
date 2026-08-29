@@ -3,11 +3,16 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 
 import { expect, sameOriginHeaders, test } from "./auth-fixture";
 
-test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
+function recordDocumentRequests(page: Page): string[] {
   const documentRequests: string[] = [];
   page.on("request", (request) => {
     if (request.resourceType() === "document") documentRequests.push(request.url());
   });
+  return documentRequests;
+}
+
+test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
+  const documentRequests = recordDocumentRequests(page);
   await page.route("**/api/research-folders", async (route) => {
     await route.fulfill({
       json: {
@@ -66,6 +71,55 @@ test("ResearchRun return keeps the selected Type without a document reload", asy
 
   await expect(page).toHaveURL(/\/research-runs$/);
   await expect(page.getByLabel("Filter by Type")).toHaveValue("factor_evaluation");
+  expect(documentRequests).toEqual([]);
+});
+
+test("Start Tracking opens the created DailyTrack without a document reload", async ({ page }) => {
+  const runId = "run_feedface1234abcd9876";
+  const trackId = "track_cafebabefeed1234";
+  const documentRequests = recordDocumentRequests(page);
+  const startTrackingMethods: string[] = [];
+  await page.route("**/api/research-folders", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [{
+          id: "folder_default",
+          name: "Default",
+          is_default: true,
+          created_at: "2026-08-13T00:00:00Z",
+        }],
+        next_cursor: null,
+      },
+    });
+  });
+  await page.route(`**/api/research-runs/${runId}`, async (route) => {
+    await route.fulfill({
+      json: {
+        id: runId,
+        status: "succeeded",
+        name: "Tracking navigation regression",
+        folder_id: "folder_default",
+        created_at: "2026-08-13T01:02:03Z",
+        start_date: "2026-08-01",
+        end_date: "2026-08-05",
+        formula_summary: "rank(close)",
+        research_kind: "strategy_backtest",
+      },
+    });
+  });
+  await page.route(`**/api/research-runs/${runId}/daily-tracks`, async (route) => {
+    startTrackingMethods.push(route.request().method());
+    await route.fulfill({ status: 201, json: { id: trackId } });
+  });
+
+  await page.goto(`/research-runs/${runId}`);
+  await expect(page.getByRole("button", { name: "Start Tracking" })).toBeVisible();
+  documentRequests.length = 0;
+
+  await page.getByRole("button", { name: "Start Tracking" }).click();
+
+  await expect(page).toHaveURL(new RegExp(`/daily-tracks/${trackId}$`));
+  expect(startTrackingMethods).toEqual(["POST"]);
   expect(documentRequests).toEqual([]);
 });
 
