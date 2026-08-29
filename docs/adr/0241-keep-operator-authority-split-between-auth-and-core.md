@@ -1,0 +1,3 @@
+# Keep Operator authority split between Auth and Core
+
+Auth owns the singleton Operator Assignment, current-password Operator Proofs, Researcher and Login Session views, and Researcher Invitation mutations, while Core owns Dataset Operational Status and Data Refresh Operations; Core consumes the exact one-time proof through a bounded internal Auth verification and neither runtime role reads the other's schema. The Data Operator Worker remains a private Core runtime with no public HTTP surface. This extends the existing identity-versus-product authorization boundary instead of installing the Better Auth Admin plugin, forwarding passwords to Core, trusting proxy role headers, or adding a third administrator backend.

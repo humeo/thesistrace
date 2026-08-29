@@ -10,13 +10,35 @@ the [ADR index](docs/adr/README.md) and [Core architecture](docs/architecture/co
 ### Identity and Access
 
 **Operator**:
-The trusted deployment administrator who manages Researcher access and
-Canonical Data only through private operational interfaces.
-_Avoid_: Researcher, Web administrator, separate Access Operator
+A Researcher who holds the Operator Capability and manages Researcher access
+and Canonical Data through the Operator Console or private operational commands.
+_Avoid_: Separate administrator identity, Organization administrator
+
+**Operator Capability**:
+The unique privileged grant held by exactly one Researcher and allowing that
+Researcher to act as the Operator. It is indivisible and does not form a
+general permission hierarchy.
+_Avoid_: Role, RBAC, permission set, Organization membership
+
+**Operator Assignment**:
+The unique association between one active Researcher and the Operator
+Capability, established or transferred only by a private deployment action.
+_Avoid_: Role assignment, Console permission management, Organization membership
+
+**Operator Proof**:
+A short-lived, single-use current-password confirmation bound to one Login
+Session and one exact Operator mutation.
+_Avoid_: Login Session, confirmation window, API key, reusable bearer token
+
+**Operator Console**:
+The privileged product surface through which an Operator manages Researcher
+access and Invitations, starts Data Refreshes, and reviews Dataset Operational Status.
+_Avoid_: Admin dashboard, Settings, ordinary product navigation
 
 **Researcher**:
 An authenticated human who owns one private set of Research Folders,
-ResearchRuns, Research Batches, and DailyTracks.
+ResearchRuns, Research Batches, and DailyTracks and may also hold the Operator
+Capability without changing that Research Ownership.
 _Avoid_: User, account, tenant, Personal Workspace
 
 **Login Session**:
@@ -668,7 +690,13 @@ _Avoid_: Earlier Financial Coverage, invented value
 The read-only product view of current Dataset Coverage, Benchmark Snapshot
 readiness and identity, freshness, Financial Research Readiness, and aggregate
 pending or discovery-gap counts.
-_Avoid_: Data Refresh control, raw table browser, instrument failure dump
+_Avoid_: Dataset Operational Status, Data Refresh control, raw table browser,
+instrument failure dump
+
+**Dataset Operational Status**:
+The Operator view of the current Dataset Head and recent Data Refresh targets,
+phases, outcomes, bounded counts, and safe failure codes.
+_Avoid_: Data Overview, Dataset history, raw table browser, object-store browser
 
 **Financial Research Readiness**:
 The published financial input-quality status of a Data Generation: `ready`,
@@ -678,10 +706,9 @@ executable and are frozen into ResearchRun and DailyTrack provenance;
 _Avoid_: Boolean readiness, raw ingestion completion, hidden stale input
 
 **Data Operator**:
-The private operational capability through which the Operator initializes,
-inspects, refreshes, and collects Canonical Data outside the ordinary research
-product.
-_Avoid_: Researcher, Web administrator, Researcher access management
+The operational capability through which the Operator initializes, inspects,
+refreshes, and collects Canonical Data.
+_Avoid_: Researcher access management, ordinary Researcher action
 
 **Dataset Bootstrap**:
 The explicit Data Operator action that creates the first complete Data
@@ -689,9 +716,19 @@ Generation and Dataset Head for an empty data store.
 _Avoid_: Automatic startup download, Data Refresh retry
 
 **Data Refresh**:
-The private operator action that builds a validated candidate Data Generation
-and atomically advances the Dataset Head.
+The Operator action that builds a validated candidate Data Generation and
+atomically advances the Dataset Head.
 _Avoid_: User product action, in-place mutation
+
+**Data Refresh Operation**:
+The durable record of one explicit Market, Financial, or Industry Refresh
+target accepted from the Operator and processed in submission order.
+_Avoid_: HTTP request, combined Refresh, scheduled job
+
+**Data Operator Worker**:
+The single-slot runtime that serially claims and executes Data Refresh
+Operations.
+_Avoid_: Research Worker, scheduler, per-Refresh process
 
 **Market Refresh**:
 A Data Refresh that advances end-of-day market families while retaining the

@@ -53,6 +53,8 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 ## Identity, access, and public entry
 
 - [ADR-0233 — Separate Better Auth identity from Core Research authorization behind one origin](0233-separate-better-auth-identity-from-core-research-authorization.md)
+- [ADR-0239 — Expose one capability-gated Operator Console without general RBAC](0239-expose-one-capability-gated-operator-console.md)
+- [ADR-0241 — Keep Operator authority split between Auth and Core](0241-keep-operator-authority-split-between-auth-and-core.md)
 
 ## Research lifecycle, Daily Tracking, and Batches
 
@@ -76,6 +78,7 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0153 — Use user-selected Research Periods and derived Alpha warm-up](0153-use-user-selected-research-periods-and-derived-alpha-warm-up.md)
 - [ADR-0154 — Use a mounted current Dataset Head and temporary Data Generations](0154-use-a-mounted-current-dataset-head-and-temporary-data-generations.md)
 - [ADR-0155 — Refresh market data through a private operator overlap merge](0155-refresh-market-data-through-a-private-operator-overlap-merge.md)
+- [ADR-0240 — Run every Data Refresh through one durable Operator Worker](0240-run-data-refresh-through-one-durable-operator-worker.md)
 
 ## Agent access
 
