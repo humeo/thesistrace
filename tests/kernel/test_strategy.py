@@ -1,7 +1,6 @@
 import copy
 from decimal import Decimal
 
-import numpy as np
 import pytest
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 from series import aligned_market_data
@@ -11,8 +10,6 @@ from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_al
 from thesistrace.research_kernel.strategy import (
     StrategyCalculationError,
     advance_strategy_metric_state,
-    columnar_equal_weight_benchmark_return,
-    equal_weight_benchmark_return,
     legal_order_quantity,
     market_rejection_reason,
     maximum_drawdown,
@@ -21,7 +18,6 @@ from thesistrace.research_kernel.strategy import (
     strategy_metrics_from_state,
     transaction_cost,
 )
-from thesistrace.research_series import ExecutionPrice, InstrumentProfile
 
 
 def test_a_share_quantity_child_order_and_cost_rules() -> None:
@@ -143,11 +139,8 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
     assert set(metrics) >= {
         "gross_cumulative_return",
         "net_cumulative_return",
-        "benchmark_cumulative_return",
         "gross_cagr",
         "net_cagr",
-        "benchmark_cagr",
-        "annualized_excess_return",
         "maximum_drawdown",
         "annualized_volatility",
         "sharpe",
@@ -261,7 +254,7 @@ def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() ->
         )
 
 
-def test_suspended_holding_carries_and_benchmark_catches_up_on_reopen() -> None:
+def test_suspended_holding_carries_valuation() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         aligned_market_data(canonical),
@@ -293,33 +286,6 @@ def test_suspended_holding_carries_and_benchmark_catches_up_on_reopen() -> None:
         "instrument_id": held_candidate,
         "type": "valuation_carry",
     } in result["daily"][2]["valuation_events"]
-    entry_session = canonical["research_calendar"][report_start + 1]
-    reopen_session = canonical["research_calendar"][report_start + 3]
-    benchmark_data = aligned_market_data(canonical)
-    assert (
-        equal_weight_benchmark_return(
-            entry_session,
-            entry_session,
-            suspended_session,
-            {entry_session: (held_candidate,)},
-            benchmark_data.execution_prices,
-            benchmark_data.trading_states,
-            benchmark_data.instruments,
-        )
-        == 0
-    )
-    assert (
-        equal_weight_benchmark_return(
-            suspended_session,
-            suspended_session,
-            reopen_session,
-            {suspended_session: (held_candidate,)},
-            benchmark_data.execution_prices,
-            benchmark_data.trading_states,
-            benchmark_data.instruments,
-        )
-        != 0
-    )
 
 
 def test_suspended_new_target_creates_one_logical_rejection_without_children() -> None:
@@ -441,145 +407,6 @@ def test_terminal_delisting_writes_off_without_an_order_or_cost() -> None:
         not (order["session"] == delist_session and order["instrument_id"] == held_candidate)
         for order in result["orders"]
     )
-    assert result["daily"][2]["benchmark_return"] < 0
-
-
-def test_benchmark_rejects_unexplained_missing_exit() -> None:
-    with pytest.raises(StrategyCalculationError, match="unexplained Benchmark Open"):
-        equal_weight_benchmark_return(
-            "2026-01-01",
-            "2026-01-02",
-            "2026-01-03",
-            {"2026-01-01": ("equity:1.SH",)},
-            {("2026-01-02", "equity:1.SH"): ExecutionPrice("10", "10")},
-            {},
-            {"equity:1.SH": InstrumentProfile("main", "")},
-        )
-
-
-def test_columnar_benchmark_return_is_decimal_equal_to_row_reference() -> None:
-    sessions = ("2026-01-01", "2026-01-02", "2026-01-03")
-    instrument_ids = tuple(f"equity:{index}.SH" for index in range(6))
-    instruments = {
-        instrument_id: InstrumentProfile(
-            "main",
-            sessions[2] if index == 3 else "",
-        )
-        for index, instrument_id in enumerate(instrument_ids)
-    }
-    prices = {
-        (session, instrument_id): ExecutionPrice(
-            str(10 + index + session_index / 7),
-            str(10 + index + session_index / 7),
-        )
-        for session_index, session in enumerate(sessions)
-        for index, instrument_id in enumerate(instrument_ids)
-        if not (
-            (session == sessions[1] and index in {4, 5})
-            or (session == sessions[2] and index in {1, 2, 3})
-        )
-    }
-    states = {
-        (sessions[2], instrument_ids[1]): "data_unavailable",
-        (sessions[2], instrument_ids[2]): "full_session_suspension",
-        (sessions[1], instrument_ids[4]): "full_session_suspension",
-        (sessions[1], instrument_ids[5]): "data_unavailable",
-    }
-    matrix = np.asarray(
-        [
-            [
-                (
-                    Decimal(prices[(session, instrument_id)].adjusted_open)
-                    if (session, instrument_id) in prices
-                    else None
-                )
-                for session in sessions
-            ]
-            for instrument_id in instrument_ids
-        ],
-        dtype=object,
-    )
-    numeric_matrix = np.asarray(
-        [
-            [
-                (
-                    float(prices[(session, instrument_id)].adjusted_open)
-                    if (session, instrument_id) in prices
-                    else np.nan
-                )
-                for session in sessions
-            ]
-            for instrument_id in instrument_ids
-        ],
-        dtype=np.float64,
-    )
-    universes = {sessions[0]: instrument_ids}
-
-    expected = equal_weight_benchmark_return(
-        sessions[0],
-        sessions[1],
-        sessions[2],
-        universes,
-        prices,
-        states,
-        instruments,
-    )
-    actual = columnar_equal_weight_benchmark_return(
-        sessions[0],
-        sessions[1],
-        sessions[2],
-        universes,
-        states,
-        instruments,
-        {instrument_id: index for index, instrument_id in enumerate(instrument_ids)},
-        {session: index for index, session in enumerate(sessions)},
-        matrix,
-        numeric_matrix,
-    )
-
-    assert actual == expected
-
-    complete_prices = {
-        (session, instrument_id): ExecutionPrice(
-            str(10 + index + session_index / 7),
-            str(10 + index + session_index / 7),
-        )
-        for session_index, session in enumerate(sessions)
-        for index, instrument_id in enumerate(instrument_ids)
-    }
-    complete_matrix = np.asarray(
-        [
-            [
-                Decimal(complete_prices[(session, instrument_id)].adjusted_open)
-                for session in sessions
-            ]
-            for instrument_id in instrument_ids
-        ],
-        dtype=object,
-    )
-    complete_expected = equal_weight_benchmark_return(
-        sessions[0],
-        sessions[1],
-        sessions[2],
-        universes,
-        complete_prices,
-        {},
-        instruments,
-    )
-    complete_actual = columnar_equal_weight_benchmark_return(
-        sessions[0],
-        sessions[1],
-        sessions[2],
-        universes,
-        {},
-        instruments,
-        {instrument_id: index for index, instrument_id in enumerate(instrument_ids)},
-        {session: index for index, session in enumerate(sessions)},
-        complete_matrix,
-        np.asarray(complete_matrix, dtype=np.float64),
-    )
-
-    assert complete_actual == complete_expected
 
 
 def test_drawdown_is_a_non_negative_loss_with_recovery() -> None:

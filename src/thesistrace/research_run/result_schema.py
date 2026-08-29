@@ -131,10 +131,7 @@ class Turnover(DurableResultModel):
 
 
 class StrategyMetrics(DurableResultModel):
-    annualized_excess_return: OptionalNumber
     annualized_volatility: OptionalNumber
-    benchmark_cagr: OptionalNumber
-    benchmark_cumulative_return: OptionalNumber
     calmar: OptionalNumber
     cash_ratio: CashRatio
     gross_cagr: OptionalNumber
@@ -151,16 +148,11 @@ class StrategyMetrics(DurableResultModel):
     turnover: Turnover
 
 
-class StrategyBenchmark(DurableResultModel):
-    universe: StrictStr
-    methodology: Literal["selected_universe_equal_weight"]
-
-
 class StrategySummaryValue(DurableResultModel):
     alpha_checksum: StrictStr
+    entry_session: StrictStr
     initial_cash_cny: StrictStr
     source_checksum: StrictStr
-    benchmark: StrategyBenchmark
     metrics: StrategyMetrics
 
 
@@ -168,7 +160,6 @@ class StrategyDailyObservation(DurableResultModel):
     session: StrictStr
     gross_nav: StrictStr
     net_nav: StrictStr
-    benchmark_nav: StrictStr
     net_cash: StrictStr
     transaction_cost_cny: StrictStr
     holdings_count: StrictInt

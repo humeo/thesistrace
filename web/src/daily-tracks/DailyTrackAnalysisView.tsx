@@ -1,4 +1,6 @@
-import { StrategyPerformanceChart } from "../analysis/StrategyPerformanceChart";
+import { StrategyComparisonPanel } from "../analysis/StrategyComparisonPanel";
+import type { StrategyComparison } from "../analysis/strategyComparison";
+import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
 
 type CorrelationSummary = {
   mean: number | null;
@@ -28,7 +30,6 @@ export type DailyTrackStrategyObservation = {
   session: string;
   gross_nav: string;
   net_nav: string;
-  benchmark_nav: string;
   net_cash: string;
   transaction_cost_cny: string;
   holdings_count: number;
@@ -46,18 +47,16 @@ export type DailyTrackAnalysis = {
     summary: {
       metrics: {
         net_cumulative_return: number;
-        benchmark_cumulative_return: number;
-        annualized_excess_return: number;
+        benchmark_cumulative_return: number | null;
+        benchmark_cagr: number | null;
+        annualized_excess_return: number | null;
         maximum_drawdown: { value: number | null };
         sharpe: number | null;
         transaction_costs: { cumulative_amount: number };
       };
     };
-    benchmark: {
-      universe: string;
-      methodology: "selected_universe_equal_weight";
-    };
     observations: DailyTrackStrategyObservation[];
+    comparison: StrategyComparison;
   };
 };
 
@@ -81,12 +80,11 @@ export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnaly
       <section className="research-result-section">
         <div className="section-heading">
           <h2>Strategy Summary</h2>
-          <p>Selected universe {analysis.strategy.benchmark.universe}</p>
         </div>
         <div className="strategy-metrics">
           <Metric label="Net cumulative" value={formatPercent(metrics.net_cumulative_return)} />
           <Metric
-            label="Benchmark cumulative"
+            label={`${STRATEGY_BENCHMARK_DISPLAY_NAME} cumulative`}
             value={formatPercent(metrics.benchmark_cumulative_return)}
           />
           <Metric
@@ -103,7 +101,7 @@ export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnaly
             value={formatCny(metrics.transaction_costs.cumulative_amount)}
           />
         </div>
-        <StrategyPerformanceChart observations={analysis.strategy.observations} />
+        <StrategyComparisonPanel comparison={analysis.strategy.comparison} />
       </section>
     </div>
   );

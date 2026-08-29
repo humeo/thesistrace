@@ -12,7 +12,10 @@ from thesistrace.data.io_benchmark import (
     assert_benchmark_budgets,
     assert_long_research_qualification,
     derive_repository_budgets,
+    is_research_execution_child_started_event,
+    long_research_qualification_outcome,
     long_research_qualification_summary,
+    long_research_sample_qualification,
     summarize_samples,
 )
 from thesistrace.product_state import PRODUCT_STATE_COUNT_NAMES
@@ -65,6 +68,8 @@ def _long_research_evidence() -> dict[str, object]:
                     "strategy_daily_observations",
                     "strategy_daily_observations.part-000000",
                     "strategy_summary",
+                    "terminal_positions",
+                    "terminal_positions.part-000000",
                     "terminal_strategy_state",
                 ]
                 if strategy
@@ -105,7 +110,7 @@ def _long_research_evidence() -> dict[str, object]:
 
     evidence = {
         "format": "thesistrace-long-research-qualification",
-        "version": 1,
+        "version": 2,
         "image": {"revision": "sha256:" + "b" * 64},
         "capacity": {
             "cpu_count": 2,
@@ -170,8 +175,8 @@ def test_long_research_qualification_accepts_only_the_exact_release_workload() -
 
     qualified = assert_long_research_qualification(evidence)
 
-    assert qualified["factor_evaluation"]["cold_p95_duration_ms"] == 1_000
-    assert qualified["strategy_backtest"]["warm_p95_duration_ms"] == 1_000
+    assert qualified["factor_evaluation"]["cold_max_duration_ms"] == 1_000
+    assert qualified["strategy_backtest"]["warm_max_duration_ms"] == 1_000
     assert qualified["factor_evaluation"]["peak_rss_bytes"] == 512 * 1024 * 1024
     assert qualified["strategy_backtest"]["first_checkpoint_latency_ms"] == 500
     assert evidence["summary"] == qualified
@@ -191,25 +196,25 @@ def test_long_research_qualification_accepts_only_the_exact_release_workload() -
             lambda value: _qualification_sample(
                 value, "factor_evaluation", "cold", 4
             ).update(duration_ms=600_001),
-            "cold execution P95",
+            "factor_evaluation cold sample 4 exceeds ten minutes",
         ),
         (
             lambda value: _qualification_sample(
                 value, "strategy_backtest", "warm", 4
             ).update(duration_ms=300_001),
-            "warm execution P95",
+            "strategy_backtest warm sample 4 exceeds five minutes",
         ),
         (
             lambda value: _qualification_sample(
                 value, "factor_evaluation", "warm", 0
             ).update(peak_rss_bytes=1536 * 1024 * 1024 + 1),
-            "peak RSS",
+            "factor_evaluation warm sample 0 exceeds the 1.5 GiB execution budget",
         ),
         (
             lambda value: _qualification_sample(
                 value, "strategy_backtest", "cold", 0
             ).update(first_checkpoint_latency_ms=45_001),
-            "first Checkpoint",
+            "strategy_backtest cold sample 0 first Checkpoint exceeds 45 seconds",
         ),
         (
             lambda value: _qualification_cancellation(
@@ -231,12 +236,48 @@ def test_long_research_qualification_accepts_only_the_exact_release_workload() -
         ),
         (
             lambda value: _qualification_sample(
+                value, "strategy_backtest", "warm", 0
+            )["result_payload_names"].remove("terminal_positions.part-000000"),
+            "journey evidence is incomplete",
+        ),
+        (
+            lambda value: _qualification_sample(
+                value, "strategy_backtest", "warm", 0
+            )["result_payload_names"].append("terminal_positions.part-unexpected-extra"),
+            "journey evidence is incomplete",
+        ),
+        (
+            lambda value: _qualification_sample(
+                value, "strategy_backtest", "warm", 0
+            )["result_payload_names"].__setitem__(
+                2,
+                "strategy_daily_observations.part-000001",
+            ),
+            "journey evidence is incomplete",
+        ),
+        (
+            lambda value: _qualification_sample(
+                value, "strategy_backtest", "warm", 0
+            )["result_payload_names"].__setitem__(
+                5,
+                "terminal_positions.part-invalid",
+            ),
+            "journey evidence is incomplete",
+        ),
+        (
+            lambda value: _qualification_sample(
+                value, "strategy_backtest", "warm", 0
+            )["result_payload_names"].append("factor_summary"),
+            "payload evidence is invalid",
+        ),
+        (
+            lambda value: _qualification_sample(
                 value, "strategy_backtest", "cold", 0
             ).update(factor_summary_sha256="e" * 64),
             "Factor Summary equivalent",
         ),
         (
-            lambda value: value["summary"]["factor_evaluation"].update(cold_p95_duration_ms=0),
+            lambda value: value["summary"]["factor_evaluation"].update(cold_max_duration_ms=0),
             "summary",
         ),
     ],
@@ -274,6 +315,40 @@ def test_benchmark_summary_records_deterministic_nearest_rank_p50_and_p95() -> N
     assert summary["p50"]["duration_ms"] == 3.0
     assert summary["p95"]["duration_ms"] == 5.0
     assert summary["p95"]["rows_scanned"] == 5000
+
+
+def test_long_research_sample_qualification_is_reportable_before_fail_fast() -> None:
+    evidence = _long_research_evidence()
+    sample = _qualification_sample(evidence, "factor_evaluation", "warm", 0)
+
+    assert long_research_sample_qualification(
+        sample,
+        research_kind="factor_evaluation",
+        phase="warm",
+        index=0,
+    ) == {"status": "passed", "failure_reason": None}
+
+    sample["duration_ms"] = 300_001
+
+    assert long_research_sample_qualification(
+        sample,
+        research_kind="factor_evaluation",
+        phase="warm",
+        index=0,
+    ) == {
+        "status": "failed",
+        "failure_reason": "factor_evaluation warm sample 0 exceeds five minutes",
+    }
+
+
+def test_long_research_final_qualification_failure_is_reportable() -> None:
+    evidence = _long_research_evidence()
+    evidence["scientific_equivalence"]["factor_summary_sha256"] = "e" * 64
+
+    assert long_research_qualification_outcome(evidence) == {
+        "status": "failed",
+        "failure_reason": "scientific equivalence evidence is inconsistent",
+    }
 
 
 def test_repository_benchmark_contract_is_full_scale_and_budgeted() -> None:
@@ -346,6 +421,22 @@ def test_long_research_profile_is_the_fixed_top3000_release_fixture() -> None:
         "universe": "top3000",
         "repetitions_per_phase": 5,
     }
+
+
+def test_cancellation_wait_matches_the_public_worker_child_start_event() -> None:
+    event = json.loads(
+        '{"event":"research_execution_child_started","run_id":"run_expected"}'
+    )
+
+    assert is_research_execution_child_started_event(event, "run_expected")
+    assert not is_research_execution_child_started_event(event, "run_other")
+    assert not is_research_execution_child_started_event(
+        {
+            "event": "research_execution_child_started",
+            "resource_id": "run_expected",
+        },
+        "run_expected",
+    )
 
 
 def test_repository_budgets_gate_exact_io_and_material_time_and_memory_regressions() -> None:

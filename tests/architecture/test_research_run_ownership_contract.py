@@ -9,6 +9,7 @@ from typing import cast
 from uuid import UUID
 
 import pytest
+from cryptography.fernet import Fernet
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.research_run.models import (
@@ -23,11 +24,15 @@ from thesistrace.research_run.service import (
 
 RESEARCHER_ID = UUID("11111111-1111-4111-8111-111111111111")
 OTHER_RESEARCHER_ID = UUID("22222222-2222-4222-8222-222222222222")
+CURSOR_SECRET = b"research-run-cursor-secret-32byt"
 
 
 class _Rows:
-    def fetchone(self) -> None:
-        return None
+    def __init__(self, row: dict[str, object] | None = None) -> None:
+        self._row = row
+
+    def fetchone(self) -> dict[str, object] | None:
+        return self._row
 
     def fetchall(self) -> list[dict[str, object]]:
         return []
@@ -41,6 +46,8 @@ class _Transaction:
     def execute(self, statement: str, parameters: tuple[object, ...]) -> _Rows:
         self.statements.append(statement)
         self.parameters = parameters
+        if "research_runs.cursor_secrets" in statement:
+            return _Rows({"secret": CURSOR_SECRET.hex()})
         return _Rows()
 
 
@@ -72,7 +79,13 @@ def _cursor(
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
-    return urlsafe_b64encode(payload).decode().rstrip("=")
+    return Fernet(urlsafe_b64encode(CURSOR_SECRET)).encrypt(payload).decode("ascii")
+
+
+def _tampered_cursor() -> str:
+    cursor = _cursor()
+    replacement = "A" if cursor[24] != "A" else "B"
+    return f"{cursor[:24]}{replacement}{cursor[25:]}"
 
 
 def test_research_run_browser_service_surface_requires_explicit_researcher() -> None:
@@ -96,20 +109,27 @@ def test_research_run_browser_service_surface_requires_explicit_researcher() -> 
 
 
 @pytest.mark.parametrize(
-    "cursor,folder_id,research_kind",
+    "cursor_case,folder_id,research_kind",
     [
-        ("not-a-cursor", "folder_default", "factor_evaluation"),
-        (f"{_cursor()}!", "folder_default", "factor_evaluation"),
-        (_cursor(researcher_id=OTHER_RESEARCHER_ID), "folder_default", "factor_evaluation"),
-        (_cursor(folder_id="folder_other"), "folder_default", "factor_evaluation"),
-        (_cursor(research_kind="strategy_backtest"), "folder_default", "factor_evaluation"),
+        ("malformed", "folder_default", "factor_evaluation"),
+        ("tampered", "folder_default", "factor_evaluation"),
+        ("other_researcher", "folder_default", "factor_evaluation"),
+        ("other_folder", "folder_default", "factor_evaluation"),
+        ("other_kind", "folder_default", "factor_evaluation"),
     ],
 )
-def test_list_cursor_rejects_malformed_or_context_mismatched_values_before_query(
-    cursor: str,
+def test_list_cursor_rejects_malformed_or_context_mismatched_values_before_resource_query(
+    cursor_case: str,
     folder_id: str,
     research_kind: str,
 ) -> None:
+    cursor = {
+        "malformed": "not-a-cursor",
+        "tampered": _tampered_cursor(),
+        "other_researcher": _cursor(researcher_id=OTHER_RESEARCHER_ID),
+        "other_folder": _cursor(folder_id="folder_other"),
+        "other_kind": _cursor(research_kind="strategy_backtest"),
+    }[cursor_case]
     database = _Database()
     service = ResearchRunService(cast(PostgresDatabase, database))
 
@@ -122,7 +142,9 @@ def test_list_cursor_rejects_malformed_or_context_mismatched_values_before_query
             limit=20,
         )
 
-    assert database.open_count == 0
+    assert database.open_count == 1
+    assert len(database.transaction_value.statements) == 1
+    assert "research_runs.cursor_secrets" in database.transaction_value.statements[0]
 
 
 def test_list_cursor_allows_limit_change_and_scopes_the_query_to_researcher() -> None:

@@ -2,16 +2,21 @@ import copy
 
 import pytest
 
-from thesistrace.publication import JsonPayload, ParquetRowsPayload, VerifiedBundle, VerifiedPayload
+from thesistrace.publication import (
+    JsonPayload,
+    ParquetRowsPayload,
+    VerifiedBundle,
+    VerifiedPayload,
+)
 from thesistrace.publication.serialization import canonical_json_bytes, parquet_bytes
 from thesistrace.research_run.result import (
     LAST_DAILY_OBSERVATION_KEYS,
     METRIC_STATE_KEYS,
     RESULT_DAILY_PARTITION_PREFIX,
-    STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
     STRATEGY_METRIC_KEYS,
     ResearchResultError,
     enforce_result_bundle_budget,
+    plan_bounded_result_partition_names,
     read_result_bundle,
     result_bundle_byte_budget,
     result_publication_payloads,
@@ -59,29 +64,77 @@ def test_four_value_result_codec_is_deterministic_and_reopens_parquet_rows() -> 
     second_bytes = parquet_bytes(second_daily.rows, second_daily.contract)
     assert first_bytes == second_bytes
 
-    bundle = VerifiedBundle(
-        kind="research.result",
-        manifest_sha256="0" * 64,
-        provenance={"run_id": "run-1"},
-        payloads={
-            "factor_summary": _json_payload(result["factor_summary"]),
-            "strategy_summary": _json_payload(result["strategy_summary"]),
-            "strategy_daily_observations": _json_payload(
-                first["strategy_daily_observations"].value
-            ),
-            part_name: VerifiedPayload(
-                media_type="application/vnd.apache.parquet",
-                content=first_bytes,
-                serialization={
-                    "format": "canonical-parquet",
-                    "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
-                },
-            ),
-            "terminal_strategy_state": _json_payload(result["terminal_strategy_state"]),
-        },
-    )
+    bundle = _verified_bundle(first)
 
     assert read_result_bundle(bundle, research_kind="strategy_backtest") == result
+
+
+def test_terminal_state_round_trip_preserves_absent_short_period_accumulators() -> None:
+    result = _legal_result()
+    metric_state = result["terminal_strategy_state"]["metric_state"]
+    for name in (
+        "return_sum_numerator",
+        "return_sum_denominator",
+        "return_square_sum_numerator",
+        "return_square_sum_denominator",
+        "turnover_sum_numerator",
+        "turnover_sum_denominator",
+    ):
+        metric_state.pop(name)
+
+    payloads = result_publication_payloads(result, research_kind="strategy_backtest")
+
+    assert read_result_bundle(
+        _verified_bundle(payloads), research_kind="strategy_backtest"
+    ) == result
+
+
+def test_bounded_partition_planner_selects_only_page_and_lookahead_rows() -> None:
+    observation_partitions = [
+        {
+            "name": "observations-0",
+            "row_count": 504,
+            "first": "000000",
+            "last": "000503",
+        },
+        {
+            "name": "observations-1",
+            "row_count": 1,
+            "first": "000504",
+            "last": "000504",
+        },
+    ]
+    position_partitions = [
+        {
+            "name": f"positions-{index}",
+            "row_count": 50 if index < 2 else 1,
+            "first": f"{index * 50:06d}",
+            "last": f"{min(index * 50 + 49, 100):06d}",
+        }
+        for index in range(3)
+    ]
+
+    assert plan_bounded_result_partition_names(
+        observation_partitions,
+        after=None,
+        limit=50,
+        first_key="first",
+        last_key="last",
+    ) == ("observations-0",)
+    assert plan_bounded_result_partition_names(
+        position_partitions,
+        after=None,
+        limit=50,
+        first_key="first",
+        last_key="last",
+    ) == ("positions-0", "positions-1")
+    assert plan_bounded_result_partition_names(
+        position_partitions,
+        after="000049",
+        limit=50,
+        first_key="first",
+        last_key="last",
+    ) == ("positions-1", "positions-2")
 
 
 def test_factor_evaluation_result_codec_requires_exactly_factor_summary() -> None:
@@ -151,7 +204,7 @@ def test_four_value_result_codec_rejects_nested_transient_values(
     [
         (("strategy_summary", "alpha_checksum"), {"fills": []}),
         (
-            ("strategy_summary", "metrics", "annualized_excess_return"),
+            ("strategy_summary", "metrics", "net_cagr"),
             [{"orders": []}],
         ),
         (("strategy_daily_observations", 0, "gross_nav"), {"diagnostics": []}),
@@ -298,7 +351,6 @@ def _legal_result() -> dict[str, object]:
     last_daily = {name: 0 for name in LAST_DAILY_OBSERVATION_KEYS}
     last_daily.update(
         {
-            "benchmark_nav": "1",
             "cumulative_transaction_cost": "0",
             "cycle_type": "terminal_valuation",
             "execution_rounding_residual": "0",
@@ -316,10 +368,11 @@ def _legal_result() -> dict[str, object]:
     metric_state = {name: 0 for name in METRIC_STATE_KEYS}
     metric_state.update(
         {
-            "contract": "strategy-metric-state-v1",
+            "contract": "strategy-metric-state-v2",
+            "entry_session": "2024-01-02",
+            "entry_session_ordinal": 1,
             "first_gross_nav": "1e+7",
             "first_net_nav": "1e+7",
-            "first_benchmark_nav": "1",
             "peak_net_nav": "1e+7",
             "peak_session": "2024-01-02",
             "worst_drawdown": "0",
@@ -331,7 +384,6 @@ def _legal_result() -> dict[str, object]:
             "cash_maximum_session": "2024-01-02",
             "last_gross_nav": "1e+7",
             "last_net_nav": "1e+7",
-            "last_benchmark_nav": "1",
             "last_session": "2024-01-02",
             "cumulative_cost": "0",
         }
@@ -340,20 +392,16 @@ def _legal_result() -> dict[str, object]:
         "factor_summary": {"horizons": horizons},
         "strategy_summary": {
             "alpha_checksum": "a" * 64,
+            "entry_session": "2024-01-02",
             "initial_cash_cny": "1e+7",
             "source_checksum": "c" * 64,
             "metrics": metrics,
-            "benchmark": {
-                "universe": "manual",
-                "methodology": "selected_universe_equal_weight",
-            },
         },
         "strategy_daily_observations": [
             {
                 "session": "2024-01-02",
                 "gross_nav": "1e+7",
                 "net_nav": "1e+7",
-                "benchmark_nav": "1",
                 "net_cash": "1e+7",
                 "transaction_cost_cny": "0",
                 "holdings_count": 0,
@@ -369,7 +417,6 @@ def _legal_result() -> dict[str, object]:
             "net_cash": "1e+7",
             "gross_nav": "1e+7",
             "net_nav": "1e+7",
-            "benchmark_nav": "1",
             "cumulative_transaction_cost": "0",
             "positions": [],
             "rebalance_phase": {

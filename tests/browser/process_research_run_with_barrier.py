@@ -38,6 +38,7 @@ def main() -> None:
                 settings.data_mount,
             ).current,
             track_references_result=runtime.daily_tracks.references_result_manifest,
+            annualized_excess_calculator=runtime.annualized_excess_calculator,
         )
         if not service.process_next():
             raise RuntimeError("Browser ResearchRun was not claimed")

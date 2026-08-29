@@ -6,7 +6,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock, Thread
 from time import monotonic
 
 POSTGRESQL_READY = "POSTGRESQL_READY"
@@ -18,6 +18,8 @@ RUSTFS_UNAVAILABLE = "RUSTFS_UNAVAILABLE"
 DATASET_STORE_READY = "DATASET_STORE_READY"
 DATASET_STORE_UNAVAILABLE = "DATASET_STORE_UNAVAILABLE"
 READINESS_DEADLINE_SECONDS = 2.0
+_MAX_COMPLETION_RESERVE_SECONDS = 0.1
+_MIN_PROBE_BUDGET_FRACTION = 0.75
 
 _BASE_DEPENDENCIES = {
     "postgresql": (POSTGRESQL_READY, POSTGRESQL_UNAVAILABLE),
@@ -59,13 +61,37 @@ class CoreReadiness:
     def snapshot(self) -> dict[str, object]:
         if not self._probe_lock.acquire(blocking=False):
             return _unavailable_snapshot(self._dependencies())
-        try:
-            return self._snapshot()
-        finally:
-            self._probe_lock.release()
+        completed = Event()
+        result: list[dict[str, object]] = []
+        probe_budget_seconds = max(
+            self.deadline_seconds * _MIN_PROBE_BUDGET_FRACTION,
+            self.deadline_seconds - _MAX_COMPLETION_RESERVE_SECONDS,
+        )
 
-    def _snapshot(self) -> dict[str, object]:
-        deadline = monotonic() + self.deadline_seconds
+        def probe() -> None:
+            try:
+                result.append(self._snapshot(probe_budget_seconds))
+            except Exception:
+                result.append(_unavailable_snapshot(self._dependencies()))
+            finally:
+                self._probe_lock.release()
+                completed.set()
+
+        try:
+            Thread(
+                target=probe,
+                name="thesistrace-readiness",
+                daemon=True,
+            ).start()
+        except Exception:
+            self._probe_lock.release()
+            return _unavailable_snapshot(self._dependencies())
+        if not completed.wait(timeout=self.deadline_seconds):
+            return _unavailable_snapshot(self._dependencies())
+        return result[0] if result else _unavailable_snapshot(self._dependencies())
+
+    def _snapshot(self, deadline_seconds: float) -> dict[str, object]:
+        deadline = monotonic() + deadline_seconds
         dependencies_contract = self._dependencies()
         environment = {
             **os.environ,

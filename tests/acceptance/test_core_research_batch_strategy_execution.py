@@ -25,6 +25,7 @@ from test_core_research_batch_factor_recovery import (
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
+from thesistrace.benchmark import BenchmarkLevel, BenchmarkSnapshotStore
 from thesistrace.data import DatasetLifecycle
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.publication import PublishedRef
@@ -484,7 +485,19 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
     events: list[dict[str, object]] = []
     with TestClient(create_app(settings)) as client:
         generation_id = _publish_current_data(settings)
-        command = _strategy_command("strategy-sweep-equivalence")
+        BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+            (
+                BenchmarkLevel("2010-01-04", "3500"),
+                BenchmarkLevel("2026-08-03", "4000"),
+                BenchmarkLevel("2026-08-04", "4040"),
+                BenchmarkLevel("2026-08-05", "4080"),
+            ),
+            published_at=datetime(2026, 8, 5, 18, tzinfo=UTC),
+        )
+        command = {
+            **_strategy_command("strategy-sweep-equivalence"),
+            "end_date": "2026-08-05",
+        }
         batch = client.post("/api/research-batches", json=command).json()
         child_ids = [str(item["research_run_id"]) for item in batch["items"]]
         assert client.delete(f"/api/research-runs/{child_ids[0]}").status_code == 409
@@ -519,6 +532,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                     f"ordinary-strategy-{ordinal}",
                     holdings_count=int(item["holdings_count"]),
                     rebalance_every_sessions=int(item["rebalance_every_sessions"]),
+                    end_date="2026-08-05",
                 ),
             ).json()
             for ordinal, item in enumerate(command["strategies"], start=1)
@@ -554,6 +568,8 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                 batch_stored["result_provenance"]["semantic_versions"]
                 == (ordinary_stored["result_provenance"]["semantic_versions"])
             )
+            assert batch_stored["key_metrics"] == ordinary_stored["key_metrics"]
+            assert batch_stored["key_metrics"]["annualized_excess_return"] is not None
 
         ordinary_in_batch_folder = client.post(
             "/api/research-runs",
@@ -1648,7 +1664,7 @@ def _stored_run(settings: CoreSettings, run_id: str) -> dict[str, object]:
         with database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT result_manifest_sha256, result_provenance
+                SELECT result_manifest_sha256, result_provenance, key_metrics
                 FROM research_runs.runs
                 WHERE id = %s
                 """,

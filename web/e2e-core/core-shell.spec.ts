@@ -106,6 +106,9 @@ test("date inputs retain a browser-populated value when focus leaves the field",
         market_coverage: { start: "2010-01-04", end: "2026-08-13" },
         financial_coverage: null,
         industry_coverage: null,
+        benchmark_coverage: null,
+        benchmark_snapshot_sha256: null,
+        benchmark_last_published_at: null,
         data_through_session: "2026-08-13",
         last_market_refresh_at: null,
         last_financial_refresh_at: null,
@@ -113,6 +116,7 @@ test("date inputs retain a browser-populated value when focus leaves the field",
         industry_refresh_status: null,
         industry_refresh_failure_code: null,
         market_research_readiness: true,
+        benchmark_research_readiness: false,
         financial_research_readiness: "not_ready",
         industry_research_readiness: false,
       } });
@@ -447,9 +451,13 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({
       timeout: 90_000,
     });
-    const performanceChart = page.getByLabel("Strategy performance chart");
+    const comparisonChartLabel = "Net Strategy, 沪深300, and Net Excess performance chart";
+    const performanceChart = page.getByLabel(comparisonChartLabel, { exact: true });
     await expect(performanceChart).toBeVisible();
     await expect(performanceChart.locator("canvas").first()).toBeVisible();
+    await expect(performanceChart.getByText("Net Strategy", { exact: true })).toBeVisible();
+    await expect(performanceChart.getByText("沪深300", { exact: true })).toBeVisible();
+    await expect(performanceChart.getByText("Net Excess", { exact: true })).toBeVisible();
     await expect(
       performanceChart.getByRole("link", { name: "TradingView Lightweight Charts™" }),
     ).toHaveAttribute("href", "https://www.tradingview.com/");
@@ -466,7 +474,47 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
       canvasBounds.x + (canvasBounds.width * 0.6),
       canvasBounds.y + (canvasBounds.height * 0.5),
     );
-    await expect(performanceChart.locator(".strategy-chart-readout")).toContainText("Strategy");
+    const performanceReadout = performanceChart.locator(".strategy-chart-readout");
+    await expect(performanceReadout).toContainText("Net Strategy");
+    await expect(performanceReadout).toContainText("沪深300");
+    await expect(performanceReadout).toContainText("Net Excess");
+
+    const runDetailPath = `**/api/research-runs/${runId}`;
+    await page.route(runDetailPath, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json() as Record<string, unknown> & {
+        result: Record<string, unknown> & {
+          strategy: Record<string, unknown>;
+        };
+      };
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          result: {
+            ...body.result,
+            strategy: {
+              ...body.result.strategy,
+              comparison: {
+                status: "unavailable",
+                reason: "benchmark_snapshot_unavailable",
+              },
+            },
+          },
+        },
+      });
+    });
+    await page.reload();
+    const unavailableRunComparison = page.getByLabel("沪深300 Strategy Comparison", {
+      exact: true,
+    });
+    await expect(unavailableRunComparison).toHaveAttribute("role", "status");
+    await expect(unavailableRunComparison).toContainText("沪深300 comparison unavailable");
+    await expect(unavailableRunComparison.locator("figure")).toHaveCount(0);
+    await expect(page.getByLabel(comparisonChartLabel, { exact: true })).toHaveCount(0);
+    await page.unroute(runDetailPath);
+    await page.reload();
+    await expect(page.getByLabel(comparisonChartLabel, { exact: true })).toBeVisible();
     const terminalProgress = page.locator("[aria-label='ResearchRun progress']");
     await expect(terminalProgress.getByText("Warm-up", { exact: true })).toHaveCount(0);
     await expect(terminalProgress.getByText("Committed chunks", { exact: true })).toHaveCount(0);
@@ -509,6 +557,44 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     await expect(page.locator(".research-run-facts").first()).toContainText(
       "Advance phase up_to_date",
     );
+    const dailyTrackChart = page.getByLabel(comparisonChartLabel, { exact: true });
+    await expect(dailyTrackChart).toBeVisible();
+    await expect(dailyTrackChart.locator("canvas").first()).toBeVisible();
+    await expect(dailyTrackChart.getByText("Net Strategy", { exact: true })).toBeVisible();
+    await expect(dailyTrackChart.getByText("沪深300", { exact: true })).toBeVisible();
+    await expect(dailyTrackChart.getByText("Net Excess", { exact: true })).toBeVisible();
+
+    const trackDetailPath = `**/api/daily-tracks/${trackId}`;
+    await page.route(trackDetailPath, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json() as Record<string, unknown> & {
+        strategy: Record<string, unknown>;
+      };
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          strategy: {
+            ...body.strategy,
+            comparison: {
+              status: "unavailable",
+              reason: "benchmark_snapshot_unavailable",
+            },
+          },
+        },
+      });
+    });
+    await page.reload();
+    const unavailableTrackComparison = page.getByLabel("沪深300 Strategy Comparison", {
+      exact: true,
+    });
+    await expect(unavailableTrackComparison).toHaveAttribute("role", "status");
+    await expect(unavailableTrackComparison).toContainText("沪深300 comparison unavailable");
+    await expect(unavailableTrackComparison.locator("figure")).toHaveCount(0);
+    await expect(page.getByLabel(comparisonChartLabel, { exact: true })).toHaveCount(0);
+    await page.unroute(trackDetailPath);
+    await page.reload();
+    await expect(page.getByLabel(comparisonChartLabel, { exact: true })).toBeVisible();
 
     publishFinancialTrackHead("lagged");
     await expect.poll(async () => (

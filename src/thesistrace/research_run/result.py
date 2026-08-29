@@ -4,6 +4,7 @@ import copy
 import json
 from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from decimal import Decimal
 
 import pyarrow as pa
@@ -14,6 +15,8 @@ from pydantic import ValidationError
 from thesistrace.publication import (
     JsonPayload,
     ParquetRowsPayload,
+    Publication,
+    PublishedRef,
     StagedPayload,
     VerifiedBundle,
 )
@@ -49,10 +52,18 @@ class ResearchResultError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class SemanticResultSectionRead:
+    value: object
+    next_after: str | None = None
+
+
 RESULT_BUDGET_SESSION_BLOCK = 504
 RESULT_BUDGET_BYTE_BLOCK = 1_048_576
 RESULT_DAILY_PARTITION_SESSION_COUNT = 504
 RESULT_DAILY_PARTITION_PREFIX = "strategy_daily_observations.part-"
+RESULT_TERMINAL_POSITION_PARTITION_COUNT = 50
+RESULT_TERMINAL_POSITION_PARTITION_PREFIX = "terminal_positions.part-"
 FACTOR_RESULT_VALUE_NAMES = frozenset({"factor_summary"})
 STRATEGY_RESULT_VALUE_NAMES = frozenset(
     {
@@ -62,15 +73,23 @@ STRATEGY_RESULT_VALUE_NAMES = frozenset(
         "terminal_strategy_state",
     }
 )
+STRATEGY_RESULT_BASE_PAYLOAD_NAMES = frozenset(
+    {
+        "factor_summary",
+        "strategy_summary",
+        "strategy_daily_observations",
+        "terminal_strategy_state",
+        "terminal_positions",
+    }
+)
 STRATEGY_DAILY_OBSERVATIONS_CONTRACT = ParquetWriterContract(
     name="research-result-strategy-daily-observations",
-    version=1,
+    version=2,
     schema=pa.schema(
         [
             pa.field("session", pa.string(), nullable=False),
             pa.field("gross_nav", pa.string(), nullable=False),
             pa.field("net_nav", pa.string(), nullable=False),
-            pa.field("benchmark_nav", pa.string(), nullable=False),
             pa.field("net_cash", pa.string(), nullable=False),
             pa.field("transaction_cost_cny", pa.string(), nullable=False),
             pa.field("holdings_count", pa.int64(), nullable=False),
@@ -82,8 +101,33 @@ STRATEGY_DAILY_OBSERVATIONS_CONTRACT = ParquetWriterContract(
     ),
     sort_keys=("session",),
 )
+TERMINAL_POSITIONS_CONTRACT = ParquetWriterContract(
+    name="research-result-terminal-positions",
+    version=1,
+    schema=pa.schema(
+        [
+            pa.field("instrument_id", pa.string(), nullable=False),
+            pa.field("execution_shares", pa.int64(), nullable=False),
+            pa.field("adjusted_units", pa.string(), nullable=False),
+            pa.field("last_adjusted_price", pa.string(), nullable=False),
+        ]
+    ),
+    sort_keys=("instrument_id",),
+)
 DAILY_OBSERVATION_KEYS = frozenset(
     field.name for field in STRATEGY_DAILY_OBSERVATIONS_CONTRACT.schema
+)
+PUBLIC_TERMINAL_STATE_KEYS = frozenset(
+    {
+        "session",
+        "gross_cash",
+        "net_cash",
+        "gross_nav",
+        "net_nav",
+        "cumulative_transaction_cost",
+        "rebalance_phase",
+        "pending_signal",
+    }
 )
 
 
@@ -127,10 +171,13 @@ def result_publication_payloads(
         or any(not isinstance(row, Mapping) for row in observations)
     ):
         raise ResearchResultError("Strategy Daily Observations are invalid")
+    terminal_state, positions = _split_terminal_strategy_state(
+        result["terminal_strategy_state"]
+    )
     payloads: dict[str, JsonPayload | ParquetRowsPayload] = {
         "factor_summary": JsonPayload(copy.deepcopy(result["factor_summary"])),
         "strategy_summary": JsonPayload(copy.deepcopy(result["strategy_summary"])),
-        "terminal_strategy_state": JsonPayload(copy.deepcopy(result["terminal_strategy_state"])),
+        "terminal_strategy_state": JsonPayload(terminal_state),
     }
     partitions: list[dict[str, object]] = []
     for partition_index, start in enumerate(
@@ -159,6 +206,7 @@ def result_publication_payloads(
             "partitions": partitions,
         }
     )
+    payloads.update(_terminal_position_payloads(positions))
     return payloads
 
 
@@ -167,7 +215,7 @@ def result_publication_payloads_from_staged(
     partitions: Sequence[tuple[StagedPayload, int, str, str]],
     *,
     research_kind: str,
-) -> dict[str, JsonPayload | StagedPayload]:
+) -> dict[str, JsonPayload | ParquetRowsPayload | StagedPayload]:
     if research_kind == "factor_evaluation":
         if set(final_values) != FACTOR_RESULT_VALUE_NAMES or partitions:
             raise ResearchResultError("Factor Evaluation Result values are invalid")
@@ -190,12 +238,13 @@ def result_publication_payloads_from_staged(
         raise ResearchResultError("Final Research values are invalid") from error
     if not partitions:
         raise ResearchResultError("Result requires staged Strategy observations")
-    payloads: dict[str, JsonPayload | StagedPayload] = {
+    terminal_state, positions = _split_terminal_strategy_state(
+        final_values["terminal_strategy_state"]
+    )
+    payloads: dict[str, JsonPayload | ParquetRowsPayload | StagedPayload] = {
         "factor_summary": JsonPayload(copy.deepcopy(final_values["factor_summary"])),
         "strategy_summary": JsonPayload(copy.deepcopy(final_values["strategy_summary"])),
-        "terminal_strategy_state": JsonPayload(
-            copy.deepcopy(final_values["terminal_strategy_state"])
-        ),
+        "terminal_strategy_state": JsonPayload(terminal_state),
     }
     descriptors: list[dict[str, object]] = []
     prior_session: str | None = None
@@ -233,6 +282,7 @@ def result_publication_payloads_from_staged(
             "partitions": descriptors,
         }
     )
+    payloads.update(_terminal_position_payloads(positions))
     return payloads
 
 
@@ -257,10 +307,183 @@ def read_result_bundle(
         "factor_summary": _read_json_value(bundle, "factor_summary"),
         "strategy_summary": _read_json_value(bundle, "strategy_summary"),
         "strategy_daily_observations": _read_daily_observations(bundle),
-        "terminal_strategy_state": _read_json_value(bundle, "terminal_strategy_state"),
+        "terminal_strategy_state": {
+            **_read_terminal_strategy_state(bundle),
+            "positions": _read_terminal_positions(bundle),
+        },
     }
+    _require_exact_strategy_payload_names(bundle)
     _validate_result_values(result, research_kind=research_kind)
     return result
+
+
+def read_semantic_result_section(
+    publication: Publication,
+    published_ref: PublishedRef,
+    *,
+    research_kind: str,
+    section: str,
+    after: str | None = None,
+    limit: int = 20,
+) -> SemanticResultSectionRead:
+    if section == "provenance":
+        bundle = publication.read_selected(published_ref, frozenset())
+        _require_result_bundle_identity(bundle)
+        return SemanticResultSectionRead(value=bundle.provenance)
+    if section == "factor":
+        bundle = publication.read_selected(published_ref, frozenset({"factor_summary"}))
+        _require_result_bundle_identity(bundle)
+        value = _read_json_value(bundle, "factor_summary")
+        try:
+            validated = FactorSummaryValue.model_validate(value)
+        except ValidationError as error:
+            raise ResearchResultError("Factor Result section is invalid") from error
+        return SemanticResultSectionRead(value=validated.model_dump(mode="json", by_alias=True))
+    if research_kind != "strategy_backtest":
+        raise ResearchResultError("Strategy Result section requires Strategy Backtest")
+    if section == "strategy_summary":
+        bundle = publication.read_selected(published_ref, frozenset({"strategy_summary"}))
+        _require_result_bundle_identity(bundle)
+        value = _read_json_value(bundle, "strategy_summary")
+        try:
+            validated = StrategySummaryValue.model_validate(value)
+        except ValidationError as error:
+            raise ResearchResultError("Strategy Summary section is invalid") from error
+        return SemanticResultSectionRead(value=validated.model_dump(mode="json"))
+    if section == "terminal_strategy_state":
+        bundle = publication.read_selected(
+            published_ref,
+            frozenset({"terminal_strategy_state"}),
+        )
+        _require_result_bundle_identity(bundle)
+        terminal_state = _read_terminal_strategy_state(bundle)
+        return SemanticResultSectionRead(
+            value={
+                name: terminal_state[name]
+                for name in PUBLIC_TERMINAL_STATE_KEYS
+            }
+        )
+    if section == "strategy_observations":
+        descriptor_bundle = publication.read_selected(
+            published_ref,
+            frozenset({"strategy_daily_observations"}),
+        )
+        _require_result_bundle_identity(descriptor_bundle)
+        descriptor = _daily_observations_descriptor(descriptor_bundle)
+        names = plan_bounded_result_partition_names(
+            descriptor["partitions"],
+            after=after,
+            limit=limit,
+            first_key="first_session",
+            last_key="last_session",
+        )
+        page_bundle = publication.read_selected(
+            published_ref,
+            frozenset(names),
+        )
+        _require_result_bundle_identity(page_bundle)
+        rows = _read_selected_daily_observations(page_bundle, descriptor, names)
+        remaining = [row for row in rows if after is None or str(row["session"]) > after]
+        selected = remaining[:limit]
+        return SemanticResultSectionRead(
+            value=selected,
+            next_after=(
+                str(selected[-1]["session"]) if len(remaining) > limit else None
+            ),
+        )
+    if section == "terminal_positions":
+        descriptor_bundle = publication.read_selected(
+            published_ref,
+            frozenset({"terminal_positions"}),
+        )
+        _require_result_bundle_identity(descriptor_bundle)
+        descriptor = _terminal_positions_descriptor(descriptor_bundle)
+        names = plan_bounded_result_partition_names(
+            descriptor["partitions"],
+            after=after,
+            limit=limit,
+            first_key="first_instrument_id",
+            last_key="last_instrument_id",
+        )
+        if names:
+            page_bundle = publication.read_selected(published_ref, frozenset(names))
+            _require_result_bundle_identity(page_bundle)
+            rows = _read_selected_terminal_positions(page_bundle, descriptor, names)
+        else:
+            rows = []
+        remaining = [
+            row
+            for row in rows
+            if after is None or str(row["instrument_id"]) > after
+        ]
+        selected = remaining[:limit]
+        return SemanticResultSectionRead(
+            value=selected,
+            next_after=(
+                str(selected[-1]["instrument_id"]) if len(remaining) > limit else None
+            ),
+        )
+    raise ResearchResultError("ResearchRun Result section is unsupported")
+
+
+def _require_result_bundle_identity(bundle: VerifiedBundle) -> None:
+    if bundle.kind != "research.result":
+        raise ResearchResultError("Result Bundle kind is invalid")
+
+
+def _split_terminal_strategy_state(
+    value: object,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    if not isinstance(value, Mapping):
+        raise ResearchResultError("Terminal Strategy State is invalid")
+    try:
+        validated = TerminalStrategyStateValue.model_validate(value)
+    except ValidationError as error:
+        raise ResearchResultError("Terminal Strategy State is invalid") from error
+    terminal = copy.deepcopy(dict(value))
+    terminal.pop("positions")
+    positions = sorted(
+        (position.model_dump(mode="json") for position in validated.positions),
+        key=lambda item: str(item["instrument_id"]),
+    )
+    instrument_ids = [str(item["instrument_id"]) for item in positions]
+    if len(instrument_ids) != len(set(instrument_ids)):
+        raise ResearchResultError("Terminal Strategy positions contain duplicates")
+    return terminal, positions
+
+
+def _terminal_position_payloads(
+    positions: list[dict[str, object]],
+) -> dict[str, JsonPayload | ParquetRowsPayload]:
+    payloads: dict[str, JsonPayload | ParquetRowsPayload] = {}
+    partitions: list[dict[str, object]] = []
+    for partition_index, start in enumerate(
+        range(0, len(positions), RESULT_TERMINAL_POSITION_PARTITION_COUNT)
+    ):
+        rows = positions[start : start + RESULT_TERMINAL_POSITION_PARTITION_COUNT]
+        name = f"{RESULT_TERMINAL_POSITION_PARTITION_PREFIX}{partition_index:06d}"
+        payloads[name] = ParquetRowsPayload(
+            rows=tuple(rows),
+            contract=TERMINAL_POSITIONS_CONTRACT,
+        )
+        partitions.append(
+            {
+                "name": name,
+                "row_count": len(rows),
+                "first_instrument_id": str(rows[0]["instrument_id"]),
+                "last_instrument_id": str(rows[-1]["instrument_id"]),
+            }
+        )
+    payloads["terminal_positions"] = JsonPayload(
+        {
+            "format": "partitioned-parquet",
+            "version": 1,
+            "partition_position_count": RESULT_TERMINAL_POSITION_PARTITION_COUNT,
+            "writer_contract": TERMINAL_POSITIONS_CONTRACT.descriptor(),
+            "partitions": partitions,
+        }
+    )
+    return payloads
 
 
 def build_result_payload(
@@ -268,14 +491,13 @@ def build_result_payload(
     *,
     research_kind: str,
     rebalance_interval: int | None = None,
-    universe: str | None = None,
 ) -> dict[str, object]:
     """Project transient Kernel output into the bounded durable Result contract."""
     artifacts = output.artifacts_snapshot()
     factor = _mapping(artifacts, "factor_evaluation")
     if research_kind == "factor_evaluation":
         return {"factor_summary": _factor_summary(factor)}
-    if research_kind != "strategy_backtest" or rebalance_interval is None or universe is None:
+    if research_kind != "strategy_backtest" or rebalance_interval is None:
         raise ResearchResultError("Strategy Backtest Result inputs are incomplete")
     strategy = _mapping(artifacts, "strategy_backtest")
     daily = _rows(strategy, "daily")
@@ -283,7 +505,7 @@ def build_result_payload(
         raise ResearchResultError("Result requires a positive Research Period")
     return {
         "factor_summary": _factor_summary(factor),
-        "strategy_summary": _strategy_summary(strategy, universe=universe),
+        "strategy_summary": _strategy_summary(strategy),
         "strategy_daily_observations": _strategy_daily_observations(strategy),
         "terminal_strategy_state": _terminal_strategy_state(
             strategy,
@@ -337,8 +559,6 @@ def _factor_summary(factor: Mapping[str, object]) -> dict[str, object]:
 
 def _strategy_summary(
     strategy: Mapping[str, object],
-    *,
-    universe: str,
 ) -> dict[str, object]:
     metrics = strategy.get("metrics")
     if not isinstance(metrics, Mapping):
@@ -349,16 +569,18 @@ def _strategy_summary(
     _remove_nested(projected, "holdings_count", "daily")
     _remove_nested(projected, "maximum_single_name_weight", "daily")
     _remove_nested(projected, "cash_ratio", "daily")
+    daily = _rows(strategy, "daily")
+    entry_session = next(
+        (str(row["session"]) for row in daily if row.get("rebalance") is True),
+        str(daily[-1]["session"]),
+    )
     return {
         "alpha_checksum": str(strategy["alpha_checksum"]),
+        "entry_session": entry_session,
         "initial_cash_cny": str(strategy["initial_cash_cny"]),
         "source_checksum": canonical_checksum_chain(
             _strategy_daily_observations(strategy)
         ),
-        "benchmark": {
-            "universe": universe,
-            "methodology": "selected_universe_equal_weight",
-        },
         "metrics": projected,
     }
 
@@ -384,7 +606,6 @@ def _strategy_daily_observations(
                 "session": str(row["session"]),
                 "gross_nav": str(row["gross_nav"]),
                 "net_nav": str(row["net_nav"]),
-                "benchmark_nav": str(row["benchmark_nav"]),
                 "net_cash": str(row["net_cash"]),
                 "transaction_cost_cny": canonical_decimal(session_cost),
                 "holdings_count": int(row["holdings_count"]),
@@ -428,7 +649,6 @@ def _terminal_strategy_state(
         "net_cash": str(terminal["net_cash"]),
         "gross_nav": str(terminal["gross_nav"]),
         "net_nav": str(terminal["net_nav"]),
-        "benchmark_nav": str(terminal["benchmark_nav"]),
         "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
         "positions": [copy.deepcopy(dict(position)) for position in positions],
         "rebalance_phase": {
@@ -483,6 +703,12 @@ def _read_json_value(bundle: VerifiedBundle, name: str) -> object:
 
 
 def _read_daily_observations(bundle: VerifiedBundle) -> list[dict[str, object]]:
+    descriptor = _daily_observations_descriptor(bundle)
+    names = tuple(str(value["name"]) for value in descriptor["partitions"])
+    return _read_selected_daily_observations(bundle, descriptor, names)
+
+
+def _daily_observations_descriptor(bundle: VerifiedBundle) -> Mapping[str, object]:
     descriptor = _read_json_value(bundle, "strategy_daily_observations")
     if not isinstance(descriptor, Mapping) or set(descriptor) != {
         "format",
@@ -503,12 +729,6 @@ def _read_daily_observations(bundle: VerifiedBundle) -> list[dict[str, object]]:
     partitions = descriptor.get("partitions")
     if not isinstance(partitions, list) or not partitions:
         raise ResearchResultError("Strategy Daily Observations partitions are invalid")
-    expected_serialization = {
-        "format": "canonical-parquet",
-        "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
-    }
-    expected_payload_names = set(STRATEGY_RESULT_VALUE_NAMES)
-    rows: list[dict[str, object]] = []
     prior_session: str | None = None
     for index, value in enumerate(partitions):
         if not isinstance(value, Mapping) or set(value) != {
@@ -519,9 +739,40 @@ def _read_daily_observations(bundle: VerifiedBundle) -> list[dict[str, object]]:
         }:
             raise ResearchResultError("Strategy Daily Observations partition is invalid")
         expected_name = f"{RESULT_DAILY_PARTITION_PREFIX}{index:06d}"
-        if value.get("name") != expected_name:
-            raise ResearchResultError("Strategy Daily Observations partition order is invalid")
-        expected_payload_names.add(expected_name)
+        first = value.get("first_session")
+        last = value.get("last_session")
+        row_count = value.get("row_count")
+        if (
+            value.get("name") != expected_name
+            or not isinstance(first, str)
+            or not isinstance(last, str)
+            or not isinstance(row_count, int)
+            or isinstance(row_count, bool)
+            or row_count < 1
+            or row_count > RESULT_DAILY_PARTITION_SESSION_COUNT
+            or first > last
+            or (prior_session is not None and first <= prior_session)
+        ):
+            raise ResearchResultError("Strategy Daily Observations partition is invalid")
+        prior_session = last
+    return descriptor
+
+
+def _read_selected_daily_observations(
+    bundle: VerifiedBundle,
+    descriptor: Mapping[str, object],
+    names: Sequence[str],
+) -> list[dict[str, object]]:
+    expected_serialization = {
+        "format": "canonical-parquet",
+        "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
+    }
+    selected_names = set(names)
+    rows: list[dict[str, object]] = []
+    for value in descriptor["partitions"]:
+        expected_name = str(value["name"])
+        if expected_name not in selected_names:
+            continue
         payload = bundle.payloads.get(expected_name)
         if (
             payload is None
@@ -545,14 +796,162 @@ def _read_daily_observations(bundle: VerifiedBundle) -> list[dict[str, object]]:
             or value.get("first_session") != partition_rows[0]["session"]
             or value.get("last_session") != partition_rows[-1]["session"]
             or len(partition_rows) > RESULT_DAILY_PARTITION_SESSION_COUNT
-            or (prior_session is not None and str(partition_rows[0]["session"]) <= prior_session)
         ):
             raise ResearchResultError("Strategy Daily Observations partition is invalid")
-        prior_session = str(partition_rows[-1]["session"])
         rows.extend(partition_rows)
-    if set(bundle.payloads) != expected_payload_names:
-        raise ResearchResultError("Result Bundle contains an unexpected physical payload")
     return rows
+
+
+def _read_terminal_strategy_state(bundle: VerifiedBundle) -> dict[str, object]:
+    value = _read_json_value(bundle, "terminal_strategy_state")
+    if not isinstance(value, Mapping) or "positions" in value:
+        raise ResearchResultError("Terminal Strategy State payload is invalid")
+    try:
+        TerminalStrategyStateValue.model_validate({**value, "positions": []})
+    except ValidationError as error:
+        raise ResearchResultError("Terminal Strategy State payload is invalid") from error
+    return copy.deepcopy(dict(value))
+
+
+def _read_terminal_positions(bundle: VerifiedBundle) -> list[dict[str, object]]:
+    descriptor = _terminal_positions_descriptor(bundle)
+    names = tuple(str(value["name"]) for value in descriptor["partitions"])
+    return _read_selected_terminal_positions(bundle, descriptor, names)
+
+
+def _read_selected_terminal_positions(
+    bundle: VerifiedBundle,
+    descriptor: Mapping[str, object],
+    names: Sequence[str],
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    selected_names = set(names)
+    expected_serialization = {
+        "format": "canonical-parquet",
+        "writer_contract": TERMINAL_POSITIONS_CONTRACT.descriptor(),
+    }
+    for value in descriptor["partitions"]:
+        expected_name = str(value["name"])
+        if expected_name not in selected_names:
+            continue
+        payload = bundle.payloads.get(expected_name)
+        if (
+            payload is None
+            or payload.media_type != "application/vnd.apache.parquet"
+            or payload.serialization != expected_serialization
+        ):
+            raise ResearchResultError("Terminal Strategy positions have an invalid encoding")
+        try:
+            table = pq.read_table(pa.BufferReader(payload.content))
+            if table.schema != TERMINAL_POSITIONS_CONTRACT.schema:
+                raise ResearchResultError("Terminal Strategy positions schema is invalid")
+            partition_rows = canonicalize_parquet_rows(
+                table.to_pylist(),
+                TERMINAL_POSITIONS_CONTRACT,
+            )
+        except (ArrowException, ParquetContractError, TypeError, ValueError) as error:
+            raise ResearchResultError("Terminal Strategy positions are invalid") from error
+        if (
+            not partition_rows
+            or value.get("row_count") != len(partition_rows)
+            or value.get("first_instrument_id") != partition_rows[0]["instrument_id"]
+            or value.get("last_instrument_id") != partition_rows[-1]["instrument_id"]
+            or len(partition_rows) > RESULT_TERMINAL_POSITION_PARTITION_COUNT
+        ):
+            raise ResearchResultError("Terminal Strategy position partition is invalid")
+        rows.extend(partition_rows)
+    return rows
+
+
+def _terminal_positions_descriptor(bundle: VerifiedBundle) -> Mapping[str, object]:
+    descriptor = _read_json_value(bundle, "terminal_positions")
+    if not isinstance(descriptor, Mapping) or set(descriptor) != {
+        "format",
+        "version",
+        "partition_position_count",
+        "writer_contract",
+        "partitions",
+    }:
+        raise ResearchResultError("Terminal Strategy positions descriptor is invalid")
+    if descriptor != {
+        **descriptor,
+        "format": "partitioned-parquet",
+        "version": 1,
+        "partition_position_count": RESULT_TERMINAL_POSITION_PARTITION_COUNT,
+        "writer_contract": TERMINAL_POSITIONS_CONTRACT.descriptor(),
+    }:
+        raise ResearchResultError("Terminal Strategy positions descriptor is invalid")
+    partitions = descriptor.get("partitions")
+    if not isinstance(partitions, list):
+        raise ResearchResultError("Terminal Strategy position partitions are invalid")
+    prior_last: str | None = None
+    for index, value in enumerate(partitions):
+        if not isinstance(value, Mapping) or set(value) != {
+            "name",
+            "row_count",
+            "first_instrument_id",
+            "last_instrument_id",
+        }:
+            raise ResearchResultError("Terminal Strategy position partition is invalid")
+        expected_name = f"{RESULT_TERMINAL_POSITION_PARTITION_PREFIX}{index:06d}"
+        first = value.get("first_instrument_id")
+        last = value.get("last_instrument_id")
+        row_count = value.get("row_count")
+        if (
+            value.get("name") != expected_name
+            or not isinstance(first, str)
+            or not isinstance(last, str)
+            or not isinstance(row_count, int)
+            or isinstance(row_count, bool)
+            or row_count < 1
+            or row_count > RESULT_TERMINAL_POSITION_PARTITION_COUNT
+            or first > last
+            or (prior_last is not None and first <= prior_last)
+        ):
+            raise ResearchResultError("Terminal Strategy position partition is invalid")
+        prior_last = last
+    return descriptor
+
+
+def plan_bounded_result_partition_names(
+    partitions: object,
+    *,
+    after: str | None,
+    limit: int,
+    first_key: str,
+    last_key: str,
+) -> tuple[str, ...]:
+    if not isinstance(partitions, list):
+        raise ResearchResultError("Result collection partitions are invalid")
+    selected: list[str] = []
+    available_rows = 0
+    for value in partitions:
+        if not isinstance(value, Mapping):
+            raise ResearchResultError("Result collection partition is invalid")
+        if after is not None and str(value[last_key]) <= after:
+            continue
+        selected.append(str(value["name"]))
+        row_count = int(value["row_count"])
+        if after is None or str(value[first_key]) > after:
+            available_rows += row_count
+        if available_rows >= limit + 1:
+            break
+    return tuple(selected)
+
+
+def _require_exact_strategy_payload_names(bundle: VerifiedBundle) -> None:
+    observation_descriptor = _read_json_value(bundle, "strategy_daily_observations")
+    position_descriptor = _terminal_positions_descriptor(bundle)
+    if not isinstance(observation_descriptor, Mapping):
+        raise ResearchResultError("Strategy Daily Observations descriptor is invalid")
+    observation_partitions = observation_descriptor.get("partitions")
+    if not isinstance(observation_partitions, list):
+        raise ResearchResultError("Strategy Daily Observations partitions are invalid")
+    expected = set(STRATEGY_RESULT_BASE_PAYLOAD_NAMES)
+    expected.update(str(item["name"]) for item in observation_partitions)
+    expected.update(str(item["name"]) for item in position_descriptor["partitions"])
+    if set(bundle.payloads) != expected:
+        raise ResearchResultError("Result Bundle contains an unexpected physical payload")
 
 
 def _validate_result_values(result: Mapping[str, object], *, research_kind: str) -> None:

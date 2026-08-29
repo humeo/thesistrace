@@ -552,7 +552,6 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
         "session",
         "gross_nav",
         "net_nav",
-        "benchmark_nav",
         "net_cash",
         "transaction_cost_cny",
         "holdings_count",
@@ -567,7 +566,6 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
         "gross_cash",
         "net_cash",
         "cumulative_transaction_cost",
-        "benchmark_nav",
         "gross_nav",
         "net_nav",
     }

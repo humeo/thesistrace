@@ -21,8 +21,10 @@
     "test:caddy-image-smoke": "./scripts/test-caddy-production-image",
     "test:image-smoke": "./scripts/test-runtime image-smoke && pnpm --dir auth test:image-smoke && pnpm test:caddy-image-smoke",
     "test:integration": "./scripts/test-runtime integration && pnpm --dir auth test:integration",
+    "test:codex-mcp": "./scripts/test-runtime codex-mcp",
     "check": "pnpm test && pnpm test:integration && pnpm test:e2e",
-    "check:release": "pnpm check && pnpm test:image-smoke && pnpm test:benchmark",
+    "check:performance": "./scripts/test-runtime performance",
+    "check:release": "pnpm check && pnpm test:image-smoke",
     "check:live-tushare": "uv run python scripts/check_live_tushare.py"
   }
 }

@@ -26,6 +26,9 @@ const overview: DataOverview = {
     observation_through_session: "2026-08-07",
     classification_version: "SW2021",
   },
+  benchmark_coverage: { start: "2010-01-04", end: "2026-08-07" },
+  benchmark_snapshot_sha256: "a".repeat(64),
+  benchmark_last_published_at: "2026-08-07T05:00:00Z",
   data_through_session: "2026-08-07",
   last_market_refresh_at: null,
   last_financial_refresh_at: "2026-08-07T03:00:00Z",
@@ -33,6 +36,7 @@ const overview: DataOverview = {
   industry_refresh_status: "succeeded",
   industry_refresh_failure_code: null,
   market_research_readiness: true,
+  benchmark_research_readiness: true,
   financial_research_readiness: "ready",
   industry_research_readiness: true,
 };
@@ -84,6 +88,15 @@ describe("DataOverviewView", () => {
     expect(markup).toContain("Last market refresh");
     expect(markup).toContain("Market data");
     expect(markup).toContain("Market ready");
+    expect(markup).toContain("Strategy Benchmark");
+    expect(markup).toContain("CSI 300 ready");
+    expect(markup).toContain(
+      'aria-hidden="true" class="health-dot"></span> Strategy Benchmark',
+    );
+    expect(markup).toContain("Benchmark coverage start");
+    expect(markup).toContain("Snapshot SHA-256");
+    expect(markup).toContain("a".repeat(64));
+    expect(markup).toContain("2026-08-07T05:00:00Z");
     expect(markup).toContain("Financial coverage start");
     expect(markup).toContain("2010-01-04");
     expect(markup).toContain("Discovery baseline");
@@ -124,6 +137,9 @@ describe("DataOverviewView", () => {
         market_coverage: null,
         financial_coverage: null,
         industry_coverage: null,
+        benchmark_coverage: null,
+        benchmark_snapshot_sha256: null,
+        benchmark_last_published_at: null,
         data_through_session: null,
         last_market_refresh_at: null,
         last_financial_refresh_at: null,
@@ -131,6 +147,7 @@ describe("DataOverviewView", () => {
         industry_refresh_status: null,
         industry_refresh_failure_code: null,
         market_research_readiness: false,
+        benchmark_research_readiness: false,
         financial_research_readiness: "not_ready",
         industry_research_readiness: false,
       },
@@ -138,9 +155,13 @@ describe("DataOverviewView", () => {
     }));
 
     expect(markup).toContain("Market not ready");
+    expect(markup).toContain("CSI 300 not ready");
+    expect(markup).toContain(
+      'aria-hidden="true" class="health-dot health-dot-warning"></span> Strategy Benchmark',
+    );
     expect(markup).toContain("Finance not ready");
     expect(markup).toContain("Industry not ready");
-    expect(markup.match(/<dd>Not available<\/dd>/g)).toHaveLength(16);
+    expect(markup.match(/<dd>Not available<\/dd>/g)).toHaveLength(20);
     expect(markup).toContain("No fields are currently available for research.");
   });
 

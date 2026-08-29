@@ -162,21 +162,24 @@ mise exec -- pnpm dev:reset
 Reset accepts only the canonical `thesistrace-dev` project, deletes and
 recreates its PostgreSQL, RustFS, and Batch Attempt Control runtime volumes,
 including Core Product State and Auth state. It preserves the canonical-data
-volume and exact Dataset Head, runs both one-shot schema initializers, and waits
-for health. It does not contact Tushare, migrate old Product State, or publish
-Fixture data. The initialized runtime validates and immediately reuses the
-preserved mounted Canonical Data Store.
+volume and exact Dataset Head, and preserves the independent benchmark-data
+volume and its current Snapshot. It runs both one-shot Core and Auth schema
+initializers and waits for health. It does not contact Tushare, migrate old
+Product State, or publish Fixture data. The initialized runtime validates and
+immediately reuses the preserved mounted Canonical Data Store; Benchmark
+readiness is reported independently through Data Overview.
 
-Complete deletion of Product State and downloaded Canonical Data is a separate
-explicit operation:
+Complete deletion of Product State, downloaded Canonical Data, and the
+Benchmark Snapshot is a separate explicit operation:
 
 ```sh
 mise exec -- pnpm dev:erase
 ```
 
 `dev:erase` accepts only the canonical `thesistrace-dev` project, stops it, and
-removes all four Development volumes without restarting the runtime. Research
-cannot run again until Canonical Data is bootstrapped or restored.
+removes all five Development volumes without restarting the runtime. Research
+cannot run again until Canonical Data is bootstrapped or restored; the next
+Market Bootstrap recreates the Benchmark Snapshot before the first Head.
 
 ## Test gates
 
@@ -254,9 +257,22 @@ Before a release, run every local seam, including the final image qualification:
 mise exec -- pnpm check:release
 ```
 
-`pnpm check:release` runs `pnpm check` once, then `pnpm test:image-smoke`, then
-the dual-kind `pnpm test:benchmark` final-image qualification. It does not
-repeat the standard gate.
+`pnpm check:release` runs `pnpm check` once and then `pnpm test:image-smoke`. It
+does not repeat the standard gate or run the long performance qualification.
+
+Run the dual-kind long-Research performance qualification separately, only on
+a controlled and otherwise idle host:
+
+```sh
+mise exec -- pnpm check:performance
+```
+
+The command keeps one serial Research Worker and five fresh cold plus five fresh
+warm samples per Research Kind. It stores each completed sample and its verdict
+before enforcing duration, memory, and first-Checkpoint limits, so a sample that
+makes the maximum-of-five limit impossible stops the run immediately. Use this
+gate for performance-sensitive Kernel, Data, Worker, or final-image changes and
+for deliberate periodic qualification, not for ordinary merges.
 
 ## Evidence, cleanup, and interactive diagnosis
 

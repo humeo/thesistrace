@@ -26,8 +26,10 @@ from thesistrace.research_run.result import (
     LAST_DAILY_OBSERVATION_KEYS,
     METRIC_STATE_KEYS,
     RESULT_DAILY_PARTITION_PREFIX,
+    RESULT_TERMINAL_POSITION_PARTITION_PREFIX,
     STRATEGY_METRIC_KEYS,
     read_result_bundle,
+    read_semantic_result_section,
     result_bundle_byte_budget,
     result_publication_payloads,
 )
@@ -100,7 +102,7 @@ def test_prepare_is_canonical_idempotent_and_verified(core_settings: CoreSetting
         assert verified.payloads["rows"].media_type == "application/vnd.apache.parquet"
 
 
-def test_research_result_preparation_uses_four_values_and_partitioned_objects(
+def test_research_result_preparation_uses_bounded_collection_objects(
     core_settings: CoreSettings,
 ) -> None:
     result = _legal_result()
@@ -122,13 +124,14 @@ def test_research_result_preparation_uses_four_values_and_partitioned_objects(
 
         assert first.manifest_sha256 == second.manifest_sha256
         assert first.payload_sha256s == second.payload_sha256s
-        assert first.object_count == 5
+        assert first.object_count == 6
         assert set(first.payload_sha256s) == {
             "factor_summary",
             "strategy_summary",
             "strategy_daily_observations",
             f"{RESULT_DAILY_PARTITION_PREFIX}000000",
             "terminal_strategy_state",
+            "terminal_positions",
         }
         assert first.exact_bytes <= result_bundle_byte_budget(1)
         assert (
@@ -138,6 +141,156 @@ def test_research_result_preparation_uses_four_values_and_partitioned_objects(
             )
             == result
         )
+
+
+def test_semantic_result_sections_read_only_bounded_real_rustfs_objects(
+    core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
+) -> None:
+    result = _legal_result()
+    observation = result["strategy_daily_observations"][0]
+    result["strategy_daily_observations"] = [
+        {**observation, "session": f"{index:06d}"} for index in range(505)
+    ]
+    position = {
+        "instrument_id": "equity:000000.SZ",
+        "execution_shares": 100,
+        "adjusted_units": "100",
+        "last_adjusted_price": "10",
+    }
+    result["terminal_strategy_state"]["positions"] = [
+        {**position, "instrument_id": f"equity:{index:06d}.SZ"}
+        for index in range(101)
+    ]
+
+    with open_core_runtime(core_settings) as runtime:
+        prepared = runtime.publication.prepare(
+            kind="research.result",
+            payloads=result_publication_payloads(
+                result,
+                research_kind="strategy_backtest",
+            ),
+            provenance={"research_run_id": "run-selective-result"},
+        )
+        with runtime.database.transaction() as transaction:
+            published_ref = runtime.publication.record(transaction, prepared)
+
+        observed_digests: list[str] = []
+
+        def record_get_object(params: dict[str, object], **_kwargs: object) -> None:
+            observed_digests.append(str(params["Key"]).rsplit("/", 1)[-1])
+
+        event_name = "before-parameter-build.s3.GetObject"
+        rustfs_admin.meta.events.register(event_name, record_get_object)
+        publication = Publication(
+            runtime.database,
+            rustfs_admin,
+            bucket=core_settings.s3_bucket,
+        )
+        payload_digests = prepared.payload_sha256s
+        try:
+            factor = read_semantic_result_section(
+                publication,
+                published_ref,
+                research_kind="strategy_backtest",
+                section="factor",
+            )
+            assert factor.next_after is None
+            assert observed_digests == [payload_digests["factor_summary"]]
+
+            observed_digests.clear()
+            terminal = read_semantic_result_section(
+                publication,
+                published_ref,
+                research_kind="strategy_backtest",
+                section="terminal_strategy_state",
+            )
+            assert set(terminal.value) == {
+                "session",
+                "gross_cash",
+                "net_cash",
+                "gross_nav",
+                "net_nav",
+                "cumulative_transaction_cost",
+                "rebalance_phase",
+                "pending_signal",
+            }
+            assert observed_digests == [payload_digests["terminal_strategy_state"]]
+
+            observed_digests.clear()
+            observations = read_semantic_result_section(
+                publication,
+                published_ref,
+                research_kind="strategy_backtest",
+                section="strategy_observations",
+                limit=50,
+            )
+            assert len(observations.value) == 50
+            assert observations.next_after == "000049"
+            assert observed_digests == [
+                payload_digests["strategy_daily_observations"],
+                payload_digests[f"{RESULT_DAILY_PARTITION_PREFIX}000000"],
+            ]
+
+            observed_digests.clear()
+            positions = read_semantic_result_section(
+                publication,
+                published_ref,
+                research_kind="strategy_backtest",
+                section="terminal_positions",
+                limit=50,
+            )
+            assert len(positions.value) == 50
+            assert positions.next_after == "equity:000049.SZ"
+            assert observed_digests == [
+                payload_digests["terminal_positions"],
+                payload_digests[f"{RESULT_TERMINAL_POSITION_PARTITION_PREFIX}000000"],
+                payload_digests[f"{RESULT_TERMINAL_POSITION_PARTITION_PREFIX}000001"],
+            ]
+
+            observed_digests.clear()
+            provenance = read_semantic_result_section(
+                publication,
+                published_ref,
+                research_kind="strategy_backtest",
+                section="provenance",
+            )
+            assert provenance.value == published_ref.provenance
+            assert observed_digests == []
+
+            with pytest.raises(
+                PublicationVerificationError,
+                match="Selected Publication payload does not exist",
+            ):
+                publication.read_selected(
+                    published_ref,
+                    frozenset({"missing_payload"}),
+                )
+            assert observed_digests == []
+        finally:
+            rustfs_admin.meta.events.unregister(event_name, record_get_object)
+            with runtime.database.transaction() as transaction:
+                transaction.execute(
+                    "DELETE FROM publication.manifest_objects WHERE manifest_sha256 = %s",
+                    (prepared.manifest_sha256,),
+                )
+                transaction.execute(
+                    "DELETE FROM publication.manifests WHERE sha256 = %s",
+                    (prepared.manifest_sha256,),
+                )
+                for digest in payload_digests.values():
+                    transaction.execute(
+                        """
+                        DELETE FROM publication.objects AS object
+                        WHERE object.sha256 = %s
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM publication.manifest_objects AS link
+                              WHERE link.object_sha256 = object.sha256
+                          )
+                        """,
+                        (digest,),
+                    )
 
 
 def test_all_payloads_are_serialized_before_any_upload(
@@ -484,7 +637,6 @@ def _legal_result() -> dict[str, object]:
     last_daily = {name: 0 for name in LAST_DAILY_OBSERVATION_KEYS}
     last_daily.update(
         {
-            "benchmark_nav": "1",
             "cumulative_transaction_cost": "0",
             "cycle_type": "terminal_valuation",
             "execution_rounding_residual": "0",
@@ -502,10 +654,11 @@ def _legal_result() -> dict[str, object]:
     metric_state = {name: 0 for name in METRIC_STATE_KEYS}
     metric_state.update(
         {
-            "contract": "strategy-metric-state-v1",
+            "contract": "strategy-metric-state-v2",
+            "entry_session": "2024-01-02",
+            "entry_session_ordinal": 1,
             "first_gross_nav": "1e+7",
             "first_net_nav": "1e+7",
-            "first_benchmark_nav": "1",
             "peak_net_nav": "1e+7",
             "peak_session": "2024-01-02",
             "worst_drawdown": "0",
@@ -517,7 +670,6 @@ def _legal_result() -> dict[str, object]:
             "cash_maximum_session": "2024-01-02",
             "last_gross_nav": "1e+7",
             "last_net_nav": "1e+7",
-            "last_benchmark_nav": "1",
             "last_session": "2024-01-02",
             "cumulative_cost": "0",
         }
@@ -526,20 +678,16 @@ def _legal_result() -> dict[str, object]:
         "factor_summary": {"horizons": horizons},
         "strategy_summary": {
             "alpha_checksum": "a" * 64,
+            "entry_session": "2024-01-02",
             "initial_cash_cny": "1e+7",
             "source_checksum": "c" * 64,
             "metrics": metrics,
-            "benchmark": {
-                "universe": "manual",
-                "methodology": "selected_universe_equal_weight",
-            },
         },
         "strategy_daily_observations": [
             {
                 "session": "2024-01-02",
                 "gross_nav": "1e+7",
                 "net_nav": "1e+7",
-                "benchmark_nav": "1",
                 "net_cash": "1e+7",
                 "transaction_cost_cny": "0",
                 "holdings_count": 0,
@@ -555,7 +703,6 @@ def _legal_result() -> dict[str, object]:
             "net_cash": "1e+7",
             "gross_nav": "1e+7",
             "net_nav": "1e+7",
-            "benchmark_nav": "1",
             "cumulative_transaction_cost": "0",
             "positions": [],
             "rebalance_phase": {

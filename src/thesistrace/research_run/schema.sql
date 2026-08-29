@@ -207,9 +207,40 @@ CREATE TABLE research_runs.admission_requests (
     researcher_id uuid NOT NULL,
     request_id text NOT NULL,
     request_fingerprint text NOT NULL,
-    run_id text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    run_id text,
+    outcome jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT admission_requests_outcome_check CHECK (
+        COALESCE(
+            jsonb_typeof(outcome) = 'object'
+            AND (
+                (outcome = '{"outcome":"accepted"}'::jsonb AND run_id IS NOT NULL)
+                OR (
+                    outcome->>'outcome' = 'rejected'
+                    AND run_id IS NULL
+                    AND outcome ?& ARRAY['outcome', 'issues']
+                    AND jsonb_typeof(outcome->'issues') = 'array'
+                    AND jsonb_array_length(outcome->'issues') > 0
+                    AND outcome - ARRAY['outcome', 'issues'] = '{}'::jsonb
+                )
+            ),
+            false
+        )
+    )
 );
+
+
+CREATE TABLE research_runs.cursor_secrets (
+    singleton smallint NOT NULL,
+    secret text DEFAULT (
+        replace(gen_random_uuid()::text, '-', '')
+        || replace(gen_random_uuid()::text, '-', '')
+    ) NOT NULL,
+    CONSTRAINT cursor_secrets_singleton_check CHECK (singleton = 1),
+    CONSTRAINT cursor_secrets_secret_check CHECK (secret ~ '^[0-9a-f]{64}$')
+);
+
+INSERT INTO research_runs.cursor_secrets (singleton) VALUES (1);
 
 
 --
@@ -224,7 +255,29 @@ CREATE TABLE research_runs.start_tracking_receipts (
     track_id text NOT NULL,
     outcome jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT start_tracking_receipts_outcome_check CHECK ((jsonb_typeof(outcome) = 'object'::text))
+    CONSTRAINT start_tracking_receipts_outcome_check CHECK (
+        jsonb_typeof(outcome) = 'object'::text
+        AND outcome ?& ARRAY[
+            'id', 'status', 'seed_run_id', 'result_checksum_sha256',
+            'origin_session', 'strategy_session'
+        ]
+        AND outcome - ARRAY[
+            'id', 'status', 'seed_run_id', 'result_checksum_sha256',
+            'origin_session', 'strategy_session'
+        ] = '{}'::jsonb
+        AND outcome ->> 'id' = track_id
+        AND outcome ->> 'seed_run_id' = seed_run_id
+        AND outcome ->> 'status' = 'active'
+        AND jsonb_typeof(outcome -> 'id') = 'string'
+        AND jsonb_typeof(outcome -> 'status') = 'string'
+        AND jsonb_typeof(outcome -> 'seed_run_id') = 'string'
+        AND jsonb_typeof(outcome -> 'result_checksum_sha256') = 'string'
+        AND outcome ->> 'result_checksum_sha256' ~ '^[0-9a-f]{64}$'
+        AND jsonb_typeof(outcome -> 'origin_session') = 'string'
+        AND outcome ->> 'origin_session' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+        AND jsonb_typeof(outcome -> 'strategy_session') = 'string'
+        AND outcome ->> 'strategy_session' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    )
 );
 
 
@@ -269,6 +322,9 @@ ALTER TABLE ONLY research_runs.admission_requests
 ALTER TABLE ONLY research_runs.admission_requests
     ADD CONSTRAINT admission_requests_run_id_key UNIQUE (run_id);
 
+ALTER TABLE ONLY research_runs.cursor_secrets
+    ADD CONSTRAINT cursor_secrets_pkey PRIMARY KEY (singleton);
+
 
 --
 -- Name: runs runs_pkey; Type: CONSTRAINT; Schema: research_runs; Owner: -
@@ -307,6 +363,9 @@ ALTER TABLE ONLY research_runs.runs
 
 ALTER TABLE ONLY research_runs.start_tracking_receipts
     ADD CONSTRAINT start_tracking_receipts_pkey PRIMARY KEY (researcher_id, request_id);
+
+ALTER TABLE ONLY research_runs.start_tracking_receipts
+    ADD CONSTRAINT start_tracking_receipts_seed_run_id_key UNIQUE (seed_run_id);
 
 
 --

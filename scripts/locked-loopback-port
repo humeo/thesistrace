@@ -35,7 +35,7 @@ def main() -> None:
 
 def _acquire(lock_root: Path, owner: str) -> int:
     lock_root.mkdir(parents=True, exist_ok=True)
-    start = int.from_bytes(hashlib.sha256(owner.encode()).digest()[:4]) % PORT_COUNT
+    start = int.from_bytes(hashlib.sha256(owner.encode()).digest()[:4], "big") % PORT_COUNT
     for offset in range(PORT_COUNT):
         port = FIRST_PORT + ((start + offset) % PORT_COUNT)
         lock = lock_root / str(port)

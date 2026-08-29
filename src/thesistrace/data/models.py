@@ -54,6 +54,9 @@ class DataOverview(BaseModel):
     market_coverage: DatasetCoverage | None
     financial_coverage: FinancialCoverage | None
     industry_coverage: IndustryCoverage | None
+    benchmark_coverage: DatasetCoverage | None
+    benchmark_snapshot_sha256: str | None
+    benchmark_last_published_at: datetime | None
     data_through_session: date | None
     last_market_refresh_at: datetime | None
     last_financial_refresh_at: datetime | None
@@ -61,5 +64,6 @@ class DataOverview(BaseModel):
     industry_refresh_status: Literal["running", "succeeded", "failed"] | None
     industry_refresh_failure_code: str | None
     market_research_readiness: bool
+    benchmark_research_readiness: bool
     financial_research_readiness: FinancialResearchReadiness
     industry_research_readiness: bool

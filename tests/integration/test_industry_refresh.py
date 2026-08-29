@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from benchmark_support import benchmark_mount_for_data_mount
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.tushare_industry import (
@@ -27,6 +28,17 @@ from thesistrace.fixture import build_fixture, build_minimal_canonical_fixture
 from thesistrace.publication.serialization import canonical_json_bytes
 
 NOW = datetime(2026, 8, 14, 1, tzinfo=UTC)
+
+
+def _overview_service(
+    database: PostgresDatabase,
+    mount_root: Path,
+) -> DatasetOverviewService:
+    return DatasetOverviewService(
+        database,
+        mount_root,
+        benchmark_mount_for_data_mount(mount_root),
+    )
 
 
 class StaticIndustrySource:
@@ -118,7 +130,7 @@ def test_industry_refresh_publishes_only_industry_family(
         assert IndustryRefreshService(database, tmp_path, source).inspect(
             "industry-success"
         )["status"] == "succeeded"
-        overview = DatasetOverviewService(database, tmp_path).overview()
+        overview = _overview_service(database, tmp_path).overview()
         assert overview.industry_coverage is not None
         assert overview.industry_coverage.model_dump(mode="json") == {
             "start": through,
@@ -155,7 +167,7 @@ def test_data_overview_marks_lagging_industry_coverage_stale(
             observation_through_session=first_session,
         )
 
-        overview = DatasetOverviewService(database, tmp_path).overview()
+        overview = _overview_service(database, tmp_path).overview()
         assert overview.industry_coverage is not None
         assert overview.industry_coverage.observation_through_session.isoformat() == first_session
         assert overview.industry_refresh_status == "succeeded"
@@ -300,7 +312,7 @@ def test_overlapping_industry_refresh_fails_without_moving_head(
         )
         assert operation["candidate_manifest_sha256"] is None
         assert operation["source_lineage_sha256"] is not None
-        overview = DatasetOverviewService(database, tmp_path).overview()
+        overview = _overview_service(database, tmp_path).overview()
         assert overview.industry_coverage is None
         assert overview.last_industry_refresh_at is None
         assert overview.industry_refresh_status == "failed"

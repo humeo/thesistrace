@@ -147,6 +147,50 @@ def test_operational_event_accepts_canonical_data_refresh_operation_ids() -> Non
     ]
 
 
+def test_operational_event_keeps_safe_mcp_completion_context() -> None:
+    output = StringIO()
+    sink = _sink(output)
+
+    sink(
+        OperationalEvent(
+            level="ERROR",
+            component="research_agent_mcp",
+            event="mcp_tool_call_completed",
+            context={
+                "subject": "local_operator",
+                "transport": "stdio",
+                "tool_name": "diagnose_alpha_formula",
+                "outcome": "failed",
+                "failure_code": "INTERNAL",
+                "trace_id": "trace_0123456789abcdef0123456789abcdef",
+                "run_id": "run_0123456789abcdef",
+                "request_id": "request_0123456789abcdef",
+                "duration_ms": 2,
+                "response_bytes": 128,
+                "formula": "canary-secret-formula",
+            },
+        )
+    )
+
+    assert json.loads(output.getvalue()) == {
+        "component": "research_agent_mcp",
+        "duration_ms": 2,
+        "event": "mcp_tool_call_completed",
+        "failure_code": "INTERNAL",
+        "level": "ERROR",
+        "outcome": "failed",
+        "response_bytes": 128,
+        "run_id": "run_0123456789abcdef",
+        "request_id": "request_0123456789abcdef",
+        "subject": "local_operator",
+        "timestamp": "2026-08-24T00:00:00.000Z",
+        "tool_name": "diagnose_alpha_formula",
+        "trace_id": "trace_0123456789abcdef0123456789abcdef",
+        "transport": "stdio",
+    }
+    assert "canary-secret-formula" not in output.getvalue()
+
+
 def test_operational_event_keeps_safe_batch_qualification_evidence_only() -> None:
     output = StringIO()
     sink = _sink(output)

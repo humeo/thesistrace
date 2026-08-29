@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
+from core_runtime import drop_product_schemas, internal_api_origin
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
@@ -193,6 +193,7 @@ def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]
             "THESISTRACE_S3_BUCKET": settings.s3_bucket,
             "THESISTRACE_S3_REGION": settings.s3_region,
             "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
+            "THESISTRACE_INTERNAL_API_ORIGIN": internal_api_origin(settings),
             "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
                 settings.batch_attempt_control_directory
             ),

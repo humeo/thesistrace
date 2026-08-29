@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -39,6 +40,10 @@ def test_explicit_schema_initialization_is_idempotent_and_required_before_startu
         ],
         capture_output=True,
         check=False,
+        env={
+            **os.environ,
+            "THESISTRACE_INTERNAL_API_ORIGIN": "http://127.0.0.1:1",
+        },
         text=True,
     )
     assert missing_worker.returncode != 0
@@ -62,6 +67,10 @@ def test_explicit_schema_initialization_is_idempotent_and_required_before_startu
         ],
         capture_output=True,
         check=False,
+        env={
+            **os.environ,
+            "THESISTRACE_INTERNAL_API_ORIGIN": "http://127.0.0.1:1",
+        },
         text=True,
     )
     assert worker.returncode == 0, worker.stderr

@@ -12,11 +12,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from benchmark_support import FixtureBenchmarkSource, benchmark_mount_for_data_mount
 from canonical_store import open_complete_refresh_basis
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.errors import RaiseException
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.benchmark import (
+    BenchmarkLevel,
+    BenchmarkLevelSource,
+    BenchmarkSnapshotStore,
+)
 from thesistrace.data import (
     BootstrapCollectionPlan,
     CanonicalSourceBatch,
@@ -32,6 +38,7 @@ from thesistrace.fixture import build_minimal_canonical_fixture
 
 AS_OF = datetime(2026, 8, 3, 10, tzinfo=UTC)
 PREPARED_AT = datetime(2026, 8, 9, 12, tzinfo=UTC)
+BENCHMARK_PUBLISHED_AT = datetime(2026, 8, 9, 12, 4, tzinfo=UTC)
 COMPLETED_AT = datetime(2026, 8, 9, 12, 5, tzinfo=UTC)
 
 
@@ -62,6 +69,23 @@ class RecordingBootstrapSource:
         )
 
 
+def _operator(
+    database: PostgresDatabase,
+    mount_root: Path,
+    source: RecordingBootstrapSource,
+    benchmark_source: BenchmarkLevelSource | None = None,
+    **options: object,
+) -> DataOperator:
+    return DataOperator(
+        database,
+        mount_root,
+        source,
+        benchmark_mount_root=benchmark_mount_for_data_mount(mount_root),
+        benchmark_source=benchmark_source or FixtureBenchmarkSource(),
+        **options,
+    )
+
+
 def test_private_operator_bootstraps_once_and_reopens_idempotently(
     core_settings: CoreSettings,
     tmp_path: Path,
@@ -69,8 +93,15 @@ def test_private_operator_bootstraps_once_and_reopens_idempotently(
     database = _database(core_settings)
     try:
         source = RecordingBootstrapSource()
-        times = iter((PREPARED_AT, COMPLETED_AT))
-        operator = DataOperator(database, tmp_path, source, clock=times.__next__)
+        times = iter((PREPARED_AT, BENCHMARK_PUBLISHED_AT, COMPLETED_AT))
+        benchmark_source = FixtureBenchmarkSource()
+        operator = _operator(
+            database,
+            tmp_path,
+            source,
+            benchmark_source,
+            clock=times.__next__,
+        )
 
         first = operator.bootstrap(idempotency_key="bootstrap-once", as_of=AS_OF)
         repeated = operator.bootstrap(idempotency_key="bootstrap-once", as_of=AS_OF)
@@ -90,6 +121,14 @@ def test_private_operator_bootstraps_once_and_reopens_idempotently(
             == build_minimal_canonical_fixture()
         )
         assert head.prepared_at == COMPLETED_AT.isoformat()
+        snapshot = BenchmarkSnapshotStore(
+            benchmark_mount_for_data_mount(tmp_path)
+        ).read()
+        assert snapshot is not None
+        assert snapshot.coverage_start_session == "2010-01-04"
+        assert snapshot.coverage_end_session == "2026-08-07"
+        assert snapshot.published_at == "2026-08-09T12:04:00Z"
+        assert benchmark_source.requests == [("2010-01-04", "2026-08-07")]
 
         with pytest.raises(DataOperatorError, match="HEAD_ALREADY_EXISTS"):
             operator.bootstrap(idempotency_key="cannot-overwrite", as_of=AS_OF)
@@ -100,17 +139,115 @@ def test_private_operator_bootstraps_once_and_reopens_idempotently(
         database.close()
 
 
+def test_bootstrap_snapshot_remains_published_when_competing_head_wins(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        winner_canonical = build_minimal_canonical_fixture(price_offset=9)
+        winner = MountedGenerationStore(tmp_path).materialize(
+            winner_canonical,
+            prepared_at=PREPARED_AT,
+            source_name="competing-operator",
+            source_lineage={"winner": True},
+        )
+        winner_published = False
+
+        def publish_competing_head_after_benchmark(event: dict[str, object]) -> None:
+            nonlocal winner_published
+            if event.get("phase") != "benchmark" or event.get("status") != "completed":
+                return
+            snapshot = BenchmarkSnapshotStore(
+                benchmark_mount_for_data_mount(tmp_path)
+            ).read()
+            assert snapshot is not None
+            assert snapshot.coverage_end_session == "2026-08-07"
+            lifecycle = DatasetLifecycle(database, tmp_path)
+            lifecycle.protect_candidate(
+                operation_id="competing-bootstrap",
+                generation_manifest_sha256=winner.manifest_sha256,
+                lease_seconds=60,
+            )
+            lifecycle.compare_and_swap_head(
+                expected_generation_manifest_sha256=None,
+                candidate_generation_manifest_sha256=winner.manifest_sha256,
+                operation_id="competing-bootstrap",
+            )
+            winner_published = True
+
+        with pytest.raises(DataOperatorError, match="HEAD_ALREADY_EXISTS"):
+            _operator(
+                database,
+                tmp_path,
+                RecordingBootstrapSource(),
+                clock=iter(
+                    (PREPARED_AT, BENCHMARK_PUBLISHED_AT, COMPLETED_AT)
+                ).__next__,
+                progress=publish_competing_head_after_benchmark,
+            ).bootstrap(idempotency_key="benchmark-before-head", as_of=AS_OF)
+
+        assert winner_published is True
+        snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
+        assert snapshot is not None
+        assert snapshot.coverage_end_session == "2026-08-07"
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert head is not None
+        assert head.generation_manifest_sha256 == winner.manifest_sha256
+        assert open_complete_refresh_basis(
+            MountedGenerationStore(tmp_path), head.generation_manifest_sha256
+        ) == winner_canonical
+    finally:
+        database.close()
+
+
+def test_bootstrap_rejects_incomplete_benchmark_without_publishing_head(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    class IncompleteBenchmarkSource:
+        def collect_open_levels(
+            self,
+            *,
+            start_session: str,
+            end_session: str,
+        ) -> tuple[BenchmarkLevel, ...]:
+            assert start_session == "2010-01-04"
+            assert end_session == "2026-08-07"
+            return (BenchmarkLevel("2010-01-04", "3592.47"),)
+
+    database = _database(core_settings)
+    try:
+        with pytest.raises(DataOperatorError) as failure:
+            _operator(
+                database,
+                tmp_path,
+                RecordingBootstrapSource(),
+                IncompleteBenchmarkSource(),
+                clock=lambda: PREPARED_AT,
+            ).bootstrap(idempotency_key="incomplete-benchmark", as_of=AS_OF)
+
+        assert failure.value.code == "BENCHMARK_COVERAGE_INSUFFICIENT"
+        assert DatasetLifecycle(database, tmp_path).current_pointer() is None
+        assert (
+            BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
+            is None
+        )
+    finally:
+        database.close()
+
+
 def test_private_operator_bootstraps_market_without_industry_family(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
     database = _database(core_settings)
     try:
-        outcome = DataOperator(
+        outcome = _operator(
             database,
             tmp_path,
             RecordingBootstrapSource(include_industry=False),
-            clock=iter((PREPARED_AT, COMPLETED_AT)).__next__,
+            clock=iter((PREPARED_AT, BENCHMARK_PUBLISHED_AT, COMPLETED_AT)).__next__,
         ).bootstrap(idempotency_key="bootstrap-market-only", as_of=AS_OF)
 
         generation = MountedGenerationStore(tmp_path).validate_generation(
@@ -131,11 +268,11 @@ def test_private_operator_reports_bootstrap_progress(
     database = _database(core_settings)
     progress: list[dict[str, object]] = []
     try:
-        outcome = DataOperator(
+        outcome = _operator(
             database,
             tmp_path,
             RecordingBootstrapSource(),
-            clock=iter((PREPARED_AT, COMPLETED_AT)).__next__,
+            clock=iter((PREPARED_AT, BENCHMARK_PUBLISHED_AT, COMPLETED_AT)).__next__,
             progress=progress.append,
         ).bootstrap(idempotency_key="bootstrap-progress", as_of=AS_OF)
 
@@ -148,10 +285,14 @@ def test_private_operator_reports_bootstrap_progress(
             "validation",
             "materialization",
             "materialization",
+            "benchmark",
+            "benchmark",
             "publication",
             "publication",
         ]
         assert [event["status"] for event in progress] == [
+            "completed",
+            "started",
             "completed",
             "started",
             "completed",
@@ -178,7 +319,7 @@ def test_collection_failure_leaves_no_head_and_replays_sanitized_failure(
         source = RecordingBootstrapSource(
             failure=DataSourceError("unavailable", detail_code="SECRET_PROVIDER_DETAIL")
         )
-        operator = DataOperator(database, tmp_path, source, clock=lambda: PREPARED_AT)
+        operator = _operator(database, tmp_path, source, clock=lambda: PREPARED_AT)
         for _ in range(2):
             with pytest.raises(DataOperatorError) as failure:
                 operator.bootstrap(idempotency_key="source-failure", as_of=AS_OF)
@@ -205,7 +346,7 @@ def test_validation_failure_and_head_cas_loser_never_replace_the_winner(
 
         invalid = InvalidSource()
         with pytest.raises(DataOperatorError) as failure:
-            DataOperator(database, tmp_path, invalid, clock=lambda: PREPARED_AT).bootstrap(
+            _operator(database, tmp_path, invalid, clock=lambda: PREPARED_AT).bootstrap(
                 idempotency_key="invalid-canonical",
                 as_of=AS_OF,
             )
@@ -235,7 +376,7 @@ def test_validation_failure_and_head_cas_loser_never_replace_the_winner(
 
         losing_source = WinnerPublishingSource()
         with pytest.raises(DataOperatorError) as failure:
-            DataOperator(database, tmp_path, losing_source, clock=lambda: PREPARED_AT).bootstrap(
+            _operator(database, tmp_path, losing_source, clock=lambda: PREPARED_AT).bootstrap(
                 idempotency_key="cas-loser",
                 as_of=AS_OF,
             )
@@ -246,7 +387,7 @@ def test_validation_failure_and_head_cas_loser_never_replace_the_winner(
             MountedGenerationStore(tmp_path), head.generation_manifest_sha256
         ) == build_minimal_canonical_fixture(price_offset=9)
         with pytest.raises(DataOperatorError, match="HEAD_ALREADY_EXISTS"):
-            DataOperator(database, tmp_path, losing_source, clock=lambda: PREPARED_AT).bootstrap(
+            _operator(database, tmp_path, losing_source, clock=lambda: PREPARED_AT).bootstrap(
                 idempotency_key="cas-loser",
                 as_of=AS_OF,
             )
@@ -269,7 +410,7 @@ def test_expired_bootstrap_attempt_is_fenced_and_taken_over_without_sleep(
             assert release_source.wait(timeout=10)
             return super().collect_bootstrap(plan)
 
-    first = DataOperator(
+    first = _operator(
         database,
         tmp_path,
         BlockingSource(),
@@ -277,8 +418,8 @@ def test_expired_bootstrap_attempt_is_fenced_and_taken_over_without_sleep(
         heartbeat_seconds=600,
     )
     winner_source = RecordingBootstrapSource()
-    winner_times = iter((PREPARED_AT, COMPLETED_AT))
-    winner = DataOperator(database, tmp_path, winner_source, clock=winner_times.__next__)
+    winner_times = iter((PREPARED_AT, BENCHMARK_PUBLISHED_AT, COMPLETED_AT))
+    winner = _operator(database, tmp_path, winner_source, clock=winner_times.__next__)
     executor = ThreadPoolExecutor(max_workers=1)
     try:
         stale = executor.submit(first.bootstrap, idempotency_key="take-over", as_of=AS_OF)
@@ -343,8 +484,8 @@ def test_active_bootstrap_heartbeat_prevents_lease_takeover(
             assert release_source.wait(timeout=10)
             return super().collect_bootstrap(plan)
 
-    times = iter((PREPARED_AT, COMPLETED_AT))
-    active = DataOperator(
+    times = iter((PREPARED_AT, BENCHMARK_PUBLISHED_AT, COMPLETED_AT))
+    active = _operator(
         database,
         tmp_path,
         BlockingSource(),
@@ -375,7 +516,7 @@ def test_active_bootstrap_heartbeat_prevents_lease_takeover(
             description="Bootstrap operation lease renewal",
         )
         with pytest.raises(DataOperatorError) as duplicate:
-            DataOperator(database, tmp_path, RecordingBootstrapSource()).bootstrap(
+            _operator(database, tmp_path, RecordingBootstrapSource()).bootstrap(
                 idempotency_key="heartbeat",
                 as_of=AS_OF,
             )
@@ -438,16 +579,16 @@ def test_takeover_revokes_an_old_protected_candidate_before_head_cas(
         return original_cas(self, **kwargs)
 
     monkeypatch.setattr(DatasetLifecycle, "compare_and_swap_head", barrier_cas)
-    stale_times = iter((PREPARED_AT, COMPLETED_AT))
-    stale_operator = DataOperator(
+    stale_times = iter((PREPARED_AT, BENCHMARK_PUBLISHED_AT, COMPLETED_AT))
+    stale_operator = _operator(
         database,
         tmp_path,
         RecordingBootstrapSource(),
         clock=stale_times.__next__,
         heartbeat_seconds=600,
     )
-    winner_times = iter((PREPARED_AT, COMPLETED_AT))
-    winner_operator = DataOperator(
+    winner_times = iter((PREPARED_AT, BENCHMARK_PUBLISHED_AT, COMPLETED_AT))
+    winner_operator = _operator(
         database,
         tmp_path,
         RecordingBootstrapSource(),
@@ -530,9 +671,9 @@ def test_expired_bootstrap_reconciles_a_committed_head_after_process_loss(
         fault_installed = True
 
         source = RecordingBootstrapSource()
-        times = iter((PREPARED_AT, COMPLETED_AT))
+        times = iter((PREPARED_AT, BENCHMARK_PUBLISHED_AT, COMPLETED_AT))
         with pytest.raises(RaiseException, match="simulated process loss"):
-            DataOperator(database, tmp_path, source, clock=times.__next__).bootstrap(
+            _operator(database, tmp_path, source, clock=times.__next__).bootstrap(
                 idempotency_key="head-committed",
                 as_of=AS_OF,
             )
@@ -548,7 +689,7 @@ def test_expired_bootstrap_reconciles_a_committed_head_after_process_loss(
         fault_installed = False
 
         reopened_source = RecordingBootstrapSource()
-        recovered = DataOperator(database, tmp_path, reopened_source).bootstrap(
+        recovered = _operator(database, tmp_path, reopened_source).bootstrap(
             idempotency_key="head-committed",
             as_of=AS_OF,
         )
@@ -583,6 +724,9 @@ def test_real_private_command_bootstraps_from_tushare_replay(
         **os.environ,
         "THESISTRACE_DATABASE_URL": core_settings.database_url,
         "THESISTRACE_DATA_MOUNT": str(mount),
+        "THESISTRACE_BENCHMARK_MOUNT": str(
+            mount.parent / f"{mount.name}-benchmark-data"
+        ),
     }
     command = (
         sys.executable,
@@ -693,6 +837,9 @@ def test_real_private_financial_command_uses_product_replay(
         **os.environ,
         "THESISTRACE_DATABASE_URL": core_settings.database_url,
         "THESISTRACE_DATA_MOUNT": str(mount),
+        "THESISTRACE_BENCHMARK_MOUNT": str(
+            mount.parent / f"{mount.name}-benchmark-data"
+        ),
     }
     def cleanup() -> None:
         database = PostgresDatabase(core_settings.database_url)
@@ -823,6 +970,10 @@ def _replay_payload(*, request_start: str = "2025-08-03") -> dict[str, object]:
         "amount": "1000",
     }
     snapshot = {
+        "benchmark_index_daily": [
+            {"ts_code": "399300.SZ", "trade_date": "20100104", "open": "3592.47"},
+            {"ts_code": "399300.SZ", "trade_date": session, "open": "4102.33"},
+        ],
         "calendar_sse": [{"exchange": "SSE", "cal_date": session, "is_open": "1"}],
         "calendar_szse": [{"exchange": "SZSE", "cal_date": session, "is_open": "1"}],
         "stock_basic": [

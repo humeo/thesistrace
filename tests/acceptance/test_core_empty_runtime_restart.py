@@ -59,7 +59,11 @@ def _request_status(url: str, *, headers: dict[str, str] | None = None) -> int:
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
 def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Path) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = replace(
+        CoreSettings.from_environment(),
+        data_mount=tmp_path,
+        benchmark_mount=tmp_path.parent / f"{tmp_path.name}-benchmark-data",
+    )
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
@@ -90,6 +94,7 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
     environment = {
         **os.environ,
         "THESISTRACE_DATA_MOUNT": str(tmp_path),
+        "THESISTRACE_BENCHMARK_MOUNT": str(settings.benchmark_mount),
         "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
             settings.batch_attempt_control_directory
         ),
@@ -108,6 +113,9 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
             "observation_through_session": "2026-08-07",
             "classification_version": "SW2021",
         },
+        "benchmark_coverage": None,
+        "benchmark_snapshot_sha256": None,
+        "benchmark_last_published_at": None,
         "data_through_session": "2026-08-07",
         "last_market_refresh_at": None,
         "last_financial_refresh_at": None,
@@ -115,32 +123,39 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
         "industry_refresh_status": None,
         "industry_refresh_failure_code": None,
         "market_research_readiness": True,
+        "benchmark_research_readiness": False,
         "financial_research_readiness": "not_ready",
         "industry_research_readiness": True,
     }
 
     for role in ("research", "tracking"):
-        worker = subprocess.run(
-            [worker_command, "--role", role, "--once"],
-            cwd=ROOT,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        assert worker.returncode == 0, worker.stderr
-
         port = _free_port()
+        process_environment = {
+            **environment,
+            "THESISTRACE_INTERNAL_API_ORIGIN": f"http://127.0.0.1:{port}",
+        }
         http = subprocess.Popen(
             [api_command, "--host", "127.0.0.1", "--port", str(port)],
             cwd=ROOT,
-            env=environment,
+            env=process_environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
         try:
+            assert _request_json(f"http://127.0.0.1:{port}/health/live") == {
+                "status": "ok"
+            }
+            worker = subprocess.run(
+                [worker_command, "--role", role, "--once"],
+                cwd=ROOT,
+                env=process_environment,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            assert worker.returncode == 0, worker.stderr
             assert _request_json(
                 f"http://127.0.0.1:{port}/api/data",
                 headers=auth_headers,

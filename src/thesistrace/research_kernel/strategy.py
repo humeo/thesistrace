@@ -8,8 +8,6 @@ from fractions import Fraction
 from heapq import nsmallest
 from statistics import stdev
 
-import numpy as np
-
 from thesistrace.research_kernel.numeric import (
     ACCOUNTING_CONTEXT,
     canonical_decimal,
@@ -334,39 +332,11 @@ def _execute_strategy(
         if isinstance(value_store, Mapping)
         else {str(item["session"]): item["values"] for item in alpha_matrix["sessions"]}
     )
-    universes = research_data.universe_members
-    columnar_benchmark: tuple[
-        dict[str, int],
-        dict[str, int],
-        np.ndarray,
-        np.ndarray,
-    ] | None = None
-    if isinstance(research_data, ColumnarResearchSeries):
-        benchmark_instruments = tuple(
-            sorted(
-                {
-                    instrument_id
-                    for session in calendar
-                    for instrument_id in universes.get(session, ())
-                }
-            )
-        )
-        columnar_benchmark = (
-            {
-                instrument_id: index
-                for index, instrument_id in enumerate(benchmark_instruments)
-            },
-            {session: index for index, session in enumerate(calendar)},
-            research_data.adjusted_open_decimal_matrix(benchmark_instruments),
-            research_data.adjusted_open_matrix(benchmark_instruments),
-        )
-
     if continuation is None:
         positions: dict[str, Position] = {}
         gross_cash = INITIAL_CASH
         net_cash = INITIAL_CASH
         cumulative_cost = Decimal(0)
-        benchmark_nav = Decimal(1)
         daily: list[dict[str, object]] = []
         fills: list[dict[str, object]] = []
         orders: list[dict[str, object]] = []
@@ -396,7 +366,6 @@ def _execute_strategy(
         gross_cash = Decimal(str(last_daily["gross_cash"]))
         net_cash = Decimal(str(last_daily["net_cash"]))
         cumulative_cost = Decimal(str(last_daily["cumulative_transaction_cost"]))
-        benchmark_nav = Decimal(str(last_daily["benchmark_nav"]))
         fills = [dict(item) for item in continuation.get("fills", [])]
         orders = [dict(item) for item in continuation.get("orders", [])]
         child_orders = [dict(item) for item in continuation.get("child_orders", [])]
@@ -444,7 +413,6 @@ def _execute_strategy(
             else "open"
         )
         rebalance = False
-        benchmark_return = Decimal(0)
         event_side_order: list[str] = []
         event_intended_orders: list[dict[str, object]] = []
         event_order_start = len(orders)
@@ -725,32 +693,6 @@ def _execute_strategy(
         if net_cash < 0:
             raise StrategyCalculationError("Net Cash became negative")
 
-        if report_index >= 2:
-            signal_session = calendar[global_index - 2]
-            entry_session = calendar[global_index - 1]
-            benchmark_return = (
-                columnar_equal_weight_benchmark_return(
-                    signal_session,
-                    entry_session,
-                    session,
-                    universes,
-                    states,
-                    instruments,
-                    *columnar_benchmark,
-                )
-                if columnar_benchmark is not None
-                else equal_weight_benchmark_return(
-                    signal_session,
-                    entry_session,
-                    session,
-                    universes,
-                    prices,
-                    states,
-                    instruments,
-                )
-            )
-            benchmark_nav = money(benchmark_nav * (Decimal(1) + benchmark_return))
-
         position_values = {
             instrument_id: money(position.adjusted_units * marks[instrument_id])
             for instrument_id, position in positions.items()
@@ -778,8 +720,6 @@ def _execute_strategy(
                 "net_return": float(net_nav / previous_net_nav - 1),
                 "gross_cash": canonical_decimal(gross_cash),
                 "net_cash": canonical_decimal(net_cash),
-                "benchmark_nav": canonical_decimal(benchmark_nav),
-                "benchmark_return": float(benchmark_return),
                 "cumulative_transaction_cost": canonical_decimal(cumulative_cost),
                 "holdings_count": holdings,
                 "maximum_single_name_weight": max_weight,
@@ -1116,155 +1056,6 @@ def affordable_quantity(
     return minimum + (low_units - 1) * step if low_units else 0
 
 
-def equal_weight_benchmark_return(
-    signal_session: str,
-    entry_session: str,
-    exit_session: str,
-    universes: dict[str, tuple[str, ...]],
-    prices: dict[tuple[str, str], ExecutionPrice],
-    states: dict[tuple[str, str], str],
-    instruments: dict[str, InstrumentProfile],
-) -> Decimal:
-    returns: list[Decimal] = []
-    for instrument_id in universes.get(signal_session, []):
-        entry = prices.get((entry_session, instrument_id))
-        exit_price = prices.get((exit_session, instrument_id))
-        if entry is not None:
-            entry_open = Decimal(entry.adjusted_open)
-        elif states.get((entry_session, instrument_id)) == "full_session_suspension":
-            prior = latest_adjusted_open_before(
-                entry_session,
-                instrument_id,
-                prices,
-            )
-            if prior is None:
-                raise StrategyCalculationError(
-                    f"missing prior Benchmark mark for {instrument_id} on {entry_session}"
-                )
-            entry_open = prior
-        elif states.get((entry_session, instrument_id)) == "data_unavailable":
-            continue
-        else:
-            listed_to = instruments[instrument_id].listed_to
-            if listed_to and listed_to <= entry_session:
-                returns.append(Decimal(0))
-                continue
-            raise StrategyCalculationError(
-                f"unexplained Benchmark Open for {instrument_id} on {entry_session}"
-            )
-        if exit_price is not None:
-            returns.append(money(Decimal(exit_price.adjusted_open) / entry_open - 1))
-            continue
-        if states.get((exit_session, instrument_id)) == "full_session_suspension":
-            returns.append(Decimal(0))
-            continue
-        if states.get((exit_session, instrument_id)) == "data_unavailable":
-            continue
-        listed_to = instruments[instrument_id].listed_to
-        if listed_to and listed_to <= exit_session:
-            returns.append(Decimal(-1))
-            continue
-        raise StrategyCalculationError(
-            f"unexplained Benchmark Open for {instrument_id} on {exit_session}"
-        )
-    return money(sum(returns, Decimal(0)) / len(returns)) if returns else Decimal(0)
-
-
-def columnar_equal_weight_benchmark_return(
-    signal_session: str,
-    entry_session: str,
-    exit_session: str,
-    universes: Mapping[str, tuple[str, ...]],
-    states: Mapping[tuple[str, str], str],
-    instruments: Mapping[str, InstrumentProfile],
-    instrument_positions: Mapping[str, int],
-    session_positions: Mapping[str, int],
-    adjusted_opens: np.ndarray,
-    numeric_adjusted_opens: np.ndarray,
-) -> Decimal:
-    entry_index = session_positions[entry_session]
-    exit_index = session_positions[exit_session]
-    universe = universes.get(signal_session, ())
-    positions = np.fromiter(
-        (instrument_positions[instrument_id] for instrument_id in universe),
-        dtype=np.intp,
-        count=len(universe),
-    )
-    entry_values = adjusted_opens[positions, entry_index]
-    exit_values = adjusted_opens[positions, exit_index]
-    entry_present = np.isfinite(numeric_adjusted_opens[positions, entry_index])
-    exit_present = np.isfinite(numeric_adjusted_opens[positions, exit_index])
-    if np.all(entry_present) and np.all(exit_present):
-        returns = np.subtract(np.divide(exit_values, entry_values), Decimal(1))
-        total_return = np.sum(returns, initial=Decimal(0))
-        return money(total_return / len(returns)) if len(returns) else Decimal(0)
-    total_return = Decimal(0)
-    return_count = 0
-    for instrument_id in universe:
-        position = instrument_positions[instrument_id]
-        entry_open = adjusted_opens[position, entry_index]
-        exit_open = adjusted_opens[position, exit_index]
-        if isinstance(entry_open, Decimal):
-            pass
-        elif states.get((entry_session, instrument_id)) == "full_session_suspension":
-            prior_values = adjusted_opens[position, :entry_index]
-            entry_open = next(
-                (value for value in reversed(prior_values) if isinstance(value, Decimal)),
-                None,
-            )
-            if entry_open is None:
-                raise StrategyCalculationError(
-                    f"missing prior Benchmark mark for {instrument_id} on {entry_session}"
-                )
-        elif states.get((entry_session, instrument_id)) == "data_unavailable":
-            continue
-        else:
-            listed_to = instruments[instrument_id].listed_to
-            if listed_to and listed_to <= entry_session:
-                return_count += 1
-                continue
-            raise StrategyCalculationError(
-                f"unexplained Benchmark Open for {instrument_id} on {entry_session}"
-            )
-        if isinstance(exit_open, Decimal):
-            total_return += require_finite_decimal(exit_open / entry_open - 1)
-            return_count += 1
-            continue
-        if states.get((exit_session, instrument_id)) == "full_session_suspension":
-            return_count += 1
-            continue
-        if states.get((exit_session, instrument_id)) == "data_unavailable":
-            continue
-        listed_to = instruments[instrument_id].listed_to
-        if listed_to and listed_to <= exit_session:
-            total_return += Decimal(-1)
-            return_count += 1
-            continue
-        raise StrategyCalculationError(
-            f"unexplained Benchmark Open for {instrument_id} on {exit_session}"
-        )
-    return money(total_return / return_count) if return_count else Decimal(0)
-
-
-def latest_adjusted_open_before(
-    session: str,
-    instrument_id: str,
-    prices: dict[tuple[str, str], ExecutionPrice],
-) -> Decimal | None:
-    optimized = getattr(prices, "latest_adjusted_open_before", None)
-    if callable(optimized):
-        value = optimized(session, instrument_id)
-        return None if value is None else Decimal(str(value))
-    candidates = [
-        (price_session, Decimal(row.adjusted_open))
-        for (price_session, price_instrument), row in prices.items()
-        if price_instrument == instrument_id and price_session < session
-    ]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda item: item[0])[1]
-
-
 def strategy_metrics(
     *,
     daily: list[dict[str, object]],
@@ -1274,21 +1065,16 @@ def strategy_metrics(
 ) -> dict[str, object]:
     gross_nav = [Decimal(str(item["gross_nav"])) for item in daily]
     net_nav = [Decimal(str(item["net_nav"])) for item in daily]
-    benchmark_nav = [Decimal(str(item["benchmark_nav"])) for item in daily]
-    intervals = len(daily) - 1
-    gross_cumulative = float(gross_nav[-1] / gross_nav[0] - 1)
-    net_cumulative = float(net_nav[-1] / net_nav[0] - 1)
-    benchmark_cumulative = float(benchmark_nav[-1] / benchmark_nav[0] - 1)
-    gross_cagr = cagr(gross_nav[-1] / gross_nav[0], intervals)
-    net_cagr = cagr(net_nav[-1] / net_nav[0], intervals)
-    benchmark_cagr = cagr(
-        benchmark_nav[-1] / benchmark_nav[0],
-        intervals,
+    entry_index = next(
+        (index for index, item in enumerate(daily) if item["rebalance"] is True),
+        len(daily) - 1,
     )
-    annualized_excess = cagr(
-        (net_nav[-1] / net_nav[0]) / (benchmark_nav[-1] / benchmark_nav[0]),
-        intervals,
-    )
+    investment_intervals = len(daily) - entry_index - 1
+    report_intervals = len(daily) - 1
+    gross_cumulative = float(gross_nav[-1] / INITIAL_CASH - 1)
+    net_cumulative = float(net_nav[-1] / INITIAL_CASH - 1)
+    gross_cagr = cagr(gross_nav[-1] / INITIAL_CASH, investment_intervals)
+    net_cagr = cagr(net_nav[-1] / INITIAL_CASH, investment_intervals)
     net_returns = [
         float(net_nav[index] / net_nav[index - 1] - 1) for index in range(1, len(net_nav))
     ]
@@ -1300,7 +1086,11 @@ def strategy_metrics(
         else return_mean / (volatility / math.sqrt(252)) * math.sqrt(252)
     )
     drawdown = maximum_drawdown(daily, net_nav)
-    calmar = None if drawdown["value"] in {None, 0.0} else net_cagr / abs(float(drawdown["value"]))
+    calmar = (
+        None
+        if net_cagr is None or drawdown["value"] in {None, 0.0}
+        else net_cagr / abs(float(drawdown["value"]))
+    )
     turnover_values = [float(item["value"]) for item in turnover_events]
     holdings = [int(item["holdings_count"]) for item in daily]
     weights = [float(item["maximum_single_name_weight"]) for item in daily]
@@ -1311,11 +1101,8 @@ def strategy_metrics(
     return {
         "gross_cumulative_return": gross_cumulative,
         "net_cumulative_return": net_cumulative,
-        "benchmark_cumulative_return": benchmark_cumulative,
         "gross_cagr": gross_cagr,
         "net_cagr": net_cagr,
-        "benchmark_cagr": benchmark_cagr,
-        "annualized_excess_return": annualized_excess,
         "maximum_drawdown": drawdown,
         "annualized_volatility": volatility,
         "sharpe": sharpe,
@@ -1326,7 +1113,11 @@ def strategy_metrics(
             "average_rebalance": (
                 math.fsum(turnover_values) / len(turnover_values) if turnover_values else None
             ),
-            "annualized": (math.fsum(turnover_values) * 252 / intervals if intervals else None),
+            "annualized": (
+                math.fsum(turnover_values) * 252 / report_intervals
+                if report_intervals
+                else None
+            ),
         },
         "transaction_costs": {
             "cumulative_amount": float(cumulative_cost),
@@ -1457,7 +1248,6 @@ def advance_strategy_metric_state(
         session = str(row["session"])
         gross_nav = Decimal(str(row["gross_nav"]))
         net_nav = Decimal(str(row["net_nav"]))
-        benchmark_nav = Decimal(str(row["benchmark_nav"]))
         holdings = int(row["holdings_count"])
         weight = float(row["maximum_single_name_weight"])
         cash = float(row["cash_ratio"])
@@ -1465,10 +1255,11 @@ def advance_strategy_metric_state(
         if session_count == 0:
             state.update(
                 {
-                    "contract": "strategy-metric-state-v1",
+                    "contract": "strategy-metric-state-v2",
+                    "entry_session": None,
+                    "entry_session_ordinal": None,
                     "first_gross_nav": str(gross_nav),
                     "first_net_nav": str(net_nav),
-                    "first_benchmark_nav": str(benchmark_nav),
                     "return_count": 0,
                     "peak_net_nav": str(net_nav),
                     "peak_session": session,
@@ -1537,16 +1328,24 @@ def advance_strategy_metric_state(
                 state["cash_maximum"] = cash
                 state["cash_maximum_session"] = session
 
+        if row["rebalance"] is True and state.get("entry_session") is None:
+            state["entry_session"] = session
+            state["entry_session_ordinal"] = session_count + 1
         state["session_count"] = session_count + 1
         state["last_gross_nav"] = str(gross_nav)
         state["last_net_nav"] = str(net_nav)
-        state["last_benchmark_nav"] = str(benchmark_nav)
         state["last_session"] = session
         state["holdings_sum"] = int(state["holdings_sum"]) + holdings
         state["holdings_ending"] = holdings
         state["weight_ending"] = weight
         _add_binary64(state, "cash_sum", cash)
         state["cash_ending"] = cash
+
+    if state.get("entry_session") is None and daily:
+        terminal = daily[-1]
+        if terminal.get("cycle_type") == "terminal_valuation":
+            state["entry_session"] = str(terminal["session"])
+            state["entry_session_ordinal"] = int(state["session_count"])
 
     for item in turnover_events:
         _add_binary64(
@@ -1567,26 +1366,19 @@ def advance_strategy_metric_state(
 def strategy_metrics_from_state(
     state: dict[str, object],
 ) -> dict[str, object]:
-    intervals = int(state["session_count"]) - 1
-    first_gross_nav = Decimal(str(state["first_gross_nav"]))
-    first_net_nav = Decimal(str(state["first_net_nav"]))
-    first_benchmark_nav = Decimal(str(state["first_benchmark_nav"]))
+    report_intervals = int(state["session_count"]) - 1
+    entry_ordinal = state.get("entry_session_ordinal")
+    investment_intervals = (
+        report_intervals
+        if entry_ordinal is None
+        else int(state["session_count"]) - int(entry_ordinal)
+    )
     last_gross_nav = Decimal(str(state["last_gross_nav"]))
     last_net_nav = Decimal(str(state["last_net_nav"]))
-    last_benchmark_nav = Decimal(str(state["last_benchmark_nav"]))
-    gross_cumulative = float(last_gross_nav / first_gross_nav - 1)
-    net_cumulative = float(last_net_nav / first_net_nav - 1)
-    benchmark_cumulative = float(last_benchmark_nav / first_benchmark_nav - 1)
-    gross_cagr = cagr(last_gross_nav / first_gross_nav, intervals)
-    net_cagr = cagr(last_net_nav / first_net_nav, intervals)
-    benchmark_cagr = cagr(
-        last_benchmark_nav / first_benchmark_nav,
-        intervals,
-    )
-    annualized_excess = cagr(
-        (last_net_nav / first_net_nav) / (last_benchmark_nav / first_benchmark_nav),
-        intervals,
-    )
+    gross_cumulative = float(last_gross_nav / INITIAL_CASH - 1)
+    net_cumulative = float(last_net_nav / INITIAL_CASH - 1)
+    gross_cagr = cagr(last_gross_nav / INITIAL_CASH, investment_intervals)
+    net_cagr = cagr(last_net_nav / INITIAL_CASH, investment_intervals)
     return_count = int(state["return_count"])
     return_sum = _fraction_from_state(state, "return_sum")
     return_square_sum = _fraction_from_state(
@@ -1626,11 +1418,8 @@ def strategy_metrics_from_state(
     return {
         "gross_cumulative_return": gross_cumulative,
         "net_cumulative_return": net_cumulative,
-        "benchmark_cumulative_return": benchmark_cumulative,
         "gross_cagr": gross_cagr,
         "net_cagr": net_cagr,
-        "benchmark_cagr": benchmark_cagr,
-        "annualized_excess_return": annualized_excess,
         "maximum_drawdown": drawdown,
         "annualized_volatility": volatility,
         "sharpe": sharpe,
@@ -1639,7 +1428,9 @@ def strategy_metrics_from_state(
         "turnover": {
             "events": [],
             "average_rebalance": (turnover_sum / turnover_count if turnover_count else None),
-            "annualized": (turnover_sum * 252 / intervals if intervals else None),
+            "annualized": (
+                turnover_sum * 252 / report_intervals if report_intervals else None
+            ),
         },
         "transaction_costs": {
             "cumulative_amount": float(cumulative_cost),

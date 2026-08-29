@@ -12,10 +12,11 @@ from pathlib import Path
 
 import pytest
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas
+from core_runtime import drop_product_schemas, internal_api_origin
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.benchmark import BenchmarkLevel, BenchmarkSnapshotStore
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
@@ -30,11 +31,22 @@ from thesistrace.fixture import build_minimal_canonical_fixture
 def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
     tmp_path: Path,
 ) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    settings = replace(
+        CoreSettings.from_environment(),
+        data_mount=tmp_path / "canonical-data",
+        benchmark_mount=tmp_path / "benchmark-data",
+    )
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = _business_sessions(date(2024, 8, 1), count=510)
     seed_sessions = sessions[:3]
+    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+        (
+            BenchmarkLevel("2010-01-04", "3500"),
+            *(BenchmarkLevel(session, "4000") for session in sessions),
+        ),
+        published_at=datetime(2026, 8, 10, 8, tzinfo=UTC),
+    )
     head_a = _publish_head(
         settings,
         sessions=seed_sessions,
@@ -126,9 +138,10 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
     expected_cost = notional * (Decimal("0.0003") + Decimal("0.00001"))
     expected_wealth = (initial_cash - expected_cost) / initial_cash
     return_intervals = len(sessions) - 1
+    comparison_intervals = len(sessions) - 2
     expected_net_return = float(expected_wealth - 1)
     expected_annualized_return = float(expected_wealth) ** (
-        252 / return_intervals
+        252 / comparison_intervals
     ) - 1
 
     assert actual_metrics["transaction_costs"]["cumulative_amount"] == float(
@@ -137,6 +150,15 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
     assert actual_metrics["net_cumulative_return"] == expected_net_return
     assert actual_metrics["benchmark_cumulative_return"] == 0.0
     assert actual_metrics["annualized_excess_return"] == expected_annualized_return
+    comparison = detail["strategy"]["comparison"]
+    assert comparison["status"] == "available"
+    assert comparison["entry"]["session"] == sessions[1]
+    assert len(comparison["curves"]) == 504
+    assert comparison["curves"][0]["session"] == expected_window[0]
+    assert comparison["curves"][0]["net_strategy_return"] == expected_net_return
+    assert comparison["curves"][0]["benchmark_relative_return"] == 0.0
+    assert comparison["curves"][0]["net_excess_nav"] == float(expected_wealth)
+    assert comparison["curves"][0]["net_excess_return"] == expected_net_return
     assert actual_metrics["sharpe"] == pytest.approx(
         -math.sqrt(252 / return_intervals),
         rel=1e-12,
@@ -240,6 +262,7 @@ def _run_worker_once(
         "THESISTRACE_S3_BUCKET": settings.s3_bucket,
         "THESISTRACE_S3_REGION": settings.s3_region,
         "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
+        "THESISTRACE_INTERNAL_API_ORIGIN": internal_api_origin(settings),
         "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
             settings.batch_attempt_control_directory
         ),

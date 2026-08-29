@@ -63,3 +63,10 @@ Before a release, include the final Production Image Smoke with:
 ```sh
 mise exec -- pnpm check:release
 ```
+
+Run the long-Research final-image performance qualification separately on a
+controlled idle host:
+
+```sh
+mise exec -- pnpm check:performance
+```

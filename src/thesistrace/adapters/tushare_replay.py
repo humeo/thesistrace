@@ -8,6 +8,12 @@ from datetime import date
 from pathlib import Path
 
 from thesistrace.adapters.tushare_provider import TushareSourceError
+from thesistrace.benchmark import (
+    BENCHMARK_SOURCE_API_NAME,
+    BENCHMARK_SOURCE_FIELDS,
+    BENCHMARK_START_SESSION,
+    BENCHMARK_TS_CODE,
+)
 from thesistrace.data.source import RawSourceResponse
 
 _REPLAY_MAX_BYTES = 128 * 1024 * 1024
@@ -97,7 +103,7 @@ class ReplayTushareProvider:
             self._request_end,
         ):
             raise TushareSourceError("REPLAY_WINDOW_MISMATCH", source_code=0)
-        return self._snapshot
+        return _market_snapshot(self._snapshot)
 
     def collect_incremental_snapshot(
         self,
@@ -113,7 +119,7 @@ class ReplayTushareProvider:
             raise TushareSourceError("REPLAY_WINDOW_MISMATCH", source_code=0) from error
         if (request_start, as_of) != (self._request_start, self._request_end):
             raise TushareSourceError("REPLAY_WINDOW_MISMATCH", source_code=0)
-        return self._snapshot
+        return _market_snapshot(self._snapshot)
 
     def query_raw(
         self,
@@ -122,6 +128,8 @@ class ReplayTushareProvider:
         params: Mapping[str, object],
         fields: Sequence[str],
     ) -> RawSourceResponse:
+        if api_name == BENCHMARK_SOURCE_API_NAME:
+            return self._query_benchmark(params=params, fields=fields)
         ts_code = params.get("ts_code")
         if not isinstance(ts_code, str) or set(params) != {"ts_code"}:
             raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
@@ -129,6 +137,46 @@ class ReplayTushareProvider:
         if response is None or not set(fields) <= set(response.fields):
             raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
         return response
+
+    def _query_benchmark(
+        self,
+        *,
+        params: Mapping[str, object],
+        fields: Sequence[str],
+    ) -> RawSourceResponse:
+        if set(params) != {"ts_code", "start_date", "end_date", "limit", "offset"}:
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
+        try:
+            start = date.fromisoformat(_compact_date(str(params["start_date"])))
+            end = date.fromisoformat(_compact_date(str(params["end_date"])))
+            limit = int(params["limit"])
+            offset = int(params["offset"])
+        except (TypeError, ValueError) as error:
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0) from error
+        if (
+            params["ts_code"] != BENCHMARK_TS_CODE
+            or start < date.fromisoformat(BENCHMARK_START_SESSION)
+            or end > self._request_end
+            or start > end
+            or limit <= 0
+            or offset < 0
+            or tuple(fields) != BENCHMARK_SOURCE_FIELDS
+        ):
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
+        raw_rows = self._snapshot.get("benchmark_index_daily")
+        if not isinstance(raw_rows, list):
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
+        selected: list[tuple[object, ...]] = []
+        for row in raw_rows:
+            if not isinstance(row, dict) or not set(fields) <= set(row):
+                raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
+            trade_date = str(row["trade_date"])
+            if str(params["start_date"]) <= trade_date <= str(params["end_date"]):
+                selected.append(tuple(row[field] for field in fields))
+        return RawSourceResponse(
+            fields=tuple(fields),
+            items=tuple(selected[offset : offset + limit]),
+        )
 
     def query_paginated(
         self,
@@ -183,6 +231,22 @@ def _financial_responses(value: object) -> dict[tuple[str, str], RawSourceRespon
                 items=tuple(tuple(row) for row in items),
             )
     return responses
+
+
+def _compact_date(value: str) -> str:
+    if len(value) != 8 or not value.isdigit():
+        raise ValueError("compact date is invalid")
+    return f"{value[:4]}-{value[4:6]}-{value[6:]}"
+
+
+def _market_snapshot(
+    snapshot: Mapping[str, list[dict[str, object]]],
+) -> dict[str, list[dict[str, object]]]:
+    return {
+        name: rows
+        for name, rows in snapshot.items()
+        if name != "benchmark_index_daily"
+    }
 
 
 __all__ = ("ReplayTushareProvider",)

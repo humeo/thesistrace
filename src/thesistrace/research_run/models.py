@@ -4,6 +4,7 @@ from datetime import date, datetime
 from typing import Annotated, Literal
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -14,16 +15,98 @@ from pydantic import (
     model_validator,
 )
 
+from thesistrace.alpha_language.language import MAX_FORMULA_LENGTH
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
+from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
+from thesistrace.daily_track.models import DailyTrackSummary
 from thesistrace.data.models import FinancialResearchReadiness
+from thesistrace.research_run.result_schema import StrategyMetrics
 
-RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
+
+def _normalized_request_id(value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError("request_id must not be blank")
+    return normalized
+
+
+RequestId = Annotated[
+    str,
+    Field(strict=True, min_length=1, max_length=200),
+    AfterValidator(_normalized_request_id),
+]
 FolderId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 ResearchName = Annotated[str, Field(strict=True, max_length=200)]
-Formula = Annotated[str, Field(strict=True)]
-HoldingsCount = Annotated[int, Field(strict=True, ge=1, le=100)]
-RebalanceInterval = Annotated[int, Field(strict=True, ge=1, le=20)]
+Formula = Annotated[str, Field(strict=True, max_length=MAX_FORMULA_LENGTH)]
+MIN_HOLDINGS_COUNT = 1
+MAX_HOLDINGS_COUNT = 100
+MIN_REBALANCE_INTERVAL = 1
+MAX_REBALANCE_INTERVAL = 20
+HoldingsCount = Annotated[
+    int,
+    Field(strict=True, ge=MIN_HOLDINGS_COUNT, le=MAX_HOLDINGS_COUNT),
+]
+RebalanceInterval = Annotated[
+    int,
+    Field(strict=True, ge=MIN_REBALANCE_INTERVAL, le=MAX_REBALANCE_INTERVAL),
+]
 type ResearchKind = Literal["factor_evaluation", "strategy_backtest"]
+type ResearchRunStatus = Literal[
+    "queued", "running", "cancelling", "succeeded", "failed", "cancelled"
+]
+type ResearchRunResultSection = Literal[
+    "factor",
+    "strategy_summary",
+    "strategy_observations",
+    "terminal_strategy_state",
+    "terminal_positions",
+    "provenance",
+]
+type ResearchUniverse = Literal["top300", "top1000", "top2000", "top3000"]
+type ResearchNeutralization = Literal["none", "industry"]
+RESEARCH_RUN_ACTIVE_STATUSES = frozenset({"queued", "running", "cancelling"})
+RESEARCH_RUN_POLL_RETRY_SECONDS = 2
+FACTOR_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
+    "factor",
+    "provenance",
+)
+STRATEGY_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
+    "factor",
+    "strategy_summary",
+    "strategy_observations",
+    "terminal_strategy_state",
+    "terminal_positions",
+    "provenance",
+)
+RESEARCH_KINDS: tuple[ResearchKind, ...] = (
+    "factor_evaluation",
+    "strategy_backtest",
+)
+RESEARCH_UNIVERSES: tuple[ResearchUniverse, ...] = (
+    "top300",
+    "top1000",
+    "top2000",
+    "top3000",
+)
+RESEARCH_NEUTRALIZATIONS: tuple[ResearchNeutralization, ...] = (
+    "none",
+    "industry",
+)
+
+
+def research_run_retry_after_seconds(status: ResearchRunStatus) -> int | None:
+    return RESEARCH_RUN_POLL_RETRY_SECONDS if status in RESEARCH_RUN_ACTIVE_STATUSES else None
+
+
+def research_run_result_sections(
+    status: ResearchRunStatus,
+    research_kind: ResearchKind,
+) -> tuple[ResearchRunResultSection, ...]:
+    if status != "succeeded":
+        return ()
+    if research_kind == "factor_evaluation":
+        return FACTOR_RESULT_SECTIONS
+    return STRATEGY_RESULT_SECTIONS
 
 
 def _natural_date(value: object) -> date:
@@ -53,8 +136,16 @@ class _ResearchRunAdmissionBase(BaseModel):
     hypothesis: str | None = None
     start_date: NaturalDate
     end_date: NaturalDate
-    universe: Literal["top300", "top1000", "top2000", "top3000"]
-    neutralization: Literal["none", "industry"]
+    universe: ResearchUniverse
+    neutralization: ResearchNeutralization
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     @model_validator(mode="after")
     def validate_research_period(self) -> _ResearchRunAdmissionBase:
@@ -181,8 +272,8 @@ class ImmutableRunInput(BaseModel):
     requested_start_date: date
     requested_end_date: date
     field_bindings: dict[str, str]
-    universe: Literal["top300", "top1000", "top2000", "top3000"]
-    neutralization: Literal["none", "industry"]
+    universe: ResearchUniverse
+    neutralization: ResearchNeutralization
     research_kind: ResearchKind
     strategy: dict[str, object] | None = None
     costs: dict[str, str] | None = None
@@ -242,9 +333,7 @@ class ResearchRunSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
-    status: Literal[
-        "queued", "running", "cancelling", "succeeded", "failed", "cancelled"
-    ]
+    status: ResearchRunStatus
     name: str
     folder_id: str
     created_at: datetime
@@ -268,6 +357,38 @@ class ResearchRunSummary(BaseModel):
         return self
 
 
+class ResearchRunCancelOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    run: ResearchRunSummary
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
+class ResearchRunAdmissionAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    run: ResearchRunSummary
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
+class ResearchRunAdmissionRejectedOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["rejected"] = "rejected"
+    issues: Annotated[list[ResearchRunAdmissionIssue], Field(min_length=1)]
+    replayed: bool
+
+
+type ResearchRunAdmissionOutcome = Annotated[
+    ResearchRunAdmissionAccepted | ResearchRunAdmissionRejectedOutcome,
+    Field(discriminator="outcome"),
+]
+
+
 class ResearchRunAuthorableInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -275,8 +396,8 @@ class ResearchRunAuthorableInput(BaseModel):
     hypothesis: str | None
     start_date: date
     end_date: date
-    universe: Literal["top300", "top1000", "top2000", "top3000"]
-    neutralization: Literal["none", "industry"]
+    universe: ResearchUniverse
+    neutralization: ResearchNeutralization
     research_kind: ResearchKind
     holdings_count: int | None = Field(default=None, exclude_if=lambda value: value is None)
     rebalance_every_sessions: int | None = Field(
@@ -308,6 +429,15 @@ class StartTrackingCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     request_id: RequestId
+
+
+class ResearchRunStartTrackingOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    track: DailyTrackSummary
+    status: Literal["active"] = "active"
+    replayed: bool
+    retry_after_seconds: Literal[30] = 30
 
 
 class ResearchRunList(BaseModel):
@@ -375,7 +505,6 @@ class StrategyDailyObservation(BaseModel):
     session: str
     gross_nav: str
     net_nav: str
-    benchmark_nav: str
     net_cash: str
     transaction_cost_cny: str
     holdings_count: int
@@ -385,19 +514,12 @@ class StrategyDailyObservation(BaseModel):
     suspension_rejections: int
 
 
-class StrategyBenchmark(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    universe: str
-    methodology: Literal["selected_universe_equal_weight"]
-
-
 class StrategyResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     summary: dict[str, object]
-    benchmark: StrategyBenchmark
     observations: list[StrategyDailyObservation]
+    comparison: StrategyComparison
 
 
 class TerminalStrategyPosition(BaseModel):
@@ -435,7 +557,6 @@ class TerminalStrategyStateView(BaseModel):
     net_cash: str
     gross_nav: str
     net_nav: str
-    benchmark_nav: str
     cumulative_transaction_cost: str
     positions: list[TerminalStrategyPosition]
     rebalance_phase: TerminalRebalancePhase
@@ -476,9 +597,171 @@ class StrategyBacktestResearchRunResult(BaseModel):
     provenance: StrategyBacktestResultProvenance
 
 
-type ResearchRunResult = (
-    FactorEvaluationResearchRunResult | StrategyBacktestResearchRunResult
-)
+type ResearchRunResult = FactorEvaluationResearchRunResult | StrategyBacktestResearchRunResult
+
+
+ResultCursor = Annotated[str, Field(strict=True, min_length=1, max_length=1024)]
+ResultPageLimit = Annotated[int, Field(strict=True, ge=1, le=50)]
+
+
+class _ResearchRunResultSectionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    run_id: Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class FactorResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["factor"]
+
+
+class StrategySummaryResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["strategy_summary"]
+
+
+class StrategyObservationsResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["strategy_observations"]
+    cursor: ResultCursor | None = None
+    limit: ResultPageLimit = 20
+
+
+class TerminalStrategyStateResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["terminal_strategy_state"]
+
+
+class TerminalPositionsResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["terminal_positions"]
+    cursor: ResultCursor | None = None
+    limit: ResultPageLimit = 20
+
+
+class ProvenanceResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["provenance"]
+
+
+type ResearchRunResultSectionInput = Annotated[
+    FactorResultSectionInput
+    | StrategySummaryResultSectionInput
+    | StrategyObservationsResultSectionInput
+    | TerminalStrategyStateResultSectionInput
+    | TerminalPositionsResultSectionInput
+    | ProvenanceResultSectionInput,
+    Field(discriminator="section"),
+]
+
+
+class FactorMetricUnits(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    horizon: Literal["research_sessions"] = "research_sessions"
+    ic: Literal["correlation"] = "correlation"
+    rank_ic: Literal["rank_correlation"] = "rank_correlation"
+    quantile_returns: Literal["decimal_return"] = "decimal_return"
+    top_bottom_return: Literal["decimal_return"] = "decimal_return"
+
+
+class FactorMissingValueSemantics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    unavailable_optional_metric: Literal["null"] = "null"
+    observed_zero_is_missing: Literal[False] = False
+
+
+class FactorResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    section: Literal["factor"] = "factor"
+    run_id: str
+    research_kind: ResearchKind
+    factor: FactorResult
+    units: FactorMetricUnits = FactorMetricUnits()
+    missing_values: FactorMissingValueSemantics = FactorMissingValueSemantics()
+
+
+class StrategySummaryResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["strategy_summary"] = "strategy_summary"
+    run_id: str
+    research_kind: Literal["strategy_backtest"] = "strategy_backtest"
+    entry_session: str
+    initial_cash_cny: str
+    metrics: StrategyMetrics
+    comparison: StrategyComparisonSummary
+
+
+class StrategyObservationsResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["strategy_observations"] = "strategy_observations"
+    run_id: str
+    research_kind: Literal["strategy_backtest"] = "strategy_backtest"
+    items: list[StrategyDailyObservation]
+    next_cursor: str | None
+
+
+class TerminalStrategyStateResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["terminal_strategy_state"] = "terminal_strategy_state"
+    run_id: str
+    research_kind: Literal["strategy_backtest"] = "strategy_backtest"
+    session: str
+    gross_cash: str
+    net_cash: str
+    gross_nav: str
+    net_nav: str
+    cumulative_transaction_cost: str
+    rebalance_phase: TerminalRebalancePhase
+    pending_signal: TerminalPendingSignal | None
+
+
+class TerminalPositionsResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["terminal_positions"] = "terminal_positions"
+    run_id: str
+    research_kind: Literal["strategy_backtest"] = "strategy_backtest"
+    items: list[TerminalStrategyPosition]
+    next_cursor: str | None
+
+
+class ResultDataProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    generation_id: str
+    data_through_session: date
+    financial_research_readiness: FinancialResearchReadiness
+
+
+class ResultExecutionProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    calculation_contracts: dict[str, object]
+    semantic_versions: dict[str, str]
+
+
+class ProvenanceResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    section: Literal["provenance"] = "provenance"
+    run_id: str
+    research_kind: ResearchKind
+    schema_version: str
+    immutable_input_sha256: str
+    authoring_input: ResearchRunAuthorableInput
+    data: ResultDataProvenance
+    execution: ResultExecutionProvenance
+
+
+type ResearchRunResultSectionResponse = Annotated[
+    FactorResultSection
+    | StrategySummaryResultSection
+    | StrategyObservationsResultSection
+    | TerminalStrategyStateResultSection
+    | TerminalPositionsResultSection
+    | ProvenanceResultSection,
+    Field(discriminator="section"),
+]
 
 
 class ResearchRunProgress(BaseModel):
@@ -503,6 +786,27 @@ class ResearchRunExecutionTiming(BaseModel):
     finished_at: datetime | None
     elapsed_seconds: float | None
     is_final: bool
+
+
+class ResearchRunPollingDetail(ResearchRunSummary):
+    input: ResearchRunAuthorableInput
+    progress: ResearchRunProgress
+    execution_timing: ResearchRunExecutionTiming
+    result_available: bool
+    available_result_sections: tuple[ResearchRunResultSection, ...]
+    retry_after_seconds: int | None
+
+    @model_validator(mode="after")
+    def validate_polling_projection(self) -> ResearchRunPollingDetail:
+        expected_retry = research_run_retry_after_seconds(self.status)
+        if self.retry_after_seconds != expected_retry:
+            raise ValueError("ResearchRun retry guidance must match active lifecycle state")
+        expected_sections = research_run_result_sections(self.status, self.research_kind)
+        if self.available_result_sections != expected_sections:
+            raise ValueError("ResearchRun Result sections must match lifecycle and Research Kind")
+        if self.result_available != bool(expected_sections):
+            raise ValueError("ResearchRun Result availability must match its public sections")
+        return self
 
 
 class ResearchRunDetail(ResearchRunSummary):

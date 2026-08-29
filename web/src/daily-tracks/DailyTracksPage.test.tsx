@@ -7,7 +7,10 @@ import {
   TrackingProgressView,
   type DailyTrackDetail,
 } from "./DailyTracksPage";
-import { DailyTrackAnalysisView } from "./DailyTrackAnalysisView";
+import {
+  DailyTrackAnalysisView,
+  type DailyTrackAnalysis,
+} from "./DailyTrackAnalysisView";
 
 describe("DailyTrack detail polling", () => {
   it("keeps loading while Stop is waiting for child-exit confirmation", () => {
@@ -33,36 +36,101 @@ describe("DailyTrackAnalysisView", () => {
         quantile_valid_session_count: 0,
       },
     };
-    const markup = renderToStaticMarkup(
-      <DailyTrackAnalysisView analysis={{
-        factor: {
-          horizons: {
-            "1": horizon,
-            "5": { ...horizon, horizon: 5 },
-            "20": { ...horizon, horizon: 20 },
+    const analysis = {
+      factor: {
+        horizons: {
+          "1": horizon,
+          "5": { ...horizon, horizon: 5 },
+          "20": { ...horizon, horizon: 20 },
+        },
+      },
+      strategy: {
+        summary: {
+          metrics: {
+            net_cumulative_return: 0.1,
+            benchmark_cumulative_return: 0.05,
+            benchmark_cagr: 0.07,
+            annualized_excess_return: 0.03,
+            maximum_drawdown: { value: -0.02 },
+            sharpe: 1.2,
+            transaction_costs: { cumulative_amount: 25 },
           },
         },
-        strategy: {
-          summary: {
-            metrics: {
-              net_cumulative_return: 0.1,
-              benchmark_cumulative_return: 0.05,
-              annualized_excess_return: 0.03,
-              maximum_drawdown: { value: -0.02 },
-              sharpe: 1.2,
-              transaction_costs: { cumulative_amount: 25 },
+        observations: [],
+        comparison: {
+          status: "available",
+          benchmark: {
+            id: "csi300-price-index-open",
+            display_name: "沪深300",
+            ts_code: "399300.SZ",
+            kind: "price_index",
+            coordinate: "open",
+            snapshot_sha256: "d".repeat(64),
+            coverage: {
+              start_session: "2010-01-04",
+              end_session: "2026-08-13",
             },
+            published_at: "2026-08-13T18:00:00Z",
           },
-          benchmark: { universe: "top300", methodology: "selected_universe_equal_weight" },
-          observations: [],
+          entry: {
+            session: "2024-08-01",
+            benchmark_open_level: "3500.1",
+            initial_cash_cny: "10000000",
+          },
+          terminal: {
+            session: "2026-08-05",
+            benchmark_open_level: "4200.12",
+            net_nav: "11000000",
+          },
+          metrics: {
+            net_strategy_cumulative_return: 0.1,
+            benchmark_cumulative_return: 0.05,
+            net_strategy_cagr: 0.14,
+            benchmark_cagr: 0.07,
+            annualized_excess_return: 0.03,
+          },
+          curves: Array.from({ length: 504 }, (_, index) => ({
+            session: new Date(Date.UTC(2024, 0, 1 + index)).toISOString().slice(0, 10),
+            net_strategy_return: 0.25 + (index / 10_000),
+            benchmark_relative_return: 0.2 + (index / 20_000),
+            net_excess_nav: 1.04 + (index / 100_000),
+            net_excess_return: 0.04 + (index / 100_000),
+          })),
         },
-      }} />,
+      },
+    } satisfies DailyTrackAnalysis;
+    const markup = renderToStaticMarkup(
+      <DailyTrackAnalysisView analysis={analysis} />,
     );
 
     expect(markup).toContain("Factor Summary");
     expect(markup).toContain("Strategy Summary");
     expect(markup).toContain("Rank IC coverage 1/2");
+    expect(markup).toContain("CSI 300");
+    expect(markup).not.toContain("沪深300");
+    expect(markup).not.toContain("Fixed Strategy Benchmark");
+    expect(markup).not.toContain("数据截至");
+    expect(markup).not.toContain("d".repeat(64));
+    expect(markup).toContain("504 Research Sessions");
+    expect(markup).not.toContain("Net Excess");
     expect(markup).not.toMatch(/Predictive evidence|Fixed origin|signal sessions/i);
+
+    const unavailableMarkup = renderToStaticMarkup(
+      <DailyTrackAnalysisView
+        analysis={{
+          ...analysis,
+          strategy: {
+            ...analysis.strategy,
+            comparison: {
+              status: "unavailable",
+              reason: "benchmark_snapshot_unavailable",
+            },
+          },
+        }}
+      />,
+    );
+    expect(unavailableMarkup).toContain("CSI 300 comparison unavailable");
+    expect(unavailableMarkup).not.toContain("<figure");
   });
 });
 
@@ -161,7 +229,6 @@ describe("TrackingOriginView", () => {
         net_cash: "8999995",
         gross_nav: "10001000",
         net_nav: "10000995",
-        benchmark_nav: "1.001",
         cumulative_transaction_cost: "5",
         positions: [],
         rebalance_phase: {
@@ -198,7 +265,6 @@ describe("TrackingOriginView", () => {
         net_cash: "8999995",
         gross_nav: "10001000",
         net_nav: "10000995",
-        benchmark_nav: "1.001",
         cumulative_transaction_cost: "5",
         positions: [],
         rebalance_phase: {

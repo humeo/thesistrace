@@ -10,12 +10,12 @@ import {
   ResearchRunProgressView,
   ResearchRunHistory,
   ResearchRunPagination,
-  TerminalStrategyStateView,
   UseAsDraftPanel,
   formatResearchRunCreatedAt,
   isTerminalResearch,
   researchRunListPath,
   sortResearchRuns,
+  type ResearchResult,
   type ResearchRun,
   type TerminalStrategyState,
 } from "./ResearchRunsPage";
@@ -180,7 +180,6 @@ const TERMINAL_STATE: TerminalStrategyState = {
   net_cash: "8999995",
   gross_nav: "10001000",
   net_nav: "10000995",
-  benchmark_nav: "1.001",
   cumulative_transaction_cost: "5",
   positions: [
     {
@@ -201,58 +200,6 @@ const TERMINAL_STATE: TerminalStrategyState = {
     execution: "next_research_session_open",
   },
 };
-
-describe("TerminalStrategyStateView", () => {
-  it("renders the retained terminal account and holdings", () => {
-    const markup = renderToStaticMarkup(
-      <TerminalStrategyStateView state={TERMINAL_STATE} />,
-    );
-
-    expect(markup).toContain("Final Portfolio");
-    expect(markup).toContain("As of");
-    expect(markup).toContain("Portfolio value");
-    expect(markup).not.toContain("Terminal Strategy State");
-    expect(markup).toContain("2026-08-05");
-    expect(markup).toContain("10000995");
-    expect(markup).toContain("8999995");
-    expect(markup).toContain("cn.stock.000001");
-    expect(markup).toContain("remains pending");
-    expect(markup).not.toContain("Retained account at the Research Period boundary");
-    expect(markup).not.toMatch(/Generation|manifest|checkpoint|fence|object location/i);
-  });
-  it("does not add empty boundary commentary when no signal is pending", () => {
-    const markup = renderToStaticMarkup(
-      <TerminalStrategyStateView state={{ ...TERMINAL_STATE, pending_signal: null }} />,
-    );
-
-    expect(markup).not.toContain("No pending signal at this boundary.");
-    expect(markup).not.toContain("Retained account at the Research Period boundary");
-  });
-
-  it("formats high-precision terminal decimals without losing the exact value", () => {
-    const state = {
-      ...TERMINAL_STATE,
-      net_nav: "30752.034497893580384922868008825220680825475",
-      net_cash: "29375803.841923",
-      cumulative_transaction_cost: "2048185.34275",
-      positions: [{
-        ...TERMINAL_STATE.positions[0],
-        adjusted_units: "32282994090610636900853578463558766e-32",
-        last_adjusted_price: "918646e-5",
-      }],
-    };
-
-    const markup = renderToStaticMarkup(<TerminalStrategyStateView state={state} />);
-
-    expect(markup).toContain("CN¥30,752.03");
-    expect(markup).toContain("CN¥29,375,803.84");
-    expect(markup).toContain("CN¥2,048,185.34");
-    expect(markup).toContain("322.829941");
-    expect(markup).toContain("9.18646");
-    expect(markup).toContain(`title="${state.net_nav}"`);
-    expect(markup).toContain(`title="${state.positions[0].adjusted_units}"`);
-  });
-});
 
 describe("ResearchResultView", () => {
   it("keeps result summaries and coverage while removing low-value detail sections", () => {
@@ -278,7 +225,7 @@ describe("ResearchResultView", () => {
         quantile_valid_session_count: 0,
       },
     };
-    const markup = renderToStaticMarkup(<ResearchResultView result={{
+    const result = {
       factor: {
         horizons: {
           "1": horizon,
@@ -289,23 +236,23 @@ describe("ResearchResultView", () => {
       strategy: {
         summary: {
           alpha_checksum: "a",
+          entry_session: "2026-08-03",
           initial_cash_cny: "10000000",
           source_checksum: "b",
           metrics: {
             net_cumulative_return: 0.1,
             benchmark_cumulative_return: 0.05,
+            benchmark_cagr: 0.07,
             annualized_excess_return: 0.03,
             maximum_drawdown: { value: -0.02 },
             sharpe: 1.2,
             transaction_costs: { cumulative_amount: 25 },
           },
         },
-        benchmark: { universe: "top300", methodology: "selected_universe_equal_weight" },
         observations: [{
           session: "2026-08-03",
           gross_nav: "10000000",
           net_nav: "10000000",
-          benchmark_nav: "1",
           net_cash: "10000000",
           transaction_cost_cny: "0",
           holdings_count: 0,
@@ -314,24 +261,93 @@ describe("ResearchResultView", () => {
           lower_limit_sell_rejections: 0,
           suspension_rejections: 0,
         }],
+        comparison: {
+          status: "available",
+          benchmark: {
+            id: "csi300-price-index-open",
+            display_name: "沪深300",
+            ts_code: "399300.SZ",
+            kind: "price_index",
+            coordinate: "open",
+            snapshot_sha256: "c".repeat(64),
+            coverage: {
+              start_session: "2010-01-04",
+              end_session: "2026-08-13",
+            },
+            published_at: "2026-08-13T18:00:00Z",
+          },
+          entry: {
+            session: "2026-08-03",
+            benchmark_open_level: "4000.1",
+            initial_cash_cny: "10000000",
+          },
+          terminal: {
+            session: "2026-08-05",
+            benchmark_open_level: "4200.105",
+            net_nav: "11000000",
+          },
+          metrics: {
+            net_strategy_cumulative_return: 0.1,
+            benchmark_cumulative_return: 0.05,
+            net_strategy_cagr: 0.14,
+            benchmark_cagr: 0.07,
+            annualized_excess_return: 0.03,
+          },
+          curves: [{
+            session: "2026-08-03",
+            net_strategy_return: -0.001,
+            benchmark_relative_return: 0,
+            net_excess_nav: 0.999,
+            net_excess_return: -0.001,
+          }],
+        },
       },
       terminal_strategy_state: TERMINAL_STATE,
       provenance: {
-        schema_version: "research-result-v1",
+        schema_version: "research-result-v2",
         research_run_id: "run_test",
         immutable_input_sha256: "a".repeat(64),
         calculation_contracts: {},
-        semantic_versions: { kernel: "kernel-v4" },
+        semantic_versions: { kernel: "kernel-v5" },
         research_kind: "strategy_backtest",
       },
-    }} />);
+    } satisfies ResearchResult;
+    const markup = renderToStaticMarkup(<ResearchResultView result={result} />);
 
     expect(markup).toContain("Factor Summary");
     expect(markup).toContain("Strategy Summary");
     expect(markup).toContain("Rank IC coverage 1/2");
+    expect(markup).toContain("CSI 300");
+    expect(markup).not.toContain("沪深300");
+    expect(markup).not.toContain("Fixed Strategy Benchmark");
+    expect(markup).not.toContain("数据截至");
+    expect(markup).not.toContain("c".repeat(64));
+    expect(markup).not.toContain("Entry Open");
+    expect(markup).not.toContain("Terminal Open");
+    expect(markup).not.toContain("Net Excess");
+    expect(markup).not.toContain("Final Portfolio");
+    expect(markup).not.toContain("cn.stock.000001");
     expect(markup).not.toMatch(
       /Predictive evidence|One fill path|Research-period account observations|signal sessions|Daily Observations|Provenance|Input digest/i,
     );
+
+    const unavailableMarkup = renderToStaticMarkup(
+      <ResearchResultView
+        result={{
+          ...result,
+          strategy: {
+            ...result.strategy,
+            comparison: {
+              status: "unavailable",
+              reason: "benchmark_snapshot_unavailable",
+            },
+          },
+        }}
+      />,
+    );
+    expect(unavailableMarkup).toContain("CSI 300 comparison unavailable");
+    expect(unavailableMarkup).toContain("No comparison chart is shown");
+    expect(unavailableMarkup).not.toContain("<figure");
   });
 });
 
@@ -525,7 +541,7 @@ const FACTOR_RESULT = {
     }>,
   },
   provenance: {
-    schema_version: "research-result-v1",
+    schema_version: "research-result-v2",
     research_run_id: "run_factor",
     immutable_input_sha256: "a".repeat(64),
     calculation_contracts: {},

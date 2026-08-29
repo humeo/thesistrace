@@ -3,8 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from base64 import urlsafe_b64decode, urlsafe_b64encode
-from binascii import Error as Base64DecodeError
+from base64 import urlsafe_b64encode
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -14,15 +13,27 @@ from time import monotonic
 from typing import Literal
 from uuid import UUID, uuid4
 
+from cryptography.fernet import Fernet, InvalidToken
 from psycopg import OperationalError
-from psycopg.errors import OutOfMemory
+from psycopg.errors import OutOfMemory, UniqueViolation
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
 from pydantic import ValidationError
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.alpha_language import CompiledAlpha, FormulaCompilationError, alpha_language
-from thesistrace.daily_track import DailyTrackSummary, TrackingOrigin
+from thesistrace.benchmark import (
+    AnnualizedExcessCalculator,
+    StrategyComparisonFacts,
+    StrategyComparisonService,
+    strategy_comparison_summary,
+)
+from thesistrace.daily_track import (
+    DailyTrackActivationLimitReached,
+    DailyTrackAlreadyExists,
+    DailyTrackSummary,
+    TrackingOrigin,
+)
 from thesistrace.data import (
     DatasetAdmissionSnapshot,
     DatasetLifecycle,
@@ -75,24 +86,48 @@ from thesistrace.research_run.models import (
     DataAdmissionFacts,
     FactorEvaluationResearchRunKeyMetrics,
     FactorEvaluationResearchRunResult,
+    FactorResultSection,
+    FactorResultSectionInput,
     ImmutableRunInput,
     OrganizeResearchRunCommand,
+    ProvenanceResultSection,
+    ProvenanceResultSectionInput,
     ResearchKind,
+    ResearchRunAdmissionAccepted,
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionIssue,
+    ResearchRunAdmissionOutcome,
+    ResearchRunAdmissionRejectedOutcome,
     ResearchRunAuthorableInput,
     ResearchRunCancelCommand,
+    ResearchRunCancelOutcome,
     ResearchRunDetail,
     ResearchRunExecutionTiming,
     ResearchRunKeyMetrics,
     ResearchRunList,
+    ResearchRunPollingDetail,
     ResearchRunProgress,
     ResearchRunResult,
+    ResearchRunResultSectionInput,
+    ResearchRunResultSectionResponse,
+    ResearchRunStartTrackingOutcome,
     ResearchRunSummary,
+    ResultDataProvenance,
+    ResultExecutionProvenance,
     StartTrackingCommand,
     StrategyBacktestAdmissionCommand,
     StrategyBacktestResearchRunKeyMetrics,
     StrategyBacktestResearchRunResult,
+    StrategyObservationsResultSection,
+    StrategyObservationsResultSectionInput,
+    StrategySummaryResultSection,
+    StrategySummaryResultSectionInput,
+    TerminalPositionsResultSection,
+    TerminalPositionsResultSectionInput,
+    TerminalStrategyStateResultSection,
+    TerminalStrategyStateResultSectionInput,
+    research_run_result_sections,
+    research_run_retry_after_seconds,
 )
 from thesistrace.research_run.planning import (
     DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
@@ -103,8 +138,10 @@ from thesistrace.research_run.result import (
     RESULT_DAILY_PARTITION_SESSION_COUNT,
     STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
     ResearchResultError,
+    SemanticResultSectionRead,
     enforce_result_bundle_budget,
     read_result_bundle,
+    read_semantic_result_section,
     result_publication_payloads_from_staged,
 )
 
@@ -156,6 +193,14 @@ class ResearchRunCancelConflict(RuntimeError):
     pass
 
 
+class ResearchRunCancelIdempotencyConflict(ResearchRunCancelConflict):
+    pass
+
+
+class ResearchRunCancelStateConflict(ResearchRunCancelConflict):
+    pass
+
+
 class ResearchRunStartTrackingConflict(RuntimeError):
     pass
 
@@ -164,11 +209,27 @@ class ResearchRunResultUnavailable(RuntimeError):
     pass
 
 
+class ResearchRunResultSectionIncompatible(RuntimeError):
+    pass
+
+
+class ResearchRunResultReadFailed(RuntimeError):
+    pass
+
+
 class ResearchRunTrackingUnavailable(RuntimeError):
     pass
 
 
 class ResearchRunTrackingTemporarilyUnavailable(RuntimeError):
+    pass
+
+
+class ResearchRunTemporarilyUnavailable(RuntimeError):
+    pass
+
+
+class ResearchRunInvalidCursor(ValueError):
     pass
 
 
@@ -209,8 +270,8 @@ FIXED_COSTS = {
 }
 SEMANTIC_VERSIONS = {
     "factor": "factor-v1",
-    "strategy": "strategy-v1",
-    "kernel": "kernel-v4",
+    "strategy": "strategy-v2",
+    "kernel": "kernel-v5",
 }
 
 
@@ -289,6 +350,8 @@ class ResearchRunService:
         execution: SupervisedResearchExecutor | None = None,
         execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
         lifecycle_event: ExecutionEvent | None = None,
+        annualized_excess_calculator: AnnualizedExcessCalculator | None = None,
+        strategy_comparison: StrategyComparisonService | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
@@ -306,6 +369,8 @@ class ResearchRunService:
         self._preserve_dependent_run_history = preserve_dependent_run_history
         self._execution = execution
         self._execution_memory_bytes = execution_memory_bytes
+        self._annualized_excess_calculator = annualized_excess_calculator
+        self._strategy_comparison = strategy_comparison
         self._lifecycle_event = non_blocking_operational_event_sink(
             lifecycle_event or (lambda _event: None),
             component="core_api",
@@ -640,7 +705,11 @@ class ResearchRunService:
             final_chunk,
         )
         provenance = _result_provenance(claim)
-        key_metrics = _result_key_metrics(final_values, "strategy_backtest")
+        key_metrics = _result_key_metrics(
+            final_values,
+            "strategy_backtest",
+            annualized_excess_return=self._strategy_annualized_excess(final_values),
+        )
         partitions: list[tuple[StagedPayload, int, str, str]] = []
         observation_offset = 0
         for plan_chunk in claim.immutable_input.execution_plan.chunks:
@@ -870,12 +939,11 @@ class ResearchRunService:
             execution_memory_bytes=self._execution_memory_bytes,
         )
         run_id = f"run_{uuid4().hex[:20]}"
-        submitted_name = (command.name or "").strip()
         return PreparedResearchRunAdmission(
             researcher_id=researcher_id,
             run_id=run_id,
             folder_id=command.folder_id,
-            name=submitted_name or f"Research {run_id[-8:].upper()}",
+            name=command.name or f"Research {run_id[-8:].upper()}",
             immutable_input=immutable_input,
         )
 
@@ -972,6 +1040,28 @@ class ResearchRunService:
         researcher_id: UUID,
         command: ResearchRunAdmissionCommand,
     ) -> ResearchRunSummary:
+        outcome = self.admit_with_outcome(researcher_id, command)
+        if isinstance(outcome, ResearchRunAdmissionRejectedOutcome):
+            raise ResearchRunAdmissionRejected(outcome.issues)
+        return outcome.run
+
+    def admit_with_outcome(
+        self,
+        researcher_id: UUID,
+        command: ResearchRunAdmissionCommand,
+    ) -> ResearchRunAdmissionOutcome:
+        try:
+            return self._admit_with_outcome(researcher_id, command)
+        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+            raise ResearchRunTemporarilyUnavailable(
+                "ResearchRun admission is temporarily unavailable"
+            ) from error
+
+    def _admit_with_outcome(
+        self,
+        researcher_id: UUID,
+        command: ResearchRunAdmissionCommand,
+    ) -> ResearchRunAdmissionOutcome:
         if self._compile_formula is None or self._current_dataset is None:
             raise RuntimeError("ResearchRun admission dependencies are not configured")
         fingerprint = _admission_fingerprint(command)
@@ -982,14 +1072,24 @@ class ResearchRunService:
             ).fetchone()
             receipt = _admission_receipt(transaction, researcher_id, command.request_id)
             if receipt is not None:
-                if receipt["request_fingerprint"] != fingerprint:
-                    raise ResearchRunAdmissionConflict("ResearchRun request_id conflicts")
-                return _summary(receipt)
-        prepared = self.prepare_child_admission(
-            researcher_id,
-            command,
-            dataset=self.current_admission_dataset(),
-        )
+                return _admission_outcome(
+                    receipt,
+                    request_fingerprint=fingerprint,
+                    replayed=True,
+                )
+        try:
+            prepared = self.prepare_child_admission(
+                researcher_id,
+                command,
+                dataset=self.current_admission_dataset(),
+            )
+        except ResearchRunAdmissionRejected as error:
+            return self._record_admission_rejection(
+                researcher_id,
+                command,
+                request_fingerprint=fingerprint,
+                issues=error.issues,
+            )
         with self._database.transaction() as transaction:
             transaction.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -997,9 +1097,11 @@ class ResearchRunService:
             ).fetchone()
             receipt = _admission_receipt(transaction, researcher_id, command.request_id)
             if receipt is not None:
-                if receipt["request_fingerprint"] != fingerprint:
-                    raise ResearchRunAdmissionConflict("ResearchRun request_id conflicts")
-                return _summary(receipt)
+                return _admission_outcome(
+                    receipt,
+                    request_fingerprint=fingerprint,
+                    replayed=True,
+                )
             folder = transaction.execute(
                 """
                 SELECT id
@@ -1010,31 +1112,75 @@ class ResearchRunService:
                 (researcher_id, command.folder_id),
             ).fetchone()
             if folder is None:
-                raise ResearchRunAdmissionRejected(
-                    [
+                rejection = ResearchRunAdmissionRejectedOutcome(
+                    issues=[
                         ResearchRunAdmissionIssue(
                             code="FOLDER_NOT_FOUND",
                             field="folder_id",
                             message="Research Folder does not exist",
                         )
-                    ]
+                    ],
+                    replayed=False,
                 )
+                _insert_admission_receipt(
+                    transaction,
+                    researcher_id=researcher_id,
+                    request_id=command.request_id,
+                    request_fingerprint=fingerprint,
+                    run_id=None,
+                    outcome=rejection.model_dump(mode="json", exclude={"replayed"}),
+                )
+                return rejection
             row = self.admit_prepared_child_in_transaction(
                 transaction,
                 prepared,
                 execution_owner="ordinary",
                 retain_generation=self._dataset_lifecycle is not None,
             )
-            transaction.execute(
-                """
-                INSERT INTO research_runs.admission_requests (
-                    researcher_id, request_id, request_fingerprint, run_id
-                ) VALUES (%s, %s, %s, %s)
-                """,
-                (researcher_id, command.request_id, fingerprint, prepared.run_id),
+            _insert_admission_receipt(
+                transaction,
+                researcher_id=researcher_id,
+                request_id=command.request_id,
+                request_fingerprint=fingerprint,
+                run_id=prepared.run_id,
+                outcome={"outcome": "accepted"},
             )
         assert row is not None
-        return _summary(row)
+        return _accepted_admission_outcome(row, replayed=False)
+
+    def _record_admission_rejection(
+        self,
+        researcher_id: UUID,
+        command: ResearchRunAdmissionCommand,
+        *,
+        request_fingerprint: str,
+        issues: list[ResearchRunAdmissionIssue],
+    ) -> ResearchRunAdmissionOutcome:
+        rejection = ResearchRunAdmissionRejectedOutcome(
+            issues=issues,
+            replayed=False,
+        )
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"research_runs.admit:{researcher_id}:{command.request_id}",),
+            ).fetchone()
+            receipt = _admission_receipt(transaction, researcher_id, command.request_id)
+            if receipt is not None:
+                return _admission_outcome(
+                    receipt,
+                    request_fingerprint=request_fingerprint,
+                    replayed=True,
+                )
+            _insert_admission_receipt(
+                transaction,
+                researcher_id=researcher_id,
+                request_id=command.request_id,
+                request_fingerprint=request_fingerprint,
+                run_id=None,
+                outcome=rejection.model_dump(mode="json", exclude={"replayed"}),
+            )
+        return rejection
 
     def process_next(
         self,
@@ -1276,13 +1422,37 @@ class ResearchRunService:
         cursor: str | None = None,
         limit: int = 50,
     ) -> ResearchRunList:
-        cursor_created_at, cursor_id = _decode_list_cursor(
-            cursor,
-            researcher_id=researcher_id,
-            folder_id=folder_id,
-            research_kind=research_kind,
-        )
+        try:
+            return self._list(
+                researcher_id,
+                folder_id=folder_id,
+                research_kind=research_kind,
+                cursor=cursor,
+                limit=limit,
+            )
+        except (OperationalError, PoolTimeout) as error:
+            raise ResearchRunTemporarilyUnavailable(
+                "ResearchRun history is temporarily unavailable"
+            ) from error
+
+    def _list(
+        self,
+        researcher_id: UUID,
+        *,
+        folder_id: str | None = None,
+        research_kind: ResearchKind | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> ResearchRunList:
         with self._database.transaction() as transaction:
+            cursor_secret = _cursor_secret(transaction)
+            cursor_created_at, cursor_id = _decode_list_cursor(
+                cursor,
+                secret=cursor_secret,
+                researcher_id=researcher_id,
+                folder_id=folder_id,
+                research_kind=research_kind,
+            )
             rows = transaction.execute(
                 """
                 SELECT id, name, folder_id, status, requested_start_date,
@@ -1318,6 +1488,7 @@ class ResearchRunService:
         next_cursor = (
             _encode_list_cursor(
                 selected[-1],
+                secret=cursor_secret,
                 researcher_id=researcher_id,
                 folder_id=folder_id,
                 research_kind=research_kind,
@@ -1477,7 +1648,20 @@ class ResearchRunService:
         researcher_id: UUID,
         run_id: str,
         command: ResearchRunCancelCommand,
-    ) -> ResearchRunSummary | None:
+    ) -> ResearchRunCancelOutcome | None:
+        try:
+            return self._cancel(researcher_id, run_id, command)
+        except (OperationalError, PoolTimeout) as error:
+            raise ResearchRunTemporarilyUnavailable(
+                "ResearchRun cancellation is temporarily unavailable"
+            ) from error
+
+    def _cancel(
+        self,
+        researcher_id: UUID,
+        run_id: str,
+        command: ResearchRunCancelCommand,
+    ) -> ResearchRunCancelOutcome | None:
         request_id = command.request_id.strip()
         if not request_id:
             raise ValueError("ResearchRun Cancel request_id is required")
@@ -1509,8 +1693,15 @@ class ResearchRunService:
             ).fetchone()
             if receipt is not None:
                 if receipt["request_fingerprint"] != fingerprint:
-                    raise ResearchRunCancelConflict("ResearchRun Cancel request_id conflicts")
-                return ResearchRunSummary.model_validate(receipt["outcome"])
+                    raise ResearchRunCancelIdempotencyConflict(
+                        "ResearchRun Cancel request_id conflicts"
+                    )
+                replayed_run = ResearchRunSummary.model_validate(receipt["outcome"])
+                return ResearchRunCancelOutcome(
+                    run=replayed_run,
+                    replayed=True,
+                    retry_after_seconds=research_run_retry_after_seconds(replayed_run.status),
+                )
 
             self._lock_result_staging(transaction, run_id)
             row = transaction.execute(
@@ -1528,7 +1719,7 @@ class ResearchRunService:
             if row is None:
                 return None
             if row["execution_owner"] != "ordinary":
-                raise ResearchRunCancelConflict(
+                raise ResearchRunCancelStateConflict(
                     "Batch-owned ResearchRun cancellation is controlled by its Research Batch"
                 )
             if row["status"] == "running":
@@ -1603,6 +1794,10 @@ class ResearchRunService:
                         transaction,
                         retention_id=f"queued-research-run:{run_id}",
                     )
+            else:
+                raise ResearchRunCancelStateConflict(
+                    "ResearchRun state does not allow cancellation"
+                )
             outcome = _summary(row)
             transaction.execute(
                 """
@@ -1631,7 +1826,11 @@ class ResearchRunService:
                     **event_context,
                 }
             )
-        return outcome
+        return ResearchRunCancelOutcome(
+            run=outcome,
+            replayed=False,
+            retry_after_seconds=research_run_retry_after_seconds(outcome.status),
+        )
 
     def _cancellation_is_pending(self, claim: ResearchRunExecutionClaim) -> bool:
         with self._database.transaction() as transaction:
@@ -1747,6 +1946,15 @@ class ResearchRunService:
         run_id: str,
         command: StartTrackingCommand,
     ) -> DailyTrackSummary | None:
+        outcome = self.start_tracking_with_outcome(researcher_id, run_id, command)
+        return None if outcome is None else outcome.track
+
+    def start_tracking_with_outcome(
+        self,
+        researcher_id: UUID,
+        run_id: str,
+        command: StartTrackingCommand,
+    ) -> ResearchRunStartTrackingOutcome | None:
         if self._activate_track is None or self._publication is None:
             raise RuntimeError("DailyTrack activation dependencies are not configured")
         request_id = command.request_id.strip()
@@ -1783,7 +1991,10 @@ class ResearchRunService:
                         raise ResearchRunStartTrackingConflict(
                             "Start Tracking request_id conflicts"
                         )
-                    return DailyTrackSummary.model_validate(receipt["outcome"])
+                    return ResearchRunStartTrackingOutcome(
+                        track=DailyTrackSummary.model_validate(receipt["outcome"]),
+                        replayed=True,
+                    )
                 row = transaction.execute(
                     """
                     SELECT id, name, folder_id, status,
@@ -1840,45 +2051,30 @@ class ResearchRunService:
                         Jsonb(outcome.model_dump(mode="json")),
                     ),
                 )
-                return outcome
+                return ResearchRunStartTrackingOutcome(
+                    track=outcome,
+                    replayed=False,
+                )
+        except DailyTrackActivationLimitReached as error:
+            raise ResearchRunTrackingUnavailable(
+                "Active DailyTrack limit of 10 reached"
+            ) from error
+        except DailyTrackAlreadyExists as error:
+            raise ResearchRunTrackingUnavailable("ResearchRun already has a DailyTrack") from error
+        except UniqueViolation as error:
+            if error.diag.constraint_name not in {
+                "start_tracking_receipts_seed_run_id_key",
+                "tracks_seed_run_id_key",
+            }:
+                raise
+            raise ResearchRunTrackingUnavailable("ResearchRun already has a DailyTrack") from error
         except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
             raise ResearchRunTrackingTemporarilyUnavailable(
                 "Start Tracking is temporarily unavailable"
             ) from error
 
     def get_detail(self, researcher_id: UUID, run_id: str) -> ResearchRunDetail | None:
-        with self._database.transaction() as transaction:
-            row = transaction.execute(
-                """
-                SELECT run.id, run.name, run.folder_id, run.status,
-                       run.requested_start_date, run.requested_end_date,
-                       run.created_at, run.immutable_input,
-                       run.result_manifest_sha256, run.result_provenance,
-                       run.key_metrics, run.failure_reason,
-                       progress.phase AS progress_phase,
-                       progress.completed_warmup_sessions,
-                       progress.total_warmup_sessions,
-                       progress.completed_research_sessions,
-                       progress.total_research_sessions,
-                       progress.committed_chunk_count,
-                       progress.last_completed_warmup_session,
-                       progress.last_completed_research_session,
-                       progress.remaining_duration_estimate_seconds,
-                       timing.execution_started_at,
-                       timing.execution_finished_at,
-                       CURRENT_TIMESTAMP AS execution_observed_at
-                FROM research_runs.runs AS run
-                JOIN research_runs.progress AS progress ON progress.run_id = run.id
-                LEFT JOIN LATERAL (
-                    SELECT min(attempt.started_at) AS execution_started_at,
-                           max(attempt.finished_at) AS execution_finished_at
-                    FROM research_runs.attempts AS attempt
-                    WHERE attempt.run_id = run.id
-                ) AS timing ON true
-                WHERE run.researcher_id = %s AND run.id = %s
-                """,
-                (researcher_id, run_id),
-            ).fetchone()
+        row = self._detail_row(researcher_id, run_id)
         if row is None:
             return None
         summary = _summary(row)
@@ -1911,6 +2107,19 @@ class ResearchRunService:
                 stored_result,
                 dict(provenance),
                 research_kind=summary.research_kind,
+                comparison=(
+                    self._comparison_for_result(stored_result)
+                    if summary.research_kind == "strategy_backtest"
+                    else None
+                ),
+                annualized_excess_return=(
+                    summary.key_metrics.annualized_excess_return
+                    if isinstance(
+                        summary.key_metrics,
+                        StrategyBacktestResearchRunKeyMetrics,
+                    )
+                    else None
+                ),
             )
         except Exception as error:
             raise ResearchRunResultUnavailable from error
@@ -1920,6 +2129,222 @@ class ResearchRunService:
             progress=_research_progress(row),
             execution_timing=_research_execution_timing(row, summary.status),
             result=result,
+        )
+
+    def _detail_row(
+        self,
+        researcher_id: UUID,
+        run_id: str,
+    ) -> dict[str, object] | None:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT run.id, run.name, run.folder_id, run.status,
+                       run.requested_start_date, run.requested_end_date,
+                       run.created_at, run.immutable_input,
+                       run.result_manifest_sha256, run.result_provenance,
+                       run.key_metrics, run.failure_reason,
+                       progress.phase AS progress_phase,
+                       progress.completed_warmup_sessions,
+                       progress.total_warmup_sessions,
+                       progress.completed_research_sessions,
+                       progress.total_research_sessions,
+                       progress.committed_chunk_count,
+                       progress.last_completed_warmup_session,
+                       progress.last_completed_research_session,
+                       progress.remaining_duration_estimate_seconds,
+                       timing.execution_started_at,
+                       timing.execution_finished_at,
+                       CURRENT_TIMESTAMP AS execution_observed_at
+                FROM research_runs.runs AS run
+                JOIN research_runs.progress AS progress ON progress.run_id = run.id
+                LEFT JOIN LATERAL (
+                    SELECT min(attempt.started_at) AS execution_started_at,
+                           max(attempt.finished_at) AS execution_finished_at
+                    FROM research_runs.attempts AS attempt
+                    WHERE attempt.run_id = run.id
+                ) AS timing ON true
+                WHERE run.researcher_id = %s AND run.id = %s
+                """,
+                (researcher_id, run_id),
+            ).fetchone()
+        return row
+
+    def get_polling_detail(
+        self,
+        researcher_id: UUID,
+        run_id: str,
+    ) -> ResearchRunPollingDetail | None:
+        try:
+            return self._get_polling_detail(researcher_id, run_id)
+        except (OperationalError, PoolTimeout) as error:
+            raise ResearchRunTemporarilyUnavailable(
+                "ResearchRun detail is temporarily unavailable"
+            ) from error
+
+    def get_result_section(
+        self,
+        researcher_id: UUID,
+        query: ResearchRunResultSectionInput,
+    ) -> ResearchRunResultSectionResponse | None:
+        try:
+            return self._get_result_section(researcher_id, query)
+        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+            raise ResearchRunTemporarilyUnavailable(
+                "ResearchRun Result is temporarily unavailable"
+            ) from error
+
+    def _get_result_section(
+        self,
+        researcher_id: UUID,
+        query: ResearchRunResultSectionInput,
+    ) -> ResearchRunResultSectionResponse | None:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT id, status, immutable_input, result_manifest_sha256,
+                       result_provenance
+                FROM research_runs.runs
+                WHERE researcher_id = %s AND id = %s
+                """,
+                (researcher_id, query.run_id),
+            ).fetchone()
+            cursor_secret = _cursor_secret(transaction)
+        if row is None:
+            return None
+        immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
+        if row["status"] != "succeeded":
+            raise ResearchRunResultUnavailable("ResearchRun Result is available only after success")
+        if query.section not in research_run_result_sections(
+            "succeeded",
+            immutable_input.research_kind,
+        ):
+            raise ResearchRunResultSectionIncompatible(
+                "Result section is incompatible with Research Kind"
+            )
+        manifest_sha256 = row.get("result_manifest_sha256")
+        provenance = row.get("result_provenance")
+        if (
+            self._publication is None
+            or not isinstance(manifest_sha256, str)
+            or not isinstance(provenance, Mapping)
+        ):
+            raise ResearchRunResultUnavailable("succeeded ResearchRun Result is incomplete")
+        selected_provenance = dict(provenance)
+        expected_input_sha256 = hashlib.sha256(
+            canonical_json_bytes(immutable_input.canonical_value())
+        ).hexdigest()
+        if (
+            selected_provenance.get("research_run_id") != query.run_id
+            or selected_provenance.get("research_kind") != immutable_input.research_kind
+            or selected_provenance.get("immutable_input_sha256") != expected_input_sha256
+        ):
+            raise ResearchRunResultReadFailed(
+                "ResearchRun Result provenance does not match immutable input"
+            )
+        published_ref = PublishedRef(
+            manifest_sha256=manifest_sha256,
+            kind="research.result",
+            provenance=selected_provenance,
+        )
+        after: str | None = None
+        limit = 20
+        if isinstance(query, StrategyObservationsResultSectionInput):
+            limit = query.limit
+            after = _decode_result_cursor(
+                query.cursor,
+                secret=cursor_secret,
+                researcher_id=researcher_id,
+                run_id=query.run_id,
+                section=query.section,
+                order="session_asc",
+                manifest_sha256=manifest_sha256,
+            )
+        elif isinstance(query, TerminalPositionsResultSectionInput):
+            limit = query.limit
+            after = _decode_result_cursor(
+                query.cursor,
+                secret=cursor_secret,
+                researcher_id=researcher_id,
+                run_id=query.run_id,
+                section=query.section,
+                order="instrument_asc",
+                manifest_sha256=manifest_sha256,
+            )
+        try:
+            section_read = read_semantic_result_section(
+                self._publication,
+                published_ref,
+                research_kind=immutable_input.research_kind,
+                section=query.section,
+                after=after,
+                limit=limit,
+            )
+            comparison_summary = None
+            if isinstance(query, StrategySummaryResultSectionInput):
+                stored_result = read_result_bundle(
+                    self._publication.read(published_ref),
+                    research_kind=immutable_input.research_kind,
+                )
+                comparison_summary = strategy_comparison_summary(
+                    self._comparison_for_result(stored_result)
+                )
+            result = _result_section_response(
+                query,
+                section_read=section_read,
+                provenance=selected_provenance,
+                authoring_input=_authorable_input(row),
+                manifest_sha256=manifest_sha256,
+                cursor_secret=cursor_secret,
+                researcher_id=researcher_id,
+                comparison=comparison_summary,
+            )
+        except PublicationUnavailableError:
+            raise
+        except (
+            KeyError,
+            PublicationNotFoundError,
+            PublicationVerificationError,
+            ResearchResultError,
+            ValidationError,
+            ValueError,
+        ) as error:
+            raise ResearchRunResultReadFailed("ResearchRun Result could not be verified") from error
+        return result
+
+    def _get_polling_detail(
+        self,
+        researcher_id: UUID,
+        run_id: str,
+    ) -> ResearchRunPollingDetail | None:
+        row = self._detail_row(researcher_id, run_id)
+        if row is None:
+            return None
+        summary = _summary(row)
+        manifest_sha256 = row.get("result_manifest_sha256")
+        provenance = row.get("result_provenance")
+        result_available = summary.status == "succeeded"
+        if result_available and (
+            not isinstance(manifest_sha256, str) or not isinstance(provenance, Mapping)
+        ):
+            raise ResearchRunResultUnavailable("succeeded ResearchRun Result is incomplete")
+        if not result_available and (manifest_sha256 is not None or provenance is not None):
+            raise ResearchRunResultUnavailable("unfinished ResearchRun exposes Result metadata")
+        sections = research_run_result_sections(summary.status, summary.research_kind)
+        retry_after_seconds = research_run_retry_after_seconds(summary.status)
+        return ResearchRunPollingDetail.model_validate(
+            {
+                **summary.model_dump(mode="json"),
+                "input": _authorable_input(row).model_dump(mode="json"),
+                "progress": _research_progress(row).model_dump(mode="json"),
+                "execution_timing": _research_execution_timing(
+                    row,
+                    summary.status,
+                ).model_dump(mode="json"),
+                "result_available": result_available,
+                "available_result_sections": sections,
+                "retry_after_seconds": retry_after_seconds,
+            }
         )
 
     def _tracking_origin(
@@ -1965,17 +2390,17 @@ class ResearchRunService:
             ),
         )
         stored_result = read_result_bundle(bundle, research_kind=immutable_input.research_kind)
-        _public_result(
-            stored_result,
-            selected_provenance,
-            research_kind=immutable_input.research_kind,
-        )
         if not isinstance(stored_result, Mapping):
             raise ResearchRunTrackingUnavailable
         initial_strategy_state = stored_result.get("terminal_strategy_state")
+        strategy_summary = stored_result.get("strategy_summary")
         calculation_contracts = selected_provenance.get("calculation_contracts")
-        if not isinstance(initial_strategy_state, Mapping) or not isinstance(
-            calculation_contracts, Mapping
+        if (
+            not isinstance(initial_strategy_state, Mapping)
+            or not isinstance(strategy_summary, Mapping)
+            or not isinstance(calculation_contracts, Mapping)
+            or not isinstance(strategy_summary.get("entry_session"), str)
+            or not isinstance(strategy_summary.get("initial_cash_cny"), str)
         ):
             raise ResearchRunTrackingUnavailable
         return TrackingOrigin(
@@ -1992,8 +2417,36 @@ class ResearchRunService:
                     canonical_json_bytes(stored_result)
                 ).hexdigest(),
             },
+            strategy_entry_session=str(strategy_summary["entry_session"]),
+            strategy_initial_cash_cny=str(strategy_summary["initial_cash_cny"]),
             initial_strategy_state=dict(initial_strategy_state),
             calculation_contracts=dict(calculation_contracts),
+        )
+
+    def _strategy_annualized_excess(
+        self,
+        final_values: Mapping[str, object],
+    ) -> float | None:
+        if self._annualized_excess_calculator is None:
+            raise RuntimeError("Annualized excess calculator is not configured")
+        return self._annualized_excess_calculator.annualized_excess_return(
+            _strategy_comparison_facts(final_values)
+        )
+
+    def _comparison_for_result(
+        self,
+        stored_result: Mapping[str, object],
+    ) -> dict[str, object]:
+        if self._strategy_comparison is None:
+            raise RuntimeError("Strategy comparison service is not configured")
+        observations = stored_result.get("strategy_daily_observations")
+        if not isinstance(observations, list) or any(
+            not isinstance(value, Mapping) for value in observations
+        ):
+            raise ResearchResultError("Strategy observations are invalid")
+        return self._strategy_comparison.comparison(
+            _strategy_comparison_facts(stored_result),
+            observations,
         )
 
     def _require_execution_dependencies(self) -> None:
@@ -2505,6 +2958,11 @@ class ResearchRunService:
         key_metrics = _result_key_metrics(
             final_values,
             claim.immutable_input.research_kind,
+            annualized_excess_return=(
+                self._strategy_annualized_excess(final_values)
+                if claim.immutable_input.research_kind == "strategy_backtest"
+                else None
+            ),
         )
         provenance = _result_provenance(claim)
         with self._database.transaction() as transaction:
@@ -3003,8 +3461,7 @@ class ResearchRunService:
         return _RecordedFailure(
             retry=retry,
             attempt_number=attempt_number,
-            failure_code=attempt_failure_code(policy.attempt_reason)
-            or "UNCLASSIFIED_FAILURE",
+            failure_code=attempt_failure_code(policy.attempt_reason) or "UNCLASSIFIED_FAILURE",
         )
 
     def _release_execution_checkpoints(
@@ -3042,12 +3499,12 @@ def _admission_receipt(
 ) -> dict[str, object] | None:
     return transaction.execute(
         """
-        SELECT request.request_fingerprint,
+        SELECT request.request_fingerprint, request.outcome,
                run.id, run.name, run.folder_id, run.status,
                run.requested_start_date, run.requested_end_date,
                run.created_at, run.immutable_input, run.failure_reason
         FROM research_runs.admission_requests AS request
-        JOIN research_runs.runs AS run
+        LEFT JOIN research_runs.runs AS run
           ON (run.researcher_id, run.id) = (request.researcher_id, request.run_id)
         WHERE request.researcher_id = %s AND request.request_id = %s
         """,
@@ -3055,9 +3512,91 @@ def _admission_receipt(
     ).fetchone()
 
 
+def _insert_admission_receipt(
+    transaction: PostgresTransaction,
+    *,
+    researcher_id: UUID,
+    request_id: str,
+    request_fingerprint: str,
+    run_id: str | None,
+    outcome: Mapping[str, object],
+) -> None:
+    transaction.execute(
+        """
+        INSERT INTO research_runs.admission_requests (
+            researcher_id, request_id, request_fingerprint, run_id, outcome
+        ) VALUES (%s, %s, %s, %s, %s)
+        """,
+        (
+            researcher_id,
+            request_id,
+            request_fingerprint,
+            run_id,
+            Jsonb(dict(outcome)),
+        ),
+    )
+
+
+def _admission_outcome(
+    receipt: Mapping[str, object],
+    *,
+    request_fingerprint: str,
+    replayed: bool,
+) -> ResearchRunAdmissionOutcome:
+    if receipt["request_fingerprint"] != request_fingerprint:
+        raise ResearchRunAdmissionConflict("ResearchRun request_id conflicts")
+    stored_outcome = receipt.get("outcome")
+    if not isinstance(stored_outcome, Mapping):
+        raise RuntimeError("ResearchRun admission receipt outcome is invalid")
+    if stored_outcome.get("outcome") == "rejected":
+        return ResearchRunAdmissionRejectedOutcome.model_validate(
+            {**stored_outcome, "replayed": replayed}
+        )
+    if stored_outcome.get("outcome") != "accepted" or receipt.get("id") is None:
+        raise RuntimeError("ResearchRun accepted receipt is incomplete")
+    return _accepted_admission_outcome(
+        receipt,
+        replayed=replayed,
+    )
+
+
+def _accepted_admission_outcome(
+    row: Mapping[str, object],
+    *,
+    replayed: bool,
+) -> ResearchRunAdmissionAccepted:
+    run = _summary(row)
+    return ResearchRunAdmissionAccepted(
+        run=run,
+        replayed=replayed,
+        retry_after_seconds=research_run_retry_after_seconds(run.status),
+    )
+
+
+def _cursor_secret(transaction: PostgresTransaction) -> bytes:
+    row = transaction.execute(
+        "SELECT secret FROM research_runs.cursor_secrets WHERE singleton = 1",
+        (),
+    ).fetchone()
+    if row is None or not isinstance(row.get("secret"), str):
+        raise RuntimeError("ResearchRun cursor secret is unavailable")
+    try:
+        secret = bytes.fromhex(str(row["secret"]))
+    except ValueError as error:
+        raise RuntimeError("ResearchRun cursor secret is invalid") from error
+    if len(secret) != 32:
+        raise RuntimeError("ResearchRun cursor secret is invalid")
+    return secret
+
+
+def _cursor_fernet(secret: bytes) -> Fernet:
+    return Fernet(urlsafe_b64encode(secret))
+
+
 def _encode_list_cursor(
     row: Mapping[str, object],
     *,
+    secret: bytes,
     researcher_id: UUID,
     folder_id: str | None,
     research_kind: ResearchKind | None,
@@ -3076,12 +3615,13 @@ def _encode_list_cursor(
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    return urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+    return _cursor_fernet(secret).encrypt(payload).decode("ascii")
 
 
 def _decode_list_cursor(
     cursor: str | None,
     *,
+    secret: bytes,
     researcher_id: UUID,
     folder_id: str | None,
     research_kind: ResearchKind | None,
@@ -3089,13 +3629,8 @@ def _decode_list_cursor(
     if cursor is None:
         return None, None
     try:
-        if not cursor:
-            raise ValueError
-        padded = cursor + "=" * (-len(cursor) % 4)
-        payload = urlsafe_b64decode(padded)
-        if urlsafe_b64encode(payload).decode("ascii").rstrip("=") != cursor:
-            raise ValueError
-        decoded: object = json.loads(payload.decode("utf-8"))
+        plaintext = _cursor_fernet(secret).decrypt(cursor.encode("ascii"))
+        decoded: object = json.loads(plaintext.decode("utf-8"))
         if not isinstance(decoded, dict) or set(decoded) != {
             "created_at",
             "folder_id",
@@ -3118,8 +3653,8 @@ def _decode_list_cursor(
             or decoded["research_kind"] != research_kind
         ):
             raise ValueError
-    except (ValueError, UnicodeDecodeError, Base64DecodeError) as error:
-        raise ValueError("ResearchRun cursor is invalid") from error
+    except (InvalidToken, ValueError, UnicodeDecodeError, UnicodeEncodeError) as error:
+        raise ResearchRunInvalidCursor("ResearchRun cursor is invalid") from error
     return created_at, run_id
 
 
@@ -3353,8 +3888,7 @@ def _generation_matches_frozen_facts(
         and generation.research_sessions[-1] == facts.coverage_end.isoformat()
         and set(immutable_input.field_bindings)
         <= set(getattr(generation, "field_availability", ()))
-        and _generation_financial_readiness(generation)
-        == facts.financial_research_readiness
+        and _generation_financial_readiness(generation) == facts.financial_research_readiness
     )
 
 
@@ -3372,15 +3906,13 @@ def _result_provenance(claim: ResearchRunExecutionClaim) -> dict[str, object]:
             }
         )
     return {
-        "schema_version": "research-result-v1",
+        "schema_version": "research-result-v2",
         "research_run_id": claim.run_id,
         "research_kind": claim.immutable_input.research_kind,
         "immutable_input_sha256": hashlib.sha256(canonical_json_bytes(value)).hexdigest(),
         "data_generation_id": claim.data_generation_id,
         "data_through_session": claim.data_through_session,
-        "financial_research_readiness": value["data_admission"][
-            "financial_research_readiness"
-        ],
+        "financial_research_readiness": value["data_admission"]["financial_research_readiness"],
         "calculation_contracts": calculation_contracts,
         "semantic_versions": value["semantic_versions"],
     }
@@ -3529,6 +4061,8 @@ def _summary(row: object) -> ResearchRunSummary:
 def _result_key_metrics(
     final_values: Mapping[str, object],
     research_kind: ResearchKind,
+    *,
+    annualized_excess_return: float | None = None,
 ) -> ResearchRunKeyMetrics:
     if research_kind == "factor_evaluation":
         factor_summary = final_values.get("factor_summary")
@@ -3562,7 +4096,7 @@ def _result_key_metrics(
         return StrategyBacktestResearchRunKeyMetrics.model_validate(
             {
                 "research_kind": research_kind,
-                "annualized_excess_return": metrics.get("annualized_excess_return"),
+                "annualized_excess_return": annualized_excess_return,
                 "sharpe": metrics.get("sharpe"),
                 "maximum_drawdown": maximum_drawdown.get("value"),
             }
@@ -3587,6 +4121,44 @@ def _factor_rank_ic_mean(
     if not isinstance(rank_ic, Mapping):
         raise ResearchResultError(f"Final Research {horizon_name}-session horizon has no Rank IC")
     return rank_ic.get("mean")
+
+
+def _strategy_comparison_facts(
+    values: Mapping[str, object],
+) -> StrategyComparisonFacts:
+    strategy_summary = values.get("strategy_summary")
+    terminal = values.get("terminal_strategy_state")
+    if not isinstance(strategy_summary, Mapping) or not isinstance(terminal, Mapping):
+        raise ResearchResultError("Strategy comparison facts are missing")
+    metric_state = terminal.get("metric_state")
+    if not isinstance(metric_state, Mapping):
+        raise ResearchResultError("Strategy comparison coordinate is missing")
+    entry_session_ordinal = metric_state.get("entry_session_ordinal")
+    session_count = metric_state.get("session_count")
+    if (
+        isinstance(entry_session_ordinal, bool)
+        or not isinstance(entry_session_ordinal, int)
+        or isinstance(session_count, bool)
+        or not isinstance(session_count, int)
+        or entry_session_ordinal < 1
+        or session_count < entry_session_ordinal
+    ):
+        raise ResearchResultError("Strategy comparison coordinate is invalid")
+    facts = {
+        "entry_session": strategy_summary.get("entry_session"),
+        "terminal_session": terminal.get("session"),
+        "initial_cash_cny": strategy_summary.get("initial_cash_cny"),
+        "terminal_net_nav": terminal.get("net_nav"),
+    }
+    if any(not isinstance(value, str) for value in facts.values()):
+        raise ResearchResultError("Strategy comparison facts are invalid")
+    return StrategyComparisonFacts(
+        entry_session=str(facts["entry_session"]),
+        terminal_session=str(facts["terminal_session"]),
+        session_interval_count=session_count - entry_session_ordinal,
+        initial_cash_cny=str(facts["initial_cash_cny"]),
+        terminal_net_nav=str(facts["terminal_net_nav"]),
+    )
 
 
 def _authorable_input(row: object) -> ResearchRunAuthorableInput:
@@ -3700,7 +4272,7 @@ def _checkpoint_binding(
             }
         )
     return {
-        "schema_version": "research-execution-checkpoint-v1",
+        "schema_version": "research-execution-checkpoint-v2",
         "research_kind": immutable_input.research_kind,
         "run_id": run_id,
         "creator_attempt_id": creator_attempt_id,
@@ -3754,11 +4326,211 @@ def _checkpoint_json_payload(payload: object, *, subject: str) -> dict[str, obje
     return value
 
 
+def _result_section_response(
+    query: ResearchRunResultSectionInput,
+    *,
+    section_read: SemanticResultSectionRead,
+    provenance: dict[str, object],
+    authoring_input: ResearchRunAuthorableInput,
+    manifest_sha256: str,
+    cursor_secret: bytes,
+    researcher_id: UUID,
+    comparison: Mapping[str, object] | None,
+) -> ResearchRunResultSectionResponse:
+    run_id = query.run_id
+    research_kind = authoring_input.research_kind
+    if isinstance(query, FactorResultSectionInput):
+        stored = section_read.value
+        if not isinstance(stored, Mapping):
+            raise ResearchRunResultReadFailed("Factor Result section is invalid")
+        stored_horizons = stored.get("horizons")
+        if not isinstance(stored_horizons, Mapping) or set(stored_horizons) != {
+            "1",
+            "5",
+            "20",
+        }:
+            raise ResearchRunResultReadFailed("Factor Result horizons are invalid")
+        return FactorResultSection.model_validate(
+            {
+                "run_id": run_id,
+                "research_kind": research_kind,
+                "factor": {
+                    "horizons": {
+                        name: {
+                            key: value
+                            for key, value in dict(stored_horizons[name]).items()
+                            if key in {"horizon", "summary", "coverage"}
+                        }
+                        for name in ("1", "5", "20")
+                    }
+                },
+            }
+        )
+    if isinstance(query, ProvenanceResultSectionInput):
+        if (
+            section_read.value != provenance
+            or provenance.get("research_run_id") != run_id
+            or provenance.get("research_kind") != research_kind
+        ):
+            raise ResearchRunResultReadFailed("Result provenance does not match ResearchRun")
+        return ProvenanceResultSection(
+            run_id=run_id,
+            research_kind=research_kind,
+            schema_version=str(provenance["schema_version"]),
+            immutable_input_sha256=str(provenance["immutable_input_sha256"]),
+            authoring_input=authoring_input,
+            data=ResultDataProvenance(
+                generation_id=str(provenance["data_generation_id"]),
+                data_through_session=provenance["data_through_session"],
+                financial_research_readiness=provenance["financial_research_readiness"],
+            ),
+            execution=ResultExecutionProvenance(
+                calculation_contracts=dict(provenance["calculation_contracts"]),
+                semantic_versions=dict(provenance["semantic_versions"]),
+            ),
+        )
+    if isinstance(query, StrategySummaryResultSectionInput):
+        if not isinstance(section_read.value, Mapping):
+            raise ResearchRunResultReadFailed("Strategy Summary section is invalid")
+        summary = dict(section_read.value)
+        metrics = summary.get("metrics")
+        if not isinstance(metrics, Mapping) or comparison is None:
+            raise ResearchRunResultReadFailed("Strategy Result metrics are unavailable")
+        return StrategySummaryResultSection.model_validate(
+            {
+                "run_id": run_id,
+                "entry_session": summary["entry_session"],
+                "initial_cash_cny": summary["initial_cash_cny"],
+                "metrics": metrics,
+                "comparison": comparison,
+            }
+        )
+    if isinstance(query, StrategyObservationsResultSectionInput):
+        next_cursor = (
+            _encode_result_cursor(
+                section_read.next_after,
+                secret=cursor_secret,
+                researcher_id=researcher_id,
+                run_id=run_id,
+                section=query.section,
+                order="session_asc",
+                manifest_sha256=manifest_sha256,
+            )
+            if section_read.next_after is not None
+            else None
+        )
+        return StrategyObservationsResultSection.model_validate(
+            {
+                "run_id": run_id,
+                "items": section_read.value,
+                "next_cursor": next_cursor,
+            }
+        )
+    if isinstance(query, TerminalStrategyStateResultSectionInput):
+        if not isinstance(section_read.value, Mapping):
+            raise ResearchRunResultReadFailed("Terminal Strategy State is invalid")
+        return TerminalStrategyStateResultSection.model_validate(
+            {"run_id": run_id, **section_read.value}
+        )
+    if isinstance(query, TerminalPositionsResultSectionInput):
+        next_cursor = (
+            _encode_result_cursor(
+                section_read.next_after,
+                secret=cursor_secret,
+                researcher_id=researcher_id,
+                run_id=run_id,
+                section=query.section,
+                order="instrument_asc",
+                manifest_sha256=manifest_sha256,
+            )
+            if section_read.next_after is not None
+            else None
+        )
+        return TerminalPositionsResultSection.model_validate(
+            {
+                "run_id": run_id,
+                "items": section_read.value,
+                "next_cursor": next_cursor,
+            }
+        )
+    raise ResearchRunResultSectionIncompatible("Unsupported ResearchRun Result section")
+
+
+def _encode_result_cursor(
+    after: str,
+    *,
+    secret: bytes,
+    researcher_id: UUID,
+    run_id: str,
+    section: str,
+    order: str,
+    manifest_sha256: str,
+) -> str:
+    payload = json.dumps(
+        {
+            "after": after,
+            "manifest_sha256": manifest_sha256,
+            "order": order,
+            "researcher_id": str(researcher_id),
+            "run_id": run_id,
+            "section": section,
+            "version": 1,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return _cursor_fernet(secret).encrypt(payload).decode("ascii")
+
+
+def _decode_result_cursor(
+    cursor: str | None,
+    *,
+    secret: bytes,
+    researcher_id: UUID,
+    run_id: str,
+    section: str,
+    order: str,
+    manifest_sha256: str,
+) -> str | None:
+    if cursor is None:
+        return None
+    try:
+        plaintext = _cursor_fernet(secret).decrypt(cursor.encode("ascii"))
+        decoded: object = json.loads(plaintext.decode("utf-8"))
+        if not isinstance(decoded, dict) or set(decoded) != {
+            "after",
+            "manifest_sha256",
+            "order",
+            "researcher_id",
+            "run_id",
+            "section",
+            "version",
+        }:
+            raise ValueError
+        after = decoded["after"]
+        if (
+            not isinstance(after, str)
+            or not after
+            or decoded["manifest_sha256"] != manifest_sha256
+            or decoded["order"] != order
+            or decoded["researcher_id"] != str(researcher_id)
+            or decoded["run_id"] != run_id
+            or decoded["section"] != section
+            or decoded["version"] != 1
+        ):
+            raise ValueError
+    except (InvalidToken, ValueError, UnicodeDecodeError, UnicodeEncodeError) as error:
+        raise ResearchRunInvalidCursor("ResearchRun Result cursor is invalid") from error
+    return after
+
+
 def _public_result(
     stored: object,
     provenance: dict[str, object],
     *,
     research_kind: str,
+    comparison: Mapping[str, object] | None = None,
+    annualized_excess_return: float | int | None = None,
 ) -> ResearchRunResult:
     if not isinstance(stored, Mapping):
         raise ResearchRunResultUnavailable
@@ -3808,16 +4580,34 @@ def _public_result(
         or not isinstance(terminal_strategy_state, Mapping)
     ):
         raise ResearchRunResultUnavailable
-    benchmark = strategy_summary.get("benchmark")
-    public_strategy_summary = {
-        name: value for name, value in strategy_summary.items() if name != "benchmark"
+    if comparison is None:
+        raise ResearchRunResultUnavailable
+    public_strategy_summary = dict(strategy_summary)
+    stored_metrics = strategy_summary.get("metrics")
+    if not isinstance(stored_metrics, Mapping):
+        raise ResearchRunResultUnavailable
+    public_metrics = {
+        **dict(stored_metrics),
+        "annualized_excess_return": annualized_excess_return,
+        "benchmark_cumulative_return": None,
+        "benchmark_cagr": None,
     }
+    comparison_metrics = comparison.get("metrics")
+    if comparison.get("status") == "available" and isinstance(
+        comparison_metrics,
+        Mapping,
+    ):
+        public_metrics["benchmark_cumulative_return"] = comparison_metrics.get(
+            "benchmark_cumulative_return"
+        )
+        public_metrics["benchmark_cagr"] = comparison_metrics.get("benchmark_cagr")
+    public_strategy_summary["metrics"] = public_metrics
     public.update(
         {
             "strategy": {
                 "summary": public_strategy_summary,
-                "benchmark": benchmark,
                 "observations": observations,
+                "comparison": comparison,
             },
             "terminal_strategy_state": {
                 name: terminal_strategy_state[name]
@@ -3827,7 +4617,6 @@ def _public_result(
                     "net_cash",
                     "gross_nav",
                     "net_nav",
-                    "benchmark_nav",
                     "cumulative_transaction_cost",
                     "positions",
                     "rebalance_phase",

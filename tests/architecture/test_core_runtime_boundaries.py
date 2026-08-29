@@ -13,6 +13,7 @@ from botocore.exceptions import ClientError
 
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import (
+    CORE_ENVIRONMENT_NAMES,
     PUBLICATION_REQUEST_TIMEOUT_SECONDS,
     CoreRuntime,
     CoreSettings,
@@ -22,12 +23,15 @@ from thesistrace.entrypoints.runtime import (
 ROOT = Path(__file__).resolve().parents[2]
 CORE_PACKAGES = (
     "_postgres",
+    "benchmark",
     "data",
     "daily_track",
     "entrypoints",
     "operational_events",
     "publication",
+    "research_authoring",
     "research_batch",
+    "research_agent",
     "research_folder",
     "research_run",
     "researcher",
@@ -60,6 +64,14 @@ ALLOWED_SCHEMA_REFERENCES = {
 }
 
 
+def test_research_agent_mcp_runbook_forwards_every_required_core_variable() -> None:
+    runbook = (ROOT / "docs" / "runbook" / "research-agent-mcp.md").read_text()
+    sample = runbook.split("```toml", maxsplit=1)[1].split("```", maxsplit=1)[0]
+    server = tomllib.loads(sample)["mcp_servers"]["thesistrace"]
+
+    assert set(CORE_ENVIRONMENT_NAMES) <= set(server["env_vars"])
+
+
 def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
     for package in CORE_PACKAGES:
         for path in (ROOT / "src" / "thesistrace" / package).rglob("*.py"):
@@ -83,12 +95,14 @@ def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
 def test_internal_import_graph_is_layered_and_acyclic() -> None:
     allowed = {
         "_postgres": set(),
+        "benchmark": set(),
         "alpha_language": {"data", "research_kernel"},
         "publication": {"_postgres"},
         "research_series": set(),
         "research_kernel": {"research_series"},
         "data": {
             "_postgres",
+            "benchmark",
             "operational_events",
             "product_state",
             "publication",
@@ -99,6 +113,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "researcher": {"_postgres", "research_folder"},
         "daily_track": {
             "_postgres",
+            "benchmark",
             "data",
             "operational_events",
             "publication",
@@ -108,6 +123,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "research_run": {
             "_postgres",
             "alpha_language",
+            "benchmark",
             "daily_track",
             "data",
             "operational_events",
@@ -126,17 +142,35 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
                 "research_run",
                 "research_series",
             },
+        "research_authoring": {
+            "alpha_language",
+            "research_batch",
+            "research_run",
+        },
+        "research_agent": {
+            "alpha_language",
+            "data",
+            "daily_track",
+            "operational_events",
+            "research_authoring",
+            "research_batch",
+            "research_folder",
+            "research_run",
+        },
         "fixture": {"data"},
-        "adapters": {"data", "fixture"},
+        "adapters": {"benchmark", "data", "fixture"},
         "entrypoints": {
             "_postgres",
             "alpha_language",
             "adapters",
+            "benchmark",
             "daily_track",
             "data",
             "operational_events",
             "publication",
+            "research_authoring",
             "research_batch",
+            "research_agent",
             "research_folder",
             "research_kernel",
             "research_run",
@@ -184,6 +218,7 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "research_runs.admission_requests",
             "research_runs.attempts",
             "research_runs.cancel_receipts",
+            "research_runs.cursor_secrets",
             "research_runs.start_tracking_receipts",
         ),
         "research_batch": (
@@ -192,8 +227,10 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "research_batches.progress",
             "research_batches.admission_receipts",
             "research_batches.cancel_receipts",
+            "research_batches.cursor_secrets",
         ),
         "daily_track": (
+            "daily_tracks.cursor_secrets",
             "daily_tracks.tracks",
             "daily_tracks.session_progressions",
             "daily_tracks.session_progression_attempts",
@@ -250,6 +287,7 @@ def test_runtime_requires_independent_batch_attempt_control_directory(
         "THESISTRACE_S3_SECRET_ACCESS_KEY": "unused",
         "THESISTRACE_S3_BUCKET": "unused",
         "THESISTRACE_DATA_MOUNT": str(data_mount),
+        "THESISTRACE_BENCHMARK_MOUNT": str(tmp_path / "benchmark-data"),
         "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY": str(
             attempt_control_directory
         ),
@@ -260,9 +298,25 @@ def test_runtime_requires_independent_batch_attempt_control_directory(
     settings = CoreSettings.from_environment()
 
     assert settings.data_mount == data_mount
+    assert settings.benchmark_mount == tmp_path / "benchmark-data"
     assert settings.batch_attempt_control_directory == attempt_control_directory
     assert not settings.batch_attempt_control_directory.is_relative_to(
         settings.data_mount
+    )
+
+    independent_mount = tmp_path / "independent-store" / "benchmark"
+    monkeypatch.setenv("THESISTRACE_BENCHMARK_MOUNT", str(independent_mount))
+    assert CoreSettings.from_environment().benchmark_mount == independent_mount
+
+    monkeypatch.setenv("THESISTRACE_BENCHMARK_MOUNT", str(data_mount / "benchmark"))
+    with pytest.raises(
+        RuntimeError,
+        match="must be independent of Canonical Data",
+    ):
+        CoreSettings.from_environment()
+    monkeypatch.setenv(
+        "THESISTRACE_BENCHMARK_MOUNT",
+        str(tmp_path / "benchmark-data"),
     )
 
     monkeypatch.delenv("THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY")
@@ -294,6 +348,9 @@ def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> Non
         "thesistrace-core-worker": "thesistrace.entrypoints.worker:main",
         "thesistrace-initialize": "thesistrace.entrypoints.initialize:main",
         "thesistrace-data-operator": "thesistrace.entrypoints.data_operator:main",
+        "thesistrace-research-agent-mcp": (
+            "thesistrace.entrypoints.research_agent_mcp:main"
+        ),
     }
 
 
@@ -844,17 +901,30 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     assert "deepcopy(" not in execution_source
     assert "run_kernel(" not in service_source
     assert "canonical-data:/var/lib/thesistrace/canonical-data:ro" in compose_source
+    assert "benchmark-data:/var/lib/thesistrace/benchmark-data" in compose_source
+    assert compose_source.count(
+        "benchmark-data:/var/lib/thesistrace/benchmark-data"
+    ) == 1
     assert (
         "batch-attempt-control:/var/lib/thesistrace/.batch-attempts"
         in compose_source
     )
     assert "/canonical-data/.batch-attempts" not in compose_source
     assert ":/var/lib/thesistrace/canonical-data:ro" in test_compose_source
+    assert ":/var/lib/thesistrace/benchmark-data" in test_compose_source
+    assert test_compose_source.count(":/var/lib/thesistrace/benchmark-data") == 1
     assert (
         ":/var/lib/thesistrace/.batch-attempts" in test_compose_source
     )
     assert "/canonical-data/.batch-attempts" not in test_compose_source
-    assert "${THESISTRACE_TEST_RUN_ROOT}:/smoke-data:ro" in image_smoke_compose_source
+    assert (
+        "${THESISTRACE_TEST_BENCHMARK_MOUNT}:/smoke-data/benchmark-data"
+        in image_smoke_compose_source
+    )
+    assert image_smoke_compose_source.count(
+        "${THESISTRACE_TEST_BENCHMARK_MOUNT}:/smoke-data/benchmark-data"
+    ) == 2
+    assert "${THESISTRACE_TEST_RUN_ROOT}:/smoke-data" not in image_smoke_compose_source
     assert "/canonical-data/.batch-attempts" not in image_smoke_compose_source
     child_environment = transport_source[
         transport_source.index("def child_environment(") : transport_source.index(
@@ -1105,6 +1175,32 @@ def test_obsolete_authoring_contract_cannot_reenter_the_active_runtime() -> None
         "alpha_release_id",
     ):
         assert forbidden not in active_authoring
+
+
+def test_browser_only_plots_backend_precomputed_strategy_comparison_curves() -> None:
+    web_root = ROOT / "web" / "src"
+    chart_source = (web_root / "analysis" / "StrategyPerformanceChart.tsx").read_text()
+    product_source = "\n".join(
+        path.read_text()
+        for path in web_root.rglob("*")
+        if path.suffix in {".ts", ".tsx"} and ".test." not in path.name
+    )
+
+    for precomputed_field in (
+        "net_strategy_return",
+        "benchmark_relative_return",
+    ):
+        assert precomputed_field in chart_source
+    for forbidden_financial_input in (
+        "net_nav",
+        "benchmark_nav",
+        "initial_cash_cny",
+        "benchmark_open_level",
+        "net_excess_nav",
+    ):
+        assert forbidden_financial_input not in chart_source
+    assert "selected_universe_equal_weight" not in product_source
+    assert "benchmark_nav" not in product_source
 
 
 

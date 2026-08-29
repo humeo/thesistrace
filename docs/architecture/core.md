@@ -8,8 +8,8 @@
 The active checkout closes one invite-only, multi-Researcher research loop:
 
 ```text
-Data Operator prepares the current Dataset Head
-    -> Data Overview exposes current coverage read-only
+Data Operator prepares the current Dataset Head and CSI 300 Benchmark Snapshot
+    -> Data Overview exposes Dataset and Benchmark readiness read-only
     -> author one browser-local Draft inside a Research Folder
     -> Run compiles and atomically admits one immutable ResearchRun
     -> a ResearchRun Attempt pins the Generation frozen at admission
@@ -22,7 +22,8 @@ The browser-visible resources are Data Overview, Research Folders, Research
 (ResearchRuns), and DailyTracks. Research Batches are a backend API resource in
 V1 and their child ResearchRuns appear in the Batch Research Folder; there is no
 Batch browser surface. Browser Draft is local authoring state rather than a
-server resource. Data Generation, execution Attempt, Tracking Checkpoint,
+server resource. Benchmark Store, Data Generation, execution Attempt, Tracking
+Checkpoint,
 Working Cache, publication manifest, and schema fingerprint are implementation
 concepts, not additional product resources.
 
@@ -60,9 +61,12 @@ flowchart LR
     T["Tracking Worker pool"] --> M
     O["Private Data Operator"] --> D["Data module"]
     M --> P["PostgreSQL Core schemas"]
-    A --> X["PostgreSQL auth schema"]
+    A --> U["PostgreSQL auth schema"]
+    O --> B["Benchmark module"]
+    H --> B
     M --> S["RustFS via S3 client"]
     D --> F["Mounted Canonical Data Store"]
+    B --> G["Mounted Benchmark Store"]
 ```
 
 Caddy evaluates mutually exclusive `handle /api/auth/*`, `handle /api/*`, and
@@ -231,13 +235,22 @@ The Production deployment is one node and one replica per service, uses
 `restart: unless-stopped`, and permits planned short maintenance downtime. It
 makes no high-availability or zero-downtime claim.
 
+The mounted Benchmark Store contains one current atomically replaced
+`csi300-price-index-open.json` Snapshot. It is outside Canonical Data, Product
+State, Dataset Families, and Data Generations. Only API and private Data
+Operator processes mount it; Research, Batch Research, and Tracking Workers do
+not.
+
 ## Operational observability
 
 Every first-party Core operational event uses one JSONL envelope on process
 stderr: `timestamp`, `level`, `component`, and stable lower-snake-case `event`.
 The only optional correlation identities are `operation_id`, `run_id`,
-`track_id`, `attempt_id`, and `http_request_id`; event-specific context comes
-from the closed allowlist in `operational_events.py`. Request URLs, query
+`batch_id`, `track_id`, `attempt_id`, `http_request_id`, `request_id`,
+`subject`, and `trace_id`; event-specific context comes from the closed
+allowlist in `operational_events.py`. Research Agent identities supplied by a
+caller are recorded only as field-domain digests; canonical Product IDs may be
+recorded after validated successful output. Request URLs, query
 strings, headers, bodies, responses, Formulae, Hypotheses, credentials, object
 keys, exception messages, local variables, and physical paths are not event
 fields.
@@ -297,6 +310,7 @@ permanent retention.
 src/thesistrace/
 ├── researcher/
 ├── alpha_language/
+├── benchmark/
 ├── data/
 ├── research_folder/
 ├── research_run/
@@ -321,6 +335,7 @@ flowchart LR
     E --> B["Research Batches"]
     E --> T["DailyTracks"]
     E --> A["Data"]
+    E --> B["Benchmark"]
     E --> L["Alpha Language"]
     L --> A
     L --> K["Research Kernel"]
@@ -331,6 +346,7 @@ flowchart LR
     R --> F
     R --> A
     R --> K
+    R --> B
     R --> P["Publication"]
     R --> T
     B --> F
@@ -340,6 +356,7 @@ flowchart LR
     B --> P
     T --> A
     T --> K
+    T --> B
     T --> P
 ```
 
@@ -407,7 +424,8 @@ legacy Draft read, compatibility role, or fallback identity.
 The product interface is read-only:
 
 ```text
-GET /api/data -> coverage, data-through session, last refresh, readiness
+GET /api/data -> Dataset coverage and readiness plus Benchmark Snapshot readiness,
+                 coverage, SHA-256, and publication time
 ```
 
 Bootstrap, Refresh, inspection, work execution, and garbage collection belong
@@ -422,6 +440,17 @@ calling Industry endpoints. Financial and Industry Refresh each build and
 validate their own candidate, recompose it with the latest unaffected Families,
 and atomically move Head only if its target Family is still current. Any
 failure leaves the previous Head readable.
+
+Dataset Bootstrap and Market Refresh use one Benchmark-first publication
+barrier. The Data Operator obtains Tushare `index_daily` Open Levels for
+`399300.SZ`, initially from 2010-01-04 and later only after the published
+Snapshot terminal Research Session. It validates every required session,
+atomically replaces the complete Snapshot, and only then attempts the Market
+Head compare-and-swap. The Snapshot may lead a failed or concurrent Head move;
+a newly published Market Head may never lead it. Market no-change may still
+append Benchmark Levels. Published historical Levels are fixed and there is no
+alternate index, carry, runtime remote read, compatibility reader, or other
+fallback.
 
 An active execution pins one Data Generation. Garbage collection retains the
 current Head, live candidates, and active pins; completed Results and Tracking
@@ -487,10 +516,16 @@ Folder membership stay outside immutable execution input.
 
 A succeeded Run exposes one immutable Result discriminated by Research Kind.
 Factor Evaluation publishes `factor` and provenance; Strategy Backtest adds
-`strategy` and `terminal_strategy_state`. Publication failure cannot expose a
-partial Result or mark the Run succeeded. Cancel fences publication immediately
-and enters `cancelling`; it reaches terminal `cancelled` only after execution
-has stopped and the Generation pin is released.
+Strategy-only `strategy` and `terminal_strategy_state` facts. Successful
+Strategy finalization reads the current Snapshot once to persist the existing
+list `key_metrics.annualized_excess_return`; unavailable Benchmark data stores
+`null` without failing the Run. Detail reads assemble Strategy Comparison from
+the immutable Strategy facts and current Snapshot. Benchmark Levels, identity,
+NAV, cumulative metrics, and CAGR are not immutable Result or execution state.
+Publication failure cannot expose a partial Result or mark the Run succeeded.
+Cancel fences publication immediately and enters `cancelling`; it reaches
+terminal `cancelled` only after execution has stopped and the Generation pin is
+released.
 
 ## DailyTracks
 
@@ -498,6 +533,12 @@ A succeeded Strategy Backtest ResearchRun can activate at most one DailyTrack;
 Factor Evaluation cannot. Activation freezes the complete Tracking Origin and
 initial Strategy state. The current product permits at most ten non-stopped
 Tracks; terminally stopped Tracks do not count.
+
+DailyTrack Detail assembles the same Snapshot-backed Strategy Comparison as its
+seed ResearchRun. Entry Open and Initial Cash remain the seed baseline even
+when the response exposes only the latest 504 observations. Missing, damaged,
+or insufficient Snapshot data makes only the comparison unavailable and never
+blocks Tracking.
 
 ```text
 active | blocked | stopping | stopped
@@ -686,11 +727,14 @@ The active local gates are documented in the
 3. `mise exec -- pnpm test:e2e` drives the complete browser loop against a fresh
    topology.
 4. `mise exec -- pnpm test:image-smoke` qualifies the built application images.
-5. `mise exec -- pnpm test:benchmark` qualifies both long Research Kinds in the
-   final image under the declared Worker envelope.
+5. `mise exec -- pnpm check:performance` independently qualifies both long
+   Research Kinds in the final image under the declared Worker envelope on a
+   controlled idle host. It is serial and fails immediately after persisting an
+   over-budget sample.
 6. `mise exec -- pnpm check` is the ordinary merge gate;
-   `mise exec -- pnpm check:release` adds image smoke and long-Research
-   qualification.
+   `mise exec -- pnpm check:release` adds image smoke. Long-Research performance
+   qualification remains explicit so unrelated host load cannot turn an
+   ordinary release check into a multi-hour ambiguous failure.
 
 Identity and ownership use those same gates rather than a second test topology.
 Test uses a local Resend-compatible HTTP fake and never the public
@@ -723,6 +767,8 @@ are not Production readiness.
 - SQLite Product State or a second runtime implementation.
 - Tracking Generation branches, multi-contract dispatch, or contract migration.
 - Raw artifact browsers, physical object paths, or internal lifecycle pages.
+- A public Raw Benchmark API or browser-side alignment, compounding, and excess
+  return calculation.
 - Server Definitions, visible Revisions, Save, authoring Refresh, or product
   Rerun endpoints and compatibility paths.
 

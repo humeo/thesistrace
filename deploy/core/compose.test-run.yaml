@@ -7,6 +7,8 @@ x-test-environment: &test-environment
   THESISTRACE_S3_BUCKET: ${THESISTRACE_TEST_BUCKET:-thesistrace-test}
   THESISTRACE_S3_REGION: us-east-1
   THESISTRACE_DATA_MOUNT: /var/lib/thesistrace/canonical-data
+  THESISTRACE_BENCHMARK_MOUNT: /var/lib/thesistrace/benchmark-data
+  THESISTRACE_INTERNAL_API_ORIGIN: http://api:8100
   THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY: /var/lib/thesistrace/.batch-attempts
 
 services:
@@ -66,6 +68,7 @@ services:
       THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth:8200
     volumes:
       - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data
+      - ${THESISTRACE_TEST_BENCHMARK_MOUNT}:/var/lib/thesistrace/benchmark-data
 
   research-worker:
     environment:

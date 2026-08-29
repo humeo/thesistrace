@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -13,6 +13,12 @@ from threading import Event, Thread
 from psycopg.errors import UniqueViolation
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.benchmark import (
+    BenchmarkLevelSource,
+    BenchmarkSnapshotError,
+    BenchmarkSnapshotStore,
+    BenchmarkSnapshotUpdater,
+)
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
 from thesistrace.data.head_store import (
     DatasetHeadConflict,
@@ -89,6 +95,7 @@ class DataRefreshService:
         database: PostgresDatabase,
         mount_root: Path | str,
         *,
+        benchmark_mount_root: Path | str,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         lease_seconds: float = _REFRESH_LEASE_SECONDS,
         heartbeat_seconds: float = _REFRESH_HEARTBEAT_SECONDS,
@@ -116,6 +123,7 @@ class DataRefreshService:
         self._lifecycle = DatasetLifecycle(database, mount_root)
         self._heads = MountedDatasetHeadStore(mount_root)
         self._generations = MountedGenerationStore(mount_root)
+        self._benchmark_store = BenchmarkSnapshotStore(benchmark_mount_root)
 
     @contextmanager
     def _timed_phase(self, operation_id: str, phase: str) -> Iterator[None]:
@@ -191,11 +199,21 @@ class DataRefreshService:
             raise DataRefreshError("REFRESH_NOT_FOUND")
         return _outcome(row)
 
-    def process_next(self, source: DataSource) -> bool:
+    def process_next(
+        self,
+        source: DataSource,
+        *,
+        benchmark_source: BenchmarkLevelSource,
+    ) -> bool:
         with mounted_data_mutation_lock(self._database):
-            return self._process_next(source)
+            return self._process_next(source, benchmark_source=benchmark_source)
 
-    def _process_next(self, source: DataSource) -> bool:
+    def _process_next(
+        self,
+        source: DataSource,
+        *,
+        benchmark_source: BenchmarkLevelSource,
+    ) -> bool:
         reconciled = self._reconcile_pending_completion()
         recovered = self._recover_expired_claims()
         claim = self._claim()
@@ -243,6 +261,16 @@ class DataRefreshService:
                     candidate_canonical = batch.canonical
                     unchanged = candidate_canonical == refresh_base.canonical
                 if unchanged:
+                    phase = "benchmark"
+                    with self._timed_phase(operation_id, phase):
+                        current_admission = self._generations.open_admission(
+                            expected_manifest
+                        )
+                        self._update_benchmark(
+                            current_admission.research_calendar,
+                            benchmark_source,
+                        )
+                    heartbeat.assert_owned()
                     completed_at = self._operator_time()
                     self._complete_no_change(
                         claim,
@@ -262,6 +290,16 @@ class DataRefreshService:
                             prepared_at=prepared_at,
                             source_name=batch.source_name,
                             source_lineage=batch.source_lineage,
+                        )
+                    heartbeat.assert_owned()
+                    phase = "benchmark"
+                    with self._timed_phase(operation_id, phase):
+                        candidate_admission = self._generations.open_admission(
+                            generation.manifest_sha256
+                        )
+                        self._update_benchmark(
+                            candidate_admission.research_calendar,
+                            benchmark_source,
                         )
                     heartbeat.assert_owned()
                     phase = "candidate_validation"
@@ -370,6 +408,17 @@ class DataRefreshService:
                 )
             )
         return True
+
+    def _update_benchmark(
+        self,
+        research_calendar: Sequence[str],
+        source: BenchmarkLevelSource,
+    ) -> None:
+        BenchmarkSnapshotUpdater(
+            self._benchmark_store,
+            source,
+            clock=self._operator_time,
+        ).update(research_calendar)
 
     def _claim(self) -> _RefreshClaim | None:
         owner_token = secrets.token_hex(16)
@@ -829,6 +878,8 @@ def _failure_policy(error: Exception) -> tuple[str, bool]:
         return error.code, retryable
     if isinstance(error, DataSourceError):
         return f"SOURCE_{error.category.upper()}", error.category == "unavailable"
+    if isinstance(error, BenchmarkSnapshotError):
+        return error.code, False
     if isinstance(error, DatasetHeadConflict):
         return "HEAD_CHANGED", True
     if isinstance(error, ValueError):

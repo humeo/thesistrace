@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from benchmark_support import FixtureBenchmarkSource, benchmark_mount_for_data_mount
 from canonical_store import open_complete_refresh_basis
 
 from thesistrace._postgres import PostgresDatabase
@@ -519,7 +520,11 @@ def test_materialized_refresh_candidate_is_never_planned_before_registration(
             source_lineage={"ordinal": 1},
         ).manifest_sha256
         _install_head(lifecycle, head, operation_id="candidate-gap-head")
-        refresh = DataRefreshService(database, tmp_path)
+        refresh = DataRefreshService(
+            database,
+            tmp_path,
+            benchmark_mount_root=benchmark_mount_for_data_mount(tmp_path),
+        )
         refresh.submit(
             idempotency_key="candidate-gap-refresh",
             as_of=datetime(2026, 8, 10, 2, tzinfo=UTC),
@@ -544,7 +549,11 @@ def test_materialized_refresh_candidate_is_never_planned_before_registration(
             pause_after_materialize,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
-            processing = executor.submit(refresh.process_next, _StaticRefreshSource(candidate))
+            processing = executor.submit(
+                refresh.process_next,
+                _StaticRefreshSource(candidate),
+                benchmark_source=FixtureBenchmarkSource(),
+            )
             assert candidate_materialized.wait(timeout=20)
             with pytest.raises(DataCollectionError) as rejected:
                 DataGarbageCollector(database, tmp_path).collect(

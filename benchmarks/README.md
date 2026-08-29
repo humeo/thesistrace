@@ -1,11 +1,11 @@
 # Benchmarks
 
-## Long Research qualification
+## Long Research performance qualification
 
-Run the release-blocking final Production Image qualification with:
+Run the independent final Production Image performance qualification with:
 
 ```sh
-pnpm test:benchmark
+pnpm check:performance
 ```
 
 The command builds the final image once and measures Factor Evaluation and
@@ -16,10 +16,19 @@ execution budget, and two calculation threads. Warm preload reads Canonical
 objects only; every measured sample begins after an ordinary Product State
 reset and proves the PostgreSQL and RustFS Product State is empty.
 
+Run it only on a controlled, otherwise idle host. The Worker cgroup caps the
+workload at two CPUs but cannot reserve host CPU time from unrelated processes.
+Samples remain serial; parallel samples would contaminate the comparison. A
+failed run remains failed, and a later clean-host run is separate evidence.
+
 The structured report is saved below the run's `.local/test-runs/<run-id>/`
-evidence directory. It records deterministic nearest-rank duration P95,
-per-phase timings, peak RSS, first durable Checkpoint, confirmed cancellation,
-child exit, exact Result object sets, and cross-kind Factor Summary identity.
+evidence directory. It records the maximum cold and warm duration across the
+five samples, per-phase timings, peak RSS, first durable Checkpoint, confirmed
+cancellation, child exit, exact Result object sets, and cross-kind Factor
+Summary identity. Every completed sample is written with its qualification
+status and failure reason before the limit is enforced, so an irreversible
+duration, memory, or first-Checkpoint failure stops the run immediately. The
+assembled report is likewise written before cross-sample qualification.
 Duration and first-Checkpoint latency use an independent PostgreSQL observer's
 monotonic clock, starting when the committed running Attempt becomes visible
 and ending only when the committed Checkpoint or terminal state becomes visible
@@ -27,7 +36,9 @@ to that connection. Transaction-start timestamps are diagnostic fields, not
 gate timers.
 Factor Evaluation fails if any Strategy phase, continuation, observation
 partition, or Result object appears. A failed sample fails the run; it is never
-replaced by a retry.
+replaced by a retry. This long qualification is not part of `pnpm check:release`.
+Run it for performance-sensitive Kernel, Data, Worker, or image changes and for
+deliberate periodic qualification.
 
 ## Financial I/O benchmark
 
@@ -61,7 +72,8 @@ projected Parquet rows and columns, and Python peak memory under `tracemalloc`.
 exact for deterministic object, byte, row, and column counts. P95 duration and
 peak memory are capped at three times and two times the committed baseline,
 respectively: deliberately wide enough for host variance, but finite so a
-material CPU or memory regression fails. The full-scale command is part of
-`pnpm check:release`, not the ordinary development test loop. It fails before
-writing results when any budget or the price-only/descriptor zero-financial-I/O
-invariant regresses.
+material CPU or memory regression fails. The committed baseline and budget
+contract is checked by `pnpm test`; rerunning the full-scale Financial I/O
+benchmark remains an explicit performance task. It fails before writing results
+when any budget or the price-only/descriptor zero-financial-I/O invariant
+regresses.

@@ -87,10 +87,12 @@ release_test_origin() {
 compose() {
   validate_test_project
   if [ "${command:-}" = image-smoke ] \
+    || { [ "${command:-}" = performance ] && [ "${use_image_overlay:-false}" = true ]; } \
     || { [ "${command:-}" = benchmark ] && [ "${use_image_overlay:-false}" = true ]; }; then
     COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
       THESISTRACE_TEST_BUCKET="$bucket_name" \
       THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
+      THESISTRACE_TEST_BENCHMARK_MOUNT="$benchmark_mount" \
       THESISTRACE_TEST_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
       THESISTRACE_TEST_RUN_ROOT="$run_root" \
       THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
@@ -116,6 +118,7 @@ compose() {
     COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
       THESISTRACE_TEST_BUCKET="$bucket_name" \
       THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
+      THESISTRACE_TEST_BENCHMARK_MOUNT="$benchmark_mount" \
       THESISTRACE_TEST_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
       THESISTRACE_TEST_CADDY_PORT="$caddy_port" \
       THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
@@ -156,6 +159,14 @@ base_compose() {
     "$@"
 }
 
+compose_run() {
+  compose run --rm --no-deps -T --interactive=false "$@"
+}
+
+base_compose_run() {
+  base_compose run --rm --no-deps -T --interactive=false "$@"
+}
+
 runtime_image_name() {
   image_service=$1
   printf '%s-%s\n' "$project_name" "$image_service"
@@ -175,12 +186,15 @@ cleanup_runtime_images() {
 }
 
 build_runtime_images() {
-  compose build initialize auth-initialize web
+  compose build initialize auth-initialize web || return $?
   built_backend_image=$(runtime_image_name initialize)
-  docker image tag "$built_backend_image" "$(runtime_image_name api)"
-  docker image tag "$built_backend_image" "$(runtime_image_name research-worker)"
-  docker image tag "$built_backend_image" "$(runtime_image_name batch-research-worker)"
-  docker image tag "$built_backend_image" "$(runtime_image_name tracking-worker)"
+  docker image tag "$built_backend_image" "$(runtime_image_name api)" || return $?
+  docker image tag "$built_backend_image" "$(runtime_image_name research-worker)" \
+    || return $?
+  docker image tag "$built_backend_image" "$(runtime_image_name batch-research-worker)" \
+    || return $?
+  docker image tag "$built_backend_image" "$(runtime_image_name tracking-worker)" \
+    || return $?
 }
 
 mapped_port() {
@@ -208,6 +222,7 @@ run_with_environment() {
   THESISTRACE_S3_BUCKET="$bucket_name" \
   THESISTRACE_S3_REGION=us-east-1 \
   THESISTRACE_DATA_MOUNT="$data_mount" \
+  THESISTRACE_BENCHMARK_MOUNT="$benchmark_mount" \
   THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
   THESISTRACE_TEST_PROJECT_NAME="$project_name" \
   THESISTRACE_TEST_RESEND_ORIGIN="${resend_test_origin-}" \
@@ -228,6 +243,7 @@ run_playwright() {
   THESISTRACE_S3_BUCKET="$bucket_name" \
   THESISTRACE_S3_REGION=us-east-1 \
   THESISTRACE_DATA_MOUNT="$data_mount" \
+  THESISTRACE_BENCHMARK_MOUNT="$benchmark_mount" \
   THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
     "$@"
 }
@@ -262,22 +278,28 @@ capture_gateway_auth_log_evidence() {
 scan_secret_canaries() {
   scan_result="$evidence_dir/secret-canary-scan.txt"
   : >"$scan_result"
-  for canary in \
-    observability-access-canary \
-    observability-outage-canary \
-    observability-secret-canary \
-    observability-request-canary; do
-    if grep -R -F -q -- "$canary" "$evidence_dir"; then
-      printf 'failed\n' >"$scan_result"
-      return 1
-    fi
-  done
-  printf 'passed\n' >"$scan_result"
+  if uv run python "$repo_root/tests/sanitize_production_mcp_evidence.py" \
+    verify "$evidence_dir"; then
+    printf 'passed\n' >"$scan_result"
+    return 0
+  fi
+  printf 'failed\n' >"$scan_result"
+  return 1
+}
+
+sanitize_mcp_failure_evidence() {
+  uv run python "$repo_root/tests/sanitize_production_mcp_evidence.py" \
+    sanitize "$evidence_dir"
+}
+
+discard_unsanitized_failure_evidence() {
+  uv run python "$repo_root/tests/sanitize_production_mcp_evidence.py" \
+    discard "$evidence_dir"
 }
 
 verify_image_health() {
   suffix=$1
-  compose run --rm --no-deps -T \
+  compose_run \
     -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
     -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
     -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
@@ -350,13 +372,31 @@ verify_caddy_backend_independence() {
   verify_caddy_single_origin
 }
 
+run_mcp_image_smoke() {
+  phase=$1
+  compose_run \
+    -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+    -e THESISTRACE_TEST_EVIDENCE_DIR=/smoke-evidence \
+    -e THESISTRACE_TEST_IMAGE_ID="$image_revision" \
+    -e THESISTRACE_TEST_RANDOM_SEED=1401 \
+    initialize python /smoke/production_mcp_image_smoke.py "$phase"
+}
+
+capture_stopped_api_state() {
+  container_id=$(compose ps --all --quiet api)
+  test -n "$container_id" || return 1
+  docker inspect --format \
+    '{"status":"{{.State.Status}}","exit_code":{{.State.ExitCode}},"oom_killed":{{.State.OOMKilled}}}' \
+    "$container_id" >"$evidence_dir/mcp-api-stopped.json"
+}
+
 verify_service_readiness_outage() {
   service=$1
   dependency=$2
   outage_status=0
   recovery_status=0
   compose stop "$service" >/dev/null
-  compose run --rm --no-deps -T \
+  compose_run \
     -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
     -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
     -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
@@ -380,20 +420,45 @@ verify_service_readiness_outage() {
 }
 
 verify_dataset_readiness_outage() {
-  unavailable_mount="$run_root/canonical-data-unavailable"
+  outage_container="dataset-store-outage-$run_id"
+  outage_parent="$run_root/dataset-store-outage"
+  outage_root="$outage_parent/current"
   outage_status=0
   recovery_status=0
-  mv "$data_mount" "$unavailable_mount"
-  compose run --rm --no-deps -T \
-    -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-    -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
-    -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
-    -e THESISTRACE_TEST_UNAVAILABLE_DEPENDENCY=dataset_store \
-    initialize python /smoke/production_image_smoke.py readiness-outage \
-    >"$evidence_dir/readiness-dataset_store-unavailable.json" \
-    2>"$evidence_dir/readiness-dataset_store-unavailable.stderr.log" \
-    || outage_status=$?
-  mv "$unavailable_mount" "$data_mount" || recovery_status=$?
+  mkdir -p "$outage_parent"
+  ln -s ../canonical-data "$outage_root"
+  compose_run --detach \
+    --name "$outage_container" \
+    --volume "$outage_parent:/smoke-data/dataset-store-outage:ro" \
+    -e THESISTRACE_DATA_MOUNT=/smoke-data/dataset-store-outage/current \
+    api >/dev/null || outage_status=$?
+  if [ "$outage_status" -eq 0 ]; then
+    compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN="http://$outage_container:8100" \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
+      initialize python /smoke/production_image_smoke.py health \
+      >"$evidence_dir/readiness-dataset_store-before-outage.json" \
+      2>"$evidence_dir/readiness-dataset_store-before-outage.stderr.log" \
+      || outage_status=$?
+  fi
+  if [ "$outage_status" -eq 0 ]; then
+    unlink "$outage_root" || outage_status=$?
+  fi
+  if [ "$outage_status" -eq 0 ]; then
+    compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN="http://$outage_container:8100" \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
+      -e THESISTRACE_TEST_UNAVAILABLE_DEPENDENCY=dataset_store \
+      initialize python /smoke/production_image_smoke.py readiness-outage \
+      >"$evidence_dir/readiness-dataset_store-unavailable.json" \
+      2>"$evidence_dir/readiness-dataset_store-unavailable.stderr.log" \
+      || outage_status=$?
+  fi
+  docker logs "$outage_container" \
+    >"$evidence_dir/readiness-dataset_store-api.log" 2>&1 || true
+  docker stop "$outage_container" >/dev/null || recovery_status=$?
   if [ "$recovery_status" -eq 0 ]; then
     verify_image_health dataset_store-recovered || recovery_status=$?
   fi
@@ -412,7 +477,7 @@ verify_worker_capacity_rejection() {
     fi
     stdout="$evidence_dir/${role}-worker-cpu-capacity.stdout.log"
     stderr="$evidence_dir/${role}-worker-cpu-capacity.stderr.log"
-    if compose run --rm --no-deps -T "$service" \
+    if compose_run "$service" \
       thesistrace-core-worker --role "$role" --once --cpu-count 3 \
       >"$stdout" 2>"$stderr"; then
       echo "$role Worker accepted a CPU declaration above its cgroup limit" >&2
@@ -423,7 +488,7 @@ verify_worker_capacity_rejection() {
 
     stdout="$evidence_dir/${role}-worker-memory-capacity.stdout.log"
     stderr="$evidence_dir/${role}-worker-memory-capacity.stderr.log"
-    if compose run --rm --no-deps -T "$service" \
+    if compose_run "$service" \
       thesistrace-core-worker --role "$role" --once \
       --memory-bytes 3221225472 \
       >"$stdout" 2>"$stderr"; then
@@ -564,7 +629,7 @@ cleanup_project() {
   image_status=0
   if [ "$compose_cleanup_required" = true ]; then
     compose down --volumes --remove-orphans || compose_status=$?
-    "$repo_root/scripts/product-state-volumes" reset "$project_name" \
+    "$repo_root/scripts/product-state-volumes" erase "$project_name" \
       || product_state_status=$?
     if [ "$compose_status" -eq 0 ]; then
       cleanup_runtime_images || image_status=$?
@@ -572,6 +637,7 @@ cleanup_project() {
   fi
   mount_status=0
   rm -rf -- "$state_root/$run_id/canonical-data" || mount_status=$?
+  rm -rf -- "$state_root/$run_id/benchmark-data" || mount_status=$?
   rm -rf -- "$state_root/$run_id/batch-attempt-control" || mount_status=$?
   port_lock_status=0
   if [ "$compose_status" -eq 0 ]; then
@@ -641,6 +707,25 @@ run_phase() {
   return "$phase_status"
 }
 
+require_codex_host() {
+  if ! command -v codex >/dev/null 2>&1; then
+    echo "real Codex acceptance requires the Codex CLI" >&2
+    return 1
+  fi
+  if ! codex --ask-for-approval never exec --help >/dev/null; then
+    echo "real Codex acceptance requires the supported noninteractive CLI contract" >&2
+    return 1
+  fi
+}
+
+verify_codex_evidence() {
+  target=$1
+  test -s "$target" || return 1
+  uv run python -c \
+    'import json, pathlib, sys; value=json.loads(pathlib.Path(sys.argv[1]).read_text()); raise SystemExit(0 if isinstance(value, dict) and value.get("status") == "passed" else 1)' \
+    "$target" || return 1
+}
+
 finish() {
   status=$?
   trap - EXIT
@@ -658,6 +743,22 @@ finish() {
   fi
   if [ "$status" -ne 0 ]; then
     capture_evidence
+    if sanitize_mcp_failure_evidence; then
+      failure_evidence_sanitization_status=0
+    else
+      failure_evidence_sanitization_status=1
+      echo "failed to sanitize MCP failure evidence" >&2
+      if discard_unsanitized_failure_evidence; then
+        failure_evidence_discard_status=0
+      else
+        failure_evidence_discard_status=1
+        echo "failed to discard unsanitized MCP evidence" >&2
+      fi
+      printf 'failure_evidence_discard_status=%s\n' \
+        "$failure_evidence_discard_status" >>"$run_metadata"
+    fi
+    printf 'failure_evidence_sanitization_status=%s\n' \
+      "$failure_evidence_sanitization_status" >>"$run_metadata"
     if scan_secret_canaries; then
       failure_canary_scan_status=0
     else
@@ -698,6 +799,7 @@ case "$command" in
     bucket_name=${project_name#"$canonical_prefix"}
     run_id=${project_name#"$canonical_prefix"}
     data_mount="$state_root/$run_id/canonical-data"
+    benchmark_mount="$state_root/$run_id/benchmark-data"
     batch_attempt_control_directory="$state_root/$run_id/batch-attempt-control/.batch-attempts"
     cleanup_project
     exit 0
@@ -707,6 +809,7 @@ case "$command" in
     bucket_name=${project_name#"$canonical_prefix"}
     run_id=${project_name#"$canonical_prefix"}
     data_mount="$state_root/$run_id/canonical-data"
+    benchmark_mount="$state_root/$run_id/benchmark-data"
     batch_attempt_control_directory="$state_root/$run_id/batch-attempt-control/.batch-attempts"
     validate_cleanup_target
     load_test_origin
@@ -756,9 +859,9 @@ case "$command" in
     fi
     exit 0
     ;;
-  integration | integration-batch-cancel | benchmark | e2e | image-smoke) ;;
+  integration | integration-batch-cancel | codex-mcp | benchmark | performance | e2e | image-smoke) ;;
   *)
-    echo "usage: $0 {identity|cleanup|stop-postgres|restart-postgres|stop-rustfs|restart-rustfs|integration|integration-batch-cancel|benchmark|e2e|image-smoke [--keep-environment]}" >&2
+    echo "usage: $0 {identity|cleanup|stop-postgres|restart-postgres|stop-rustfs|restart-rustfs|integration|integration-batch-cancel|codex-mcp|benchmark|performance|e2e|image-smoke [--keep-environment]}" >&2
     exit 2
     ;;
 esac
@@ -786,6 +889,7 @@ project_name="$canonical_prefix$run_id"
 bucket_name="$canonical_prefix$run_id"
 run_root="$state_root/$run_id"
 data_mount="$run_root/canonical-data"
+benchmark_mount="$run_root/benchmark-data"
 batch_attempt_control_directory="$run_root/batch-attempt-control/.batch-attempts"
 evidence_dir="$run_root/evidence"
 pytest_report="$evidence_dir/pytest.xml"
@@ -793,10 +897,12 @@ database_restart_report="$evidence_dir/pytest-database-restart.xml"
 dependency_restart_report="$evidence_dir/pytest-dependency-restart.xml"
 run_metadata="$run_root/run.txt"
 validate_test_project
-mkdir -p "$evidence_dir" "$data_mount" "$batch_attempt_control_directory"
+mkdir -p "$evidence_dir" "$data_mount" "$benchmark_mount" "$batch_attempt_control_directory"
 secret_dir=
 auth_session_file=
-if [ "$command" = image-smoke ] || [ "$command" = benchmark ]; then
+if [ "$command" = image-smoke ] \
+  || [ "$command" = benchmark ] \
+  || [ "$command" = performance ]; then
   secret_root="$state_root/.runtime-secrets"
   mkdir -p "$secret_root"
   chmod 700 "$secret_root"
@@ -828,6 +934,22 @@ trap 'handle_signal 143' TERM
 compose config --quiet
 compose_cleanup_required=true
 case "$command" in
+  codex-mcp)
+    run_phase codex-mcp-host-preflight require_codex_host
+    run_phase codex-mcp-infrastructure compose up --detach \
+      --wait --wait-timeout 300 postgres rustfs
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    printf 'postgres_port=%s\ns3_port=%s\n' "$postgres_port" "$s3_port" >>"$run_metadata"
+    run_phase codex-mcp-initialization run_with_environment uv run thesistrace-initialize
+    run_phase codex-mcp-acceptance run_with_environment env \
+      THESISTRACE_REAL_CODEX_EVIDENCE_PATH="$evidence_dir/codex-stdio-acceptance.json" \
+      uv run pytest -q \
+      tests/acceptance/test_real_codex_research_agent_mcp.py \
+      -m real_codex
+    run_phase codex-mcp-evidence verify_codex_evidence \
+      "$evidence_dir/codex-stdio-acceptance.json"
+    ;;
   integration-batch-cancel)
     run_phase integration-batch-cancel-infrastructure compose up --detach \
       --wait --wait-timeout 300 postgres rustfs
@@ -852,26 +974,26 @@ case "$command" in
       tests/acceptance/test_core_research_batch_cancel.py::test_cancel_is_terminal_while_object_cleanup_retries_after_rustfs_restart \
       --junitxml="$dependency_restart_report"
     ;;
-  benchmark)
+  benchmark | performance)
     use_image_overlay=true
-    run_phase benchmark-images build_runtime_images
-    run_phase benchmark-infrastructure compose up --detach --no-build \
+    run_phase performance-images build_runtime_images
+    run_phase performance-infrastructure compose up --detach --no-build \
       --wait --wait-timeout 300 postgres rustfs initialize
-    run_phase benchmark-initialization compose wait initialize
+    run_phase performance-initialization compose wait initialize
     qualification_dir="$evidence_dir/long-research"
     mkdir -p "$qualification_dir"
-    run_phase benchmark-prepare compose run --rm --no-deps -T initialize \
+    run_phase performance-prepare compose_run initialize \
       python /qualification/long_research_qualification.py prepare \
       --output /smoke-evidence/long-research/preparation.json
     for research_kind in factor_evaluation strategy_backtest; do
       sample_index=0
       while [ "$sample_index" -lt 5 ]; do
-        run_phase "benchmark-$research_kind-cold-$sample_index-product-state-reset" \
+        run_phase "performance-$research_kind-cold-$sample_index-product-state-reset" \
           reset_product_state
-        run_phase "benchmark-$research_kind-cold-$sample_index-api" \
+        run_phase "performance-$research_kind-cold-$sample_index-api" \
           prepare_benchmark_api
-        run_phase "benchmark-$research_kind-cold-$sample_index" \
-          compose run --rm --no-deps -T \
+        run_phase "performance-$research_kind-cold-$sample_index" \
+          compose_run \
           -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
           research-worker python /qualification/long_research_qualification.py sample \
           --research-kind "$research_kind" \
@@ -881,19 +1003,19 @@ case "$command" in
         sample_index=$((sample_index + 1))
       done
     done
-    run_phase benchmark-warm-preload-product-state-reset reset_product_state
-    run_phase benchmark-warm-preload compose run --rm --no-deps -T \
+    run_phase performance-warm-preload-product-state-reset reset_product_state
+    run_phase performance-warm-preload compose_run \
       research-worker python /qualification/long_research_qualification.py preload \
       --output /qualification-evidence/long-research/preload.json
     for research_kind in factor_evaluation strategy_backtest; do
       sample_index=0
       while [ "$sample_index" -lt 5 ]; do
-        run_phase "benchmark-$research_kind-warm-$sample_index-product-state-reset" \
+        run_phase "performance-$research_kind-warm-$sample_index-product-state-reset" \
           reset_product_state
-        run_phase "benchmark-$research_kind-warm-$sample_index-api" \
+        run_phase "performance-$research_kind-warm-$sample_index-api" \
           prepare_benchmark_api
-        run_phase "benchmark-$research_kind-warm-$sample_index" \
-          compose run --rm --no-deps -T \
+        run_phase "performance-$research_kind-warm-$sample_index" \
+          compose_run \
           -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
           research-worker python /qualification/long_research_qualification.py sample \
           --research-kind "$research_kind" \
@@ -904,11 +1026,11 @@ case "$command" in
       done
     done
     for research_kind in factor_evaluation strategy_backtest; do
-      run_phase "benchmark-$research_kind-cancellation-product-state-reset" \
+      run_phase "performance-$research_kind-cancellation-product-state-reset" \
         reset_product_state
-      run_phase "benchmark-$research_kind-cancellation-api" \
+      run_phase "performance-$research_kind-cancellation-api" \
         prepare_benchmark_api
-      run_phase "benchmark-$research_kind-cancellation" compose run --rm --no-deps -T \
+      run_phase "performance-$research_kind-cancellation" compose_run \
         -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
         research-worker python /qualification/long_research_qualification.py cancel \
         --research-kind "$research_kind" \
@@ -917,7 +1039,7 @@ case "$command" in
     done
     backend_image=$(runtime_image_name initialize)
     image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
-    run_phase benchmark-qualification compose run --rm --no-deps -T initialize \
+    run_phase performance-qualification compose_run initialize \
       python /qualification/long_research_qualification.py assemble \
       --samples /smoke-evidence/long-research \
       --image-revision "$image_revision" \
@@ -943,7 +1065,7 @@ case "$command" in
     run_phase integration-initialization run_with_environment uv run thesistrace-initialize
     run_phase integration-pytest run_with_environment uv run pytest -q \
       tests/integration tests/acceptance \
-      -m "not database_restart and not dependency_restart" \
+      -m "not database_restart and not dependency_restart and not real_codex" \
       --junitxml="$pytest_report"
     postgres_port=$(mapped_port postgres 5432)
     run_phase integration-database-restart run_with_environment env \
@@ -1010,9 +1132,12 @@ case "$command" in
     ;;
   image-smoke)
     smoke_state=/smoke-evidence/image-smoke-state.json
+    bootstrap_replay=/smoke-evidence/tushare-financial-product-full-replay.json
     run_phase image-smoke-images build_runtime_images
+    backend_image=$(runtime_image_name initialize)
+    image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
     run_phase image-smoke-fresh-named-volume-mount \
-      base_compose run --rm --no-deps -T \
+      base_compose_run \
       --entrypoint /bin/true batch-research-worker
     run_phase image-smoke-worker-capacity-rejection verify_worker_capacity_rejection
     run_phase image-smoke-research-child-cgroup-oom \
@@ -1022,14 +1147,21 @@ case "$command" in
     run_phase image-smoke-initializers compose up --detach --no-build \
       initialize auth-initialize
     run_phase image-smoke-initialization compose wait initialize auth-initialize
-    run_phase image-smoke-operator-bootstrap compose run --rm --no-deps -T initialize \
+    run_phase image-smoke-bootstrap-replay compose_run initialize \
+      python /smoke/browser/prepare_image_smoke_bootstrap_replay.py \
+      --input /smoke/fixtures/tushare-financial-product-replay.json \
+      --output "$bootstrap_replay"
+    run_phase image-smoke-operator-bootstrap compose_run initialize \
       thesistrace-data-operator bootstrap \
       --idempotency-key financial-release-bootstrap \
       --as-of 2026-08-05T18:00:00+08:00 \
       --start-date 2010-01-04 \
-      --replay /smoke/fixtures/tushare-financial-product-replay.json
-    run_phase image-smoke-prepare-data compose run --rm --no-deps -T initialize \
+      --replay "$bootstrap_replay"
+    run_phase image-smoke-prepare-data compose_run initialize \
       python /smoke/browser/prepare_image_smoke_data.py
+    run_phase image-smoke-mcp-preflight run_mcp_image_smoke preflight \
+      >"$evidence_dir/mcp-preflight.json" \
+      2>"$evidence_dir/mcp-preflight.stderr.log"
     run_phase image-smoke-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
       auth api web
@@ -1055,10 +1187,8 @@ case "$command" in
     test "$network_internal" = true
     printf 'internal=%s\n' "$network_internal" >"$evidence_dir/network.txt"
     compose images --format json >"$evidence_dir/images.jsonl"
-    backend_image=$(runtime_image_name initialize)
-    image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
     compose ps --all >"$evidence_dir/compose-ps-before-restart.txt"
-    run_phase image-smoke-before compose run --rm --no-deps -T \
+    run_phase image-smoke-before compose_run \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
@@ -1067,7 +1197,7 @@ case "$command" in
       >"$evidence_dir/smoke-before.json" \
       2>"$evidence_dir/smoke-before.stderr.log"
     run_phase image-smoke-worker-loss compose kill research-worker
-    run_phase image-smoke-expire-worker-loss compose run --rm --no-deps -T \
+    run_phase image-smoke-expire-worker-loss compose_run \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
@@ -1081,7 +1211,7 @@ case "$command" in
       compose restart api tracking-worker
     run_phase image-smoke-checkpointed-reopen compose up --detach --no-build \
       --wait --wait-timeout 120 api tracking-worker
-    run_phase image-smoke-checkpointed compose run --rm --no-deps -T \
+    run_phase image-smoke-checkpointed compose_run \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
@@ -1090,7 +1220,7 @@ case "$command" in
       2>"$evidence_dir/smoke-checkpointed.stderr.log"
     run_phase image-smoke-worker-reopen compose up --detach --no-build \
       --wait --wait-timeout 120 research-worker
-    run_phase image-smoke-recovered compose run --rm --no-deps -T \
+    run_phase image-smoke-recovered compose_run \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
@@ -1104,7 +1234,7 @@ case "$command" in
       compose restart api research-worker batch-research-worker tracking-worker
     run_phase image-smoke-reopen compose up --detach --no-build \
       --wait --wait-timeout 120 api research-worker batch-research-worker tracking-worker
-    run_phase image-smoke-persisted compose run --rm --no-deps -T \
+    run_phase image-smoke-persisted compose_run \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
@@ -1112,11 +1242,11 @@ case "$command" in
       >"$evidence_dir/smoke-persisted.json" \
       2>"$evidence_dir/smoke-persisted.stderr.log"
     run_phase image-smoke-rustfs-outage compose stop rustfs
-    run_phase image-smoke-publish-transient-target compose run --rm --no-deps -T \
+    run_phase image-smoke-publish-transient-target compose_run \
       initialize python /smoke/browser/prepare_image_smoke_data.py lagged \
       >"$evidence_dir/transient-target.json" \
       2>"$evidence_dir/transient-target.stderr.log"
-    run_phase image-smoke-transient-failed compose run --rm --no-deps -T \
+    run_phase image-smoke-transient-failed compose_run \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
@@ -1125,7 +1255,7 @@ case "$command" in
       2>"$evidence_dir/smoke-transient-failed.stderr.log"
     run_phase image-smoke-rustfs-reopen compose up --detach --no-build \
       --wait --wait-timeout 120 rustfs
-    run_phase image-smoke-after compose run --rm --no-deps -T \
+    run_phase image-smoke-after compose_run \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
@@ -1133,7 +1263,7 @@ case "$command" in
       >"$evidence_dir/smoke-after.json" \
       2>"$evidence_dir/smoke-after.stderr.log"
     run_phase image-smoke-reset-worker-stop compose stop research-worker batch-research-worker
-    run_phase image-smoke-reset-ready compose run --rm --no-deps -T \
+    run_phase image-smoke-reset-ready compose_run \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
@@ -1143,7 +1273,7 @@ case "$command" in
     run_phase image-smoke-worker-logs capture_worker_log_evidence
     run_phase image-smoke-api-logs capture_api_log_evidence
     run_phase image-smoke-gateway-auth-logs capture_gateway_auth_log_evidence
-    run_phase image-smoke-worker-event-contract compose run --rm --no-deps -T \
+    run_phase image-smoke-worker-event-contract compose_run \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
@@ -1155,7 +1285,7 @@ case "$command" in
     run_phase image-smoke-reset-api compose up --detach --no-build \
       --wait --wait-timeout 120 auth api
     run_phase image-smoke-reset-auth-session provision_image_smoke_auth
-    run_phase image-smoke-reset-verified compose run --rm --no-deps -T \
+    run_phase image-smoke-reset-verified compose_run \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
@@ -1164,7 +1294,7 @@ case "$command" in
       2>"$evidence_dir/smoke-reset.stderr.log"
     compose ps --all >"$evidence_dir/compose-ps-after-restart.txt"
     run_phase image-smoke-bounded-evidence capture_evidence
-    run_phase image-smoke-observability compose run --rm --no-deps -T \
+    run_phase image-smoke-observability compose_run \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
@@ -1175,5 +1305,25 @@ case "$command" in
       initialize python /smoke/production_image_smoke.py observability \
       >"$evidence_dir/smoke-observability.json" \
       2>"$evidence_dir/smoke-observability.stderr.log"
+    run_phase image-smoke-mcp-http-before run_mcp_image_smoke http-before \
+      >"$evidence_dir/mcp-http-before.json" \
+      2>"$evidence_dir/mcp-http-before.stderr.log"
+    run_phase image-smoke-mcp-api-stop compose stop --timeout 30 api
+    run_phase image-smoke-mcp-api-stopped capture_stopped_api_state
+    run_phase image-smoke-mcp-api-reopen compose up --detach --no-build \
+      --wait --wait-timeout 120 api
+    run_phase image-smoke-mcp-workers compose up --detach --no-build \
+      --wait --wait-timeout 120 \
+      research-worker batch-research-worker tracking-worker
+    run_phase image-smoke-mcp-http-after run_mcp_image_smoke http-after \
+      >"$evidence_dir/mcp-http-after.json" \
+      2>"$evidence_dir/mcp-http-after.stderr.log"
+    run_phase image-smoke-mcp-stdio run_mcp_image_smoke stdio \
+      >"$evidence_dir/mcp-stdio.json" \
+      2>"$evidence_dir/mcp-stdio.stderr.log"
+    run_phase image-smoke-mcp-api-logs capture_api_log_evidence
+    run_phase image-smoke-mcp-evidence run_mcp_image_smoke evidence \
+      >"$evidence_dir/mcp-image-evidence.json" \
+      2>"$evidence_dir/mcp-image-evidence.stderr.log"
     ;;
 esac

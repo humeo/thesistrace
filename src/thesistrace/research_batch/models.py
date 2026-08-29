@@ -19,6 +19,8 @@ from thesistrace.research_run.models import (
     RebalanceInterval,
     RequestId,
     ResearchName,
+    ResearchNeutralization,
+    ResearchUniverse,
 )
 
 
@@ -32,6 +34,10 @@ ItemKey = Annotated[
     Field(strict=True, min_length=1, max_length=200),
 ]
 type ResearchBatchKind = Literal["factor_evaluation", "strategy_sweep"]
+RESEARCH_BATCH_KINDS: tuple[ResearchBatchKind, ...] = (
+    "factor_evaluation",
+    "strategy_sweep",
+)
 type ResearchBatchStatus = Literal[
     "queued",
     "running",
@@ -41,6 +47,8 @@ type ResearchBatchStatus = Literal[
     "failed",
     "cancelled",
 ]
+MIN_RESEARCH_BATCH_ITEMS = 1
+MAX_RESEARCH_BATCH_ITEMS = 20
 
 
 class _ResearchBatchAdmissionBase(BaseModel):
@@ -49,8 +57,8 @@ class _ResearchBatchAdmissionBase(BaseModel):
     request_id: RequestId
     start_date: NaturalDate
     end_date: NaturalDate
-    universe: Literal["top300", "top1000", "top2000", "top3000"]
-    neutralization: Literal["none", "industry"]
+    universe: ResearchUniverse
+    neutralization: ResearchNeutralization
 
     @model_validator(mode="after")
     def validate_research_period(self) -> _ResearchBatchAdmissionBase:
@@ -70,7 +78,10 @@ class FactorBatchItem(BaseModel):
 
 class FactorEvaluationBatchAdmissionCommand(_ResearchBatchAdmissionBase):
     batch_kind: Literal["factor_evaluation"]
-    factors: list[FactorBatchItem] = Field(min_length=1, max_length=20)
+    factors: list[FactorBatchItem] = Field(
+        min_length=MIN_RESEARCH_BATCH_ITEMS,
+        max_length=MAX_RESEARCH_BATCH_ITEMS,
+    )
 
 
 class StrategySweepAlpha(BaseModel):
@@ -92,7 +103,10 @@ class StrategySweepItem(BaseModel):
 class StrategySweepBatchAdmissionCommand(_ResearchBatchAdmissionBase):
     batch_kind: Literal["strategy_sweep"]
     alpha: StrategySweepAlpha
-    strategies: list[StrategySweepItem] = Field(min_length=1, max_length=20)
+    strategies: list[StrategySweepItem] = Field(
+        min_length=MIN_RESEARCH_BATCH_ITEMS,
+        max_length=MAX_RESEARCH_BATCH_ITEMS,
+    )
 
 
 type ResearchBatchAdmissionCommand = Annotated[
@@ -130,8 +144,8 @@ class ResearchBatchScope(BaseModel):
 
     start_date: date
     end_date: date
-    universe: Literal["top300", "top1000", "top2000", "top3000"]
-    neutralization: Literal["none", "industry"]
+    universe: ResearchUniverse
+    neutralization: ResearchNeutralization
     numeric_execution_contract: str
     semantic_versions: dict[str, str]
     data_through_session: date
@@ -234,6 +248,78 @@ class ResearchBatchDetail(ResearchBatchSummary):
     attempt: ResearchBatchAttemptSummary | None
     live_progress: ResearchBatchLiveProgress | None
     items: list[ResearchBatchItemSummary]
+
+
+def research_batch_retry_after_seconds(status: ResearchBatchStatus) -> int | None:
+    return 2 if status in {"queued", "running", "cancelling"} else None
+
+
+class ResearchBatchPollingItemSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ordinal: int
+    item_key: str
+    research_run_id: str
+    dependency_role: Literal["factor", "strategy"]
+    status: Literal["queued", "running", "cancelling", "succeeded", "failed", "cancelled"]
+    outcome: Literal["succeeded", "failed", "cancelled"] | None = None
+    run_availability: Literal["available", "deleted"]
+    diagnostic: ResearchBatchDiagnostic | None = None
+    deleted_at: datetime | None = None
+
+
+class ResearchBatchPollingDetail(ResearchBatchSummary):
+    diagnostic: ResearchBatchDiagnostic | None
+    items: list[ResearchBatchPollingItemSummary]
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
+def research_batch_polling_detail(
+    detail: ResearchBatchDetail,
+) -> ResearchBatchPollingDetail:
+    return ResearchBatchPollingDetail(
+        **{name: getattr(detail, name) for name in ResearchBatchSummary.model_fields},
+        diagnostic=detail.attempt.diagnostic if detail.attempt is not None else None,
+        items=[
+            ResearchBatchPollingItemSummary.model_validate(
+                item.model_dump(exclude={"task_attempt_count"})
+            )
+            for item in detail.items
+        ],
+        retry_after_seconds=research_batch_retry_after_seconds(detail.status),
+    )
+
+
+class ResearchBatchAdmissionAccepted(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    batch: ResearchBatchDetail
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+
+
+class ResearchBatchAdmissionRejectedOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["rejected"] = "rejected"
+    issues: Annotated[list[ResearchBatchAdmissionIssue], Field(min_length=1)]
+    replayed: bool
+
+
+type ResearchBatchAdmissionOutcome = Annotated[
+    ResearchBatchAdmissionAccepted | ResearchBatchAdmissionRejectedOutcome,
+    Field(discriminator="outcome"),
+]
+
+
+class ResearchBatchCancelOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    batch: ResearchBatchDetail
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
 
 
 class ResearchBatchList(BaseModel):

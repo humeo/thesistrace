@@ -14,6 +14,7 @@ from pathlib import Path
 from time import monotonic
 
 import pytest
+from benchmark_support import FixtureBenchmarkSource, benchmark_mount_for_data_mount
 from canonical_store import open_complete_refresh_basis
 
 import thesistrace.data.refresh as refresh_module
@@ -21,6 +22,11 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import _append_session
 from thesistrace.adapters.tushare_data import TushareDataSource
 from thesistrace.adapters.tushare_provider import normalize_tushare_snapshot
+from thesistrace.benchmark import (
+    BenchmarkLevel,
+    BenchmarkLevelSource,
+    BenchmarkSnapshotStore,
+)
 from thesistrace.data import (
     CanonicalSourceBatch,
     CollectionPlan,
@@ -40,6 +46,7 @@ AS_OF = datetime(2026, 9, 7, 9, tzinfo=UTC)
 CORRECTION_AS_OF = datetime(2026, 7, 28, 10, tzinfo=UTC)
 REPLAY_AS_OF = datetime(2026, 8, 3, 9, tzinfo=UTC)
 FIRST_PREPARED_AT = datetime(2026, 9, 7, 9, 30, tzinfo=UTC)
+FIRST_BENCHMARK_PUBLISHED_AT = datetime(2026, 9, 7, 9, 45, tzinfo=UTC)
 FIRST_REFRESH_AT = datetime(2026, 9, 7, 10, tzinfo=UTC)
 SECOND_REFRESH_AT = datetime(2026, 9, 7, 11, tzinfo=UTC)
 
@@ -82,6 +89,41 @@ class ReplayRefreshProvider:
         return copy.deepcopy(self.snapshot)  # type: ignore[return-value]
 
 
+def _refresh_service(
+    database: PostgresDatabase,
+    mount_root: Path,
+    **options: object,
+) -> DataRefreshService:
+    return DataRefreshService(
+        database,
+        mount_root,
+        benchmark_mount_root=benchmark_mount_for_data_mount(mount_root),
+        **options,
+    )
+
+
+def _overview_service(
+    database: PostgresDatabase,
+    mount_root: Path,
+) -> DatasetOverviewService:
+    return DatasetOverviewService(
+        database,
+        mount_root,
+        benchmark_mount_for_data_mount(mount_root),
+    )
+
+
+def _process_next(
+    service: DataRefreshService,
+    source: object,
+    benchmark_source: BenchmarkLevelSource | None = None,
+) -> bool:
+    return service.process_next(  # type: ignore[arg-type]
+        source,
+        benchmark_source=benchmark_source or FixtureBenchmarkSource(),
+    )
+
+
 def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
     core_settings: CoreSettings,
     tmp_path: Path,
@@ -94,7 +136,7 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
         candidate = copy.deepcopy(current)
         _append_session(candidate)
         source = RecordingRefreshSource(candidate)
-        operator_times = iter((FIRST_PREPARED_AT, FIRST_REFRESH_AT))
+        operator_times = iter((FIRST_PREPARED_AT, FIRST_BENCHMARK_PUBLISHED_AT, FIRST_REFRESH_AT))
         lifecycle_events: list[dict[str, object]] = []
         published_sessions: list[str] = []
 
@@ -109,7 +151,7 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
                     "simulated telemetry loss with canary-secret at /private/source"
                 )
 
-        refresh = DataRefreshService(
+        refresh = _refresh_service(
             database,
             tmp_path,
             clock=lambda: next(operator_times),
@@ -134,7 +176,8 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
         assert accepted["status"] == "accepted"
         assert source.plans == []
         assert refresh.inspect("refresh-once").__dict__ == accepted
-        assert refresh.process_next(source) is True
+        benchmark_source = FixtureBenchmarkSource()
+        assert _process_next(refresh, source, benchmark_source) is True
 
         terminal = _operator_command(
             core_settings,
@@ -154,17 +197,35 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
             == candidate
         )
         assert head.prepared_at == FIRST_PREPARED_AT.isoformat()
+        snapshot = BenchmarkSnapshotStore(
+            benchmark_mount_for_data_mount(tmp_path)
+        ).read()
+        assert snapshot is not None
+        assert snapshot.coverage_end_session == candidate["research_calendar"][-1]
+        assert snapshot.published_at == "2026-09-07T09:45:00Z"
+        assert benchmark_source.requests == [
+            ("2010-01-04", candidate["research_calendar"][-1])
+        ]
         assert len(source.plans) == 1
         plan = source.plans[0]
         assert plan.kind == "refresh"
         assert plan.overlap_start_session == current["research_calendar"][-20]
         assert plan.after_session == current["research_calendar"][-1]
         assert plan.completed_through_date.isoformat() == "2026-09-07"
-        overview = DatasetOverviewService(database, tmp_path).overview()
+        overview = _overview_service(database, tmp_path).overview()
         assert overview.last_market_refresh_at == FIRST_REFRESH_AT
         assert overview.data_through_session.isoformat() == candidate["research_calendar"][-1]
+        assert overview.benchmark_coverage is not None
+        assert overview.benchmark_coverage.model_dump(mode="json") == {
+            "start": "2010-01-04",
+            "end": candidate["research_calendar"][-1],
+        }
+        assert overview.benchmark_snapshot_sha256 == snapshot.sha256
+        assert overview.benchmark_last_published_at == FIRST_BENCHMARK_PUBLISHED_AT
+        assert overview.benchmark_research_readiness is True
         assert [event["event"] for event in lifecycle_events] == [
             "data_refresh_started",
+            "data_refresh_phase_completed",
             "data_refresh_phase_completed",
             "data_refresh_phase_completed",
             "data_refresh_phase_completed",
@@ -185,6 +246,7 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
             "market",
             "validation",
             "materialization",
+            "benchmark",
             "candidate_validation",
             "publication",
         ]
@@ -196,6 +258,39 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
         assert published_sessions == [candidate["research_calendar"][-1]]
         assert "canary-secret" not in json.dumps(lifecycle_events)
         assert "/private/source" not in json.dumps(lifecycle_events)
+    finally:
+        database.close()
+
+
+def test_data_overview_reports_a_lagging_benchmark_snapshot_as_not_ready(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        prior_session = str(current["research_calendar"][-2])
+        snapshot = BenchmarkSnapshotStore(
+            benchmark_mount_for_data_mount(tmp_path)
+        ).publish(
+            (
+                BenchmarkLevel("2010-01-04", "1"),
+                BenchmarkLevel(prior_session, "2"),
+            ),
+            published_at=FIRST_BENCHMARK_PUBLISHED_AT,
+        )
+
+        overview = _overview_service(database, tmp_path).overview()
+
+        assert overview.benchmark_coverage is not None
+        assert overview.benchmark_coverage.model_dump(mode="json") == {
+            "start": "2010-01-04",
+            "end": prior_session,
+        }
+        assert overview.benchmark_snapshot_sha256 == snapshot.sha256
+        assert overview.benchmark_last_published_at == FIRST_BENCHMARK_PUBLISHED_AT
+        assert overview.benchmark_research_readiness is False
     finally:
         database.close()
 
@@ -217,14 +312,16 @@ def test_market_refresh_without_industry_input_reuses_industry_family_manifest(
         market_candidate = copy.deepcopy(current)
         _append_session(market_candidate)
         del market_candidate["industry_membership"]
-        refresh = DataRefreshService(
+        refresh = _refresh_service(
             database,
             tmp_path,
-            clock=iter((FIRST_PREPARED_AT, FIRST_REFRESH_AT)).__next__,
+            clock=iter(
+                (FIRST_PREPARED_AT, FIRST_BENCHMARK_PUBLISHED_AT, FIRST_REFRESH_AT)
+            ).__next__,
         )
         refresh.submit(idempotency_key="market-only-refresh", as_of=AS_OF)
 
-        assert refresh.process_next(RecordingRefreshSource(market_candidate)) is True
+        assert _process_next(refresh, RecordingRefreshSource(market_candidate)) is True
 
         pointer = DatasetLifecycle(database, tmp_path).current_pointer()
         assert pointer is not None
@@ -254,9 +351,9 @@ def test_refresh_reports_only_canonical_phase_timings(
         candidate = copy.deepcopy(current)
         _append_session(candidate)
         lifecycle_events: list[dict[str, object]] = []
-        timestamps = iter(float(value) for value in range(14))
-        operator_times = iter((FIRST_PREPARED_AT, FIRST_REFRESH_AT))
-        refresh = DataRefreshService(
+        timestamps = iter(float(value) for value in range(16))
+        operator_times = iter((FIRST_PREPARED_AT, FIRST_BENCHMARK_PUBLISHED_AT, FIRST_REFRESH_AT))
+        refresh = _refresh_service(
             database,
             tmp_path,
             clock=lambda: next(operator_times),
@@ -265,7 +362,7 @@ def test_refresh_reports_only_canonical_phase_timings(
         )
         refresh.submit(idempotency_key="timed-refresh", as_of=AS_OF)
 
-        assert refresh.process_next(RecordingRefreshSource(candidate)) is True
+        assert _process_next(refresh, RecordingRefreshSource(candidate)) is True
 
         phase_events = [
             event
@@ -277,10 +374,11 @@ def test_refresh_reports_only_canonical_phase_timings(
             "market",
             "validation",
             "materialization",
+            "benchmark",
             "candidate_validation",
             "publication",
         ]
-        assert [event["duration_ms"] for event in phase_events] == [1000] * 6
+        assert [event["duration_ms"] for event in phase_events] == [1000] * 7
     finally:
         database.close()
 
@@ -303,7 +401,7 @@ def test_refresh_submission_reads_only_head_and_root_manifest(
             reject_table_manifest_read,
         )
 
-        accepted = DataRefreshService(database, tmp_path).submit(
+        accepted = _refresh_service(database, tmp_path).submit(
             idempotency_key="lightweight-submit",
             as_of=AS_OF,
         )
@@ -328,10 +426,10 @@ def test_refresh_publishes_a_physically_valid_family_candidate(
         current_manifest = _establish_head(database, tmp_path, current)
         candidate = copy.deepcopy(current)
         _append_session(candidate)
-        refresh = DataRefreshService(database, tmp_path)
+        refresh = _refresh_service(database, tmp_path)
         refresh.submit(idempotency_key="single-candidate-validation", as_of=AS_OF)
 
-        assert refresh.process_next(RecordingRefreshSource(candidate)) is True
+        assert _process_next(refresh, RecordingRefreshSource(candidate)) is True
 
         published = DatasetLifecycle(database, tmp_path).current_pointer()
         assert published is not None
@@ -354,7 +452,7 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
         manifest = _establish_head(database, tmp_path, current)
         source = RecordingRefreshSource(current)
         lifecycle_events: list[dict[str, object]] = []
-        refresh = DataRefreshService(
+        refresh = _refresh_service(
             database,
             tmp_path,
             clock=lambda: SECOND_REFRESH_AT,
@@ -364,7 +462,8 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
         first = refresh.submit(idempotency_key="no-change", as_of=AS_OF)
         replay = refresh.submit(idempotency_key="no-change", as_of=AS_OF)
         assert replay == first
-        assert refresh.process_next(source) is True
+        benchmark_source = FixtureBenchmarkSource()
+        assert _process_next(refresh, source, benchmark_source) is True
 
         terminal = refresh.inspect("no-change")
         assert terminal.status == "succeeded"
@@ -373,14 +472,22 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
-        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
+        snapshot = BenchmarkSnapshotStore(
+            benchmark_mount_for_data_mount(tmp_path)
+        ).read()
+        assert snapshot is not None
+        assert snapshot.coverage_end_session == current["research_calendar"][-1]
+        assert benchmark_source.requests == [
+            ("2010-01-04", current["research_calendar"][-1])
+        ]
+        assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             SECOND_REFRESH_AT
         )
         assert [
             event.get("phase")
             for event in lifecycle_events
             if event["event"] == "data_refresh_phase_completed"
-        ] == ["current_head", "market", "validation"]
+        ] == ["current_head", "market", "validation", "benchmark"]
         assert lifecycle_events[-1]["event"] == "data_refresh_succeeded"
         assert lifecycle_events[-1]["outcome"] == "no_change"
     finally:
@@ -396,7 +503,7 @@ def test_refresh_no_change_detection_does_not_serialize_the_canonical_dataset(
     try:
         current = _twenty_session_canonical()
         _establish_head(database, tmp_path, current)
-        refresh = DataRefreshService(database, tmp_path, clock=lambda: SECOND_REFRESH_AT)
+        refresh = _refresh_service(database, tmp_path, clock=lambda: SECOND_REFRESH_AT)
         refresh.submit(idempotency_key="no-canonical-json", as_of=AS_OF)
 
         def reject_canonical_serialization(*_args: object, **_kwargs: object) -> bytes:
@@ -408,8 +515,128 @@ def test_refresh_no_change_detection_does_not_serialize_the_canonical_dataset(
             reject_canonical_serialization,
         )
 
-        assert refresh.process_next(RecordingRefreshSource(current)) is True
+        assert _process_next(refresh, RecordingRefreshSource(current)) is True
         assert refresh.inspect("no-canonical-json").outcome == "no_change"
+    finally:
+        database.close()
+
+
+def test_refresh_rejects_incomplete_benchmark_before_moving_head(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    class IncompleteBenchmarkSource:
+        def collect_open_levels(
+            self,
+            *,
+            start_session: str,
+            end_session: str,
+        ) -> tuple[BenchmarkLevel, ...]:
+            assert start_session == "2010-01-04"
+            return (BenchmarkLevel("2010-01-04", "3592.47"),)
+
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        original_manifest = _establish_head(database, tmp_path, current)
+        candidate = copy.deepcopy(current)
+        _append_session(candidate)
+        refresh = _refresh_service(database, tmp_path)
+        refresh.submit(idempotency_key="incomplete-benchmark", as_of=AS_OF)
+
+        with pytest.raises(DataRefreshError) as failure:
+            _process_next(
+                refresh,
+                RecordingRefreshSource(candidate),
+                IncompleteBenchmarkSource(),
+            )
+
+        assert failure.value.code == "BENCHMARK_COVERAGE_INSUFFICIENT"
+        terminal = refresh.inspect("incomplete-benchmark")
+        assert terminal.status == "failed"
+        assert terminal.failure_code == "BENCHMARK_COVERAGE_INSUFFICIENT"
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert head is not None
+        assert head.generation_manifest_sha256 == original_manifest
+        assert (
+            BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
+            is None
+        )
+    finally:
+        database.close()
+
+
+def test_refresh_snapshot_can_lead_when_a_competing_head_wins(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        original_manifest = _establish_head(database, tmp_path, current)
+        candidate = copy.deepcopy(current)
+        _append_session(candidate)
+        winner_canonical = copy.deepcopy(candidate)
+        winner_prices = winner_canonical["prices"]
+        assert isinstance(winner_prices, list)
+        winner_price = winner_prices[-1]
+        assert isinstance(winner_price, dict)
+        winner_price["turnover_cny"] = "999999.00"
+        winner = MountedGenerationStore(tmp_path).materialize(
+            winner_canonical,
+            prepared_at=FIRST_PREPARED_AT,
+            source_name="competing-refresh",
+            source_lineage={"winner": True},
+        )
+        winner_published = False
+
+        def publish_competing_head_after_benchmark(event: dict[str, object]) -> None:
+            nonlocal winner_published
+            if event.get("phase") != "benchmark" or event.get("outcome") != "completed":
+                return
+            snapshot = BenchmarkSnapshotStore(
+                benchmark_mount_for_data_mount(tmp_path)
+            ).read()
+            assert snapshot is not None
+            assert snapshot.coverage_end_session == candidate["research_calendar"][-1]
+            lifecycle = DatasetLifecycle(database, tmp_path)
+            lifecycle.protect_candidate(
+                operation_id="competing-refresh",
+                generation_manifest_sha256=winner.manifest_sha256,
+                lease_seconds=60,
+            )
+            lifecycle.compare_and_swap_head(
+                expected_generation_manifest_sha256=original_manifest,
+                candidate_generation_manifest_sha256=winner.manifest_sha256,
+                operation_id="competing-refresh",
+            )
+            winner_published = True
+
+        refresh = _refresh_service(
+            database,
+            tmp_path,
+            max_attempts=1,
+            lifecycle_event=publish_competing_head_after_benchmark,
+            clock=iter(
+                (FIRST_PREPARED_AT, FIRST_BENCHMARK_PUBLISHED_AT)
+            ).__next__,
+        )
+        refresh.submit(idempotency_key="benchmark-before-head", as_of=AS_OF)
+
+        with pytest.raises(DataRefreshError, match="HEAD_CHANGED"):
+            _process_next(refresh, RecordingRefreshSource(candidate))
+
+        assert winner_published is True
+        snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
+        assert snapshot is not None
+        assert snapshot.coverage_end_session == candidate["research_calendar"][-1]
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert head is not None
+        assert head.generation_manifest_sha256 == winner.manifest_sha256
+        terminal = refresh.inspect("benchmark-before-head")
+        assert terminal.status == "failed"
+        assert terminal.failure_code == "RETRY_EXHAUSTED"
+        assert terminal.last_failure_code == "HEAD_CHANGED"
     finally:
         database.close()
 
@@ -423,12 +650,12 @@ def test_invalid_refresh_candidate_leaves_the_current_head_and_freshness_unchang
         current = _twenty_session_canonical()
         manifest = _establish_head(database, tmp_path, current)
         prior_refresh_at = (
-            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+            _overview_service(database, tmp_path).overview().last_market_refresh_at
         )
         invalid = copy.deepcopy(current)
         invalid["prices"] = []
         lifecycle_events: list[dict[str, object]] = []
-        refresh = DataRefreshService(
+        refresh = _refresh_service(
             database,
             tmp_path,
             clock=lambda: FIRST_REFRESH_AT,
@@ -437,7 +664,7 @@ def test_invalid_refresh_candidate_leaves_the_current_head_and_freshness_unchang
         refresh.submit(idempotency_key="invalid-candidate", as_of=AS_OF)
 
         with pytest.raises(DataRefreshError) as failure:
-            refresh.process_next(RecordingRefreshSource(invalid))
+            _process_next(refresh, RecordingRefreshSource(invalid))
 
         assert failure.value.code == "INVALID_CANONICAL_DATA"
         terminal = refresh.inspect("invalid-candidate")
@@ -447,7 +674,7 @@ def test_invalid_refresh_candidate_leaves_the_current_head_and_freshness_unchang
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
-        overview = DatasetOverviewService(database, tmp_path).overview()
+        overview = _overview_service(database, tmp_path).overview()
         assert overview.last_market_refresh_at == prior_refresh_at
         failure_event = next(
             event for event in lifecycle_events if event["event"] == "data_refresh_failed"
@@ -508,6 +735,7 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
             "data_refresh_phase_completed",
             "data_refresh_phase_completed",
             "data_refresh_phase_completed",
+            "data_refresh_phase_completed",
             "data_refresh_succeeded",
         ]
         assert all(event["component"] == "data_operator" for event in operator_events)
@@ -524,7 +752,7 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         assert (
-            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+            _overview_service(database, tmp_path).overview().last_market_refresh_at
             is not None
         )
     finally:
@@ -551,14 +779,18 @@ def test_concurrent_workers_publish_one_authoritative_refresh(
         candidate = copy.deepcopy(current)
         _append_session(candidate)
         source = BlockingSource(candidate)
-        first = DataRefreshService(database, tmp_path, heartbeat_seconds=1)
-        second = DataRefreshService(database, tmp_path, heartbeat_seconds=1)
+        first = _refresh_service(database, tmp_path, heartbeat_seconds=1)
+        second = _refresh_service(database, tmp_path, heartbeat_seconds=1)
         first.submit(idempotency_key="concurrent-workers", as_of=AS_OF)
 
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(first.process_next, source)
+            future = executor.submit(
+                first.process_next,
+                source,
+                benchmark_source=FixtureBenchmarkSource(),
+            )
             assert started.wait(timeout=10)
-            assert second.process_next(source) is False
+            assert _process_next(second, source) is False
             release.set()
             assert future.result(timeout=10) is True
 
@@ -587,7 +819,7 @@ def test_refresh_submission_replay_and_conflicts_cannot_duplicate_work(
     try:
         current = _twenty_session_canonical()
         _establish_head(database, tmp_path, current)
-        refresh = DataRefreshService(database, tmp_path)
+        refresh = _refresh_service(database, tmp_path)
 
         accepted = refresh.submit(idempotency_key="submission-replay", as_of=AS_OF)
         assert refresh.submit(idempotency_key="submission-replay", as_of=AS_OF) == accepted
@@ -601,7 +833,7 @@ def test_refresh_submission_replay_and_conflicts_cannot_duplicate_work(
             refresh.submit(idempotency_key="another-refresh", as_of=AS_OF)
         assert second_operation.value.code == "REFRESH_ALREADY_ACTIVE"
 
-        assert refresh.process_next(RecordingRefreshSource(current)) is True
+        assert _process_next(refresh, RecordingRefreshSource(current)) is True
         assert refresh.inspect("submission-replay").status == "succeeded"
         with database.transaction() as transaction:
             count = transaction.execute(
@@ -624,10 +856,10 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
         current = _twenty_session_canonical()
         manifest = _establish_head(database, tmp_path, current)
         prior_refresh_at = (
-            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+            _overview_service(database, tmp_path).overview().last_market_refresh_at
         )
         lifecycle_events: list[dict[str, object]] = []
-        refresh = DataRefreshService(
+        refresh = _refresh_service(
             database,
             tmp_path,
             max_attempts=2,
@@ -636,7 +868,7 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
         refresh.submit(idempotency_key="bounded-retry", as_of=AS_OF)
 
         with pytest.raises(DataRefreshError) as first:
-            refresh.process_next(UnavailableRefreshSource())
+            _process_next(refresh, UnavailableRefreshSource())
         assert first.value.code == "SOURCE_UNAVAILABLE"
         retrying = refresh.inspect("bounded-retry")
         assert retrying.status == "accepted"
@@ -645,7 +877,7 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
         assert retrying.last_failure_code == "SOURCE_UNAVAILABLE"
 
         with pytest.raises(DataRefreshError) as second:
-            refresh.process_next(UnavailableRefreshSource())
+            _process_next(refresh, UnavailableRefreshSource())
         assert second.value.code == "SOURCE_UNAVAILABLE"
         terminal = refresh.inspect("bounded-retry")
         assert terminal.status == "failed"
@@ -655,7 +887,7 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
-        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
+        assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
         failures = [
@@ -694,20 +926,21 @@ def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
         manifest = _establish_head(database, tmp_path, current)
         stale_candidate = copy.deepcopy(current)
         _append_session(stale_candidate)
-        old_worker = DataRefreshService(
+        old_worker = _refresh_service(
             database,
             tmp_path,
             lease_seconds=60,
             heartbeat_seconds=30,
             max_attempts=3,
         )
-        replacement = DataRefreshService(database, tmp_path, max_attempts=3)
+        replacement = _refresh_service(database, tmp_path, max_attempts=3)
         old_worker.submit(idempotency_key="lost-worker", as_of=AS_OF)
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             old_future = executor.submit(
                 old_worker.process_next,
                 PausedOldSource(stale_candidate),
+                benchmark_source=FixtureBenchmarkSource(),
             )
             assert old_worker_started.wait(timeout=10)
             with database.transaction() as transaction:
@@ -719,14 +952,14 @@ def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
                     """
                 )
 
-            assert replacement.process_next(RecordingRefreshSource(current)) is True
+            assert _process_next(replacement, RecordingRefreshSource(current)) is True
             recovered = replacement.inspect("lost-worker")
             assert recovered.status == "succeeded"
             assert recovered.outcome == "no_change"
             assert recovered.attempt_count == 2
             assert recovered.last_failure_code is None
             recovered_freshness = (
-                DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+                _overview_service(database, tmp_path).overview().last_market_refresh_at
             )
 
             resume_old_worker.set()
@@ -736,7 +969,7 @@ def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         assert replacement.inspect("lost-worker") == recovered
-        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
+        assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             recovered_freshness
         )
     finally:
@@ -755,15 +988,18 @@ def test_real_tushare_overlap_merge_failure_keeps_prior_head_and_freshness(
         manifest = _establish_head(database, tmp_path, current)
         prior_canonical = open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
         prior_refresh_at = (
-            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+            _overview_service(database, tmp_path).overview().last_market_refresh_at
         )
         malformed = copy.deepcopy(snapshot)
         malformed["daily"] = {"not": "a source table"}
-        refresh = DataRefreshService(database, tmp_path, max_attempts=1)
+        refresh = _refresh_service(database, tmp_path, max_attempts=1)
         refresh.submit(idempotency_key="failure-merge", as_of=CORRECTION_AS_OF)
 
         with pytest.raises(DataRefreshError) as failure:
-            refresh.process_next(TushareDataSource(provider=ReplayRefreshProvider(malformed)))
+            _process_next(
+                refresh,
+                TushareDataSource(provider=ReplayRefreshProvider(malformed)),
+            )
 
         assert failure.value.code == "SOURCE_INVALID_SOURCE_DATA"
         terminal = refresh.inspect("failure-merge")
@@ -777,7 +1013,7 @@ def test_real_tushare_overlap_merge_failure_keeps_prior_head_and_freshness(
             open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
             == prior_canonical
         )
-        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
+        assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
     finally:
@@ -795,13 +1031,13 @@ def test_real_tushare_derived_recomputation_failure_keeps_prior_head_and_freshne
         manifest = _establish_head(database, tmp_path, current)
         prior_canonical = open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
         prior_refresh_at = (
-            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+            _overview_service(database, tmp_path).overview().last_market_refresh_at
         )
         corrected = copy.deepcopy(snapshot)
         daily = corrected["daily"]
         assert isinstance(daily, list)
         daily[2]["amount"] = "1000.00001"
-        refresh = DataRefreshService(database, tmp_path, max_attempts=1)
+        refresh = _refresh_service(database, tmp_path, max_attempts=1)
         refresh.submit(
             idempotency_key="failure-derived-recomputation",
             as_of=CORRECTION_AS_OF,
@@ -810,7 +1046,10 @@ def test_real_tushare_derived_recomputation_failure_keeps_prior_head_and_freshne
         with localcontext() as context:
             context.traps[Inexact] = True
             with pytest.raises(DataRefreshError) as failure:
-                refresh.process_next(TushareDataSource(provider=ReplayRefreshProvider(corrected)))
+                _process_next(
+                    refresh,
+                    TushareDataSource(provider=ReplayRefreshProvider(corrected)),
+                )
 
         assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
         terminal = refresh.inspect("failure-derived-recomputation")
@@ -825,7 +1064,7 @@ def test_real_tushare_derived_recomputation_failure_keeps_prior_head_and_freshne
             open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
             == prior_canonical
         )
-        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
+        assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
     finally:
@@ -851,7 +1090,7 @@ def test_real_generation_write_failure_keeps_the_prior_head_readable(
         current = _twenty_session_canonical()
         manifest = _establish_head(database, tmp_path, current)
         prior_refresh_at = (
-            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+            _overview_service(database, tmp_path).overview().last_market_refresh_at
         )
         candidate = copy.deepcopy(current)
         _append_session(candidate)
@@ -874,12 +1113,16 @@ def test_real_generation_write_failure_keeps_the_prior_head_readable(
         assert blocked_candidate_object is not None
         blocked_candidate_object.parent.mkdir(parents=True, exist_ok=True)
         blocked_candidate_object.write_bytes(b"candidate write fault barrier")
-        refresh = DataRefreshService(database, tmp_path, max_attempts=1)
+        refresh = _refresh_service(database, tmp_path, max_attempts=1)
         refresh.submit(idempotency_key="failure-generation-write", as_of=AS_OF)
         assert open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest) == current
 
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(refresh.process_next, BlockingSource(candidate))
+            future = executor.submit(
+                refresh.process_next,
+                BlockingSource(candidate),
+                benchmark_source=FixtureBenchmarkSource(),
+            )
             assert source_entered.wait(timeout=10)
             assert (
                 open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest) == current
@@ -899,7 +1142,7 @@ def test_real_generation_write_failure_keeps_the_prior_head_readable(
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         assert open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest) == current
-        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
+        assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
     finally:
@@ -918,11 +1161,11 @@ def test_head_replacement_with_rolled_back_lifecycle_commit_is_reconciled(
         current = _twenty_session_canonical()
         original = _establish_head(database, tmp_path, current)
         prior_refresh_at = (
-            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+            _overview_service(database, tmp_path).overview().last_market_refresh_at
         )
         candidate = copy.deepcopy(current)
         _append_session(candidate)
-        refresh = DataRefreshService(database, tmp_path)
+        refresh = _refresh_service(database, tmp_path)
         refresh.submit(idempotency_key="ambiguous-cas", as_of=AS_OF)
         with database.transaction() as transaction:
             transaction.execute(
@@ -949,6 +1192,7 @@ def test_head_replacement_with_rolled_back_lifecycle_commit_is_reconciled(
                     future = executor.submit(
                         refresh.process_next,
                         RecordingRefreshSource(candidate),
+                        benchmark_source=FixtureBenchmarkSource(),
                     )
                     _wait_for_physical_head_change(tmp_path, original, timeout=10)
                     tmp_path.chmod(0)
@@ -971,18 +1215,18 @@ def test_head_replacement_with_rolled_back_lifecycle_commit_is_reconciled(
         pending = refresh.inspect("ambiguous-cas")
         assert pending.status == "running"
         assert pending.failure_code is None
-        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
+        assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
         manifests_before = tuple((tmp_path / "manifests" / "sha256").glob("*/*.json"))
 
         recovery_events: list[dict[str, object]] = []
-        reopened = DataRefreshService(
+        reopened = _refresh_service(
             database,
             tmp_path,
             lifecycle_event=recovery_events.append,
         )
-        assert reopened.process_next(RecordingRefreshSource(candidate)) is True
+        assert _process_next(reopened, RecordingRefreshSource(candidate)) is True
 
         terminal = reopened.inspect("ambiguous-cas")
         assert terminal.status == "succeeded"
@@ -1013,12 +1257,12 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
         current = _twenty_session_canonical()
         original = _establish_head(database, tmp_path, current)
         prior_refresh_at = (
-            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+            _overview_service(database, tmp_path).overview().last_market_refresh_at
         )
         candidate = copy.deepcopy(current)
         _append_session(candidate)
         lifecycle_events: list[dict[str, object]] = []
-        refresh = DataRefreshService(
+        refresh = _refresh_service(
             database,
             tmp_path,
             lifecycle_event=lifecycle_events.append,
@@ -1045,7 +1289,7 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
             )
         try:
             with pytest.raises(DataRefreshError) as failure:
-                refresh.process_next(RecordingRefreshSource(candidate))
+                _process_next(refresh, RecordingRefreshSource(candidate))
             assert failure.value.code == "REFRESH_COMPLETION_PENDING"
         finally:
             with database.transaction() as transaction:
@@ -1076,20 +1320,20 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
         assert not [
             event for event in lifecycle_events if event["event"] == "data_refresh_succeeded"
         ]
-        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
+        assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
         manifests_before = tuple((tmp_path / "manifests" / "sha256").glob("*/*.json"))
 
-        reopened = DataRefreshService(database, tmp_path)
-        assert reopened.process_next(RecordingRefreshSource(candidate)) is True
+        reopened = _refresh_service(database, tmp_path)
+        assert _process_next(reopened, RecordingRefreshSource(candidate)) is True
 
         terminal = reopened.inspect("completion-crash")
         assert terminal.status == "succeeded"
         assert terminal.outcome == "published"
         assert terminal.attempt_count == 1
         assert (
-            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+            _overview_service(database, tmp_path).overview().last_market_refresh_at
             is not None
         )
         assert tuple((tmp_path / "manifests" / "sha256").glob("*/*.json")) == manifests_before
@@ -1286,6 +1530,9 @@ def _operator_command_with_events(
         **os.environ,
         "THESISTRACE_DATABASE_URL": settings.database_url,
         "THESISTRACE_DATA_MOUNT": os.fspath(mount_root),
+        "THESISTRACE_BENCHMARK_MOUNT": os.fspath(
+            mount_root.parent / f"{mount_root.name}-benchmark-data"
+        ),
     }
     completed = subprocess.run(
         [sys.executable, "-m", "thesistrace.entrypoints.data_operator", *arguments],

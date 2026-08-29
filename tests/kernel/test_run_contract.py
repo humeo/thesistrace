@@ -61,7 +61,6 @@ def test_strategy_ledger_is_transient_and_rejected_from_product_state(
         accepted_kernel_run,
         research_kind="strategy_backtest",
         rebalance_interval=5,
-        universe="top300",
     )
     assert set(result) == {
         "factor_summary",

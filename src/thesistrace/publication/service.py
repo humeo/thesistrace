@@ -405,10 +405,43 @@ class Publication:
         with self._database.transaction() as transaction:
             return self.read_in_transaction(transaction, published_ref)
 
+    def read_selected(
+        self,
+        published_ref: PublishedRef,
+        payload_names: frozenset[str],
+    ) -> VerifiedBundle:
+        with self._database.transaction() as transaction:
+            return self.read_selected_in_transaction(
+                transaction,
+                published_ref,
+                payload_names,
+            )
+
     def read_in_transaction(
         self,
         transaction: PostgresTransaction,
         published_ref: PublishedRef,
+    ) -> VerifiedBundle:
+        return self._read_in_transaction(transaction, published_ref, payload_names=None)
+
+    def read_selected_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        published_ref: PublishedRef,
+        payload_names: frozenset[str],
+    ) -> VerifiedBundle:
+        return self._read_in_transaction(
+            transaction,
+            published_ref,
+            payload_names=payload_names,
+        )
+
+    def _read_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        published_ref: PublishedRef,
+        *,
+        payload_names: frozenset[str] | None,
     ) -> VerifiedBundle:
         row = transaction.execute(
             """
@@ -434,11 +467,29 @@ class Publication:
             published_ref.provenance
         ):
             raise PublicationVerificationError("PublishedRef provenance does not match manifest")
-        return self.verify_prepared(
-            PreparedPublication(
-                manifest_sha256=published_ref.manifest_sha256,
-                _manifest_bytes=manifest_bytes,
+        descriptors = {
+            name: (digest, expected_bytes, media_type, serialization)
+            for name, digest, expected_bytes, media_type, serialization in (
+                _object_descriptor(item) for item in objects
             )
+        }
+        selected_names = set(descriptors) if payload_names is None else set(payload_names)
+        if not selected_names <= set(descriptors):
+            raise PublicationVerificationError("Selected Publication payload does not exist")
+        verified_payloads: dict[str, VerifiedPayload] = {}
+        for name in sorted(selected_names):
+            digest, expected_bytes, media_type, serialization = descriptors[name]
+            content = self._read_verified(digest, expected_bytes)
+            verified_payloads[name] = VerifiedPayload(
+                media_type=media_type,
+                content=content,
+                serialization=serialization,
+            )
+        return VerifiedBundle(
+            kind=str(manifest["kind"]),
+            manifest_sha256=published_ref.manifest_sha256,
+            provenance=manifest["provenance"],
+            payloads=verified_payloads,
         )
 
     def find_orphan_sha256s(self, *, uploaded_before: datetime) -> tuple[str, ...]:

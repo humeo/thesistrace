@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -350,6 +351,10 @@ def test_failed_object_deletion_remains_durable_until_worker_retry(
         ],
         check=False,
         capture_output=True,
+        env={
+            **os.environ,
+            "THESISTRACE_INTERNAL_API_ORIGIN": "http://127.0.0.1:1",
+        },
         text=True,
         timeout=30,
     )

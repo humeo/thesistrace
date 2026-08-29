@@ -4,6 +4,7 @@ import ast
 import errno
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -21,6 +22,7 @@ def _fake_development_docker(tmp_path: Path) -> tuple[Path, Path, dict[str, str]
     volume_root.mkdir()
     for volume in (
         "thesistrace-dev_batch-attempt-control",
+        "thesistrace-dev_benchmark-data",
         "thesistrace-dev_canonical-data",
         "thesistrace-dev_postgres-data",
         "thesistrace-dev_rustfs-data",
@@ -55,6 +57,7 @@ if "down" in arguments and "--volumes" in arguments:
 if "up" in arguments:
     for volume in (
         "thesistrace-dev_batch-attempt-control",
+        "thesistrace-dev_benchmark-data",
         "thesistrace-dev_canonical-data",
         "thesistrace-dev_postgres-data",
         "thesistrace-dev_rustfs-data",
@@ -94,17 +97,32 @@ if "stop" in arguments and "auth" in arguments and "api" in arguments:
 if "up" in arguments and "auth" in arguments and "api" in arguments:
     backend_marker.unlink(missing_ok=True)
 if arguments[0] == "inspect":
-    print("container inspection")
+    if any(argument.startswith('{"status"') for argument in arguments):
+        print('{"status":"exited","exit_code":143,"oom_killed":false}')
+    else:
+        print("container inspection")
+    raise SystemExit(0)
+if arguments[0] == "stop":
+    raise SystemExit(0)
+if arguments[0] == "logs":
+    print("outage api logs")
     raise SystemExit(0)
 if arguments[:2] == ["network", "inspect"]:
     print("true")
     raise SystemExit(0)
 if arguments[:2] == ["image", "tag"]:
+    failing_target = os.environ.get("FAKE_IMAGE_TAG_FAILURE_TARGET")
+    if failing_target and arguments[-1].endswith(f"-{failing_target}"):
+        raise SystemExit(6)
     raise SystemExit(0)
 if arguments[:2] == ["image", "inspect"]:
     print("sha256:test-image")
     raise SystemExit(0)
 if arguments[:2] == ["image", "rm"]:
+    raise SystemExit(0)
+if arguments[:2] == ["volume", "inspect"]:
+    raise SystemExit(0)
+if arguments[:2] == ["volume", "rm"]:
     raise SystemExit(0)
 if arguments[0] == "run" and "--project-name" not in arguments:
     print('{"classified":true,"child_returncode":-9}')
@@ -113,6 +131,8 @@ if "config" in arguments and os.environ.get("FAKE_CONFIG_STATUS"):
     raise SystemExit(int(os.environ["FAKE_CONFIG_STATUS"]))
 
 project = arguments[arguments.index("--project-name") + 1]
+if "build" in arguments and os.environ.get("FAKE_BUILD_STATUS"):
+    raise SystemExit(int(os.environ["FAKE_BUILD_STATUS"]))
 if "up" in arguments:
     with log.open("a") as stream:
         stream.write(
@@ -160,10 +180,45 @@ elif "logs" in arguments:
         print(os.environ.get("FAKE_COMPOSE_LOGS", "test logs"))
 elif "images" in arguments:
     print('{"ID":"sha256:test-image"}')
+if (
+    "run" in arguments
+    and "thesistrace-data-operator" in arguments
+    and "bootstrap" in arguments
+):
+    data_mount = Path(os.environ["THESISTRACE_TEST_DATA_MOUNT"])
+    data_mount.mkdir(parents=True, exist_ok=True)
+    (data_mount / "HEAD.json").write_text("fake Dataset Head")
 smoke_script = next(
     (argument for argument in arguments if argument.endswith("production_image_smoke.py")),
     None,
 )
+mcp_smoke_script = next(
+    (argument for argument in arguments if argument.endswith("production_mcp_image_smoke.py")),
+    None,
+)
+qualification_script = next(
+    (argument for argument in arguments if argument.endswith("long_research_qualification.py")),
+    None,
+)
+if (
+    "run" in arguments
+    and qualification_script is not None
+    and arguments[arguments.index(qualification_script) + 1] == "sample"
+):
+    failure_target = os.environ.get("FAKE_LONG_RESEARCH_SAMPLE_FAILURE")
+    research_kind = arguments[arguments.index("--research-kind") + 1]
+    phase = arguments[arguments.index("--phase") + 1]
+    index = arguments[arguments.index("--index") + 1]
+    if failure_target == f"{research_kind}:{phase}:{index}":
+        raise SystemExit(7)
+if "run" in arguments and mcp_smoke_script is not None:
+    print('{"status":"passed"}')
+    phase = arguments[arguments.index(mcp_smoke_script) + 1]
+    if phase == os.environ.get("FAKE_MCP_IMAGE_SMOKE_PHASE") and os.environ.get(
+        "FAKE_MCP_IMAGE_SMOKE_STATUS"
+    ):
+        print(f"fake {phase} MCP image smoke failure", file=sys.stderr)
+        raise SystemExit(int(os.environ["FAKE_MCP_IMAGE_SMOKE_STATUS"]))
 if "run" in arguments and smoke_script is not None:
     phase = arguments[arguments.index(smoke_script) + 1]
     failing_phase = os.environ.get("FAKE_IMAGE_SMOKE_PHASE", "before")
@@ -217,6 +272,14 @@ esac
 printf 'uv %s db=%s s3=%s bucket=%s\\n' \
   "$*" "$THESISTRACE_DATABASE_URL" "$THESISTRACE_S3_ENDPOINT_URL" \
   "$THESISTRACE_S3_BUCKET" >> "$TEST_COMMAND_LOG"
+if [ "${1:-}" = run ] && [ "${2:-}" = python ] && \
+   [ "$(basename "${3:-}")" = sanitize_production_mcp_evidence.py ]; then
+  if [ "${4:-}" = sanitize ] && [ -n "${FAKE_SANITIZER_STATUS:-}" ]; then
+    exit "$FAKE_SANITIZER_STATUS"
+  fi
+  python3 "$3" "$4" "$5"
+  exit $?
+fi
 for argument in "$@"; do
   case "$argument" in
     --junitxml=*)
@@ -238,9 +301,25 @@ case " $* " in
       > "$output"
     chmod 600 "$output"
     ;;
-esac
-case " $* " in
+  *" python -c "*)
+    target=
+    for argument in "$@"; do
+      target=$argument
+    done
+    test -s "$target" || exit 1
+    grep -Fqx '{"status": "passed"}' "$target" || exit 1
+    ;;
   *" pytest "*)
+    if [ -n "${THESISTRACE_REAL_CODEX_EVIDENCE_PATH:-}" ] && \
+       [ -z "${FAKE_SKIP_CODEX_EVIDENCE:-}" ]; then
+      mkdir -p "$(dirname "$THESISTRACE_REAL_CODEX_EVIDENCE_PATH")"
+      if [ -n "${FAKE_INVALID_CODEX_EVIDENCE:-}" ]; then
+        printf '{"status": "failed", "nested": {"status": "passed"}}\n' \
+          > "$THESISTRACE_REAL_CODEX_EVIDENCE_PATH"
+      else
+        printf '{"status": "passed"}\n' > "$THESISTRACE_REAL_CODEX_EVIDENCE_PATH"
+      fi
+    fi
     if [ -n "${FAKE_PYTEST_READY_DIR:-}" ] && \
        [ -z "${THESISTRACE_DATABASE_RESTART_PHASE:-}" ]; then
       mkdir -p "$FAKE_PYTEST_READY_DIR" "$FAKE_PYTEST_RELEASE_DIR"
@@ -334,6 +413,9 @@ fi
 """
     )
     curl.chmod(0o755)
+    codex = tmp_path / "codex"
+    codex.write_text('#!/bin/sh\nexit "${FAKE_CODEX_STATUS:-0}"\n')
+    codex.chmod(0o755)
     environment = {
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
@@ -402,6 +484,12 @@ def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) 
     command_log, volume_root, environment = _fake_development_docker(tmp_path)
     canonical_head = volume_root / "thesistrace-dev_canonical-data" / "HEAD.json"
     canonical_head.write_text("frozen-dataset-head")
+    benchmark_snapshot = (
+        volume_root
+        / "thesistrace-dev_benchmark-data"
+        / "csi300-price-index-open.json"
+    )
+    benchmark_snapshot.write_text("frozen-benchmark-snapshot")
 
     completed = subprocess.run(
         [ROOT / "scripts" / "dev-runtime", "reset"],
@@ -414,6 +502,7 @@ def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) 
 
     assert completed.returncode == 0, completed.stderr
     assert canonical_head.read_text() == "frozen-dataset-head"
+    assert benchmark_snapshot.read_text() == "frozen-benchmark-snapshot"
     assert (
         volume_root / "thesistrace-dev_canonical-data" / "preserved-marker"
     ).exists()
@@ -428,6 +517,7 @@ def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) 
     assert "volume rm thesistrace-dev_rustfs-data" in commands
     assert "volume rm thesistrace-dev_batch-attempt-control" in commands
     assert "volume rm thesistrace-dev_canonical-data" not in commands
+    assert "volume rm thesistrace-dev_benchmark-data" not in commands
     assert "up --detach --build --wait --wait-timeout 300" in commands
 
 
@@ -452,6 +542,7 @@ def test_development_erase_removes_every_development_volume(tmp_path: Path) -> N
     assert "volume rm thesistrace-dev_rustfs-data" in commands
     assert "volume rm thesistrace-dev_batch-attempt-control" in commands
     assert "volume rm thesistrace-dev_canonical-data" in commands
+    assert "volume rm thesistrace-dev_benchmark-data" in commands
     assert "up --detach" not in commands
 
 
@@ -871,6 +962,120 @@ def test_rustfs_restart_waits_for_the_authenticated_s3_api() -> None:
     assert 'retries={"max_attempts": 0, "mode": "standard"}' in probe
 
 
+def test_real_codex_mcp_runtime_is_explicit_isolated_and_evidence_backed(
+    tmp_path: Path,
+) -> None:
+    package = json.loads((ROOT / "package.json").read_text())
+    assert package["scripts"]["test:codex-mcp"] == "./scripts/test-runtime codex-mcp"
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "codex-mcp"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    commands = command_log.read_text()
+    assert "up --detach --wait --wait-timeout 300 postgres rustfs" in commands
+    assert "uv run thesistrace-initialize" in commands
+    assert (
+        "uv run pytest -q tests/acceptance/"
+        "test_real_codex_research_agent_mcp.py -m real_codex" in commands
+    )
+    assert "--junitxml=" not in commands
+    assert not (tmp_path / "runs" / run_id / "evidence" / "pytest.xml").exists()
+    runtime = (ROOT / "scripts" / "test-runtime").read_text()
+    assert (
+        'THESISTRACE_REAL_CODEX_EVIDENCE_PATH="$evidence_dir/'
+        'codex-stdio-acceptance.json"' in runtime
+    )
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
+    assert "test_kind=codex-mcp\n" in metadata
+    assert "phase=codex-mcp-host-preflight " in metadata
+    assert "phase=codex-mcp-infrastructure " in metadata
+    assert "phase=codex-mcp-initialization " in metadata
+    assert "phase=codex-mcp-acceptance " in metadata
+    assert "phase=codex-mcp-evidence " in metadata
+    assert "down --volumes --remove-orphans" in commands
+
+
+def test_real_codex_mcp_runtime_fails_closed_without_host_or_evidence(
+    tmp_path: Path,
+) -> None:
+    _, environment = _fake_test_runtime_commands(tmp_path)
+    (tmp_path / "codex").unlink()
+    environment["PATH"] = f"{tmp_path}:/usr/bin:/bin"
+
+    missing_host = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "codex-mcp"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert missing_host.returncode != 0
+    assert "requires the Codex CLI" in missing_host.stderr
+
+    unsupported_root = tmp_path / "unsupported"
+    unsupported_root.mkdir()
+    _, unsupported_environment = _fake_test_runtime_commands(unsupported_root)
+    unsupported_environment["FAKE_CODEX_STATUS"] = "2"
+    unsupported_contract = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "codex-mcp"],
+        cwd=ROOT,
+        env=unsupported_environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert unsupported_contract.returncode != 0
+    assert "supported noninteractive CLI contract" in unsupported_contract.stderr
+
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    _, evidence_environment = _fake_test_runtime_commands(evidence_root)
+    evidence_environment["FAKE_SKIP_CODEX_EVIDENCE"] = "1"
+    missing_evidence = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "codex-mcp"],
+        cwd=ROOT,
+        env=evidence_environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert missing_evidence.returncode != 0
+    run_id = missing_evidence.stdout.splitlines()[0].removeprefix("Test run: ")
+    metadata = (tmp_path / "evidence" / "runs" / run_id / "run.txt").read_text()
+    assert any(
+        line.startswith("phase=codex-mcp-evidence ") and not line.endswith("status=0")
+        for line in metadata.splitlines()
+    )
+
+    invalid_root = tmp_path / "invalid-evidence"
+    invalid_root.mkdir()
+    _, invalid_environment = _fake_test_runtime_commands(invalid_root)
+    invalid_environment["FAKE_INVALID_CODEX_EVIDENCE"] = "1"
+    invalid_evidence = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "codex-mcp"],
+        cwd=ROOT,
+        env=invalid_environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert invalid_evidence.returncode != 0
+
+
 def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() -> None:
     overlay = (ROOT / "deploy" / "core" / "compose.test-run.yaml").read_text()
     base = (ROOT / "deploy" / "core" / "compose.yaml").read_text()
@@ -892,6 +1097,7 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
     assert "postgres-data:" in base
     assert "rustfs-data:" in base
     assert "batch-attempt-control:" in base
+    assert "benchmark-data:" in base
     assert "name:" not in base.split("volumes:", maxsplit=1)[1]
 
 
@@ -964,6 +1170,10 @@ def test_test_cleanup_accepts_only_an_identity_with_matching_run_metadata(
     )
     (run_root / "canonical-data").mkdir()
     (run_root / "canonical-data" / "HEAD.json").write_text("test data")
+    (run_root / "benchmark-data").mkdir()
+    (run_root / "benchmark-data" / "csi300-price-index-open.json").write_text(
+        "test benchmark"
+    )
     marker = tmp_path / "docker-invoked"
     docker = tmp_path / "docker"
     docker.write_text(f"#!/bin/sh\nprintf invoked > '{marker}'\n")
@@ -988,6 +1198,7 @@ def test_test_cleanup_accepts_only_an_identity_with_matching_run_metadata(
     assert completed.returncode == 0, completed.stderr
     assert marker.exists()
     assert not (run_root / "canonical-data").exists()
+    assert not (run_root / "benchmark-data").exists()
     assert list(port_lock_root.iterdir()) == []
 
 
@@ -1031,7 +1242,9 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
 
     assert completed.returncode == 0, completed.stderr
     run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    project_name = f"thesistrace-test-{run_id}"
     assert not (tmp_path / "runs" / run_id / "canonical-data").exists()
+    assert not (tmp_path / "runs" / run_id / "benchmark-data").exists()
     metadata = (tmp_path / "runs" / run_id / "run.txt").read_text().splitlines()
     assert len([line for line in metadata if line.startswith("git_revision=")]) == 1
     assert len(
@@ -1067,6 +1280,8 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     assert "s3=http://127.0.0.1:41002" in commands
     assert "port auth 8200" in commands
     assert "down --volumes --remove-orphans" in commands
+    assert f"docker volume rm {project_name}_canonical-data\n" in commands
+    assert f"docker volume rm {project_name}_benchmark-data\n" in commands
 
 
 def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
@@ -1145,17 +1360,16 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
         "pnpm test:integration",
         "pnpm test:e2e",
     ]
-    assert scripts["check:release"] == (
-        "pnpm check && pnpm test:image-smoke && pnpm test:benchmark"
-    )
+    assert scripts["check:release"] == "pnpm check && pnpm test:image-smoke"
     assert scripts["check:release"].split(" && ") == [
         "pnpm check",
         "pnpm test:image-smoke",
-        "pnpm test:benchmark",
     ]
     assert scripts["test:integration"] == (
         "./scripts/test-runtime integration && pnpm --dir auth test:integration"
     )
+    assert scripts["check:performance"] == "./scripts/test-runtime performance"
+    assert scripts["test:benchmark"] == "./scripts/test-runtime benchmark"
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
     assert scripts["test:image-smoke"] == (
         "./scripts/test-runtime image-smoke && pnpm --dir auth test:image-smoke "
@@ -1227,8 +1441,50 @@ def test_benchmark_reprovisions_an_authenticated_researcher_after_each_reset(
     assert "_ensure_researcher_bootstrap(api_origin)" in qualification
     assert 'headers = {"Cookie": _auth_session()["cookie"]}' in qualification
     assert 'headers["Origin"]' in qualification
-    assert 'event.get("run_id") == run_id' in qualification
+    assert "is_research_execution_child_started_event(event, run_id)" in qualification
     assert 'event.get("resource_id") == run_id' not in qualification
+
+
+def test_long_research_performance_stops_after_the_first_failed_sample(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_LONG_RESEARCH_SAMPLE_FAILURE"] = "factor_evaluation:warm:1"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "performance"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 7
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    commands = command_log.read_text()
+    assert "--research-kind factor_evaluation --phase warm --index 1" in commands
+    assert "--research-kind factor_evaluation --phase warm --index 2" not in commands
+    assert "--research-kind strategy_backtest --phase warm" not in commands
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
+    assert "phase=performance-factor_evaluation-warm-1 " in metadata
+    assert "status=7" in metadata
+
+
+def test_managed_compose_run_phases_never_read_from_the_parent_terminal() -> None:
+    runtime = (ROOT / "scripts" / "test-runtime").read_text()
+    normalized_runtime = re.sub(r"\\\s*\n\s*", " ", runtime)
+    raw_compose_runs = re.findall(
+        r"(?<![A-Za-z0-9_])(?:base_)?compose\s+run\b",
+        normalized_runtime,
+    )
+
+    assert raw_compose_runs == ["compose run", "base_compose run"]
+    for invocation in (
+        'compose run --rm --no-deps -T --interactive=false "$@"',
+        'base_compose run --rm --no-deps -T --interactive=false "$@"',
+    ):
+        assert invocation in normalized_runtime
 
 
 def test_production_image_smoke_builds_once_and_reuses_the_images(
@@ -1271,6 +1527,13 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
         "up --detach --no-build --wait --wait-timeout 120 "
         "research-worker batch-research-worker tracking-worker\n" in commands
     )
+    assert "production_mcp_image_smoke.py preflight" in commands
+    assert "production_mcp_image_smoke.py http-before" in commands
+    assert "stop --timeout 30 api" in commands
+    assert "production_mcp_image_smoke.py http-after" in commands
+    assert "production_mcp_image_smoke.py stdio" in commands
+    assert "production_mcp_image_smoke.py evidence" in commands
+    assert "THESISTRACE_TEST_RANDOM_SEED=1401" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
         "api research-worker batch-research-worker tracking-worker\n" in commands
@@ -1294,7 +1557,85 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     secret_root = tmp_path / "runs" / ".runtime-secrets"
     assert secret_root.is_dir()
     assert list(secret_root.iterdir()) == []
+    assert "THESISTRACE_DATA_MOUNT=/smoke-data/dataset-store-outage/current" in commands
+    assert "production_image_smoke.py health" in commands
+    assert "production_image_smoke.py readiness-outage" in commands
     assert "--build" not in commands
+
+
+def test_image_smoke_mounts_explicit_local_mcp_api_without_changing_production_image() -> None:
+    overlay = (ROOT / "deploy" / "core" / "compose.image-smoke.yaml").read_text()
+    dockerfile = (ROOT / "deploy" / "core" / "Dockerfile.backend").read_text()
+    api_harness = (ROOT / "tests" / "production_mcp_image_api.py").read_text()
+    smoke = (ROOT / "tests" / "production_mcp_image_smoke.py").read_text()
+
+    assert 'command: ["python", "/smoke/production_mcp_image_api.py"]' in overlay
+    assert "../../tests:/smoke:ro" in overlay
+    assert "THESISTRACE_RESEARCH_AGENT_TEST" not in dockerfile
+    assert "LocalImageSmokeTokenVerifier" in api_harness
+    assert "create_app(" in api_harness
+    assert "enable_research_agent_http=True" in api_harness
+    assert '"/mcp" not in default_routes' in smoke
+    assert "create_app(enable_research_agent_http=True)" in smoke
+    assert "terminate_on_close=False" in smoke
+
+
+def test_production_image_base_tags_are_locked_to_content_digests() -> None:
+    backend = (ROOT / "deploy" / "core" / "Dockerfile.backend").read_text()
+    web = (ROOT / "deploy" / "core" / "Dockerfile.web").read_text()
+
+    for dockerfile in (backend, web):
+        from_lines = [line for line in dockerfile.splitlines() if line.startswith("FROM ")]
+        assert from_lines
+        assert all("@sha256:" in line for line in from_lines)
+        assert all(len(line.partition("@sha256:")[2].split()[0]) == 64 for line in from_lines)
+
+
+def test_failed_image_build_stops_smoke_before_runtime_phases(tmp_path: Path) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_BUILD_STATUS"] = "7"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 7
+    commands = command_log.read_text()
+    assert "build initialize auth-initialize web\n" in commands
+    assert "entrypoint /bin/true batch-research-worker" not in commands
+    assert "production_image_smoke.py" not in commands
+
+
+@pytest.mark.parametrize(
+    "target",
+    ("api", "research-worker", "batch-research-worker", "tracking-worker"),
+)
+def test_failed_backend_image_tag_stops_smoke_before_runtime_phases(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_IMAGE_TAG_FAILURE_TARGET"] = target
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 6
+    commands = command_log.read_text()
+    assert f"-{target}\n" in commands
+    assert "entrypoint /bin/true batch-research-worker" not in commands
+    assert "production_image_smoke.py" not in commands
 
 
 def test_failed_image_smoke_persists_runner_diagnostics_before_cleanup(
@@ -1330,6 +1671,112 @@ def test_failed_image_smoke_persists_runner_diagnostics_before_cleanup(
         "ps --all"
     )
     assert commands.rindex("ps --all") < commands.index("down --volumes")
+
+
+def test_failed_image_build_stops_before_infrastructure_and_preserves_status(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_BUILD_STATUS"] = "12"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 12
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
+    assert "phase=image-smoke-images " in metadata
+    assert "status=12" in metadata
+    commands = command_log.read_text()
+    assert "build initialize auth-initialize web" in commands
+    assert "image tag" not in commands
+    assert "up --detach" not in commands
+
+
+def test_failed_mcp_image_smoke_sanitizes_preserved_protocol_evidence(
+    tmp_path: Path,
+) -> None:
+    _, environment = _fake_test_runtime_commands(tmp_path)
+    environment.update(
+        {
+            "FAKE_MCP_IMAGE_SMOKE_PHASE": "http-before",
+            "FAKE_MCP_IMAGE_SMOKE_STATUS": "17",
+            "FAKE_COMPOSE_LOGS": " ".join(
+                (
+                    "mcp-image-action-token-canary",
+                    "mcp-image-read-token-canary",
+                    "mcp-image-hypothesis-canary",
+                    "018f6f7e-8342-7c9a-a4df-9a86147d2e02",
+                    "rank(close) + 0.123456789",
+                )
+            ),
+        }
+    )
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 17
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    run_root = tmp_path / "runs" / run_id
+    metadata = (run_root / "run.txt").read_text()
+    assert "failure_evidence_sanitization_status=0" in metadata
+    assert "failure_canary_scan_status=0" in metadata
+    compose_logs = (run_root / "evidence" / "compose-logs.txt").read_text()
+    assert compose_logs.count("<redacted>") == 5
+    assert "rank(close)" not in compose_logs
+    for canary in (
+        "mcp-image-action-token-canary",
+        "mcp-image-read-token-canary",
+        "mcp-image-hypothesis-canary",
+        "018f6f7e-8342-7c9a-a4df-9a86147d2e02",
+        "0.123456789",
+    ):
+        assert canary not in compose_logs
+
+
+def test_failed_evidence_sanitization_discards_all_text_evidence(
+    tmp_path: Path,
+) -> None:
+    _, environment = _fake_test_runtime_commands(tmp_path)
+    environment.update(
+        {
+            "FAKE_MCP_IMAGE_SMOKE_PHASE": "http-before",
+            "FAKE_MCP_IMAGE_SMOKE_STATUS": "17",
+            "FAKE_SANITIZER_STATUS": "19",
+            "FAKE_COMPOSE_LOGS": "rank(close) + 0.123456789",
+        }
+    )
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 17
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    run_root = tmp_path / "runs" / run_id
+    metadata = (run_root / "run.txt").read_text()
+    assert "failure_evidence_sanitization_status=1" in metadata
+    assert "failure_evidence_discard_status=0" in metadata
+    assert "failure_canary_scan_status=0" in metadata
+    assert not (run_root / "evidence" / "compose-logs.txt").exists()
 
 
 def test_active_lifecycle_rejects_legacy_and_hybrid_entrypoints() -> None:
@@ -1427,7 +1874,7 @@ def test_failed_integration_captures_evidence_before_default_cleanup(
     assert commands.index("ps --all") < commands.index("down --volumes")
 
 
-def test_failed_runtime_scans_new_failure_evidence_for_secret_canaries(
+def test_failed_runtime_sanitizes_then_scans_new_failure_evidence(
     tmp_path: Path,
 ) -> None:
     _, environment = _fake_test_runtime_commands(tmp_path)
@@ -1444,11 +1891,14 @@ def test_failed_runtime_scans_new_failure_evidence_for_secret_canaries(
     )
 
     assert completed.returncode == 7
-    assert "secret canary detected in failure evidence" in completed.stderr
     run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
     run_root = tmp_path / "runs" / run_id
-    assert (run_root / "evidence" / "secret-canary-scan.txt").read_text() == "failed\n"
-    assert "failure_canary_scan_status=1\n" in (run_root / "run.txt").read_text()
+    evidence = run_root / "evidence"
+    assert (evidence / "secret-canary-scan.txt").read_text() == "passed\n"
+    assert (evidence / "compose-logs.txt").read_text().strip() == "<redacted>"
+    metadata = (run_root / "run.txt").read_text()
+    assert "failure_evidence_sanitization_status=0\n" in metadata
+    assert "failure_canary_scan_status=0\n" in metadata
 
 
 def test_cleanup_failure_is_reported_without_masking_the_test_failure(
@@ -1705,9 +2155,9 @@ def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None
         "mise exec -- pnpm test:integration",
         "mise exec -- pnpm test:e2e",
         "mise exec -- pnpm test:image-smoke",
-        "mise exec -- pnpm test:benchmark",
         "mise exec -- pnpm check",
         "mise exec -- pnpm check:release",
+        "mise exec -- pnpm check:performance",
     ):
         assert f"`{command}`" in architecture
     assert "`bun run " not in architecture

@@ -172,9 +172,7 @@ def test_queued_cancel_is_atomic_idempotent_conflict_safe_and_terminal(
             f"/api/research-batches/{second['id']}/cancel",
             json={"request_id": "cancel-after-natural-terminal"},
         )
-        assert late.status_code == 200
-        assert late.json()["status"] == "succeeded"
-        assert all(item["status"] == "succeeded" for item in late.json()["items"])
+        assert late.status_code == 409
 
         with client.app.state.core_runtime.database.transaction() as transaction:
             receipts = transaction.execute(
@@ -183,7 +181,6 @@ def test_queued_cancel_is_atomic_idempotent_conflict_safe_and_terminal(
         assert {(row["request_id"], row["batch_id"]) for row in receipts} == {
             ("cancel-queued", first["id"]),
             ("cancel-queued-strategy", queued_strategy["id"]),
-            ("cancel-after-natural-terminal", second["id"]),
         }
 
 

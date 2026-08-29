@@ -12,22 +12,32 @@ from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
+from starlette.routing import Route
 
+from thesistrace.alpha_language import alpha_language
+from thesistrace.benchmark import (
+    INTERNAL_STRATEGY_METRIC_PATH,
+    InternalAnnualizedExcessRequest,
+    InternalAnnualizedExcessResponse,
+    StrategyComparisonError,
+    StrategyComparisonFacts,
+)
 from thesistrace.daily_track import (
-    DailyTrackActivationLimitReached,
     DailyTrackDeleteConflict,
     DailyTrackDetail,
     DailyTrackDetailUnavailable,
+    DailyTrackInvalidCursor,
     DailyTrackList,
     DailyTrackRetryConflict,
     DailyTrackRetryUnavailable,
     DailyTrackStopConflict,
     DailyTrackStopUnavailable,
     DailyTrackSummary,
+    DailyTrackTemporarilyUnavailable,
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
 )
-from thesistrace.data import DataOverview
+from thesistrace.data import DataOverview, DatasetOverviewService
 from thesistrace.entrypoints.alpha_http import install_alpha_http
 from thesistrace.entrypoints.authentication import (
     AuthSessionUnavailable,
@@ -43,6 +53,11 @@ from thesistrace.operational_events import (
     emit_operational_event,
     sanitized_exception_context,
 )
+from thesistrace.research_agent import (
+    ResearchAgentHTTPConfiguration,
+    ResearchAgentModules,
+    create_research_agent_http_transport,
+)
 from thesistrace.research_batch import (
     ResearchBatchAdmissionCommand,
     ResearchBatchAdmissionConflict,
@@ -52,7 +67,9 @@ from thesistrace.research_batch import (
     ResearchBatchCancelCommand,
     ResearchBatchCancelConflict,
     ResearchBatchDetail,
+    ResearchBatchInvalidCursor,
     ResearchBatchList,
+    ResearchBatchTemporarilyUnavailable,
 )
 from thesistrace.research_folder import (
     CreateResearchFolder,
@@ -72,11 +89,13 @@ from thesistrace.research_run import (
     ResearchRunCancelConflict,
     ResearchRunDeleteConflict,
     ResearchRunDetail,
+    ResearchRunInvalidCursor,
     ResearchRunList,
     ResearchRunOrganizationConflict,
     ResearchRunResultUnavailable,
     ResearchRunStartTrackingConflict,
     ResearchRunSummary,
+    ResearchRunTemporarilyUnavailable,
     ResearchRunTrackingTemporarilyUnavailable,
     ResearchRunTrackingUnavailable,
     StartTrackingCommand,
@@ -98,14 +117,20 @@ def create_app(
     http_request_id_factory: Callable[[], str] | None = None,
     monotonic_ns: Callable[[], int] | None = None,
     public_origin: str | None = None,
+    enable_research_agent_http: bool = False,
+    research_agent_http: ResearchAgentHTTPConfiguration | None = None,
 ) -> FastAPI:
+    if enable_research_agent_http != (research_agent_http is not None):
+        raise ValueError(
+            "Research Agent HTTP must be explicitly enabled with a token verifier configuration"
+        )
     selected_event_sink = emit_operational_event if event_sink is None else event_sink
     selected_request_id_factory = (
-        _new_http_request_id
-        if http_request_id_factory is None
-        else http_request_id_factory
+        _new_http_request_id if http_request_id_factory is None else http_request_id_factory
     )
     selected_monotonic_ns = perf_counter_ns if monotonic_ns is None else monotonic_ns
+
+    research_agent_transport = None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -135,7 +160,11 @@ def create_app(
                 ),
             ) as runtime:
                 app.state.core_runtime = runtime
-                yield
+                if research_agent_transport is None:
+                    yield
+                else:
+                    async with research_agent_transport.session_manager.run():
+                        yield
         finally:
             if owned_verifier is not None:
                 await owned_verifier.aclose()
@@ -182,6 +211,36 @@ def create_app(
                 )
         request.state.researcher = researcher
         return await call_next(request)
+
+    if research_agent_http is not None:
+
+        def research_agent_modules() -> ResearchAgentModules:
+            runtime = app.state.core_runtime
+            return ResearchAgentModules(
+                data_overview=runtime.data_overview,
+                research_folders=runtime.research_folders,
+                alpha_language=alpha_language,
+                research_authoring=runtime.research_authoring,
+                research_runs=runtime.research_runs,
+                research_batches=runtime.research_batches,
+                daily_tracks=runtime.daily_tracks,
+            )
+
+        research_agent_transport = create_research_agent_http_transport(
+            research_agent_http,
+            modules=research_agent_modules,
+            event_sink=selected_event_sink,
+            monotonic_ns=selected_monotonic_ns,
+        )
+        app.router.routes.extend(research_agent_transport.metadata_routes)
+        app.router.routes.append(
+            Route(
+                "/mcp",
+                endpoint=research_agent_transport.app,
+                name="research_agent_mcp",
+                include_in_schema=False,
+            )
+        )
 
     @app.middleware("http")
     async def observe_http_request(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -251,7 +310,7 @@ def create_app(
     install_alpha_http(
         app,
         financial_authoring_ready=lambda request: (
-            _runtime(request).data_overview.overview().financial_research_readiness
+            _data_overview(request).overview().financial_research_readiness
             != "not_ready"
         ),
     )
@@ -272,9 +331,34 @@ def create_app(
             content=snapshot,
         )
 
+    @app.post(
+        INTERNAL_STRATEGY_METRIC_PATH,
+        response_model=InternalAnnualizedExcessResponse,
+        include_in_schema=False,
+    )
+    def calculate_annualized_excess(
+        request: Request,
+        facts: InternalAnnualizedExcessRequest,
+    ) -> InternalAnnualizedExcessResponse:
+        try:
+            metric = _runtime(request).annualized_excess_calculator.annualized_excess_return(
+                StrategyComparisonFacts(
+                    entry_session=facts.entry_session,
+                    terminal_session=facts.terminal_session,
+                    session_interval_count=facts.session_interval_count,
+                    initial_cash_cny=facts.initial_cash_cny,
+                    terminal_net_nav=facts.terminal_net_nav,
+                )
+            )
+        except StrategyComparisonError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return InternalAnnualizedExcessResponse(
+            annualized_excess_return=metric,
+        )
+
     @app.get("/api/data", response_model=DataOverview)
     def data_overview(request: Request) -> DataOverview:
-        return _runtime(request).data_overview.overview()
+        return _data_overview(request).overview()
 
     @app.post(
         "/api/researcher/bootstrap",
@@ -354,6 +438,11 @@ def create_app(
                 status_code=422,
                 content=rejection.model_dump(mode="json"),
             )
+        except ResearchBatchTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="Research Batch admission is temporarily unavailable",
+            ) from error
 
     @app.get("/api/research-batches", response_model=ResearchBatchList)
     def list_research_batches(
@@ -365,17 +454,28 @@ def create_app(
             return _runtime(request).research_batches.list(
                 _researcher_id(request), cursor=cursor, limit=limit
             )
-        except ValueError as error:
+        except ResearchBatchInvalidCursor as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        except ResearchBatchTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="Research Batch listing is temporarily unavailable",
+            ) from error
 
     @app.get(
         "/api/research-batches/{batch_id}",
         response_model=ResearchBatchDetail,
     )
     def get_research_batch(request: Request, batch_id: str) -> ResearchBatchDetail:
-        batch = _runtime(request).research_batches.get(
-            _researcher_id(request), batch_id
-        )
+        try:
+            batch = _runtime(request).research_batches.get(
+                _researcher_id(request), batch_id
+            )
+        except ResearchBatchTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="Research Batch lookup is temporarily unavailable",
+            ) from error
         if batch is None:
             raise HTTPException(status_code=404, detail="Research Batch not found")
         return batch
@@ -395,6 +495,11 @@ def create_app(
             )
         except ResearchBatchCancelConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except ResearchBatchTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="Research Batch cancellation is temporarily unavailable",
+            ) from error
         if batch is None:
             raise HTTPException(status_code=404, detail="Research Batch not found")
         return batch
@@ -420,6 +525,11 @@ def create_app(
                 status_code=422,
                 content=rejection.model_dump(mode="json"),
             )
+        except ResearchRunTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="ResearchRun admission temporarily unavailable",
+            ) from error
 
     @app.get("/api/research-runs", response_model=ResearchRunList)
     def list_research_runs(
@@ -437,8 +547,13 @@ def create_app(
                 cursor=cursor,
                 limit=limit,
             )
-        except ValueError as error:
+        except ResearchRunInvalidCursor as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        except ResearchRunTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="ResearchRun history temporarily unavailable",
+            ) from error
 
     @app.patch(
         "/api/research-runs/{run_id}",
@@ -501,16 +616,18 @@ def create_app(
         command: ResearchRunCancelCommand,
     ) -> ResearchRunSummary:
         try:
-            run = _runtime(request).research_runs.cancel(
+            outcome = _runtime(request).research_runs.cancel(
                 _researcher_id(request), run_id, command
             )
         except ResearchRunCancelConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except ResearchRunTemporarilyUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        if run is None:
+        if outcome is None:
             raise HTTPException(status_code=404, detail="ResearchRun not found")
-        return run
+        return outcome.run
 
     @app.post(
         "/api/research-runs/{run_id}/daily-tracks",
@@ -526,8 +643,6 @@ def create_app(
             track = _runtime(request).research_runs.start_tracking(
                 _researcher_id(request), run_id, command
             )
-        except DailyTrackActivationLimitReached as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
         except ResearchRunStartTrackingConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ResearchRunTrackingUnavailable as error:
@@ -541,8 +656,24 @@ def create_app(
         return track
 
     @app.get("/api/daily-tracks", response_model=DailyTrackList)
-    def list_daily_tracks(request: Request) -> DailyTrackList:
-        return _runtime(request).daily_tracks.list(_researcher_id(request))
+    def list_daily_tracks(
+        request: Request,
+        cursor: str | None = Query(default=None, min_length=1, max_length=1024),
+        limit: int = Query(default=20, ge=1, le=50),
+    ) -> DailyTrackList:
+        try:
+            return _runtime(request).daily_tracks.list(
+                _researcher_id(request),
+                cursor=cursor,
+                limit=limit,
+            )
+        except DailyTrackInvalidCursor as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except DailyTrackTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="DailyTrack listing is temporarily unavailable",
+            ) from error
 
     @app.get("/api/daily-tracks/{track_id}", response_model=DailyTrackDetail)
     def get_daily_track(request: Request, track_id: str) -> DailyTrackDetail:
@@ -591,6 +722,8 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DailyTrackRetryUnavailable as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except DailyTrackTemporarilyUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         if track is None:
@@ -615,6 +748,8 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DailyTrackStopUnavailable as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except DailyTrackTemporarilyUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         if track is None:
@@ -714,6 +849,13 @@ def _request_is_json(request: Request) -> bool:
     return _JSON_CONTENT_TYPE.fullmatch(
         request.headers.get("content-type", "")
     ) is not None
+
+
+def _data_overview(request: Request) -> DatasetOverviewService:
+    overview = _runtime(request).data_overview
+    if overview is None:
+        raise RuntimeError("Data Overview is unavailable outside the API runtime")
+    return overview
 
 
 def _normalized_route(request: Request) -> str:

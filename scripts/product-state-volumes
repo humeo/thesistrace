@@ -46,6 +46,7 @@ case "$command" in
     remove_volume_if_present "${project_name}_postgres-data"
     remove_volume_if_present "${project_name}_rustfs-data"
     remove_volume_if_present "${project_name}_canonical-data"
+    remove_volume_if_present "${project_name}_benchmark-data"
     ;;
   *)
     echo "usage: $0 {reset|erase} project-name" >&2

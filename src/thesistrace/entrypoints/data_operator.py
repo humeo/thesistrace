@@ -15,6 +15,7 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.cninfo_financial_announcements import (
     AkshareCninfoFinancialAnnouncementSource,
 )
+from thesistrace.adapters.tushare_benchmark import TushareBenchmarkSource
 from thesistrace.adapters.tushare_data import TushareDataSource
 from thesistrace.adapters.tushare_financial import TushareFinancialSource
 from thesistrace.adapters.tushare_industry import (
@@ -27,6 +28,7 @@ from thesistrace.adapters.tushare_provider import (
     TushareSourceError,
 )
 from thesistrace.adapters.tushare_replay import ReplayTushareProvider
+from thesistrace.benchmark import validate_independent_benchmark_mount
 from thesistrace.data import (
     BootstrapOutcome,
     CollectionOutcome,
@@ -206,16 +208,31 @@ def _run(
             return report.descriptor()
         database_url = _environment("THESISTRACE_DATABASE_URL")
         mount_root = Path(_environment("THESISTRACE_DATA_MOUNT"))
+        try:
+            benchmark_mount = validate_independent_benchmark_mount(
+                mount_root,
+                _environment("THESISTRACE_BENCHMARK_MOUNT"),
+            )
+        except ValueError as error:
+            raise RuntimeError(str(error)) from error
         database = PostgresDatabase(database_url)
         database.open()
         verify_core_schema(database)
         if parsed.command == "refresh":
-            return DataRefreshService(database, mount_root).submit(
+            return DataRefreshService(
+                database,
+                mount_root,
+                benchmark_mount_root=benchmark_mount,
+            ).submit(
                 idempotency_key=parsed.idempotency_key,
                 as_of=datetime.fromisoformat(parsed.as_of),
             )
         if parsed.command == "inspect-refresh":
-            return DataRefreshService(database, mount_root).inspect(parsed.idempotency_key)
+            return DataRefreshService(
+                database,
+                mount_root,
+                benchmark_mount_root=benchmark_mount,
+            ).inspect(parsed.idempotency_key)
         if parsed.command == "inspect-industry-refresh":
             return IndustryRefreshService(
                 database,
@@ -343,6 +360,8 @@ def _run(
                 database,
                 mount_root,
                 source,
+                benchmark_mount_root=benchmark_mount,
+                benchmark_source=TushareBenchmarkSource(provider),
                 progress=lambda event: _progress({"event": "bootstrap_progress", **event}),
             ).bootstrap(
                 idempotency_key=parsed.idempotency_key,
@@ -372,8 +391,12 @@ def _run(
         processed = DataRefreshService(
             database,
             mount_root,
+            benchmark_mount_root=benchmark_mount,
             lifecycle_event=_progress,
-        ).process_next(source)
+        ).process_next(
+            source,
+            benchmark_source=TushareBenchmarkSource(provider),
+        )
         return {"status": "processed" if processed else "idle"}
     finally:
         if database is not None:

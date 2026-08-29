@@ -64,7 +64,7 @@ DIRECT_RESEARCHER = ResearcherIdentity(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_formula_rejection_matches_preview_and_leaves_no_durable_admission_state() -> None:
+def test_formula_rejection_matches_preview_and_replays_durable_outcome() -> None:
     settings = CoreSettings.from_environment()
     drop_product_schemas(settings)
 
@@ -77,6 +77,18 @@ def test_formula_rejection_matches_preview_and_leaves_no_durable_admission_state
             "/api/research-runs",
             json={**_valid_command("direct-invalid"), "formula": "unknown_field"},
         )
+        replay = client.post(
+            "/api/research-runs",
+            json={
+                **_valid_command("direct-invalid"),
+                "name": "  Direct Research  ",
+                "formula": "unknown_field",
+            },
+        )
+        conflict = client.post(
+            "/api/research-runs",
+            json=_valid_command("direct-invalid"),
+        )
 
         assert preview.status_code == 200
         assert rejected.status_code == 422
@@ -85,6 +97,14 @@ def test_formula_rejection_matches_preview_and_leaves_no_durable_admission_state
         assert issue["code"] == diagnostic["code"]
         assert issue["range"] == diagnostic["range"]
         assert issue["field"] == "formula"
+        assert replay.status_code == 422
+        assert replay.json() == rejected.json()
+        assert conflict.status_code == 409
+        blank_request_id = client.post(
+            "/api/research-runs",
+            json={**_valid_command("   "), "formula": "unknown_field"},
+        )
+        assert blank_request_id.status_code == 422
         assert client.get("/api/definitions").status_code == 404
         assert (
             client.post(
@@ -94,14 +114,14 @@ def test_formula_rejection_matches_preview_and_leaves_no_durable_admission_state
             == 404
         )
 
-    assert _admission_counts(settings) == {"requests": 0, "runs": 0}
+    assert _admission_counts(settings) == {"requests": 1, "runs": 0}
 
 
 @pytest.mark.skipif(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_every_data_or_folder_rejection_leaves_no_durable_admission_state(
+def test_every_data_or_folder_rejection_records_one_durable_outcome(
     tmp_path: Path,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
@@ -113,7 +133,7 @@ def test_every_data_or_folder_rejection_leaves_no_durable_admission_state(
             json=_valid_command("direct-data-not-ready"),
         )
         assert _only_issue_code(not_ready) == "DATA_NOT_READY"
-        assert _admission_counts(settings) == {"requests": 0, "runs": 0}
+        assert _admission_counts(settings) == {"requests": 1, "runs": 0}
 
         _publish_current_data(settings)
         cases = (
@@ -139,13 +159,16 @@ def test_every_data_or_folder_rejection_leaves_no_durable_admission_state(
             }
             rejected = client.post("/api/research-runs", json=command)
             assert _only_issue_code(rejected) == expected_code
-            assert _admission_counts(settings) == {"requests": 0, "runs": 0}
+            assert _admission_counts(settings) == {
+                "requests": index + 2,
+                "runs": 0,
+            }
 
         incomplete = _valid_command("direct-folder-required")
         incomplete.pop("folder_id")
         missing_folder = client.post("/api/research-runs", json=incomplete)
         assert missing_folder.status_code == 422
-        assert _admission_counts(settings) == {"requests": 0, "runs": 0}
+        assert _admission_counts(settings) == {"requests": 6, "runs": 0}
 
 
 @pytest.mark.skipif(
@@ -214,6 +237,29 @@ def test_current_schema_rejects_missing_null_or_malformed_research_kind_contract
                                 date(2026, 8, 4),
                                 Jsonb(immutable_input),
                             ),
+                        )
+            malformed_outcomes = (
+                {},
+                {"outcome": None},
+                {"outcome": "accepted"},
+                {"outcome": "rejected"},
+                {"outcome": "rejected", "issues": []},
+                {
+                    "outcome": "rejected",
+                    "issues": [{"code": "INVALID", "field": "formula", "message": "bad"}],
+                    "unexpected": True,
+                },
+            )
+            for index, outcome in enumerate(malformed_outcomes):
+                with pytest.raises(CheckViolation):
+                    with database.transaction() as transaction:
+                        transaction.execute(
+                            """
+                            INSERT INTO research_runs.admission_requests (
+                                request_id, request_fingerprint, run_id, outcome
+                            ) VALUES (%s, %s, NULL, %s)
+                            """,
+                            (f"malformed_receipt_{index}", "f" * 64, Jsonb(outcome)),
                         )
         finally:
             database.close()
@@ -411,8 +457,8 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "numeric_execution_contract": "thesistrace-numeric-v1",
             "semantic_versions": {
                 "factor": "factor-v1",
-                "strategy": "strategy-v1",
-                "kernel": "kernel-v4",
+                "strategy": "strategy-v2",
+                "kernel": "kernel-v5",
             },
             "alpha_admission": {
                 "effective_lookback": 0,
@@ -622,6 +668,28 @@ def test_research_organization_updates_compose_concurrently_and_cursor_is_stable
         assert len(second_page["items"]) == 1
         assert second_page["items"][0]["id"] != first_page["items"][0]["id"]
         assert second_page["next_cursor"] is not None
+        assert (
+            client.get(
+                "/api/research-runs",
+                params={
+                    "folder_id": "folder_default",
+                    "limit": 1,
+                    "cursor": first_page["next_cursor"],
+                },
+            ).status_code
+            == 422
+        )
+        assert (
+            client.get(
+                "/api/research-runs",
+                params={
+                    "research_kind": "strategy_backtest",
+                    "limit": 1,
+                    "cursor": first_page["next_cursor"],
+                },
+            ).status_code
+            == 422
+        )
 
 
 @pytest.mark.skipif(

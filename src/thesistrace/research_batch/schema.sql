@@ -342,14 +342,71 @@ CREATE TABLE research_batches.progress (
     FOREIGN KEY (batch_id) REFERENCES research_batches.batches(id) ON DELETE CASCADE
 );
 
+CREATE TABLE research_batches.cursor_secrets (
+    singleton smallint PRIMARY KEY,
+    secret text DEFAULT (
+        replace(gen_random_uuid()::text, '-', '')
+        || replace(gen_random_uuid()::text, '-', '')
+    ) NOT NULL,
+    CONSTRAINT cursor_secrets_singleton_check CHECK (singleton = 1),
+    CONSTRAINT cursor_secrets_secret_check CHECK (secret ~ '^[0-9a-f]{64}$')
+);
+
+INSERT INTO research_batches.cursor_secrets (singleton) VALUES (1);
+
+CREATE FUNCTION research_batches.valid_admission_issues(value jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT CASE
+        WHEN jsonb_typeof(value) <> 'array' THEN false
+        ELSE jsonb_array_length(value) > 0
+            AND NOT EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(value) AS entry(issue)
+                WHERE jsonb_typeof(issue) <> 'object'
+                   OR NOT issue ?& ARRAY[
+                        'code', 'field', 'message', 'item_key', 'severity', 'range', 'details'
+                   ]
+                   OR issue - ARRAY[
+                        'code', 'field', 'message', 'item_key', 'severity', 'range', 'details'
+                   ] <> '{}'::jsonb
+                   OR jsonb_typeof(issue -> 'code') <> 'string'
+                   OR jsonb_typeof(issue -> 'field') <> 'string'
+                   OR jsonb_typeof(issue -> 'message') <> 'string'
+                   OR jsonb_typeof(issue -> 'item_key') NOT IN ('string', 'null')
+                   OR issue ->> 'severity' <> 'error'
+                   OR jsonb_typeof(issue -> 'range') NOT IN ('object', 'null')
+                   OR jsonb_typeof(issue -> 'details') NOT IN ('object', 'null')
+            )
+    END
+$$;
+
 CREATE TABLE research_batches.admission_receipts (
     researcher_id uuid NOT NULL,
     request_id text NOT NULL,
     request_fingerprint text NOT NULL,
-    batch_id text NOT NULL UNIQUE,
+    batch_id text UNIQUE,
     outcome jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT admission_receipts_outcome_check CHECK (jsonb_typeof(outcome) = 'object'),
+    CONSTRAINT admission_receipts_outcome_check CHECK (
+        COALESCE(
+            jsonb_typeof(outcome) = 'object'
+            AND (
+                (batch_id IS NOT NULL AND outcome = '{"outcome":"accepted"}'::jsonb)
+                OR (
+                    batch_id IS NULL
+                    AND outcome ->> 'outcome' = 'rejected'
+                    AND outcome ?& ARRAY['outcome', 'issues']
+                    AND research_batches.valid_admission_issues(outcome -> 'issues')
+                    AND outcome - ARRAY['outcome', 'issues'] = '{}'::jsonb
+                )
+            ),
+            false
+        )
+    ),
     PRIMARY KEY (researcher_id, request_id),
     FOREIGN KEY (researcher_id, batch_id)
         REFERENCES research_batches.batches(researcher_id, id)
@@ -360,7 +417,35 @@ CREATE TABLE research_batches.cancel_receipts (
     request_id text NOT NULL,
     request_fingerprint text NOT NULL,
     batch_id text NOT NULL,
+    outcome jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT cancel_receipts_outcome_check CHECK (
+        COALESCE(
+            jsonb_typeof(outcome) = 'object'
+            AND outcome ?& ARRAY[
+                'id', 'batch_kind', 'status', 'created_at', 'scope', 'progress',
+                'execution_timing', 'attempt', 'live_progress', 'items'
+            ]
+            AND outcome - ARRAY[
+                'id', 'batch_kind', 'status', 'created_at', 'scope', 'progress',
+                'execution_timing', 'attempt', 'live_progress', 'items'
+            ] = '{}'::jsonb
+            AND outcome ->> 'id' = batch_id
+            AND jsonb_typeof(outcome -> 'id') = 'string'
+            AND jsonb_typeof(outcome -> 'batch_kind') = 'string'
+            AND outcome ->> 'batch_kind' IN ('factor_evaluation', 'strategy_sweep')
+            AND jsonb_typeof(outcome -> 'status') = 'string'
+            AND outcome ->> 'status' IN ('cancelled', 'cancelling')
+            AND jsonb_typeof(outcome -> 'created_at') = 'string'
+            AND jsonb_typeof(outcome -> 'scope') = 'object'
+            AND jsonb_typeof(outcome -> 'progress') = 'object'
+            AND jsonb_typeof(outcome -> 'execution_timing') = 'object'
+            AND jsonb_typeof(outcome -> 'attempt') IN ('object', 'null')
+            AND jsonb_typeof(outcome -> 'live_progress') IN ('object', 'null')
+            AND jsonb_typeof(outcome -> 'items') = 'array',
+            false
+        )
+    ),
     PRIMARY KEY (researcher_id, request_id),
     FOREIGN KEY (researcher_id, batch_id)
         REFERENCES research_batches.batches(researcher_id, id)

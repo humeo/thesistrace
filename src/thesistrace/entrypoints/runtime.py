@@ -13,6 +13,13 @@ from botocore.config import Config
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
+from thesistrace.benchmark import (
+    AnnualizedExcessCalculator,
+    BenchmarkSnapshotStore,
+    RemoteAnnualizedExcessCalculator,
+    StrategyComparisonService,
+    validate_independent_benchmark_mount,
+)
 from thesistrace.daily_track import DailyTrackService, SessionCoordinateRepository
 from thesistrace.daily_track.planning import DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES
 from thesistrace.data import (
@@ -25,6 +32,7 @@ from thesistrace.entrypoints.readiness import CoreReadiness
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.operational_events import emit_operational_event_data
 from thesistrace.publication import Publication
+from thesistrace.research_authoring import ResearchAuthoringService
 from thesistrace.research_batch import ResearchBatchService, preserve_deleted_run_history
 from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
 from thesistrace.research_folder import ResearchFolderService
@@ -35,7 +43,7 @@ from thesistrace.research_run import (
 )
 from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.planning import DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES
-from thesistrace.research_run.result import read_result_bundle
+from thesistrace.research_run.result import read_result_bundle, read_semantic_result_section
 from thesistrace.researcher import ResearcherService
 
 CORE_ENVIRONMENT_NAMES = (
@@ -45,6 +53,7 @@ CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_S3_SECRET_ACCESS_KEY",
     "THESISTRACE_S3_BUCKET",
     "THESISTRACE_DATA_MOUNT",
+    "THESISTRACE_BENCHMARK_MOUNT",
     "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY",
 )
 PUBLICATION_REQUEST_TIMEOUT_SECONDS = 5.0
@@ -66,6 +75,7 @@ class CoreSettings:
     s3_secret_access_key: str
     s3_bucket: str
     data_mount: Path
+    benchmark_mount: Path
     batch_attempt_control_directory: Path
     s3_region: str = "us-east-1"
     research_execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES
@@ -73,21 +83,18 @@ class CoreSettings:
 
     @classmethod
     def from_environment(cls) -> CoreSettings:
-        names = dict(
-            zip(
-                (
-                    "database_url",
-                    "s3_endpoint_url",
-                    "s3_access_key_id",
-                    "s3_secret_access_key",
-                    "s3_bucket",
-                    "data_mount",
-                    "batch_attempt_control_directory",
-                ),
-                CORE_ENVIRONMENT_NAMES,
-                strict=True,
-            )
-        )
+        names = {
+            "database_url": "THESISTRACE_DATABASE_URL",
+            "s3_endpoint_url": "THESISTRACE_S3_ENDPOINT_URL",
+            "s3_access_key_id": "THESISTRACE_S3_ACCESS_KEY_ID",
+            "s3_secret_access_key": "THESISTRACE_S3_SECRET_ACCESS_KEY",
+            "s3_bucket": "THESISTRACE_S3_BUCKET",
+            "data_mount": "THESISTRACE_DATA_MOUNT",
+            "benchmark_mount": "THESISTRACE_BENCHMARK_MOUNT",
+            "batch_attempt_control_directory": (
+                "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY"
+            ),
+        }
         values: dict[str, str] = {}
         missing: list[str] = []
         for field, name in names.items():
@@ -115,6 +122,13 @@ class CoreSettings:
         if tracking_execution_memory_bytes <= 0:
             raise RuntimeError("Tracking execution memory must be positive")
         data_mount = Path(values["data_mount"])
+        try:
+            benchmark_mount = validate_independent_benchmark_mount(
+                data_mount,
+                values["benchmark_mount"],
+            )
+        except ValueError as error:
+            raise RuntimeError(str(error)) from error
         batch_attempt_control_directory = Path(
             values["batch_attempt_control_directory"]
         )
@@ -122,8 +136,7 @@ class CoreSettings:
             data_mount.resolve()
         ):
             raise RuntimeError(
-                "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY must be outside "
-                "THESISTRACE_DATA_MOUNT"
+                "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY must be outside THESISTRACE_DATA_MOUNT"
             )
         return cls(
             database_url=values["database_url"],
@@ -132,6 +145,7 @@ class CoreSettings:
             s3_secret_access_key=values["s3_secret_access_key"],
             s3_bucket=values["s3_bucket"],
             data_mount=data_mount,
+            benchmark_mount=benchmark_mount,
             batch_attempt_control_directory=batch_attempt_control_directory,
             s3_region=os.environ.get("THESISTRACE_S3_REGION", "us-east-1"),
             research_execution_memory_bytes=research_execution_memory_bytes,
@@ -149,8 +163,9 @@ def core_environment_is_configured(
 @dataclass(frozen=True)
 class CoreRuntime:
     database: PostgresDatabase
-    data_overview: DatasetOverviewService
+    data_overview: DatasetOverviewService | None
     researchers: ResearcherService
+    research_authoring: ResearchAuthoringService
     research_folders: ResearchFolderService
     research_batches: ResearchBatchService
     research_runs: ResearchRunService
@@ -158,6 +173,7 @@ class CoreRuntime:
     daily_track_sessions: SessionCoordinateRepository
     publication: Publication
     readiness: CoreReadiness
+    annualized_excess_calculator: AnnualizedExcessCalculator
 
 
 @contextmanager
@@ -165,6 +181,44 @@ def open_core_runtime(
     settings: CoreSettings,
     *,
     auth_readiness_origin: str | None = None,
+) -> Iterator[CoreRuntime]:
+    comparison = StrategyComparisonService(BenchmarkSnapshotStore(settings.benchmark_mount))
+    with _open_runtime(
+        settings,
+        annualized_excess_calculator=comparison,
+        strategy_comparison=comparison,
+        include_data_overview=True,
+        auth_readiness_origin=auth_readiness_origin,
+    ) as runtime:
+        yield runtime
+
+
+@contextmanager
+def open_worker_runtime(
+    settings: CoreSettings,
+    *,
+    internal_api_origin: str,
+) -> Iterator[CoreRuntime]:
+    with _open_runtime(
+        settings,
+        annualized_excess_calculator=RemoteAnnualizedExcessCalculator(
+            internal_api_origin
+        ),
+        strategy_comparison=None,
+        include_data_overview=False,
+        auth_readiness_origin=None,
+    ) as runtime:
+        yield runtime
+
+
+@contextmanager
+def _open_runtime(
+    settings: CoreSettings,
+    *,
+    annualized_excess_calculator: AnnualizedExcessCalculator,
+    strategy_comparison: StrategyComparisonService | None,
+    include_data_overview: bool,
+    auth_readiness_origin: str | None,
 ) -> Iterator[CoreRuntime]:
     working_cache = TemporaryDirectory(prefix="thesistrace-core-working-cache-")
     database = PostgresDatabase(settings.database_url)
@@ -181,10 +235,17 @@ def open_core_runtime(
         )
         s3.list_buckets()
         publication = Publication(database, s3, bucket=settings.s3_bucket)
-        data_overview = DatasetOverviewService(database, settings.data_mount)
-        data_overview.validate_startup()
         dataset_admission = DatasetAdmissionService(database, settings.data_mount)
         dataset_lifecycle = DatasetLifecycle(database, settings.data_mount)
+        dataset_lifecycle.current_pointer()
+        data_overview: DatasetOverviewService | None = None
+        if include_data_overview:
+            data_overview = DatasetOverviewService(
+                database,
+                settings.data_mount,
+                settings.benchmark_mount,
+            )
+            data_overview.validate_startup()
         generation_store = MountedGenerationStore(settings.data_mount)
         daily_tracks = DailyTrackService(
             database,
@@ -195,11 +256,13 @@ def open_core_runtime(
                 read_result_bundle,
                 research_kind="strategy_backtest",
             ),
+            read_semantic_result_section=read_semantic_result_section,
             working_cache_root=Path(working_cache.name) / "daily-tracks",
             seed_research_exists=research_run_exists,
             research_references_result=research_result_manifest_is_referenced,
             execution_memory_bytes=settings.tracking_execution_memory_bytes,
             lifecycle_event=emit_operational_event_data,
+            strategy_comparison=strategy_comparison,
         )
         research_runs = ResearchRunService(
             database,
@@ -217,6 +280,8 @@ def open_core_runtime(
             ),
             execution_memory_bytes=settings.research_execution_memory_bytes,
             lifecycle_event=emit_operational_event_data,
+            annualized_excess_calculator=annualized_excess_calculator,
+            strategy_comparison=strategy_comparison,
         )
         research_batches = ResearchBatchService(
             database,
@@ -234,6 +299,7 @@ def open_core_runtime(
             database=database,
             data_overview=data_overview,
             researchers=ResearcherService(database),
+            research_authoring=ResearchAuthoringService(),
             research_folders=ResearchFolderService(database),
             research_batches=research_batches,
             research_runs=research_runs,
@@ -250,6 +316,7 @@ def open_core_runtime(
                 s3_region=settings.s3_region,
                 data_mount=settings.data_mount,
             ),
+            annualized_excess_calculator=annualized_excess_calculator,
         )
     finally:
         database.close()

@@ -7,8 +7,10 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { StrategyPerformanceChart } from "../analysis/StrategyPerformanceChart";
 import { coreFetch } from "../auth/coreFetch";
+import { StrategyComparisonPanel } from "../analysis/StrategyComparisonPanel";
+import type { StrategyComparison } from "../analysis/strategyComparison";
+import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
 import {
   useResearchAsDraft,
   type FrozenResearchAuthorableInput,
@@ -43,7 +45,6 @@ type StrategyObservation = {
   session: string;
   gross_nav: string;
   net_nav: string;
-  benchmark_nav: string;
   net_cash: string;
   transaction_cost_cny: string;
   holdings_count: number;
@@ -55,8 +56,9 @@ type StrategyObservation = {
 
 type StrategyMetrics = {
   net_cumulative_return: number;
-  benchmark_cumulative_return: number;
-  annualized_excess_return: number;
+  benchmark_cumulative_return: number | null;
+  benchmark_cagr: number | null;
+  annualized_excess_return: number | null;
   maximum_drawdown: { value: number | null };
   sharpe: number | null;
   transaction_costs: { cumulative_amount: number };
@@ -68,7 +70,6 @@ export type TerminalStrategyState = {
   net_cash: string;
   gross_nav: string;
   net_nav: string;
-  benchmark_nav: string;
   cumulative_transaction_cost: string;
   positions: Array<{
     instrument_id: string;
@@ -108,15 +109,13 @@ type StrategyBacktestResearchResult = {
   strategy: {
     summary: {
       alpha_checksum: string;
+      entry_session: string;
       initial_cash_cny: string;
       source_checksum: string;
       metrics: StrategyMetrics;
     };
-    benchmark: {
-      universe: string;
-      methodology: "selected_universe_equal_weight";
-    };
     observations: StrategyObservation[];
+    comparison: StrategyComparison;
   };
   terminal_strategy_state: TerminalStrategyState;
   provenance: ResearchResultProvenance & {
@@ -124,7 +123,7 @@ type StrategyBacktestResearchResult = {
   };
 };
 
-type ResearchResult = FactorEvaluationResearchResult | StrategyBacktestResearchResult;
+export type ResearchResult = FactorEvaluationResearchResult | StrategyBacktestResearchResult;
 
 export type ResearchRunProgress = {
   phase: "queued" | "warmup" | "research" | "finalizing" | "succeeded";
@@ -1299,12 +1298,11 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
       {strategyResult !== null ? <section className="research-result-section">
         <div className="section-heading">
           <h2>Strategy Summary</h2>
-          <p>Selected universe {strategyResult.strategy.benchmark.universe}</p>
         </div>
         <div className="strategy-metrics">
           <Metric label="Net cumulative" value={formatPercent(strategyResult.strategy.summary.metrics.net_cumulative_return)} />
           <Metric
-            label="Benchmark cumulative"
+            label={`${STRATEGY_BENCHMARK_DISPLAY_NAME} cumulative`}
             value={formatPercent(strategyResult.strategy.summary.metrics.benchmark_cumulative_return)}
           />
           <Metric
@@ -1321,68 +1319,10 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
             value={formatCny(strategyResult.strategy.summary.metrics.transaction_costs.cumulative_amount)}
           />
         </div>
-        <StrategyPerformanceChart observations={strategyResult.strategy.observations} />
+        <StrategyComparisonPanel comparison={strategyResult.strategy.comparison} />
       </section> : null}
 
-      {strategyResult !== null ? (
-        <TerminalStrategyStateView state={strategyResult.terminal_strategy_state} />
-      ) : null}
     </div>
-  );
-}
-
-export function TerminalStrategyStateView({ state }: { state: TerminalStrategyState }) {
-  return (
-    <section className="research-result-section" aria-label="Final Portfolio">
-      <div className="section-heading">
-        <h2>Final Portfolio</h2>
-      </div>
-      <div className="strategy-metrics">
-        <Metric label="As of" value={state.session} />
-        <Metric
-          label="Portfolio value"
-          value={formatCnyDecimal(state.net_nav)}
-          exactValue={state.net_nav}
-        />
-        <Metric
-          label="Cash"
-          value={formatCnyDecimal(state.net_cash)}
-          exactValue={state.net_cash}
-        />
-        <Metric label="Positions" value={String(state.positions.length)} />
-        <Metric
-          label="Transaction costs"
-          value={formatCnyDecimal(state.cumulative_transaction_cost)}
-          exactValue={state.cumulative_transaction_cost}
-        />
-      </div>
-      {state.positions.length === 0 ? (
-        <p>No holdings at the end of the Research Period.</p>
-      ) : (
-        <div className="result-table-scroll">
-          <table aria-label="Final holdings">
-            <thead>
-              <tr><th>Instrument</th><th>Shares</th><th>Adjusted units</th><th>Last price</th></tr>
-            </thead>
-            <tbody>
-              {state.positions.map((position) => (
-                <tr key={position.instrument_id}>
-                  <td>{position.instrument_id}</td>
-                  <td>{position.execution_shares}</td>
-                  <td title={position.adjusted_units}>{formatNumericString(position.adjusted_units)}</td>
-                  <td title={position.last_adjusted_price}>{formatNumericString(position.last_adjusted_price)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {state.pending_signal ? (
-        <p>
-          Signal from {state.pending_signal.signal_session} remains pending for the next Research Session open.
-        </p>
-      ) : null}
-    </section>
   );
 }
 
@@ -1459,20 +1399,4 @@ function neutralizationLabel(
 
 function rebalanceLabel(sessions: number): string {
   return sessions === 1 ? "Every session" : `Every ${sessions} sessions`;
-}
-
-function formatCnyDecimal(value: string) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "CNY",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(Number(value));
-}
-
-function formatNumericString(value: string) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return value;
-  if (numeric !== 0 && Math.abs(numeric) < 0.000001) return numeric.toExponential(6);
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 }).format(numeric);
 }

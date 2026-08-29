@@ -143,7 +143,7 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
     prior_research_data = slice_research_sessions(
         research_data, calendar[: local_current_index + 1]
     )
-    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v1":
+    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v2":
         prior = restore_tracking_origin(
             origin,
             _mapping_value(
@@ -243,7 +243,7 @@ def _mapping_value(value: object, name: str) -> Mapping[str, object]:
 
 
 def _predecessor_instrument_ids(predecessor: Mapping[str, object]) -> frozenset[str]:
-    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v1":
+    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v2":
         terminal = _mapping_value(
             predecessor.get("terminal_strategy_state"),
             "Activation Terminal Strategy State",

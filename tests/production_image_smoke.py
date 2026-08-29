@@ -29,6 +29,7 @@ from thesistrace.publication import Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_run.result import (
     RESULT_DAILY_PARTITION_PREFIX,
+    RESULT_TERMINAL_POSITION_PARTITION_PREFIX,
     read_result_bundle,
 )
 
@@ -53,8 +54,10 @@ EXPECTED_OVERVIEW = {
         "observation_through_session": "2026-08-05",
         "classification_version": "SW2021",
     },
+    "benchmark_coverage": {"start": "2010-01-04", "end": "2026-08-05"},
     "data_through_session": "2026-08-05",
     "market_research_readiness": True,
+    "benchmark_research_readiness": True,
     "financial_research_readiness": "ready",
     "industry_research_readiness": True,
 }
@@ -70,6 +73,7 @@ UNAVAILABLE_DEPENDENCY_CODES = {
     "dataset_store": "DATASET_STORE_UNAVAILABLE",
     "auth": "AUTH_UNAVAILABLE",
 }
+HTTP_REQUEST_TIMEOUT_SECONDS = 10
 
 BATCH_PERFORMANCE_WARMUP_SAMPLES = 1
 BATCH_PERFORMANCE_MEASURED_SAMPLES = 4
@@ -1075,22 +1079,18 @@ def _assert_strategy_science(results: list[dict[str, object]]) -> None:
         summary = stored["strategy_summary"]
         metrics = summary["metrics"]
         assert summary["source_checksum"] == _independent_observation_checksum(observations)
+        initial_cash = Decimal(str(summary["initial_cash_cny"]))
         for observation in observations:
-            for name in ("gross_nav", "net_nav", "benchmark_nav", "net_cash"):
+            for name in ("gross_nav", "net_nav", "net_cash"):
                 assert Decimal(str(observation[name])).is_finite()
             assert Decimal(str(observation["gross_nav"])) > 0
             assert Decimal(str(observation["net_nav"])) > 0
-            assert Decimal(str(observation["benchmark_nav"])) > 0
-        first = observations[0]
         last = observations[-1]
         assert metrics["gross_cumulative_return"] == float(
-            Decimal(str(last["gross_nav"])) / Decimal(str(first["gross_nav"])) - 1
+            Decimal(str(last["gross_nav"])) / initial_cash - 1
         )
         assert metrics["net_cumulative_return"] == float(
-            Decimal(str(last["net_nav"])) / Decimal(str(first["net_nav"])) - 1
-        )
-        assert metrics["benchmark_cumulative_return"] == float(
-            Decimal(str(last["benchmark_nav"])) / Decimal(str(first["benchmark_nav"])) - 1
+            Decimal(str(last["net_nav"])) / initial_cash - 1
         )
         cumulative_cost = sum(
             (Decimal(str(observation["transaction_cost_cny"])) for observation in observations),
@@ -1101,10 +1101,10 @@ def _assert_strategy_science(results: list[dict[str, object]]) -> None:
         assert metrics["transaction_costs"]["cumulative_amount"] == float(cumulative_cost)
         assert {
             name: str(terminal[name])
-            for name in ("session", "gross_nav", "net_nav", "benchmark_nav", "net_cash")
+            for name in ("session", "gross_nav", "net_nav", "net_cash")
         } == {
             name: str(last[name])
-            for name in ("session", "gross_nav", "net_nav", "benchmark_nav", "net_cash")
+            for name in ("session", "gross_nav", "net_nav", "net_cash")
         }
         independently_recomputed_drawdown = _independent_maximum_drawdown(observations)
         assert metrics["maximum_drawdown"] == independently_recomputed_drawdown, {
@@ -2086,7 +2086,11 @@ def _wait_for_readiness(
         "dependencies": expected_dependencies,
     }
     while time.monotonic() < deadline:
-        last = _request_health(api_origin, "/health/ready")
+        try:
+            last = _request_health(api_origin, "/health/ready")
+        except urllib.error.URLError:
+            interval.wait(0.05)
+            continue
         if last[0] == expected_status and last[1] == expected_payload:
             return last
         interval.wait(0.05)
@@ -2124,20 +2128,20 @@ def _request_health(
     return status, payload, elapsed
 
 
-def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
-    fixture = Path("/smoke/fixtures/tushare-financial-product-replay.json")
-    replay = json.loads(fixture.read_text())
+def _build_data_refresh_replay(replay: dict[str, object]) -> dict[str, object]:
     replay.pop("financial")
-    _source, canonical = normalize_tushare_snapshot(replay["snapshot"])
+    snapshot = replay["snapshot"]
+    assert isinstance(snapshot, dict)
+    _source, canonical = normalize_tushare_snapshot(snapshot)
     calendar = canonical["research_calendar"]
     request_start = calendar[-20]
     request_end = calendar[-1]
     compact_start = request_start.replace("-", "")
     compact_end = request_end.replace("-", "")
     for table in ("calendar_sse", "calendar_szse"):
-        replay["snapshot"][table] = [
+        snapshot[table] = [
             row
-            for row in replay["snapshot"][table]
+            for row in snapshot[table]
             if compact_start <= str(row["cal_date"]) <= compact_end
         ]
     for table in (
@@ -2147,8 +2151,9 @@ def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
         "price_limits",
         "industry_membership",
     ):
-        replay["snapshot"][table] = []
-    for instrument in replay["snapshot"]["stock_basic"]:
+        snapshot[table] = []
+    snapshot["benchmark_index_daily"] = []
+    for instrument in snapshot["stock_basic"]:
         instrument["list_date"] = EXPECTED_OVERVIEW["market_coverage"]["start"].replace(
             "-", ""
         )
@@ -2160,6 +2165,12 @@ def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
             "request_end": request_end,
         }
     )
+    return replay
+
+
+def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
+    fixture = Path("/smoke/fixtures/tushare-financial-product-replay.json")
+    replay = _build_data_refresh_replay(json.loads(fixture.read_text()))
     with tempfile.TemporaryDirectory(prefix="thesistrace-image-refresh-") as directory:
         replay_path = Path(directory) / "refresh-replay.json"
         replay_path.write_text(json.dumps(replay, sort_keys=True, separators=(",", ":")))
@@ -2204,6 +2215,7 @@ def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
         "market",
         "validation",
         "materialization",
+        "benchmark",
         "candidate_validation",
         "publication",
     ]
@@ -2353,6 +2365,8 @@ def _verify_observability_evidence(
     ):
         assert isinstance(json.loads(path.read_text()), dict)
     canaries = {
+        "mcp-image-action-token-canary",
+        "mcp-image-read-token-canary",
         "observability-access-canary",
         "observability-outage-canary",
         "observability-secret-canary",
@@ -2595,10 +2609,17 @@ def _assert_private_operator_installed() -> None:
 
 def _assert_expected_overview(overview: dict[str, object]) -> None:
     assert {key: overview[key] for key in EXPECTED_OVERVIEW} == EXPECTED_OVERVIEW
+    snapshot_sha256 = overview.get("benchmark_snapshot_sha256")
+    assert isinstance(snapshot_sha256, str)
+    assert len(snapshot_sha256) == 64
+    assert all(character in "0123456789abcdef" for character in snapshot_sha256)
     for field in ("last_market_refresh_at", "last_financial_refresh_at"):
         refreshed_at = overview.get(field)
         assert isinstance(refreshed_at, str)
         assert refreshed_at.endswith(("+00:00", "Z"))
+    benchmark_published_at = overview.get("benchmark_last_published_at")
+    assert isinstance(benchmark_published_at, str)
+    assert benchmark_published_at.endswith(("+00:00", "Z"))
 
 
 def _durable_result(
@@ -2690,8 +2711,18 @@ def _durable_result(
             partition_names = {
                 name for name in payload_names if name.startswith(RESULT_DAILY_PARTITION_PREFIX)
             }
+            position_partition_names = {
+                name
+                for name in payload_names
+                if name.startswith(RESULT_TERMINAL_POSITION_PARTITION_PREFIX)
+            }
             assert partition_names
-            assert set(payload_names) == set(result_object_names) | partition_names
+            assert set(payload_names) == (
+                set(result_object_names)
+                | {"terminal_positions"}
+                | partition_names
+                | position_partition_names
+            )
         return {
             "active_pin_count": int(row["active_pin_count"]),
             "manifest_sha256": manifest_sha256,
@@ -2858,7 +2889,10 @@ def _request_json(
         method=method,
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(
+            request,
+            timeout=HTTP_REQUEST_TIMEOUT_SECONDS,
+        ) as response:
             assert response.status < 300
             value = json.loads(response.read())
     except urllib.error.HTTPError as error:

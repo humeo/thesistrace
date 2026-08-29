@@ -20,8 +20,10 @@ from benchmark_financial_io import build_market_benchmark_stream
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.generation_store import MountedGenerationStore
 from thesistrace.data.io_benchmark import (
-    assert_long_research_qualification,
+    is_research_execution_child_started_event,
+    long_research_qualification_outcome,
     long_research_qualification_summary,
+    long_research_sample_qualification,
 )
 from thesistrace.data.io_metrics import measure_data_io
 from thesistrace.data.lifecycle import DatasetLifecycle
@@ -69,16 +71,22 @@ def main() -> None:
     elif arguments.command == "preload":
         _write_json(arguments.output, _preload_canonical_objects())
     elif arguments.command == "sample":
-        _write_json(
-            arguments.output,
-            _execute_sample(
-                arguments.phase,
-                arguments.index,
-                arguments.log,
-                research_kind=arguments.research_kind,
-                require_fresh_product_state=arguments.require_fresh_product_state,
-            ),
+        evidence = _execute_sample(
+            arguments.phase,
+            arguments.index,
+            arguments.log,
+            research_kind=arguments.research_kind,
+            require_fresh_product_state=arguments.require_fresh_product_state,
         )
+        outcome = long_research_sample_qualification(
+            evidence,
+            research_kind=arguments.research_kind,
+            phase=arguments.phase,
+            index=arguments.index,
+        )
+        evidence["qualification"] = outcome
+        _write_json(arguments.output, evidence)
+        _raise_for_failed_qualification(outcome)
     elif arguments.command == "cancel":
         _write_json(
             arguments.output,
@@ -86,8 +94,19 @@ def main() -> None:
         )
     else:
         evidence = _assemble(arguments.samples, arguments.image_revision)
-        assert_long_research_qualification(evidence)
+        outcome = long_research_qualification_outcome(evidence)
+        evidence["qualification"] = outcome
         _write_json(arguments.output, evidence)
+        _raise_for_failed_qualification(outcome)
+
+
+def _raise_for_failed_qualification(outcome: dict[str, str | None]) -> None:
+    if outcome == {"status": "passed", "failure_reason": None}:
+        return
+    failure_reason = outcome.get("failure_reason")
+    if outcome.get("status") != "failed" or not failure_reason:
+        raise RuntimeError("qualification outcome is invalid")
+    raise AssertionError(failure_reason)
 
 
 def _prepare() -> dict[str, object]:
@@ -456,18 +475,14 @@ def _assemble(samples_path: Path, image_revision: str) -> dict[str, object]:
         }
     generation_ids = {str(item["generation_manifest_sha256"]) for item in all_samples}
     plans = {(int(item["chunk_session_count"]), int(item["chunk_count"])) for item in all_samples}
-    if len(generation_ids) != 1 or len(plans) != 1:
-        raise RuntimeError("qualification samples did not preserve one frozen input and plan")
-    if not all(item.get("fresh_product_state_verified") is True for item in all_samples):
-        raise RuntimeError("qualification samples did not start from fresh Product State")
     factor_summary_ids = {str(item["factor_summary_sha256"]) for item in all_samples}
-    if len(factor_summary_ids) != 1:
-        raise RuntimeError("qualification kinds are not Factor Summary equivalent")
-    chunk_session_count, chunk_count = next(iter(plans))
+    generation_manifest_sha256 = sorted(generation_ids)[0]
+    chunk_session_count, chunk_count = sorted(plans)[0]
+    factor_summary_sha256 = sorted(factor_summary_ids)[0]
     preload = _read_json(samples_path / "preload.json")
     evidence = {
         "format": "thesistrace-long-research-qualification",
-        "version": 1,
+        "version": 2,
         "image": {"revision": image_revision},
         "capacity": {
             "cpu_count": 2,
@@ -481,14 +496,14 @@ def _assemble(samples_path: Path, image_revision: str) -> dict[str, object]:
             "universe": "top3000",
             "start_date": "2010-01-04",
             "end_date": "2026-08-13",
-            "generation_manifest_sha256": next(iter(generation_ids)),
+            "generation_manifest_sha256": generation_manifest_sha256,
             "chunk_session_count": chunk_session_count,
             "chunk_count": chunk_count,
         },
         "warm_preload": preload,
         "research_kinds": research_kinds,
         "scientific_equivalence": {
-            "factor_summary_sha256": next(iter(factor_summary_ids)),
+            "factor_summary_sha256": factor_summary_sha256,
             "sample_count": len(all_samples),
         },
     }
@@ -653,8 +668,7 @@ def _wait_for_child_start(
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if any(
-            event.get("event") == "research_execution_child_started"
-            and event.get("run_id") == run_id
+            is_research_execution_child_started_event(event, run_id)
             for event in _read_events(log_path)
         ):
             return
