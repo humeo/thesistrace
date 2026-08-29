@@ -23,6 +23,18 @@ function dependencies(): OperatorCommandDependencies {
         status: "updated" as const,
       })),
     },
+    assignment: {
+      assign: vi.fn(async () => ({
+        operatorResearcherId: researcherId,
+        status: "assigned" as const,
+      })),
+      transfer: vi.fn(async () => ({
+        formerOperatorResearcherId:
+          "00000000-0000-4000-8000-000000000099",
+        operatorResearcherId: researcherId,
+        status: "transferred" as const,
+      })),
+    },
     invitations: {
       issue: vi.fn(async () => ({
         email: "researcher@example.com",
@@ -39,6 +51,45 @@ function dependencies(): OperatorCommandDependencies {
 }
 
 describe("Auth operator command contract", () => {
+  it.each([
+    {
+      args: ["assign-operator", "--email", " Researcher@Example.COM "],
+      command: "assign-operator" as const,
+      identity: { email: " Researcher@Example.COM " },
+      method: "assign" as const,
+      result: {
+        command: "assign-operator",
+        researcher_id: researcherId,
+        status: "assigned",
+      },
+    },
+    {
+      args: ["transfer-operator", "--researcher-id", researcherId],
+      command: "transfer-operator" as const,
+      identity: { researcherId },
+      method: "transfer" as const,
+      result: {
+        command: "transfer-operator",
+        former_researcher_id: "00000000-0000-4000-8000-000000000099",
+        researcher_id: researcherId,
+        status: "transferred",
+      },
+    },
+  ])("runs the deployment-private $command command", async ({
+    args,
+    identity,
+    method,
+    result,
+  }) => {
+    const commandDependencies = dependencies();
+
+    await expect(runOperatorCommand(args, commandDependencies)).resolves.toEqual(
+      result,
+    );
+    expect(commandDependencies.assignment[method]).toHaveBeenCalledWith(identity);
+    expect(commandDependencies.access.resolveResearcherId).not.toHaveBeenCalled();
+  });
+
   it("resolves an email without mutating Auth state", async () => {
     const commandDependencies = dependencies();
 
@@ -124,6 +175,8 @@ describe("Auth operator command contract", () => {
     { args: [] },
     { args: ["unknown"] },
     { args: ["invite", "--researcher-id", researcherId] },
+    { args: ["assign-operator", "--email", "a@example.com", "--researcher-id", researcherId] },
+    { args: ["transfer-operator", "--label", "secret-canary"] },
     {
       args: [
         "deactivate",

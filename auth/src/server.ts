@@ -16,6 +16,7 @@ import { diagnoseAuthFailure } from "./failure.js";
 import { createAuthHttpObserver } from "./http-observability.js";
 import { ResearcherInvitationService } from "./invitation.js";
 import { InvitationAdmission } from "./invitation-admission.js";
+import { OperatorDirectoryService } from "./operator-directory.js";
 import { PasswordResetLifecycle } from "./password-reset.js";
 import { checkAuthReadiness } from "./readiness.js";
 import { sendResendEmail } from "./resend.js";
@@ -108,6 +109,10 @@ async function main(): Promise<void> {
         headers,
         query: { disableCookieCache: true, disableRefresh: true },
       });
+    const operatorDirectory = new OperatorDirectoryService({
+      authSecret: settings.secret,
+      pool,
+    });
     const app = createAuthApp({
       acceptInvitation: (token, password, headers) =>
         invitations.accept(token, password, headers),
@@ -127,8 +132,14 @@ async function main(): Promise<void> {
       consumePasswordResetRateLimit: (token, headers) =>
         passwordResetRateLimiter.consume(token, headers),
       getSession: (input) => auth.api.getSession(input),
+      hasOperatorCapability: (principal) =>
+        operatorDirectory.hasCapability(principal),
       httpObserver: createAuthHttpObserver(),
       inspectInvitation: (token) => invitations.inspect(token),
+      listOperatorInvitations: (principal, input) =>
+        operatorDirectory.listInvitations(principal, input),
+      listOperatorResearchers: (principal, input) =>
+        operatorDirectory.listResearchers(principal, input),
       publicOrigin: settings.publicOrigin,
       readiness: () => checkAuthReadiness(pool),
       resetPassword: passwordReset.completeReset,

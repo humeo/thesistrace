@@ -15,6 +15,17 @@ CREATE TABLE auth."user" (
     )
 );
 
+CREATE TABLE auth.operator_assignment (
+    singleton boolean NOT NULL,
+    researcher_id uuid NOT NULL,
+    assigned_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    CONSTRAINT operator_assignment_pkey PRIMARY KEY (singleton),
+    CONSTRAINT operator_assignment_singleton_check CHECK (singleton),
+    CONSTRAINT operator_assignment_researcher_id_key UNIQUE (researcher_id),
+    CONSTRAINT operator_assignment_researcher_id_fkey FOREIGN KEY (researcher_id)
+        REFERENCES auth."user" (id) ON DELETE RESTRICT
+);
+
 CREATE TABLE auth."session" (
     "id" uuid DEFAULT pg_catalog.gen_random_uuid() NOT NULL,
     "expiresAt" timestamp with time zone NOT NULL,

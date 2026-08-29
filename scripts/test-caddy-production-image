@@ -141,6 +141,24 @@ start_container
 docker exec "$container_name" wget --quiet --no-check-certificate \
   --output-document - https://thesistrace.test/login \
   >"$evidence_root/spa.html"
+if docker exec "$client_one_name" wget --quiet --no-check-certificate \
+  --output-document /dev/null \
+  https://thesistrace.test/operator/researchers; then
+  echo "Caddy exposed the Operator page without Auth admission" >&2
+  exit 1
+fi
+docker exec "$client_one_name" wget --server-response --no-check-certificate \
+  --output-document /dev/null \
+  https://thesistrace.test/operator/researchers \
+  >"$evidence_root/operator-denied.stdout.log" \
+  2>"$evidence_root/operator-denied.stderr.log" || true
+grep -F "404 Not Found" "$evidence_root/operator-denied.stderr.log"
+docker exec "$client_one_name" wget --quiet --no-check-certificate \
+  --header 'Cookie: session=operator-allowed' \
+  --output-document - \
+  https://thesistrace.test/operator/researchers \
+  >"$evidence_root/operator-spa.html"
+cmp "$evidence_root/spa.html" "$evidence_root/operator-spa.html"
 docker exec "$container_name" wget --server-response --spider \
   --no-check-certificate \
   http://thesistrace.test/ \

@@ -169,6 +169,28 @@ export function expireInvitation(token: string): void {
   }
 }
 
+export function seedOperatorDirectory(): void {
+  const output = execFileSync(
+    "docker",
+    [
+      "exec",
+      `${testProjectName()}-auth-1`,
+      "node",
+      "/test-fixtures/mutate-auth-test-state.mjs",
+      "seed-operator-directory",
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  const result = JSON.parse(output) as unknown;
+  if (
+    !isRecord(result)
+    || result.researchers !== 55
+    || result.status !== "seeded"
+  ) {
+    throw new Error("Private Auth Operator directory fixture returned an invalid result");
+  }
+}
+
 function resetAuthRateLimits(): void {
   const output = execFileSync(
     "docker",

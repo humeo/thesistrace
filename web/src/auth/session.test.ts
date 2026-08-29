@@ -12,6 +12,7 @@ const session = {
   researcherId: "00000000-0000-4000-8000-000000000001",
   email: "researcher@example.test",
   displayLabel: "researcher",
+  operator: false,
 };
 
 describe("public Session state", () => {

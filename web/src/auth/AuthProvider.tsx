@@ -16,6 +16,7 @@ import {
   createCoreFetch,
   setCoreUnauthorizedHandler,
 } from "./coreFetch";
+import { loadOperatorCapability } from "./operatorCapability";
 import {
   authStateReducer,
   decodePublicSession,
@@ -89,12 +90,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
           return;
         }
-        const session = decodePublicSession(result.data);
-        if (session === null) {
+        const researcherSession = decodePublicSession(result.data);
+        if (researcherSession === null) {
           readyResearcherId.current = null;
           dispatch({ type: "session-missing" });
           return;
         }
+        const session: PublicSession = {
+          ...researcherSession,
+          operator: await loadOperatorCapability(),
+        };
         if (!forceSetup && readyResearcherId.current === session.researcherId) {
           dispatch({ type: "setup-succeeded", session });
           return;

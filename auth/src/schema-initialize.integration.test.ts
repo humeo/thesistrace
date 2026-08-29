@@ -265,6 +265,7 @@ describe.sequential("Auth physical schema", () => {
     expect(relations.rows.map((row) => row.name)).toEqual([
       "account",
       "auth_secret_contract",
+      "operator_assignment",
       "password_reset",
       "rateLimit",
       "researcher_invitation",

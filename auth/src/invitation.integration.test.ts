@@ -270,7 +270,16 @@ describe.sequential("Researcher Invitation lifecycle", () => {
         return { allowed: true, retryAfterSeconds: 0 };
       },
       getSession: (input) => harness.auth.api.getSession(input),
+      async hasOperatorCapability() {
+        return false;
+      },
       inspectInvitation: (candidate) => harness.service.inspect(candidate),
+      async listOperatorInvitations() {
+        throw new Error("OPERATOR_DIRECTORY_UNAVAILABLE_IN_INVITATION_HARNESS");
+      },
+      async listOperatorResearchers() {
+        throw new Error("OPERATOR_DIRECTORY_UNAVAILABLE_IN_INVITATION_HARNESS");
+      },
       publicOrigin: settings.publicOrigin,
       readiness: async () => true,
       async resetPassword() {},

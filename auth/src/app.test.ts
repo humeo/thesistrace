@@ -9,9 +9,10 @@ import {
   createAuthHttpObserver,
   type AuthHttpEvent,
 } from "./http-observability.js";
+import { OperatorAccessNotFoundError } from "./operator-directory.js";
 
 const activeSession = {
-  session: { id: "session-id" },
+  session: { id: "00000000-0000-4000-8000-000000000010" },
   user: {
     active: true,
     email: "researcher@example.com",
@@ -35,7 +36,16 @@ function dependencies(
       Response.json({ status: "ok" }, { headers: { "set-cookie": "unexpected=1" } }),
     ),
     getSession: vi.fn(async () => activeSession),
+    hasOperatorCapability: vi.fn(async () => true),
     inspectInvitation: vi.fn(async () => ({ email: "researcher@example.com" })),
+    listOperatorInvitations: vi.fn(async () => ({
+      items: [],
+      nextCursor: null,
+    })),
+    listOperatorResearchers: vi.fn(async () => ({
+      items: [],
+      nextCursor: null,
+    })),
     consumeInvitationRateLimit: vi.fn(async () => ({
       allowed: true,
       retryAfterSeconds: 0,
@@ -526,6 +536,100 @@ describe("Auth HTTP boundary", () => {
       headers: expect.any(Headers),
       query: { disableCookieCache: true, disableRefresh: true },
     });
+  });
+
+  it("admits the Operator page check and exposes only read-only projections", async () => {
+    const appDependencies = dependencies({
+      listOperatorResearchers: vi.fn(async () => ({
+        items: [{
+          active: true,
+          createdAt: "2026-08-28T00:00:00.000Z",
+          currentSessionCount: 2,
+          displayLabel: "Researcher",
+          effectiveInvitation: null,
+          email: "researcher@example.com",
+          id: "00000000-0000-4000-8000-000000000001",
+          latestSuccessfulLoginAt: null,
+        }],
+        nextCursor: "opaque-cursor",
+      })),
+    });
+    const app = createAuthApp(appDependencies);
+
+    expect((await app.request(
+      "http://auth.test/internal/operator/page-access",
+      { headers: { cookie: "session=fake" } },
+    )).status).toBe(204);
+    const capability = await app.request(
+      "http://auth.test/api/auth/operator/capability",
+      { headers: { cookie: "session=fake" } },
+    );
+    expect(capability.status).toBe(200);
+    expect(await capability.json()).toEqual({ operator: true });
+    const researchers = await app.request(
+      "http://auth.test/api/auth/operator/researchers?search=Research&cursor=opaque",
+      { headers: { cookie: "session=fake" } },
+    );
+    expect(researchers.status).toBe(200);
+    expect(await researchers.json()).toEqual({
+      items: [{
+        active: true,
+        created_at: "2026-08-28T00:00:00.000Z",
+        current_session_count: 2,
+        display_label: "Researcher",
+        effective_invitation: null,
+        email: "researcher@example.com",
+        latest_successful_login_at: null,
+        researcher_id: "00000000-0000-4000-8000-000000000001",
+      }],
+      next_cursor: "opaque-cursor",
+    });
+    expect(appDependencies.listOperatorResearchers).toHaveBeenCalledWith(
+      {
+        researcherId: "00000000-0000-4000-8000-000000000001",
+        sessionId: "00000000-0000-4000-8000-000000000010",
+      },
+      { cursor: "opaque", search: "Research" },
+    );
+  });
+
+  it("returns an empty 404 for every ordinary-Researcher Operator boundary", async () => {
+    const appDependencies = dependencies({
+      hasOperatorCapability: vi.fn(async () => false),
+      listOperatorInvitations: vi.fn(async () => {
+        throw new OperatorAccessNotFoundError();
+      }),
+      listOperatorResearchers: vi.fn(async () => {
+        throw new OperatorAccessNotFoundError();
+      }),
+    });
+    const app = createAuthApp(appDependencies);
+
+    for (const path of [
+      "/internal/operator/page-access",
+      "/api/auth/operator/capability",
+      "/api/auth/operator/researchers",
+      "/api/auth/operator/invitations",
+    ]) {
+      const response = await app.request(`http://auth.test${path}`, {
+        headers: { cookie: "ordinary=fake" },
+      });
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe("");
+    }
+  });
+
+  it("rejects malformed Operator list queries without calling the projection", async () => {
+    const appDependencies = dependencies();
+    const app = createAuthApp(appDependencies);
+
+    const response = await app.request(
+      "http://auth.test/api/auth/operator/researchers?search=a&search=b",
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "OPERATOR_REQUEST_INVALID" });
+    expect(appDependencies.listOperatorResearchers).not.toHaveBeenCalled();
   });
 
   it.each([

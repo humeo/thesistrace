@@ -37,6 +37,7 @@ describe("browser auth routing", () => {
     "/research",
     "/research-runs/run_feedface",
     "/daily-tracks/track_feedface",
+    "/operator/researchers",
   ])("recognizes the product route %s", (pathname) => {
     expect(isProductPath(pathname)).toBe(true);
     expect(isAuthPath(pathname)).toBe(false);
@@ -75,6 +76,7 @@ describe("browser auth routing", () => {
   test.each([
     ["/research?folder=folder_default#formula", "/research?folder=folder_default#formula"],
     ["/research-runs/run_feedface", "/research-runs/run_feedface"],
+    ["/operator/researchers", "/operator/researchers"],
     ["//attacker.test/data", null],
     ["https://attacker.test/data", null],
     ["/login?returnTo=%2Fdata", null],

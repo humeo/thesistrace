@@ -894,8 +894,17 @@ function resetHarness(
     },
     consumePasswordResetRateLimit,
     getSession: (input) => auth.api.getSession(input),
+    async hasOperatorCapability() {
+      return false;
+    },
     async inspectInvitation() {
       throw new InvitationRejectedError();
+    },
+    async listOperatorInvitations() {
+      throw new Error("OPERATOR_DIRECTORY_UNAVAILABLE_IN_RESET_HARNESS");
+    },
+    async listOperatorResearchers() {
+      throw new Error("OPERATOR_DIRECTORY_UNAVAILABLE_IN_RESET_HARNESS");
     },
     publicOrigin: settings.publicOrigin,
     readiness: async () => true,

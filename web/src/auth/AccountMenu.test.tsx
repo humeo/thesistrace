@@ -10,6 +10,7 @@ test("shows only the compact account identity and supported actions", () => {
       session={{
         displayLabel: "researcher",
         email: "researcher@example.test",
+        operator: false,
         researcherId: "00000000-0000-4000-8000-000000000001",
       }}
       signOut={vi.fn(async () => ({ ok: true } as const))}

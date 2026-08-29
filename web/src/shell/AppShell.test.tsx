@@ -4,10 +4,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AuthProvider } from "../auth/AuthProvider";
 import { AppShell } from "./AppShell";
 
-function renderShell(currentPath: string, content = "Current resource"): string {
+function renderShell(
+  currentPath: string,
+  content = "Current resource",
+  isOperator = false,
+): string {
   return renderToStaticMarkup(
     <AuthProvider>
-      <AppShell currentPath={currentPath}>
+      <AppShell currentPath={currentPath} isOperator={isOperator}>
         <section>{content}</section>
       </AppShell>
     </AuthProvider>,
@@ -28,6 +32,25 @@ test("renders four resources and composes only the active resource content", () 
   expect(markup).not.toContain("Core workspace");
   expect(markup).not.toContain("New research");
   expect(markup).toContain("Selected resource");
+});
+
+test("places the Operator destination at the bottom only for the Operator", () => {
+  const operatorMarkup = renderShell(
+    "/operator/researchers",
+    "Operator researchers",
+    true,
+  );
+  const ordinaryMarkup = renderShell("/data");
+
+  expect(operatorMarkup).toContain(
+    'aria-current="page" href="/operator/researchers"',
+  );
+  expect(operatorMarkup.indexOf('href="/operator/researchers"')).toBeGreaterThan(
+    operatorMarkup.indexOf('href="/daily-tracks"'),
+  );
+  expect(operatorMarkup).toContain("Operator researchers");
+  expect(ordinaryMarkup).not.toContain('href="/operator/researchers"');
+  expect(ordinaryMarkup).not.toContain(">Operator<");
 });
 
 test("keeps the Research header focused on navigation and folder context", () => {

@@ -42,6 +42,15 @@ export class DisplayLabelInvalidError extends Error {
   }
 }
 
+export class OperatorDeactivationRejectedError extends Error {
+  readonly code = "OPERATOR_DEACTIVATION_REJECTED";
+
+  constructor() {
+    super("OPERATOR_DEACTIVATION_REJECTED");
+    this.name = "OperatorDeactivationRejectedError";
+  }
+}
+
 export type ResearcherAccessDependencies = Readonly<{
   authSecret: string;
   clock?: () => Date;
@@ -84,6 +93,17 @@ export class ResearcherAccessService {
   deactivate(researcherIdInput: string): Promise<AccessMutationResult> {
     const researcherId = parseResearcherId(researcherIdInput);
     return this.#mutate(researcherId, "researcher_deactivated", async (client, user, now) => {
+      const assignment = await client.query(
+        `
+          SELECT 1
+          FROM auth.operator_assignment
+          WHERE singleton IS TRUE AND researcher_id = $1
+        `,
+        [researcherId],
+      );
+      if (assignment.rowCount !== 0) {
+        throw new OperatorDeactivationRejectedError();
+      }
       const active = await client.query(
         'UPDATE auth."user" SET active = FALSE, "updatedAt" = $2 WHERE id = $1 AND active = TRUE',
         [researcherId, now],

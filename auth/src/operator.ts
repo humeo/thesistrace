@@ -10,6 +10,7 @@ import { createAuthCoordinationPool, createAuthPool } from "./database.js";
 import { diagnoseAuthFailure } from "./failure.js";
 import { ResearcherInvitationService } from "./invitation.js";
 import { InvitationAdmission } from "./invitation-admission.js";
+import { OperatorAssignmentService } from "./operator-assignment.js";
 import { runOperatorCommand } from "./operator-command.js";
 import { PasswordResetLifecycle } from "./password-reset.js";
 import { sendResendEmail } from "./resend.js";
@@ -70,6 +71,7 @@ async function main(): Promise<void> {
         authSecret: settings.secret,
         pool,
       }),
+      assignment: new OperatorAssignmentService({ pool }),
       invitations: new ResearcherInvitationService({
         auth,
         authSecret: settings.secret,

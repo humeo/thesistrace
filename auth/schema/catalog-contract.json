@@ -129,6 +129,30 @@
       "type": "text"
     },
     {
+      "default": null,
+      "name": "singleton",
+      "notNull": true,
+      "position": 1,
+      "relation": "operator_assignment",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "researcher_id",
+      "notNull": true,
+      "position": 2,
+      "relation": "operator_assignment",
+      "type": "uuid"
+    },
+    {
+      "default": "CURRENT_TIMESTAMP",
+      "name": "assigned_at",
+      "notNull": true,
+      "position": 3,
+      "relation": "operator_assignment",
+      "type": "timestamp with time zone"
+    },
+    {
       "default": "gen_random_uuid()",
       "name": "id",
       "notNull": true,
@@ -569,6 +593,30 @@
       "type": "c"
     },
     {
+      "definition": "PRIMARY KEY (singleton)",
+      "name": "operator_assignment_pkey",
+      "relation": "operator_assignment",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (researcher_id) REFERENCES auth.\"user\"(id) ON DELETE RESTRICT",
+      "name": "operator_assignment_researcher_id_fkey",
+      "relation": "operator_assignment",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (researcher_id)",
+      "name": "operator_assignment_researcher_id_key",
+      "relation": "operator_assignment",
+      "type": "u"
+    },
+    {
+      "definition": "CHECK (singleton)",
+      "name": "operator_assignment_singleton_check",
+      "relation": "operator_assignment",
+      "type": "c"
+    },
+    {
       "definition": "CHECK ((((status = 'delivery_pending'::text) AND (delivered_at IS NULL) AND (terminal_at IS NULL)) OR ((status = 'delivered'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NULL)) OR ((status = ANY (ARRAY['delivery_failed'::text, 'revoked'::text])) AND (terminal_at IS NOT NULL)) OR ((status = 'consumed'::text) AND (delivered_at IS NOT NULL) AND (terminal_at IS NOT NULL))))",
       "name": "password_reset_lifecycle_check",
       "relation": "password_reset",
@@ -777,6 +825,16 @@
       "relation": "auth_secret_contract"
     },
     {
+      "definition": "CREATE UNIQUE INDEX operator_assignment_pkey ON auth.operator_assignment USING btree (singleton)",
+      "name": "operator_assignment_pkey",
+      "relation": "operator_assignment"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX operator_assignment_researcher_id_key ON auth.operator_assignment USING btree (researcher_id)",
+      "name": "operator_assignment_researcher_id_key",
+      "relation": "operator_assignment"
+    },
+    {
       "definition": "CREATE UNIQUE INDEX password_reset_effective_user_id_uidx ON auth.password_reset USING btree (user_id) WHERE (status = ANY (ARRAY['delivery_pending'::text, 'delivered'::text]))",
       "name": "password_reset_effective_user_id_uidx",
       "relation": "password_reset"
@@ -896,6 +954,14 @@
       "forceRowSecurity": false,
       "kind": "r",
       "name": "auth_secret_contract",
+      "rowSecurity": false,
+      "owner": "thesistrace_owner",
+      "persistence": "p"
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "operator_assignment",
       "rowSecurity": false,
       "owner": "thesistrace_owner",
       "persistence": "p"

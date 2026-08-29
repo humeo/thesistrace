@@ -4,6 +4,7 @@ import {
   Database,
   Flask,
   List,
+  ShieldCheck,
   SidebarSimple,
   X,
 } from "@phosphor-icons/react";
@@ -18,18 +19,27 @@ const resourceRoutes = [
   { path: "/daily-tracks", label: "Daily Tracks", icon: ClockCounterClockwise },
 ] as const;
 
+const operatorRoute = {
+  path: "/operator/researchers",
+  label: "Operator",
+  icon: ShieldCheck,
+} as const;
+
 type AppShellProps = {
   currentPath: string;
   children: ReactNode;
+  isOperator: boolean;
 };
 
-export function AppShell({ currentPath, children }: AppShellProps) {
+export function AppShell({ currentPath, children, isOperator }: AppShellProps) {
   const isResearch = currentPath === "/research";
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isNavigationOpen, setIsNavigationOpen] = useState(false);
-  const currentResource = resourceRoutes.find(
-    (resource) => currentPath === resource.path || currentPath.startsWith(`${resource.path}/`),
-  );
+  const currentResource = [...resourceRoutes, ...(isOperator ? [operatorRoute] : [])]
+    .find(
+      (resource) => currentPath === resource.path
+        || currentPath.startsWith(`${resource.path}/`),
+    );
 
   return (
     <div
@@ -59,9 +69,16 @@ export function AppShell({ currentPath, children }: AppShellProps) {
             />
           ))}
         </nav>
-        <div className="sidebar-footer">
-          <span className="sidebar-footer-label">Research workspace</span>
-          <span className="sidebar-footer-short" aria-hidden="true">TT</span>
+        <div className="sidebar-bottom">
+          {isOperator ? (
+            <nav aria-label="Operator" className="resource-nav operator-nav">
+              <ResourceLink currentPath={currentPath} resource={operatorRoute} />
+            </nav>
+          ) : null}
+          <div className="sidebar-footer">
+            <span className="sidebar-footer-label">Research workspace</span>
+            <span className="sidebar-footer-short" aria-hidden="true">TT</span>
+          </div>
         </div>
       </aside>
       <div className="application-frame">
@@ -112,7 +129,11 @@ function ResourceLink({
   resource,
 }: {
   currentPath: string;
-  resource: (typeof resourceRoutes)[number];
+  resource: Readonly<{
+    icon: typeof Database;
+    label: string;
+    path: string;
+  }>;
 }) {
   const Icon = resource.icon;
   const isCurrent = currentPath === resource.path || currentPath.startsWith(`${resource.path}/`);

@@ -5,6 +5,15 @@ import { canonicalizeAuthEmailRequest } from "./identity.js";
 import { isJsonContentType } from "./http-media-type.js";
 import type { AuthHttpObserver } from "./http-observability.js";
 import { InvitationRejectedError } from "./invitation.js";
+import {
+  OperatorAccessNotFoundError,
+  OperatorCursorInvalidError,
+  type OperatorInvitationSummary,
+  type OperatorPage,
+  type OperatorPrincipal,
+  OperatorQueryInvalidError,
+  type OperatorResearcherSummary,
+} from "./operator-directory.js";
 import { PasswordResetRejectedError } from "./password-reset.js";
 
 const invitationInspectSchema = z
@@ -34,7 +43,7 @@ const changePasswordSchema = z
   .strict();
 
 const verifiedSessionSchema = z.object({
-  session: z.object({}).passthrough(),
+  session: z.object({ id: z.uuid() }).passthrough(),
   user: z.object({
     active: z.boolean(),
     email: z.email(),
@@ -76,8 +85,17 @@ export type AuthAppDependencies = Readonly<{
     headers: Headers,
   ) => Promise<Readonly<{ allowed: boolean; retryAfterSeconds: number }>>;
   getSession: (input: GetSessionInput) => Promise<unknown>;
+  hasOperatorCapability: (principal: OperatorPrincipal) => Promise<boolean>;
   httpObserver?: AuthHttpObserver;
   inspectInvitation: (token: string) => Promise<Readonly<{ email: string }>>;
+  listOperatorInvitations: (
+    principal: OperatorPrincipal,
+    input: Readonly<{ cursor: string | null }>,
+  ) => Promise<OperatorPage<OperatorInvitationSummary>>;
+  listOperatorResearchers: (
+    principal: OperatorPrincipal,
+    input: Readonly<{ cursor: string | null; search: string | null }>,
+  ) => Promise<OperatorPage<OperatorResearcherSummary>>;
   publicOrigin: string;
   readiness: () => Promise<boolean>;
   resetPassword: (token: string, newPassword: string) => Promise<void>;
@@ -143,6 +161,71 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
       email: parsed.data.user.email,
       researcher_id: parsed.data.user.id,
     });
+  });
+
+  app.get("/internal/operator/page-access", async (context) => {
+    const principal = await requireOperator(
+      dependencies,
+      context.req.raw.headers,
+    );
+    if (principal instanceof Response) return principal;
+    return context.body(null, 204);
+  });
+
+  app.get("/api/auth/operator/capability", async (context) => {
+    const principal = await requireOperator(
+      dependencies,
+      context.req.raw.headers,
+    );
+    if (principal instanceof Response) return principal;
+    return context.json({ operator: true as const });
+  });
+
+  app.get("/api/auth/operator/researchers", async (context) => {
+    const principal = await requireOperator(
+      dependencies,
+      context.req.raw.headers,
+    );
+    if (principal instanceof Response) return principal;
+    const query = exactQuery(context.req.url, new Set(["cursor", "search"]));
+    if (query === null) {
+      return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
+    }
+    try {
+      const page = await dependencies.listOperatorResearchers(principal, {
+        cursor: query.get("cursor"),
+        search: query.get("search"),
+      });
+      return context.json({
+        items: page.items.map(researcherResponse),
+        next_cursor: page.nextCursor,
+      });
+    } catch (error) {
+      return operatorReadError(error);
+    }
+  });
+
+  app.get("/api/auth/operator/invitations", async (context) => {
+    const principal = await requireOperator(
+      dependencies,
+      context.req.raw.headers,
+    );
+    if (principal instanceof Response) return principal;
+    const query = exactQuery(context.req.url, new Set(["cursor"]));
+    if (query === null) {
+      return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
+    }
+    try {
+      const page = await dependencies.listOperatorInvitations(principal, {
+        cursor: query.get("cursor"),
+      });
+      return context.json({
+        items: page.items.map(invitationResponse),
+        next_cursor: page.nextCursor,
+      });
+    } catch (error) {
+      return operatorReadError(error);
+    }
   });
 
   app.post("/api/auth/sign-up/email", (context) =>
@@ -301,4 +384,98 @@ async function exactJson<T>(
   } catch {
     return null;
   }
+}
+
+async function requireOperator(
+  dependencies: AuthAppDependencies,
+  headers: Headers,
+): Promise<OperatorPrincipal | Response> {
+  let session: unknown;
+  try {
+    session = await dependencies.getSession({
+      headers,
+      query: { disableCookieCache: true, disableRefresh: true },
+    });
+  } catch {
+    return Response.json(
+      { code: "AUTH_SERVICE_UNAVAILABLE" },
+      { status: 503 },
+    );
+  }
+  if (session === null) return new Response(null, { status: 404 });
+  const parsed = verifiedSessionSchema.safeParse(session);
+  if (!parsed.success) {
+    return Response.json(
+      { code: "AUTH_SERVICE_UNAVAILABLE" },
+      { status: 503 },
+    );
+  }
+  if (!parsed.data.user.active) return new Response(null, { status: 404 });
+  const principal = {
+    researcherId: parsed.data.user.id,
+    sessionId: parsed.data.session.id,
+  };
+  if (!(await dependencies.hasOperatorCapability(principal))) {
+    return new Response(null, { status: 404 });
+  }
+  return principal;
+}
+
+function exactQuery(
+  url: string,
+  allowed: ReadonlySet<string>,
+): URLSearchParams | null {
+  const query = new URL(url).searchParams;
+  const seen = new Set<string>();
+  for (const name of query.keys()) {
+    if (!allowed.has(name) || seen.has(name)) return null;
+    seen.add(name);
+  }
+  return query;
+}
+
+function operatorReadError(error: unknown): Response {
+  if (error instanceof OperatorAccessNotFoundError) {
+    return new Response(null, { status: 404 });
+  }
+  if (
+    error instanceof OperatorCursorInvalidError
+    || error instanceof OperatorQueryInvalidError
+  ) {
+    return Response.json(
+      { code: "OPERATOR_REQUEST_INVALID" },
+      { status: 400 },
+    );
+  }
+  throw error;
+}
+
+function researcherResponse(item: OperatorResearcherSummary) {
+  return {
+    active: item.active,
+    created_at: item.createdAt,
+    current_session_count: item.currentSessionCount,
+    display_label: item.displayLabel,
+    effective_invitation:
+      item.effectiveInvitation === null
+        ? null
+        : invitationResponse(item.effectiveInvitation),
+    email: item.email,
+    latest_successful_login_at: item.latestSuccessfulLoginAt,
+    researcher_id: item.id,
+  };
+}
+
+function invitationResponse(item: OperatorInvitationSummary) {
+  return {
+    created_at: item.createdAt,
+    delivered_at: item.deliveredAt,
+    effective: item.effective,
+    email: item.email,
+    expires_at: item.expiresAt,
+    invitation_id: item.id,
+    researcher_id: item.researcherId,
+    status: item.status,
+    terminal_at: item.terminalAt,
+  };
 }

@@ -22,10 +22,53 @@ async function main() {
     await resetRateLimits();
     return;
   }
+  if (command === "seed-operator-directory") {
+    await seedOperatorDirectory();
+    return;
+  }
   if (command !== "expire-invitation") {
     throw new Error("AUTH_TEST_STATE_MUTATION_INVALID");
   }
   await expireInvitation();
+}
+
+async function seedOperatorDirectory() {
+  const databaseUrl = process.env.THESISTRACE_AUTH_DATABASE_URL;
+  if (databaseUrl === undefined) {
+    throw new Error("AUTH_TEST_DATABASE_UNAVAILABLE");
+  }
+  const pool = new Pool({ connectionString: databaseUrl, max: 1 });
+  try {
+    const result = await pool.query(`
+      INSERT INTO auth."user" (
+        id, name, email, "emailVerified", "createdAt", "updatedAt", active
+      )
+      SELECT
+        pg_catalog.format(
+          '00000000-0000-4000-8100-%s',
+          pg_catalog.lpad(seed.index::text, 12, '0')
+        )::uuid,
+        pg_catalog.format(
+          'Paging Researcher %s',
+          pg_catalog.lpad(seed.index::text, 2, '0')
+        ),
+        pg_catalog.format(
+          'browser-page-%s@example.test',
+          pg_catalog.lpad(seed.index::text, 2, '0')
+        ),
+        TRUE,
+        TIMESTAMPTZ '2026-08-29T12:00:00.000Z',
+        TIMESTAMPTZ '2026-08-29T12:00:00.000Z',
+        TRUE
+      FROM pg_catalog.generate_series(1, 55) AS seed(index)
+    `);
+    if (result.rowCount !== 55) {
+      throw new Error("AUTH_TEST_OPERATOR_DIRECTORY_SEED_FAILED");
+    }
+    process.stdout.write(`${JSON.stringify({ researchers: 55, status: "seeded" })}\n`);
+  } finally {
+    await pool.end();
+  }
 }
 
 async function expireInvitation() {

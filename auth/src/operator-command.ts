@@ -6,6 +6,10 @@ import type {
   InvitationIssueResult,
   ResearcherInvitationService,
 } from "./invitation.js";
+import type {
+  OperatorAssignmentService,
+  OperatorIdentity,
+} from "./operator-assignment.js";
 
 type AccessCommand =
   | "correct-label"
@@ -43,8 +47,14 @@ type InvitationOperations = Pick<
   "issue" | "reissue"
 >;
 
+type AssignmentOperations = Pick<
+  OperatorAssignmentService,
+  "assign" | "transfer"
+>;
+
 export type OperatorCommandDependencies = Readonly<{
   access: AccessOperations;
+  assignment: AssignmentOperations;
   invitations: InvitationOperations;
 }>;
 
@@ -53,6 +63,17 @@ export type OperatorCommandResult =
       command: "resolve";
       researcher_id: string;
       status: "resolved";
+    }>
+  | Readonly<{
+      command: "assign-operator";
+      researcher_id: string;
+      status: "assigned";
+    }>
+  | Readonly<{
+      command: "transfer-operator";
+      former_researcher_id: string;
+      researcher_id: string;
+      status: "no_change" | "transferred";
     }>
   | Readonly<{
       command: "invite" | "reissue";
@@ -75,6 +96,31 @@ export async function runOperatorCommand(
   dependencies: OperatorCommandDependencies,
 ): Promise<OperatorCommandResult> {
   const command = args[0];
+  if (command === "assign-operator" || command === "transfer-operator") {
+    const flags = parseFlags(
+      args.slice(1),
+      new Set(["--email", "--researcher-id"]),
+    );
+    if (flags.size !== 1) {
+      throw new OperatorArgumentError();
+    }
+    const identity = parseIdentity(flags);
+    if (command === "assign-operator") {
+      const result = await dependencies.assignment.assign(identity);
+      return {
+        command,
+        researcher_id: result.operatorResearcherId,
+        status: result.status,
+      };
+    }
+    const result = await dependencies.assignment.transfer(identity);
+    return {
+      command,
+      former_researcher_id: result.formerOperatorResearcherId,
+      researcher_id: result.operatorResearcherId,
+      status: result.status,
+    };
+  }
   if (command === "invite" || command === "reissue") {
     const flags = parseFlags(args.slice(1), new Set(["--email"]));
     if (flags.size !== 1 || !flags.has("--email")) {
@@ -166,7 +212,7 @@ function parseFlags(
 
 function parseIdentity(
   flags: ReadonlyMap<string, string>,
-): Readonly<{ email: string }> | Readonly<{ researcherId: string }> {
+): OperatorIdentity {
   const email = flags.get("--email");
   const researcherId = flags.get("--researcher-id");
   if ((email === undefined) === (researcherId === undefined)) {

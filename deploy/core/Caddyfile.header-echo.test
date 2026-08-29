@@ -1,4 +1,9 @@
 :8200 {
+	@operator_cookie header Cookie *operator-allowed*
+	handle /internal/operator/page-access {
+		respond @operator_cookie 204
+		respond 404
+	}
 	handle /api/auth/request-id {
 		respond "{http.request.header.X-Request-ID}"
 	}

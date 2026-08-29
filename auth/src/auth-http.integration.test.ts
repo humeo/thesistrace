@@ -15,6 +15,8 @@ import {
 } from "./coordination.js";
 import { createAuthCoordinationPool, createAuthPool } from "./database.js";
 import { InvitationRejectedError } from "./invitation.js";
+import { OperatorAssignmentService } from "./operator-assignment.js";
+import { OperatorDirectoryService } from "./operator-directory.js";
 import { checkAuthReadiness } from "./readiness.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
 import { verifyAuthSchema } from "./schema-contract.js";
@@ -93,6 +95,7 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     runtimeTasks.clear();
     await owner.query(`
       TRUNCATE
+        auth.operator_assignment,
         auth.security_audit,
         auth.password_reset,
         auth.researcher_invitation,
@@ -155,6 +158,64 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       ),
     });
     expect(await persistedSessionTimes()).toEqual(before);
+  });
+
+  it("serves Operator reads while every ordinary boundary remains an empty 404", async () => {
+    const { app, auth } = runtime();
+    const operatorCookie = await createSessionCookie(
+      auth,
+      "operator-http@example.com",
+      "192.0.2.101",
+    );
+    const operator = await persistedPrincipal("operator-http@example.com");
+    await new OperatorAssignmentService({ pool: runtimePool }).assign({
+      researcherId: operator.researcherId,
+    });
+    const ordinaryCookie = await createSessionCookie(
+      auth,
+      "ordinary-http@example.com",
+      "192.0.2.102",
+    );
+
+    const capability = await app.request(
+      `${settings.publicOrigin}/api/auth/operator/capability`,
+      { headers: { cookie: operatorCookie } },
+    );
+    expect(capability.status).toBe(200);
+    expect(await capability.json()).toEqual({ operator: true });
+    expect((await app.request(
+      `${settings.publicOrigin}/internal/operator/page-access`,
+      { headers: { cookie: operatorCookie } },
+    )).status).toBe(204);
+    const researchers = await app.request(
+      `${settings.publicOrigin}/api/auth/operator/researchers?search=operator-http`,
+      { headers: { cookie: operatorCookie } },
+    );
+    expect(researchers.status).toBe(200);
+    expect(await researchers.json()).toMatchObject({
+      items: [{
+        active: true,
+        current_session_count: 1,
+        display_label: "operator-http",
+        effective_invitation: null,
+        email: "operator-http@example.com",
+        researcher_id: operator.researcherId,
+      }],
+      next_cursor: null,
+    });
+
+    for (const path of [
+      "/internal/operator/page-access",
+      "/api/auth/operator/capability",
+      "/api/auth/operator/researchers?cursor=canary",
+      "/api/auth/operator/invitations",
+    ]) {
+      const response = await app.request(`${settings.publicOrigin}${path}`, {
+        headers: { cookie: ordinaryCookie },
+      });
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe("");
+    }
   });
 
   it("trims and lowercases email at the public email-password boundary", async () => {
@@ -704,6 +765,10 @@ function runtime() {
     backgroundTask: tasks.handler,
     pool: runtimePool,
   });
+  const operatorDirectory = new OperatorDirectoryService({
+    authSecret: settings.secret,
+    pool: runtimePool,
+  });
   const app = createAuthApp({
     async acceptInvitation() {
       throw new InvitationRejectedError();
@@ -734,9 +799,15 @@ function runtime() {
       return { allowed: true, retryAfterSeconds: 0 };
     },
     getSession: (input) => auth.api.getSession(input),
+    hasOperatorCapability: (principal) =>
+      operatorDirectory.hasCapability(principal),
     async inspectInvitation() {
       throw new InvitationRejectedError();
     },
+    listOperatorInvitations: (principal, input) =>
+      operatorDirectory.listInvitations(principal, input),
+    listOperatorResearchers: (principal, input) =>
+      operatorDirectory.listResearchers(principal, input),
     publicOrigin: settings.publicOrigin,
     readiness: () => checkAuthReadiness(runtimePool),
     async resetPassword() {
@@ -749,8 +820,10 @@ function runtime() {
 async function createSessionCookie(
   auth: ReturnType<typeof createThesisTraceAuth>,
   email: string,
+  clientIp?: string,
 ): Promise<string> {
   const response = await directSignUp(auth, {
+    clientIp,
     email,
     password: "correct-horse-battery-staple",
   });
@@ -760,9 +833,36 @@ async function createSessionCookie(
   return setCookie ?? "";
 }
 
+async function persistedPrincipal(email: string): Promise<Readonly<{
+  researcherId: string;
+  sessionId: string;
+}>> {
+  const result = await owner.query<{
+    researcher_id: string;
+    session_id: string;
+  }>(
+    `
+      SELECT
+        researcher.id AS researcher_id,
+        login_session.id AS session_id
+      FROM auth."user" AS researcher
+      JOIN auth."session" AS login_session
+        ON login_session."userId" = researcher.id
+      WHERE researcher.email = $1
+      ORDER BY login_session."createdAt" DESC, login_session.id DESC
+      LIMIT 1
+    `,
+    [email],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new Error("expected persisted Auth principal");
+  return { researcherId: row.researcher_id, sessionId: row.session_id };
+}
+
 async function directSignUp(
   auth: ReturnType<typeof createThesisTraceAuth>,
   input: Readonly<{
+    clientIp?: string;
     email: string;
     origin?: string;
     password: string;
@@ -783,7 +883,7 @@ async function directSignUp(
           headers: {
             "content-type": "application/json",
             origin: input.origin ?? settings.publicOrigin,
-            "x-thesistrace-client-ip": `192.0.2.${input.password.length}`,
+            "x-thesistrace-client-ip": input.clientIp ?? `192.0.2.${input.password.length}`,
           },
           method: "POST",
         }),

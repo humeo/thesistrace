@@ -34,15 +34,19 @@ def test_caddy_is_the_only_web_runtime_and_preserves_api_paths() -> None:
     auth = caddyfile.index("handle /api/auth/*")
     core = caddyfile.index("handle /api/*")
     hashed = caddyfile.index("handle @hashed_assets")
+    operator = caddyfile.index("handle @operator_pages")
     fallback = caddyfile.rindex("handle {")
-    assert private < auth < core < hashed < fallback
+    assert private < auth < core < hashed < operator < fallback
     assert "handle_path" not in caddyfile
     assert "reverse_proxy auth:8200" in caddyfile
     assert "reverse_proxy api:8100" in caddyfile
     assert caddyfile.count(
         "header_up X-ThesisTrace-Client-IP {remote_host}"
-    ) == 2
-    assert caddyfile.count("header_up X-Request-ID {http.request.uuid}") == 2
+    ) == 3
+    assert caddyfile.count("header_up X-Request-ID {http.request.uuid}") == 3
+    assert "@operator_pages path /operator /operator/*" in caddyfile
+    assert "forward_auth auth:8200" in caddyfile
+    assert "uri /internal/operator/page-access" in caddyfile
     assert ">X-Request-ID {http.request.uuid}" in caddyfile
     assert "path /health /health/* /internal /internal/*" in caddyfile
     assert 'respond 404' in caddyfile
@@ -92,6 +96,7 @@ def test_caddy_applies_the_exact_security_and_sanitized_logging_contract() -> No
         "/api/auth/*",
         "/api/*",
         "/assets/*",
+        "/operator/*",
         "/*",
     ):
         assert f"log_append path {normalized_path}" in caddyfile
@@ -261,6 +266,8 @@ def test_release_image_gate_uses_the_same_caddyfile_with_an_internal_test_ca() -
     assert "certificates_after" in smoke
     assert "certificates_before" in smoke
     assert "Caddyfile.header-echo.test" in smoke
+    assert "operator/researchers" in smoke
+    assert "operator-allowed" in smoke
     assert "203.0.113.250" in smoke
     assert "client_ip_one" in smoke
     assert "client_ip_two" in smoke

@@ -20,6 +20,7 @@ const authRuntimeDatabaseUrl = roleDatabaseUrl(
 const owner = new Pool({ connectionString: ownerDatabaseUrl, max: 2 });
 const operatorPath = fileURLToPath(new URL("../dist/operator.js", import.meta.url));
 const authRoot = fileURLToPath(new URL("..", import.meta.url));
+const fixedNow = new Date("2026-08-29T06:00:00.000Z");
 const requests: string[] = [];
 let resendServer: Server;
 let resendOrigin: string;
@@ -94,6 +95,98 @@ describe.sequential("Auth operator process boundary", () => {
     });
     expect(requests).toHaveLength(1);
     expect(requests[0]).toContain("/accept-invitation#token=");
+  });
+
+  it("establishes and transfers the singleton Operator through the private process", async () => {
+    const firstId = "00000000-0000-4000-8000-000000000201";
+    const secondId = "00000000-0000-4000-8000-000000000202";
+    await owner.query(
+      `
+        INSERT INTO auth."user" (
+          id, name, email, "emailVerified", "createdAt", "updatedAt", active
+        )
+        VALUES
+          ($1, 'first', 'process-operator-first@example.com', TRUE,
+            $3, $3, TRUE),
+          ($2, 'second', 'process-operator-second@example.com', TRUE,
+            $3, $3, TRUE)
+      `,
+      [firstId, secondId, fixedNow],
+    );
+
+    const established = await runOperator([
+      "assign-operator",
+      "--researcher-id",
+      firstId,
+    ]);
+    expect(established.code).toBe(0);
+    expect(JSON.parse(established.stdout)).toEqual({
+      command: "assign-operator",
+      researcher_id: firstId,
+      status: "assigned",
+    });
+    expect(JSON.parse(established.stderr)).toEqual({
+      command: "assign-operator",
+      event: "auth_operator_completed",
+      status: "assigned",
+    });
+
+    const conflicting = await runOperator([
+      "assign-operator",
+      "--researcher-id",
+      secondId,
+    ]);
+    expect(conflicting.code).toBe(1);
+    expect(conflicting.stdout).toBe("");
+    expect(JSON.parse(conflicting.stderr)).toEqual({
+      code: "OPERATOR_ALREADY_ASSIGNED",
+      event: "auth_operator_failed",
+    });
+
+    await owner.query(
+      `
+        INSERT INTO auth."session" (
+          id, "expiresAt", token, "createdAt", "updatedAt", "userId"
+        )
+        VALUES (
+          '00000000-0000-4000-8000-000000000203',
+          $2,
+          'process-former-operator-session',
+          $3,
+          $3,
+          $1
+        )
+      `,
+      [firstId, new Date(fixedNow.getTime() + 24 * 60 * 60 * 1_000), fixedNow],
+    );
+    const transferred = await runOperator([
+      "transfer-operator",
+      "--email",
+      " Process-Operator-Second@Example.COM ",
+    ]);
+    expect(transferred.code).toBe(0);
+    expect(JSON.parse(transferred.stdout)).toEqual({
+      command: "transfer-operator",
+      former_researcher_id: firstId,
+      researcher_id: secondId,
+      status: "transferred",
+    });
+    expect(JSON.parse(transferred.stderr)).toEqual({
+      command: "transfer-operator",
+      event: "auth_operator_completed",
+      status: "transferred",
+    });
+    expect(
+      await owner.query<{ researcher_id: string }>(
+        "SELECT researcher_id FROM auth.operator_assignment",
+      ),
+    ).toMatchObject({ rows: [{ researcher_id: secondId }] });
+    expect(
+      await owner.query<{ count: string }>(
+        'SELECT count(*) FROM auth."session" WHERE "userId" = $1',
+        [firstId],
+      ),
+    ).toMatchObject({ rows: [{ count: "0" }] });
   });
 
   it("fails with a sanitized stderr event and no stdout reflection", async () => {

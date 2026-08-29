@@ -4,6 +4,7 @@ export type PublicSession = Readonly<{
   researcherId: string;
   email: string;
   displayLabel: string;
+  operator: boolean;
 }>;
 
 export type AuthState =
@@ -68,6 +69,7 @@ export function decodePublicSession(value: unknown): PublicSession | null {
     researcherId: user.id,
     email: user.email,
     displayLabel: user.name,
+    operator: false,
   };
 }
 

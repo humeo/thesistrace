@@ -7,8 +7,12 @@ import {
 } from "./auth.js";
 import type { AuthSettings } from "./config.js";
 import { createAuthPool } from "./database.js";
-import { ResearcherAccessService } from "./access.js";
+import {
+  OperatorDeactivationRejectedError,
+  ResearcherAccessService,
+} from "./access.js";
 import { InvitationAdmission } from "./invitation-admission.js";
+import { OperatorAssignmentService } from "./operator-assignment.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
 
 const ownerDatabaseUrl = process.env.THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL;
@@ -61,6 +65,7 @@ describe.sequential("Auth operator access lifecycle", () => {
   beforeEach(async () => {
     await owner.query(`
       TRUNCATE
+        auth.operator_assignment,
         auth.security_audit,
         auth.password_reset,
         auth.researcher_invitation,
@@ -128,6 +133,21 @@ describe.sequential("Auth operator access lifecycle", () => {
     expect(await persistedAccessState(researcherId)).toMatchObject({
       active: true,
       sessions: 0,
+    });
+  });
+
+  it("cannot deactivate the Researcher holding the Operator Capability", async () => {
+    const researcherId = await createUser("operator@example.com");
+    await new OperatorAssignmentService({ pool: runtimePool }).assign({
+      researcherId,
+    });
+
+    await expect(service().deactivate(researcherId)).rejects.toBeInstanceOf(
+      OperatorDeactivationRejectedError,
+    );
+    expect(await persistedAccessState(researcherId)).toMatchObject({
+      active: true,
+      sessions: 1,
     });
   });
 
