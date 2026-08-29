@@ -210,6 +210,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
   const [canceling, setCanceling] = useState(false);
   const [startingTracking, setStartingTracking] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [folderRefreshGeneration, setFolderRefreshGeneration] = useState(0);
@@ -222,6 +223,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
   const trackingRequest = useRef<{ runId: string; requestId: string } | null>(null);
   const deleteGeneration = useRef(0);
   const deleteController = useRef<AbortController | null>(null);
+  const deleteTrigger = useRef<HTMLButtonElement | null>(null);
   const currentPageCursor = pageCursors[pageIndex] ?? null;
 
   useEffect(() => {
@@ -459,14 +461,25 @@ export function ResearchRunsPage({ researcherId, runId }: {
     }
   }
 
-  async function deleteResearch(): Promise<void> {
+  function openDeleteDialog(): void {
+    setDeleteError(null);
+    setDeleteDialogOpen(true);
+  }
+
+  function closeDeleteDialog(): void {
+    if (deleting) return;
+    setDeleteDialogOpen(false);
+    setDeleteError(null);
+    window.requestAnimationFrame(() => deleteTrigger.current?.focus());
+  }
+
+  async function performResearchDeletion(): Promise<void> {
     if (
       run === null
       || !isTerminalResearch(run.status)
       || deleting
       || startingTracking
     ) return;
-    if (!window.confirm(`Permanently delete ${run.name}? DailyTracks will remain.`)) return;
     const generation = ++deleteGeneration.current;
     deleteController.current?.abort();
     const controller = new AbortController();
@@ -541,20 +554,31 @@ export function ResearchRunsPage({ researcherId, runId }: {
             ) : null}
             {isTerminalResearch(run.status) ? (
               <button
+                aria-controls="research-delete-dialog"
+                aria-expanded={deleteDialogOpen}
+                aria-haspopup="dialog"
                 disabled={deleting || startingTracking}
-                onClick={() => void deleteResearch()}
+                onClick={openDeleteDialog}
+                ref={deleteTrigger}
               >
                 {deleting ? "Deleting…" : "Delete Research"}
               </button>
             ) : null}
           </div>
         </header>
+        <ResearchDeleteDialog
+          deleting={deleting}
+          error={deleteError}
+          name={run.name}
+          onConfirm={() => void performResearchDeletion()}
+          onDismiss={closeDeleteDialog}
+          open={deleteDialogOpen}
+        />
         {loadState === "refreshing" ? (
           <p role="status">Refreshing ResearchRun…</p>
         ) : null}
         <ResearchRunFacts run={run} />
         {!terminal ? progressView : null}
-        {deleteError !== null ? <p role="alert">{deleteError}</p> : null}
         {deleting ? null : folderError !== null ? (
           <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
         ) : folders.length === 0 ? (
@@ -655,6 +679,74 @@ export function ResearchRunBackLink() {
       Back to Research Runs
     </a>
   );
+}
+
+export function ResearchDeleteDialog({
+  deleting,
+  error,
+  name,
+  onConfirm,
+  onDismiss,
+  open,
+}: {
+  deleting: boolean;
+  error: string | null;
+  name: string;
+  onConfirm: () => void;
+  onDismiss: () => void;
+  open: boolean;
+}) {
+  const dialog = useRef<HTMLDialogElement | null>(null);
+
+  useEffect(() => {
+    const element = dialog.current;
+    if (element === null || !open) return;
+    element.showModal();
+    return () => {
+      if (element.open) element.close();
+    };
+  }, [open]);
+
+  return open ? (
+    <dialog
+      aria-describedby="research-delete-description"
+      aria-labelledby="research-delete-title"
+      aria-modal="true"
+      className="research-delete-dialog"
+      id="research-delete-dialog"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!deleting) onDismiss();
+      }}
+      ref={dialog}
+    >
+      <div className="research-delete-dialog-content">
+        <header>
+          <p className="eyebrow research-delete-dialog-eyebrow">Permanent action</p>
+          <h2 id="research-delete-title">Delete Research?</h2>
+        </header>
+        <p id="research-delete-description">
+          <strong>{name}</strong> and its run-owned result will be permanently removed. This
+          cannot be undone.
+        </p>
+        <p className="research-delete-dialog-retained">DailyTracks will remain.</p>
+        {error !== null ? (
+          <p className="inline-status inline-status-error" role="alert">{error}</p>
+        ) : null}
+        <footer className="research-delete-dialog-actions">
+          <button disabled={deleting} onClick={onDismiss} type="button">Keep Research</button>
+          <button
+            className="button-danger"
+            disabled={deleting}
+            onClick={onConfirm}
+            type="button"
+          >
+            {deleting ? "Deleting…" : "Delete Research"}
+          </button>
+        </footer>
+      </div>
+    </dialog>
+  ) : null;
 }
 
 export function researchRunListPath({

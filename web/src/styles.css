@@ -308,6 +308,45 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible {
 button:disabled { cursor: not-allowed; opacity: .42; }
 .button-primary { color: var(--ink); background: var(--primary); border-color: var(--primary); }
 .button-primary:hover:not(:disabled) { color: var(--ink); background: var(--primary-hover); border-color: var(--primary-hover); }
+.button-danger { color: #fff; background: var(--danger); border-color: var(--danger); }
+.button-danger:hover:not(:disabled) { color: #fff; background: #df5a4f; border-color: #df5a4f; }
+
+.research-delete-dialog {
+  width: min(460px, calc(100vw - 32px));
+  max-width: none;
+  margin: auto;
+  padding: 0;
+  color: var(--ink-muted);
+  background: var(--surface-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+}
+.research-delete-dialog::backdrop { background: rgb(0 0 0 / 72%); }
+.research-delete-dialog-content { display: grid; gap: 16px; padding: 24px; }
+.research-delete-dialog-content header { display: grid; gap: 2px; }
+.research-delete-dialog-content p { margin: 0; }
+.research-delete-dialog-eyebrow { color: var(--danger); }
+.research-delete-dialog-content > p { color: var(--ink-soft); font-size: 13px; line-height: 1.55; }
+.research-delete-dialog-content > p strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.research-delete-dialog-retained {
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-left: 2px solid var(--primary);
+}
+.research-delete-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+.research-delete-dialog-actions button { min-height: 44px; }
 .button-quiet { color: var(--ink-soft); background: transparent; border-color: transparent; }
 .button-quiet:hover:not(:disabled) { color: var(--ink); background: var(--surface-2); border-color: var(--line); }
 

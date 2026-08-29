@@ -1,4 +1,4 @@
-import { type Page, type Route, type TestInfo } from "@playwright/test";
+import { type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 
 import { expect, sameOriginHeaders, test } from "./auth-fixture";
@@ -67,6 +67,80 @@ test("ResearchRun return keeps the selected Type without a document reload", asy
   await expect(page).toHaveURL(/\/research-runs$/);
   await expect(page.getByLabel("Filter by Type")).toHaveValue("factor_evaluation");
   expect(documentRequests).toEqual([]);
+});
+
+test("Research deletion uses an in-page decision instead of a browser dialog", async ({ page }) => {
+  const runId = "run_de1e7ed1a109";
+  let deleteRequestCount = 0;
+  const nativeDialogs: string[] = [];
+  page.on("dialog", async (dialog) => {
+    nativeDialogs.push(dialog.type());
+    await dialog.dismiss();
+  });
+  await page.route("**/api/research-folders", async (route) => {
+    await route.fulfill({
+      json: {
+        items: [{
+          id: "folder_default",
+          name: "Default",
+          is_default: true,
+          created_at: "2026-08-13T00:00:00Z",
+        }],
+        next_cursor: null,
+      },
+    });
+  });
+  await page.route(`**/api/research-runs/${runId}`, async (route) => {
+    const request = route.request();
+    if (request.method() === "DELETE") {
+      deleteRequestCount += 1;
+      await route.fulfill({ status: 204 });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        id: runId,
+        status: "succeeded",
+        name: "Deletion dialog regression",
+        folder_id: "folder_default",
+        created_at: "2026-08-13T01:02:03Z",
+        start_date: "2026-08-01",
+        end_date: "2026-08-05",
+        formula_summary: "rank(close)",
+        research_kind: "factor_evaluation",
+      },
+    });
+  });
+  await page.route("**/api/research-runs?*", async (route) => {
+    await route.fulfill({ json: { items: [], next_cursor: null } });
+  });
+
+  await page.goto(`/research-runs/${runId}`);
+  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
+
+  const decision = page.getByRole("dialog", { name: "Delete Research?" });
+  await expect(decision).toBeVisible();
+  expect(nativeDialogs).toEqual([]);
+  await expect(decision).toContainText("Deletion dialog regression");
+  await expect(decision).toContainText("This cannot be undone.");
+  await expect(decision).toContainText("DailyTracks will remain.");
+  expect(deleteRequestCount).toBe(0);
+
+  await page.keyboard.press("Escape");
+  await expect(decision).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Delete Research", exact: true })).toBeFocused();
+  expect(deleteRequestCount).toBe(0);
+
+  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
+  await decision.getByRole("button", { name: "Keep Research" }).click();
+  await expect(decision).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`/research-runs/${runId}$`));
+  expect(deleteRequestCount).toBe(0);
+
+  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
+  await decision.getByRole("button", { name: "Delete Research", exact: true }).click();
+  await expect(page).toHaveURL(/\/research-runs$/);
+  expect(deleteRequestCount).toBe(1);
 });
 
 test("Notes keeps multiline research context visible", async ({ page }) => {
@@ -724,8 +798,7 @@ test("running Research cancellation stays visible until the child exits", async 
       timeout: 20_000,
     });
     await expect(page.getByRole("button", { name: "Create draft" })).toBeVisible();
-    page.once("dialog", async (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "Delete Research" }).click();
+    await confirmResearchDeletion(page);
     await expect(page).toHaveURL(/\/research-runs$/);
   } finally {
     if (controlledWorker !== undefined) {
@@ -822,8 +895,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   if (trackId === undefined) throw new Error("Batch child DailyTrack route has no identity");
 
   await page.goto(`/research-runs/${firstRunId}`);
-  page.once("dialog", async (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "Delete Research" }).click();
+  await confirmResearchDeletion(page);
   await expect(page).toHaveURL(/\/research-runs$/);
   const firstDeleted = await page.request.get(`/api/research-batches/${admittedBatch.id}`);
   const firstDeletedBatch = await firstDeleted.json() as {
@@ -839,8 +911,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   expect((await page.request.get(`/api/daily-tracks/${trackId}`)).status()).toBe(200);
 
   await page.goto(`/research-runs/${siblingRunId}`);
-  page.once("dialog", async (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "Delete Research" }).click();
+  await confirmResearchDeletion(page);
   await expect(page).toHaveURL(/\/research-runs$/);
   const finalBatch = await page.request.get(`/api/research-batches/${admittedBatch.id}`);
   expect(((await finalBatch.json()) as {
@@ -1190,12 +1261,11 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByRole("button", { name: "Delete DailyTrack" })).toHaveCount(0);
 
     await page.goto(`/research-runs/${reusedRunId}`);
-    page.once("dialog", async (dialog) => dialog.dismiss());
-    await page.getByRole("button", { name: "Delete Research" }).click();
+    const deleteDialog = await openResearchDeleteDialog(page);
+    await deleteDialog.getByRole("button", { name: "Keep Research" }).click();
     await expect(page).toHaveURL(new RegExp(`/research-runs/${reusedRunId}$`));
     expect((await page.request.get(`/api/research-runs/${reusedRunId}`)).status()).toBe(200);
-    page.once("dialog", async (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "Delete Research" }).click();
+    await confirmResearchDeletion(page);
     await expect(page).toHaveURL(/\/research-runs$/);
     expect((await page.request.get(`/api/research-runs/${reusedRunId}`)).status()).toBe(404);
 
@@ -1230,6 +1300,18 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await attachResponses(testInfo, responses);
   }
 });
+
+async function openResearchDeleteDialog(page: Page): Promise<Locator> {
+  await page.getByRole("button", { name: "Delete Research", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete Research?" });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
+async function confirmResearchDeletion(page: Page): Promise<void> {
+  const dialog = await openResearchDeleteDialog(page);
+  await dialog.getByRole("button", { name: "Delete Research", exact: true }).click();
+}
 
 async function fillCompleteDraft(
   page: Page,

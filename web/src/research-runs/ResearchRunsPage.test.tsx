@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ResearchFolderLoadFailure,
+  ResearchDeleteDialog,
   ResearchOrganizationPanel,
   ResearchResultView,
   ResearchRunBackLink,
@@ -26,6 +27,29 @@ describe("ResearchRunBackLink", () => {
 
     expect(markup).toContain('href="/research-runs"');
     expect(markup).toContain("Back to Research Runs");
+  });
+});
+
+describe("ResearchDeleteDialog", () => {
+  it("renders an explicit in-page decision with the permanent and retained effects", () => {
+    const markup = renderToStaticMarkup(
+      <ResearchDeleteDialog
+        deleting={false}
+        error={null}
+        name="Deletion dialog regression"
+        onConfirm={() => undefined}
+        onDismiss={() => undefined}
+        open
+      />,
+    );
+
+    expect(markup).toContain("<dialog");
+    expect(markup).toContain('aria-modal="true"');
+    expect(markup).toContain("Delete Research?");
+    expect(markup).toContain("Deletion dialog regression");
+    expect(markup).toContain("This cannot be undone.");
+    expect(markup).toContain("DailyTracks will remain.");
+    expect(markup).toContain("Keep Research");
   });
 });
 
