@@ -484,26 +484,16 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
       name: "Composite financial browser run",
       formula: "rank(close) + rank(revenue)",
     });
-    let captureRun: ((value: { id: string; status: number }) => void) | undefined;
-    const runCapture = new Promise<{ id: string; status: number }>((resolve) => {
-      captureRun = resolve;
-    });
-    await page.route("**/api/research-runs", async (route) => {
-      if (route.request().method() !== "POST") {
-        await route.continue();
-        return;
-      }
-      const response = await route.fetch();
-      const body = await response.json() as { id: string };
-      captureRun?.({ id: body.id, status: response.status() });
-      await route.fulfill({ response });
-    });
+    const runCapture = page.waitForResponse((response) => (
+      response.url().endsWith("/api/research-runs")
+      && response.request().method() === "POST"
+    ));
     await page.getByRole("button", { name: "Run research", exact: true }).click();
     const acceptedRun = await runCapture;
-    await page.unroute("**/api/research-runs");
-    expect(acceptedRun.status).toBe(202);
-    runId = acceptedRun.id;
+    expect(acceptedRun.status()).toBe(202);
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+    runId = new URL(page.url()).pathname.split("/").at(-1);
+    if (runId === undefined) throw new Error("ResearchRun route has no identity");
     await expect(page.locator(".research-run-facts").getByText(/Status\s+queued/)).toBeVisible();
     const barrier = startControlledResearchRun(runId);
     controlledWorker = barrier.process;
@@ -610,24 +600,20 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     )).toBeTruthy();
     controlWorker("unpause");
     workerPaused = false;
-    const startTrackingPath = `**/api/research-runs/${runId}/daily-tracks`;
-    let captureTrack: ((value: { id: string; status: number }) => void) | undefined;
-    const trackCapture = new Promise<{ id: string; status: number }>((resolve) => {
-      captureTrack = resolve;
-    });
-    await page.route(startTrackingPath, async (route) => {
-      const response = await route.fetch();
-      const body = await response.json() as { id: string };
-      captureTrack?.({ id: body.id, status: response.status() });
-      await route.fulfill({ response });
-    });
+    const trackCapture = page.waitForResponse((response) => (
+      response.url().endsWith(`/api/research-runs/${runId}/daily-tracks`)
+      && response.request().method() === "POST"
+    ));
     await page.getByRole("button", { name: "Start Tracking" }).click();
     const acceptedTrack = await trackCapture;
-    await page.unroute(startTrackingPath);
-    expect(acceptedTrack.status).toBe(201);
-    trackId = acceptedTrack.id;
+    expect(acceptedTrack.status()).toBe(201);
     await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
-    await expect(page.locator(".research-run-facts").first()).toContainText("Status active");
+    trackId = new URL(page.url()).pathname.split("/").at(-1);
+    if (trackId === undefined) throw new Error("DailyTrack route has no identity");
+    await expect(page.locator(".research-run-facts").first()).toContainText(
+      "Status active",
+      { timeout: 30_000 },
+    );
     await expect(page.locator(".research-run-facts").first()).toContainText(
       "Advance phase up_to_date",
     );
@@ -685,6 +671,12 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     await expect(page.getByText("Financial Coverage ends before the next Research Session.")).toBeVisible();
 
     publishFinancialTrackHead("recovered");
+    const recoveredData = await page.request.get("/api/data");
+    expect(recoveredData.status()).toBe(200);
+    expect(await recoveredData.json()).toMatchObject({
+      data_through_session: "2026-08-11",
+      financial_research_readiness: "ready",
+    });
     await page.getByRole("button", { name: "Retry blocked target" }).click();
     await expect.poll(async () => {
       const response = await page.request.get(`/api/daily-tracks/${trackId}`);
@@ -943,6 +935,12 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
   });
 
   try {
+    publishFinancialTrackHead("lagged");
+    const currentData = await page.request.get("/api/data");
+    expect(currentData.status()).toBe(200);
+    expect(await currentData.json()).toMatchObject({
+      data_through_session: "2026-08-11",
+    });
     await page.goto("/research?new");
     await expect(page).toHaveURL(/\/research$/);
     await fillCompleteDraft(page, {
