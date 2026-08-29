@@ -12,6 +12,12 @@ export const reasoningEfforts = [
 ] as const;
 
 const providerAdapters = ["anthropic", "google", "openai", "scripted"] as const;
+const providerReasoningEfforts = {
+  anthropic: new Set<ReasoningEffort>(["none", "low", "medium", "high", "xhigh"]),
+  google: new Set<ReasoningEffort>(["none", "minimal", "low", "medium", "high"]),
+  openai: new Set<ReasoningEffort>(reasoningEfforts),
+  scripted: new Set<ReasoningEffort>(reasoningEfforts),
+} as const;
 const providerSecretEnvironment = {
   anthropic: "THESISTRACE_AGENT_ANTHROPIC_API_KEY",
   google: "THESISTRACE_AGENT_GOOGLE_API_KEY",
@@ -96,6 +102,13 @@ export function readModelRegistry(
       throw invalidConfiguration();
     }
     if (!model.reasoning_efforts.includes(model.default_reasoning_effort)) {
+      throw invalidConfiguration();
+    }
+    if (
+      model.reasoning_efforts.some(
+        (effort) => !providerReasoningEfforts[model.provider_adapter].has(effort),
+      )
+    ) {
       throw invalidConfiguration();
     }
     if (model.secret_env !== providerSecretEnvironment[model.provider_adapter]) {

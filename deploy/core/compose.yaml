@@ -39,6 +39,7 @@ x-agent-image: &agent-image
   build:
     context: ../..
     dockerfile: deploy/core/Dockerfile.agent
+  image: ${THESISTRACE_AGENT_IMAGE:?THESISTRACE_AGENT_IMAGE is required}
 
 services:
   postgres:
@@ -52,6 +53,7 @@ services:
       POSTGRES_PASSWORD: ${THESISTRACE_OWNER_DATABASE_PASSWORD:?THESISTRACE_OWNER_DATABASE_PASSWORD is required}
       THESISTRACE_CORE_DATABASE_PASSWORD: ${THESISTRACE_CORE_DATABASE_PASSWORD:?THESISTRACE_CORE_DATABASE_PASSWORD is required}
       THESISTRACE_AUTH_DATABASE_PASSWORD: ${THESISTRACE_AUTH_DATABASE_PASSWORD:?THESISTRACE_AUTH_DATABASE_PASSWORD is required}
+      THESISTRACE_AGENT_DATABASE_PASSWORD: ${THESISTRACE_AGENT_DATABASE_PASSWORD:?THESISTRACE_AGENT_DATABASE_PASSWORD is required}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U thesistrace_owner -d thesistrace"]
       interval: 1s
@@ -124,6 +126,9 @@ services:
       replicas: 1
     logging: *bounded-logging
     environment:
+      COPILOTKIT_TELEMETRY_DISABLED: "true"
+      THESISTRACE_AGENT_BUILD_REVISION: ${THESISTRACE_AGENT_BUILD_REVISION:?THESISTRACE_AGENT_BUILD_REVISION is required}
+      THESISTRACE_AGENT_DATABASE_URL: postgresql://agent_runtime:${THESISTRACE_AGENT_DATABASE_PASSWORD:?THESISTRACE_AGENT_DATABASE_PASSWORD is required}@postgres:5432/thesistrace
       THESISTRACE_AGENT_ANTHROPIC_API_KEY: ${THESISTRACE_AGENT_ANTHROPIC_API_KEY:-}
       THESISTRACE_AGENT_GOOGLE_API_KEY: ${THESISTRACE_AGENT_GOOGLE_API_KEY:-}
       THESISTRACE_AGENT_MODEL_REGISTRY: ${THESISTRACE_AGENT_MODEL_REGISTRY:?THESISTRACE_AGENT_MODEL_REGISTRY is required}
@@ -133,6 +138,8 @@ services:
       THESISTRACE_ENVIRONMENT: ${THESISTRACE_ENVIRONMENT:?THESISTRACE_ENVIRONMENT is required}
       THESISTRACE_PUBLIC_ORIGIN: ${THESISTRACE_PUBLIC_ORIGIN:?THESISTRACE_PUBLIC_ORIGIN is required}
     depends_on:
+      agent-initialize:
+        condition: service_completed_successfully
       auth:
         condition: service_healthy
     healthcheck:
@@ -146,6 +153,17 @@ services:
       timeout: 5s
       retries: 60
     restart: unless-stopped
+
+  agent-initialize:
+    <<: *agent-image
+    logging: *bounded-logging
+    command: ["node", "dist/initialize.js"]
+    environment:
+      THESISTRACE_OWNER_DATABASE_URL: postgresql://thesistrace_owner:${THESISTRACE_OWNER_DATABASE_PASSWORD:?THESISTRACE_OWNER_DATABASE_PASSWORD is required}@postgres:5432/thesistrace
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   initialize:
     <<: *backend

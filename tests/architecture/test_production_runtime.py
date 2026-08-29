@@ -25,10 +25,13 @@ THESISTRACE_RESEND_API_URL=https://api.resend.com
 THESISTRACE_OWNER_DATABASE_PASSWORD=OwnerRuntime_7Qh9tT4Sx2Vk8Lm3
 THESISTRACE_CORE_DATABASE_PASSWORD=CoreRuntime_3Nm8qW6Zp5Jc2Rs7
 THESISTRACE_AUTH_DATABASE_PASSWORD=AuthRuntime_9Fd4vB7Ky2Hg6Px8
+THESISTRACE_AGENT_DATABASE_PASSWORD=AgentRuntime_5Jt8mQ3Wx7Lc9Vr4
 BETTER_AUTH_SECRET=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
 RESEND_API_KEY=re_production_7Kp4mN9vQ2sL6xT8
 RESEND_FROM_EMAIL=ThesisTrace <noreply@thesistrace.com>
 THESISTRACE_AUTH_IMAGE=ghcr.io/thesistrace/auth:2026-08-29
+THESISTRACE_AGENT_IMAGE=ghcr.io/thesistrace/agent:2026-08-29
+THESISTRACE_AGENT_BUILD_REVISION=2026-08-29.1
 THESISTRACE_AGENT_MODEL_REGISTRY={VALID_AGENT_REGISTRY}
 THESISTRACE_AGENT_OPENAI_API_KEY=sk-production-agent-7Kp4mN9vQ2sL6xT8
 """
@@ -151,6 +154,14 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
         (
             "THESISTRACE_AUTH_IMAGE=ghcr.io/thesistrace/auth:latest",
             "PRODUCTION_AUTH_IMAGE_INVALID",
+        ),
+        (
+            "THESISTRACE_AGENT_IMAGE=registry.example:5000/thesistrace/agent",
+            "PRODUCTION_AGENT_IMAGE_INVALID",
+        ),
+        (
+            "THESISTRACE_AGENT_IMAGE=ghcr.io/thesistrace/agent:latest",
+            "PRODUCTION_AGENT_IMAGE_INVALID",
         ),
         (
             "THESISTRACE_AGENT_MODEL_REGISTRY=not-json",

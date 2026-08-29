@@ -2,13 +2,18 @@ import { serve } from "@hono/node-server";
 
 import { createAgentApp } from "./app.js";
 import { readAgentSettings } from "./config.js";
+import { createResearchRuntime } from "./research-runtime.js";
 import { createSessionVerifier } from "./session-verifier.js";
 
 async function main(): Promise<void> {
   const settings = readAgentSettings();
+  const researchRuntime = await createResearchRuntime(settings);
   const app = createAgentApp({
+    handleRuntime: researchRuntime.handle,
     modelCatalog: settings.modelRegistry.safeCatalog,
     publicOrigin: settings.publicOrigin,
+    readiness: researchRuntime.ready,
+    sessionPreference: researchRuntime.preference,
     verifySession: createSessionVerifier({
       authInternalOrigin: settings.authInternalOrigin,
     }),
@@ -24,7 +29,14 @@ async function main(): Promise<void> {
     if (closing) return;
     closing = true;
     server.close(() => {
-      process.exitCode = 0;
+      researchRuntime.close().then(
+        () => {
+          process.exitCode = 0;
+        },
+        () => {
+          process.exitCode = 1;
+        },
+      );
     });
   };
   process.once("SIGINT", close);

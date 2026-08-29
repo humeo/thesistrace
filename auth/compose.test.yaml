@@ -20,6 +20,7 @@ services:
       POSTGRES_PASSWORD: owner-test-password
       THESISTRACE_CORE_DATABASE_PASSWORD: core-test-password
       THESISTRACE_AUTH_DATABASE_PASSWORD: auth-test-password
+      THESISTRACE_AGENT_DATABASE_PASSWORD: agent-test-password
     healthcheck:
       test:
         - CMD-SHELL

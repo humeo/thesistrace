@@ -9,8 +9,8 @@ DEPLOY = ROOT / "deploy" / "core"
 
 
 def _service(source: str, name: str, next_name: str) -> str:
-    return source.split(f"  {name}:\n", maxsplit=1)[1].split(
-        f"  {next_name}:\n", maxsplit=1
+    return source.split(f"\n  {name}:\n", maxsplit=1)[1].split(
+        f"\n  {next_name}:\n", maxsplit=1
     )[0]
 
 
@@ -24,11 +24,31 @@ def test_agent_host_is_a_private_node_package_without_research_authority() -> No
     )
 
     assert package["name"] == "thesistrace-agent-host"
-    assert dependencies == {"@hono/node-server", "hono", "zod"}
-    for forbidden_dependency in ("pg", "postgres", "redis", "rustfs", "celery"):
+    assert dependencies == {
+        "@ag-ui/client",
+        "@ag-ui/core",
+        "@ag-ui/encoder",
+        "@ag-ui/mastra",
+        "@ai-sdk/anthropic",
+        "@ai-sdk/google",
+        "@ai-sdk/openai",
+        "@ai-sdk/provider",
+        "@copilotkit/runtime",
+        "@hono/node-server",
+        "@mastra/core",
+        "@mastra/memory",
+        "@mastra/pg",
+        "ai",
+        "hono",
+        "pg",
+        "rxjs",
+        "zod",
+    }
+    for forbidden_dependency in ("postgres", "redis", "rustfs", "celery"):
         assert forbidden_dependency not in dependencies
     for forbidden_import in (
-        "thesistrace.",
+        "from thesistrace",
+        "import thesistrace",
         "../src/",
         "research_run",
         "canonical-data",
@@ -39,11 +59,14 @@ def test_agent_host_is_a_private_node_package_without_research_authority() -> No
 
 def test_agent_compose_identity_receives_only_provider_and_process_configuration() -> None:
     compose = (DEPLOY / "compose.yaml").read_text()
-    agent = _service(compose, "agent", "initialize")
+    agent = _service(compose, "agent", "agent-initialize")
+    initializer = _service(compose, "agent-initialize", "initialize")
 
     assert "dockerfile: deploy/core/Dockerfile.agent" in compose
     assert "THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth:8200" in agent
     assert "THESISTRACE_AGENT_MODEL_REGISTRY" in agent
+    assert 'COPILOTKIT_TELEMETRY_DISABLED: "true"' in agent
+    assert "postgresql://agent_runtime:" in agent
     for provider_secret in (
         "THESISTRACE_AGENT_ANTHROPIC_API_KEY",
         "THESISTRACE_AGENT_GOOGLE_API_KEY",
@@ -64,6 +87,10 @@ def test_agent_compose_identity_receives_only_provider_and_process_configuration
     ):
         assert forbidden_credential not in agent
     assert "    ports:\n" not in agent
+    assert "THESISTRACE_OWNER_DATABASE_URL" in initializer
+    assert "THESISTRACE_AGENT_DATABASE_URL" not in initializer
+    assert "THESISTRACE_AGENT_MODEL_REGISTRY" not in initializer
+    assert "THESISTRACE_AUTH_INTERNAL_ORIGIN" not in initializer
 
 
 def test_browser_bundle_source_has_no_provider_or_mcp_credential_contract() -> None:
@@ -82,6 +109,20 @@ def test_browser_bundle_source_has_no_provider_or_mcp_credential_contract() -> N
         "OAuth access token",
     ):
         assert forbidden not in source
+
+
+def test_research_chat_uses_copilotkit_public_headless_boundary() -> None:
+    chat_page = (ROOT / "web" / "src" / "chat" / "ChatPage.tsx").read_text()
+    provider = (
+        ROOT / "web" / "src" / "chat" / "ResearchChatCopilotProvider.tsx"
+    ).read_text()
+
+    assert 'from "@copilotkit/react-core/v2/headless"' in chat_page
+    assert 'from "@copilotkit/react-core/v2"' not in chat_page
+    assert 'from "@copilotkit/react-core/v2/context"' in provider
+    assert 'from "@copilotkit/react-core/v2"' not in provider
+    assert 'runtimeTransport: "rest"' in provider
+    assert 'runtimeUrl: RESEARCH_CHAT_RUNTIME_URL' in provider
 
 
 def test_agent_startup_logging_cannot_serialize_configuration_details() -> None:

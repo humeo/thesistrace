@@ -10,9 +10,9 @@ DEPLOY = ROOT / "deploy" / "core"
 
 
 def _service(source: str, name: str, next_name: str | None = None) -> str:
-    section = source.split(f"  {name}:\n", maxsplit=1)[1]
+    section = source.split(f"\n  {name}:\n", maxsplit=1)[1]
     if next_name is not None:
-        section = section.split(f"  {next_name}:\n", maxsplit=1)[0]
+        section = section.split(f"\n  {next_name}:\n", maxsplit=1)[0]
     return section
 
 
@@ -154,7 +154,7 @@ def test_base_compose_has_independent_agent_auth_and_core_identities() -> None:
         "\nx-backend:", 1
     )[0]
 
-    for service in ("auth-initialize", "auth", "agent", "web"):
+    for service in ("auth-initialize", "auth", "agent-initialize", "agent", "web"):
         assert f"  {service}:\n" in compose
     assert "POSTGRES_USER: thesistrace_owner" in compose
     assert "010-runtime-roles.sh:/docker-entrypoint-initdb.d/010-runtime-roles.sh:ro" in compose
@@ -169,7 +169,8 @@ def test_base_compose_has_independent_agent_auth_and_core_identities() -> None:
 
     auth_initializer = _service(compose, "auth-initialize", "auth")
     auth = _service(compose, "auth", "agent")
-    agent = _service(compose, "agent", "initialize")
+    agent = _service(compose, "agent", "agent-initialize")
+    agent_initializer = _service(compose, "agent-initialize", "initialize")
     api = _service(compose, "api", "research-worker")
     research_worker = _service(
         compose, "research-worker", "batch-research-worker"
@@ -184,10 +185,15 @@ def test_base_compose_has_independent_agent_auth_and_core_identities() -> None:
     assert "THESISTRACE_AUTH_DATABASE_URL" in auth
     assert "THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth:8200" in agent
     assert "THESISTRACE_AGENT_MODEL_REGISTRY" in agent
+    assert "image: ${THESISTRACE_AGENT_IMAGE:" in compose
+    assert "postgresql://agent_runtime:" in agent
     assert "THESISTRACE_DATABASE_URL" not in agent
     assert "THESISTRACE_AUTH_DATABASE_URL" not in agent
     assert "THESISTRACE_S3_" not in agent
     assert "    ports:\n" not in agent
+    assert "THESISTRACE_OWNER_DATABASE_URL" in agent_initializer
+    assert "THESISTRACE_AGENT_DATABASE_URL" not in agent_initializer
+    assert "THESISTRACE_AGENT_MODEL_REGISTRY" not in agent_initializer
     assert "THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth:8200" in api
     assert all(
         "THESISTRACE_AUTH_INTERNAL_ORIGIN" not in worker
@@ -223,7 +229,7 @@ def test_single_node_services_have_one_replica_and_restart_unless_stopped() -> N
         ("postgres", "rustfs"),
         ("rustfs", "auth-initialize"),
         ("auth", "agent"),
-        ("agent", "initialize"),
+        ("agent", "agent-initialize"),
         ("api", "research-worker"),
         ("research-worker", "batch-research-worker"),
         ("batch-research-worker", "tracking-worker"),
@@ -252,6 +258,7 @@ def test_development_and_test_origins_are_exact_before_compose_rendering() -> No
 
     assert "THESISTRACE_PUBLIC_ORIGIN=http://127.0.0.1:5173" in development_env
     assert "THESISTRACE_ENVIRONMENT=development" in development_env
+    assert "THESISTRACE_AGENT_IMAGE=thesistrace-agent-dev" in development_env
     assert "127.0.0.1:${THESISTRACE_DEV_WEB_PORT}:5173" in development
     assert "127.0.0.1:${THESISTRACE_DEV_API_PORT}:8100" in development
 
@@ -264,6 +271,7 @@ def test_development_and_test_origins_are_exact_before_compose_rendering() -> No
     assert "locked-loopback-port" in runner
     assert "THESISTRACE_TEST_CADDY_PORT=\"$caddy_port\"" in runner
     assert "THESISTRACE_PUBLIC_ORIGIN=\"$public_origin\"" in runner
+    assert 'THESISTRACE_AGENT_IMAGE="$project_name-agent"' in runner
     assert runner.index("caddy_port=") < runner.index("compose config --quiet")
 
 

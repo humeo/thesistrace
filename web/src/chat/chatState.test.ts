@@ -47,10 +47,8 @@ describe("Chat shell state", () => {
       model: { key: "primary" },
       reasoningEffort: "medium",
     });
-    expect(resolveModelSelection(catalog, "deep", "low")).toMatchObject({
-      model: { key: "deep" },
-      reasoningEffort: "high",
-    });
+    expect(resolveModelSelection(catalog, "deep", "low")).toBeNull();
+    expect(resolveModelSelection(catalog, "removed", "high")).toBeNull();
     expect(resolveModelSelection(catalog, "deep", "xhigh")).toMatchObject({
       model: { key: "deep" },
       reasoningEffort: "xhigh",

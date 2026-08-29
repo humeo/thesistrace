@@ -8,13 +8,17 @@ import { readModelRegistry, type ModelRegistry } from "./model-registry.js";
 const runtimeEnvironmentSchema = z.enum(["development", "test", "production"]);
 
 export type AgentSettings = Readonly<{
+  agentBuildRevision: string;
   authInternalOrigin: string;
+  databaseUrl: string;
   environment: z.infer<typeof runtimeEnvironmentSchema>;
   host: string;
   modelRegistry: ModelRegistry;
   port: number;
   publicOrigin: string;
 }>;
+
+export type AgentInitializerSettings = Readonly<{ databaseUrl: string }>;
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -32,18 +36,38 @@ export function readAgentSettings(
   const authInternalOrigin = parseInternalOrigin(
     required(environment, "THESISTRACE_AUTH_INTERNAL_ORIGIN"),
   );
+  const databaseUrl = parseDatabaseUrl(
+    required(environment, "THESISTRACE_AGENT_DATABASE_URL"),
+    "agent_runtime",
+  );
+  const agentBuildRevision = parseBuildRevision(
+    required(environment, "THESISTRACE_AGENT_BUILD_REVISION"),
+  );
   const modelRegistry = readModelRegistry(
     required(environment, "THESISTRACE_AGENT_MODEL_REGISTRY"),
     environment,
   );
 
   return {
+    agentBuildRevision,
     authInternalOrigin,
+    databaseUrl,
     environment: parsedEnvironment.data,
     host: environment.THESISTRACE_AGENT_HOST ?? "0.0.0.0",
     modelRegistry,
     port: parsePort(environment.THESISTRACE_AGENT_PORT ?? "8400"),
     publicOrigin,
+  };
+}
+
+export function readAgentInitializerSettings(
+  environment: Environment = process.env,
+): AgentInitializerSettings {
+  return {
+    databaseUrl: parseDatabaseUrl(
+      required(environment, "THESISTRACE_OWNER_DATABASE_URL"),
+      "thesistrace_owner",
+    ),
   };
 }
 
@@ -103,6 +127,47 @@ function parsePort(value: string): number {
     throw new AgentConfigurationError();
   }
   return port;
+}
+
+function parseDatabaseUrl(value: string, expectedUsername: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new AgentConfigurationError();
+  }
+  if (
+    (url.protocol !== "postgresql:" && url.protocol !== "postgres:")
+    || url.hostname.length === 0
+    || url.username.length === 0
+    || url.password.length === 0
+    || url.pathname === "/"
+  ) {
+    throw new AgentConfigurationError();
+  }
+  try {
+    if (decodeURIComponent(url.username) !== expectedUsername) {
+      throw new AgentConfigurationError();
+    }
+    decodeURIComponent(url.password);
+    decodeURIComponent(url.pathname.slice(1));
+  } catch (error) {
+    if (error instanceof AgentConfigurationError) throw error;
+    throw new AgentConfigurationError();
+  }
+  return value;
+}
+
+function parseBuildRevision(value: string): string {
+  if (
+    value !== value.trim()
+    || value.length < 1
+    || value.length > 128
+    || /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value)
+  ) {
+    throw new AgentConfigurationError();
+  }
+  return value;
 }
 
 function unbracketedHostname(hostname: string): string {

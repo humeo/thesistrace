@@ -14,11 +14,13 @@ port_lock_root=${THESISTRACE_TEST_PORT_LOCK_ROOT:-"$runtime_root/thesistrace-$(i
 owner_database_password=owner-test-password
 core_database_password=core-test-password
 auth_database_password=auth-test-password
+agent_database_password=agent-test-password
 resend_api_key=resend-test-key
 resend_from_email='ThesisTrace <noreply@thesistrace.test>'
 resend_api_url=http://resend-fake:8300
 agent_model_registry='{"default_model_key":"scripted-research","models":[{"default_reasoning_effort":"medium","display_name":"Scripted Research","enabled":true,"key":"scripted-research","provider_adapter":"scripted","provider_model_id":"scripted-v1","reasoning_efforts":["low","medium","high"],"secret_env":"THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"},{"default_reasoning_effort":"high","display_name":"Scripted Deep Research","enabled":true,"key":"scripted-deep-research","provider_adapter":"scripted","provider_model_id":"scripted-v2","reasoning_efforts":["high"],"secret_env":"THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"}]}'
 agent_scripted_model_secret=scripted-test-provider-secret
+agent_build_revision=test-build-revision
 compose_cleanup_required=true
 
 new_run_id() {
@@ -105,7 +107,10 @@ compose() {
       THESISTRACE_OWNER_DATABASE_PASSWORD="$owner_database_password" \
       THESISTRACE_CORE_DATABASE_PASSWORD="$core_database_password" \
       THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
+      THESISTRACE_AGENT_DATABASE_PASSWORD="$agent_database_password" \
       THESISTRACE_AUTH_IMAGE="$project_name-auth" \
+      THESISTRACE_AGENT_IMAGE="$project_name-agent" \
+      THESISTRACE_AGENT_BUILD_REVISION="$agent_build_revision" \
       THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
       THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET="$agent_scripted_model_secret" \
       BETTER_AUTH_SECRET="$auth_secret" \
@@ -130,7 +135,10 @@ compose() {
       THESISTRACE_OWNER_DATABASE_PASSWORD="$owner_database_password" \
       THESISTRACE_CORE_DATABASE_PASSWORD="$core_database_password" \
       THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
+      THESISTRACE_AGENT_DATABASE_PASSWORD="$agent_database_password" \
       THESISTRACE_AUTH_IMAGE="$project_name-auth" \
+      THESISTRACE_AGENT_IMAGE="$project_name-agent" \
+      THESISTRACE_AGENT_BUILD_REVISION="$agent_build_revision" \
       THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
       THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET="$agent_scripted_model_secret" \
       BETTER_AUTH_SECRET="$auth_secret" \
@@ -154,7 +162,10 @@ base_compose() {
     THESISTRACE_OWNER_DATABASE_PASSWORD="$owner_database_password" \
     THESISTRACE_CORE_DATABASE_PASSWORD="$core_database_password" \
     THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
+    THESISTRACE_AGENT_DATABASE_PASSWORD="$agent_database_password" \
     THESISTRACE_AUTH_IMAGE="$project_name-auth" \
+    THESISTRACE_AGENT_IMAGE="$project_name-agent" \
+    THESISTRACE_AGENT_BUILD_REVISION="$agent_build_revision" \
     THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
     THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET="$agent_scripted_model_secret" \
     BETTER_AUTH_SECRET="$auth_secret" \

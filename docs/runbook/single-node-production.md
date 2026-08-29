@@ -1,8 +1,9 @@
 # Single-node Production runtime
 
 ThesisTrace Production is one Docker Compose project on one host. Caddy is the
-only published service on ports 80 and 443. Auth, Core, PostgreSQL, RustFS, and
-the three fixed-role Workers stay on the private Compose network. This runtime
+only published service on ports 80 and 443. Auth, the Agent Host, Core,
+PostgreSQL, RustFS, and the three fixed-role Workers stay on the private Compose
+network. This runtime
 makes no high-availability or zero-downtime claim.
 
 ## External environment contract
@@ -27,19 +28,27 @@ THESISTRACE_RESEND_API_URL=https://api.resend.com
 THESISTRACE_OWNER_DATABASE_PASSWORD=<unique-url-safe-24-to-128-characters>
 THESISTRACE_CORE_DATABASE_PASSWORD=<unique-url-safe-24-to-128-characters>
 THESISTRACE_AUTH_DATABASE_PASSWORD=<unique-url-safe-24-to-128-characters>
+THESISTRACE_AGENT_DATABASE_PASSWORD=<unique-url-safe-24-to-128-characters>
 BETTER_AUTH_SECRET=<64-lowercase-hex-characters>
 RESEND_API_KEY=<production-resend-api-key>
 RESEND_FROM_EMAIL=<verified-sender-email-or-display-name>
 THESISTRACE_AUTH_IMAGE=ghcr.io/<owner>/<image>:<fixed-version>
+THESISTRACE_AGENT_IMAGE=ghcr.io/<owner>/<image>:<fixed-version>
+THESISTRACE_AGENT_BUILD_REVISION=<release-revision>
+THESISTRACE_AGENT_MODEL_REGISTRY={"default_model_key":"openai-research","models":[{"default_reasoning_effort":"medium","display_name":"OpenAI Research","enabled":true,"key":"openai-research","provider_adapter":"openai","provider_model_id":"<provider-model-id>","reasoning_efforts":["low","medium","high"],"secret_env":"THESISTRACE_AGENT_OPENAI_API_KEY"}]}
+THESISTRACE_AGENT_OPENAI_API_KEY=<production-provider-api-key>
 ```
 
-The three database passwords must differ. `openssl rand -hex 24` produces one
+The four database passwords must differ. `openssl rand -hex 24` produces one
 accepted password shape; run it independently for each role. `openssl rand
 -hex 32` produces the Auth secret. The public origin must use the default HTTPS
 port, contain only a hostname, and cannot use localhost or a reserved
-`.test`, `.example`, or `.invalid` name. The Auth image must use an explicit
-non-placeholder tag or a `sha256` digest. Production accepts only the public
-Resend API URL; the Test fake is rejected before Compose starts.
+`.test`, `.example`, or `.invalid` name. Auth and Agent images must use explicit
+non-placeholder tags or `sha256` digests. The Agent registry is loaded once at
+startup; every enabled model names its provider adapter, provider model ID,
+allowed reasoning efforts, and the environment key holding its credential.
+At least one registered provider credential must be present. Production accepts
+only the public Resend API URL; the Test fake is rejected before Compose starts.
 
 Validate the complete environment and resolved Compose model without starting
 services:
@@ -106,8 +115,12 @@ production_compose() (
     THESISTRACE_ENVIRONMENT THESISTRACE_PUBLIC_ORIGIN \
     THESISTRACE_RESEND_API_URL THESISTRACE_OWNER_DATABASE_PASSWORD \
     THESISTRACE_CORE_DATABASE_PASSWORD THESISTRACE_AUTH_DATABASE_PASSWORD \
+    THESISTRACE_AGENT_DATABASE_PASSWORD \
     BETTER_AUTH_SECRET RESEND_API_KEY RESEND_FROM_EMAIL \
-    THESISTRACE_AUTH_IMAGE
+    THESISTRACE_AUTH_IMAGE THESISTRACE_AGENT_IMAGE \
+    THESISTRACE_AGENT_MODEL_REGISTRY THESISTRACE_AGENT_BUILD_REVISION \
+    THESISTRACE_AGENT_ANTHROPIC_API_KEY THESISTRACE_AGENT_GOOGLE_API_KEY \
+    THESISTRACE_AGENT_OPENAI_API_KEY THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET
   sudo docker compose \
     --project-name thesistrace \
     --env-file "$production_env" \

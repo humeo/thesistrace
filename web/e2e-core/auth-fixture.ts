@@ -12,19 +12,59 @@ export const browserPassword = "Browser-acceptance-password-2026";
 export const securityTest = base.extend<{ cspGuard: void }>({
   cspGuard: [async ({ page }, use) => {
     resetAuthRateLimits();
-    const violations: string[] = [];
+    const violations: Array<Readonly<{
+      blockedResource: string;
+      columnNumber: number;
+      directive: string;
+      lineNumber: number;
+      sourcePath: string;
+    }>> = [];
     await page.exposeFunction(
       "__thesistraceRecordCspViolation",
-      (directive: unknown) => {
-        violations.push(typeof directive === "string" ? directive : "invalid");
+      (violation: unknown) => {
+        if (
+          typeof violation === "object"
+          && violation !== null
+          && "directive" in violation
+        ) {
+          violations.push(violation as (typeof violations)[number]);
+          return;
+        }
+        violations.push({
+          blockedResource: "invalid",
+          columnNumber: 0,
+          directive: "invalid",
+          lineNumber: 0,
+          sourcePath: "invalid",
+        });
       },
     );
     await page.addInitScript(() => {
       window.addEventListener("securitypolicyviolation", (event) => {
         const record = (window as unknown as {
-          __thesistraceRecordCspViolation: (directive: string) => Promise<void>;
+          __thesistraceRecordCspViolation: (violation: {
+            blockedResource: string;
+            columnNumber: number;
+            directive: string;
+            lineNumber: number;
+            sourcePath: string;
+          }) => Promise<void>;
         }).__thesistraceRecordCspViolation;
-        void record(event.effectiveDirective);
+        const resourcePath = (value: string): string => {
+          if (!value || !value.includes(":")) return value;
+          try {
+            return new URL(value, window.location.href).pathname;
+          } catch {
+            return "invalid";
+          }
+        };
+        void record({
+          blockedResource: resourcePath(event.blockedURI),
+          columnNumber: event.columnNumber,
+          directive: event.effectiveDirective,
+          lineNumber: event.lineNumber,
+          sourcePath: resourcePath(event.sourceFile),
+        });
       });
     });
     await use();

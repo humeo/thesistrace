@@ -105,9 +105,13 @@ validate_database_password() {
 owner_password=$(validate_database_password THESISTRACE_OWNER_DATABASE_PASSWORD)
 core_password=$(validate_database_password THESISTRACE_CORE_DATABASE_PASSWORD)
 auth_password=$(validate_database_password THESISTRACE_AUTH_DATABASE_PASSWORD)
+agent_password=$(validate_database_password THESISTRACE_AGENT_DATABASE_PASSWORD)
 test "$owner_password" != "$core_password" \
   && test "$owner_password" != "$auth_password" \
+  && test "$owner_password" != "$agent_password" \
   && test "$core_password" != "$auth_password" \
+  && test "$core_password" != "$agent_password" \
+  && test "$auth_password" != "$agent_password" \
   || fail PRODUCTION_DATABASE_PASSWORD_INVALID
 
 auth_secret=$(required_value BETTER_AUTH_SECRET)
@@ -132,6 +136,12 @@ printf '%s\n' "$resend_from" | grep -Eq '^[^[:cntrl:]]+@[^[:cntrl:]<> ]+>?$' \
 agent_model_registry=$(required_value THESISTRACE_AGENT_MODEL_REGISTRY)
 test "${#agent_model_registry}" -le 65536 \
   || fail PRODUCTION_AGENT_MODEL_REGISTRY_INVALID
+
+agent_build_revision=$(required_value THESISTRACE_AGENT_BUILD_REVISION)
+test "${#agent_build_revision}" -le 128 \
+  || fail PRODUCTION_AGENT_BUILD_REVISION_INVALID
+printf '%s\n' "$agent_build_revision" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$' \
+  || fail PRODUCTION_AGENT_BUILD_REVISION_INVALID
 printf '%s\n' "$agent_model_registry" | grep -Eq '^\{.*\}$' \
   || fail PRODUCTION_AGENT_MODEL_REGISTRY_INVALID
 
@@ -185,6 +195,32 @@ case "$auth_image" in
     ;;
 esac
 
+agent_image=$(required_value THESISTRACE_AGENT_IMAGE)
+case "$agent_image" in
+  *@*)
+    printf '%s\n' "$agent_image" | grep -Eq \
+      '^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$' \
+      || fail PRODUCTION_AGENT_IMAGE_INVALID
+    ;;
+  *)
+    printf '%s\n' "$agent_image" | grep -Eq \
+      '^[A-Za-z0-9][A-Za-z0-9._:/-]*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$' \
+      || fail PRODUCTION_AGENT_IMAGE_INVALID
+    agent_image_tag=${agent_image##*:}
+    normalized_agent_image_tag=$(printf '%s' "$agent_image_tag" | tr '[:upper:]' '[:lower:]')
+    case "$normalized_agent_image_tag" in
+      latest | test | dev | development | placeholder)
+        fail PRODUCTION_AGENT_IMAGE_INVALID
+        ;;
+    esac
+    ;;
+esac
+case "$agent_image" in
+  *[!A-Za-z0-9._:/@-]*)
+    fail PRODUCTION_AGENT_IMAGE_INVALID
+    ;;
+esac
+
 # Docker Compose gives the ambient shell precedence over --env-file. Remove
 # every security-sensitive value that was validated above so the root-owned
 # file remains the sole source passed to Compose.
@@ -195,11 +231,14 @@ unset \
   THESISTRACE_OWNER_DATABASE_PASSWORD \
   THESISTRACE_CORE_DATABASE_PASSWORD \
   THESISTRACE_AUTH_DATABASE_PASSWORD \
+  THESISTRACE_AGENT_DATABASE_PASSWORD \
   BETTER_AUTH_SECRET \
   RESEND_API_KEY \
   RESEND_FROM_EMAIL \
   THESISTRACE_AUTH_IMAGE \
+  THESISTRACE_AGENT_IMAGE \
   THESISTRACE_AGENT_MODEL_REGISTRY \
+  THESISTRACE_AGENT_BUILD_REVISION \
   THESISTRACE_AGENT_ANTHROPIC_API_KEY \
   THESISTRACE_AGENT_GOOGLE_API_KEY \
   THESISTRACE_AGENT_OPENAI_API_KEY \

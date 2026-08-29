@@ -867,7 +867,8 @@ signal.pause()
 def test_integration_command_generates_unique_test_identities() -> None:
     package = json.loads((ROOT / "package.json").read_text())
     assert package["scripts"]["test:integration"] == (
-        "./scripts/test-runtime integration && pnpm --dir auth test:integration"
+        "./scripts/test-runtime integration && pnpm --dir auth test:integration "
+        "&& pnpm --dir agent test:integration"
     )
 
     projects = {
@@ -1376,14 +1377,15 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
         "pnpm test:image-smoke",
     ]
     assert scripts["test:integration"] == (
-        "./scripts/test-runtime integration && pnpm --dir auth test:integration"
+        "./scripts/test-runtime integration && pnpm --dir auth test:integration "
+        "&& pnpm --dir agent test:integration"
     )
     assert scripts["check:performance"] == "./scripts/test-runtime performance"
     assert scripts["test:benchmark"] == "./scripts/test-runtime benchmark"
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
     assert scripts["test:image-smoke"] == (
         "./scripts/test-runtime image-smoke && pnpm --dir auth test:image-smoke "
-        "&& pnpm test:caddy-image-smoke"
+        "&& pnpm --dir agent test:image-smoke && pnpm test:caddy-image-smoke"
     )
     assert scripts["test:caddy-image-smoke"] == "./scripts/test-caddy-production-image"
     assert scripts["test:cleanup"] == "./scripts/test-runtime cleanup"

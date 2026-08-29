@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readAgentSettings } from "./config.js";
+import { readAgentInitializerSettings, readAgentSettings } from "./config.js";
 
 const registry = JSON.stringify({
   default_model_key: "scripted",
@@ -16,6 +16,9 @@ const registry = JSON.stringify({
   }],
 });
 const environment = {
+  THESISTRACE_AGENT_BUILD_REVISION: "test-build-1",
+  THESISTRACE_AGENT_DATABASE_URL:
+    "postgresql://agent_runtime:agent-password@postgres:5432/thesistrace",
   THESISTRACE_AGENT_MODEL_REGISTRY: registry,
   THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "scripted-test-secret",
   THESISTRACE_AUTH_INTERNAL_ORIGIN: "http://auth:8200",
@@ -26,15 +29,20 @@ const environment = {
 describe("Agent Host configuration", () => {
   it("reads one exact Test configuration and validated Registry", () => {
     expect(readAgentSettings(environment)).toMatchObject({
+      agentBuildRevision: "test-build-1",
       authInternalOrigin: "http://auth:8200",
       environment: "test",
       host: "0.0.0.0",
       port: 8400,
       publicOrigin: "http://127.0.0.1:5173",
+      databaseUrl:
+        "postgresql://agent_runtime:agent-password@postgres:5432/thesistrace",
     });
   });
 
   it.each([
+    "THESISTRACE_AGENT_BUILD_REVISION",
+    "THESISTRACE_AGENT_DATABASE_URL",
     "THESISTRACE_AGENT_MODEL_REGISTRY",
     "THESISTRACE_AUTH_INTERNAL_ORIGIN",
     "THESISTRACE_ENVIRONMENT",
@@ -43,6 +51,22 @@ describe("Agent Host configuration", () => {
     expect(() => readAgentSettings({ ...environment, [name]: "" })).toThrow(
       "Agent configuration is invalid",
     );
+  });
+
+  it("requires the dedicated Runtime and Owner database roles", () => {
+    expect(() => readAgentSettings({
+      ...environment,
+      THESISTRACE_AGENT_DATABASE_URL:
+        "postgresql://auth_runtime:agent-password@postgres:5432/thesistrace",
+    })).toThrow("Agent configuration is invalid");
+
+    expect(readAgentInitializerSettings({
+      THESISTRACE_OWNER_DATABASE_URL:
+        "postgresql://thesistrace_owner:owner-password@postgres:5432/thesistrace",
+    })).toEqual({
+      databaseUrl:
+        "postgresql://thesistrace_owner:owner-password@postgres:5432/thesistrace",
+    });
   });
 
   it.each([

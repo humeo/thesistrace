@@ -76,9 +76,95 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   const closeBox = await close.boundingBox();
   expect(closeBox?.width).toBeGreaterThanOrEqual(44);
   expect(closeBox?.height).toBeGreaterThanOrEqual(44);
+  const sendBox = await page.getByRole("button", { name: "Send message" }).boundingBox();
+  expect(sendBox?.width).toBeGreaterThanOrEqual(44);
+  expect(sendBox?.height).toBeGreaterThanOrEqual(44);
   await page.keyboard.press("Escape");
   await expect(open).toBeFocused();
   await expect(open).toHaveAttribute("aria-expanded", "false");
   await expect(sidebar).toHaveAttribute("inert", "");
   await expect(page.locator(".chat-shell")).not.toHaveClass(/chat-shell-navigation-open/);
+});
+
+test("Chat exposes an accessible 16 KiB text boundary before execution", async ({ page }) => {
+  await page.goto("/chat");
+  const message = page.getByRole("textbox", { name: "Message", exact: true });
+  await message.fill("a".repeat(16 * 1024 + 1));
+
+  await expect(message).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByRole("alert")).toHaveText("Message exceeds the 16 KiB limit.");
+  await expect(page.getByRole("button", { name: "Send message" })).toBeDisabled();
+  expect(new URL(page.url()).searchParams.get("session")).toBeNull();
+});
+
+test("an unknown durable Session URL fails closed instead of becoming a new Chat", async ({ page }) => {
+  const unknownSession = "00000000-0000-4000-8000-000000000999";
+  await page.goto(`/chat?session=${unknownSession}`);
+
+  await expect(page.getByRole("alert")).toHaveText(
+    "The Research Agent session could not be loaded.",
+  );
+  await expect(page.getByRole("status")).toHaveText("Agent disconnected");
+  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeDisabled();
+  await expect(page).toHaveURL(new RegExp(`/chat\\?session=${unknownSession}$`));
+});
+
+test("first Chat turn streams through Caddy and reload replays without another run", async ({ page }) => {
+  const runRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/agent/research/run")) {
+      runRequests.push(request.url());
+    }
+  });
+
+  await page.goto("/chat");
+  const message = page.getByRole("textbox", { name: "Message", exact: true });
+  await expect(message).toBeEnabled();
+  expect(new URL(page.url()).searchParams.get("session")).toBeNull();
+  await page.getByLabel("Model", { exact: true }).selectOption(
+    "scripted-deep-research",
+  );
+  await expect(page.getByLabel("Reasoning", { exact: true })).toHaveValue("high");
+
+  const responsePromise = page.waitForResponse((response) =>
+    new URL(response.url()).pathname.endsWith("/agent/research/run"),
+  ).then((response) => ({
+    headers: response.headers(),
+    status: response.status(),
+  }));
+  await message.fill("Build a low volatility Alpha.");
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  await expect.poll(() => new URL(page.url()).searchParams.get("session")).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+  await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText(
+    "Build a low volatility Alpha.",
+  );
+  await expect(page.locator(".chat-message-assistant .chat-message-content")).toHaveText(
+    "I can help turn that idea into a testable Alpha.",
+  );
+  await expect(page.getByRole("status")).toHaveText("Run complete");
+
+  const response = await responsePromise;
+  expect(response.status).toBe(200);
+  expect(response.headers["content-type"]).toContain("text/event-stream");
+  expect(runRequests).toHaveLength(1);
+
+  const durableUrl = page.url();
+  await page.reload();
+  await expect(page).toHaveURL(durableUrl);
+  await expect(page.getByRole("status")).toHaveText("Ready");
+  await expect(page.getByLabel("Model", { exact: true })).toHaveValue(
+    "scripted-deep-research",
+  );
+  await expect(page.getByLabel("Reasoning", { exact: true })).toHaveValue("high");
+  await expect(page.getByRole("article")).toHaveCount(2);
+  await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText(
+    "Build a low volatility Alpha.",
+  );
+  await expect(page.locator(".chat-message-assistant .chat-message-content")).toHaveText(
+    "I can help turn that idea into a testable Alpha.",
+  );
+  expect(runRequests).toHaveLength(1);
 });

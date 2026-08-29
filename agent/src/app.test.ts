@@ -23,8 +23,13 @@ function dependencies(
   overrides: Partial<AgentAppDependencies> = {},
 ): AgentAppDependencies {
   return {
+    handleRuntime: vi.fn(async () => new Response("runtime-response")),
     modelCatalog: catalog,
     publicOrigin: "http://agent.test",
+    sessionPreference: vi.fn(async () => ({
+      model_key: "research-primary",
+      reasoning_effort: "medium",
+    })),
     verifySession: vi.fn(async () => researcher),
     ...overrides,
   };
@@ -111,5 +116,47 @@ describe("Agent Host HTTP boundary", () => {
     const readiness = await app.request("http://agent.test/health/ready");
     expect(readiness.status).toBe(503);
     expect(await readiness.json()).toEqual({ status: "unavailable" });
+  });
+
+  it("protects and delegates the CopilotKit runtime with verified identity", async () => {
+    const appDependencies = dependencies();
+    const response = await createAgentApp(appDependencies).request(
+      "http://agent.test/api/agent/copilotkit/info",
+      { headers: { origin: "http://agent.test" } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("runtime-response");
+    expect(appDependencies.handleRuntime).toHaveBeenCalledWith(
+      expect.any(Request),
+      researcher,
+    );
+  });
+
+  it("returns only an owned Session preference and hides absent Sessions", async () => {
+    const appDependencies = dependencies();
+    const app = createAgentApp(appDependencies);
+    const owned = await app.request(
+      "http://agent.test/api/agent/sessions/00000000-0000-4000-8000-000000000111/preferences",
+      { headers: { origin: "http://agent.test" } },
+    );
+    expect(owned.status).toBe(200);
+    expect(await owned.json()).toEqual({
+      model_key: "research-primary",
+      reasoning_effort: "medium",
+    });
+    expect(appDependencies.sessionPreference).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000111",
+      researcher,
+    );
+
+    const hidden = await createAgentApp(dependencies({
+      sessionPreference: vi.fn(async () => null),
+    })).request(
+      "http://agent.test/api/agent/sessions/00000000-0000-4000-8000-000000000999/preferences",
+      { headers: { origin: "http://agent.test" } },
+    );
+    expect(hidden.status).toBe(404);
+    expect(await hidden.json()).toEqual({ code: "CHAT_SESSION_NOT_FOUND" });
   });
 });

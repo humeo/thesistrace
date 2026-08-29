@@ -2,7 +2,12 @@ import { expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { AuthProvider } from "../auth/AuthProvider";
-import { ChatShell } from "./ChatPage";
+import {
+  ChatShell,
+  chatMessageBytes,
+  chatSessionHref,
+  readBrowserChatThread,
+} from "./ChatPage";
 
 const catalogState = {
   status: "ready" as const,
@@ -28,7 +33,11 @@ const catalogState = {
 test("renders the standalone Chat hierarchy and safe model controls", () => {
   const markup = renderToStaticMarkup(
     <AuthProvider>
-      <ChatShell catalogState={catalogState} reloadCatalog={vi.fn()} />
+      <ChatShell
+        catalogState={catalogState}
+        preferenceState={{ status: "not-required" }}
+        reloadCatalog={vi.fn()}
+      />
     </AuthProvider>,
   );
 
@@ -56,4 +65,32 @@ test("renders the standalone Chat hierarchy and safe model controls", () => {
   expect(markup).toContain('aria-expanded="true" aria-label="Collapse sidebar"');
   expect(markup).toContain('aria-expanded="false" aria-label="Open navigation"');
   expect(markup).not.toMatch(/temperature|top-p|token budget|endpoint|byok/i);
+});
+
+test("keeps New Chat ephemeral until a valid opaque session is present", () => {
+  const generated = "00000000-0000-4000-8000-000000000111";
+  expect(readBrowserChatThread("", () => generated)).toEqual({
+    id: generated,
+    persisted: false,
+  });
+  expect(readBrowserChatThread("?session=prototype", () => generated)).toEqual({
+    id: generated,
+    persisted: false,
+  });
+  expect(readBrowserChatThread(
+    "?session=AA000000-0000-4000-8000-000000000222",
+    () => generated,
+  )).toEqual({
+    id: "aa000000-0000-4000-8000-000000000222",
+    persisted: true,
+  });
+  expect(chatSessionHref(generated)).toBe(
+    "/chat?session=00000000-0000-4000-8000-000000000111",
+  );
+});
+
+test("counts the UTF-8 payload rather than JavaScript code units", () => {
+  expect(chatMessageBytes("alpha")).toBe(5);
+  expect(chatMessageBytes("低波动")).toBe(9);
+  expect(chatMessageBytes("α")).toBe(2);
 });

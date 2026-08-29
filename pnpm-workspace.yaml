@@ -6,6 +6,7 @@ packages:
 injectWorkspacePackages: true
 
 allowBuilds:
+  '@scarf/scarf': false
   esbuild: true
 
 minimumReleaseAge: 1440

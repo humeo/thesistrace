@@ -41,12 +41,19 @@ export function resolveModelSelection(
   catalog: AgentModelCatalog,
   requestedModelKey: string | null,
   requestedReasoningEffort: string | null,
-): ResolvedModelSelection {
-  const model = catalog.models.find((candidate) => candidate.key === requestedModelKey)
-    ?? catalog.models.find((candidate) => candidate.key === catalog.default_model_key);
-  if (model === undefined) throw new Error("Agent model Catalog has no default model");
-  const reasoningEffort = model.reasoning_efforts.find(
-    (candidate) => candidate === requestedReasoningEffort,
-  ) ?? model.default_reasoning_effort;
+): ResolvedModelSelection | null {
+  const model = requestedModelKey === null
+    ? catalog.models.find((candidate) => candidate.key === catalog.default_model_key)
+    : catalog.models.find((candidate) => candidate.key === requestedModelKey);
+  if (model === undefined) {
+    if (requestedModelKey !== null) return null;
+    throw new Error("Agent model Catalog has no default model");
+  }
+  const reasoningEffort = requestedReasoningEffort === null
+    ? model.default_reasoning_effort
+    : model.reasoning_efforts.find(
+        (candidate) => candidate === requestedReasoningEffort,
+      );
+  if (reasoningEffort === undefined) return null;
   return { model, reasoningEffort };
 }
