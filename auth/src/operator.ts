@@ -72,6 +72,7 @@ async function main(): Promise<void> {
     const result = await runOperatorCommand(process.argv.slice(2), {
       access: new ResearcherAccessService({
         authSecret: settings.secret,
+        credentialCoordinator,
         pool,
       }),
       assignment: new OperatorAssignmentService({ pool }),

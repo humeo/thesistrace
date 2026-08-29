@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 
+import { ResearcherAccessService } from "./access.js";
 import { createAuthApp } from "./app.js";
 import { createThesisTraceAuth } from "./auth.js";
 import { AuthEventRecorder } from "./auth-events.js";
@@ -19,6 +20,7 @@ import { InvitationAdmission } from "./invitation-admission.js";
 import { OperatorDirectoryService } from "./operator-directory.js";
 import { OperatorInvitationService } from "./operator-invitation.js";
 import { OperatorProofService } from "./operator-proof.js";
+import { OperatorSessionRevocationService } from "./operator-session-revocation.js";
 import { PasswordResetLifecycle } from "./password-reset.js";
 import { checkAuthReadiness } from "./readiness.js";
 import { sendResendEmail } from "./resend.js";
@@ -124,8 +126,17 @@ async function main(): Promise<void> {
       pool,
     });
     const operatorProofs = new OperatorProofService({ pool });
+    const researcherAccess = new ResearcherAccessService({
+      authSecret: settings.secret,
+      credentialCoordinator,
+      pool,
+    });
     const operatorInvitations = new OperatorInvitationService({
       invitations,
+      proofs: operatorProofs,
+    });
+    const operatorSessionRevocations = new OperatorSessionRevocationService({
+      access: researcherAccess,
       proofs: operatorProofs,
     });
     const app = createAuthApp({
@@ -165,6 +176,8 @@ async function main(): Promise<void> {
       readiness: () => checkAuthReadiness(pool),
       reissueOperatorInvitation: (principal, input) =>
         operatorInvitations.reissue(principal, input),
+      revokeOperatorResearcherSessions: (principal, input) =>
+        operatorSessionRevocations.revoke(principal, input),
       resetPassword: passwordReset.completeReset,
     });
     const server = serve({

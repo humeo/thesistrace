@@ -1263,6 +1263,9 @@ function resetHarness(
     async reissueOperatorInvitation() {
       throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_RESET_HARNESS");
     },
+    async revokeOperatorResearcherSessions() {
+      throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_RESET_HARNESS");
+    },
     resetPassword: completionReset.completeReset,
   });
   return { app, auth, invitationAdmission, reset, sent, tasks };

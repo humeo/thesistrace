@@ -18,9 +18,25 @@ import {
 const PROOF_LIFETIME_MS = 60_000;
 const principalIdSchema = z.uuid();
 
-export type OperatorProofOperation =
+export type OperatorInvitationProofOperation =
   | "invitation.issue"
   | "invitation.reissue";
+
+export type OperatorProofOperation =
+  | OperatorInvitationProofOperation
+  | "researcher.sessions.revoke";
+
+export type OperatorProofRequest =
+  | Readonly<{
+      email: string;
+      operation: OperatorInvitationProofOperation;
+      researcherId?: never;
+    }>
+  | Readonly<{
+      email?: never;
+      operation: "researcher.sessions.revoke";
+      researcherId: string;
+    }>;
 
 export type OperatorProofClaim = Readonly<{
   claimedAt: Date;
@@ -93,19 +109,15 @@ export class OperatorProofService {
 
   async confirm(
     principal: OperatorPrincipal,
-    input: Readonly<{
-      email: string;
-      operation: OperatorProofOperation;
-      password: string;
-    }>,
+    input: OperatorProofRequest & Readonly<{ password: string }>,
   ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
     assertPrincipal(principal);
-    const email = canonicalizeEmail(input.email);
+    const request = normalizeProofRequest(input);
     const proofId = this.#createId();
     const proof = createOpaqueToken(proofId, this.#randomBytes);
     const parsedProof = parseOpaqueToken(proof);
     if (parsedProof === null) throw new Error("OPERATOR_PROOF_GENERATION_FAILED");
-    const requestHash = operatorRequestHash(input.operation, email);
+    const requestHash = operatorRequestHash(request);
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
@@ -173,7 +185,7 @@ export class OperatorProofService {
           proofId,
           parsedProof.hash,
           principal.sessionId,
-          input.operation,
+          request.operation,
           requestHash,
           expiresAt,
           issuedAt,
@@ -191,17 +203,13 @@ export class OperatorProofService {
 
   async claim(
     principal: OperatorPrincipal,
-    input: Readonly<{
-      email: string;
-      operation: OperatorProofOperation;
-      proof: string;
-    }>,
+    input: OperatorProofRequest & Readonly<{ proof: string }>,
   ): Promise<OperatorProofClaim> {
     assertPrincipal(principal);
-    const email = canonicalizeEmail(input.email);
+    const request = normalizeProofRequest(input);
     const parsedProof = parseOpaqueToken(input.proof);
     if (parsedProof === null) throw new OperatorProofInvalidError();
-    const requestHash = operatorRequestHash(input.operation, email);
+    const requestHash = operatorRequestHash(request);
     const client = await this.#pool.connect();
     try {
       await client.query("BEGIN");
@@ -240,7 +248,7 @@ export class OperatorProofService {
         || row.state !== "available"
         || row.expires_at.getTime() <= claimedAt.getTime()
         || row.session_expires_at.getTime() <= claimedAt.getTime()
-        || row.operation !== input.operation
+        || row.operation !== request.operation
         || !tokenHashMatches(row.token_hash, parsedProof.hash)
         || !tokenHashMatches(row.request_hash, requestHash)
       ) {
@@ -259,7 +267,7 @@ export class OperatorProofService {
       return {
         claimedAt,
         id: parsedProof.id,
-        operation: input.operation,
+        operation: request.operation,
         requestHash,
         sessionId: principal.sessionId,
         tokenHash: parsedProof.hash,
@@ -382,11 +390,30 @@ export class OperatorProofService {
   }
 }
 
-function operatorRequestHash(
-  operation: OperatorProofOperation,
-  email: string,
-): Buffer {
-  return sha256(JSON.stringify({ email, operation, version: 1 }));
+function operatorRequestHash(request: OperatorProofRequest): Buffer {
+  return request.operation === "researcher.sessions.revoke"
+    ? sha256(JSON.stringify({
+        operation: request.operation,
+        researcher_id: request.researcherId,
+        version: 1,
+      }))
+    : sha256(JSON.stringify({
+        email: request.email,
+        operation: request.operation,
+        version: 1,
+      }));
+}
+
+function normalizeProofRequest(request: OperatorProofRequest): OperatorProofRequest {
+  if (request.operation === "researcher.sessions.revoke") {
+    const researcherId = principalIdSchema.safeParse(request.researcherId);
+    if (!researcherId.success) throw new OperatorProofInvalidError();
+    return { operation: request.operation, researcherId: researcherId.data };
+  }
+  return {
+    email: canonicalizeEmail(request.email),
+    operation: request.operation,
+  };
 }
 
 function proofMatchesClaim(

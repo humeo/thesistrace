@@ -15,6 +15,7 @@ import {
 } from "./auth-fixture";
 
 test("only the singleton Operator can open and read the Operator Console", async ({ page }) => {
+  test.setTimeout(60_000);
   const operatorMutationRequests: Array<Readonly<{ path: string; body: string }>> = [];
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
@@ -23,6 +24,7 @@ test("only the singleton Operator can open and read the Operator Console", async
       && (
         path === "/api/auth/operator/proofs"
         || path.startsWith("/api/auth/operator/invitations/")
+        || path === "/api/auth/operator/researchers/sessions/revoke"
       )
     ) {
       operatorMutationRequests.push({ body: request.postData() ?? "", path });
@@ -38,6 +40,8 @@ test("only the singleton Operator can open and read the Operator Console", async
 
   const ordinary = await createResearcher(page, "browser-ordinary@example.test");
   await bootstrapResearcher(page, ordinary);
+  await page.goto("/data");
+  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
   seedOperatorDirectory();
   const invitationEmail = "browser-reissued-invitation@example.test";
   await issueInvitation(invitationEmail);
@@ -205,6 +209,101 @@ test("only the singleton Operator can open and read the Operator Console", async
   expect(invitationMutations.map((request) => Object.keys(JSON.parse(request.body)).sort()))
     .toEqual([["email", "proof"], ["email", "proof"]]);
 
+  const currentOperatorRow = researcherTable.getByRole("row").filter({
+    hasText: operator.email,
+  });
+  await expect(currentOperatorRow.getByText("Current Operator", { exact: true }))
+    .toBeVisible();
+  await expect(currentOperatorRow.getByRole("button", { name: /Revoke/ }))
+    .toHaveCount(0);
+  const ordinaryRow = researcherTable.getByRole("row").filter({
+    hasText: ordinary.email,
+  });
+  await expect(ordinaryRow.locator('[data-label="Current sessions"]')).toHaveText("1");
+  const revokeSessions = ordinaryRow.getByRole("button", {
+    name: `Revoke 1 Login Sessions for ${ordinary.email}`,
+  });
+  await revokeSessions.focus();
+  await revokeSessions.press("Enter");
+  let revocationDialog = page.getByRole("dialog", {
+    name: "Revoke Login Sessions?",
+  });
+  await expect(revocationDialog).toBeVisible();
+  await expect(revocationDialog).toContainText("browser-ordinary");
+  await expect(revocationDialog).toContainText(ordinary.email);
+  await expect(revocationDialog).toContainText(ordinary.id);
+  await expect(revocationDialog).toContainText("Current Login Sessions");
+  await expect(revocationDialog).toContainText(
+    "Every current Login Session for this Researcher will be revoked.",
+  );
+  const revocationPassword = revocationDialog.getByLabel("Current password");
+  await expect(revocationPassword).toBeFocused();
+  await revocationPassword.fill(browserPassword);
+  await revocationPassword.press("Shift+Tab");
+  expect(await revocationDialog.evaluate((element) =>
+    element.contains(document.activeElement)
+  )).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(revocationDialog).toHaveCount(0);
+  await expect(revokeSessions).toBeFocused();
+
+  await revokeSessions.press("Enter");
+  revocationDialog = page.getByRole("dialog", {
+    name: "Revoke Login Sessions?",
+  });
+  await expect(revocationDialog.getByLabel("Current password")).toHaveValue("");
+  await revocationDialog.getByLabel("Current password").fill(browserPassword);
+  await revocationDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(revocationDialog).toHaveCount(0);
+  await expect(revokeSessions).toBeFocused();
+
+  await revokeSessions.press("Enter");
+  revocationDialog = page.getByRole("dialog", {
+    name: "Revoke Login Sessions?",
+  });
+  await expect(revocationDialog.getByLabel("Current password")).toHaveValue("");
+  await revocationDialog.getByLabel("Current password").fill(browserPassword);
+  await revocationDialog.getByLabel("Current password").press("Enter");
+  await expect(revocationDialog).toHaveCount(0);
+  await expect(page.getByRole("status").filter({
+    hasText: `Revoked 1 Login Session for ${ordinary.email}.`,
+  })).toBeVisible();
+  await expect(ordinaryRow.locator('[data-label="Current sessions"]')).toHaveText("0");
+  await expect(ordinaryRow.getByText("No active Sessions", { exact: true })).toBeVisible();
+  await expect(ordinaryRow.getByRole("button", { name: /Revoke/ })).toHaveCount(0);
+  await expect(page.locator("#operator-console-focus-fallback")).toBeFocused();
+
+  const sessionProofRequests = operatorMutationRequests.filter((request) => {
+    if (request.path !== "/api/auth/operator/proofs") return false;
+    const body = JSON.parse(request.body) as { operation?: unknown };
+    return body.operation === "researcher.sessions.revoke";
+  });
+  const sessionMutations = operatorMutationRequests.filter(
+    (request) =>
+      request.path === "/api/auth/operator/researchers/sessions/revoke",
+  );
+  expect(sessionProofRequests).toHaveLength(1);
+  expect(JSON.parse(sessionProofRequests[0]?.body ?? "{}")).toEqual({
+    operation: "researcher.sessions.revoke",
+    password: browserPassword,
+    researcher_id: ordinary.id,
+  });
+  expect(sessionMutations).toHaveLength(1);
+  expect(JSON.parse(sessionMutations[0]?.body ?? "{}")).toEqual({
+    proof: expect.any(String),
+    researcher_id: ordinary.id,
+  });
+  expect(sessionMutations[0]?.body).not.toContain(browserPassword);
+
+  await restoreResearcherSession(page, ordinary);
+  await refreshRevokedSessionOnBrowserEvent(page);
+  await expect(page.getByRole("heading", { name: "Log in to ThesisTrace" }))
+    .toBeVisible();
+  await restoreResearcherSession(page, operator);
+  await refreshOperatorSessionOnBrowserEvent(page);
+  await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
+  expect((await page.request.get("/api/auth/operator/capability")).status()).toBe(200);
+
   const invitationPagination = page.getByRole("navigation", {
     name: "Invitations pagination",
   });
@@ -322,7 +421,11 @@ test("only the singleton Operator can open and read the Operator Console", async
   expect(serializedDirectory).toContain(ordinary.id);
   expect(serializedDirectory).not.toMatch(/token|ip_address|user_agent/i);
 
-  await restoreResearcherSession(page, ordinary);
+  const deniedResearcher = await createResearcher(
+    page,
+    "browser-ordinary-denied@example.test",
+  );
+  await bootstrapResearcher(page, deniedResearcher);
   await page.goto("/data");
   await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Operator", exact: true })).toHaveCount(0);
@@ -342,6 +445,10 @@ test("only the singleton Operator can open and read the Operator Console", async
     [
       "/api/auth/operator/invitations/issue",
       { email: "ordinary-denied@example.test", proof: oldConsoleToken },
+    ],
+    [
+      "/api/auth/operator/researchers/sessions/revoke",
+      { proof: oldConsoleToken, researcher_id: deniedResearcher.id },
     ],
   ] as const) {
     const deniedMutation = await page.request.post(path, {
@@ -367,4 +474,36 @@ async function bootstrapResearcher(
   });
   expect(response.status()).toBe(200);
   expect(await response.json()).toMatchObject({ researcher_id: researcher.id });
+}
+
+async function refreshRevokedSessionOnBrowserEvent(page: Page): Promise<void> {
+  const sessionResponse = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/auth/get-session",
+  );
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const response = await sessionResponse;
+  expect(response.ok()).toBe(true);
+  expect(await response.json()).toBeNull();
+  await nextAnimationFrame(page);
+}
+
+async function refreshOperatorSessionOnBrowserEvent(page: Page): Promise<void> {
+  const sessionResponse = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/auth/get-session",
+  );
+  const capabilityResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/auth/operator/capability",
+  );
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  const responses = await Promise.all([sessionResponse, capabilityResponse]);
+  expect(responses[0].ok()).toBe(true);
+  expect(responses[1].status()).toBe(200);
+  await nextAnimationFrame(page);
+}
+
+async function nextAnimationFrame(page: Page): Promise<void> {
+  await page.evaluate(
+    () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())),
+  );
 }

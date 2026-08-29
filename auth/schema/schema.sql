@@ -85,7 +85,8 @@ CREATE TABLE auth.operator_proof (
     CONSTRAINT operator_proof_operation_check CHECK (
         operation = ANY (ARRAY[
             'invitation.issue'::text,
-            'invitation.reissue'::text
+            'invitation.reissue'::text,
+            'researcher.sessions.revoke'::text
         ])
     ),
     CONSTRAINT operator_proof_state_check CHECK (

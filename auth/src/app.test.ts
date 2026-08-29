@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { ResearcherNotFoundError } from "./access.js";
 import { createAuthApp, type AuthAppDependencies } from "./app.js";
 import {
   InvitationRejectedError,
@@ -14,6 +15,7 @@ import {
   OperatorPasswordInvalidError,
   OperatorProofInvalidError,
 } from "./operator-proof.js";
+import { OperatorSessionTargetProtectedError } from "./operator-session-revocation.js";
 
 const activeSession = {
   session: { id: "00000000-0000-4000-8000-000000000010" },
@@ -77,6 +79,11 @@ function dependencies(
       email: input.email,
       invitationId: "00000000-0000-4000-8000-000000000042",
       status: "delivered" as const,
+    })),
+    revokeOperatorResearcherSessions: vi.fn(async (_principal, input) => ({
+      researcherId: input.researcherId,
+      revokedSessionCount: 2,
+      status: "updated" as const,
     })),
     resetPassword: vi.fn(async () => undefined),
     ...overrides,
@@ -387,6 +394,148 @@ describe("Auth HTTP boundary", () => {
       expect(await response.json()).toEqual({ code: "AUTH_RATE_LIMITED" });
       expect(appDependencies.inspectInvitation).not.toHaveBeenCalled();
       expect(appDependencies.acceptInvitation).not.toHaveBeenCalled();
+    },
+  );
+
+  it("confirms one target-bound Session proof and never forwards its password", async () => {
+    const appDependencies = dependencies();
+    const app = createAuthApp(appDependencies);
+    const password = "correct-horse-battery-staple";
+    const researcherId = "00000000-0000-4000-8000-000000000002";
+    const confirmation = await app.request(
+      "http://auth.test/api/auth/operator/proofs",
+      {
+        body: JSON.stringify({
+          operation: "researcher.sessions.revoke",
+          password,
+          researcher_id: researcherId,
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: "operator=fake",
+          origin: "http://auth.test",
+        },
+        method: "POST",
+      },
+    );
+
+    expect(confirmation.status).toBe(200);
+    expect(appDependencies.confirmOperatorProof).toHaveBeenCalledWith(
+      {
+        researcherId: "00000000-0000-4000-8000-000000000001",
+        sessionId: "00000000-0000-4000-8000-000000000010",
+      },
+      {
+        operation: "researcher.sessions.revoke",
+        password,
+        researcherId,
+      },
+    );
+
+    const mutation = await app.request(
+      "http://auth.test/api/auth/operator/researchers/sessions/revoke",
+      {
+        body: JSON.stringify({
+          proof: opaqueInvitationToken,
+          researcher_id: researcherId,
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: "operator=fake",
+          origin: "http://auth.test",
+        },
+        method: "POST",
+      },
+    );
+
+    expect(mutation.status).toBe(200);
+    expect(await mutation.json()).toEqual({
+      researcher_id: researcherId,
+      revoked_session_count: 2,
+      status: "updated",
+    });
+    expect(appDependencies.revokeOperatorResearcherSessions).toHaveBeenCalledWith(
+      {
+        researcherId: "00000000-0000-4000-8000-000000000001",
+        sessionId: "00000000-0000-4000-8000-000000000010",
+      },
+      { proof: opaqueInvitationToken, researcherId },
+    );
+    expect(
+      JSON.stringify(
+        vi.mocked(appDependencies.revokeOperatorResearcherSessions).mock.calls,
+      ),
+    ).not.toContain(password);
+  });
+
+  it("rejects a non-exact Session revocation before mutation", async () => {
+    const appDependencies = dependencies();
+    const response = await createAuthApp(appDependencies).request(
+      "http://auth.test/api/auth/operator/researchers/sessions/revoke",
+      {
+        body: JSON.stringify({
+          password: "must-not-cross-this-boundary",
+          proof: opaqueInvitationToken,
+          researcher_id: "00000000-0000-4000-8000-000000000002",
+        }),
+        headers: {
+          "content-type": "application/json",
+          origin: "http://auth.test",
+        },
+        method: "POST",
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "OPERATOR_REQUEST_INVALID" });
+    expect(appDependencies.revokeOperatorResearcherSessions).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "invalid proof",
+      new OperatorProofInvalidError(),
+      400,
+      "OPERATOR_PROOF_INVALID",
+    ],
+    [
+      "protected target",
+      new OperatorSessionTargetProtectedError(),
+      409,
+      "OPERATOR_SESSION_TARGET_PROTECTED",
+    ],
+    [
+      "stale target",
+      new ResearcherNotFoundError(),
+      409,
+      "OPERATOR_SESSION_TARGET_INVALID",
+    ],
+  ] as const)(
+    "sanitizes a %s Session revocation",
+    async (_case, error, status, code) => {
+      const response = await createAuthApp(
+        dependencies({
+          revokeOperatorResearcherSessions: vi.fn(async () => {
+            throw error;
+          }),
+        }),
+      ).request(
+        "http://auth.test/api/auth/operator/researchers/sessions/revoke",
+        {
+          body: JSON.stringify({
+            proof: opaqueInvitationToken,
+            researcher_id: "00000000-0000-4000-8000-000000000002",
+          }),
+          headers: {
+            "content-type": "application/json",
+            origin: "http://auth.test",
+          },
+          method: "POST",
+        },
+      );
+
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual({ code });
     },
   );
 
@@ -837,6 +986,7 @@ describe("Auth HTTP boundary", () => {
       "/api/auth/operator/proofs",
       "/api/auth/operator/invitations/issue",
       "/api/auth/operator/invitations/reissue",
+      "/api/auth/operator/researchers/sessions/revoke",
     ]) {
       const response = await app.request(`http://auth.test${path}`, {
         body: JSON.stringify({}),

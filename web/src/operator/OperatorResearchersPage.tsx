@@ -12,6 +12,10 @@ import {
 } from "./operatorDirectoryClient";
 import { OperatorInvitationDialog } from "./OperatorInvitationDialog";
 import type { InvitationMutationOperation } from "./operatorMutationClient";
+import {
+  OperatorSessionRevocationDialog,
+  type SessionRevocationTarget,
+} from "./OperatorSessionRevocationDialog";
 
 type InvitationAction = Readonly<{
   email: string;
@@ -22,7 +26,9 @@ const inviteResearcherButtonId = "operator-invite-researcher";
 const operatorRetryButtonId = "operator-console-retry";
 const operatorPageFallbackId = "operator-console-focus-fallback";
 
-export function OperatorResearchersPage() {
+export function OperatorResearchersPage({ operatorResearcherId }: Readonly<{
+  operatorResearcherId: string;
+}>) {
   const [researchers, setResearchers] = useState<OperatorPage<OperatorResearcher> | null>(null);
   const [invitations, setInvitations] = useState<OperatorPage<OperatorInvitation> | null>(null);
   const [search, setSearch] = useState("");
@@ -33,8 +39,11 @@ export function OperatorResearchersPage() {
   const [reloadGeneration, setReloadGeneration] = useState(0);
   const [state, setState] = useState<"loading" | "not-found" | "ready" | "unavailable">("loading");
   const [invitationAction, setInvitationAction] = useState<InvitationAction | null>(null);
+  const [sessionTarget, setSessionTarget] = useState<SessionRevocationTarget | null>(null);
   const [mutationNotice, setMutationNotice] = useState<string | null>(null);
+  const [sessionMutationNotice, setSessionMutationNotice] = useState<string | null>(null);
   const mutationFocusTargetId = useRef<string | null>(null);
+  const mutationFocusFallbackId = useRef<string>(inviteResearcherButtonId);
   const restoreMutationFocusAfterLoad = useRef(false);
 
   const load = useCallback(async (signal: AbortSignal) => {
@@ -67,7 +76,10 @@ export function OperatorResearchersPage() {
     if (state === "loading" || !restoreMutationFocusAfterLoad.current) return;
     restoreMutationFocusAfterLoad.current = false;
     const frame = window.requestAnimationFrame(() => {
-      restoreMutationFocus(mutationFocusTargetId.current);
+      restoreMutationFocus(
+        mutationFocusTargetId.current,
+        mutationFocusFallbackId.current,
+      );
     });
     return () => window.cancelAnimationFrame(frame);
   }, [state]);
@@ -94,7 +106,10 @@ export function OperatorResearchersPage() {
     }
     restoreMutationFocusAfterLoad.current = false;
     window.requestAnimationFrame(() => {
-      restoreMutationFocus(mutationFocusTargetId.current);
+      restoreMutationFocus(
+        mutationFocusTargetId.current,
+        mutationFocusFallbackId.current,
+      );
     });
   }
 
@@ -103,69 +118,98 @@ export function OperatorResearchersPage() {
     action: InvitationAction,
   ): void {
     mutationFocusTargetId.current = trigger.id || null;
+    mutationFocusFallbackId.current = inviteResearcherButtonId;
     setMutationNotice(null);
     setInvitationAction(action);
+  }
+
+  function closeSessionDialog(afterReload = false): void {
+    setSessionTarget(null);
+    if (afterReload) {
+      restoreMutationFocusAfterLoad.current = true;
+      return;
+    }
+    restoreMutationFocusAfterLoad.current = false;
+    window.requestAnimationFrame(() => {
+      restoreMutationFocus(
+        mutationFocusTargetId.current,
+        mutationFocusFallbackId.current,
+      );
+    });
+  }
+
+  function openSessionDialog(
+    trigger: HTMLButtonElement,
+    target: SessionRevocationTarget,
+  ): void {
+    mutationFocusTargetId.current = trigger.id || null;
+    mutationFocusFallbackId.current = operatorPageFallbackId;
+    setSessionMutationNotice(null);
+    setSessionTarget(target);
   }
 
   return (
     <>
       <OperatorResearchersView
-      invitationCursorDepth={invitationHistory.length}
-      invitations={invitations}
-      mutationNotice={mutationNotice}
-      onInvitationAction={(trigger, action) => {
-        openInvitationDialog(trigger, action);
-      }}
-      onInvitationNext={() => {
-        if (state !== "ready" || invitations === null || invitations.next_cursor === null) {
-          return;
-        }
-        setState("loading");
-        setInvitationHistory((history) => [...history, invitationCursor]);
-        setInvitationCursor(invitations.next_cursor);
-      }}
-      onInvitationPrevious={() => {
-        if (state !== "ready") return;
-        const previous = invitationHistory.at(-1);
-        if (previous === undefined) return;
-        setState("loading");
-        setInvitationHistory((history) => history.slice(0, -1));
-        setInvitationCursor(previous);
-      }}
-      onResearcherNext={() => {
-        if (state !== "ready" || researchers === null || researchers.next_cursor === null) {
-          return;
-        }
-        setState("loading");
-        setResearcherHistory((history) => [...history, researcherCursor]);
-        setResearcherCursor(researchers.next_cursor);
-      }}
-      onResearcherPrevious={() => {
-        if (state !== "ready") return;
-        const previous = researcherHistory.at(-1);
-        if (previous === undefined) return;
-        setState("loading");
-        setResearcherHistory((history) => history.slice(0, -1));
-        setResearcherCursor(previous);
-      }}
-      onRetry={() => {
-        if (state === "loading") return;
-        setState("loading");
-        setReloadGeneration((value) => value + 1);
-      }}
-      onSearch={(value) => {
-        if (state !== "ready") return;
-        const reloadCurrent = value === search && researcherCursor === null;
-        setState("loading");
-        setSearch(value);
-        setResearcherCursor(null);
-        setResearcherHistory([]);
-        if (reloadCurrent) setReloadGeneration((generation) => generation + 1);
-      }}
-      researcherCursorDepth={researcherHistory.length}
-      researchers={researchers}
-      search={search}
-      state={state}
+        invitationCursorDepth={invitationHistory.length}
+        invitations={invitations}
+        mutationNotice={mutationNotice}
+        operatorResearcherId={operatorResearcherId}
+        onInvitationAction={(trigger, action) => {
+          openInvitationDialog(trigger, action);
+        }}
+        onInvitationNext={() => {
+          if (state !== "ready" || invitations === null || invitations.next_cursor === null) {
+            return;
+          }
+          setState("loading");
+          setInvitationHistory((history) => [...history, invitationCursor]);
+          setInvitationCursor(invitations.next_cursor);
+        }}
+        onInvitationPrevious={() => {
+          if (state !== "ready") return;
+          const previous = invitationHistory.at(-1);
+          if (previous === undefined) return;
+          setState("loading");
+          setInvitationHistory((history) => history.slice(0, -1));
+          setInvitationCursor(previous);
+        }}
+        onResearcherNext={() => {
+          if (state !== "ready" || researchers === null || researchers.next_cursor === null) {
+            return;
+          }
+          setState("loading");
+          setResearcherHistory((history) => [...history, researcherCursor]);
+          setResearcherCursor(researchers.next_cursor);
+        }}
+        onResearcherPrevious={() => {
+          if (state !== "ready") return;
+          const previous = researcherHistory.at(-1);
+          if (previous === undefined) return;
+          setState("loading");
+          setResearcherHistory((history) => history.slice(0, -1));
+          setResearcherCursor(previous);
+        }}
+        onSessionRevocation={openSessionDialog}
+        onRetry={() => {
+          if (state === "loading") return;
+          setState("loading");
+          setReloadGeneration((value) => value + 1);
+        }}
+        onSearch={(value) => {
+          if (state !== "ready") return;
+          const reloadCurrent = value === search && researcherCursor === null;
+          setState("loading");
+          setSearch(value);
+          setResearcherCursor(null);
+          setResearcherHistory([]);
+          if (reloadCurrent) setReloadGeneration((generation) => generation + 1);
+        }}
+        researcherCursorDepth={researcherHistory.length}
+        researchers={researchers}
+        search={search}
+        sessionMutationNotice={sessionMutationNotice}
+        state={state}
       />
       {invitationAction === null ? null : (
         <OperatorInvitationDialog
@@ -186,6 +230,24 @@ export function OperatorResearchersPage() {
           operation={invitationAction.operation}
         />
       )}
+      {sessionTarget === null ? null : (
+        <OperatorSessionRevocationDialog
+          onDismiss={closeSessionDialog}
+          onSucceeded={({ revokedSessionCount }) => {
+            setSessionMutationNotice(
+              `Revoked ${revokedSessionCount} Login ${
+                revokedSessionCount === 1 ? "Session" : "Sessions"
+              } for ${sessionTarget.email}.`,
+            );
+            setResearcherCursor(null);
+            setResearcherHistory([]);
+            setState("loading");
+            setReloadGeneration((value) => value + 1);
+            closeSessionDialog(true);
+          }}
+          target={sessionTarget}
+        />
+      )}
     </>
   );
 }
@@ -194,21 +256,25 @@ export function OperatorResearchersView({
   invitationCursorDepth,
   invitations,
   mutationNotice,
+  operatorResearcherId,
   onInvitationAction,
   onInvitationNext,
   onInvitationPrevious,
   onResearcherNext,
   onResearcherPrevious,
+  onSessionRevocation,
   onRetry,
   onSearch,
   researcherCursorDepth,
   researchers,
   search,
+  sessionMutationNotice,
   state = "ready",
 }: Readonly<{
   invitationCursorDepth: number;
   invitations: OperatorPage<OperatorInvitation> | null;
   mutationNotice?: string | null;
+  operatorResearcherId: string;
   onInvitationAction?: (
     trigger: HTMLButtonElement,
     action: InvitationAction,
@@ -217,11 +283,16 @@ export function OperatorResearchersView({
   onInvitationPrevious: () => void;
   onResearcherNext: () => void;
   onResearcherPrevious: () => void;
+  onSessionRevocation?: (
+    trigger: HTMLButtonElement,
+    target: SessionRevocationTarget,
+  ) => void;
   onRetry?: () => void;
   onSearch: (value: string) => void;
   researcherCursorDepth: number;
   researchers: OperatorPage<OperatorResearcher> | null;
   search: string;
+  sessionMutationNotice?: string | null;
   state?: "loading" | "ready" | "unavailable";
 }>) {
   const [draft, setDraft] = useState(search);
@@ -283,7 +354,20 @@ export function OperatorResearchersView({
             </div>
           </form>
         </header>
-        <ResearcherTable items={researchers?.items ?? null} state={state} />
+        {sessionMutationNotice === null || sessionMutationNotice === undefined
+          ? null
+          : (
+              <p aria-live="polite" className="inline-status" role="status">
+                {sessionMutationNotice}
+              </p>
+            )}
+        <ResearcherTable
+          disabled={state !== "ready"}
+          items={researchers?.items ?? null}
+          onRevoke={onSessionRevocation}
+          operatorResearcherId={operatorResearcherId}
+          state={state}
+        />
         <Pagination
           disabled={state !== "ready" || researchers === null}
           depth={researcherCursorDepth}
@@ -373,8 +457,20 @@ function OperatorLoadState({ hasData, onRetry, state }: Readonly<{
   );
 }
 
-function ResearcherTable({ items, state }: Readonly<{
+function ResearcherTable({
+  disabled,
+  items,
+  onRevoke,
+  operatorResearcherId,
+  state,
+}: Readonly<{
+  disabled: boolean;
   items: readonly OperatorResearcher[] | null;
+  onRevoke?: (
+    trigger: HTMLButtonElement,
+    target: SessionRevocationTarget,
+  ) => void;
+  operatorResearcherId: string;
   state: "loading" | "ready" | "unavailable";
 }>) {
   if (items === null) {
@@ -398,6 +494,7 @@ function ResearcherTable({ items, state }: Readonly<{
             <th scope="col">Latest login</th>
             <th scope="col">Current sessions</th>
             <th scope="col">Effective invitation</th>
+            {onRevoke === undefined ? null : <th scope="col">Session action</th>}
           </tr>
         </thead>
         <tbody>
@@ -432,6 +529,31 @@ function ResearcherTable({ items, state }: Readonly<{
                   </span>
                 )}
               </td>
+              {onRevoke === undefined ? null : (
+                <td data-label="Session action">
+                  {researcher.researcher_id === operatorResearcherId ? (
+                    <span className="operator-muted">Current Operator</span>
+                  ) : researcher.current_session_count === 0 ? (
+                    <span className="operator-muted">No active Sessions</span>
+                  ) : (
+                    <button
+                      aria-label={`Revoke ${researcher.current_session_count} Login Sessions for ${researcher.email}`}
+                      className="button-quiet operator-row-action"
+                      disabled={disabled}
+                      id={`operator-session-revoke-${researcher.researcher_id}`}
+                      onClick={(event) => onRevoke(event.currentTarget, {
+                        currentSessionCount: researcher.current_session_count,
+                        displayLabel: researcher.display_label,
+                        email: researcher.email,
+                        researcherId: researcher.researcher_id,
+                      })}
+                      type="button"
+                    >
+                      Revoke sessions
+                    </button>
+                  )}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -553,9 +675,12 @@ function formatTimestamp(value: string): string {
   }).format(new Date(value));
 }
 
-function restoreMutationFocus(targetId: string | null): void {
+function restoreMutationFocus(
+  targetId: string | null,
+  fallbackId: string,
+): void {
   const target = focusableElement(targetId)
-    ?? focusableElement(inviteResearcherButtonId)
+    ?? focusableElement(fallbackId)
     ?? focusableElement(operatorRetryButtonId)
     ?? document.getElementById(operatorPageFallbackId);
   target?.focus();

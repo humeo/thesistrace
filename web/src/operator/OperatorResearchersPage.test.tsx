@@ -31,6 +31,13 @@ const researcher = {
   latest_successful_login_at: "2026-08-28T09:00:00.000Z",
   researcher_id: "00000000-0000-4000-8000-000000000001",
 } as const;
+const otherResearcher = {
+  ...researcher,
+  display_label: "Session Target",
+  effective_invitation: null,
+  email: "target@example.com",
+  researcher_id: "00000000-0000-4000-8000-000000000002",
+} as const;
 
 describe("Operator Researcher view", () => {
   it("decodes only the bounded read contract", () => {
@@ -53,19 +60,21 @@ describe("Operator Researcher view", () => {
     })).toThrow("Operator Invitation response is invalid");
   });
 
-  it("renders dense read-only Researcher and Invitation tables", () => {
+  it("renders Session revocation only for another Researcher with Sessions", () => {
     const markup = renderToStaticMarkup(
       <OperatorResearchersView
         invitationCursorDepth={0}
         invitations={{ items: [invitation], next_cursor: null }}
+        operatorResearcherId={researcher.researcher_id}
         onInvitationNext={() => undefined}
         onInvitationPrevious={() => undefined}
         onInvitationAction={() => undefined}
         onResearcherNext={() => undefined}
         onResearcherPrevious={() => undefined}
+        onSessionRevocation={() => undefined}
         onSearch={() => undefined}
         researcherCursorDepth={0}
-        researchers={{ items: [researcher], next_cursor: null }}
+        researchers={{ items: [researcher, otherResearcher], next_cursor: null }}
         search=""
       />,
     );
@@ -80,7 +89,15 @@ describe("Operator Researcher view", () => {
     expect(markup).toContain('aria-label="Search researchers"');
     expect(markup).toContain("Invite Researcher");
     expect(markup).toContain("Reissue");
-    expect(markup).not.toMatch(/Revoke|Deactivate|Export|IP address|User-Agent/);
+    expect(markup).toContain("Current Operator");
+    expect(markup).toContain("Revoke sessions");
+    expect(markup).toContain(
+      `aria-label="Revoke 2 Login Sessions for ${otherResearcher.email}"`,
+    );
+    expect(markup).not.toContain(
+      `aria-label="Revoke 2 Login Sessions for ${researcher.email}"`,
+    );
+    expect(markup).not.toMatch(/Deactivate|Export|IP address|User-Agent/);
   });
 
   it("keeps the directory visible and disables every control while refreshing", () => {
@@ -88,13 +105,15 @@ describe("Operator Researcher view", () => {
       <OperatorResearchersView
         invitationCursorDepth={1}
         invitations={{ items: [invitation], next_cursor: "invitation-next" }}
+        operatorResearcherId={researcher.researcher_id}
         onInvitationNext={() => undefined}
         onInvitationPrevious={() => undefined}
         onResearcherNext={() => undefined}
         onResearcherPrevious={() => undefined}
+        onSessionRevocation={() => undefined}
         onSearch={() => undefined}
         researcherCursorDepth={1}
-        researchers={{ items: [researcher], next_cursor: "researcher-next" }}
+        researchers={{ items: [researcher, otherResearcher], next_cursor: "researcher-next" }}
         search=""
         state="loading"
       />,
@@ -104,6 +123,6 @@ describe("Operator Researcher view", () => {
     expect(markup).toContain("Refreshing Operator Console…");
     expect(markup).toContain("Research Lead");
     expect(markup).toContain("researcher@example.com");
-    expect(markup.match(/disabled=""/g)).toHaveLength(6);
+    expect(markup.match(/disabled=""/g)).toHaveLength(7);
   });
 });

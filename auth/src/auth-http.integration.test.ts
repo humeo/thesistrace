@@ -1,6 +1,7 @@
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
+import { ResearcherAccessService } from "./access.js";
 import { createAuthApp } from "./app.js";
 import {
   createThesisTraceAuth,
@@ -17,6 +18,8 @@ import { createAuthCoordinationPool, createAuthPool } from "./database.js";
 import { InvitationRejectedError } from "./invitation.js";
 import { OperatorAssignmentService } from "./operator-assignment.js";
 import { OperatorDirectoryService } from "./operator-directory.js";
+import { OperatorProofService } from "./operator-proof.js";
+import { OperatorSessionRevocationService } from "./operator-session-revocation.js";
 import { checkAuthReadiness } from "./readiness.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
 import { verifyAuthSchema } from "./schema-contract.js";
@@ -218,6 +221,309 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       });
       expect(response.status).toBe(404);
       expect(await response.text()).toBe("");
+    }
+  });
+
+  it("revokes another Researcher's real Sessions while preserving Operator access", async () => {
+    const { app, auth } = runtime();
+    const operatorCookie = await createSessionCookie(
+      auth,
+      "operator-revoke@example.com",
+      "192.0.2.111",
+    );
+    const operator = await persistedPrincipal("operator-revoke@example.com");
+    await new OperatorAssignmentService({ pool: runtimePool }).assign({
+      researcherId: operator.researcherId,
+    });
+    const targetCookie = await createSessionCookie(
+      auth,
+      "target-revoke@example.com",
+      "192.0.2.112",
+    );
+    const target = await persistedPrincipal("target-revoke@example.com");
+    const targetSecondSignIn = await app.request(
+      `${settings.publicOrigin}/api/auth/sign-in/email`,
+      {
+        body: JSON.stringify({
+          email: "target-revoke@example.com",
+          password: "correct-horse-battery-staple",
+        }),
+        headers: {
+          "content-type": "application/json",
+          origin: settings.publicOrigin,
+          "x-thesistrace-client-ip": "192.0.2.113",
+        },
+        method: "POST",
+      },
+    );
+    const targetSecondCookie = targetSecondSignIn.headers.get("set-cookie") ?? "";
+    const ordinaryCookie = await createSessionCookie(
+      auth,
+      "ordinary-revoke@example.com",
+      "192.0.2.114",
+    );
+    expect(targetSecondSignIn.status).toBe(200);
+
+    const confirmation = await app.request(
+      `${settings.publicOrigin}/api/auth/operator/proofs`,
+      {
+        body: JSON.stringify({
+          operation: "researcher.sessions.revoke",
+          password: "correct-horse-battery-staple",
+          researcher_id: target.researcherId,
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: operatorCookie,
+          origin: settings.publicOrigin,
+        },
+        method: "POST",
+      },
+    );
+    expect(confirmation.status).toBe(200);
+    const proof = (await confirmation.json()) as { proof: string };
+    const revoked = await app.request(
+      `${settings.publicOrigin}/api/auth/operator/researchers/sessions/revoke`,
+      {
+        body: JSON.stringify({
+          proof: proof.proof,
+          researcher_id: target.researcherId,
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: operatorCookie,
+          origin: settings.publicOrigin,
+        },
+        method: "POST",
+      },
+    );
+
+    expect(revoked.status).toBe(200);
+    expect(await revoked.json()).toEqual({
+      researcher_id: target.researcherId,
+      revoked_session_count: 2,
+      status: "updated",
+    });
+    for (const cookie of [targetCookie, targetSecondCookie]) {
+      const response = await app.request(
+        `${settings.publicOrigin}/internal/session/verify`,
+        { headers: { cookie }, method: "POST" },
+      );
+      expect(response.status).toBe(401);
+    }
+    expect((await app.request(
+      `${settings.publicOrigin}/api/auth/operator/capability`,
+      { headers: { cookie: operatorCookie } },
+    )).status).toBe(200);
+
+    const selfConfirmation = await app.request(
+      `${settings.publicOrigin}/api/auth/operator/proofs`,
+      {
+        body: JSON.stringify({
+          operation: "researcher.sessions.revoke",
+          password: "correct-horse-battery-staple",
+          researcher_id: operator.researcherId,
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: operatorCookie,
+          origin: settings.publicOrigin,
+        },
+        method: "POST",
+      },
+    );
+    const selfProof = (await selfConfirmation.json()) as { proof: string };
+    const protectedResponse = await app.request(
+      `${settings.publicOrigin}/api/auth/operator/researchers/sessions/revoke`,
+      {
+        body: JSON.stringify({
+          proof: selfProof.proof,
+          researcher_id: operator.researcherId,
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: operatorCookie,
+          origin: settings.publicOrigin,
+        },
+        method: "POST",
+      },
+    );
+    expect(protectedResponse.status).toBe(409);
+    expect((await owner.query<{ count: string }>(
+      'SELECT count(*) FROM auth."session" WHERE "userId" = $1',
+      [operator.researcherId],
+    )).rows).toEqual([{ count: "1" }]);
+
+    const denied = await app.request(
+      `${settings.publicOrigin}/api/auth/operator/researchers/sessions/revoke`,
+      {
+        body: JSON.stringify({}),
+        headers: {
+          "content-type": "application/json",
+          cookie: ordinaryCookie,
+          origin: "https://attacker.example",
+        },
+        method: "POST",
+      },
+    );
+    expect(denied.status).toBe(404);
+    expect(await denied.text()).toBe("");
+  });
+
+  it("revokes the Session produced by an already-running HTTP sign-in", async () => {
+    const { app, auth } = runtime();
+    const operatorCookie = await createSessionCookie(
+      auth,
+      "operator-linearized-revoke@example.com",
+      "192.0.2.115",
+    );
+    const operator = await persistedPrincipal(
+      "operator-linearized-revoke@example.com",
+    );
+    await new OperatorAssignmentService({ pool: runtimePool }).assign({
+      researcherId: operator.researcherId,
+    });
+    await createSessionCookie(
+      auth,
+      "target-linearized-revoke@example.com",
+      "192.0.2.116",
+    );
+    const target = await persistedPrincipal(
+      "target-linearized-revoke@example.com",
+    );
+    await owner.query('DELETE FROM auth."session" WHERE "userId" = $1', [
+      target.researcherId,
+    ]);
+    const confirmation = await app.request(
+      `${settings.publicOrigin}/api/auth/operator/proofs`,
+      {
+        body: JSON.stringify({
+          operation: "researcher.sessions.revoke",
+          password: "correct-horse-battery-staple",
+          researcher_id: target.researcherId,
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: operatorCookie,
+          origin: settings.publicOrigin,
+        },
+        method: "POST",
+      },
+    );
+    expect(confirmation.status).toBe(200);
+    const proof = (await confirmation.json()) as { proof: string };
+    const blocker = await owner.connect();
+    const insertHoldKey = "operator-revoke-sign-in-insert-hold";
+    let signingIn: Promise<Response> | undefined;
+    let revoking: Promise<Response> | undefined;
+    try {
+      await blocker.query(
+        "SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtextextended($1, 0))",
+        [insertHoldKey],
+      );
+      await owner.query(`
+        CREATE FUNCTION auth.test_hold_operator_revoke_session_insert()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $function$
+        BEGIN
+          PERFORM pg_catalog.pg_advisory_xact_lock(
+            pg_catalog.hashtextextended('${insertHoldKey}', 0)
+          );
+          RETURN NEW;
+        END;
+        $function$;
+        CREATE TRIGGER test_hold_operator_revoke_session_insert
+        BEFORE INSERT ON auth."session"
+        FOR EACH ROW
+        EXECUTE FUNCTION auth.test_hold_operator_revoke_session_insert()
+      `);
+
+      const startedSignIn = Promise.resolve(app.request(
+        `${settings.publicOrigin}/api/auth/sign-in/email`,
+        {
+          body: JSON.stringify({
+            email: "target-linearized-revoke@example.com",
+            password: "correct-horse-battery-staple",
+          }),
+          headers: {
+            "content-type": "application/json",
+            origin: settings.publicOrigin,
+            "x-thesistrace-client-ip": "192.0.2.117",
+          },
+          method: "POST",
+        },
+      ));
+      signingIn = startedSignIn;
+      void startedSignIn.catch(() => undefined);
+      await waitForCondition(() => hasAdvisoryWaiter("thesistrace_auth"));
+
+      const startedRevocation = Promise.resolve(app.request(
+        `${settings.publicOrigin}/api/auth/operator/researchers/sessions/revoke`,
+        {
+          body: JSON.stringify({
+            proof: proof.proof,
+            researcher_id: target.researcherId,
+          }),
+          headers: {
+            "content-type": "application/json",
+            cookie: operatorCookie,
+            origin: settings.publicOrigin,
+          },
+          method: "POST",
+        },
+      ));
+      revoking = startedRevocation;
+      void startedRevocation.catch(() => undefined);
+      await waitForCondition(async () => {
+        const result = await owner.query<{ state: string }>(
+          "SELECT state FROM auth.operator_proof",
+        );
+        return result.rows[0]?.state === "claimed";
+      });
+
+      await blocker.query(
+        "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended($1, 0))",
+        [insertHoldKey],
+      );
+      const [signInResponse, revocationResponse] = await Promise.all([
+        startedSignIn,
+        startedRevocation,
+      ]);
+      const targetCookie = signInResponse.headers.get("set-cookie") ?? "";
+
+      expect(signInResponse.status).toBe(200);
+      expect(revocationResponse.status).toBe(200);
+      expect(await revocationResponse.json()).toEqual({
+        researcher_id: target.researcherId,
+        revoked_session_count: 1,
+        status: "updated",
+      });
+      expect((await app.request(
+        `${settings.publicOrigin}/internal/session/verify`,
+        { headers: { cookie: targetCookie }, method: "POST" },
+      )).status).toBe(401);
+      expect((await app.request(
+        `${settings.publicOrigin}/api/auth/operator/capability`,
+        { headers: { cookie: operatorCookie } },
+      )).status).toBe(200);
+    } finally {
+      await blocker
+        .query(
+          "SELECT pg_catalog.pg_advisory_unlock(pg_catalog.hashtextextended($1, 0))",
+          [insertHoldKey],
+        )
+        .catch(() => undefined);
+      blocker.release();
+      await Promise.allSettled([
+        signingIn ?? Promise.resolve(),
+        revoking ?? Promise.resolve(),
+      ]);
+      await owner.query(`
+        DROP TRIGGER IF EXISTS test_hold_operator_revoke_session_insert
+          ON auth."session";
+        DROP FUNCTION IF EXISTS auth.test_hold_operator_revoke_session_insert()
+      `);
     }
   });
 
@@ -772,6 +1078,16 @@ function runtime() {
     authSecret: settings.secret,
     pool: runtimePool,
   });
+  const operatorProofs = new OperatorProofService({ pool: runtimePool });
+  const researcherAccess = new ResearcherAccessService({
+    authSecret: settings.secret,
+    credentialCoordinator,
+    pool: runtimePool,
+  });
+  const operatorSessionRevocations = new OperatorSessionRevocationService({
+    access: researcherAccess,
+    proofs: operatorProofs,
+  });
   const app = createAuthApp({
     async acceptInvitation() {
       throw new InvitationRejectedError();
@@ -795,9 +1111,8 @@ function runtime() {
             query: { disableCookieCache: true, disableRefresh: true },
           }),
       ),
-    async confirmOperatorProof() {
-      throw new Error("OPERATOR_PROOF_UNAVAILABLE_IN_HTTP_CONTRACT_HARNESS");
-    },
+    confirmOperatorProof: (principal, input) =>
+      operatorProofs.confirm(principal, input),
     async consumeInvitationRateLimit() {
       return { allowed: true, retryAfterSeconds: 0 };
     },
@@ -825,6 +1140,8 @@ function runtime() {
     async reissueOperatorInvitation() {
       throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_HTTP_CONTRACT_HARNESS");
     },
+    revokeOperatorResearcherSessions: (principal, input) =>
+      operatorSessionRevocations.revoke(principal, input),
     async resetPassword() {
       throw new Error("PASSWORD_RESET_UNAVAILABLE_IN_HTTP_CONTRACT_HARNESS");
     },
@@ -918,6 +1235,32 @@ async function persistedSessionTimes(): Promise<{
     throw new Error("expected one persisted Session");
   }
   return row;
+}
+
+async function hasAdvisoryWaiter(applicationName: string): Promise<boolean> {
+  const result = await owner.query<{ waiting: boolean }>(
+    `
+      SELECT EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_stat_activity
+        WHERE application_name = $1
+          AND wait_event_type = 'Lock'
+      ) AS waiting
+    `,
+    [applicationName],
+  );
+  return result.rows[0]?.waiting === true;
+}
+
+async function waitForCondition(
+  condition: () => Promise<boolean>,
+): Promise<void> {
+  const deadline = performance.now() + 2_000;
+  while (performance.now() < deadline) {
+    if (await condition()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("condition was not reached before its deadline");
 }
 
 function roleDatabaseUrl(base: string, username: string, password: string): string {

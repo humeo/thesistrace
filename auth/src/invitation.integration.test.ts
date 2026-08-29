@@ -299,6 +299,9 @@ describe.sequential("Researcher Invitation lifecycle", () => {
       async reissueOperatorInvitation() {
         throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_INVITATION_HARNESS");
       },
+      async revokeOperatorResearcherSessions() {
+        throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_INVITATION_HARNESS");
+      },
       async resetPassword() {},
     });
 

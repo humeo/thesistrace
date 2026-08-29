@@ -6,7 +6,11 @@ import {
   type AuthLifecycleDependencies,
 } from "./auth.js";
 import type { AuthSettings } from "./config.js";
-import { createAuthPool } from "./database.js";
+import {
+  AuthOperationCoordinator,
+  CredentialOperationCoordinator,
+} from "./coordination.js";
+import { createAuthCoordinationPool, createAuthPool } from "./database.js";
 import {
   OperatorDeactivationRejectedError,
   ResearcherAccessService,
@@ -28,6 +32,7 @@ const authRuntimeDatabaseUrl = roleDatabaseUrl(
 );
 const owner = new Pool({ connectionString: ownerDatabaseUrl, max: 2 });
 const runtimePool = createAuthPool(authRuntimeDatabaseUrl);
+const coordinationPool = createAuthCoordinationPool(authRuntimeDatabaseUrl);
 const settings: AuthSettings = {
   databaseUrl: authRuntimeDatabaseUrl,
   environment: "test",
@@ -41,6 +46,11 @@ const settings: AuthSettings = {
   secureCookies: false,
 };
 const fixedNow = new Date("2026-08-28T06:00:00.000Z");
+const credentialCoordinator = new CredentialOperationCoordinator({
+  authSecret: settings.secret,
+  coordination: new AuthOperationCoordinator(coordinationPool),
+  pool: runtimePool,
+});
 const invitationAdmission = new InvitationAdmission();
 const lifecycle: AuthLifecycleDependencies = {
   backgroundTask(promise) {
@@ -81,7 +91,7 @@ describe.sequential("Auth operator access lifecycle", () => {
   });
 
   afterAll(async () => {
-    await runtimePool.end();
+    await Promise.all([coordinationPool.end(), runtimePool.end()]);
     await owner.query("DROP SCHEMA IF EXISTS auth CASCADE");
     await owner.end();
   });
@@ -307,6 +317,7 @@ function service(): ResearcherAccessService {
   return new ResearcherAccessService({
     authSecret: settings.secret,
     clock: () => fixedNow,
+    credentialCoordinator,
     pool: runtimePool,
   });
 }

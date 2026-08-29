@@ -8,7 +8,7 @@ import {
 import type { OperatorPrincipal } from "./operator-directory.js";
 import {
   OperatorProofInvalidError,
-  type OperatorProofOperation,
+  type OperatorInvitationProofOperation,
   type OperatorProofService,
 } from "./operator-proof.js";
 
@@ -45,7 +45,7 @@ export class OperatorInvitationService {
 
   async #run(
     principal: OperatorPrincipal,
-    operation: OperatorProofOperation,
+    operation: OperatorInvitationProofOperation,
     input: Readonly<{ email: string; proof: string }>,
   ): Promise<InvitationIssueResult> {
     const claim = await this.#proofs.claim(principal, {

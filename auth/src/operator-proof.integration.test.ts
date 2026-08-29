@@ -27,6 +27,7 @@ const runtimePool = createAuthPool(runtimeDatabaseUrl);
 const operatorId = "00000000-0000-4000-8000-000000000001";
 const operatorSessionId = "00000000-0000-4000-8000-000000000011";
 const secondSessionId = "00000000-0000-4000-8000-000000000012";
+const targetResearcherId = "00000000-0000-4000-8000-000000000002";
 const password = "correct-horse-battery-staple";
 let now = new Date("2026-08-29T06:00:00.000Z");
 let nextProofId = 100;
@@ -125,6 +126,38 @@ describe.sequential("Auth Operator Proof", () => {
         proof: confirmed.proof,
       }),
     ).rejects.toEqual(new OperatorProofInvalidError());
+  });
+
+  it("binds Session revocation to one exact Researcher UUID", async () => {
+    const proofService = service();
+    const confirmed = await proofService.confirm(principal(), {
+      operation: "researcher.sessions.revoke",
+      password,
+      researcherId: targetResearcherId,
+    });
+
+    await expect(
+      proofService.claim(principal(), {
+        operation: "researcher.sessions.revoke",
+        proof: confirmed.proof,
+        researcherId: "00000000-0000-4000-8000-000000000003",
+      }),
+    ).rejects.toEqual(new OperatorProofInvalidError());
+    const claim = await proofService.claim(principal(), {
+      operation: "researcher.sessions.revoke",
+      proof: confirmed.proof,
+      researcherId: targetResearcherId,
+    });
+    await transaction(async (client) => {
+      await expect(proofService.consumeClaim(client, claim)).resolves.toBe(true);
+    });
+    expect(
+      await owner.query<{ operation: string; state: string }>(
+        "SELECT operation, state FROM auth.operator_proof",
+      ),
+    ).toMatchObject({
+      rows: [{ operation: "researcher.sessions.revoke", state: "consumed" }],
+    });
   });
 
   it("starts the lifetime after credential locking and rejects expiry reached behind a proof lock", async () => {

@@ -426,7 +426,7 @@ select { color-scheme: dark; }
 .operator-search input { padding-left: 34px; }
 .operator-table-scroll { width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; }
 .operator-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-.operator-researcher-table { min-width: 1120px; }
+.operator-researcher-table { min-width: 1260px; }
 .operator-invitation-table { min-width: 1060px; }
 .operator-table th,
 .operator-table td {
@@ -486,6 +486,7 @@ select { color-scheme: dark; }
 .operator-confirmation-dialog::backdrop { background: rgb(0 0 0 / 72%); }
 .operator-confirmation-content { display: grid; gap: 18px; padding: 24px; }
 .operator-confirmation-content header { display: grid; gap: 3px; }
+.operator-danger-eyebrow { color: #ff8b82; }
 .operator-confirmation-content p { margin: 0; }
 .operator-confirmation-content > p {
   color: var(--ink-soft);
@@ -505,6 +506,27 @@ select { color-scheme: dark; }
   font-weight: 500;
   overflow-wrap: anywhere;
 }
+.operator-confirmation-target {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.operator-confirmation-target > div {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 12px;
+}
+.operator-confirmation-target > div + div { border-top: 1px solid var(--line); }
+.operator-confirmation-target dt { color: var(--ink-soft); font-size: 12px; }
+.operator-confirmation-target dd { min-width: 0; margin: 0; color: var(--ink); font-size: 13px; }
+.operator-confirmation-target dd strong,
+.operator-confirmation-target dd span { display: block; }
+.operator-confirmation-target dd span { margin-top: 2px; color: var(--ink-soft); }
+.operator-confirmation-target code { font-family: var(--mono); overflow-wrap: anywhere; }
 .operator-confirmation-effect {
   display: grid;
   gap: 6px;
@@ -512,6 +534,7 @@ select { color-scheme: dark; }
   background: var(--surface-2);
   border-left: 2px solid var(--primary);
 }
+.operator-confirmation-effect-danger { border-left-color: var(--danger); }
 .operator-confirmation-effect > span { color: var(--ink-soft); font-size: 12px; font-weight: 500; }
 .operator-confirmation-effect p { color: var(--ink-muted); font-size: 13px; line-height: 1.5; }
 .operator-confirmation-actions {
@@ -1615,6 +1638,7 @@ select { color-scheme: dark; }
   .context-breadcrumb > span:nth-child(2) { display: none; }
   .main-content { padding-inline: 12px; }
   h1 { font-size: 24px; }
+  .operator-confirmation-target > div { grid-template-columns: 1fr; gap: 4px; }
   .research-workspace-header { grid-template-columns: 1fr; }
   .research-new { justify-self: start; }
   .run-configuration-grid { grid-template-columns: 1fr; }

@@ -2,6 +2,10 @@ import { Hono, type Context } from "hono";
 import { z } from "zod";
 
 import {
+  ResearcherNotFoundError,
+  type ResearcherSessionRevocationResult,
+} from "./access.js";
+import {
   canonicalizeAuthEmailRequest,
   canonicalizeEmail,
   InvalidEmailError,
@@ -27,8 +31,9 @@ import {
   OperatorPasswordInvalidError,
   OperatorProofInvalidError,
   OperatorProofNotFoundError,
-  type OperatorProofOperation,
+  type OperatorProofRequest,
 } from "./operator-proof.js";
+import { OperatorSessionTargetProtectedError } from "./operator-session-revocation.js";
 
 const invitationInspectSchema = z
   .object({ token: z.string().length(80) })
@@ -55,17 +60,32 @@ const changePasswordSchema = z
     newPassword: z.string().min(12).max(128),
   })
   .strict();
-const operatorProofSchema = z
-  .object({
-    email: z.string().min(1).max(512),
-    operation: z.enum(["invitation.issue", "invitation.reissue"]),
-    password: z.string().min(12).max(128),
-  })
-  .strict();
+const operatorProofSchema = z.union([
+  z
+    .object({
+      email: z.string().min(1).max(512),
+      operation: z.enum(["invitation.issue", "invitation.reissue"]),
+      password: z.string().min(12).max(128),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal("researcher.sessions.revoke"),
+      password: z.string().min(12).max(128),
+      researcher_id: z.uuid(),
+    })
+    .strict(),
+]);
 const operatorInvitationMutationSchema = z
   .object({
     email: z.string().min(1).max(512),
     proof: z.string().length(80),
+  })
+  .strict();
+const operatorSessionRevocationSchema = z
+  .object({
+    proof: z.string().length(80),
+    researcher_id: z.uuid(),
   })
   .strict();
 
@@ -121,11 +141,7 @@ export type AuthAppDependencies = Readonly<{
   inspectInvitation: (token: string) => Promise<Readonly<{ email: string }>>;
   confirmOperatorProof: (
     principal: OperatorPrincipal,
-    input: Readonly<{
-      email: string;
-      operation: OperatorProofOperation;
-      password: string;
-    }>,
+    input: OperatorProofRequest & Readonly<{ password: string }>,
   ) => Promise<Readonly<{ expiresAt: string; proof: string }>>;
   issueOperatorInvitation: (
     principal: OperatorPrincipal,
@@ -153,6 +169,10 @@ export type AuthAppDependencies = Readonly<{
     invitationId: string;
     status: "delivered";
   }>>;
+  revokeOperatorResearcherSessions: (
+    principal: OperatorPrincipal,
+    input: Readonly<{ proof: string; researcherId: string }>,
+  ) => Promise<ResearcherSessionRevocationResult>;
   resetPassword: (token: string, newPassword: string) => Promise<void>;
 }>;
 
@@ -305,11 +325,20 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
       return context.json({ code: "AUTH_RATE_LIMITED" }, 429);
     }
     try {
-      const result = await dependencies.confirmOperatorProof(principal, {
-        email: canonicalizeEmail(body.email),
-        operation: body.operation,
-        password: body.password,
-      });
+      const result = await dependencies.confirmOperatorProof(
+        principal,
+        body.operation === "researcher.sessions.revoke"
+          ? {
+              operation: body.operation,
+              password: body.password,
+              researcherId: body.researcher_id,
+            }
+          : {
+              email: canonicalizeEmail(body.email),
+              operation: body.operation,
+              password: body.password,
+            },
+      );
       return context.json({
         expires_at: result.expiresAt,
         proof: result.proof,
@@ -333,6 +362,10 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
   );
   app.post("/api/auth/operator/invitations/reissue", async (context) =>
     operatorInvitationMutation(context, dependencies, "reissue")
+  );
+  app.post(
+    "/api/auth/operator/researchers/sessions/revoke",
+    async (context) => operatorSessionRevocation(context, dependencies),
   );
 
   app.post("/api/auth/sign-up/email", (context) =>
@@ -438,6 +471,55 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
   });
 
   return app;
+}
+
+async function operatorSessionRevocation(
+  context: Context,
+  dependencies: AuthAppDependencies,
+): Promise<Response> {
+  const principal = await requireOperator(
+    dependencies,
+    context.req.raw.headers,
+  );
+  if (principal instanceof Response) return principal;
+  if (context.req.header("origin") !== dependencies.publicOrigin) {
+    return context.json({ code: "ORIGIN_NOT_ALLOWED" }, 403);
+  }
+  const body = await exactJson(
+    context.req.raw,
+    operatorSessionRevocationSchema,
+  );
+  if (body === null) {
+    return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
+  }
+  try {
+    const result = await dependencies.revokeOperatorResearcherSessions(
+      principal,
+      { proof: body.proof, researcherId: body.researcher_id },
+    );
+    return context.json({
+      researcher_id: result.researcherId,
+      revoked_session_count: result.revokedSessionCount,
+      status: result.status,
+    });
+  } catch (error) {
+    if (error instanceof OperatorProofNotFoundError) {
+      return context.body(null, 404);
+    }
+    if (error instanceof OperatorProofInvalidError) {
+      return context.json({ code: "OPERATOR_PROOF_INVALID" }, 400);
+    }
+    if (error instanceof OperatorSessionTargetProtectedError) {
+      return context.json(
+        { code: "OPERATOR_SESSION_TARGET_PROTECTED" },
+        409,
+      );
+    }
+    if (error instanceof ResearcherNotFoundError) {
+      return context.json({ code: "OPERATOR_SESSION_TARGET_INVALID" }, 409);
+    }
+    throw error;
+  }
 }
 
 async function operatorInvitationMutation(

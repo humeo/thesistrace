@@ -49,7 +49,7 @@ export function CoreApp({ currentPath, isOperator, researcherId }: {
           <DailyTracksPage trackId={dailyTrackMatch?.[1]} />
         ) : null}
         {currentPath === "/operator/researchers" && isOperator ? (
-          <OperatorResearchersPage />
+          <OperatorResearchersPage operatorResearcherId={researcherId} />
         ) : null}
         {currentPath === "/operator/researchers" && !isOperator ? (
           <section aria-label="Not found" className="page-section state-section">

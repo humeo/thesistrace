@@ -5,8 +5,10 @@ export type InvitationMutationOperation = "issue" | "reissue";
 export type OperatorMutationErrorCode =
   | "conflict"
   | "delivery-failed"
+  | "invalid-target"
   | "invalid-password"
   | "invalid-proof"
+  | "protected-target"
   | "rate-limited"
   | "request-invalid"
   | "unavailable";
@@ -72,6 +74,64 @@ export async function submitInvitationMutation(
   return { email: value.email, invitationId: value.invitation_id };
 }
 
+export async function confirmSessionRevocationProof(
+  researcherId: string,
+  password: string,
+  signal: AbortSignal,
+): Promise<Readonly<{ expiresAt: string; proof: string }>> {
+  const value = await operatorPost(
+    "/api/auth/operator/proofs",
+    {
+      operation: "researcher.sessions.revoke",
+      password,
+      researcher_id: researcherId,
+    },
+    signal,
+  );
+  if (
+    !hasExactKeys(value, ["expires_at", "proof"])
+    || !isIsoTimestamp(value.expires_at)
+    || typeof value.proof !== "string"
+    || !isOpaqueProof(value.proof)
+  ) {
+    throw new OperatorMutationError("unavailable");
+  }
+  return { expiresAt: value.expires_at, proof: value.proof };
+}
+
+export async function submitSessionRevocation(
+  researcherId: string,
+  proof: string,
+  signal: AbortSignal,
+): Promise<Readonly<{
+  researcherId: string;
+  revokedSessionCount: number;
+}>> {
+  const value = await operatorPost(
+    "/api/auth/operator/researchers/sessions/revoke",
+    { proof, researcher_id: researcherId },
+    signal,
+  );
+  if (
+    !hasExactKeys(value, [
+      "researcher_id",
+      "revoked_session_count",
+      "status",
+    ])
+    || value.researcher_id !== researcherId
+    || typeof value.revoked_session_count !== "number"
+    || !Number.isSafeInteger(value.revoked_session_count)
+    || value.revoked_session_count < 0
+    || (value.status !== "updated" && value.status !== "no_change")
+  ) {
+    throw new OperatorMutationError("unavailable");
+  }
+  return {
+    researcherId: value.researcher_id,
+    revokedSessionCount: value.revoked_session_count,
+  };
+}
+
 async function operatorPost(
   path: string,
   body: Readonly<Record<string, string>>,
@@ -115,6 +175,8 @@ async function responseErrorCode(
   if (code === "OPERATOR_PROOF_INVALID") return "invalid-proof";
   if (code === "OPERATOR_INVITATION_CONFLICT") return "conflict";
   if (code === "OPERATOR_INVITATION_DELIVERY_FAILED") return "delivery-failed";
+  if (code === "OPERATOR_SESSION_TARGET_PROTECTED") return "protected-target";
+  if (code === "OPERATOR_SESSION_TARGET_INVALID") return "invalid-target";
   if (code === "OPERATOR_REQUEST_INVALID") return "request-invalid";
   if (code === "AUTH_RATE_LIMITED") return "rate-limited";
   return "unavailable";
