@@ -32,15 +32,15 @@ Better Auth, and FastAPI through one browser origin without changing API paths.
 
 ## Acceptance criteria
 
-- [ ] A browser reaches static Web, `/api/auth/ok`, and `/api/data` only through
+- [x] A browser reaches static Web, `/api/auth/ok`, and `/api/data` only through
       one Caddy origin with original paths preserved.
-- [ ] SPA refresh works for all existing product and future Auth routes.
-- [ ] Caddy remains healthy and serves static files while Auth or Core is down.
-- [ ] Production Compose exposes exactly 80 and 443 from Caddy and no host port
+- [x] SPA refresh works for all existing product and future Auth routes.
+- [x] Caddy remains healthy and serves static files while Auth or Core is down.
+- [x] Production Compose exposes exactly 80 and 443 from Caddy and no host port
       for Auth, Core, PostgreSQL, RustFS, or Workers.
-- [ ] HTTP redirects to HTTPS in Production and certificate state survives a
+- [x] HTTP redirects to HTTPS in Production and certificate state survives a
       Caddy container restart.
-- [ ] `deploy/core/nginx.conf.template` and all Nginx image/config assertions are
+- [x] `deploy/core/nginx.conf.template` and all Nginx image/config assertions are
       removed rather than retained as alternatives.
 
 ## Verification

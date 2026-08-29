@@ -44,19 +44,19 @@ of Auth.
 
 ## Acceptance criteria
 
-- [ ] Bootstrap is transactional and idempotent under concurrent calls.
-- [ ] Two Researchers each own `folder_default` and `folder_batch_research`.
-- [ ] Same request ID is independent across Researchers and conflicting only
+- [x] Bootstrap is transactional and idempotent under concurrent calls.
+- [x] Two Researchers each own `folder_default` and `folder_batch_research`.
+- [x] Same request ID is independent across Researchers and conflicting only
       within one Researcher scope.
-- [ ] Folder, Run, Batch, and Track operations succeed for the owner and return
+- [x] Folder, Run, Batch, and Track operations succeed for the owner and return
       `404` for the other Researcher, including known IDs.
-- [ ] Database constraints reject every constructed cross-owner relationship.
-- [ ] Invalid Session is `401`; Auth unavailable/timeout/malformed is `503`;
+- [x] Database constraints reject every constructed cross-owner relationship.
+- [x] Invalid Session is `401`; Auth unavailable/timeout/malformed is `503`;
       own-resource forbidden state remains `403` only where specified.
-- [ ] Workers continue and publish admitted work after Researcher Deactivation.
-- [ ] Existing ownerless Product State and legacy schema fingerprint are refused;
+- [x] Workers continue and publish admitted work after Researcher Deactivation.
+- [x] Existing ownerless Product State and legacy schema fingerprint are refused;
       Canonical Data remains readable after reset.
-- [ ] Core cannot read Auth tables and accepts no trusted identity header, JWT,
+- [x] Core cannot read Auth tables and accepts no trusted identity header, JWT,
       bearer, or API key.
 
 ## Verification

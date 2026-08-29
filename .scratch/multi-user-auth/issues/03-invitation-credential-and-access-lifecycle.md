@@ -37,16 +37,16 @@ and cleanup lifecycle using the existing Resend configuration.
 
 ## Acceptance criteria
 
-- [ ] Valid Invitation creates exactly one Better Auth User and Login Session.
-- [ ] Expired, revoked, consumed, wrong-email, and replayed tokens cannot create
+- [x] Valid Invitation creates exactly one Better Auth User and Login Session.
+- [x] Expired, revoked, consumed, wrong-email, and replayed tokens cannot create
       or modify an account.
-- [ ] Double submit, two tabs, and lost response create one User and converge the
+- [x] Double submit, two tabs, and lost response create one User and converge the
       Invitation to consumed without replacing the password.
-- [ ] Resend Invitation failure produces no usable grant and no leaked token.
-- [ ] Reset responses do not enumerate Users; deactivated Users receive no
+- [x] Resend Invitation failure produces no usable grant and no leaked token.
+- [x] Reset responses do not enumerate Users; deactivated Users receive no
       email; reset revokes all Sessions.
-- [ ] Deactivate/reactivate/revoke/correct commands are idempotent and audited.
-- [ ] Cleanup is single-owner under concurrent Auth-process attempts and emits
+- [x] Deactivate/reactivate/revoke/correct commands are idempotent and audited.
+- [x] Cleanup is single-owner under concurrent Auth-process attempts and emits
       no secrets or raw unknown email.
 
 ## Verification

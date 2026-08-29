@@ -34,22 +34,22 @@ acceptance, Production environment validation, and final-image proof.
 
 ## Acceptance criteria
 
-- [ ] Final browser acceptance covers Invitation success/replay/expiry/reissue,
+- [x] Final browser acceptance covers Invitation success/replay/expiry/reissue,
       login/logout/reset/change password, revoke/deactivate/reactivate, Session
       refresh, bootstrap retry, and Auth unavailable.
-- [ ] A two-Researcher matrix proves Folder, Run, Batch, Track, receipt, cursor,
+- [x] A two-Researcher matrix proves Folder, Run, Batch, Track, receipt, cursor,
       and Draft isolation and same local system Folder IDs.
-- [ ] Chart, Alpha editor, and all Auth forms work under the final CSP with no
+- [x] Chart, Alpha editor, and all Auth forms work under the final CSP with no
       unexpected policy violation.
-- [ ] Production publishes only Caddy 80/443; HTTP redirects to HTTPS; private
+- [x] Production publishes only Caddy 80/443; HTTP redirects to HTTPS; private
       Auth/Core health and internal verifier paths are unreachable publicly.
-- [ ] Caddy serves static unavailable UI when Auth or Core is down, while Core
+- [x] Caddy serves static unavailable UI when Auth or Core is down, while Core
       and Auth report their agreed liveness/readiness independently.
-- [ ] Secret, Cookie, token, raw unknown email, email link, body, query, Formula,
+- [x] Secret, Cookie, token, raw unknown email, email link, body, query, Formula,
       object key, and manifest scans are clean across every container log and
       saved failure artifact.
-- [ ] Production rejects placeholder or Test configuration before serving Auth.
-- [ ] Final docs describe implemented current behavior without target caveats.
+- [x] Production rejects placeholder or Test configuration before serving Auth.
+- [x] Final docs describe implemented current behavior without target caveats.
 
 ## Verification
 

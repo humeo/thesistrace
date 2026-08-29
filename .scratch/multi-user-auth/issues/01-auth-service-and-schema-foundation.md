@@ -35,16 +35,16 @@ verification contract without changing the existing Core product flow yet.
 
 ## Acceptance criteria
 
-- [ ] `/api/auth/ok` succeeds against an initialized isolated Auth database.
-- [ ] Missing, partial, extra, or fingerprint-mismatched Auth schema terminates
+- [x] `/api/auth/ok` succeeds against an initialized isolated Auth database.
+- [x] Missing, partial, extra, or fingerprint-mismatched Auth schema terminates
       initializer or runtime with a sanitized error.
-- [ ] The private verifier distinguishes valid, invalid, expired, revoked,
+- [x] The private verifier distinguishes valid, invalid, expired, revoked,
       inactive, and malformed Session state without setting a Cookie.
-- [ ] Auth cannot select from a Core product table and Core cannot select from an
+- [x] Auth cannot select from a Core product table and Core cannot select from an
       Auth table under their runtime roles.
-- [ ] No JWT, bearer, Admin, Organization, API-key, MFA, passkey, or Cookie-cache
+- [x] No JWT, bearer, Admin, Organization, API-key, MFA, passkey, or Cookie-cache
       plugin/configuration is present.
-- [ ] Auth logs contain no Cookie, credential, token, request body, or full URL.
+- [x] Auth logs contain no Cookie, credential, token, request body, or full URL.
 
 ## Verification
 

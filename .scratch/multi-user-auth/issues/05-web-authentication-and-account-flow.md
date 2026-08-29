@@ -43,18 +43,18 @@ without adding a new routing or design system.
 
 ## Acceptance criteria
 
-- [ ] Anonymous navigation reaches only the four Auth pages and protected paths
+- [x] Anonymous navigation reaches only the four Auth pages and protected paths
       redirect through safe `returnTo`.
-- [ ] Invitation acceptance auto-logs in, bootstraps Core, and enters `/data`.
-- [ ] Bootstrap failure cannot enter product routes and retries successfully on
+- [x] Invitation acceptance auto-logs in, bootstraps Core, and enters `/data`.
+- [x] Bootstrap failure cannot enter product routes and retries successfully on
       the next attempt or login.
-- [ ] `401` ends polling and clears in-memory Session; `503` never presents as a
+- [x] `401` ends polling and clears in-memory Session; `503` never presents as a
       logout.
-- [ ] Seven-day rolling Cookie is refreshed only by direct Hono responses on the
+- [x] Seven-day rolling Cookie is refreshed only by direct Hono responses on the
       agreed browser events and 12-hour interval.
-- [ ] Logout and account switching preserve each Researcher's Draft while
+- [x] Logout and account switching preserve each Researcher's Draft while
       preventing cross-account reads.
-- [ ] No Session token, Invitation token, reset token, password, or full link is
+- [x] No Session token, Invitation token, reset token, password, or full link is
       stored in localStorage, application logs, or rendered after extraction.
 
 ## Verification
