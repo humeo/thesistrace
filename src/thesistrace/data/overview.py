@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from thesistrace._postgres import PostgresDatabase
@@ -19,8 +20,14 @@ from thesistrace.data.models import (
 )
 
 
+@dataclass(frozen=True)
+class DatasetOverviewSnapshot:
+    pointer: DatasetHeadPointer | None
+    overview: DataOverview
+
+
 class DatasetOverviewService:
-    """Read the one current mounted Dataset Head without exposing its identity."""
+    """Read the ordinary overview and validated internal Dataset Head snapshot."""
 
     def __init__(
         self,
@@ -39,32 +46,38 @@ class DatasetOverviewService:
         self.overview()
 
     def overview(self) -> DataOverview:
+        return self.snapshot().overview
+
+    def snapshot(self) -> DatasetOverviewSnapshot:
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
             benchmark = self._read_benchmark()
             pointer = self._heads.current_pointer()
             if pointer is None:
-                return DataOverview(
-                    market_coverage=None,
-                    financial_coverage=None,
-                    industry_coverage=None,
-                    benchmark_coverage=_benchmark_coverage(benchmark),
-                    benchmark_snapshot_sha256=(
-                        None if benchmark is None else benchmark.sha256
+                return DatasetOverviewSnapshot(
+                    pointer=None,
+                    overview=DataOverview(
+                        market_coverage=None,
+                        financial_coverage=None,
+                        industry_coverage=None,
+                        benchmark_coverage=_benchmark_coverage(benchmark),
+                        benchmark_snapshot_sha256=(
+                            None if benchmark is None else benchmark.sha256
+                        ),
+                        benchmark_last_published_at=(
+                            None if benchmark is None else benchmark.published_at
+                        ),
+                        data_through_session=None,
+                        last_market_refresh_at=None,
+                        last_financial_refresh_at=None,
+                        last_industry_refresh_at=None,
+                        industry_refresh_status=None,
+                        industry_refresh_failure_code=None,
+                        market_research_readiness=False,
+                        benchmark_research_readiness=False,
+                        financial_research_readiness="not_ready",
+                        industry_research_readiness=False,
                     ),
-                    benchmark_last_published_at=(
-                        None if benchmark is None else benchmark.published_at
-                    ),
-                    data_through_session=None,
-                    last_market_refresh_at=None,
-                    last_financial_refresh_at=None,
-                    last_industry_refresh_at=None,
-                    industry_refresh_status=None,
-                    industry_refresh_failure_code=None,
-                    market_research_readiness=False,
-                    benchmark_research_readiness=False,
-                    financial_research_readiness="not_ready",
-                    industry_research_readiness=False,
                 )
             if pointer != self._validated_pointer:
                 self._heads.resolve_descriptor(pointer)
@@ -109,51 +122,55 @@ class DatasetOverviewService:
             industry_coverage = None if industry is None else industry.dataset_coverage
             market_start = pointer.dataset_coverage["start"]
             market_end = pointer.dataset_coverage["end"]
-            return DataOverview(
-                market_coverage=DatasetCoverage(
-                    start=market_start,
-                    end=market_end,
-                ),
-                financial_coverage=(
-                    None
-                    if coverage is None
-                    else _financial_coverage(coverage)
-                ),
-                industry_coverage=(
-                    None
-                    if industry_coverage is None
-                    else IndustryCoverage(
-                        start=industry_coverage["start"],
-                        observation_through_session=industry_coverage["end"],
-                    )
-                ),
-                benchmark_coverage=_benchmark_coverage(benchmark),
-                benchmark_snapshot_sha256=(
-                    None if benchmark is None else benchmark.sha256
-                ),
-                benchmark_last_published_at=(
-                    None if benchmark is None else benchmark.published_at
-                ),
-                data_through_session=pointer.data_through_session,
-                last_market_refresh_at=state["last_market_refresh_at"],
-                last_financial_refresh_at=state["last_financial_refresh_at"],
-                last_industry_refresh_at=state["last_industry_refresh_at"],
-                industry_refresh_status=state["industry_refresh_status"],
-                industry_refresh_failure_code=state["industry_refresh_failure_code"],
-                market_research_readiness=True,
-                benchmark_research_readiness=(
-                    benchmark is not None
-                    and benchmark.coverage_end_session >= market_end
-                ),
-                financial_research_readiness=(
-                    "not_ready"
-                    if financial is None or descriptor.financial_research_readiness is None
-                    else str(descriptor.financial_research_readiness["status"])
-                ),
-                industry_research_readiness=(
-                    industry_coverage is not None
-                    and industry_coverage["start"] <= market_start
-                    and industry_coverage["end"] >= market_end
+            return DatasetOverviewSnapshot(
+                pointer=pointer,
+                overview=DataOverview(
+                    market_coverage=DatasetCoverage(
+                        start=market_start,
+                        end=market_end,
+                    ),
+                    financial_coverage=(
+                        None
+                        if coverage is None
+                        else _financial_coverage(coverage)
+                    ),
+                    industry_coverage=(
+                        None
+                        if industry_coverage is None
+                        else IndustryCoverage(
+                            start=industry_coverage["start"],
+                            observation_through_session=industry_coverage["end"],
+                        )
+                    ),
+                    benchmark_coverage=_benchmark_coverage(benchmark),
+                    benchmark_snapshot_sha256=(
+                        None if benchmark is None else benchmark.sha256
+                    ),
+                    benchmark_last_published_at=(
+                        None if benchmark is None else benchmark.published_at
+                    ),
+                    data_through_session=pointer.data_through_session,
+                    last_market_refresh_at=state["last_market_refresh_at"],
+                    last_financial_refresh_at=state["last_financial_refresh_at"],
+                    last_industry_refresh_at=state["last_industry_refresh_at"],
+                    industry_refresh_status=state["industry_refresh_status"],
+                    industry_refresh_failure_code=state["industry_refresh_failure_code"],
+                    market_research_readiness=True,
+                    benchmark_research_readiness=(
+                        benchmark is not None
+                        and benchmark.coverage_end_session >= market_end
+                    ),
+                    financial_research_readiness=(
+                        "not_ready"
+                        if financial is None
+                        or descriptor.financial_research_readiness is None
+                        else str(descriptor.financial_research_readiness["status"])
+                    ),
+                    industry_research_readiness=(
+                        industry_coverage is not None
+                        and industry_coverage["start"] <= market_start
+                        and industry_coverage["end"] >= market_end
+                    ),
                 ),
             )
 

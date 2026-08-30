@@ -20,7 +20,11 @@ type TrackedOperation = Readonly<{ generation: number; operation: FinancialRefre
 
 export function OperatorFinancialRefreshPanel({
   onAccessNotFound,
-}: Readonly<{ onAccessNotFound: () => void }>) {
+  onOperationAccepted = ignoreAcceptedOperation,
+}: Readonly<{
+  onAccessNotFound: () => void;
+  onOperationAccepted?: () => void;
+}>) {
   const [target, setTarget] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState(() =>
     suggestFinancialRefreshKey(new Date())
@@ -82,6 +86,7 @@ export function OperatorFinancialRefreshPanel({
           submissionGeneration.current += 1;
           setPending(null);
           replaceOperation(next);
+          onOperationAccepted();
           window.requestAnimationFrame(() => trigger.current?.focus());
         } else {
           setOperation({ generation: tracked.generation, operation: next });
@@ -127,7 +132,7 @@ export function OperatorFinancialRefreshPanel({
     document.addEventListener("visibilitychange", visibilityChanged);
     schedule();
     return stop;
-  }, [onAccessNotFound, operation, pending]);
+  }, [onAccessNotFound, onOperationAccepted, operation, pending]);
 
   function replaceOperation(next: FinancialRefreshOperation): void {
     const generation = operationGeneration.current + 1;
@@ -341,6 +346,7 @@ export function OperatorFinancialRefreshPanel({
             if (confirmation.generation !== submissionGeneration.current) return;
             submissionGeneration.current += 1;
             replaceOperation(accepted);
+            onOperationAccepted();
             setConfirmation(null);
             setPending(null);
             setPollError(false);
@@ -352,6 +358,10 @@ export function OperatorFinancialRefreshPanel({
       )}
     </>
   );
+}
+
+function ignoreAcceptedOperation(): void {
+  // This panel can be rendered alone in focused tests and previews.
 }
 
 export function FinancialRefreshReconciliation({

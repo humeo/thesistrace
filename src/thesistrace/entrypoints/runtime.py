@@ -26,6 +26,7 @@ from thesistrace.data import (
     DataRefreshService,
     DatasetAdmissionService,
     DatasetLifecycle,
+    DatasetOperationalStatusService,
     DatasetOverviewService,
     MountedGenerationStore,
 )
@@ -165,6 +166,7 @@ def core_environment_is_configured(
 class CoreRuntime:
     database: PostgresDatabase
     data_overview: DatasetOverviewService | None
+    data_operational_status: DatasetOperationalStatusService | None
     data_refreshes: DataRefreshService
     researchers: ResearcherService
     research_authoring: ResearchAuthoringService
@@ -241,6 +243,7 @@ def _open_runtime(
         dataset_lifecycle = DatasetLifecycle(database, settings.data_mount)
         dataset_lifecycle.current_pointer()
         data_overview: DatasetOverviewService | None = None
+        data_operational_status: DatasetOperationalStatusService | None = None
         if include_data_overview:
             data_overview = DatasetOverviewService(
                 database,
@@ -248,6 +251,10 @@ def _open_runtime(
                 settings.benchmark_mount,
             )
             data_overview.validate_startup()
+            data_operational_status = DatasetOperationalStatusService(
+                database,
+                data_overview,
+            )
         generation_store = MountedGenerationStore(settings.data_mount)
         daily_tracks = DailyTrackService(
             database,
@@ -300,6 +307,7 @@ def _open_runtime(
         yield CoreRuntime(
             database=database,
             data_overview=data_overview,
+            data_operational_status=data_operational_status,
             data_refreshes=DataRefreshService(
                 database,
                 settings.data_mount,

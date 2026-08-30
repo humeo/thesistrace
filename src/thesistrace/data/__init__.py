@@ -78,6 +78,13 @@ from thesistrace.data.models import (
     FinancialResearchReadiness,
     IndustryCoverage,
 )
+from thesistrace.data.operational_status import (
+    DataRefreshInvalidCursor,
+    DataRefreshOperationalStatus,
+    DatasetOperationalHead,
+    DatasetOperationalStatus,
+    DatasetOperationalStatusService,
+)
 from thesistrace.data.operator import BootstrapOutcome, DataOperator, DataOperatorError
 from thesistrace.data.overview import DatasetOverviewService
 from thesistrace.data.refresh import (
@@ -119,12 +126,17 @@ __all__ = [
     "DataGarbageCollector",
     "DailyFinancialRefreshService",
     "DataRefreshError",
+    "DataRefreshInvalidCursor",
+    "DataRefreshOperationalStatus",
     "DataRefreshService",
     "DatasetAdmissionService",
     "DatasetAdmissionSnapshot",
     "DatasetWarmupUnavailable",
     "DatasetCoverage",
     "DatasetOverviewService",
+    "DatasetOperationalHead",
+    "DatasetOperationalStatus",
+    "DatasetOperationalStatusService",
     "DataLifecycleError",
     "DataNotReady",
     "DataOperator",

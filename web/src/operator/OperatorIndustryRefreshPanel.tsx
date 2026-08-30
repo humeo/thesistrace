@@ -26,7 +26,11 @@ type TrackedOperation = Readonly<{
 
 export function OperatorIndustryRefreshPanel({
   onAccessNotFound,
-}: Readonly<{ onAccessNotFound: () => void }>) {
+  onOperationAccepted = ignoreAcceptedOperation,
+}: Readonly<{
+  onAccessNotFound: () => void;
+  onOperationAccepted?: () => void;
+}>) {
   const [target, setTarget] = useState("");
   const [idempotencyKey, setIdempotencyKey] = useState(() =>
     suggestIndustryRefreshKey(new Date())
@@ -88,6 +92,7 @@ export function OperatorIndustryRefreshPanel({
           submissionGeneration.current += 1;
           setPending(null);
           replaceOperation(next);
+          onOperationAccepted();
           window.requestAnimationFrame(() => trigger.current?.focus());
         } else {
           setOperation({ generation: tracked.generation, operation: next });
@@ -133,7 +138,7 @@ export function OperatorIndustryRefreshPanel({
     document.addEventListener("visibilitychange", visibilityChanged);
     schedule();
     return stop;
-  }, [onAccessNotFound, operation, pending]);
+  }, [onAccessNotFound, onOperationAccepted, operation, pending]);
 
   function replaceOperation(next: IndustryRefreshOperation): void {
     const generation = operationGeneration.current + 1;
@@ -348,6 +353,7 @@ export function OperatorIndustryRefreshPanel({
             if (confirmation.generation !== submissionGeneration.current) return;
             submissionGeneration.current += 1;
             replaceOperation(accepted);
+            onOperationAccepted();
             setConfirmation(null);
             setPending(null);
             setPollError(false);
@@ -359,6 +365,10 @@ export function OperatorIndustryRefreshPanel({
       )}
     </>
   );
+}
+
+function ignoreAcceptedOperation(): void {
+  // This panel can be rendered alone in focused tests and previews.
 }
 
 export function IndustryRefreshReconciliation({

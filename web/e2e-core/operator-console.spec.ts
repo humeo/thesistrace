@@ -266,6 +266,12 @@ test("only the singleton Operator can open and read the Operator Console", async
   const reviewRefresh = marketRefreshSection.getByRole("button", {
     name: "Review Refresh",
   });
+  const marketRefreshReceipt = page.locator(
+    'section[aria-labelledby="operator-market-refresh-status"]',
+  );
+  const marketRefreshReconciliation = page.locator(
+    'section[aria-labelledby="operator-market-refresh-reconciliation"]',
+  );
 
   await marketAsOfInput.fill("2026-08-11");
   await marketKeyInput.fill("browser-invalid-market-refresh");
@@ -395,7 +401,8 @@ test("only the singleton Operator can open and read the Operator Console", async
   await page.keyboard.press("Escape");
   await expect(marketConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
-  await expect(page.getByText(marketKey, { exact: true })).toBeVisible();
+  await expect(marketRefreshReconciliation.getByText(marketKey, { exact: true }))
+    .toBeVisible();
   releaseCoreResponse();
   await coreResponseDropped;
   await page.unroute(
@@ -408,9 +415,10 @@ test("only the singleton Operator can open and read the Operator Console", async
     asOf: marketAsOf,
     idempotencyKey: marketKey,
   });
-  await expect(page.getByText(marketKey, { exact: true })).toBeVisible();
-  await expect(page.getByText("Published", { exact: true })).toBeVisible();
-  await expect(page.getByText("2026-08-14", { exact: true })).toBeVisible();
+  await expect(marketRefreshReceipt.getByText(marketKey, { exact: true })).toBeVisible();
+  await expect(marketRefreshReceipt.getByText("Published", { exact: true })).toBeVisible();
+  await expect(marketRefreshReceipt.getByText("2026-08-14", { exact: true }))
+    .toBeVisible();
   await expect(reviewRefresh).toBeFocused();
 
   const conflictingMarketAsOf = "2026-08-12T18:00:00+08:00";
@@ -556,7 +564,8 @@ test("only the singleton Operator can open and read the Operator Console", async
     asOf: marketAsOf,
     idempotencyKey: droppedAfterAcceptanceKey,
   });
-  await expect(page.getByText(droppedAfterAcceptanceKey, { exact: true })).toBeVisible();
+  await expect(marketRefreshReceipt.getByText(droppedAfterAcceptanceKey, { exact: true }))
+    .toBeVisible();
   resetAuthRateLimits();
 
   const staleMarketKey = "browser-stale-response-a";
@@ -658,7 +667,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Refresh completed" }))
     .toBeVisible({ timeout: 15_000 });
-  await expect(page.getByText("No change", { exact: true })).toBeVisible();
+  await expect(marketRefreshReceipt.getByText("No change", { exact: true })).toBeVisible();
   const recoveredLatePostResponse = page.waitForResponse((response) => {
     const request = response.request();
     if (
@@ -672,8 +681,9 @@ test("only the singleton Operator can open and read the Operator Console", async
   await recoveredLatePostResponse;
   await settleReactUpdates(page);
   await expect(page.getByRole("heading", { name: "Refresh completed" })).toBeVisible();
-  await expect(page.getByText(recoveredBeforePostKey, { exact: true })).toBeVisible();
-  await expect(page.getByText("No change", { exact: true })).toBeVisible();
+  await expect(marketRefreshReceipt.getByText(recoveredBeforePostKey, { exact: true }))
+    .toBeVisible();
+  await expect(marketRefreshReceipt.getByText("No change", { exact: true })).toBeVisible();
   await page.unroute(
     "**/api/operator/data/refreshes/market**",
     recoveredBeforePostHandler,
@@ -747,7 +757,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await settleReactUpdates(page);
   await expect(currentMarketConfirmation).toBeVisible();
   await expect(currentMarketConfirmation).toContainText(currentMarketKey);
-  await expect(page.getByText(staleMarketKey, { exact: true })).toHaveCount(0);
+  await expect(marketRefreshReceipt.getByText(staleMarketKey, { exact: true })).toHaveCount(0);
 
   const currentBrowserResponse = page.waitForResponse((response) => {
     const request = response.request();
@@ -762,7 +772,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await currentBrowserResponse;
   await expect(currentMarketConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Refresh completed" })).toBeVisible();
-  await expect(page.getByText(currentMarketKey, { exact: true })).toBeVisible();
+  await expect(marketRefreshReceipt.getByText(currentMarketKey, { exact: true })).toBeVisible();
   await page.unroute(
     "**/api/operator/data/refreshes/market**",
     submissionRaceHandler,
@@ -864,15 +874,15 @@ test("only the singleton Operator can open and read the Operator Console", async
   const newerMarketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await expect(page.getByText(polledMarketKey, { exact: true })).toBeVisible();
+  await expect(marketRefreshReceipt.getByText(polledMarketKey, { exact: true })).toBeVisible();
   await newerMarketConfirmation.getByLabel("Current password").fill(browserPassword);
   await newerMarketConfirmation.getByLabel("Current password").press("Enter");
   await expect(newerMarketConfirmation).toHaveCount(0);
   await polledRequestSettled;
   await settleReactUpdates(page);
   await expect(page.getByRole("heading", { name: "Refresh completed" })).toBeVisible();
-  await expect(page.getByText(newerMarketKey, { exact: true })).toBeVisible();
-  await expect(page.getByText(polledMarketKey, { exact: true })).toHaveCount(0);
+  await expect(marketRefreshReceipt.getByText(newerMarketKey, { exact: true })).toBeVisible();
+  await expect(marketRefreshReceipt.getByText(polledMarketKey, { exact: true })).toHaveCount(0);
   await page.unroute(
     "**/api/operator/data/refreshes/market**",
     pollingRaceHandler,
@@ -1401,6 +1411,171 @@ test("only the singleton Operator can open and read the Operator Console", async
   await page.goto("/operator/data");
   await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
 
+  const datasetStatus = page.locator(
+    'section[aria-labelledby="operator-dataset-status-heading"]',
+  );
+  await expect(datasetStatus.getByRole("heading", {
+    name: "Current research Dataset",
+  })).toBeVisible();
+  await expect(
+    datasetStatus.locator("dl > div").filter({ hasText: "Data identity" }).locator("code"),
+  ).toHaveText(/^[0-9a-f]{64}$/);
+  await expect(datasetStatus.getByText("Market ready", { exact: true })).toBeVisible();
+  await expect(datasetStatus.getByText("Benchmark ready", { exact: true })).toBeVisible();
+  await expect(datasetStatus.getByText(/^Financial ready/)).toBeVisible();
+  await expect(datasetStatus.getByText("Industry ready", { exact: true })).toBeVisible();
+
+  const latestRefreshes = datasetStatus.getByRole("table", {
+    name: "Latest Data Refresh operations",
+  });
+  for (const kind of ["Market Refresh", "Financial Refresh", "Industry Refresh"]) {
+    await expect(latestRefreshes.getByRole("row").filter({ hasText: kind })).toHaveCount(1);
+  }
+  const operationHistory = datasetStatus.getByRole("table", {
+    name: "Data Refresh operation history",
+  });
+  for (const key of [marketKey, financialKey, industryKey]) {
+    await expect(operationHistory.getByText(key, { exact: true })).toBeVisible();
+  }
+
+  const marketHistoryRow = operationHistory.getByRole("row").filter({ hasText: marketKey });
+  const marketDetails = marketHistoryRow.getByRole("button", { name: `View details for ${marketKey}` });
+  await marketDetails.focus();
+  await marketDetails.press("Enter");
+  const operationDrawer = page.getByRole("dialog", { name: "Operation details" });
+  await expect(operationDrawer).toBeVisible();
+  await expect(operationDrawer).toContainText(marketKey);
+  await expect(operationDrawer).toContainText("Last heartbeat");
+  await expect(operationDrawer).not.toContainText(/manifest|owner token|object path|raw response/i);
+  await expect(operationDrawer.getByRole("button", { name: "Close operation details" }))
+    .toBeFocused();
+  await page.keyboard.press("Tab");
+  expect(await operationDrawer.evaluate((element) => element.contains(document.activeElement)))
+    .toBe(true);
+  await page.keyboard.press("Shift+Tab");
+  expect(await operationDrawer.evaluate((element) => element.contains(document.activeElement)))
+    .toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(operationDrawer).toHaveCount(0);
+  await expect(marketDetails).toBeFocused();
+
+  const originalViewport = page.viewportSize();
+  await page.setViewportSize({ width: 640, height: 900 });
+  expect(await operationHistory.evaluate((element) => getComputedStyle(element).display))
+    .toBe("block");
+  expect(await marketHistoryRow.evaluate((element) => getComputedStyle(element).display))
+    .toBe("grid");
+  expect(await marketHistoryRow.locator('[data-label="State"]').evaluate(
+    (element) => getComputedStyle(element, "::before").content,
+  )).toBe('"State"');
+  if (originalViewport !== null) await page.setViewportSize(originalViewport);
+
+  const terminalStatusResponse = await page.request.get("/api/operator/data/status");
+  expect(terminalStatusResponse.status()).toBe(200);
+  const terminalStatus = await terminalStatusResponse.json() as {
+    head: Record<string, unknown>;
+    latest_by_kind: Array<Record<string, unknown>>;
+    operations: Array<Record<string, unknown>>;
+    next_cursor: string | null;
+  };
+  expect(Object.keys(terminalStatus).sort()).toEqual([
+    "head",
+    "latest_by_kind",
+    "next_cursor",
+    "operations",
+  ]);
+  expect(JSON.stringify(terminalStatus)).not.toMatch(
+    /generation_manifest|owner_token|lease_expires_at|fingerprint|object_path/i,
+  );
+  const terminalMarket = terminalStatus.latest_by_kind.find(
+    (operation) => operation.kind === "market",
+  );
+  expect(terminalMarket).toBeDefined();
+  const acceptedMarket = {
+    ...terminalMarket,
+    attempt_count: 0,
+    data_through_session: null,
+    failure_code: null,
+    finished_at: null,
+    last_failure_code: null,
+    last_heartbeat_at: null,
+    last_refresh_at: null,
+    outcome: null,
+    phase: null,
+    started_at: null,
+    status: "accepted",
+  };
+  const acceptedStatus = {
+    ...terminalStatus,
+    latest_by_kind: terminalStatus.latest_by_kind.map((operation) => (
+      operation.kind === "market" ? acceptedMarket : operation
+    )),
+    operations: terminalStatus.operations.map((operation) => (
+      operation.kind === "market" && operation.idempotency_key === terminalMarket?.idempotency_key
+        ? acceptedMarket
+        : operation
+    )),
+  };
+  let statusRouteCalls = 0;
+  const statusPollingHandler = async (route: Route): Promise<void> => {
+    statusRouteCalls += 1;
+    await route.fulfill({
+      body: JSON.stringify(statusRouteCalls === 1 ? acceptedStatus : terminalStatus),
+      contentType: "application/json",
+      status: 200,
+    });
+  };
+  await page.route("**/api/operator/data/status**", statusPollingHandler);
+  const acceptedResponse = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/operator/data/status",
+  );
+  await datasetStatus.getByRole("button", { name: "Reload" }).click();
+  await acceptedResponse;
+  await expect(
+    latestRefreshes.getByRole("row").filter({ hasText: "Market Refresh" })
+      .getByText("Accepted · queued", { exact: true }),
+  ).toBeVisible();
+
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const hiddenRequestCount = statusRouteCalls;
+  await page.waitForTimeout(5_200);
+  expect(statusRouteCalls).toBe(hiddenRequestCount);
+
+  const visibleRecoveryResponse = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/operator/data/status",
+  );
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await visibleRecoveryResponse;
+  const terminalRequestCount = statusRouteCalls;
+  await page.waitForTimeout(5_200);
+  expect(statusRouteCalls).toBe(terminalRequestCount);
+
+  for (const eventName of ["focus", "online"] as const) {
+    const recoveryResponse = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/operator/data/status",
+    );
+    await page.evaluate((selectedEvent) => window.dispatchEvent(new Event(selectedEvent)), eventName);
+    await recoveryResponse;
+  }
+  const manualResponse = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/operator/data/status",
+  );
+  await datasetStatus.getByRole("button", { name: "Reload" }).click();
+  await manualResponse;
+  await page.unroute("**/api/operator/data/status**", statusPollingHandler);
+
   await page.getByRole("navigation", { name: "Operator Console sections" })
     .getByRole("link", { name: "Researchers", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
@@ -1686,6 +1861,9 @@ test("only the singleton Operator can open and read the Operator Console", async
   );
   expect(deniedMarketInspection.status()).toBe(404);
   expect(await deniedMarketInspection.text()).toBe("");
+  const deniedDatasetStatus = await page.request.get("/api/operator/data/status");
+  expect(deniedDatasetStatus.status()).toBe(404);
+  expect(await deniedDatasetStatus.text()).toBe("");
   const deniedMalformedInspection = await page.request.get(
     "/api/operator/data/refreshes/market",
   );

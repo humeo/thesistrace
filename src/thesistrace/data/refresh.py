@@ -157,7 +157,9 @@ class DataRefreshService:
         self._benchmark_store = BenchmarkSnapshotStore(benchmark_mount_root)
 
     @contextmanager
-    def _timed_phase(self, operation_id: str, phase: str) -> Iterator[None]:
+    def _timed_phase(self, claim: _RefreshClaim, phase: str) -> Iterator[None]:
+        self._record_phase(claim, phase)
+        operation_id = _operation_id(claim.key, claim.owner_token)
         started_at = self._monotonic()
         yield
         elapsed = self._monotonic() - started_at
@@ -397,7 +399,7 @@ class DataRefreshService:
         try:
             with self._maintain_claim(claim) as heartbeat:
                 phase = "current_head"
-                with self._timed_phase(operation_id, phase):
+                with self._timed_phase(claim, phase):
                     head = self._lifecycle.current_pointer()
                     refresh_base = (
                         None
@@ -411,17 +413,17 @@ class DataRefreshService:
                 plan = refresh_collection_plan(self._as_of(claim), refresh_base.canonical)
                 assert plan.overlap_start_session is not None
                 phase = "market"
-                with self._timed_phase(operation_id, phase):
+                with self._timed_phase(claim, phase):
                     batch = source.collect(plan)
                 heartbeat.assert_owned()
                 phase = "validation"
-                with self._timed_phase(operation_id, phase):
+                with self._timed_phase(claim, phase):
                     validate_release_batch(batch, predecessor_session=head.data_through_session)
                     candidate_canonical = batch.canonical
                     unchanged = candidate_canonical == refresh_base.canonical
                 if unchanged:
                     phase = "benchmark"
-                    with self._timed_phase(operation_id, phase):
+                    with self._timed_phase(claim, phase):
                         current_admission = self._generations.open_admission(expected_manifest)
                         self._update_benchmark(
                             current_admission.research_calendar,
@@ -441,7 +443,7 @@ class DataRefreshService:
                 else:
                     prepared_at = self._operator_time()
                     phase = "materialization"
-                    with self._timed_phase(operation_id, phase):
+                    with self._timed_phase(claim, phase):
                         generation = self._generations.materialize_refresh(
                             predecessor_manifest_sha256=expected_manifest,
                             replacement_canonical=candidate_canonical,
@@ -452,7 +454,7 @@ class DataRefreshService:
                         )
                     heartbeat.assert_owned()
                     phase = "benchmark"
-                    with self._timed_phase(operation_id, phase):
+                    with self._timed_phase(claim, phase):
                         candidate_admission = self._generations.open_admission(
                             generation.manifest_sha256
                         )
@@ -464,7 +466,7 @@ class DataRefreshService:
                         )
                     heartbeat.assert_owned()
                     phase = "candidate_validation"
-                    with self._timed_phase(operation_id, phase):
+                    with self._timed_phase(claim, phase):
                         protected_candidate = candidate_scope.enter_context(
                             self._lifecycle.protected_refresh_candidate(
                                 operation_id=operation_id,
@@ -484,7 +486,7 @@ class DataRefreshService:
                     heartbeat.assert_owned()
                     phase = "publication"
                     try:
-                        with self._timed_phase(operation_id, phase):
+                        with self._timed_phase(claim, phase):
                             moved = self._lifecycle.compare_and_swap_refresh_head(
                                 expected_generation_manifest_sha256=expected_manifest,
                                 candidate=protected_candidate,
@@ -613,7 +615,7 @@ class DataRefreshService:
                 raise DataRefreshError("FINANCIAL_WORKER_SOURCE_MISSING")
             with self._maintain_claim(claim) as heartbeat:
                 target = self._financial_target(claim)
-                with self._timed_phase(operation_id, phase):
+                with self._timed_phase(claim, phase):
                     outcome = DailyFinancialRefreshService(
                         self._database,
                         self._generations.root,
@@ -747,7 +749,7 @@ class DataRefreshService:
                 target = self._industry_target(claim)
                 if industry_source_target_selector is not None:
                     industry_source_target_selector(target)
-                with self._timed_phase(operation_id, phase):
+                with self._timed_phase(claim, phase):
                     outcome = IndustryRefreshService(
                         self._database,
                         self._generations.root,
@@ -879,6 +881,23 @@ class DataRefreshService:
             ):
                 yield
 
+    def _record_phase(self, claim: _RefreshClaim, phase: str) -> None:
+        with self._database.transaction() as transaction:
+            updated = transaction.execute(
+                """
+                UPDATE data.refresh_operations
+                SET phase = %s,
+                    lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                    last_heartbeat_at = clock_timestamp(),
+                    updated_at = clock_timestamp()
+                WHERE idempotency_key = %s AND status = 'running'
+                  AND owner_token = %s AND lease_expires_at > clock_timestamp()
+                """,
+                (phase, self._lease_seconds, claim.key, claim.owner_token),
+            )
+        if updated.rowcount != 1:
+            raise _RefreshFenced("Refresh phase belongs to a stale owner")
+
     @contextmanager
     def _owned_refresh_transaction(
         self,
@@ -899,6 +918,7 @@ class DataRefreshService:
             """
             UPDATE data.refresh_operations
             SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                last_heartbeat_at = clock_timestamp(),
                 updated_at = clock_timestamp()
             WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
             """,
@@ -941,6 +961,7 @@ class DataRefreshService:
             """
             UPDATE data.refresh_operations
             SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                last_heartbeat_at = clock_timestamp(),
                 updated_at = clock_timestamp()
             WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
             """,
@@ -973,7 +994,8 @@ class DataRefreshService:
                 UPDATE data.refresh_operations
                 SET status = 'running', owner_token = %s,
                     lease_expires_at = clock_timestamp() + make_interval(secs => %s),
-                    attempt_count = attempt_count + 1,
+                    attempt_count = attempt_count + 1, phase = 'claim',
+                    last_heartbeat_at = clock_timestamp(),
                     started_at = clock_timestamp(), updated_at = clock_timestamp()
                 WHERE idempotency_key = %s AND status = 'accepted'
                 RETURNING attempt_count
@@ -1017,6 +1039,7 @@ class DataRefreshService:
                         """
                         UPDATE data.refresh_operations
                         SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                            last_heartbeat_at = clock_timestamp(),
                             updated_at = clock_timestamp()
                         WHERE idempotency_key = %s AND status = 'running'
                           AND owner_token = %s
@@ -1125,6 +1148,7 @@ class DataRefreshService:
                 generation_manifest_sha256 = %s,
                 candidate_prepared_at = %s,
                 lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                last_heartbeat_at = clock_timestamp(),
                 updated_at = clock_timestamp()
             WHERE idempotency_key = %s AND kind = 'financial'
               AND status = 'running' AND owner_token = %s
@@ -1146,6 +1170,7 @@ class DataRefreshService:
             """
             UPDATE data.refresh_operations
             SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                last_heartbeat_at = clock_timestamp(),
                 updated_at = clock_timestamp()
             WHERE idempotency_key = %s AND kind = 'financial'
               AND status = 'running' AND owner_token = %s
@@ -1172,6 +1197,7 @@ class DataRefreshService:
                 generation_manifest_sha256 = %s,
                 candidate_prepared_at = %s,
                 lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                last_heartbeat_at = clock_timestamp(),
                 updated_at = clock_timestamp()
             WHERE idempotency_key = %s AND kind = 'industry'
               AND status = 'running' AND owner_token = %s
@@ -1193,6 +1219,7 @@ class DataRefreshService:
             """
             UPDATE data.refresh_operations
             SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                last_heartbeat_at = clock_timestamp(),
                 updated_at = clock_timestamp()
             WHERE idempotency_key = %s AND kind = 'industry'
               AND status = 'running' AND owner_token = %s
@@ -1321,6 +1348,7 @@ class DataRefreshService:
                 """
                 UPDATE data.refresh_operations
                 SET expected_generation_manifest_sha256 = %s,
+                    last_heartbeat_at = clock_timestamp(),
                     updated_at = clock_timestamp()
                 WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
                   AND lease_expires_at > clock_timestamp()
@@ -1347,6 +1375,7 @@ class DataRefreshService:
             UPDATE data.refresh_operations
             SET generation_manifest_sha256 = %s, candidate_prepared_at = %s,
                 lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                last_heartbeat_at = clock_timestamp(),
                 updated_at = clock_timestamp()
             WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
               AND expected_generation_manifest_sha256 = %s
@@ -1529,7 +1558,7 @@ class DataRefreshService:
                     """
                     UPDATE data.refresh_operations
                     SET status = 'accepted', owner_token = NULL, lease_expires_at = NULL,
-                        expected_generation_manifest_sha256 = NULL,
+                        phase = NULL, expected_generation_manifest_sha256 = NULL,
                         generation_manifest_sha256 = NULL, candidate_prepared_at = NULL,
                         started_at = NULL, last_failure_code = %s, updated_at = now()
                     WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
@@ -1927,7 +1956,7 @@ class DataRefreshService:
                         """
                         UPDATE data.refresh_operations
                         SET status = 'accepted', owner_token = NULL, lease_expires_at = NULL,
-                            expected_generation_manifest_sha256 = NULL,
+                            phase = NULL, expected_generation_manifest_sha256 = NULL,
                             generation_manifest_sha256 = NULL,
                             candidate_prepared_at = NULL, started_at = NULL,
                             last_failure_code = 'WORKER_LEASE_EXPIRED', updated_at = now()

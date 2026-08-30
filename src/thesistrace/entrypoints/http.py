@@ -45,6 +45,9 @@ from thesistrace.daily_track import (
 from thesistrace.data import (
     DataOverview,
     DataRefreshError,
+    DataRefreshInvalidCursor,
+    DatasetOperationalStatus,
+    DatasetOperationalStatusService,
     DatasetOverviewService,
     RefreshOutcome,
     validate_financial_refresh_request,
@@ -499,6 +502,22 @@ def create_app(
     @app.get("/api/data", response_model=DataOverview)
     def data_overview(request: Request) -> DataOverview:
         return _data_overview(request).overview()
+
+    @app.get(
+        "/api/operator/data/status",
+        response_model=DatasetOperationalStatus,
+    )
+    def operator_data_status(
+        request: Request,
+        cursor: str | None = None,
+    ) -> DatasetOperationalStatus | Response:
+        try:
+            return _data_operational_status(request).status(cursor=cursor)
+        except DataRefreshInvalidCursor:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"code": "DATA_REFRESH_CURSOR_INVALID"},
+            )
 
     @app.post(
         "/api/operator/data/refreshes/market",
@@ -1297,6 +1316,13 @@ def _data_overview(request: Request) -> DatasetOverviewService:
     if overview is None:
         raise RuntimeError("Data Overview is unavailable outside the API runtime")
     return overview
+
+
+def _data_operational_status(request: Request) -> DatasetOperationalStatusService:
+    operational_status = _runtime(request).data_operational_status
+    if operational_status is None:
+        raise RuntimeError("Dataset operational status is unavailable outside the API runtime")
+    return operational_status
 
 
 def _normalized_route(request: Request) -> str:

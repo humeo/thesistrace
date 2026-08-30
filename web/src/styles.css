@@ -619,6 +619,104 @@ select { color-scheme: dark; }
 .operator-refresh-receipt time { font-family: var(--mono); }
 .operator-refresh-published { border-left-color: var(--success); }
 .operator-refresh-failed { border-left-color: var(--danger); }
+.operator-dataset-status { display: grid; gap: 22px; }
+.operator-dataset-status .operator-section-header { padding-bottom: 0; }
+.operator-dataset-head {
+  display: grid;
+  gap: 0;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.operator-dataset-head > dl {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(150px, 1fr));
+  margin: 0;
+}
+.operator-dataset-head > dl > div { min-width: 0; padding: 15px 16px; }
+.operator-dataset-head > dl > div + div { border-left: 1px solid var(--line); }
+.operator-dataset-head dt,
+.operator-operation-details dt { color: var(--ink-soft); font-size: 11px; }
+.operator-dataset-head dd,
+.operator-operation-details dd {
+  min-width: 0;
+  margin: 5px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.operator-dataset-head code,
+.operator-operation-details code { font-family: var(--mono); }
+.operator-dataset-readiness {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+.operator-dataset-readiness li { min-width: 0; padding: 11px 16px; }
+.operator-dataset-readiness li + li { border-left: 1px solid var(--line); }
+.operator-dataset-subsection { display: grid; gap: 11px; }
+.operator-dataset-subsection > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+.operator-dataset-subsection h3 { font-size: 14px; font-weight: 600; }
+.operator-dataset-subsection > header span { color: var(--ink-soft); font-size: 11px; }
+.operator-latest-refresh-table { min-width: 760px; }
+.operator-data-operation-table { min-width: 1240px; }
+.operator-data-operation-table th:first-child { width: 20%; }
+.operator-data-operation-table th:nth-child(2) { width: 10%; }
+.operator-data-operation-table th:nth-child(3) { width: 12%; }
+.operator-data-operation-table th:nth-child(4) { width: 15%; }
+.operator-data-operation-table th:nth-child(5) { width: 12%; }
+.operator-data-operation-table th:nth-child(6) { width: 13%; }
+.operator-data-operation-table th:nth-child(7) { width: 12%; }
+.operator-data-operation-table th:last-child { width: 76px; }
+.operator-operation-phase { display: grid; gap: 2px; }
+.operator-operation-phase strong { color: var(--ink); font-family: var(--mono); font-weight: 500; }
+.operator-operation-phase small { color: var(--ink-soft); font-size: 11px; }
+.operator-operation-state-accepted::before { background: var(--warning); }
+.operator-operation-state-running::before { background: var(--primary-hover); }
+.operator-operation-state-succeeded::before { background: var(--success); }
+.operator-operation-state-failed::before { background: var(--danger); }
+.operator-operation-state-cancelled::before { background: var(--ink-faint); }
+.operator-data-operation-drawer {
+  width: min(540px, 100vw);
+  max-width: none;
+  height: 100vh;
+  height: 100dvh;
+  max-height: none;
+  margin: 0 0 0 auto;
+  padding: 0;
+  color: var(--ink-muted);
+  background: var(--surface-1);
+  border: 0;
+  border-left: 1px solid var(--line-strong);
+  border-radius: 0;
+  overflow: auto;
+}
+.operator-data-operation-drawer::backdrop { background: rgb(0 0 0 / 72%); }
+.operator-data-operation-drawer > article { min-height: 100%; }
+.operator-data-operation-drawer > article > header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 22px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+}
+.operator-data-operation-drawer h2 { margin-top: 4px; font-size: 20px; }
+.operator-data-operation-drawer header button { min-height: 40px; }
+.operator-operation-details { display: grid; margin: 0; padding: 4px 22px 28px; }
+.operator-operation-details > div { min-width: 0; padding: 13px 0; border-bottom: 1px solid var(--line); }
 
 /* Authentication and account access */
 .auth-page {
@@ -1497,6 +1595,7 @@ select { color-scheme: dark; }
   .operator-section-header > button,
   .operator-search button,
   .operator-pagination button { min-height: 44px; }
+  .operator-data-operation-drawer header button { min-width: 44px; min-height: 44px; }
   .account-menu > summary { min-width: 44px; }
 }
 
@@ -1591,6 +1690,12 @@ select { color-scheme: dark; }
   .operator-refresh-receipt > dl { grid-template-columns: 1fr; }
   .operator-refresh-receipt > dl > div:nth-child(n) { border-top: 1px solid var(--line); border-left: 0; }
   .operator-refresh-receipt > dl > div:first-child { border-top: 0; }
+  .operator-dataset-head > dl { grid-template-columns: 1fr; }
+  .operator-dataset-head > dl > div + div { border-top: 1px solid var(--line); border-left: 0; }
+  .operator-dataset-readiness { grid-template-columns: 1fr 1fr; }
+  .operator-dataset-readiness li:nth-child(odd) { border-left: 0; }
+  .operator-dataset-readiness li:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  .operator-dataset-subsection > header { align-items: flex-start; flex-direction: column; gap: 4px; }
   .operator-search { width: 100%; }
   .operator-table-scroll { overflow: visible; }
   .operator-table { display: block; min-width: 0; }
@@ -1723,6 +1828,11 @@ select { color-scheme: dark; }
   .main-content { padding-inline: 12px; }
   h1 { font-size: 24px; }
   .operator-confirmation-target > div { grid-template-columns: 1fr; gap: 4px; }
+  .operator-dataset-readiness { grid-template-columns: 1fr; }
+  .operator-dataset-readiness li:nth-child(n) { border-top: 1px solid var(--line); border-left: 0; }
+  .operator-dataset-readiness li:first-child { border-top: 0; }
+  .operator-data-operation-drawer > article > header,
+  .operator-operation-details { padding-inline: 16px; }
   .research-workspace-header { grid-template-columns: 1fr; }
   .research-new { justify-self: start; }
   .run-configuration-grid { grid-template-columns: 1fr; }

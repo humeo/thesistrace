@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { OperatorConsoleNavigation } from "./OperatorConsoleNavigation";
+import { OperatorDatasetStatus } from "./OperatorDatasetStatus";
 import { OperatorFinancialRefreshPanel } from "./OperatorFinancialRefreshPanel";
 import { OperatorIndustryRefreshPanel } from "./OperatorIndustryRefreshPanel";
 import { OperatorMarketRefreshDialog } from "./OperatorMarketRefreshDialog";
@@ -47,6 +48,7 @@ export function OperatorDataPage() {
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [fieldErrors, setFieldErrors] = useState(noFieldErrors);
+  const [datasetStatusReloadGeneration, setDatasetStatusReloadGeneration] = useState(0);
   const asOfInput = useRef<HTMLInputElement | null>(null);
   const idempotencyKeyInput = useRef<HTMLInputElement | null>(null);
   const pendingFieldFocus = useRef<keyof MarketRefreshFieldErrors | null>(null);
@@ -56,6 +58,10 @@ export function OperatorDataPage() {
   const trigger = useRef<HTMLButtonElement | null>(null);
   pendingSubmissionRef.current = pendingSubmission;
   const showNotFound = useCallback(() => setNotFound(true), []);
+  const notifyOperationAccepted = useCallback(
+    () => setDatasetStatusReloadGeneration((current) => current + 1),
+    [],
+  );
 
   useEffect(() => {
     if (
@@ -113,6 +119,7 @@ export function OperatorDataPage() {
           activeSubmissionGeneration.current += 1;
           setPendingSubmission(null);
           replaceOperation(next);
+          notifyOperationAccepted();
           window.requestAnimationFrame(() => trigger.current?.focus());
         } else {
           setOperation({ generation: trackedRequest.generation, operation: next });
@@ -159,7 +166,7 @@ export function OperatorDataPage() {
     document.addEventListener("visibilitychange", visibilityChanged);
     schedule();
     return stop;
-  }, [notFound, operation, pendingSubmission]);
+  }, [notFound, notifyOperationAccepted, operation, pendingSubmission]);
 
   function pollGenerationIsCurrent(
     tracked: TrackedMarketRefreshRequest & Readonly<{ source: "operation" | "pending" }>,
@@ -280,6 +287,11 @@ export function OperatorDataPage() {
 
         <OperatorConsoleNavigation current="data" />
 
+        <OperatorDatasetStatus
+          onAccessNotFound={showNotFound}
+          reloadGeneration={datasetStatusReloadGeneration}
+        />
+
         <section aria-labelledby="operator-market-refresh-heading" className="operator-section">
           <header className="operator-section-header">
             <div>
@@ -398,8 +410,14 @@ export function OperatorDataPage() {
           <MarketRefreshReceipt operation={operation.operation} pollError={pollError} />
         )}
 
-        <OperatorFinancialRefreshPanel onAccessNotFound={showNotFound} />
-        <OperatorIndustryRefreshPanel onAccessNotFound={showNotFound} />
+        <OperatorFinancialRefreshPanel
+          onAccessNotFound={showNotFound}
+          onOperationAccepted={notifyOperationAccepted}
+        />
+        <OperatorIndustryRefreshPanel
+          onAccessNotFound={showNotFound}
+          onOperationAccepted={notifyOperationAccepted}
+        />
       </section>
       {confirmation === null ? null : (
         <OperatorMarketRefreshDialog
@@ -411,6 +429,7 @@ export function OperatorDataPage() {
             if (activeSubmissionGeneration.current !== confirmation.generation) return;
             activeSubmissionGeneration.current += 1;
             replaceOperation(accepted);
+            notifyOperationAccepted();
             setConfirmation(null);
             setPendingSubmission(null);
             setPollError(false);

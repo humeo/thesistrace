@@ -35,6 +35,7 @@ from thesistrace.data import (
     DataRefreshError,
     DataRefreshService,
     DatasetLifecycle,
+    DatasetOperationalStatusService,
     DatasetOverviewService,
     MountedGenerationStore,
     RefreshOutcome,
@@ -769,6 +770,25 @@ def test_concurrent_workers_publish_one_authoritative_refresh(
                 benchmark_source=FixtureBenchmarkSource(),
             )
             assert started.wait(timeout=10)
+            with database.transaction() as transaction:
+                running = transaction.execute(
+                    """
+                    SELECT phase, last_heartbeat_at
+                    FROM data.refresh_operations
+                    WHERE idempotency_key = 'concurrent-workers'
+                    """
+                ).fetchone()
+                running_count = transaction.execute(
+                    """
+                    SELECT count(*) AS count
+                    FROM data.refresh_operations
+                    WHERE status = 'running'
+                    """
+                ).fetchone()
+            assert running is not None
+            assert running["phase"] == "market"
+            assert running["last_heartbeat_at"] is not None
+            assert running_count == {"count": 1}
             assert _process_next(second, source) is False
             release.set()
             assert future.result(timeout=10) is True
@@ -776,6 +796,17 @@ def test_concurrent_workers_publish_one_authoritative_refresh(
         terminal = first.inspect("concurrent-workers")
         assert terminal.status == "succeeded"
         assert terminal.attempt_count == 1
+        with database.transaction() as transaction:
+            terminal_state = transaction.execute(
+                """
+                SELECT phase, last_heartbeat_at
+                FROM data.refresh_operations
+                WHERE idempotency_key = 'concurrent-workers'
+                """
+            ).fetchone()
+        assert terminal_state is not None
+        assert terminal_state["phase"] == "publication"
+        assert terminal_state["last_heartbeat_at"] is not None
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 != original
@@ -1039,6 +1070,117 @@ def test_financial_and_industry_submission_share_exact_idempotency_and_the_marke
             "fifo-financial",
             "fifo-industry",
         )
+        database.close()
+
+
+def test_operational_status_has_safe_head_latest_kinds_and_stable_fifty_row_pages(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    created_at = datetime(2026, 8, 30, 8, tzinfo=UTC)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        pointer = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert pointer is not None
+        target = current["research_calendar"][-1]
+        with database.transaction() as transaction:
+            transaction.execute("DELETE FROM data.refresh_operations")
+            for index in range(53):
+                key = f"status-{index:03d}"
+                kind = ("market", "financial", "industry")[index % 3]
+                status = "cancelled" if index == 52 else "accepted"
+                transaction.execute(
+                    """
+                    INSERT INTO data.refresh_operations (
+                        idempotency_key, kind, fingerprint, status,
+                        as_of, observation_through_session, created_at,
+                        finished_at
+                    ) VALUES (
+                        %s, %s, %s, %s,
+                        CASE WHEN %s = 'market' THEN %s ELSE NULL END,
+                        CASE WHEN %s = 'market' THEN NULL ELSE %s::date END,
+                        %s,
+                        CASE WHEN %s = 'cancelled' THEN %s ELSE NULL END
+                    )
+                    """,
+                    (
+                        key,
+                        kind,
+                        f"{index:064x}",
+                        status,
+                        kind,
+                        AS_OF,
+                        kind,
+                        target,
+                        created_at,
+                        status,
+                        created_at,
+                    ),
+                )
+
+        service = DatasetOperationalStatusService(
+            database,
+            _overview_service(database, tmp_path),
+        )
+        first = service.status(cursor=None)
+
+        assert first.head.data_identity == pointer.data_identity
+        assert first.head.data_through_session.isoformat() == target
+        assert first.head.market_research_readiness is True
+        assert [item.idempotency_key for item in first.latest_by_kind] == [
+            "status-051",
+            "status-052",
+            "status-050",
+        ]
+        assert first.latest_by_kind[1].status == "cancelled"
+        assert len(first.operations) == 50
+        assert first.operations[0].idempotency_key == "status-052"
+        assert first.operations[-1].idempotency_key == "status-003"
+        assert first.next_cursor is not None
+        serialized = first.model_dump_json()
+        for forbidden in (
+            "generation_manifest_sha256",
+            "owner_token",
+            "lease_expires_at",
+            "fingerprint",
+        ):
+            assert forbidden not in serialized
+
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                INSERT INTO data.refresh_operations (
+                    idempotency_key, kind, fingerprint, status, as_of, created_at
+                ) VALUES (%s, 'market', %s, 'accepted', %s, %s)
+                """,
+                (
+                    "status-newest",
+                    "f" * 64,
+                    AS_OF,
+                    created_at + timedelta(seconds=1),
+                ),
+            )
+
+        second = service.status(cursor=first.next_cursor)
+        assert [item.idempotency_key for item in second.operations] == [
+            "status-002",
+            "status-001",
+            "status-000",
+        ]
+        assert second.next_cursor is None
+        assert "status-newest" not in {
+            item.idempotency_key for item in second.operations
+        }
+        reloaded = service.status(cursor=None)
+        assert reloaded.operations[0].idempotency_key == "status-newest"
+        assert reloaded.latest_by_kind[0].idempotency_key == "status-newest"
+    finally:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.refresh_operations WHERE idempotency_key LIKE 'status-%'"
+            )
         database.close()
 
 
@@ -1624,7 +1766,8 @@ def test_worker_waits_for_a_nonexpired_running_refresh_before_claiming_fifo(
                 UPDATE data.refresh_operations
                 SET status = 'running', owner_token = 'interrupted-worker',
                     lease_expires_at = now() + interval '1 minute',
-                    attempt_count = 1, started_at = now(), updated_at = now()
+                    attempt_count = 1, phase = 'claim',
+                    last_heartbeat_at = now(), started_at = now(), updated_at = now()
                 WHERE idempotency_key = 'interrupted-running'
                 """
             )
