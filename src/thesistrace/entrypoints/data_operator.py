@@ -42,6 +42,7 @@ from thesistrace.data import (
     DataOperatorError,
     DataRefreshError,
     DataRefreshService,
+    DataRefreshWorkerLease,
     DataSourceError,
     FinancialCandidateError,
     FinancialCapabilityReport,
@@ -162,6 +163,10 @@ def _run(
 
     if parsed.command == "worker" and parsed.once and parsed.replay is None:
         raise DataRefreshError("WORKER_REPLAY_REQUIRED")
+
+    worker_tushare_token: str | None = None
+    if parsed.command == "worker" and parsed.replay is None:
+        worker_tushare_token = _live_worker_tushare_token()
 
     market_request: tuple[str, datetime] | None = None
     financial_request: tuple[str, str] | None = None
@@ -294,6 +299,7 @@ def _run(
                     else None
                 ),
                 operational_progress=(None if parsed.command == "worker" else _progress),
+                token=worker_tushare_token,
             )
             provider = live_provider
             financial_source = TushareFinancialSource(live_provider)
@@ -385,26 +391,29 @@ def _run(
         )
         benchmark_source = TushareBenchmarkSource(provider)
         worker_wait = Event()
-        while True:
-            try:
-                processed = refresh_service.process_next(
-                    source,
-                    benchmark_source=benchmark_source,
-                    financial_announcement_source=financial_announcement_source,
-                    financial_source=financial_source,
-                    financial_source_window_selector=financial_source_window_selector,
-                    industry_source=industry_source,
-                    industry_source_target_selector=industry_source_target_selector,
-                )
-            except DataRefreshError:
+        with DataRefreshWorkerLease(database).maintain() as worker_owner:
+            while True:
+                worker_owner.assert_owned()
+                try:
+                    processed = refresh_service.process_next(
+                        source,
+                        benchmark_source=benchmark_source,
+                        financial_announcement_source=financial_announcement_source,
+                        financial_source=financial_source,
+                        financial_source_window_selector=financial_source_window_selector,
+                        industry_source=industry_source,
+                        industry_source_target_selector=industry_source_target_selector,
+                    )
+                except DataRefreshError:
+                    if parsed.once:
+                        raise
+                    worker_wait.wait(5)
+                    continue
+                worker_owner.assert_owned()
                 if parsed.once:
-                    raise
-                worker_wait.wait(5)
-                continue
-            if parsed.once:
-                return {"status": "processed" if processed else "idle"}
-            if not processed:
-                worker_wait.wait(5)
+                    return {"status": "processed" if processed else "idle"}
+                if not processed:
+                    worker_wait.wait(5)
     finally:
         if database is not None:
             database.close()
@@ -443,6 +452,7 @@ def _create_live_tushare_provider(
     rate_limit_events: dict[str, list[float]],
     bootstrap_checkpoint: Path | None,
     operational_progress: Callable[[dict[str, object]], None] | None,
+    token: str | None = None,
 ) -> tuple[HttpTushareTransport, TushareAdapter]:
     transport = HttpTushareTransport(
         endpoint=os.environ.get("THESISTRACE_TUSHARE_ENDPOINT", "https://api.tushare.pro")
@@ -459,7 +469,7 @@ def _create_live_tushare_provider(
 
     try:
         provider = TushareAdapter(
-            token=_environment("THESISTRACE_TUSHARE_TOKEN"),
+            token=token or _environment("THESISTRACE_TUSHARE_TOKEN"),
             transport=transport,
             progress=progress,
             bootstrap_checkpoint=bootstrap_checkpoint,
@@ -492,6 +502,23 @@ def _environment(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
         raise RuntimeError(f"missing Data Operator configuration: {name}")
+    return value
+
+
+def _live_worker_tushare_token() -> str:
+    raw_value = os.environ.get("THESISTRACE_TUSHARE_TOKEN", "")
+    value = raw_value.strip()
+    lowered = value.lower()
+    invalid = (
+        raw_value != value
+        or not 8 <= len(value) <= 512
+        or any(character.isspace() for character in value)
+        or lowered.startswith(("test-", "development-", "placeholder"))
+        or lowered in {"changeme", "dummy", "example", "tushare-test-token"}
+        or (value.startswith("<") and value.endswith(">"))
+    )
+    if invalid:
+        raise DataRefreshError("WORKER_TUSHARE_TOKEN_INVALID")
     return value
 
 

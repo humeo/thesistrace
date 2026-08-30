@@ -651,6 +651,34 @@ INSERT INTO data.refresh_cursor_secrets (singleton) VALUES (1);
 
 
 --
+-- Name: refresh_worker_leases; Type: TABLE; Schema: data; Owner: -
+--
+
+CREATE TABLE data.refresh_worker_leases (
+    singleton smallint PRIMARY KEY,
+    owner_token text,
+    lease_expires_at timestamp with time zone,
+    last_heartbeat_at timestamp with time zone NOT NULL,
+    started_at timestamp with time zone NOT NULL,
+    CONSTRAINT refresh_worker_leases_singleton_check CHECK (singleton = 1),
+    CONSTRAINT refresh_worker_leases_owner_check CHECK (
+        (
+            owner_token IS NULL
+            AND lease_expires_at IS NULL
+        )
+        OR (
+            owner_token ~ '^[0-9a-f]{32}$'
+            AND lease_expires_at IS NOT NULL
+            AND lease_expires_at > last_heartbeat_at
+        )
+    ),
+    CONSTRAINT refresh_worker_leases_time_check CHECK (
+        last_heartbeat_at >= started_at
+    )
+);
+
+
+--
 -- Name: bootstrap_operations bootstrap_operations_pkey; Type: CONSTRAINT; Schema: data; Owner: -
 --
 

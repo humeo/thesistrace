@@ -99,6 +99,14 @@ if "up" in arguments and "auth" in arguments and "api" in arguments:
 if arguments[0] == "inspect":
     if any(argument.startswith('{"status"') for argument in arguments):
         print('{"status":"exited","exit_code":143,"oom_killed":false}')
+    elif any("Config.Env" in argument for argument in arguments):
+        failing_target = os.environ.get("FAKE_ENV_INSPECT_FAILURE_TARGET")
+        if failing_target and arguments[-1].endswith(f"-{failing_target}-1"):
+            raise SystemExit(23)
+        if arguments[-1].endswith("-data-operator-worker-1"):
+            print("THESISTRACE_TUSHARE_TOKEN=worker-only-secret")
+        else:
+            print("PATH=/usr/bin")
     else:
         print("container inspection")
     raise SystemExit(0)
@@ -167,7 +175,7 @@ if "port" in arguments:
     }[service]
     print(f"127.0.0.1:{base_port + offset}")
 elif "ps" in arguments and "--quiet" in arguments:
-    print("container-test-id")
+    print(f"container-test-id-{arguments[-1]}")
 elif "ps" in arguments:
     print("test services")
 elif "logs" in arguments:
@@ -1356,6 +1364,34 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     ):
         assert f"docker image rm {project_name}-{service}\n" in commands
     assert "down --volumes --remove-orphans" in commands
+
+
+def test_e2e_secret_scope_fails_closed_when_container_inspection_fails(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_ENV_INSPECT_FAILURE_TARGET"] = "api"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "e2e"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    commands = command_log.read_text()
+    assert "inspect --format {{range .Config.Env}}" in commands
+    assert "pnpm --dir web test:e2e" not in commands
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
+    assert any(
+        line.startswith("phase=e2e-tushare-secret-scope ")
+        and not line.endswith("status=0")
+        for line in metadata.splitlines()
+    )
 
 
 def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate() -> None:

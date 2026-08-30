@@ -3,11 +3,24 @@ from datetime import UTC, date, datetime
 import pytest
 
 from thesistrace.data.operational_status import (
+    DataOperatorWorkerStatus,
     DataRefreshInvalidCursor,
     _decode_cursor,
     _encode_cursor,
     _operation_from_row,
 )
+
+
+def test_worker_status_contains_only_safe_availability_facts() -> None:
+    heartbeat = datetime(2026, 8, 30, 8, 1, tzinfo=UTC)
+
+    assert DataOperatorWorkerStatus(
+        available=False,
+        last_heartbeat_at=heartbeat,
+    ).model_dump(mode="json") == {
+        "available": False,
+        "last_heartbeat_at": "2026-08-30T08:01:00Z",
+    }
 
 
 def test_operational_status_cursor_is_opaque_bound_and_strict() -> None:

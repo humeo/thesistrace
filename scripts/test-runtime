@@ -17,7 +17,7 @@ auth_database_password=auth-test-password
 resend_api_key=resend-test-key
 resend_from_email='ThesisTrace <noreply@thesistrace.test>'
 resend_api_url=http://resend-fake:8300
-tushare_test_token=tushare-test-token
+tushare_test_token=0f3d7a91c4e6482b8d5f106a79c2e4b3
 compose_cleanup_required=true
 
 new_run_id() {
@@ -505,6 +505,35 @@ verify_worker_capacity_rejection() {
     grep -F '"event":"worker_startup_failed"' "$stderr" >/dev/null
     grep -F '"failure_code":"WORKER_CAPACITY_INVALID"' "$stderr" >/dev/null
   done
+}
+
+verify_tushare_secret_scope() {
+  for service in \
+    postgres rustfs initialize auth-initialize auth api research-worker \
+    batch-research-worker tracking-worker web; do
+    container_id="$project_name-$service-1"
+    container_environment=$(docker inspect \
+      --format '{{range .Config.Env}}{{println .}}{{end}}' "$container_id") \
+      || return 1
+    if printf '%s\n' "$container_environment" \
+      | grep -q '^THESISTRACE_TUSHARE_TOKEN='; then
+      echo "Tushare Secret escaped into $service" >&2
+      return 1
+    fi
+  done
+  worker_id="$project_name-data-operator-worker-1"
+  worker_environment=$(docker inspect \
+    --format '{{range .Config.Env}}{{println .}}{{end}}' "$worker_id") \
+    || return 1
+  printf '%s\n' "$worker_environment" \
+    | grep -q '^THESISTRACE_TUSHARE_TOKEN=' \
+    || return 1
+  browser_html=$(curl --fail --silent --show-error "$public_origin/data") \
+    || return 1
+  if printf '%s' "$browser_html" | grep -Fq "$tushare_test_token"; then
+    echo "Tushare Secret escaped into browser state" >&2
+    return 1
+  fi
 }
 
 verify_research_child_cgroup_oom_detection() {
@@ -1131,6 +1160,7 @@ case "$command" in
     run_phase e2e-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
       auth api research-worker batch-research-worker tracking-worker data-operator-worker web
+    run_phase e2e-tushare-secret-scope verify_tushare_secret_scope
     resend_port=$(mapped_port resend-fake 8300)
     resend_test_origin="http://127.0.0.1:$resend_port"
     printf 'postgres_port=%s\ns3_port=%s\nresend_port=%s\n' \
@@ -1190,6 +1220,7 @@ case "$command" in
     run_phase image-smoke-workers compose up --detach --no-build \
       --wait --wait-timeout 120 \
       research-worker batch-research-worker tracking-worker data-operator-worker
+    run_phase image-smoke-tushare-secret-scope verify_tushare_secret_scope
     network_internal=$(docker network inspect "${project_name}_default" \
       --format '{{.Internal}}')
     test "$network_internal" = true

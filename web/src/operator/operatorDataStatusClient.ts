@@ -23,6 +23,11 @@ export type DatasetOperationalHead = Readonly<{
   industryResearchReadiness: boolean;
 }>;
 
+export type DataOperatorWorkerStatus = Readonly<{
+  available: boolean;
+  lastHeartbeatAt: string | null;
+}>;
+
 export type DataRefreshOperationalStatus = Readonly<{
   idempotencyKey: string;
   kind: DataRefreshKind;
@@ -52,6 +57,7 @@ export type DataRefreshOperationalStatus = Readonly<{
 
 export type DatasetOperationalStatus = Readonly<{
   head: DatasetOperationalHead;
+  worker: DataOperatorWorkerStatus;
   latestByKind: readonly DataRefreshOperationalStatus[];
   operations: readonly DataRefreshOperationalStatus[];
   nextCursor: string | null;
@@ -126,12 +132,13 @@ export async function loadDatasetOperationalStatus(
 
 export function decodeDatasetOperationalStatus(value: unknown): DatasetOperationalStatus {
   if (
-    !hasExactKeys(value, ["head", "latest_by_kind", "operations", "next_cursor"])
+    !hasExactKeys(value, ["head", "worker", "latest_by_kind", "operations", "next_cursor"])
     || !Array.isArray(value.latest_by_kind)
     || !Array.isArray(value.operations)
     || value.operations.length > 50
   ) invalid();
   const head = decodeHead(value.head);
+  const worker = decodeWorker(value.worker);
   const latestByKind = value.latest_by_kind.map(decodeOperation);
   const operations = value.operations.map(decodeOperation);
   const kindOrder: Record<DataRefreshKind, number> = { market: 0, financial: 1, industry: 2 };
@@ -143,7 +150,20 @@ export function decodeDatasetOperationalStatus(value: unknown): DatasetOperation
     ))
   ) invalid();
   const nextCursor = decodeCursor(value.next_cursor);
-  return { head, latestByKind, operations, nextCursor };
+  return { head, worker, latestByKind, operations, nextCursor };
+}
+
+function decodeWorker(value: unknown): DataOperatorWorkerStatus {
+  if (
+    !hasExactKeys(value, ["available", "last_heartbeat_at"])
+    || typeof value.available !== "boolean"
+    || !isOptionalTimestamp(value.last_heartbeat_at)
+    || (value.available && value.last_heartbeat_at === null)
+  ) invalid();
+  return {
+    available: value.available,
+    lastHeartbeatAt: value.last_heartbeat_at,
+  };
 }
 
 function decodeHead(value: unknown): DatasetOperationalHead {

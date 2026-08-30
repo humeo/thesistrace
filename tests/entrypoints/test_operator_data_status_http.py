@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi.testclient import TestClient
 
 from thesistrace.data.operational_status import (
+    DataOperatorWorkerStatus,
     DataRefreshInvalidCursor,
     DataRefreshOperationalStatus,
     DatasetOperationalHead,
@@ -77,6 +78,10 @@ class OperationalStatusReader:
                 financial_research_readiness="ready_with_pending",
                 industry_research_readiness=True,
             ),
+            worker=DataOperatorWorkerStatus(
+                available=False,
+                last_heartbeat_at=datetime(2026, 8, 30, 7, 59, tzinfo=UTC),
+            ),
             latest_by_kind=(operation,),
             operations=(operation,),
             next_cursor="opaque-next-page",
@@ -102,7 +107,17 @@ def test_operator_dataset_status_returns_exact_safe_projection() -> None:
     assert response.status_code == 200
     assert reader.cursors == ["opaque-page"]
     payload = response.json()
-    assert set(payload) == {"head", "latest_by_kind", "operations", "next_cursor"}
+    assert set(payload) == {
+        "head",
+        "worker",
+        "latest_by_kind",
+        "operations",
+        "next_cursor",
+    }
+    assert payload["worker"] == {
+        "available": False,
+        "last_heartbeat_at": "2026-08-30T07:59:00Z",
+    }
     assert payload["head"] == {
         "data_identity": "d" * 64,
         "prepared_at": "2026-08-29T23:00:00Z",

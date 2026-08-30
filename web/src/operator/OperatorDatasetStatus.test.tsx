@@ -95,6 +95,62 @@ describe("Operator Dataset status", () => {
     expect(markup).not.toMatch(/manifest|owner token|lease|object path|raw response/i);
   });
 
+  it("warns explicitly when durable queued work has no available Worker", () => {
+    const markup = renderToStaticMarkup(
+      <OperatorDatasetStatusView
+        cursorDepth={0}
+        data={statusPage({
+          latestByKind: [operation({ status: "accepted" })],
+          operations: [operation({ status: "accepted" })],
+          worker: {
+            available: false,
+            lastHeartbeatAt: "2026-08-30T07:59:00Z",
+          },
+        })}
+        error={false}
+        loading={false}
+        onDetails={() => undefined}
+        onNext={() => undefined}
+        onPrevious={() => undefined}
+        onReload={() => undefined}
+        onAction={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain("Data Operator Worker unavailable");
+    expect(markup).toContain(
+      "Accepted work is durably queued but cannot start until the Worker recovers.",
+    );
+    expect(markup).toContain("2026-08-30T07:59:00Z");
+    expect(markup).not.toMatch(/owner token|lease expires|tushare/i);
+  });
+
+  it("describes interrupted running work as recoverable rather than not started", () => {
+    const markup = renderToStaticMarkup(
+      <OperatorDatasetStatusView
+        cursorDepth={0}
+        data={statusPage({
+          latestByKind: [operation({ status: "running" })],
+          operations: [operation({ status: "running" })],
+          worker: { available: false, lastHeartbeatAt: null },
+        })}
+        error={false}
+        loading={false}
+        onDetails={() => undefined}
+        onNext={() => undefined}
+        onPrevious={() => undefined}
+        onReload={() => undefined}
+        onAction={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain(
+      "Running work will be recovered from its durable claim when the Worker recovers.",
+    );
+    expect(markup).not.toContain("cannot start");
+  });
+
   it("shows exact Cancel facts and effect before asking for the password", () => {
     const target = operation({
       idempotencyKey: "market-cancel-source",
@@ -181,6 +237,7 @@ function statusPage(
       financialResearchReadiness: "ready_with_pending",
       industryResearchReadiness: true,
     },
+    worker: { available: true, lastHeartbeatAt: "2026-08-30T08:01:00Z" },
     latestByKind: [operation({ outcome: "published", status: "succeeded" })],
     operations: [operation({ outcome: "published", status: "succeeded" })],
     nextCursor: null,

@@ -60,6 +60,45 @@ def test_one_shot_market_worker_is_replay_only(
 
 @pytest.mark.parametrize(
     "value",
+    (
+        None,
+        "short",
+        "test-worker-token",
+        "tushare-test-token",
+        "development-data-operator-token",
+        "placeholder-token",
+        "<production-tushare-token>",
+        "token with whitespace",
+        " valid-worker-token ",
+    ),
+)
+def test_live_worker_rejects_missing_or_placeholder_tushare_token_before_database(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    value: str | None,
+) -> None:
+    if value is None:
+        monkeypatch.delenv("THESISTRACE_TUSHARE_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("THESISTRACE_TUSHARE_TOKEN", value)
+    monkeypatch.setattr(
+        data_operator,
+        "PostgresDatabase",
+        lambda _url: (_ for _ in ()).throw(AssertionError("database opened")),
+    )
+
+    with pytest.raises(SystemExit) as failure:
+        data_operator.main(["worker"])
+
+    assert failure.value.code == 2
+    assert json.loads(capsys.readouterr().out) == {
+        "code": "WORKER_TUSHARE_TOKEN_INVALID",
+        "status": "failed",
+    }
+
+
+@pytest.mark.parametrize(
+    "value",
     [
         "2026-08-11",
         "not-a-time",

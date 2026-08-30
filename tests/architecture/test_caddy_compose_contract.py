@@ -202,6 +202,9 @@ def test_base_compose_has_one_worker_only_market_refresh_runtime() -> None:
     assert "tushare-operator-console-market-refresh-replay.json" in test_overlay
     assert "tushare-image-smoke-market-refresh-replay.json" in test_overlay
     assert 'THESISTRACE_TUSHARE_TOKEN="$tushare_test_token"' in runner
+    assert "verify_tushare_secret_scope()" in runner
+    assert "image-smoke-tushare-secret-scope verify_tushare_secret_scope" in runner
+    assert "e2e-tushare-secret-scope verify_tushare_secret_scope" in runner
     assert "auth api research-worker batch-research-worker tracking-worker " \
         "data-operator-worker web" in runner
 

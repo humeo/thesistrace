@@ -218,11 +218,84 @@ export function stopDataOperatorWorker(): void {
   );
 }
 
-export function markDataRefreshRunning(idempotencyKey: string): void {
-  if (!/^[a-z0-9-]+$/.test(idempotencyKey)) {
-    throw new Error("Browser acceptance Data Refresh key is invalid");
+export function startDataOperatorWorker(): void {
+  execFileSync(
+    "docker",
+    ["start", `${testProjectName()}-data-operator-worker-1`],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+}
+
+export function expireDataOperatorWorkerLease(): void {
+  const result = runDataStateCommand(`
+    WITH expired AS (
+      UPDATE data.refresh_worker_leases
+      SET lease_expires_at = last_heartbeat_at + interval '1 microsecond'
+      WHERE singleton = 1 AND owner_token IS NOT NULL
+      RETURNING singleton
+    ) SELECT singleton FROM expired
+  `);
+  if (result !== "1") {
+    throw new Error(`Could not expire Data Operator Worker lease: ${result || "no row"}`);
   }
-  const result = execFileSync(
+}
+
+export function markDataRefreshRunning(idempotencyKey: string): void {
+  assertDataRefreshKey(idempotencyKey);
+  const result = runDataStateCommand(`WITH claimed AS (
+        UPDATE data.refresh_operations
+        SET status = 'running', owner_token = 'browser-worker-claim',
+            lease_expires_at = clock_timestamp() + interval '10 minutes',
+            attempt_count = attempt_count + 1, phase = 'claim',
+            last_heartbeat_at = clock_timestamp(), started_at = clock_timestamp(),
+            updated_at = clock_timestamp()
+        WHERE idempotency_key = '${idempotencyKey}' AND status = 'accepted'
+        RETURNING status
+      ) SELECT status FROM claimed`);
+  if (result !== "running") {
+    throw new Error(`Could not mark Data Refresh running: ${result || "no row"}`);
+  }
+}
+
+export function expireDataRefreshClaim(idempotencyKey: string): void {
+  assertDataRefreshKey(idempotencyKey);
+  const result = runDataStateCommand(`
+    WITH expired AS (
+      UPDATE data.refresh_operations
+      SET lease_expires_at = clock_timestamp() - interval '1 second'
+      WHERE idempotency_key = '${idempotencyKey}' AND status = 'running'
+      RETURNING status
+    ) SELECT status FROM expired
+  `);
+  if (result !== "running") {
+    throw new Error(`Could not expire Data Refresh claim: ${result || "no row"}`);
+  }
+}
+
+export function exhaustDataRefresh(idempotencyKey: string): void {
+  assertDataRefreshKey(idempotencyKey);
+  const result = runDataStateCommand(`
+    WITH exhausted AS (
+      UPDATE data.refresh_operations
+      SET status = 'failed', owner_token = NULL, lease_expires_at = NULL,
+          attempt_count = 3, phase = 'claim',
+          last_heartbeat_at = clock_timestamp(),
+          failure_code = 'RETRY_EXHAUSTED',
+          last_failure_code = 'WORKER_LEASE_EXPIRED',
+          started_at = clock_timestamp(), finished_at = clock_timestamp(),
+          updated_at = clock_timestamp()
+      WHERE idempotency_key = '${idempotencyKey}'
+        AND status = 'running' AND attempt_count = 2
+      RETURNING status
+    ) SELECT status FROM exhausted
+  `);
+  if (result !== "failed") {
+    throw new Error(`Could not exhaust Data Refresh: ${result || "no row"}`);
+  }
+}
+
+function runDataStateCommand(statement: string): string {
+  return execFileSync(
     "docker",
     [
       "exec",
@@ -237,21 +310,15 @@ export function markDataRefreshRunning(idempotencyKey: string): void {
       "--tuples-only",
       "--no-align",
       "--command",
-      `WITH claimed AS (
-        UPDATE data.refresh_operations
-        SET status = 'running', owner_token = 'browser-worker-claim',
-            lease_expires_at = clock_timestamp() + interval '10 minutes',
-            attempt_count = attempt_count + 1, phase = 'claim',
-            last_heartbeat_at = clock_timestamp(), started_at = clock_timestamp(),
-            updated_at = clock_timestamp()
-        WHERE idempotency_key = '${idempotencyKey}' AND status = 'accepted'
-        RETURNING status
-      ) SELECT status FROM claimed`,
+      statement,
     ],
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   ).trim();
-  if (result !== "running") {
-    throw new Error(`Could not mark Data Refresh running: ${result || "no row"}`);
+}
+
+function assertDataRefreshKey(idempotencyKey: string): void {
+  if (!/^[a-z0-9-]+$/.test(idempotencyKey)) {
+    throw new Error("Browser acceptance Data Refresh key is invalid");
   }
 }
 

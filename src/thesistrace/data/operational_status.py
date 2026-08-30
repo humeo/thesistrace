@@ -46,6 +46,13 @@ class DatasetOperationalHead(BaseModel):
     industry_research_readiness: bool
 
 
+class DataOperatorWorkerStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    available: bool
+    last_heartbeat_at: datetime | None
+
+
 class DataRefreshOperationalStatus(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -79,6 +86,7 @@ class DatasetOperationalStatus(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     head: DatasetOperationalHead
+    worker: DataOperatorWorkerStatus
     latest_by_kind: tuple[DataRefreshOperationalStatus, ...]
     operations: tuple[DataRefreshOperationalStatus, ...]
     next_cursor: str | None
@@ -138,12 +146,28 @@ class DatasetOperationalStatusService:
                     DATA_REFRESH_OPERATION_PAGE_SIZE + 1,
                 ),
             ).fetchall()
+            worker_row = transaction.execute(
+                """
+                SELECT
+                    lease_expires_at IS NOT NULL
+                        AND lease_expires_at > clock_timestamp() AS available,
+                    last_heartbeat_at
+                FROM data.refresh_worker_leases
+                WHERE singleton = 1
+                """
+            ).fetchone()
         operations = tuple(
             _operation_from_row(row)
             for row in rows[:DATA_REFRESH_OPERATION_PAGE_SIZE]
         )
         return DatasetOperationalStatus(
             head=_head_from_snapshot(overview),
+            worker=DataOperatorWorkerStatus(
+                available=bool(worker_row and worker_row["available"]),
+                last_heartbeat_at=(
+                    None if worker_row is None else worker_row["last_heartbeat_at"]
+                ),
+            ),
             latest_by_kind=tuple(_operation_from_row(row) for row in latest_rows),
             operations=operations,
             next_cursor=(

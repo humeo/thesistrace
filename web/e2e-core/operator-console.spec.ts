@@ -4,6 +4,9 @@ import {
   browserPassword,
   createResearcher,
   emailToken,
+  exhaustDataRefresh,
+  expireDataOperatorWorkerLease,
+  expireDataRefreshClaim,
   expect,
   issueInvitation,
   markDataRefreshRunning,
@@ -12,6 +15,7 @@ import {
   runAuthOperator,
   sameOriginHeaders,
   seedOperatorDirectory,
+  startDataOperatorWorker,
   stopDataOperatorWorker,
   securityTest as test,
   type AuthenticatedResearcher,
@@ -1478,6 +1482,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   expect(terminalStatusResponse.status()).toBe(200);
   const terminalStatus = await terminalStatusResponse.json() as {
     head: Record<string, unknown>;
+    worker: { available: boolean; last_heartbeat_at: string | null };
     latest_by_kind: Array<Record<string, unknown>>;
     operations: Array<Record<string, unknown>>;
     next_cursor: string | null;
@@ -1487,6 +1492,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     "latest_by_kind",
     "next_cursor",
     "operations",
+    "worker",
   ]);
   expect(JSON.stringify(terminalStatus)).not.toMatch(
     /generation_manifest|owner_token|lease_expires_at|fingerprint|object_path/i,
@@ -1581,7 +1587,80 @@ test("only the singleton Operator can open and read the Operator Console", async
   await page.unroute("**/api/operator/data/status**", statusPollingHandler);
 
   stopDataOperatorWorker();
-  const submitAcceptedMarket = async (key: string): Promise<string> => {
+  expireDataOperatorWorkerLease();
+  resetAuthRateLimits();
+  const recoveryKey = "browser-market-worker-recovery";
+  await submitAcceptedMarket(recoveryKey);
+  const unavailableReload = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/operator/data/status",
+  );
+  await datasetStatus.getByRole("button", { name: "Reload" }).click();
+  await unavailableReload;
+  await expect(datasetStatus.getByRole("alert")).toContainText(
+    "Data Operator Worker unavailable",
+  );
+  await expect(datasetStatus.getByRole("alert")).toContainText(
+    "Accepted work is durably queued but cannot start until the Worker recovers.",
+  );
+  const recoveryRow = operationHistory.getByRole("row").filter({ hasText: recoveryKey });
+  await expect(recoveryRow.getByText("Accepted · queued", { exact: true })).toBeVisible();
+
+  markDataRefreshRunning(recoveryKey);
+  expireDataRefreshClaim(recoveryKey);
+  const expiredClaimReload = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/operator/data/status",
+  );
+  await datasetStatus.getByRole("button", { name: "Reload" }).click();
+  await expiredClaimReload;
+  await expect(recoveryRow.locator('[data-label="Attempt / phase"] strong')).toHaveText("1");
+  await expect(recoveryRow.getByText("Running · Claim", { exact: true })).toBeVisible();
+
+  startDataOperatorWorker();
+  await expect.poll(async () => {
+    const response = await page.request.get("/api/operator/data/status");
+    const snapshot = await response.json() as {
+      worker?: { available?: unknown };
+      operations?: Array<{ attempt_count?: unknown; idempotency_key?: unknown }>;
+    };
+    const recovered = snapshot.operations?.find(
+      (operation) => operation.idempotency_key === recoveryKey,
+    );
+    return {
+      attempt: recovered?.attempt_count,
+      available: snapshot.worker?.available,
+    };
+  }, { timeout: 30_000 }).toEqual({ attempt: 2, available: true });
+  const recoveredReload = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/operator/data/status",
+  );
+  await datasetStatus.getByRole("button", { name: "Reload" }).click();
+  await recoveredReload;
+  await expect(datasetStatus.getByText(
+    "Data Operator Worker available",
+    { exact: true },
+  )).toBeVisible();
+  await expect(recoveryRow.locator('[data-label="Attempt / phase"] strong')).toHaveText("2");
+
+  stopDataOperatorWorker();
+  expireDataOperatorWorkerLease();
+  exhaustDataRefresh(recoveryKey);
+  const exhaustedReload = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/operator/data/status",
+  );
+  await datasetStatus.getByRole("button", { name: "Reload" }).click();
+  await exhaustedReload;
+  const exhaustedRow = recoveryRow;
+  await expect(exhaustedRow.getByText("Failed", { exact: true })).toBeVisible();
+  await expect(exhaustedRow.locator('[data-label="Attempt / phase"] strong')).toHaveText("3");
+  await exhaustedRow.getByRole("button", {
+    name: `View details for ${recoveryKey}`,
+  }).click();
+  const exhaustedDrawer = page.getByRole("dialog", { name: "Operation details" });
+  await expect(exhaustedDrawer).toContainText("RETRY_EXHAUSTED");
+  await expect(exhaustedDrawer).toContainText("WORKER_LEASE_EXPIRED");
+  await exhaustedDrawer.getByRole("button", { name: "Close operation details" }).click();
+
+  async function submitAcceptedMarket(key: string): Promise<string> {
     const proofResponse = await page.request.post("/api/auth/operator/proofs", {
       data: {
         as_of: marketAsOf,
@@ -1607,7 +1686,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     expect(receipt.status).toBe("accepted");
     expect(typeof receipt.as_of).toBe("string");
     return receipt.as_of as string;
-  };
+  }
 
   resetAuthRateLimits();
   const cancelSourceKey = "browser-market-cancel-source";

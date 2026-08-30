@@ -39,6 +39,10 @@ const response = {
     financial_research_readiness: "ready_with_pending",
     industry_research_readiness: true,
   },
+  worker: {
+    available: false,
+    last_heartbeat_at: "2026-08-30T07:59:00Z",
+  },
   latest_by_kind: [operation],
   operations: [operation],
   next_cursor: "opaque-page",
@@ -55,6 +59,10 @@ describe("Operator Dataset operational status decoder", () => {
         benchmarkResearchReadiness: true,
         financialResearchReadiness: "ready_with_pending",
         industryResearchReadiness: true,
+      },
+      worker: {
+        available: false,
+        lastHeartbeatAt: "2026-08-30T07:59:00Z",
       },
       latestByKind: [{
         idempotencyKey: "financial-20260830",
@@ -91,6 +99,10 @@ describe("Operator Dataset operational status decoder", () => {
     expect(() => decodeDatasetOperationalStatus({
       ...response,
       head: { ...response.head, data_identity: "not-a-dataset-identity" },
+    })).toThrow("Dataset operational status response is invalid");
+    expect(() => decodeDatasetOperationalStatus({
+      ...response,
+      worker: { ...response.worker, owner_token: "secret-worker" },
     })).toThrow("Dataset operational status response is invalid");
     expect(() => decodeDatasetOperationalStatus({
       ...response,

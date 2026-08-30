@@ -243,6 +243,7 @@ export function OperatorDatasetStatusView({
       ) : (
         <>
           <DatasetHeadSummary data={data} />
+          <WorkerAvailability data={data} />
           {error ? (
             <p className="inline-status inline-status-error" role="alert">
               Status refresh failed. Showing the last safe response; Reload or automatic
@@ -296,6 +297,33 @@ function DatasetHeadSummary({ data }: Readonly<{ data: DatasetOperationalStatus 
         </li>
         <ReadinessItem label="Industry" ready={head.industryResearchReadiness} />
       </ul>
+    </div>
+  );
+}
+
+function WorkerAvailability({ data }: Readonly<{ data: DatasetOperationalStatus }>) {
+  const worker = data.worker;
+  const visibleOperations = [...data.latestByKind, ...data.operations];
+  const accepted = visibleOperations.some((operation) => operation.status === "accepted");
+  const running = visibleOperations.some((operation) => operation.status === "running");
+  return (
+    <div
+      className={`inline-status${worker.available ? "" : " inline-status-error"}`}
+      role={worker.available ? "status" : "alert"}
+    >
+      <strong>
+        Data Operator Worker {worker.available ? "available" : "unavailable"}
+      </strong>
+      <span>
+        {worker.available
+          ? "Accepted work can be claimed by the single Refresh Worker."
+          : accepted
+            ? "Accepted work is durably queued but cannot start until the Worker recovers."
+            : running
+              ? "Running work will be recovered from its durable claim when the Worker recovers."
+              : "New work can be accepted durably but cannot start until the Worker recovers."}
+      </span>
+      <small>Last Worker heartbeat: {timestamp(worker.lastHeartbeatAt)}</small>
     </div>
   );
 }

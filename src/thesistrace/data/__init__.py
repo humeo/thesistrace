@@ -79,6 +79,7 @@ from thesistrace.data.models import (
     IndustryCoverage,
 )
 from thesistrace.data.operational_status import (
+    DataOperatorWorkerStatus,
     DataRefreshInvalidCursor,
     DataRefreshOperationalStatus,
     DatasetOperationalHead,
@@ -96,6 +97,7 @@ from thesistrace.data.refresh import (
     validate_market_refresh_request,
     validate_refresh_action_request,
 )
+from thesistrace.data.refresh_worker import DataRefreshWorkerLease
 from thesistrace.data.source import (
     DATA_SOURCE_ERROR_CATEGORIES,
     BootstrapCollectionPlan,
@@ -123,6 +125,7 @@ __all__ = [
     "CompletedFinancialCollection",
     "DATA_SOURCE_ERROR_CATEGORIES",
     "DataOverview",
+    "DataOperatorWorkerStatus",
     "DataCollectionError",
     "DataGarbageCollector",
     "DailyFinancialRefreshService",
@@ -130,6 +133,7 @@ __all__ = [
     "DataRefreshInvalidCursor",
     "DataRefreshOperationalStatus",
     "DataRefreshService",
+    "DataRefreshWorkerLease",
     "DatasetAdmissionService",
     "DatasetAdmissionSnapshot",
     "DatasetWarmupUnavailable",

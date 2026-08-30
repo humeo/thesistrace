@@ -209,6 +209,7 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "data.current_dataset_state",
             "data.bootstrap_operations",
             "data.refresh_operations",
+            "data.refresh_worker_leases",
             "data.refresh_cursor_secrets",
             "data.generation_candidates",
             "data.generation_pins",
@@ -452,6 +453,7 @@ def test_postgres_support_contains_mechanics_but_no_product_sql() -> None:
     data_schema = (ROOT / "src" / "thesistrace" / "data" / "schema.sql").read_text()
     assert "CREATE TABLE data.current_dataset_state" in data_schema
     assert "CREATE TABLE data.refresh_operations" in data_schema
+    assert "CREATE TABLE data.refresh_worker_leases" in data_schema
     assert "CREATE TABLE data.refresh_cursor_secrets" in data_schema
     assert "last_heartbeat_at timestamp with time zone" in data_schema
     assert "phase text" in data_schema
