@@ -8,6 +8,7 @@ export function controlWorker(
 ): void {
   execFileSync("docker", [action, `${testProjectName()}-${service}-1`], {
     stdio: "pipe",
+    timeout: 10_000,
   });
 }
 

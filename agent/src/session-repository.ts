@@ -812,9 +812,16 @@ export class ResearchSessionRepository {
     threadId: string,
     researcherId: string,
   ): Promise<readonly Message[]> {
+    return (await this.connectionSnapshot(threadId, researcherId)).messages;
+  }
+
+  async connectionSnapshot(
+    threadId: string,
+    researcherId: string,
+  ): Promise<Readonly<{ latestRun: TerminalRun | null; messages: readonly Message[] }>> {
     const client = await this.pool.connect();
     try {
-      // Messages and surfaces must come from one database snapshot. Separate
+      // Run identity, Messages and surfaces must come from one snapshot. Separate
       // read-committed queries can straddle an owner/surface commit and make a
       // valid FK-backed surface appear orphaned to a reconnecting client.
       await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
@@ -824,14 +831,15 @@ export class ResearchSessionRepository {
       `, [threadId]);
       if (owner.rows[0] === undefined) {
         await client.query("COMMIT");
-        return [];
+        return { latestRun: null, messages: [] };
       }
       if (owner.rows[0].researcher_id !== researcherId) throw new SessionNotFoundError();
       const messages = await loadDurableMessages(client, threadId, researcherId);
       const activities = await loadA2UIActivities(client, threadId, researcherId);
       const merged = mergeA2UIActivities(messages, activities);
+      const latestRun = await loadLatestRun(client, threadId);
       await client.query("COMMIT");
-      return merged;
+      return { latestRun, messages: merged };
     } catch (error) {
       await client.query("ROLLBACK").catch(() => undefined);
       throw error;
@@ -854,24 +862,28 @@ export class ResearchSessionRepository {
   async latestRun(threadId: string, researcherId: string): Promise<TerminalRun | null> {
     const ownership = await this.ownership(threadId, researcherId);
     if (ownership !== "owned") return null;
-    const result = await this.pool.query<{
-      id: string;
-      status: TerminalRun["status"];
-      terminal_error_code: string | null;
-    }>(`
-      SELECT id::text, status, terminal_error_code
-      FROM agent.agent_run
-      WHERE thread_id = $1::uuid
-      ORDER BY started_at DESC, id DESC
-      LIMIT 1
-    `, [threadId]);
-    const row = result.rows[0];
-    return row === undefined ? null : {
-      id: row.id,
-      status: row.status,
-      terminalErrorCode: row.terminal_error_code,
-    };
+    return loadLatestRun(this.pool, threadId);
   }
+}
+
+async function loadLatestRun(client: Pool | PoolClient, threadId: string): Promise<TerminalRun | null> {
+  const result = await client.query<{
+    id: string;
+    status: TerminalRun["status"];
+    terminal_error_code: string | null;
+  }>(`
+    SELECT id::text, status, terminal_error_code
+    FROM agent.agent_run
+    WHERE thread_id = $1::uuid
+    ORDER BY started_at DESC, id DESC
+    LIMIT 1
+  `, [threadId]);
+  const row = result.rows[0];
+  return row === undefined ? null : {
+    id: row.id,
+    status: row.status,
+    terminalErrorCode: row.terminal_error_code,
+  };
 }
 
 export function mergeA2UIActivities(

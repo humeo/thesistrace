@@ -40,6 +40,7 @@ def test_agent_host_is_a_private_node_package_without_research_authority() -> No
         "@mastra/mcp",
         "@mastra/pg",
         "ai",
+        "exit-hook",
         "hono",
         "pg",
         "rxjs",

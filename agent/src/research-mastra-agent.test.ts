@@ -198,6 +198,39 @@ test("one MCP Tool failure terminates the Run before later model output", async 
   expect(close).toHaveBeenCalledOnce();
 });
 
+test("cancellation drains the bridge reader even after the browser terminal failure", async () => {
+  const streaming = deferred<void>();
+  const drained = deferred<void>();
+  let tailCompleted = false;
+  const { agent, input, pendingBridges } = testAgent({
+    agentStream: async () => ({
+      processDataStream: async () => {
+        streaming.resolve();
+        await drained.promise;
+        tailCompleted = true;
+      },
+    }),
+    mcpRun: async () => ({
+      close: async () => undefined,
+      hasFatalToolFailure: () => false,
+      toolFailure: () => undefined,
+      tools: {},
+    }),
+    runMaxWallMs: 1_000,
+  });
+  const result = lastValueFrom(agent.run(input).pipe(toArray()));
+  await streaming.promise;
+  agent.abortRun();
+  expect((await result).at(-1)?.type).toBe("RUN_ERROR");
+  expect(tailCompleted).toBe(false);
+  expect(pendingBridges.size).toBe(1);
+  const settled = Promise.all(pendingBridges);
+  drained.resolve();
+  await settled;
+  expect(tailCompleted).toBe(true);
+  expect(pendingBridges.size).toBe(0);
+});
+
 test("a Core business rejection is a failed Tool but the Agent Run may continue", async () => {
   const close = vi.fn(async () => undefined);
   const { agent, input, repository } = testAgent({
@@ -459,9 +492,11 @@ function testAgent(options: Readonly<{
     resourceId: "00000000-0000-4000-8000-000000000010",
   } as unknown as MastraAgentConfig;
   const scheduleTitle = vi.fn(async () => undefined);
+  const pendingBridges = new Set<Promise<void>>();
   const agent = new ResearchMastraAgent(bridgeConfig, {
     agentBuildRevision: "test-build",
     mcpRun: options.mcpRun,
+    pendingBridges,
     providerModelId: "scripted-v1",
     repository: repository as unknown as ResearchSessionRepository,
     requestContext,
@@ -471,7 +506,7 @@ function testAgent(options: Readonly<{
     scheduleTitle,
     usage: () => undefined,
   });
-  return { agent, input, repository, requestContext, scheduleTitle };
+  return { agent, input, pendingBridges, repository, requestContext, scheduleTitle };
 }
 
 function deferred<T>() {

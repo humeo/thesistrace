@@ -4,7 +4,7 @@ import { testProjectName } from "./auth-fixture";
 
 type FaultProxyService = "auth-exchange-proxy" | "mcp-fault-proxy";
 type FaultProxyResource = "exchange" | "metadata" | "readiness" | "tool-call";
-type FaultProxyMode = "disconnect" | "disconnect-submit" | "pass" | "timeout";
+type FaultProxyMode = "disconnect" | "disconnect-submit" | "hold" | "hold-detail" | "pass" | "timeout";
 
 export function setProxyMode(
   service: FaultProxyService,

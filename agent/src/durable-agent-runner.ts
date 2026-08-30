@@ -12,8 +12,11 @@ import {
   concat,
   concatMap,
   defer,
+  endWith,
   filter,
+  firstValueFrom,
   from,
+  ignoreElements,
   mergeMap,
   of,
   shareReplay,
@@ -40,26 +43,39 @@ export class DurableResearchAgentRunner extends AgentRunner {
   private readonly delegate = new InMemoryAgentRunner({ onConcurrentRun: "throw" });
   private readonly active = new Map<string, ActiveRun>();
   private readonly sessionMutations = new Set<string>();
+  private closing = false;
 
   constructor(private readonly repository: ResearchSessionRepository) {
     super();
   }
 
   run(request: AgentRunnerRunRequest): Observable<BaseEvent> {
+    if (this.closing) return of(safeRunError());
     if (this.sessionMutations.has(request.threadId)) {
-      throw new SessionActiveRunError();
+      return of(safeRunConflict());
     }
     const current = this.active.get(request.threadId);
     const fingerprint = chatRunFingerprint(request.input);
     if (current?.runId === request.input.runId) {
       if (!current.fingerprint.equals(fingerprint)) {
-        throw new Error("ACTIVE_RUN_REQUEST_CONFLICT");
+        return of(safeRunConflict());
       }
       return current.events;
     }
 
+    let accepted: Observable<BaseEvent>;
+    try {
+      accepted = this.delegate.run(request);
+    } catch (error) {
+      // Native Runner admission is the concurrency authority. Project its
+      // rejection into AG-UI here: the framework SSE factory otherwise logs
+      // the exception and closes an empty HTTP 200 response.
+      return of(error instanceof Error && error.message === "Thread already running"
+        ? safeRunConflict()
+        : safeRunError());
+    }
     const a2ui = new ResearchA2UIEventProjector();
-    const source = this.delegate.run(request).pipe(
+    const source = accepted.pipe(
       concatMap((event) => defer(async () => {
         const batch = a2ui.project(event);
         for (const activity of batch.activities) {
@@ -105,15 +121,26 @@ export class DurableResearchAgentRunner extends AgentRunner {
     if (researcherId === undefined) {
       return of(safeConnectionError());
     }
-    const active = this.active.get(request.threadId);
+    const captured = this.active.get(request.threadId);
     return defer(async () => {
-      const [messages, latestRun] = await Promise.all([
-        this.repository.durableBrowserMessages(request.threadId, researcherId),
-        this.repository.latestRun(request.threadId, researcherId),
-      ]);
-      return { latestRun, messages };
+      let snapshot = await this.repository.connectionSnapshot(request.threadId, researcherId);
+      const matchingActive = () => {
+        const current = this.active.get(request.threadId);
+        return current?.runId === snapshot.latestRun?.id
+          ? current
+          : captured?.runId === snapshot.latestRun?.id ? captured : undefined;
+      };
+      let active = matchingActive();
+      // A Run may finish while the repeatable-read snapshot is loading. Read
+      // its durable terminal state once more if no captured/live stream owns
+      // that snapshot; do not invent a failed model invocation.
+      if (active === undefined && snapshot.latestRun?.status === "running") {
+        snapshot = await this.repository.connectionSnapshot(request.threadId, researcherId);
+        active = matchingActive();
+      }
+      return { ...snapshot, active };
     }).pipe(
-      mergeMap(({ latestRun, messages }) => {
+      mergeMap(({ active, latestRun, messages }) => {
         const snapshot: BaseEvent = {
           type: EventType.MESSAGES_SNAPSHOT,
           messages: [...safeBrowserMessages(messages)],
@@ -163,6 +190,20 @@ export class DurableResearchAgentRunner extends AgentRunner {
     return this.delegate.stop(request);
   }
 
+  async shutdown(): Promise<readonly string[]> {
+    this.closing = true;
+    const running = [...this.active.entries()];
+    const settled = Promise.all(running.map(([, run]) => firstValueFrom(
+      run.events.pipe(ignoreElements(), endWith(undefined)),
+    )));
+    await Promise.all(running.map(([threadId, run]) => this.delegate.stop({
+      threadId,
+      runId: run.runId,
+    })));
+    await settled;
+    return running.map(([, run]) => run.runId);
+  }
+
   async mutateSessionWhenIdle<T>(
     threadId: string,
     operation: () => Promise<T>,
@@ -204,5 +245,13 @@ function safeConnectionError(): BaseEvent {
     type: EventType.RUN_ERROR,
     code: "AGENT_CONNECTION_FAILED",
     message: "The Research Agent session could not be loaded.",
+  };
+}
+
+function safeRunConflict(): BaseEvent {
+  return {
+    type: EventType.RUN_ERROR,
+    code: "AGENT_RUN_CONFLICT",
+    message: "This Chat is already running. Reopen it to follow the current run.",
   };
 }

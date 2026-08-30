@@ -34,6 +34,7 @@ import { createResearchRuntime, type ResearchRuntime } from "./research-runtime.
 import { initializeAgentSchema } from "./schema-initialize.js";
 import {
   SCRIPTED_FACTOR_IDEA_PROMPT,
+  SCRIPTED_RESUME_RESEARCH_PROMPT,
   SCRIPTED_DISCOVERY_PROMPT,
   SCRIPTED_RELOAD_DAILY_TRACK_PROMPT,
   SCRIPTED_FACTOR_BATCH_PROMPT,
@@ -271,6 +272,214 @@ describe.sequential("durable Research Agent runtime", () => {
       await runtime.close();
     }
   });
+
+  it("rejects an overlapping Thread Run explicitly while another Thread runs independently", async () => {
+    const threadId = fixedUuid(9001);
+    const runId = fixedUuid(9002);
+    const secondThreadId = fixedUuid(9011);
+    const secondRunId = fixedUuid(9012);
+    const barrier = toolBarrier();
+    const toolRuns: string[] = [];
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async (_headers, acceptedRunId) => ({
+        close: async () => undefined,
+        hasFatalToolFailure: () => false,
+        toolFailure: () => undefined,
+        tools: {
+          get_research_context: createTool({
+            description: "Read the current research context.",
+            execute: async () => {
+              toolRuns.push(acceptedRunId);
+              await barrier.promise;
+              return { available: true };
+            },
+            id: "get_research_context",
+            inputSchema: z.object({}).strict(),
+          }),
+        },
+      }),
+    });
+    const first = run(runtime, runInput({
+      content: SCRIPTED_TOOL_PROMPT,
+      messageId: fixedUuid(9003),
+      runId,
+      threadId,
+    }), primaryResearcher);
+    try {
+      await vi.waitFor(() => expect(toolRuns).toEqual([runId]));
+      const attached = connect(runtime, threadId, primaryResearcher);
+      await expect(runtime.deleteSession(threadId, primaryResearcher))
+        .rejects.toBeInstanceOf(SessionActiveRunError);
+
+      const overlap = await run(runtime, runInput({
+        content: SCRIPTED_TOOL_PROMPT,
+        messageId: fixedUuid(9004),
+        runId: fixedUuid(9005),
+        sessionMode: "existing",
+        threadId,
+      }), primaryResearcher);
+      expect(overlap).toMatchObject([{ type: "RUN_ERROR", code: "AGENT_RUN_CONFLICT" }]);
+      expect(overlap).toHaveLength(1);
+
+      const independent = run(runtime, runInput({
+        content: SCRIPTED_TOOL_PROMPT,
+        messageId: fixedUuid(9013),
+        runId: secondRunId,
+        threadId: secondThreadId,
+      }), primaryResearcher);
+      await vi.waitFor(() => expect(toolRuns).toEqual([runId, secondRunId]));
+      const active = await owner.query<{ id: string; status: string }>(`
+        SELECT id::text, status FROM agent.agent_run
+        WHERE thread_id = ANY($1::uuid[]) ORDER BY id
+      `, [[threadId, secondThreadId]]);
+      expect(active.rows).toEqual([
+        { id: runId, status: "running" },
+        { id: secondRunId, status: "running" },
+      ]);
+      for (const target of [threadId, fixedUuid(9099)]) {
+        const foreign = await runtime.handle(connectRequest(target), foreignResearcher);
+        expect(foreign.status).toBe(404);
+        await expect(foreign.json()).resolves.toEqual({ code: "CHAT_SESSION_NOT_FOUND" });
+        await expect(runtime.deleteSession(target, foreignResearcher))
+          .rejects.toBeInstanceOf(SessionNotFoundError);
+        const foreignRun = await runtime.handle(runRequest(runInput({
+          messageId: fixedUuid(9097), runId: fixedUuid(9098), sessionMode: "existing", threadId: target,
+        })), foreignResearcher);
+        expect(foreignRun.status).toBe(404);
+        await expect(foreignRun.json()).resolves.toEqual({ code: "CHAT_SESSION_NOT_FOUND" });
+      }
+
+      barrier.resolve();
+      const [firstEvents, attachedEvents, independentEvents] = await Promise.all([
+        first, attached, independent,
+      ]);
+      for (const events of [firstEvents, attachedEvents]) {
+        expect(events[0]).toMatchObject({ type: "RUN_STARTED", threadId, runId });
+        expect(events.at(-1)).toMatchObject({ type: "RUN_FINISHED", threadId, runId });
+      }
+      expect(independentEvents.at(-1)).toMatchObject({ runId: secondRunId });
+      const persisted = snapshotMessages(await connect(runtime, threadId, primaryResearcher));
+      expect(persisted.filter((message) => message.role === "user").map((message) => message.id))
+        .toEqual([fixedUuid(9003)]);
+      expect(persisted.filter((message) => message.role === "tool")).toHaveLength(1);
+      await expect(runtime.session(threadId, primaryResearcher))
+        .resolves.toMatchObject({ activeRun: false });
+    } finally {
+      barrier.resolve();
+      await first;
+      await runtime.close();
+    }
+  });
+
+  it("does not expose framework Stop, inspector, memory, or unscoped Thread endpoints", async () => {
+    const runtime = await createIntegrationRuntime();
+    try {
+      for (const [method, path] of [
+        ["POST", `/agent/research/stop/${fixedUuid(9201)}`],
+        ["POST", "/agent/research/stop"],
+        ["POST", "/agent/research/resume"],
+        ["GET", "/threads"],
+        ["GET", `/threads/${fixedUuid(9201)}/messages`],
+        ["GET", `/threads/${fixedUuid(9201)}/events`],
+        ["GET", "/inspector/metadata"],
+        ["GET", "/memories"],
+        ["GET", "/cpk-debug/events"],
+        ["POST", "/agent/research/connect?threadId=ignored"],
+      ]) {
+        const response = await runtime.handle(new Request(
+          `http://agent.test/api/agent/copilotkit${path}`,
+          { method },
+        ), primaryResearcher);
+        expect(response.status, path).toBe(404);
+        await expect(response.json()).resolves.toEqual({ code: "CHAT_SESSION_NOT_FOUND" });
+      }
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("fails an unfinished invocation on shutdown and replays completed Tool outcomes without resubmission", async () => {
+    const warnings = vi.spyOn(console, "warn");
+    const threadId = fixedUuid(9301);
+    const runId = fixedUuid(9302);
+    const coreRunId = "run_00000000000000009301";
+    const calls: Array<Readonly<{ input: Record<string, unknown>; name: string }>> = [];
+    const barrier = toolBarrier();
+    let detailWaiting = false;
+    let runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => { barrier.resolve(); },
+        hasFatalToolFailure: () => false,
+        toolFailure: () => undefined,
+        tools: researchLoopTools(coreRunId, calls, async () => {
+          detailWaiting = true;
+          await barrier.promise;
+        }),
+      }),
+    });
+    const first = run(runtime, runInput({
+      content: SCRIPTED_FACTOR_IDEA_PROMPT,
+      messageId: fixedUuid(9303),
+      runId,
+      threadId,
+    }), primaryResearcher);
+    try {
+      await vi.waitFor(() => expect(detailWaiting).toBe(true), { timeout: 3_000 });
+      const repository = new ResearchSessionRepository(agentStore);
+      const before = await repository.connectionSnapshot(threadId, primaryResearcher.researcher_id);
+      expect(before.latestRun).toMatchObject({ id: runId, status: "running" });
+      expect(before.messages.some((message) => message.role === "tool"
+        && parseSafeToolResult(message.content)?.resource?.id === coreRunId)).toBe(true);
+
+      let closed = false;
+      const closing = runtime.close().then(() => { closed = true; });
+      await vi.waitFor(() => expect(closed).toBe(true), { timeout: 3_000 });
+      await closing;
+      const interrupted = await first;
+      expect(interrupted.filter((event) => event.type === "RUN_ERROR")).toHaveLength(1);
+      expect(interrupted.some((event) => event.type === "RUN_FINISHED")).toBe(false);
+
+      runtime = await createResearchRuntime(settings, {
+        mcpRunFactory: async () => ({
+          close: async () => undefined,
+          hasFatalToolFailure: () => false,
+          toolFailure: () => undefined,
+          tools: researchLoopTools(coreRunId, calls),
+        }),
+      });
+      const replay = await connect(runtime, threadId, primaryResearcher);
+      expect(replay[0]).toMatchObject({ type: "RUN_STARTED", threadId, runId });
+      expect(replay.at(-1)).toMatchObject({ type: "RUN_ERROR" });
+      const retained = snapshotMessages(replay);
+      expect(retained.filter((message) => message.role === "user").map((message) => message.id))
+        .toEqual([fixedUuid(9303)]);
+      expect(retained.some((message) => message.role === "tool"
+        && parseSafeToolResult(message.content)?.resource?.id === coreRunId)).toBe(true);
+
+      const resumed = await run(runtime, runInput({
+        messageId: fixedUuid(9304),
+        messages: [...retained.filter((message) => message.role !== "activity"), {
+          content: SCRIPTED_RESUME_RESEARCH_PROMPT, id: fixedUuid(9304), role: "user",
+        }],
+        runId: fixedUuid(9305), threadId,
+      }), primaryResearcher);
+      expect(resumed.at(-1)).toMatchObject({ type: "RUN_FINISHED", runId: fixedUuid(9305) });
+      expect(calls.filter((call) => call.name === "submit_research_run")).toHaveLength(1);
+      const statuses = await owner.query<{ id: string; status: string }>(`
+        SELECT id::text, status FROM agent.agent_run WHERE thread_id = $1 ORDER BY id
+      `, [threadId]);
+      expect(statuses.rows).toEqual([
+        { id: runId, status: "failed" }, { id: fixedUuid(9305), status: "completed" },
+      ]);
+      expect(warnings.mock.calls.flat().map(String).join("\n"))
+        .not.toContain("Cannot use a pool after calling end");
+    } finally {
+      barrier.resolve();
+      await first;
+      await runtime.close();
+      warnings.mockRestore();
+    }
+  }, 15_000);
 
   it("orders durable history by exact UTC instants on a non-UTC host", async () => {
     expect(new Date("2026-08-30T00:00:00.000Z").getTimezoneOffset()).toBe(-540);
@@ -2130,6 +2339,12 @@ describe.sequential("durable Research Agent runtime", () => {
     }
   });
 });
+
+function toolBarrier(): Readonly<{ promise: Promise<void>; resolve: () => void }> {
+  let resolve = () => undefined as void;
+  const promise = new Promise<void>((release) => { resolve = release; });
+  return { promise, resolve };
+}
 
 function researchLoopTools(
   coreRunId: string,

@@ -399,10 +399,19 @@ async function sessionFetch(
     controller.abort();
   }, SESSION_REQUEST_TIMEOUT_MS);
   try {
-    return await fetch(input, {
+    const response = await fetch(input, {
       ...init,
       credentials: "same-origin",
       signal: controller.signal,
+    });
+    if (response.status === 204) return response;
+    // A header-only response is not a completed metadata request. Retain the
+    // caller cancellation and deadline until its whole body has arrived.
+    const body = await awaitWithAbort(response.arrayBuffer(), controller.signal);
+    return new Response(body, {
+      headers: response.headers,
+      status: response.status,
+      statusText: response.statusText,
     });
   } catch (error) {
     if (parentSignal?.aborted === true) throw abortError();

@@ -144,6 +144,7 @@ export async function createResearchRuntime(
   });
   const agent = new Agent({
     defaultOptions: ({ requestContext }) => ({
+      abortSignal: requestContext.get<string, AbortSignal | undefined>("agentAbortSignal"),
       maxSteps: 16,
       providerOptions: selectionFrom(requestContext).providerOptions,
       // Completed tool steps must be durable while a later MCP call is still
@@ -172,6 +173,7 @@ export async function createResearchRuntime(
     storage,
   });
   const runner = new DurableResearchAgentRunner(repository);
+  const pendingBridges = new Set<Promise<void>>();
   const runtime = new CopilotRuntime({
     a2ui: {
       agents: [RESEARCH_AGENT_ID],
@@ -237,6 +239,7 @@ export async function createResearchRuntime(
         [RESEARCH_AGENT_ID]: createRunAgent({
           agentBuildRevision: settings.agentBuildRevision,
           mastra,
+          pendingBridges,
           mcpRun: () => mcpRunFactory(
             new Headers(request.headers),
             validated.input.runId,
@@ -265,19 +268,29 @@ export async function createResearchRuntime(
     mode: "multi-route",
     runtime,
   });
+  let closePromise: Promise<void> | undefined;
 
   return {
-    close: async () => {
+    close: () => closePromise ??= (async () => {
+      const interruptedRuns = await runner.shutdown();
+      await Promise.all(pendingBridges);
+      await Promise.all(interruptedRuns.map((runId) => repository.awaitFrameworkRunSettled(runId)));
       await titleGenerator.settled();
       await memory.settled();
+      await repository.failInterruptedRunsAfterHostRestart();
       await storage.close();
       await readinessPool.end();
       await pool.end();
+    })(),
+    deleteSession: async (threadId, researcher) => {
+      // Ownership must be checked before observable Runner state. A foreign
+      // running Session must be indistinguishable from an unknown Session.
+      await assertOwnedThread(repository, threadId, researcher.researcher_id);
+      await runner.mutateSessionWhenIdle(
+        threadId,
+        () => repository.deleteSession(threadId, researcher.researcher_id),
+      );
     },
-    deleteSession: (threadId, researcher) => runner.mutateSessionWhenIdle(
-      threadId,
-      () => repository.deleteSession(threadId, researcher.researcher_id),
-    ),
     handle: (request, researcher) => handleAuthenticatedRuntimeRequest({
       repository,
       request,
@@ -319,6 +332,7 @@ export async function createResearchRuntime(
 function createRunAgent(options: Readonly<{
   agentBuildRevision: string;
   mastra: Mastra;
+  pendingBridges: Set<Promise<void>>;
   mcpRun: () => ReturnType<McpRunFactory>;
   providerModelId: string;
   repository: ResearchSessionRepository;
@@ -344,6 +358,7 @@ function createRunAgent(options: Readonly<{
   }, {
     agentBuildRevision: options.agentBuildRevision,
     mcpRun: options.mcpRun,
+    pendingBridges: options.pendingBridges,
     providerModelId: options.providerModelId,
     repository: options.repository,
     requestContext: options.requestContext,
@@ -373,15 +388,27 @@ async function handleAuthenticatedRuntimeRequest(options: Readonly<{
   settings: AgentSettings;
 }>): Promise<Response> {
   try {
-    const pathname = new URL(options.request.url).pathname;
-    if (pathname.endsWith(`/agent/${RESEARCH_AGENT_ID}/run`)) {
+    const url = new URL(options.request.url);
+    const pathname = url.pathname;
+    const basePath = "/api/agent/copilotkit";
+    const isRun = options.request.method === "POST"
+      && pathname === `${basePath}/agent/${RESEARCH_AGENT_ID}/run`;
+    const isConnect = options.request.method === "POST"
+      && pathname === `${basePath}/agent/${RESEARCH_AGENT_ID}/connect`;
+    const isInfo = options.request.method === "GET" && pathname === `${basePath}/info`;
+    // The library also ships Stop, inspector, unscoped Thread and Memory
+    // endpoints. None is a ThesisTrace Chat API or an alternate replay path.
+    if (url.search !== "" || (!isRun && !isConnect && !isInfo)) {
+      throw new SessionNotFoundError();
+    }
+    if (isRun) {
       const run = await readValidatedChatRun(options.request, options.settings.modelRegistry);
-      await assertRunnableThread(
-        options.repository,
-        run.input.threadId,
-        options.researcher.researcher_id,
-      );
-    } else if (pathname.endsWith(`/agent/${RESEARCH_AGENT_ID}/connect`)) {
+      if (run.sessionMode === "existing") {
+        await assertOwnedThread(options.repository, run.input.threadId, options.researcher.researcher_id);
+      } else {
+        await assertRunnableThread(options.repository, run.input.threadId, options.researcher.researcher_id);
+      }
+    } else if (isConnect) {
       const threadId = await readThreadId(options.request);
       await assertOwnedThread(
         options.repository,

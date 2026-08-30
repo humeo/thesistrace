@@ -1,4 +1,6 @@
 import { serve } from "@hono/node-server";
+import { createServer, type Server } from "node:http";
+import { asyncExitHook } from "exit-hook";
 
 import { createAgentApp } from "./app.js";
 import { readAgentSettings } from "./config.js";
@@ -23,28 +25,34 @@ async function main(): Promise<void> {
     }),
   });
   const server = serve({
+    createServer,
     fetch: app.fetch,
     hostname: settings.host,
     port: settings.port,
-  });
+  }) as Server;
 
-  let closing = false;
-  const close = () => {
-    if (closing) return;
-    closing = true;
-    server.close(() => {
-      researchRuntime.close().then(
-        () => {
-          process.exitCode = 0;
-        },
-        () => {
-          process.exitCode = 1;
-        },
-      );
-    });
-  };
-  process.once("SIGINT", close);
-  process.once("SIGTERM", close);
+  // Mastra MCP uses exit-hook to terminate on signals. Join its awaited
+  // lifecycle instead of racing it with a separate process signal listener.
+  asyncExitHook(async () => {
+    // Stop unfinished framework Runs before waiting for their SSE connections
+    // to close. Waiting for HTTP first leaves shutdown blocked on the model.
+    try {
+      await Promise.all([
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => error === undefined ? resolve() : reject(error));
+        }),
+        researchRuntime.close().finally(() => {
+          // CopilotKit/Caddy can retain a streaming HTTP reader after its Run
+          // has terminated. No new requests are accepted, and all model/Memory
+          // work is drained before detaching the remaining sockets.
+          server.closeAllConnections();
+        }),
+      ]);
+      process.stdout.write(`${JSON.stringify({ event: "agent_shutdown_completed" })}\n`);
+    } catch {
+      process.stderr.write(`${JSON.stringify({ event: "agent_shutdown_failed" })}\n`);
+    }
+  }, { wait: 10_000 });
 }
 
 main().catch(() => {

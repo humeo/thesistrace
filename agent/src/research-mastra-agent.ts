@@ -30,6 +30,7 @@ type ResearchExecutionContext = Readonly<{
   agentBuildRevision: string;
   providerModelId: string;
   mcpRun: () => Promise<McpRun>;
+  pendingBridges: Set<Promise<void>>;
   researcherId: string;
   repository: ResearchSessionRepository;
   requestContext: import("@mastra/core/request-context").RequestContext;
@@ -42,17 +43,27 @@ type ResearchExecutionContext = Readonly<{
 class PersistedFatalToolFailure extends Error {}
 
 export class ResearchMastraAgent extends MastraAgent {
+  private readonly abortController = new AbortController();
+  private terminalStarted = false;
+
   constructor(
     private readonly bridgeConfig: MastraAgentConfig,
     private readonly execution: ResearchExecutionContext,
   ) {
     super(bridgeConfig);
+    execution.requestContext.set("agentAbortSignal", this.abortController.signal);
   }
 
   override clone(): ResearchMastraAgent {
     const clone = new ResearchMastraAgent(this.bridgeConfig, this.execution);
     if (this.headers !== undefined) clone.headers = { ...this.headers };
     return clone;
+  }
+
+  override abortRun(): void {
+    if (!this.terminalStarted) {
+      this.abortController.abort(new Error("AGENT_RUN_INTERRUPTED"));
+    }
   }
 
   override run(input: RunAgentInput): Observable<BaseEvent> {
@@ -69,7 +80,6 @@ export class ResearchMastraAgent extends MastraAgent {
     return defer(() => {
       let disposed = false;
       let ownsRun = false;
-      let terminalStarted = false;
       let shouldScheduleTitle = false;
       let titleScheduled = false;
       let activeMcpRun: McpRun | undefined;
@@ -117,7 +127,7 @@ export class ResearchMastraAgent extends MastraAgent {
         if (shouldScheduleTitle) void scheduleTitle();
         if (disposed && prepared.kind === "new") {
           ownsRun = true;
-          terminalStarted = true;
+          this.terminalStarted = true;
           await this.failRun(input.runId, closeMcp);
           throw new Error("AGENT_RUN_DISPOSED");
         }
@@ -154,7 +164,7 @@ export class ResearchMastraAgent extends MastraAgent {
                 messages: [this.execution.run.latestUserMessage],
               };
             }).pipe(
-              concatMap((authoritativeInput) => super.run(authoritativeInput)),
+              concatMap((authoritativeInput) => this.runBridge(authoritativeInput)),
               // The durable acceptance event above is the sole RUN_STARTED.
               concatMap((event) => {
                 if (event.type === EventType.RUN_STARTED) return from([]);
@@ -166,7 +176,7 @@ export class ResearchMastraAgent extends MastraAgent {
                   ? undefined
                   : activeMcpRun?.toolFailure(toolCallId);
                 if (toolFailure === "transport") {
-                  terminalStarted = true;
+                  this.terminalStarted = true;
                   // Emit the safe failed Tool result, persist the terminal Run
                   // failure, then unsubscribe from any already-buffered model
                   // output. This prevents a later RUN_FINISHED from racing the
@@ -181,7 +191,7 @@ export class ResearchMastraAgent extends MastraAgent {
                   event.type === EventType.RUN_ERROR
                   || event.type === EventType.RUN_FINISHED
                 ) {
-                  terminalStarted = true;
+                  this.terminalStarted = true;
                 }
                 return this.persistTerminalEvent(
                   event,
@@ -200,7 +210,7 @@ export class ResearchMastraAgent extends MastraAgent {
         }),
       );
 
-      const boundedRun = withTotalTimeout(source, this.execution.runMaxWallMs).pipe(
+      const boundedRun = withTotalTimeout(source, this.execution.runMaxWallMs, this.abortController).pipe(
         // Once prepareRun inserts a Run, every later failure owns that row and
         // must durably terminate it. Preparation conflicts never mutate a Run.
         catchError((error) => {
@@ -208,7 +218,7 @@ export class ResearchMastraAgent extends MastraAgent {
           if (!ownsRun) {
             return from(closeMcp()).pipe(map(() => safeRunError()));
           }
-          terminalStarted = true;
+          this.terminalStarted = true;
           return this.persistFailure(input.runId, closeMcp);
         }),
       );
@@ -216,14 +226,42 @@ export class ResearchMastraAgent extends MastraAgent {
       return boundedRun.pipe(
         finalize(() => {
           disposed = true;
-          if (ownsRun && !terminalStarted) {
-            terminalStarted = true;
+          if (ownsRun && !this.terminalStarted) {
+            this.terminalStarted = true;
+            this.abortController.abort(new Error("AGENT_RUN_INTERRUPTED"));
             void this.failRun(input.runId, closeMcp);
           } else {
             void closeMcp();
           }
         }),
       );
+    });
+  }
+
+  private runBridge(input: RunAgentInput): Observable<BaseEvent> {
+    return new Observable((subscriber) => {
+      let completed = false;
+      let settle!: () => void;
+      const drained = new Promise<void>((resolve) => { settle = resolve; });
+      this.execution.pendingBridges.add(drained);
+      const finish = () => {
+        completed = true;
+        this.execution.pendingBridges.delete(drained);
+        settle();
+      };
+      // The pinned bridge's Observable teardown does not await its async
+      // stream reader or final Memory snapshot. Keep that reader subscribed
+      // until it really terminates; cancellation is propagated to Mastra via
+      // abortSignal, while closed downstream subscribers discard late output.
+      // The Host drains these readers before closing PostgreSQL.
+      super.run(input).subscribe({
+        complete: () => { finish(); subscriber.complete(); },
+        error: (error) => { finish(); subscriber.error(error); },
+        next: (event) => subscriber.next(event),
+      });
+      return () => {
+        if (!completed) this.abortController.abort(new Error("AGENT_RUN_INTERRUPTED"));
+      };
     });
   }
 
@@ -319,19 +357,30 @@ function safeRunError(): BaseEvent {
 function withTotalTimeout(
   source: Observable<BaseEvent>,
   timeoutMs: number,
+  abortController: AbortController,
 ): Observable<BaseEvent> {
   return new Observable((subscriber) => {
+    const signal = abortController.signal;
+    if (signal.aborted) {
+      subscriber.error(signal.reason);
+      return;
+    }
     const subscription = source.subscribe({
       complete: () => subscriber.complete(),
       error: (error) => subscriber.error(error),
       next: (event) => subscriber.next(event),
     });
-    const timer = setTimeout(() => {
+    const onAbort = () => {
       subscription.unsubscribe();
-      subscriber.error(new Error("AGENT_RUN_TIMEOUT"));
+      subscriber.error(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    const timer = setTimeout(() => {
+      abortController.abort(new Error("AGENT_RUN_TIMEOUT"));
     }, timeoutMs);
     return () => {
       clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
       subscription.unsubscribe();
     };
   });

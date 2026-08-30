@@ -1,4 +1,4 @@
-import type { AbstractAgent, AgentSubscriber } from "@ag-ui/client";
+import type { AgentSubscriber } from "@ag-ui/client";
 import type { ActivityMessage, Message } from "@ag-ui/core";
 import { UseAgentUpdate, useAgent } from "@copilotkit/react-core/v2/headless";
 import {
@@ -45,6 +45,7 @@ import {
 import { ResearchChatCopilotProvider } from "./ResearchChatCopilotProvider";
 import { ResearchA2UIActivity } from "./researchA2UI";
 import { SessionHistoryList } from "./SessionHistoryList";
+import { watchSelectedSession } from "./sessionSynchronization";
 import {
   AgentSessionPreferenceInvalidError,
   AgentSessionPreferenceNotFoundError,
@@ -110,7 +111,7 @@ type ConversationSubscriberOptions = Readonly<{
   onRunFinished: () => void;
   onRunInitialized?: () => void;
   onRunError: () => void;
-  onRunStarted: () => void;
+  onRunStarted: (runId: string) => void;
   startTool: (id: string, name: string) => void;
 }>;
 
@@ -119,8 +120,9 @@ type ExistingSessionConnectionOptions = Readonly<{
   failRunningTools: () => void;
   finishTool: (id: string, result: SafeToolResult | null) => void;
   onSessionChanged: () => void;
+  onRunIdentity: (runId: string) => void;
   onTitleMaySettle: (threadId: string) => void;
-  setError: (error: string) => void;
+  setError: (error: string | null) => void;
   setStatus: (status: ConversationStatus) => void;
   shouldWatchTitle: () => boolean;
   startTool: (id: string, name: string) => void;
@@ -223,7 +225,9 @@ export function ChatShell({
   );
   const [requestedModelKey, setRequestedModelKey] = useState<string | null>(null);
   const [requestedReasoning, setRequestedReasoning] = useState<string | null>(null);
-  const [accepted, setAccepted] = useState(thread?.kind === "session");
+  const [acceptedThreadId, setAcceptedThreadId] = useState<string | null>(null);
+  const accepted = thread?.kind === "session"
+    || (thread?.kind === "new" && thread.id === acceptedThreadId);
   const mobileViewport = useMobileViewport();
   const mobileNavigationToggleRef = useRef<HTMLButtonElement>(null);
   const mobileNavigationCloseRef = useRef<HTMLButtonElement>(null);
@@ -263,7 +267,6 @@ export function ChatShell({
   }, [navigation.mobileNavigationOpen]);
 
   useEffect(() => {
-    setAccepted(thread?.kind === "session");
     setRequestedModelKey(null);
     setRequestedReasoning(null);
   }, [thread?.id, thread?.kind]);
@@ -301,7 +304,7 @@ export function ChatShell({
   function acceptThread(): void {
     if (thread === undefined || thread.id === null || accepted) return;
     window.history.replaceState(window.history.state, "", chatSessionHref(thread.id));
-    setAccepted(true);
+    setAcceptedThreadId(thread.id);
   }
 
   function openChat(href: string): void {
@@ -464,7 +467,7 @@ export function ChatShell({
         ) : (
           <AgentConversation
             key={thread.id}
-            existingSession={thread.kind === "session"}
+            existingSession={accepted}
             modelControls={modelControls}
             onAccepted={acceptThread}
             onSessionChanged={sessionHistory.refresh}
@@ -518,13 +521,13 @@ function AgentConversation({
   });
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [observedRunId, setObservedRunId] = useState<string | null>(null);
   const [status, setStatus] = useState<ConversationStatus>(
     existingSession ? "loading-history" : "idle",
   );
   const [toolActivities, setToolActivities] = useState<ReadonlyMap<string, ChatToolActivity>>(
     () => new Map(),
   );
-  const connectedAgent = useRef<AbstractAgent | null>(null);
   const sessionEstablished = useRef(existingSession);
   const titleMaySettleRef = useRef(titleMaySettle);
   titleMaySettleRef.current = titleMaySettle;
@@ -588,22 +591,43 @@ function AgentConversation({
   }, []);
 
   useEffect(() => {
-    if (!existingSession || !isReady || connectedAgent.current === agent) return;
-    connectedAgent.current = agent;
-    return startExistingSessionConnection({
-      connect: async (subscriber) => {
-        await agent.connectAgent(undefined, subscriber);
+    if (!existingSession || !isReady) return;
+    const controller = new AbortController();
+    let connection: ReturnType<typeof startExistingSessionConnection> | undefined;
+    void watchSelectedSession({
+      isStreaming: () => agent.isRunning,
+      signal: controller.signal,
+      synchronize: async () => {
+        if (controller.signal.aborted) return;
+        connection?.dispose();
+        connection = startExistingSessionConnection({
+          connect: async (subscriber) => { await agent.connectAgent(undefined, subscriber); },
+          failRunningTools,
+          finishTool,
+          onRunIdentity: setObservedRunId,
+          onSessionChanged,
+          onTitleMaySettle,
+          setError,
+          setStatus,
+          shouldWatchTitle: () => titleMaySettleRef.current,
+          startTool,
+          threadId,
+        });
+        await connection.settled;
       },
-      failRunningTools,
-      finishTool,
-      onSessionChanged,
-      onTitleMaySettle,
-      setError,
-      setStatus,
-      shouldWatchTitle: () => titleMaySettleRef.current,
-      startTool,
       threadId,
+    }).catch(() => {
+      if (controller.signal.aborted) return;
+      setError("The Research Agent session could not be loaded. Reopen this Chat to reconnect.");
+      setStatus("disconnected");
+      onSessionChanged();
     });
+    return () => {
+      controller.abort();
+      connection?.dispose();
+      // Detach only this browser's subscription; never send framework Stop.
+      void agent.detachActiveRun();
+    };
   }, [
     agent,
     existingSession,
@@ -637,7 +661,8 @@ function AgentConversation({
         setError(null);
         setStatus("starting");
       },
-      onRunStarted: () => {
+      onRunStarted: (runId) => {
+        setObservedRunId(runId);
         accepted = true;
         sessionEstablished.current = true;
         onAccepted();
@@ -708,7 +733,7 @@ function AgentConversation({
   }
 
   return (
-    <main className="chat-main">
+    <main className="chat-main" data-agent-run-id={observedRunId ?? undefined}>
       {timeline.length === 0 ? (
         <ChatEmptyState status={status} />
       ) : (
@@ -792,7 +817,7 @@ function createConversationSubscriber(
       options.failRunningTools();
       options.onRunError();
     },
-    onRunStartedEvent: options.onRunStarted,
+    onRunStartedEvent: ({ event }) => options.onRunStarted(event.runId),
     onToolCallResultEvent: ({ event }) => {
       options.finishTool(event.toolCallId, parseSafeToolResult(event.content));
     },
@@ -804,7 +829,7 @@ function createConversationSubscriber(
 
 export function startExistingSessionConnection(
   options: ExistingSessionConnectionOptions,
-): () => void {
+): Readonly<{ dispose: () => void; settled: Promise<void> }> {
   let disposed = false;
   let failed = false;
   const watchUnsettledTitle = () => {
@@ -814,8 +839,10 @@ export function startExistingSessionConnection(
   };
   const subscriber = createConversationSubscriber({
     failRunningTools: options.failRunningTools,
-    onRunStarted: () => {
+    onRunStarted: (runId) => {
       if (!disposed) {
+        options.onRunIdentity(runId);
+        options.setError(null);
         options.setStatus("running");
         options.onSessionChanged();
       }
@@ -852,7 +879,7 @@ export function startExistingSessionConnection(
     },
   });
   options.setStatus("loading-history");
-  void options.connect(subscriber)
+  const settled = options.connect(subscriber)
     .then(() => {
       if (!disposed && !failed) options.setStatus("idle");
     })
@@ -862,8 +889,9 @@ export function startExistingSessionConnection(
         options.setStatus("disconnected");
       }
     });
-  return () => {
-    disposed = true;
+  return {
+    dispose: () => { disposed = true; },
+    settled,
   };
 }
 

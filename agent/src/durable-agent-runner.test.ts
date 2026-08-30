@@ -33,7 +33,7 @@ describe("DurableResearchAgentRunner", () => {
     const first = runner.run({ agent, input: firstInput, threadId });
 
     expect(runner.run({ agent, input: firstInput, threadId })).toBe(first);
-    expect(() => runner.run({
+    await expect(firstValueFrom(runner.run({
       agent,
       input: {
         ...firstInput,
@@ -44,12 +44,12 @@ describe("DurableResearchAgentRunner", () => {
         }],
       },
       threadId,
-    })).toThrow("ACTIVE_RUN_REQUEST_CONFLICT");
-    expect(() => runner.run({
+    }).pipe(toArray()))).resolves.toMatchObject([{ type: "RUN_ERROR", code: "AGENT_RUN_CONFLICT" }]);
+    await expect(firstValueFrom(runner.run({
       agent: new HoldingAgent(),
       input: input(threadId, randomUUID()),
       threadId,
-    })).toThrow("Thread already running");
+    }).pipe(toArray()))).resolves.toMatchObject([{ type: "RUN_ERROR", code: "AGENT_RUN_CONFLICT" }]);
 
     agent.events.complete();
     await vi.waitFor(async () => {
@@ -73,8 +73,7 @@ describe("DurableResearchAgentRunner", () => {
       resolveLatestRun = resolve;
     });
     const repository = {
-      durableBrowserMessages: vi.fn(async () => []),
-      latestRun: vi.fn(() => latestRun),
+      connectionSnapshot: vi.fn(async () => ({ latestRun: await latestRun, messages: [] })),
     } as unknown as ResearchSessionRepository;
     const runner = new DurableResearchAgentRunner(repository);
     const agent = new HoldingAgent();
@@ -107,15 +106,9 @@ describe("DurableResearchAgentRunner", () => {
     const threadId = randomUUID();
     const runId = randomUUID();
     const repository = {
-      durableBrowserMessages: vi.fn(async () => [{
-        content: "Persisted idea",
-        id: randomUUID(),
-        role: "user" as const,
-      }]),
-      latestRun: vi.fn(async () => ({
-        id: runId,
-        status: "completed" as const,
-        terminalErrorCode: null,
+      connectionSnapshot: vi.fn(async () => ({
+        latestRun: { id: runId, status: "completed" as const, terminalErrorCode: null },
+        messages: [{ content: "Persisted idea", id: randomUUID(), role: "user" as const }],
       })),
     } as unknown as ResearchSessionRepository;
     const runner = new DurableResearchAgentRunner(repository);
@@ -204,11 +197,9 @@ describe("DurableResearchAgentRunner", () => {
     const threadId = randomUUID();
     const runId = randomUUID();
     const repository = {
-      durableBrowserMessages: vi.fn(async () => []),
-      latestRun: vi.fn(async () => ({
-        id: runId,
-        status: "running" as const,
-        terminalErrorCode: null,
+      connectionSnapshot: vi.fn(async () => ({
+        latestRun: { id: runId, status: "running" as const, terminalErrorCode: null },
+        messages: [],
       })),
     } as unknown as ResearchSessionRepository;
     const runner = new DurableResearchAgentRunner(repository);
@@ -267,11 +258,11 @@ describe("DurableResearchAgentRunner", () => {
       return "deleted";
     });
 
-    expect(() => runner.run({
+    await expect(firstValueFrom(runner.run({
       agent: new HoldingAgent(),
       input: input(threadId, fixedUuid(212)),
       threadId,
-    })).toThrow(SessionActiveRunError);
+    }).pipe(toArray()))).resolves.toMatchObject([{ type: "RUN_ERROR", code: "AGENT_RUN_CONFLICT" }]);
 
     release();
     await expect(mutation).resolves.toBe("deleted");

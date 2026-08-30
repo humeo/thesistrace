@@ -228,7 +228,7 @@ test("keeps an active reconnect subscribed when its title settles before the ter
   const connection = new Promise<void>((resolve) => {
     connectionState.resolve = resolve;
   });
-  const dispose = startExistingSessionConnection({
+  const attached = startExistingSessionConnection({
     connect: async (candidate) => {
       connectionState.subscriber = candidate;
       await connection;
@@ -236,6 +236,7 @@ test("keeps an active reconnect subscribed when its title settles before the ter
     failRunningTools: vi.fn(),
     finishTool: vi.fn(),
     onSessionChanged: vi.fn(),
+    onRunIdentity: vi.fn(),
     onTitleMaySettle,
     setError: vi.fn(),
     setStatus: (status) => statuses.push(status),
@@ -246,7 +247,7 @@ test("keeps an active reconnect subscribed when its title settles before the ter
   const subscriber = connectionState.subscriber;
   if (subscriber === undefined) throw new Error("Reconnect did not install its subscriber");
 
-  await subscriber.onRunStartedEvent?.({} as never);
+  await subscriber.onRunStartedEvent?.({ event: { runId: "00000000-0000-4000-8000-000000000112" } } as never);
   expect(statuses.at(-1)).toBe("running");
 
   titleMaySettle = false;
@@ -257,7 +258,7 @@ test("keeps an active reconnect subscribed when its title settles before the ter
   connectionState.resolve?.();
   await connection;
   await vi.waitFor(() => expect(statuses.at(-1)).toBe("idle"));
-  dispose();
+  attached.dispose();
 });
 
 test("shows distinct rename guidance for local input and malformed server responses", () => {

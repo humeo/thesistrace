@@ -12,6 +12,8 @@ let disconnectedSubmitResponses = 0;
 let metadataMode = "pass";
 let metadataRequests = 0;
 let disconnectedMetadataResponses = 0;
+const heldResponses = new Set();
+let heldToolResponses = 0;
 
 http.createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://mcp-fault-proxy.test");
@@ -30,6 +32,8 @@ http.createServer(async (request, response) => {
       tool_call_mode: toolCallMode,
       tool_call_requests: toolCallRequests,
       tool_list_requests: toolListRequests,
+      held_tool_responses: heldToolResponses,
+      pending_held_tool_responses: heldResponses.size,
     });
     return;
   }
@@ -82,19 +86,21 @@ http.createServer(async (request, response) => {
     const body = await readJson(request, 1_024);
     if (
       body === null
-      || !["pass", "disconnect", "disconnect-submit"].includes(body.mode)
+      || !["pass", "disconnect", "disconnect-submit", "hold", "hold-detail"].includes(body.mode)
       || typeof body.reset !== "boolean"
     ) {
       json(response, 400, { code: "MCP_PROXY_CONTROL_INVALID" });
       return;
     }
     toolCallMode = body.mode;
+    for (const release of [...heldResponses]) release();
     if (body.reset) {
       discoveryRequests = 0;
       toolListRequests = 0;
       toolCallRequests = 0;
       disconnectedToolResponses = 0;
       disconnectedSubmitResponses = 0;
+      heldToolResponses = 0;
     }
     json(response, 200, { tool_call_mode: toolCallMode });
     return;
@@ -122,6 +128,10 @@ http.createServer(async (request, response) => {
     && toolNames.some((name) => ["submit_research_run", "submit_research_batch", "start_daily_track", "retry_daily_track"].includes(name));
   const disconnectResponse = methods.includes("tools/call")
     && (toolCallMode === "disconnect" || disconnectSubmitResponse);
+  const holdResponse = methods.includes("tools/call") && (
+    toolCallMode === "hold"
+    || (toolCallMode === "hold-detail" && toolNames.includes("get_research_run"))
+  );
 
   try {
     const headers = forwardedHeaders(request.headers);
@@ -133,6 +143,7 @@ http.createServer(async (request, response) => {
       signal: AbortSignal.timeout(upstreamTimeoutMs),
     });
     const responseBody = new Uint8Array(await upstream.arrayBuffer());
+    if (holdResponse && !await waitForBarrier(response)) return;
     if (disconnectResponse) {
       disconnectedToolResponses += 1;
       if (disconnectSubmitResponse) disconnectedSubmitResponses += 1;
@@ -146,6 +157,25 @@ http.createServer(async (request, response) => {
     json(response, 502, { code: "MCP_PROXY_UPSTREAM_UNAVAILABLE" });
   }
 }).listen(port, "0.0.0.0");
+
+function waitForBarrier(response) {
+  if (response.destroyed) return Promise.resolve(false);
+  heldToolResponses += 1;
+  return new Promise((resolve) => {
+    const release = () => {
+      clearTimeout(timer);
+      heldResponses.delete(release);
+      response.removeListener("close", release);
+      resolve(!response.destroyed && !response.writableEnded);
+    };
+    const timer = setTimeout(() => {
+      json(response, 504, { code: "MCP_PROXY_BARRIER_TIMEOUT" });
+      release();
+    }, 90_000);
+    heldResponses.add(release);
+    response.once("close", release);
+  });
+}
 
 function forwardedHeaders(source) {
   const headers = new Headers();
