@@ -35,6 +35,7 @@ from thesistrace.data import (
     DatasetLifecycle,
     DatasetOverviewService,
     MountedGenerationStore,
+    RefreshOutcome,
 )
 from thesistrace.data.head_store import MountedDatasetHeadStore
 from thesistrace.data.source import DataSourceError
@@ -726,7 +727,7 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
         processed, operator_events = _operator_command_with_events(
             core_settings,
             tmp_path,
-            ["work-refresh", "--replay", os.fspath(refresh_replay)],
+            ["worker", "--once", "--replay", os.fspath(refresh_replay)],
         )
 
         assert processed == {"status": "processed"}
@@ -811,7 +812,7 @@ def test_concurrent_workers_publish_one_authoritative_refresh(
         database.close()
 
 
-def test_refresh_submission_replay_and_conflicts_cannot_duplicate_work(
+def test_refresh_submission_replay_and_fifo_cannot_duplicate_work(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
@@ -829,12 +830,16 @@ def test_refresh_submission_replay_and_conflicts_cannot_duplicate_work(
                 as_of=AS_OF.replace(hour=10),
             )
         assert conflicting_reuse.value.code == "IDEMPOTENCY_KEY_CONFLICT"
-        with pytest.raises(DataRefreshError) as second_operation:
-            refresh.submit(idempotency_key="another-refresh", as_of=AS_OF)
-        assert second_operation.value.code == "REFRESH_ALREADY_ACTIVE"
+        queued = refresh.submit(idempotency_key="another-refresh", as_of=AS_OF)
+        assert queued.status == "accepted"
+        assert queued.kind == "market"
+        assert queued.as_of == AS_OF.isoformat()
 
         assert _process_next(refresh, RecordingRefreshSource(current)) is True
         assert refresh.inspect("submission-replay").status == "succeeded"
+        assert refresh.inspect("another-refresh").status == "accepted"
+        assert _process_next(refresh, RecordingRefreshSource(current)) is True
+        assert refresh.inspect("another-refresh").status == "succeeded"
         with database.transaction() as transaction:
             count = transaction.execute(
                 """
@@ -842,8 +847,162 @@ def test_refresh_submission_replay_and_conflicts_cannot_duplicate_work(
                 WHERE idempotency_key IN ('submission-replay', 'another-refresh')
                 """
             ).fetchone()
+        assert count == {"count": 2}
+    finally:
+        database.close()
+
+
+def test_concurrent_identical_submission_returns_one_durable_receipt(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    barrier = threading.Barrier(3)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path)
+
+        def submit() -> RefreshOutcome:
+            barrier.wait(timeout=10)
+            return refresh.submit(idempotency_key="concurrent-replay", as_of=AS_OF)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(submit) for _ in range(2)]
+            barrier.wait(timeout=10)
+            receipts = [future.result(timeout=10) for future in futures]
+
+        assert receipts[0] == receipts[1]
+        with database.transaction() as transaction:
+            count = transaction.execute(
+                """
+                SELECT count(*) AS count FROM data.refresh_operations
+                WHERE idempotency_key = 'concurrent-replay'
+                """
+            ).fetchone()
         assert count == {"count": 1}
     finally:
+        _delete_refresh_operations(database, "concurrent-replay")
+        database.close()
+
+
+def test_concurrent_conflicting_submission_admits_exactly_one_request(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    barrier = threading.Barrier(3)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path)
+
+        def submit(as_of: datetime) -> tuple[str, str]:
+            barrier.wait(timeout=10)
+            try:
+                receipt = refresh.submit(
+                    idempotency_key="concurrent-conflict",
+                    as_of=as_of,
+                )
+            except DataRefreshError as error:
+                return "rejected", error.code
+            return "accepted", receipt.as_of
+
+        targets = (AS_OF, AS_OF + timedelta(hours=1))
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(submit, target) for target in targets]
+            barrier.wait(timeout=10)
+            results = [future.result(timeout=10) for future in futures]
+
+        assert sorted(result[0] for result in results) == ["accepted", "rejected"]
+        assert ("rejected", "IDEMPOTENCY_KEY_CONFLICT") in results
+        with database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT as_of FROM data.refresh_operations
+                WHERE idempotency_key = 'concurrent-conflict'
+                """
+            ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["as_of"] in targets
+    finally:
+        _delete_refresh_operations(database, "concurrent-conflict")
+        database.close()
+
+
+def test_concurrent_distinct_submissions_both_enter_the_fifo(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    barrier = threading.Barrier(3)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path)
+
+        def submit(key: str) -> RefreshOutcome:
+            barrier.wait(timeout=10)
+            return refresh.submit(idempotency_key=key, as_of=AS_OF)
+
+        keys = ("concurrent-fifo-a", "concurrent-fifo-b")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(submit, key) for key in keys]
+            barrier.wait(timeout=10)
+            receipts = [future.result(timeout=10) for future in futures]
+
+        assert {receipt.idempotency_key for receipt in receipts} == set(keys)
+        assert {receipt.status for receipt in receipts} == {"accepted"}
+        with database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT idempotency_key, status FROM data.refresh_operations
+                WHERE idempotency_key = ANY(%s)
+                """,
+                (list(keys),),
+            ).fetchall()
+        assert {(row["idempotency_key"], row["status"]) for row in rows} == {
+            ("concurrent-fifo-a", "accepted"),
+            ("concurrent-fifo-b", "accepted"),
+        }
+    finally:
+        _delete_refresh_operations(database, "concurrent-fifo-a", "concurrent-fifo-b")
+        database.close()
+
+
+def test_worker_waits_for_a_nonexpired_running_refresh_before_claiming_fifo(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path)
+        refresh.submit(idempotency_key="interrupted-running", as_of=AS_OF)
+        refresh.submit(idempotency_key="queued-behind-running", as_of=AS_OF)
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                UPDATE data.refresh_operations
+                SET status = 'running', owner_token = 'interrupted-worker',
+                    lease_expires_at = now() + interval '1 minute',
+                    attempt_count = 1, started_at = now(), updated_at = now()
+                WHERE idempotency_key = 'interrupted-running'
+                """
+            )
+
+        source = RecordingRefreshSource(current)
+        assert _process_next(refresh, source) is False
+        assert source.plans == []
+        assert refresh.inspect("interrupted-running").status == "running"
+        assert refresh.inspect("queued-behind-running").status == "accepted"
+    finally:
+        _delete_refresh_operations(
+            database,
+            "interrupted-running",
+            "queued-behind-running",
+        )
         database.close()
 
 
@@ -912,14 +1071,22 @@ def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
     tmp_path: Path,
 ) -> None:
     database = _database(core_settings)
-    old_worker_started = threading.Event()
+    old_benchmark_started = threading.Event()
     resume_old_worker = threading.Event()
 
-    class PausedOldSource(RecordingRefreshSource):
-        def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
-            old_worker_started.set()
+    class PausedOldBenchmarkSource(FixtureBenchmarkSource):
+        def collect_open_levels(
+            self,
+            *,
+            start_session: str,
+            end_session: str,
+        ) -> tuple[BenchmarkLevel, ...]:
+            old_benchmark_started.set()
             assert resume_old_worker.wait(timeout=10)
-            return super().collect(plan)
+            return super().collect_open_levels(
+                start_session=start_session,
+                end_session=end_session,
+            )
 
     try:
         current = _twenty_session_canonical()
@@ -939,10 +1106,10 @@ def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
         with ThreadPoolExecutor(max_workers=1) as executor:
             old_future = executor.submit(
                 old_worker.process_next,
-                PausedOldSource(stale_candidate),
-                benchmark_source=FixtureBenchmarkSource(),
+                RecordingRefreshSource(stale_candidate),
+                benchmark_source=PausedOldBenchmarkSource(),
             )
-            assert old_worker_started.wait(timeout=10)
+            assert old_benchmark_started.wait(timeout=10)
             with database.transaction() as transaction:
                 transaction.execute(
                     """
@@ -972,8 +1139,273 @@ def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
         assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             recovered_freshness
         )
+        snapshot = BenchmarkSnapshotStore(
+            benchmark_mount_for_data_mount(tmp_path)
+        ).read()
+        assert snapshot is not None
+        assert snapshot.coverage_end_session == current["research_calendar"][-1]
+        with database.transaction() as transaction:
+            candidates = transaction.execute(
+                """
+                SELECT count(*) AS count FROM data.generation_candidates
+                WHERE status = 'live'
+                """
+            ).fetchone()
+        assert candidates == {"count": 0}
     finally:
         resume_old_worker.set()
+        database.close()
+
+
+def test_benchmark_publication_rechecks_lease_after_waiting_for_lifecycle_lock(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    observer = PostgresDatabase(core_settings.database_url)
+    observer.open()
+    benchmark_collected = threading.Event()
+    resume_benchmark = threading.Event()
+
+    class PausedBenchmarkSource(FixtureBenchmarkSource):
+        def collect_open_levels(
+            self,
+            *,
+            start_session: str,
+            end_session: str,
+        ) -> tuple[BenchmarkLevel, ...]:
+            levels = super().collect_open_levels(
+                start_session=start_session,
+                end_session=end_session,
+            )
+            benchmark_collected.set()
+            assert resume_benchmark.wait(timeout=10)
+            return levels
+
+    try:
+        current = _twenty_session_canonical()
+        manifest = _establish_head(database, tmp_path, current)
+        candidate = copy.deepcopy(current)
+        _append_session(candidate)
+        snapshot_store = BenchmarkSnapshotStore(
+            benchmark_mount_for_data_mount(tmp_path)
+        )
+        assert snapshot_store.read() is None
+        refresh = _refresh_service(
+            database,
+            tmp_path,
+            lease_seconds=1,
+            heartbeat_seconds=0.8,
+            max_attempts=1,
+        )
+        refresh.submit(idempotency_key="benchmark-lock-expiry", as_of=AS_OF)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                refresh.process_next,
+                RecordingRefreshSource(candidate),
+                benchmark_source=PausedBenchmarkSource(),
+            )
+            assert benchmark_collected.wait(timeout=10)
+            with database.transaction() as blocker:
+                blocker.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    ("thesistrace-mounted-data-lifecycle",),
+                )
+                resume_benchmark.set()
+                _wait_for_advisory_waiters(observer, expected=1, timeout=5)
+                _wait_for_refresh_lease_expiry(
+                    observer,
+                    "benchmark-lock-expiry",
+                    timeout=5,
+                )
+            assert future.result(timeout=10) is True
+
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert head is not None
+        assert head.generation_manifest_sha256 == manifest
+        assert snapshot_store.read() is None
+        expired = refresh.inspect("benchmark-lock-expiry")
+        assert expired.status == "running"
+        assert expired.attempt_count == 1
+
+        replacement = _refresh_service(database, tmp_path, max_attempts=1)
+        assert _process_next(replacement, RecordingRefreshSource(current)) is True
+        recovered = replacement.inspect("benchmark-lock-expiry")
+        assert recovered.status == "failed"
+        assert recovered.failure_code == "RETRY_EXHAUSTED"
+        assert recovered.last_failure_code == "WORKER_LEASE_EXPIRED"
+    finally:
+        resume_benchmark.set()
+        observer.close()
+        database.close()
+
+
+def test_head_publication_rechecks_lease_after_waiting_for_lifecycle_lock(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    observer = PostgresDatabase(core_settings.database_url)
+    observer.open()
+    head_publication_started = threading.Event()
+    resume_head_publication = threading.Event()
+    original_compare_and_swap = DatasetLifecycle.compare_and_swap_refresh_head
+
+    def pause_head_publication(
+        lifecycle: DatasetLifecycle,
+        **arguments: object,
+    ) -> object:
+        head_publication_started.set()
+        assert resume_head_publication.wait(timeout=10)
+        return original_compare_and_swap(lifecycle, **arguments)  # type: ignore[arg-type]
+
+    try:
+        current = _twenty_session_canonical()
+        manifest = _establish_head(database, tmp_path, current)
+        candidate = copy.deepcopy(current)
+        _append_session(candidate)
+        refresh = _refresh_service(
+            database,
+            tmp_path,
+            lease_seconds=1,
+            heartbeat_seconds=0.8,
+            max_attempts=1,
+        )
+        refresh.submit(idempotency_key="head-lock-expiry", as_of=AS_OF)
+
+        with monkeypatch.context() as scoped_patch:
+            scoped_patch.setattr(
+                DatasetLifecycle,
+                "compare_and_swap_refresh_head",
+                pause_head_publication,
+            )
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    refresh.process_next,
+                    RecordingRefreshSource(candidate),
+                    benchmark_source=FixtureBenchmarkSource(),
+                )
+                assert head_publication_started.wait(timeout=10)
+                with database.transaction() as blocker:
+                    blocker.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        ("thesistrace-mounted-data-lifecycle",),
+                    )
+                    resume_head_publication.set()
+                    _wait_for_advisory_waiters(observer, expected=1, timeout=5)
+                    _wait_for_refresh_lease_expiry(
+                        observer,
+                        "head-lock-expiry",
+                        timeout=5,
+                    )
+                assert future.result(timeout=10) is True
+
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert head is not None
+        assert head.generation_manifest_sha256 == manifest
+        expired = refresh.inspect("head-lock-expiry")
+        assert expired.status == "running"
+        assert expired.attempt_count == 1
+
+        replacement = _refresh_service(database, tmp_path, max_attempts=1)
+        assert _process_next(replacement, RecordingRefreshSource(current)) is True
+        recovered = replacement.inspect("head-lock-expiry")
+        assert recovered.status == "failed"
+        assert recovered.failure_code == "RETRY_EXHAUSTED"
+        assert recovered.last_failure_code == "WORKER_LEASE_EXPIRED"
+        with database.transaction() as transaction:
+            live_candidates = transaction.execute(
+                """
+                SELECT count(*) AS count FROM data.generation_candidates
+                WHERE status = 'live'
+                """
+            ).fetchone()
+        assert live_candidates == {"count": 0}
+    finally:
+        resume_head_publication.set()
+        observer.close()
+        database.close()
+
+
+def test_candidate_receipt_and_protection_commit_atomically(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        manifest = _establish_head(database, tmp_path, current)
+        candidate = copy.deepcopy(current)
+        _append_session(candidate)
+        refresh = _refresh_service(database, tmp_path, max_attempts=1)
+        refresh.submit(idempotency_key="candidate-transaction", as_of=AS_OF)
+        with database.transaction() as transaction:
+            candidate_count_before = transaction.execute(
+                "SELECT count(*) AS count FROM data.generation_candidates"
+            ).fetchone()
+            transaction.execute(
+                """
+                CREATE FUNCTION data.reject_refresh_candidate_insert() RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                DECLARE
+                    receipt_candidate_is_visible boolean;
+                BEGIN
+                    SELECT
+                        generation_manifest_sha256 IS NOT NULL
+                        AND candidate_prepared_at IS NOT NULL
+                    INTO receipt_candidate_is_visible
+                    FROM data.refresh_operations
+                    WHERE idempotency_key = 'candidate-transaction';
+                    IF receipt_candidate_is_visible THEN
+                        RAISE EXCEPTION 'injected candidate insert failure';
+                    END IF;
+                    RETURN NEW;
+                END
+                $$;
+                CREATE TRIGGER reject_refresh_candidate_insert
+                BEFORE INSERT ON data.generation_candidates
+                FOR EACH ROW EXECUTE FUNCTION data.reject_refresh_candidate_insert();
+                """
+            )
+        try:
+            with pytest.raises(DataRefreshError) as failure:
+                _process_next(refresh, RecordingRefreshSource(candidate))
+            assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
+        finally:
+            with database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    DROP TRIGGER reject_refresh_candidate_insert
+                    ON data.generation_candidates;
+                    DROP FUNCTION data.reject_refresh_candidate_insert();
+                    """
+                )
+
+        terminal = refresh.inspect("candidate-transaction")
+        assert terminal.status == "failed"
+        assert terminal.failure_code == "RETRY_EXHAUSTED"
+        with database.transaction() as transaction:
+                receipt = transaction.execute(
+                    """
+                    SELECT generation_manifest_sha256, candidate_prepared_at
+                    FROM data.refresh_operations
+                    WHERE idempotency_key = 'candidate-transaction'
+                    """
+                ).fetchone()
+                candidates = transaction.execute(
+                    "SELECT count(*) AS count FROM data.generation_candidates"
+                ).fetchone()
+        assert receipt == {
+            "candidate_prepared_at": None,
+            "generation_manifest_sha256": None,
+        }
+        assert candidates == candidate_count_before
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert head is not None
+        assert head.generation_manifest_sha256 == manifest
+    finally:
         database.close()
 
 
@@ -1344,7 +1776,6 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
 @pytest.mark.parametrize(
     "arguments",
     [
-        ["work-refresh"],
         [
             "refresh-financial",
             "--idempotency-key",
@@ -1353,7 +1784,7 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
             "2026-08-13",
         ],
     ],
-    ids=("market", "financial"),
+    ids=("financial",),
 )
 def test_refresh_command_failure_before_operation_start_keeps_one_stdout_result(
     tmp_path: Path,
@@ -1479,6 +1910,64 @@ def _wait_for_physical_head_change(
     raise AssertionError("Dataset Head did not move before the fault barrier timed out")
 
 
+def _wait_for_advisory_waiters(
+    database: PostgresDatabase,
+    *,
+    expected: int,
+    timeout: float,
+) -> None:
+    deadline = monotonic() + timeout
+    poll = threading.Event()
+    last_waiting = -1
+    while monotonic() < deadline:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT count(*) AS waiting
+                FROM pg_stat_activity
+                WHERE datname = current_database() AND wait_event = 'advisory'
+                """
+            ).fetchone()
+        assert row is not None
+        last_waiting = int(row["waiting"])
+        if last_waiting >= expected:
+            return
+        poll.wait(timeout=0.01)
+    raise AssertionError(
+        f"expected {expected} advisory-lock waiters, observed {last_waiting}"
+    )
+
+
+def _wait_for_refresh_lease_expiry(
+    database: PostgresDatabase,
+    idempotency_key: str,
+    *,
+    timeout: float,
+) -> None:
+    deadline = monotonic() + timeout
+    poll = threading.Event()
+    last_lease: object = None
+    while monotonic() < deadline:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT lease_expires_at,
+                       lease_expires_at <= clock_timestamp() AS expired
+                FROM data.refresh_operations
+                WHERE idempotency_key = %s AND status = 'running'
+                """,
+                (idempotency_key,),
+            ).fetchone()
+        assert row is not None
+        last_lease = row["lease_expires_at"]
+        if row["expired"] is True:
+            return
+        poll.wait(timeout=0.01)
+    raise AssertionError(
+        f"refresh {idempotency_key!r} lease did not expire; last lease {last_lease!r}"
+    )
+
+
 def _establish_head(
     database: PostgresDatabase,
     mount_root: Path,
@@ -1510,6 +1999,17 @@ def _database(settings: CoreSettings) -> PostgresDatabase:
     database = PostgresDatabase(settings.database_url)
     database.open()
     return database
+
+
+def _delete_refresh_operations(
+    database: PostgresDatabase,
+    *idempotency_keys: str,
+) -> None:
+    with database.transaction() as transaction:
+        transaction.execute(
+            "DELETE FROM data.refresh_operations WHERE idempotency_key = ANY(%s)",
+            (list(idempotency_keys),),
+        )
 
 
 def _operator_command(

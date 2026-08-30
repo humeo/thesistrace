@@ -257,6 +257,25 @@ services:
       NUMEXPR_NUM_THREADS: ${THESISTRACE_TRACKING_WORKER_CALCULATION_THREADS:-2}
     restart: unless-stopped
 
+  data-operator-worker:
+    <<: *backend
+    deploy:
+      replicas: 1
+    logging: *bounded-logging
+    command:
+      - thesistrace-data-operator
+      - worker
+    environment:
+      <<: *core-environment
+      THESISTRACE_TUSHARE_TOKEN: ${THESISTRACE_TUSHARE_TOKEN:?THESISTRACE_TUSHARE_TOKEN is required}
+    volumes:
+      - canonical-data:/var/lib/thesistrace/canonical-data
+      - benchmark-data:/var/lib/thesistrace/benchmark-data
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
   web:
     deploy:
       replicas: 1

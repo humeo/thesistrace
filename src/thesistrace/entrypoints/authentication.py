@@ -21,8 +21,29 @@ class AuthSessionUnavailable(RuntimeError):
     pass
 
 
+class OperatorAccessNotFound(RuntimeError):
+    pass
+
+
+class InvalidOperatorProof(RuntimeError):
+    pass
+
+
 class SessionVerifier(Protocol):
     async def verify(self, cookie: str | None) -> ResearcherIdentity: ...
+
+
+class OperatorAuthorizer(Protocol):
+    async def authorize_operator(self, cookie: str | None) -> None: ...
+
+    async def consume_market_refresh_proof(
+        self,
+        cookie: str | None,
+        *,
+        as_of: str,
+        idempotency_key: str,
+        proof: str,
+    ) -> None: ...
 
 
 class _VerifiedSession(BaseModel):
@@ -114,6 +135,53 @@ class CoreAuthVerifier:
         except (ValidationError, ValueError) as error:
             raise AuthSessionUnavailable() from error
 
+    async def authorize_operator(self, cookie: str | None) -> None:
+        try:
+            response = await self._client.get(
+                "/internal/operator/page-access",
+                headers=_cookie_headers(cookie),
+            )
+        except (httpx.HTTPError, OSError) as error:
+            raise AuthSessionUnavailable() from error
+        if response.status_code == 404:
+            raise OperatorAccessNotFound()
+        if response.status_code != 204:
+            raise AuthSessionUnavailable()
+
+    async def consume_market_refresh_proof(
+        self,
+        cookie: str | None,
+        *,
+        as_of: str,
+        idempotency_key: str,
+        proof: str,
+    ) -> None:
+        try:
+            response = await self._client.post(
+                "/internal/operator/proofs/consume",
+                headers=_cookie_headers(cookie),
+                json={
+                    "as_of": as_of,
+                    "idempotency_key": idempotency_key,
+                    "operation": "data.refresh.market.submit",
+                    "proof": proof,
+                },
+            )
+        except (httpx.HTTPError, OSError) as error:
+            raise AuthSessionUnavailable() from error
+        if response.status_code == 404:
+            raise OperatorAccessNotFound()
+        if response.status_code == 400:
+            try:
+                invalid_proof = response.json() == {"code": "OPERATOR_PROOF_INVALID"}
+            except ValueError:
+                invalid_proof = False
+            if invalid_proof:
+                raise InvalidOperatorProof()
+            raise AuthSessionUnavailable()
+        if response.status_code != 204:
+            raise AuthSessionUnavailable()
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -135,6 +203,10 @@ def _exact_origin(value: str, variable_name: str) -> str:
     ):
         raise RuntimeError(f"{variable_name} must be an exact HTTP origin")
     return canonical
+
+
+def _cookie_headers(cookie: str | None) -> dict[str, str]:
+    return {} if cookie is None or not cookie.strip() else {"cookie": cookie}
 
 
 def _exact_public_origin(
@@ -182,6 +254,9 @@ __all__ = (
     "AuthSessionUnavailable",
     "CoreAuthVerifier",
     "CoreHttpSettings",
+    "InvalidOperatorProof",
     "InvalidLoginSession",
+    "OperatorAccessNotFound",
+    "OperatorAuthorizer",
     "SessionVerifier",
 )

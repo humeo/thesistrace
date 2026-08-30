@@ -438,6 +438,7 @@ CREATE TABLE data.generation_pins (
 
 CREATE TABLE data.refresh_operations (
     idempotency_key text NOT NULL,
+    kind text NOT NULL,
     fingerprint text NOT NULL,
     status text NOT NULL,
     owner_token text,
@@ -462,6 +463,7 @@ CREATE TABLE data.refresh_operations (
     CONSTRAINT refresh_operations_fingerprint_check CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT refresh_operations_generation_manifest_sha256_check CHECK (((generation_manifest_sha256 IS NULL) OR (generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT refresh_operations_idempotency_key_check CHECK (((idempotency_key <> ''::text) AND (idempotency_key = btrim(idempotency_key)))),
+    CONSTRAINT refresh_operations_kind_check CHECK ((kind = 'market'::text)),
     CONSTRAINT refresh_operations_outcome_check CHECK (((outcome IS NULL) OR (outcome = ANY (ARRAY['published'::text, 'no_change'::text])))),
     CONSTRAINT refresh_operations_owner_token_check CHECK (((owner_token IS NULL) OR ((owner_token <> ''::text) AND (owner_token = btrim(owner_token))))),
     CONSTRAINT refresh_operations_status_check CHECK ((status = ANY (ARRAY['accepted'::text, 'running'::text, 'succeeded'::text, 'failed'::text])))
@@ -587,10 +589,10 @@ CREATE INDEX data_live_generation_candidates_idx ON data.generation_candidates U
 
 
 --
--- Name: data_one_active_refresh_idx; Type: INDEX; Schema: data; Owner: -
+-- Name: data_one_running_refresh_idx; Type: INDEX; Schema: data; Owner: -
 --
 
-CREATE UNIQUE INDEX data_one_active_refresh_idx ON data.refresh_operations USING btree ((true)) WHERE (status = ANY (ARRAY['accepted'::text, 'running'::text]));
+CREATE UNIQUE INDEX data_one_running_refresh_idx ON data.refresh_operations USING btree ((true)) WHERE (status = 'running'::text);
 
 
 --

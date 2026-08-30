@@ -172,6 +172,40 @@ def test_base_compose_has_independent_auth_and_core_identities() -> None:
     assert "THESISTRACE_API_ORIGIN" not in web
 
 
+def test_base_compose_has_one_worker_only_market_refresh_runtime() -> None:
+    compose = (DEPLOY / "compose.yaml").read_text()
+    test_overlay = (DEPLOY / "compose.test-run.yaml").read_text()
+    runner = (ROOT / "scripts" / "test-runtime").read_text()
+    worker = _service(compose, "data-operator-worker", "web")
+    core_environment = compose.split("x-core-environment:", 1)[1].split(
+        "\nx-backend:", 1
+    )[0]
+    api = _service(compose, "api", "research-worker")
+    auth = _service(compose, "auth", "initialize")
+
+    assert compose.count("  data-operator-worker:\n") == 1
+    assert "deploy:\n      replicas: 1" in worker
+    assert "thesistrace-data-operator\n      - worker" in worker
+    assert "canonical-data:/var/lib/thesistrace/canonical-data" in worker
+    assert "benchmark-data:/var/lib/thesistrace/benchmark-data" in worker
+    assert ":ro" not in "\n".join(
+        line for line in worker.splitlines() if "thesistrace/" in line
+    )
+    assert "THESISTRACE_TUSHARE_TOKEN:" in worker
+    assert "THESISTRACE_TUSHARE_TOKEN" not in core_environment
+    assert "THESISTRACE_TUSHARE_TOKEN" not in api
+    assert "THESISTRACE_TUSHARE_TOKEN" not in auth
+    assert "restart: unless-stopped" in worker
+    assert "data-operator-worker:" in test_overlay
+    assert "worker\n      - --replay" in test_overlay
+    assert "tushare-financial-market-refresh-replay.json" in test_overlay
+    assert "tushare-operator-console-market-refresh-replay.json" in test_overlay
+    assert "tushare-image-smoke-market-refresh-replay.json" in test_overlay
+    assert 'THESISTRACE_TUSHARE_TOKEN="$tushare_test_token"' in runner
+    assert "auth api research-worker batch-research-worker tracking-worker " \
+        "data-operator-worker web" in runner
+
+
 def test_production_overlay_publishes_only_caddy_and_persists_certificates() -> None:
     production = (DEPLOY / "compose.production.yaml").read_text()
 
@@ -200,7 +234,8 @@ def test_single_node_services_have_one_replica_and_restart_unless_stopped() -> N
         ("api", "research-worker"),
         ("research-worker", "batch-research-worker"),
         ("batch-research-worker", "tracking-worker"),
-        ("tracking-worker", "web"),
+        ("tracking-worker", "data-operator-worker"),
+        ("data-operator-worker", "web"),
         ("web", None),
     )
     for service, next_service in ordered_services:
@@ -225,6 +260,7 @@ def test_development_and_test_origins_are_exact_before_compose_rendering() -> No
 
     assert "THESISTRACE_PUBLIC_ORIGIN=http://127.0.0.1:5173" in development_env
     assert "THESISTRACE_ENVIRONMENT=development" in development_env
+    assert "THESISTRACE_TUSHARE_TOKEN=development-data-operator-token" in development_env
     assert "127.0.0.1:${THESISTRACE_DEV_WEB_PORT}:5173" in development
     assert "127.0.0.1:${THESISTRACE_DEV_API_PORT}:8100" in development
 

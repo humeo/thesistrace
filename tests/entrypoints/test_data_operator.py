@@ -10,10 +10,142 @@ import pytest
 from thesistrace.adapters.tushare_provider import TushareSourceError
 from thesistrace.data import (
     DataOperatorError,
+    DataRefreshError,
     DataSourceError,
     FinancialCollectionError,
+    validate_market_refresh_request,
 )
 from thesistrace.entrypoints import data_operator
+
+
+def test_market_worker_hard_cuts_the_manual_worker_command(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as help_exit:
+        data_operator.main(["worker", "--help"])
+
+    assert help_exit.value.code == 0
+    worker_help = capsys.readouterr().out
+    assert "--once" in worker_help
+    assert "--replay" in worker_help
+
+    with pytest.raises(SystemExit) as obsolete_exit:
+        data_operator.main(["work-refresh", "--help"])
+
+    assert obsolete_exit.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_one_shot_market_worker_is_replay_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        data_operator,
+        "PostgresDatabase",
+        lambda _url: (_ for _ in ()).throw(AssertionError("database opened")),
+    )
+
+    with pytest.raises(SystemExit) as failure:
+        data_operator.main(["worker", "--once"])
+
+    assert failure.value.code == 2
+    assert json.loads(capsys.readouterr().out) == {
+        "code": "WORKER_REPLAY_REQUIRED",
+        "status": "failed",
+    }
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-08-11",
+        "not-a-time",
+        "2026-08-11T18:00:00",
+        "2026-08-11T18:00:00." + "1" * 110 + "+08:00",
+    ],
+)
+def test_market_refresh_rejects_non_timezone_aware_as_of_before_opening_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    value: str,
+) -> None:
+    monkeypatch.setattr(
+        data_operator,
+        "PostgresDatabase",
+        lambda _url: (_ for _ in ()).throw(AssertionError("database opened")),
+    )
+    monkeypatch.setenv("THESISTRACE_DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("THESISTRACE_DATA_MOUNT", "/unused")
+    monkeypatch.setenv("THESISTRACE_BENCHMARK_MOUNT", "/unused-benchmark")
+
+    with pytest.raises(SystemExit) as failure:
+        data_operator.main(
+            [
+                "refresh",
+                "--idempotency-key",
+                "market-20260811T180000+0800",
+                "--as-of",
+                value,
+            ]
+        )
+
+    assert failure.value.code == 2
+    assert json.loads(capsys.readouterr().err) == {
+        "code": "INVALID_AS_OF",
+        "status": "failed",
+    }
+
+
+@pytest.mark.parametrize(
+    "key",
+    ("k" * 513, "刷" * 513, "market-\0-key", f"market-{chr(0xD800)}-key"),
+)
+def test_market_refresh_rejects_a_key_over_the_shared_character_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    key: str,
+) -> None:
+    monkeypatch.setattr(
+        data_operator,
+        "PostgresDatabase",
+        lambda _url: (_ for _ in ()).throw(AssertionError("database opened")),
+    )
+    monkeypatch.setenv("THESISTRACE_DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("THESISTRACE_DATA_MOUNT", "/unused")
+    monkeypatch.setenv("THESISTRACE_BENCHMARK_MOUNT", "/unused-benchmark")
+
+    with pytest.raises(SystemExit) as failure:
+        data_operator.main(
+            [
+                "refresh",
+                "--idempotency-key",
+                key,
+                "--as-of",
+                "2026-08-11T18:00:00+08:00",
+            ]
+        )
+
+    assert failure.value.code == 2
+    assert json.loads(capsys.readouterr().err) == {
+        "code": "INVALID_IDEMPOTENCY_KEY",
+        "status": "failed",
+    }
+
+
+def test_market_key_uses_the_explicit_python_boundary_whitespace_contract() -> None:
+    as_of = "2026-08-11T18:00:00+08:00"
+
+    key, _target = validate_market_refresh_request(
+        idempotency_key="\ufeffmarket-key",
+        as_of=as_of,
+    )
+    assert key == "\ufeffmarket-key"
+    with pytest.raises(DataRefreshError, match="INVALID_IDEMPOTENCY_KEY"):
+        validate_market_refresh_request(
+            idempotency_key="\x85market-key",
+            as_of=as_of,
+        )
 
 
 def test_bootstrap_cli_exposes_an_explicit_start_date(

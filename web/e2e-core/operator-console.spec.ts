@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 
 import {
   browserPassword,
@@ -6,6 +6,7 @@ import {
   emailToken,
   expect,
   issueInvitation,
+  resetAuthRateLimits,
   restoreResearcherSession,
   runAuthOperator,
   sameOriginHeaders,
@@ -15,16 +16,28 @@ import {
 } from "./auth-fixture";
 
 test("only the singleton Operator can open and read the Operator Console", async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   const operatorMutationRequests: Array<Readonly<{ path: string; body: string }>> = [];
+  const marketStatusRequests: Array<Readonly<{
+    asOf: string | null;
+    idempotencyKey: string | null;
+  }>> = [];
   page.on("request", (request) => {
-    const path = new URL(request.url()).pathname;
+    const url = new URL(request.url());
+    const path = url.pathname;
+    if (request.method() === "GET" && path === "/api/operator/data/refreshes/market") {
+      marketStatusRequests.push({
+        asOf: url.searchParams.get("as_of"),
+        idempotencyKey: url.searchParams.get("idempotency_key"),
+      });
+    }
     if (
       request.method() === "POST"
       && (
         path === "/api/auth/operator/proofs"
         || path.startsWith("/api/auth/operator/invitations/")
         || path === "/api/auth/operator/researchers/sessions/revoke"
+        || path === "/api/operator/data/refreshes/market"
       )
     ) {
       operatorMutationRequests.push({ body: request.postData() ?? "", path });
@@ -194,9 +207,11 @@ test("only the singleton Operator can open and read the Operator Console", async
   );
   expect(newInspection.status()).toBe(200);
 
-  const proofRequests = operatorMutationRequests.filter(
-    (request) => request.path === "/api/auth/operator/proofs",
-  );
+  const proofRequests = operatorMutationRequests.filter((request) => {
+    if (request.path !== "/api/auth/operator/proofs") return false;
+    const body = JSON.parse(request.body) as { operation?: unknown };
+    return body.operation === "invitation.issue" || body.operation === "invitation.reissue";
+  });
   const invitationMutations = operatorMutationRequests.filter(
     (request) => request.path.startsWith("/api/auth/operator/invitations/"),
   );
@@ -208,6 +223,635 @@ test("only the singleton Operator can open and read the Operator Console", async
     .toBe(true);
   expect(invitationMutations.map((request) => Object.keys(JSON.parse(request.body)).sort()))
     .toEqual([["email", "proof"], ["email", "proof"]]);
+
+  const operatorSections = page.getByRole("navigation", {
+    name: "Operator Console sections",
+  });
+  await operatorSections.getByRole("link", { name: "Data", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
+  await expect(page.getByText("Accepted is queued, not published.", { exact: true }))
+    .toBeVisible();
+  const marketAsOf = "2026-08-11T18:00:00+08:00";
+  const marketAsOfInput = page.getByLabel("As-of");
+  const marketKeyInput = page.getByLabel("Idempotency key");
+  await expect(marketKeyInput).toHaveValue(/^market-\d{8}T\d{6}Z$/);
+  const reviewRefresh = page.getByRole("button", { name: "Review Refresh" });
+
+  await marketAsOfInput.fill("2026-08-11");
+  await marketKeyInput.fill("browser-invalid-market-refresh");
+  await reviewRefresh.click();
+  let marketConfirmation = page.getByRole("dialog", {
+    name: "Submit Market Refresh?",
+  });
+  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await marketConfirmation.getByLabel("Current password").press("Enter");
+  await expect(marketConfirmation).toHaveCount(0);
+  const asOfError = page.getByText(
+    "Enter the same explicit timezone-aware ISO timestamp accepted by the CLI.",
+    { exact: true },
+  );
+  await expect(asOfError).toBeVisible();
+  await expect(marketAsOfInput).toHaveAttribute("aria-invalid", "true");
+  await expect(marketAsOfInput).toBeFocused();
+  await marketAsOfInput.press("Tab");
+  await expect(asOfError).toBeVisible();
+  resetAuthRateLimits();
+
+  let releasePendingProof = (): void => {};
+  let markPendingProofStarted = (): void => {};
+  const pendingProofGate = new Promise<void>((resolve) => {
+    releasePendingProof = resolve;
+  });
+  const pendingProofStarted = new Promise<void>((resolve) => {
+    markPendingProofStarted = resolve;
+  });
+  const pendingKey = "browser-cancelled-market-refresh";
+  const pendingProofHandler = async (route: Route): Promise<void> => {
+    const body = route.request().postDataJSON() as {
+      idempotency_key?: unknown;
+      operation?: unknown;
+    };
+    if (
+      body.operation === "data.refresh.market.submit"
+      && body.idempotency_key === pendingKey
+    ) {
+      markPendingProofStarted();
+      await pendingProofGate;
+      try {
+        await route.abort("aborted");
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("already handled")) {
+          throw error;
+        }
+      }
+      return;
+    }
+    await route.continue();
+  };
+  await page.route("**/api/auth/operator/proofs", pendingProofHandler);
+  await marketAsOfInput.fill(marketAsOf);
+  await marketKeyInput.fill(pendingKey);
+  await reviewRefresh.click();
+  marketConfirmation = page.getByRole("dialog", {
+    name: "Submit Market Refresh?",
+  });
+  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await marketConfirmation.getByLabel("Current password").press("Enter");
+  await pendingProofStarted;
+  await expect(marketConfirmation.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  const pendingProofAborted = page.waitForEvent("requestfailed", (request) => {
+    if (new URL(request.url()).pathname !== "/api/auth/operator/proofs") return false;
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    return body.idempotency_key === pendingKey;
+  });
+  await page.keyboard.press("Escape");
+  await expect(marketConfirmation).toHaveCount(0);
+  await expect(reviewRefresh).toBeFocused();
+  releasePendingProof();
+  await pendingProofAborted;
+  await page.unroute("**/api/auth/operator/proofs", pendingProofHandler);
+
+  const marketKey = "\uFEFFbrowser-market-refresh-20260811";
+  let releaseCoreResponse = (): void => {};
+  let markCoreAccepted = (): void => {};
+  let markCoreResponseDropped = (): void => {};
+  const coreResponseGate = new Promise<void>((resolve) => {
+    releaseCoreResponse = resolve;
+  });
+  const coreAccepted = new Promise<void>((resolve) => {
+    markCoreAccepted = resolve;
+  });
+  const coreResponseDropped = new Promise<void>((resolve) => {
+    markCoreResponseDropped = resolve;
+  });
+  const delayedCoreResponseHandler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    if (body.idempotency_key !== marketKey) {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    expect(response.status()).toBe(202);
+    markCoreAccepted();
+    await coreResponseGate;
+    await route.abort("aborted");
+    markCoreResponseDropped();
+  };
+  await page.route(
+    "**/api/operator/data/refreshes/market**",
+    delayedCoreResponseHandler,
+  );
+  await marketAsOfInput.fill(marketAsOf);
+  await marketKeyInput.fill(marketKey);
+  await reviewRefresh.focus();
+  await reviewRefresh.press("Enter");
+  marketConfirmation = page.getByRole("dialog", {
+    name: "Submit Market Refresh?",
+  });
+  await expect(marketConfirmation).toContainText(marketAsOf);
+  await expect(marketConfirmation).toContainText(marketKey);
+  await expect(marketConfirmation).toContainText("durable FIFO");
+  const marketPassword = marketConfirmation.getByLabel("Current password");
+  await expect(marketPassword).toBeFocused();
+  await marketPassword.fill(browserPassword);
+  await marketPassword.press("Enter");
+  await coreAccepted;
+  await expect(marketConfirmation.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  await page.keyboard.press("Escape");
+  await expect(marketConfirmation).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
+  await expect(page.getByText(marketKey, { exact: true })).toBeVisible();
+  releaseCoreResponse();
+  await coreResponseDropped;
+  await page.unroute(
+    "**/api/operator/data/refreshes/market**",
+    delayedCoreResponseHandler,
+  );
+  await expect(page.getByRole("heading", { name: "Refresh completed" }))
+    .toBeVisible({ timeout: 30_000 });
+  expect(marketStatusRequests).toContainEqual({
+    asOf: marketAsOf,
+    idempotencyKey: marketKey,
+  });
+  await expect(page.getByText(marketKey, { exact: true })).toBeVisible();
+  await expect(page.getByText("No change", { exact: true })).toBeVisible();
+  await expect(page.getByText("2026-08-11", { exact: true })).toBeVisible();
+  await expect(reviewRefresh).toBeFocused();
+
+  const conflictingMarketAsOf = "2026-08-12T18:00:00+08:00";
+  let releaseConflictResponse = (): void => {};
+  let markConflictRejected = (): void => {};
+  let markConflictResponseDropped = (): void => {};
+  const conflictResponseGate = new Promise<void>((resolve) => {
+    releaseConflictResponse = resolve;
+  });
+  const conflictRejected = new Promise<void>((resolve) => {
+    markConflictRejected = resolve;
+  });
+  const conflictResponseDropped = new Promise<void>((resolve) => {
+    markConflictResponseDropped = resolve;
+  });
+  const delayedConflictHandler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON() as {
+      as_of?: unknown;
+      idempotency_key?: unknown;
+    };
+    if (body.idempotency_key !== marketKey || body.as_of !== conflictingMarketAsOf) {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    expect(response.status()).toBe(409);
+    markConflictRejected();
+    await conflictResponseGate;
+    await route.abort("aborted");
+    markConflictResponseDropped();
+  };
+  await page.route(
+    "**/api/operator/data/refreshes/market**",
+    delayedConflictHandler,
+  );
+  await marketAsOfInput.fill(conflictingMarketAsOf);
+  await marketKeyInput.fill(marketKey);
+  await reviewRefresh.click();
+  marketConfirmation = page.getByRole("dialog", {
+    name: "Submit Market Refresh?",
+  });
+  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await marketConfirmation.getByLabel("Current password").press("Enter");
+  await conflictRejected;
+  await page.keyboard.press("Escape");
+  await expect(marketConfirmation).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
+  releaseConflictResponse();
+  await conflictResponseDropped;
+  await page.unroute(
+    "**/api/operator/data/refreshes/market**",
+    delayedConflictHandler,
+  );
+  await expect(page.getByText(
+    "This key is already bound to a different Market target.",
+    { exact: true },
+  )).toBeVisible({ timeout: 15_000 });
+  await expect(marketKeyInput).toBeFocused();
+  expect(marketStatusRequests).toContainEqual({
+    asOf: conflictingMarketAsOf,
+    idempotencyKey: marketKey,
+  });
+
+  const marketProofRequests = operatorMutationRequests.filter((request) => {
+    if (request.path !== "/api/auth/operator/proofs") return false;
+    const body = JSON.parse(request.body) as { operation?: unknown };
+    return body.operation === "data.refresh.market.submit";
+  });
+  const marketMutations = operatorMutationRequests.filter(
+    (request) => request.path === "/api/operator/data/refreshes/market",
+  );
+  expect(marketProofRequests).toHaveLength(4);
+  const completedMarketProof = marketProofRequests.find((request) =>
+    JSON.parse(request.body).idempotency_key === marketKey
+  );
+  expect(JSON.parse(completedMarketProof?.body ?? "{}")).toEqual({
+    as_of: marketAsOf,
+    idempotency_key: marketKey,
+    operation: "data.refresh.market.submit",
+    password: browserPassword,
+  });
+  expect(marketMutations).toHaveLength(3);
+  const completedMarketMutation = marketMutations.find((request) =>
+    JSON.parse(request.body).idempotency_key === marketKey
+  );
+  expect(JSON.parse(completedMarketMutation?.body ?? "{}")).toEqual({
+    as_of: marketAsOf,
+    idempotency_key: marketKey,
+    proof: expect.any(String),
+  });
+  expect(marketMutations.every((request) => !request.body.includes(browserPassword)))
+    .toBe(true);
+  resetAuthRateLimits();
+
+  const droppedAfterAcceptanceKey = "browser-dropped-after-acceptance";
+  let markDroppedAfterAcceptance = (): void => {};
+  const droppedAfterAcceptance = new Promise<void>((resolve) => {
+    markDroppedAfterAcceptance = resolve;
+  });
+  const droppedAfterAcceptanceHandler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    if (body.idempotency_key !== droppedAfterAcceptanceKey) {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    expect(response.status()).toBe(202);
+    await route.abort("aborted");
+    markDroppedAfterAcceptance();
+  };
+  await page.route(
+    "**/api/operator/data/refreshes/market**",
+    droppedAfterAcceptanceHandler,
+  );
+  await marketAsOfInput.fill(marketAsOf);
+  await marketKeyInput.fill(droppedAfterAcceptanceKey);
+  await reviewRefresh.click();
+  marketConfirmation = page.getByRole("dialog", {
+    name: "Submit Market Refresh?",
+  });
+  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await marketConfirmation.getByLabel("Current password").press("Enter");
+  await droppedAfterAcceptance;
+  await expect(marketConfirmation).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
+  await page.unroute(
+    "**/api/operator/data/refreshes/market**",
+    droppedAfterAcceptanceHandler,
+  );
+  await expect(page.getByRole("heading", { name: "Refresh completed" }))
+    .toBeVisible({ timeout: 30_000 });
+  expect(marketStatusRequests).toContainEqual({
+    asOf: marketAsOf,
+    idempotencyKey: droppedAfterAcceptanceKey,
+  });
+  await expect(page.getByText(droppedAfterAcceptanceKey, { exact: true })).toBeVisible();
+  resetAuthRateLimits();
+
+  const staleMarketKey = "browser-stale-response-a";
+  const currentMarketKey = "browser-current-response-b";
+  let releaseStaleResponse = (): void => {};
+  let releaseCurrentResponse = (): void => {};
+  let markStaleSubmissionStarted = (): void => {};
+  let markCurrentSubmissionStarted = (): void => {};
+  const staleResponseGate = new Promise<void>((resolve) => {
+    releaseStaleResponse = resolve;
+  });
+  const currentResponseGate = new Promise<void>((resolve) => {
+    releaseCurrentResponse = resolve;
+  });
+  const staleSubmissionStarted = new Promise<void>((resolve) => {
+    markStaleSubmissionStarted = resolve;
+  });
+  const currentSubmissionStarted = new Promise<void>((resolve) => {
+    markCurrentSubmissionStarted = resolve;
+  });
+  const terminalReceipt = (idempotencyKey: string) => ({
+    as_of: "2026-08-11T10:00:00+00:00",
+    attempt_count: 1,
+    data_through_session: "2026-08-11",
+    failure_code: null,
+    idempotency_key: idempotencyKey,
+    kind: "market",
+    last_failure_code: null,
+    last_refresh_at: "2026-08-11T10:01:00+00:00",
+    outcome: "no_change",
+    status: "succeeded",
+  });
+  const recoveredBeforePostKey = "browser-recovered-before-post-response";
+  let releaseRecoveredPostResponse = (): void => {};
+  let markRecoveredPostStarted = (): void => {};
+  const recoveredPostResponseGate = new Promise<void>((resolve) => {
+    releaseRecoveredPostResponse = resolve;
+  });
+  const recoveredPostStarted = new Promise<void>((resolve) => {
+    markRecoveredPostStarted = resolve;
+  });
+  const recoveredBeforePostHandler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (
+      request.method() === "GET"
+      && url.pathname === "/api/operator/data/refreshes/market"
+      && url.searchParams.get("idempotency_key") === recoveredBeforePostKey
+    ) {
+      await route.fulfill({
+        body: JSON.stringify(terminalReceipt(recoveredBeforePostKey)),
+        contentType: "application/json",
+        status: 200,
+      });
+      return;
+    }
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    if (body.idempotency_key !== recoveredBeforePostKey) {
+      await route.continue();
+      return;
+    }
+    markRecoveredPostStarted();
+    await recoveredPostResponseGate;
+    await route.fulfill({
+      body: JSON.stringify({
+        as_of: "2026-08-11T10:00:00+00:00",
+        attempt_count: 0,
+        data_through_session: null,
+        failure_code: null,
+        idempotency_key: recoveredBeforePostKey,
+        kind: "market",
+        last_failure_code: null,
+        last_refresh_at: null,
+        outcome: null,
+        status: "accepted",
+      }),
+      contentType: "application/json",
+      status: 202,
+    });
+  };
+  await page.route(
+    "**/api/operator/data/refreshes/market**",
+    recoveredBeforePostHandler,
+  );
+  await marketAsOfInput.fill(marketAsOf);
+  await marketKeyInput.fill(recoveredBeforePostKey);
+  await reviewRefresh.click();
+  marketConfirmation = page.getByRole("dialog", {
+    name: "Submit Market Refresh?",
+  });
+  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await marketConfirmation.getByLabel("Current password").press("Enter");
+  await recoveredPostStarted;
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Refresh completed" }))
+    .toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("No change", { exact: true })).toBeVisible();
+  const recoveredLatePostResponse = page.waitForResponse((response) => {
+    const request = response.request();
+    if (
+      request.method() !== "POST"
+      || new URL(request.url()).pathname !== "/api/operator/data/refreshes/market"
+    ) return false;
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    return body.idempotency_key === recoveredBeforePostKey;
+  });
+  releaseRecoveredPostResponse();
+  await recoveredLatePostResponse;
+  await settleReactUpdates(page);
+  await expect(page.getByRole("heading", { name: "Refresh completed" })).toBeVisible();
+  await expect(page.getByText(recoveredBeforePostKey, { exact: true })).toBeVisible();
+  await expect(page.getByText("No change", { exact: true })).toBeVisible();
+  await page.unroute(
+    "**/api/operator/data/refreshes/market**",
+    recoveredBeforePostHandler,
+  );
+  resetAuthRateLimits();
+
+  const submissionRaceHandler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    if (body.idempotency_key === staleMarketKey) {
+      markStaleSubmissionStarted();
+      await staleResponseGate;
+      await route.fulfill({
+        body: JSON.stringify(terminalReceipt(staleMarketKey)),
+        contentType: "application/json",
+        status: 202,
+      });
+      return;
+    }
+    if (body.idempotency_key === currentMarketKey) {
+      markCurrentSubmissionStarted();
+      await currentResponseGate;
+      await route.fulfill({
+        body: JSON.stringify(terminalReceipt(currentMarketKey)),
+        contentType: "application/json",
+        status: 202,
+      });
+      return;
+    }
+    await route.continue();
+  };
+  await page.route(
+    "**/api/operator/data/refreshes/market**",
+    submissionRaceHandler,
+  );
+  await marketAsOfInput.fill(marketAsOf);
+  await marketKeyInput.fill(staleMarketKey);
+  await reviewRefresh.click();
+  marketConfirmation = page.getByRole("dialog", {
+    name: "Submit Market Refresh?",
+  });
+  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await marketConfirmation.getByLabel("Current password").press("Enter");
+  await staleSubmissionStarted;
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Stop checking" }).click();
+
+  await marketKeyInput.fill(currentMarketKey);
+  await reviewRefresh.click();
+  const currentMarketConfirmation = page.getByRole("dialog", {
+    name: "Submit Market Refresh?",
+  });
+  await currentMarketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await currentMarketConfirmation.getByLabel("Current password").press("Enter");
+  await currentSubmissionStarted;
+  const staleBrowserResponse = page.waitForResponse((response) => {
+    const request = response.request();
+    if (
+      request.method() !== "POST"
+      || new URL(request.url()).pathname !== "/api/operator/data/refreshes/market"
+    ) return false;
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    return body.idempotency_key === staleMarketKey;
+  });
+  releaseStaleResponse();
+  await staleBrowserResponse;
+  await settleReactUpdates(page);
+  await expect(currentMarketConfirmation).toBeVisible();
+  await expect(currentMarketConfirmation).toContainText(currentMarketKey);
+  await expect(page.getByText(staleMarketKey, { exact: true })).toHaveCount(0);
+
+  const currentBrowserResponse = page.waitForResponse((response) => {
+    const request = response.request();
+    if (
+      request.method() !== "POST"
+      || new URL(request.url()).pathname !== "/api/operator/data/refreshes/market"
+    ) return false;
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    return body.idempotency_key === currentMarketKey;
+  });
+  releaseCurrentResponse();
+  await currentBrowserResponse;
+  await expect(currentMarketConfirmation).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Refresh completed" })).toBeVisible();
+  await expect(page.getByText(currentMarketKey, { exact: true })).toBeVisible();
+  await page.unroute(
+    "**/api/operator/data/refreshes/market**",
+    submissionRaceHandler,
+  );
+  resetAuthRateLimits();
+
+  const polledMarketKey = "browser-polled-response-a";
+  const newerMarketKey = "browser-newer-response-b";
+  let releasePolledRequest = (): void => {};
+  let markPolledRequestStarted = (): void => {};
+  let markPolledRequestSettled = (): void => {};
+  const polledRequestGate = new Promise<void>((resolve) => {
+    releasePolledRequest = resolve;
+  });
+  const polledRequestStarted = new Promise<void>((resolve) => {
+    markPolledRequestStarted = resolve;
+  });
+  const polledRequestSettled = new Promise<void>((resolve) => {
+    markPolledRequestSettled = resolve;
+  });
+  const acceptedReceipt = {
+    as_of: "2026-08-11T10:00:00+00:00",
+    attempt_count: 0,
+    data_through_session: null,
+    failure_code: null,
+    idempotency_key: polledMarketKey,
+    kind: "market",
+    last_failure_code: null,
+    last_refresh_at: null,
+    outcome: null,
+    status: "accepted",
+  };
+  const pollingRaceHandler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (
+      request.method() === "GET"
+      && url.pathname === "/api/operator/data/refreshes/market"
+      && url.searchParams.get("idempotency_key") === polledMarketKey
+    ) {
+      markPolledRequestStarted();
+      await polledRequestGate;
+      try {
+        await route.fulfill({
+          body: JSON.stringify(terminalReceipt(polledMarketKey)),
+          contentType: "application/json",
+          status: 200,
+        });
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("already handled")) {
+          throw error;
+        }
+      } finally {
+        markPolledRequestSettled();
+      }
+      return;
+    }
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    if (body.idempotency_key === polledMarketKey) {
+      await route.fulfill({
+        body: JSON.stringify(acceptedReceipt),
+        contentType: "application/json",
+        status: 202,
+      });
+      return;
+    }
+    if (body.idempotency_key === newerMarketKey) {
+      await route.fulfill({
+        body: JSON.stringify(terminalReceipt(newerMarketKey)),
+        contentType: "application/json",
+        status: 202,
+      });
+      releasePolledRequest();
+      return;
+    }
+    await route.continue();
+  };
+  await page.route(
+    "**/api/operator/data/refreshes/market**",
+    pollingRaceHandler,
+  );
+  await marketAsOfInput.fill(marketAsOf);
+  await marketKeyInput.fill(polledMarketKey);
+  await reviewRefresh.click();
+  marketConfirmation = page.getByRole("dialog", {
+    name: "Submit Market Refresh?",
+  });
+  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await marketConfirmation.getByLabel("Current password").press("Enter");
+  await expect(page.getByRole("heading", { name: "Refresh accepted" })).toBeVisible();
+  await polledRequestStarted;
+
+  await marketKeyInput.fill(newerMarketKey);
+  await reviewRefresh.click();
+  const newerMarketConfirmation = page.getByRole("dialog", {
+    name: "Submit Market Refresh?",
+  });
+  await expect(page.getByText(polledMarketKey, { exact: true })).toBeVisible();
+  await newerMarketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await newerMarketConfirmation.getByLabel("Current password").press("Enter");
+  await expect(newerMarketConfirmation).toHaveCount(0);
+  await polledRequestSettled;
+  await settleReactUpdates(page);
+  await expect(page.getByRole("heading", { name: "Refresh completed" })).toBeVisible();
+  await expect(page.getByText(newerMarketKey, { exact: true })).toBeVisible();
+  await expect(page.getByText(polledMarketKey, { exact: true })).toHaveCount(0);
+  await page.unroute(
+    "**/api/operator/data/refreshes/market**",
+    pollingRaceHandler,
+  );
+  resetAuthRateLimits();
+
+  await page.getByRole("navigation", { name: "Operator Console sections" })
+    .getByRole("link", { name: "Researchers", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
 
   const currentOperatorRow = researcherTable.getByRole("row").filter({
     hasText: operator.email,
@@ -447,6 +1091,15 @@ test("only the singleton Operator can open and read the Operator Console", async
       { email: "ordinary-denied@example.test", proof: oldConsoleToken },
     ],
     [
+      "/api/auth/operator/proofs",
+      {
+        as_of: "2026-08-11T18:00:00+08:00",
+        idempotency_key: "ordinary-denied-market-refresh",
+        operation: "data.refresh.market.submit",
+        password: browserPassword,
+      },
+    ],
+    [
       "/api/auth/operator/researchers/sessions/revoke",
       { proof: oldConsoleToken, researcher_id: deniedResearcher.id },
     ],
@@ -458,9 +1111,42 @@ test("only the singleton Operator can open and read the Operator Console", async
     expect(deniedMutation.status()).toBe(404);
     expect(await deniedMutation.text()).toBe("");
   }
+  const deniedMarketInspection = await page.request.get(
+    "/api/operator/data/refreshes/market?idempotency_key=browser-market-refresh-20260811",
+  );
+  expect(deniedMarketInspection.status()).toBe(404);
+  expect(await deniedMarketInspection.text()).toBe("");
+  const deniedMalformedInspection = await page.request.get(
+    "/api/operator/data/refreshes/market",
+  );
+  expect(deniedMalformedInspection.status()).toBe(404);
+  expect(await deniedMalformedInspection.text()).toBe("");
+  const deniedMarketMutation = await page.request.post(
+    "/api/operator/data/refreshes/market",
+    {
+      data: {
+        as_of: "2026-08-11T18:00:00+08:00",
+        idempotency_key: "ordinary-denied-market-refresh",
+        proof: oldConsoleToken,
+      },
+      headers: sameOriginHeaders(),
+    },
+  );
+  expect(deniedMarketMutation.status()).toBe(404);
+  expect(await deniedMarketMutation.text()).toBe("");
+  const deniedMalformedMutation = await page.request.post(
+    "/api/operator/data/refreshes/market",
+    { data: {}, headers: sameOriginHeaders() },
+  );
+  expect(deniedMalformedMutation.status()).toBe(404);
+  expect(await deniedMalformedMutation.text()).toBe("");
   const deniedDocument = await page.goto("/operator/researchers");
   expect(deniedDocument?.status()).toBe(404);
   expect(await deniedDocument?.text()).toBe("");
+  await expect(page.locator("#root")).toHaveCount(0);
+  const deniedDataDocument = await page.goto("/operator/data");
+  expect(deniedDataDocument?.status()).toBe(404);
+  expect(await deniedDataDocument?.text()).toBe("");
   await expect(page.locator("#root")).toHaveCount(0);
 });
 
@@ -506,4 +1192,9 @@ async function nextAnimationFrame(page: Page): Promise<void> {
   await page.evaluate(
     () => new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve())),
   );
+}
+
+async function settleReactUpdates(page: Page): Promise<void> {
+  await nextAnimationFrame(page);
+  await nextAnimationFrame(page);
 }

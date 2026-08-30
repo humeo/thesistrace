@@ -23,6 +23,7 @@ from thesistrace.benchmark import (
 from thesistrace.daily_track import DailyTrackService, SessionCoordinateRepository
 from thesistrace.daily_track.planning import DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES
 from thesistrace.data import (
+    DataRefreshService,
     DatasetAdmissionService,
     DatasetLifecycle,
     DatasetOverviewService,
@@ -164,6 +165,7 @@ def core_environment_is_configured(
 class CoreRuntime:
     database: PostgresDatabase
     data_overview: DatasetOverviewService | None
+    data_refreshes: DataRefreshService
     researchers: ResearcherService
     research_authoring: ResearchAuthoringService
     research_folders: ResearchFolderService
@@ -298,6 +300,11 @@ def _open_runtime(
         yield CoreRuntime(
             database=database,
             data_overview=data_overview,
+            data_refreshes=DataRefreshService(
+                database,
+                settings.data_mount,
+                benchmark_mount_root=settings.benchmark_mount,
+            ),
             researchers=ResearcherService(database),
             research_authoring=ResearchAuthoringService(),
             research_folders=ResearchFolderService(database),

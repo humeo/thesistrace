@@ -38,6 +38,7 @@ describe("browser auth routing", () => {
     "/research-runs/run_feedface",
     "/daily-tracks/track_feedface",
     "/operator/researchers",
+    "/operator/data",
   ])("recognizes the product route %s", (pathname) => {
     expect(isProductPath(pathname)).toBe(true);
     expect(isAuthPath(pathname)).toBe(false);
@@ -77,6 +78,7 @@ describe("browser auth routing", () => {
     ["/research?folder=folder_default#formula", "/research?folder=folder_default#formula"],
     ["/research-runs/run_feedface", "/research-runs/run_feedface"],
     ["/operator/researchers", "/operator/researchers"],
+    ["/operator/data", "/operator/data"],
     ["//attacker.test/data", null],
     ["https://attacker.test/data", null],
     ["/login?returnTo=%2Fdata", null],

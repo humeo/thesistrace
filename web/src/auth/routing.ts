@@ -34,6 +34,7 @@ export function isAuthPath(pathname: string): boolean {
 export function isProductPath(pathname: string): boolean {
   return PRODUCT_ROOTS.has(pathname)
     || pathname === "/operator/researchers"
+    || pathname === "/operator/data"
     || /^\/research-runs\/run_[a-f0-9]+$/.test(pathname)
     || /^\/daily-tracks\/track_[a-f0-9]+$/.test(pathname);
 }

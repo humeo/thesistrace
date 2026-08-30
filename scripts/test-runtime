@@ -17,6 +17,7 @@ auth_database_password=auth-test-password
 resend_api_key=resend-test-key
 resend_from_email='ThesisTrace <noreply@thesistrace.test>'
 resend_api_url=http://resend-fake:8300
+tushare_test_token=tushare-test-token
 compose_cleanup_required=true
 
 new_run_id() {
@@ -108,6 +109,7 @@ compose() {
       RESEND_API_KEY="$resend_api_key" \
       RESEND_FROM_EMAIL="$resend_from_email" \
       THESISTRACE_RESEND_API_URL="$resend_api_url" \
+      THESISTRACE_TUSHARE_TOKEN="$tushare_test_token" \
       docker compose \
       --project-name "$project_name" \
       --file "$base_file" \
@@ -131,6 +133,7 @@ compose() {
       RESEND_API_KEY="$resend_api_key" \
       RESEND_FROM_EMAIL="$resend_from_email" \
       THESISTRACE_RESEND_API_URL="$resend_api_url" \
+      THESISTRACE_TUSHARE_TOKEN="$tushare_test_token" \
       docker compose \
       --project-name "$project_name" \
       --file "$base_file" \
@@ -153,6 +156,7 @@ base_compose() {
     RESEND_API_KEY="$resend_api_key" \
     RESEND_FROM_EMAIL="$resend_from_email" \
     THESISTRACE_RESEND_API_URL="$resend_api_url" \
+    THESISTRACE_TUSHARE_TOKEN="$tushare_test_token" \
     docker compose \
     --project-name "$project_name" \
     --file "$base_file" \
@@ -175,7 +179,7 @@ runtime_image_name() {
 cleanup_runtime_images() {
   runtime_images_status=0
   for image_service in \
-    api research-worker batch-research-worker tracking-worker \
+    api research-worker batch-research-worker tracking-worker data-operator-worker \
     initialize auth web; do
     image_name=$(runtime_image_name "$image_service")
     if docker image inspect "$image_name" >/dev/null 2>&1; then
@@ -194,6 +198,8 @@ build_runtime_images() {
   docker image tag "$built_backend_image" "$(runtime_image_name batch-research-worker)" \
     || return $?
   docker image tag "$built_backend_image" "$(runtime_image_name tracking-worker)" \
+    || return $?
+  docker image tag "$built_backend_image" "$(runtime_image_name data-operator-worker)" \
     || return $?
 }
 
@@ -262,7 +268,8 @@ capture_evidence() {
 
 capture_worker_log_evidence() {
   worker_log="$evidence_dir/worker-events.jsonl"
-  compose logs --no-color research-worker batch-research-worker tracking-worker >"$worker_log"
+  compose logs --no-color research-worker batch-research-worker tracking-worker \
+    data-operator-worker >"$worker_log"
 }
 
 capture_api_log_evidence() {
@@ -588,10 +595,11 @@ print(json.dumps({
 }
 
 reset_product_state() {
-  compose stop auth api research-worker batch-research-worker tracking-worker postgres rustfs \
+  compose stop auth api research-worker batch-research-worker tracking-worker \
+    data-operator-worker postgres rustfs \
     >/dev/null 2>&1 || true
   compose rm --force auth auth-initialize api research-worker batch-research-worker \
-    tracking-worker initialize postgres rustfs \
+    tracking-worker data-operator-worker initialize postgres rustfs \
     >/dev/null 2>&1 || true
   "$repo_root/scripts/product-state-volumes" reset "$project_name"
   compose up --detach --no-build --wait --wait-timeout 300 postgres rustfs
@@ -1122,7 +1130,7 @@ case "$command" in
       tests/browser/prepare_current_data.py
     run_phase e2e-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
-      auth api research-worker batch-research-worker tracking-worker web
+      auth api research-worker batch-research-worker tracking-worker data-operator-worker web
     resend_port=$(mapped_port resend-fake 8300)
     resend_test_origin="http://127.0.0.1:$resend_port"
     printf 'postgres_port=%s\ns3_port=%s\nresend_port=%s\n' \
@@ -1181,7 +1189,7 @@ case "$command" in
     run_phase image-smoke-dataset-readiness verify_dataset_readiness_outage
     run_phase image-smoke-workers compose up --detach --no-build \
       --wait --wait-timeout 120 \
-      research-worker batch-research-worker tracking-worker
+      research-worker batch-research-worker tracking-worker data-operator-worker
     network_internal=$(docker network inspect "${project_name}_default" \
       --format '{{.Internal}}')
     test "$network_internal" = true
@@ -1228,12 +1236,15 @@ case "$command" in
       >"$evidence_dir/smoke-recovered.json" \
       2>"$evidence_dir/smoke-recovered.stderr.log"
     run_phase image-smoke-application-restart \
-      compose restart api research-worker batch-research-worker tracking-worker
+      compose restart api research-worker batch-research-worker tracking-worker \
+        data-operator-worker
     run_phase image-smoke-database-restart compose restart postgres
     run_phase image-smoke-post-database-restart \
-      compose restart api research-worker batch-research-worker tracking-worker
+      compose restart api research-worker batch-research-worker tracking-worker \
+        data-operator-worker
     run_phase image-smoke-reopen compose up --detach --no-build \
-      --wait --wait-timeout 120 api research-worker batch-research-worker tracking-worker
+      --wait --wait-timeout 120 api research-worker batch-research-worker \
+      tracking-worker data-operator-worker
     run_phase image-smoke-persisted compose_run \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
@@ -1314,7 +1325,7 @@ case "$command" in
       --wait --wait-timeout 120 api
     run_phase image-smoke-mcp-workers compose up --detach --no-build \
       --wait --wait-timeout 120 \
-      research-worker batch-research-worker tracking-worker
+      research-worker batch-research-worker tracking-worker data-operator-worker
     run_phase image-smoke-mcp-http-after run_mcp_image_smoke http-after \
       >"$evidence_dir/mcp-http-after.json" \
       2>"$evidence_dir/mcp-http-after.stderr.log"

@@ -45,6 +45,7 @@ function dependencies(
       expiresAt: "2026-08-29T06:01:00.000Z",
       proof: opaqueInvitationToken,
     })),
+    consumeOperatorProof: vi.fn(async () => undefined),
     consumeInvitationRateLimit: vi.fn(async () => ({
       allowed: true,
       retryAfterSeconds: 0,
@@ -608,6 +609,33 @@ describe("Auth HTTP boundary", () => {
     expect(appDependencies.confirmOperatorProof).not.toHaveBeenCalled();
   });
 
+  it("uses the Python boundary-whitespace set for Unicode Market keys", async () => {
+    const appDependencies = dependencies();
+    const app = createAuthApp(appDependencies);
+    const request = async (idempotencyKey: string) => app.request(
+      "http://auth.test/api/auth/operator/proofs",
+      {
+        body: JSON.stringify({
+          as_of: "2026-08-11T18:00:00+08:00",
+          idempotency_key: idempotencyKey,
+          operation: "data.refresh.market.submit",
+          password: "correct-horse-battery-staple",
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: "operator=fake",
+          origin: "http://auth.test",
+        },
+        method: "POST",
+      },
+    );
+
+    expect((await request("\uFEFFmarket-key")).status).toBe(200);
+    vi.mocked(appDependencies.confirmOperatorProof).mockClear();
+    expect((await request("\u0085market-key")).status).toBe(400);
+    expect(appDependencies.confirmOperatorProof).not.toHaveBeenCalled();
+  });
+
   it.each(["list-sessions", "update-session", "sign-in/social", "unknown"])(
     "rejects the unapproved Better Auth path: %s",
     async (path) => {
@@ -833,6 +861,139 @@ describe("Auth HTTP boundary", () => {
     );
   });
 
+  it("confirms and privately consumes one exact Market submission proof", async () => {
+    const appDependencies = dependencies();
+    const app = createAuthApp(appDependencies);
+    const request = {
+      as_of: "2026-08-11T18:00:00+08:00",
+      idempotency_key: "market-20260811T180000+0800",
+      operation: "data.refresh.market.submit",
+    } as const;
+    const confirmation = await app.request(
+      "http://auth.test/api/auth/operator/proofs",
+      {
+        body: JSON.stringify({
+          ...request,
+          password: "correct-horse-battery-staple",
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: "operator=fake",
+          origin: "http://auth.test",
+        },
+        method: "POST",
+      },
+    );
+
+    expect(confirmation.status).toBe(200);
+    expect(appDependencies.confirmOperatorProof).toHaveBeenCalledWith(
+      {
+        researcherId: "00000000-0000-4000-8000-000000000001",
+        sessionId: "00000000-0000-4000-8000-000000000010",
+      },
+      {
+        asOf: request.as_of,
+        idempotencyKey: request.idempotency_key,
+        operation: request.operation,
+        password: "correct-horse-battery-staple",
+      },
+    );
+
+    const consumed = await app.request(
+      "http://auth.test/internal/operator/proofs/consume",
+      {
+        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        headers: {
+          "content-type": "application/json",
+          cookie: "operator=fake",
+        },
+        method: "POST",
+      },
+    );
+
+    expect(consumed.status).toBe(204);
+    expect(appDependencies.consumeOperatorProof).toHaveBeenCalledWith(
+      {
+        researcherId: "00000000-0000-4000-8000-000000000001",
+        sessionId: "00000000-0000-4000-8000-000000000010",
+      },
+      {
+        asOf: request.as_of,
+        idempotencyKey: request.idempotency_key,
+        operation: request.operation,
+        proof: opaqueInvitationToken,
+      },
+    );
+  });
+
+  it("counts Unicode Market keys by characters at both Auth proof boundaries", async () => {
+    const appDependencies = dependencies();
+    const app = createAuthApp(appDependencies);
+    const request = {
+      as_of: "2026-08-11T18:00:00+08:00",
+      idempotency_key: "market-刷新",
+      operation: "data.refresh.market.submit",
+    } as const;
+    const headers = {
+      "content-type": "application/json",
+      cookie: "operator=fake",
+      origin: "http://auth.test",
+    };
+
+    const confirmation = await app.request(
+      "http://auth.test/api/auth/operator/proofs",
+      {
+        body: JSON.stringify({
+          ...request,
+          password: "correct-horse-battery-staple",
+        }),
+        headers,
+        method: "POST",
+      },
+    );
+    const consumption = await app.request(
+      "http://auth.test/internal/operator/proofs/consume",
+      {
+        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        headers,
+        method: "POST",
+      },
+    );
+
+    expect(confirmation.status).toBe(200);
+    expect(consumption.status).toBe(204);
+    expect(appDependencies.confirmOperatorProof).toHaveBeenCalled();
+    expect(appDependencies.consumeOperatorProof).toHaveBeenCalled();
+  });
+
+  it.each([
+    "market-\0-key",
+    `market-${String.fromCharCode(0xD800)}-key`,
+  ])("rejects PostgreSQL-incompatible key %j before proof work", async (key) => {
+    const appDependencies = dependencies();
+    const app = createAuthApp(appDependencies);
+    const response = await app.request(
+      "http://auth.test/api/auth/operator/proofs",
+      {
+        body: JSON.stringify({
+          as_of: "2026-08-11T18:00:00+08:00",
+          idempotency_key: key,
+          operation: "data.refresh.market.submit",
+          password: "correct-horse-battery-staple",
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: "operator=fake",
+          origin: "http://auth.test",
+        },
+        method: "POST",
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(appDependencies.confirmOperatorProof).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["issue", "invitation.issue"],
     ["reissue", "invitation.reissue"],
@@ -972,12 +1133,17 @@ describe("Auth HTTP boundary", () => {
 
     for (const path of [
       "/internal/operator/page-access",
+      "/internal/operator/proofs/consume",
       "/api/auth/operator/capability",
       "/api/auth/operator/researchers",
       "/api/auth/operator/invitations",
     ]) {
       const response = await app.request(`http://auth.test${path}`, {
-        headers: { cookie: "ordinary=fake" },
+        body: path.endsWith("/consume") ? JSON.stringify({}) : undefined,
+        headers: path.endsWith("/consume")
+          ? { "content-type": "application/json", cookie: "ordinary=fake" }
+          : { cookie: "ordinary=fake" },
+        method: path.endsWith("/consume") ? "POST" : "GET",
       });
       expect(response.status).toBe(404);
       expect(await response.text()).toBe("");

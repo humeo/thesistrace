@@ -11,6 +11,7 @@ import {
   type OperatorResearcher,
 } from "./operatorDirectoryClient";
 import { OperatorInvitationDialog } from "./OperatorInvitationDialog";
+import { OperatorConsoleNavigation } from "./OperatorConsoleNavigation";
 import type { InvitationMutationOperation } from "./operatorMutationClient";
 import {
   OperatorSessionRevocationDialog,
@@ -314,6 +315,8 @@ export function OperatorResearchersView({
           </p>
         </div>
       </header>
+
+      <OperatorConsoleNavigation current="researchers" />
 
       <OperatorLoadState
         hasData={researchers !== null || invitations !== null}

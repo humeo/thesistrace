@@ -30,6 +30,7 @@ THESISTRACE_AUTH_DATABASE_PASSWORD=<unique-url-safe-24-to-128-characters>
 BETTER_AUTH_SECRET=<64-lowercase-hex-characters>
 RESEND_API_KEY=<production-resend-api-key>
 RESEND_FROM_EMAIL=<verified-sender-email-or-display-name>
+THESISTRACE_TUSHARE_TOKEN=<production-tushare-token>
 THESISTRACE_AUTH_IMAGE=ghcr.io/<owner>/<image>:<fixed-version>
 ```
 
@@ -107,6 +108,7 @@ production_compose() (
     THESISTRACE_RESEND_API_URL THESISTRACE_OWNER_DATABASE_PASSWORD \
     THESISTRACE_CORE_DATABASE_PASSWORD THESISTRACE_AUTH_DATABASE_PASSWORD \
     BETTER_AUTH_SECRET RESEND_API_KEY RESEND_FROM_EMAIL \
+    THESISTRACE_TUSHARE_TOKEN \
     THESISTRACE_AUTH_IMAGE
   sudo docker compose \
     --project-name thesistrace \

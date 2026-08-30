@@ -1113,6 +1113,9 @@ function runtime() {
       ),
     confirmOperatorProof: (principal, input) =>
       operatorProofs.confirm(principal, input),
+    consumeOperatorProof: async (principal, input) => {
+      await operatorProofs.consumeExternal(principal, input);
+    },
     async consumeInvitationRateLimit() {
       return { allowed: true, retryAfterSeconds: 0 };
     },

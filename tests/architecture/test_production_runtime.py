@@ -19,6 +19,7 @@ THESISTRACE_AUTH_DATABASE_PASSWORD=AuthRuntime_9Fd4vB7Ky2Hg6Px8
 BETTER_AUTH_SECRET=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
 RESEND_API_KEY=re_production_7Kp4mN9vQ2sL6xT8
 RESEND_FROM_EMAIL=ThesisTrace <noreply@thesistrace.com>
+THESISTRACE_TUSHARE_TOKEN=production-tushare-token-7Kp4mN9vQ2sL6xT8
 THESISTRACE_AUTH_IMAGE=ghcr.io/thesistrace/auth:2026-08-29
 """
 
@@ -66,6 +67,7 @@ def test_production_runtime_prevents_ambient_security_overrides(
         ambient_overrides={
             "BETTER_AUTH_SECRET": "ambient-secret-must-not-override",
             "THESISTRACE_PUBLIC_ORIGIN": "http://ambient.invalid",
+            "THESISTRACE_TUSHARE_TOKEN": "ambient-token-must-not-override",
         },
     )
 
@@ -73,6 +75,7 @@ def test_production_runtime_prevents_ambient_security_overrides(
     assert environment_log.read_text().splitlines() == [
         "public_origin=unset",
         "auth_secret=unset",
+        "tushare_token=unset",
     ]
 
 
@@ -128,6 +131,14 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
         (
             "RESEND_API_KEY=resend-test-key",
             "PRODUCTION_RESEND_KEY_INVALID",
+        ),
+        (
+            "THESISTRACE_TUSHARE_TOKEN=development-data-operator-token",
+            "PRODUCTION_TUSHARE_TOKEN_INVALID",
+        ),
+        (
+            "THESISTRACE_TUSHARE_TOKEN=<production-tushare-token>",
+            "PRODUCTION_TUSHARE_TOKEN_INVALID",
         ),
         (
             "THESISTRACE_AUTH_IMAGE=registry.example:5000/thesistrace/auth",
@@ -209,9 +220,10 @@ def _run(
     docker.write_text(
         "#!/bin/sh\n"
         "if [ -n \"${PRODUCTION_RUNTIME_ENV_LOG-}\" ]; then\n"
-        "  printf 'public_origin=%s\\nauth_secret=%s\\n' "
+        "  printf 'public_origin=%s\\nauth_secret=%s\\ntushare_token=%s\\n' "
         "\"${THESISTRACE_PUBLIC_ORIGIN-unset}\" "
-        "\"${BETTER_AUTH_SECRET-unset}\" >>\"$PRODUCTION_RUNTIME_ENV_LOG\"\n"
+        "\"${BETTER_AUTH_SECRET-unset}\" "
+        "\"${THESISTRACE_TUSHARE_TOKEN-unset}\" >>\"$PRODUCTION_RUNTIME_ENV_LOG\"\n"
         "fi\n"
         "if [ -n \"${PRODUCTION_RUNTIME_COMMAND_LOG-}\" ]; then\n"
         "  printf '%s\\n' \"docker $*\" >>\"$PRODUCTION_RUNTIME_COMMAND_LOG\"\n"

@@ -10,8 +10,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
 
-from psycopg.errors import UniqueViolation
-
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.benchmark import (
     BenchmarkLevelSource,
@@ -56,6 +54,8 @@ class _RefreshFenced(RuntimeError):
 @dataclass(frozen=True)
 class RefreshOutcome:
     idempotency_key: str
+    kind: str
+    as_of: str
     status: str
     outcome: str | None
     data_through_session: str | None
@@ -142,7 +142,7 @@ class DataRefreshService:
 
     def submit(self, *, idempotency_key: str, as_of: datetime) -> RefreshOutcome:
         key = _identity(idempotency_key)
-        if as_of.tzinfo is None:
+        if as_of.tzinfo is None or as_of.utcoffset() is None:
             raise DataRefreshError("INVALID_AS_OF")
         normalized_as_of = as_of.astimezone(UTC)
         fingerprint = hashlib.sha256(
@@ -164,25 +164,22 @@ class DataRefreshService:
             return _outcome(existing)
         if self._lifecycle.current_pointer() is None:
             raise DataRefreshError("DATA_NOT_READY")
-        try:
-            with self._database.transaction() as transaction:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                INSERT INTO data.refresh_operations (
+                    idempotency_key, kind, fingerprint, status, as_of
+                ) VALUES (%s, 'market', %s, 'accepted', %s)
+                ON CONFLICT (idempotency_key) DO NOTHING
+                RETURNING *
+                """,
+                (key, fingerprint, normalized_as_of),
+            ).fetchone()
+            if row is None:
                 row = transaction.execute(
-                    """
-                    INSERT INTO data.refresh_operations (
-                        idempotency_key, fingerprint, status, as_of
-                    ) VALUES (%s, %s, 'accepted', %s)
-                    ON CONFLICT (idempotency_key) DO NOTHING
-                    RETURNING *
-                    """,
-                    (key, fingerprint, normalized_as_of),
+                    "SELECT * FROM data.refresh_operations WHERE idempotency_key = %s",
+                    (key,),
                 ).fetchone()
-                if row is None:
-                    row = transaction.execute(
-                        "SELECT * FROM data.refresh_operations WHERE idempotency_key = %s",
-                        (key,),
-                    ).fetchone()
-        except UniqueViolation as error:
-            raise DataRefreshError("REFRESH_ALREADY_ACTIVE") from error
         assert row is not None
         if row["fingerprint"] != fingerprint:
             raise DataRefreshError("IDEMPOTENCY_KEY_CONFLICT")
@@ -269,6 +266,8 @@ class DataRefreshService:
                         self._update_benchmark(
                             current_admission.research_calendar,
                             benchmark_source,
+                            claim=claim,
+                            expected_manifest=expected_manifest,
                         )
                     heartbeat.assert_owned()
                     completed_at = self._operator_time()
@@ -300,6 +299,8 @@ class DataRefreshService:
                         self._update_benchmark(
                             candidate_admission.research_calendar,
                             benchmark_source,
+                            claim=claim,
+                            expected_manifest=expected_manifest,
                         )
                     heartbeat.assert_owned()
                     phase = "candidate_validation"
@@ -309,14 +310,17 @@ class DataRefreshService:
                                 operation_id=operation_id,
                                 generation_manifest_sha256=generation.manifest_sha256,
                                 lease_seconds=self._lease_seconds,
+                                admission_guard=lambda transaction: (
+                                    self._record_candidate_in_transaction(
+                                        transaction,
+                                        claim,
+                                        expected_manifest=expected_manifest,
+                                        candidate_manifest=generation.manifest_sha256,
+                                        prepared_at=prepared_at,
+                                    )
+                                ),
                             )
                         )
-                    self._record_candidate(
-                        claim,
-                        expected_manifest=expected_manifest,
-                        candidate_manifest=generation.manifest_sha256,
-                        prepared_at=prepared_at,
-                    )
                     heartbeat.assert_owned()
                     phase = "publication"
                     try:
@@ -325,6 +329,14 @@ class DataRefreshService:
                                 expected_generation_manifest_sha256=expected_manifest,
                                 candidate=protected_candidate,
                                 prepared_at=prepared_at,
+                                publication_guard=lambda transaction: (
+                                    self._owned_refresh_transaction(
+                                        transaction,
+                                        claim,
+                                        expected_manifest=expected_manifest,
+                                        candidate_manifest=generation.manifest_sha256,
+                                    )
+                                ),
                             )
                             head_moved = True
                             completed_at = self._operator_time()
@@ -413,12 +425,103 @@ class DataRefreshService:
         self,
         research_calendar: Sequence[str],
         source: BenchmarkLevelSource,
+        *,
+        claim: _RefreshClaim,
+        expected_manifest: str,
     ) -> None:
         BenchmarkSnapshotUpdater(
             self._benchmark_store,
             source,
             clock=self._operator_time,
+            publication_guard=lambda: self._owned_refresh_mutation(
+                claim,
+                expected_manifest=expected_manifest,
+            ),
         ).update(research_calendar)
+
+    @contextmanager
+    def _owned_refresh_mutation(
+        self,
+        claim: _RefreshClaim,
+        *,
+        expected_manifest: str,
+    ) -> Iterator[None]:
+        with self._database.transaction() as transaction:
+            lock_data_lifecycle(transaction)
+            with self._owned_refresh_transaction(
+                transaction,
+                claim,
+                expected_manifest=expected_manifest,
+            ):
+                yield
+
+    @contextmanager
+    def _owned_refresh_transaction(
+        self,
+        transaction: PostgresTransaction,
+        claim: _RefreshClaim,
+        *,
+        expected_manifest: str,
+        candidate_manifest: str | None = None,
+    ) -> Iterator[None]:
+        self._require_owned_refresh(
+            transaction,
+            claim,
+            expected_manifest=expected_manifest,
+            candidate_manifest=candidate_manifest,
+        )
+        yield
+        renewed = transaction.execute(
+            """
+            UPDATE data.refresh_operations
+            SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                updated_at = clock_timestamp()
+            WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
+            """,
+            (self._lease_seconds, claim.key, claim.owner_token),
+        )
+        if renewed.rowcount != 1:
+            raise _RefreshFenced("Refresh mutation lost ownership before commit")
+
+    def _require_owned_refresh(
+        self,
+        transaction: PostgresTransaction,
+        claim: _RefreshClaim,
+        *,
+        expected_manifest: str,
+        candidate_manifest: str | None = None,
+    ) -> None:
+        row = transaction.execute(
+            """
+            SELECT expected_generation_manifest_sha256, generation_manifest_sha256
+            FROM data.refresh_operations
+            WHERE idempotency_key = %s AND status = 'running'
+              AND owner_token = %s AND lease_expires_at > clock_timestamp()
+            FOR UPDATE
+            """,
+            (claim.key, claim.owner_token),
+        ).fetchone()
+        if (
+            row is None
+            or row["expected_generation_manifest_sha256"] != expected_manifest
+            or (
+                candidate_manifest is not None
+                and row["generation_manifest_sha256"] != candidate_manifest
+            )
+        ):
+            raise _RefreshFenced("Refresh mutation belongs to a stale owner")
+        pointer = self._heads.current_pointer()
+        if pointer is None or pointer.generation_manifest_sha256 != expected_manifest:
+            raise DatasetHeadConflict("Dataset Head changed before Refresh mutation")
+        transaction.execute(
+            """
+            UPDATE data.refresh_operations
+            SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                updated_at = clock_timestamp()
+            WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
+            """,
+            (self._lease_seconds, claim.key, claim.owner_token),
+        )
 
     def _claim(self) -> _RefreshClaim | None:
         owner_token = secrets.token_hex(16)
@@ -430,6 +533,10 @@ class DataRefreshService:
                 """
                 SELECT * FROM data.refresh_operations
                 WHERE status = 'accepted'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM data.refresh_operations
+                      WHERE status = 'running'
+                  )
                 ORDER BY created_at, idempotency_key
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1
@@ -441,9 +548,9 @@ class DataRefreshService:
                 """
                 UPDATE data.refresh_operations
                 SET status = 'running', owner_token = %s,
-                    lease_expires_at = now() + make_interval(secs => %s),
+                    lease_expires_at = clock_timestamp() + make_interval(secs => %s),
                     attempt_count = attempt_count + 1,
-                    started_at = now(), updated_at = now()
+                    started_at = clock_timestamp(), updated_at = clock_timestamp()
                 WHERE idempotency_key = %s AND status = 'accepted'
                 RETURNING attempt_count
                 """,
@@ -484,11 +591,11 @@ class DataRefreshService:
                     renewed = transaction.execute(
                         """
                         UPDATE data.refresh_operations
-                        SET lease_expires_at = now() + make_interval(secs => %s),
-                            updated_at = now()
+                        SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                            updated_at = clock_timestamp()
                         WHERE idempotency_key = %s AND status = 'running'
                           AND owner_token = %s
-                          AND lease_expires_at > now()
+                          AND lease_expires_at > clock_timestamp()
                         """,
                         (self._lease_seconds, claim.key, claim.owner_token),
                     )
@@ -497,10 +604,10 @@ class DataRefreshService:
                     transaction.execute(
                         """
                         UPDATE data.generation_candidates
-                        SET lease_expires_at = now() + make_interval(secs => %s),
-                            updated_at = now()
+                        SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                            updated_at = clock_timestamp()
                         WHERE operation_id = %s AND status = 'live'
-                          AND lease_expires_at > now()
+                          AND lease_expires_at > clock_timestamp()
                         """,
                         (
                             self._lease_seconds,
@@ -528,7 +635,7 @@ class DataRefreshService:
                 SELECT as_of FROM data.refresh_operations
                 WHERE idempotency_key = %s AND status = 'running'
                   AND owner_token = %s
-                  AND lease_expires_at > now()
+                  AND lease_expires_at > clock_timestamp()
                 """,
                 (claim.key, claim.owner_token),
             ).fetchone()
@@ -545,48 +652,49 @@ class DataRefreshService:
             updated = transaction.execute(
                 """
                 UPDATE data.refresh_operations
-                SET expected_generation_manifest_sha256 = %s, updated_at = now()
+                SET expected_generation_manifest_sha256 = %s,
+                    updated_at = clock_timestamp()
                 WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
-                  AND lease_expires_at > now()
+                  AND lease_expires_at > clock_timestamp()
                 """,
                 (expected_manifest, claim.key, claim.owner_token),
             )
             if updated.rowcount != 1:
                 raise _RefreshFenced("Refresh lost expected-Head ownership")
 
-    def _record_candidate(
+    def _record_candidate_in_transaction(
         self,
+        transaction: PostgresTransaction,
         claim: _RefreshClaim,
         *,
         expected_manifest: str,
         candidate_manifest: str,
         prepared_at: datetime,
     ) -> None:
-        with self._database.transaction() as transaction:
-            lock_data_lifecycle(transaction)
-            pointer = self._heads.current_pointer()
-            if pointer is None or pointer.generation_manifest_sha256 != expected_manifest:
-                raise DatasetHeadConflict("Dataset Head changed before candidate publication")
-            updated = transaction.execute(
-                """
-                UPDATE data.refresh_operations
-                SET generation_manifest_sha256 = %s, candidate_prepared_at = %s,
-                    lease_expires_at = now() + make_interval(secs => %s), updated_at = now()
-                WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
-                  AND expected_generation_manifest_sha256 = %s
-                  AND lease_expires_at > now()
-                """,
-                (
-                    candidate_manifest,
-                    prepared_at,
-                    self._lease_seconds,
-                    claim.key,
-                    claim.owner_token,
-                    expected_manifest,
-                ),
-            )
-            if updated.rowcount != 1:
-                raise _RefreshFenced("Refresh lost candidate ownership")
+        pointer = self._heads.current_pointer()
+        if pointer is None or pointer.generation_manifest_sha256 != expected_manifest:
+            raise DatasetHeadConflict("Dataset Head changed before candidate publication")
+        updated = transaction.execute(
+            """
+            UPDATE data.refresh_operations
+            SET generation_manifest_sha256 = %s, candidate_prepared_at = %s,
+                lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                updated_at = clock_timestamp()
+            WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
+              AND expected_generation_manifest_sha256 = %s
+              AND lease_expires_at > clock_timestamp()
+            """,
+            (
+                candidate_manifest,
+                prepared_at,
+                self._lease_seconds,
+                claim.key,
+                claim.owner_token,
+                expected_manifest,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise _RefreshFenced("Refresh lost candidate ownership")
 
     def _complete_no_change(
         self,
@@ -667,7 +775,7 @@ class DataRefreshService:
                         generation_manifest_sha256 = NULL, candidate_prepared_at = NULL,
                         started_at = NULL, last_failure_code = %s, updated_at = now()
                     WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
-                      AND lease_expires_at > now()
+                      AND lease_expires_at > clock_timestamp()
                     """,
                     (code, claim.key, claim.owner_token),
                 )
@@ -679,7 +787,7 @@ class DataRefreshService:
                     SET status = 'failed', failure_code = %s, last_failure_code = %s,
                         finished_at = now(), updated_at = now()
                     WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
-                      AND lease_expires_at > now()
+                      AND lease_expires_at > clock_timestamp()
                     """,
                     (terminal_code, code, claim.key, claim.owner_token),
                 )
@@ -754,7 +862,7 @@ class DataRefreshService:
             rows = transaction.execute(
                 """
                 SELECT * FROM data.refresh_operations
-                WHERE status = 'running' AND lease_expires_at <= now()
+                WHERE status = 'running' AND lease_expires_at <= clock_timestamp()
                 FOR UPDATE SKIP LOCKED
                 """
             ).fetchall()
@@ -817,7 +925,7 @@ def _complete_operation(
             last_refresh_at = %s, failure_code = NULL, last_failure_code = NULL,
             finished_at = now(), updated_at = now()
         WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
-          AND lease_expires_at > now()
+          AND lease_expires_at > clock_timestamp()
         """,
         (
             outcome,
@@ -915,14 +1023,42 @@ def _operation_id(idempotency_key: str, owner_token: str) -> str:
 
 def _identity(value: str) -> str:
     normalized = value.strip()
-    if not normalized or normalized != value:
+    if (
+        not normalized
+        or normalized != value
+        or len(normalized) > 512
+        or "\0" in normalized
+        or any(0xD800 <= ord(character) <= 0xDFFF for character in normalized)
+    ):
         raise DataRefreshError("INVALID_IDEMPOTENCY_KEY")
     return normalized
 
 
+def validate_market_refresh_request(
+    *,
+    idempotency_key: str,
+    as_of: str,
+) -> tuple[str, datetime]:
+    key = _identity(idempotency_key)
+    if len(as_of) > 128 or as_of != as_of.strip():
+        raise DataRefreshError("INVALID_AS_OF")
+    try:
+        parsed_as_of = datetime.fromisoformat(as_of)
+    except (TypeError, ValueError) as error:
+        raise DataRefreshError("INVALID_AS_OF") from error
+    if parsed_as_of.tzinfo is None or parsed_as_of.utcoffset() is None:
+        raise DataRefreshError("INVALID_AS_OF")
+    return key, parsed_as_of.astimezone(UTC)
+
+
 def _outcome(row: dict[str, object]) -> RefreshOutcome:
+    as_of = row["as_of"]
+    if not isinstance(as_of, datetime):
+        raise DataRefreshError("REFRESH_RECEIPT_INVALID")
     return RefreshOutcome(
         idempotency_key=str(row["idempotency_key"]),
+        kind=str(row["kind"]),
+        as_of=as_of.astimezone(UTC).isoformat(),
         status=str(row["status"]),
         outcome=None if row["outcome"] is None else str(row["outcome"]),
         data_through_session=(

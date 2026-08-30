@@ -17,6 +17,37 @@ import {
 
 const PROOF_LIFETIME_MS = 60_000;
 const principalIdSchema = z.uuid();
+const pythonBoundaryWhitespace = /^[\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]$/u;
+export function isMarketRefreshIdempotencyKey(value: string): boolean {
+  const length = Array.from(value).length;
+  return length > 0
+    && length <= 512
+    && !value.includes("\0")
+    && !containsLoneSurrogate(value)
+    && !hasPythonBoundaryWhitespace(value);
+}
+
+function hasPythonBoundaryWhitespace(value: string): boolean {
+  const characters = Array.from(value);
+  const first = characters[0];
+  const last = characters.at(-1);
+  return (first !== undefined && pythonBoundaryWhitespace.test(first))
+    || (last !== undefined && pythonBoundaryWhitespace.test(last));
+}
+
+function containsLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xD800 && codeUnit <= 0xDBFF) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xDC00 || next > 0xDFFF) return true;
+      index += 1;
+    } else if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export type OperatorInvitationProofOperation =
   | "invitation.issue"
@@ -24,7 +55,8 @@ export type OperatorInvitationProofOperation =
 
 export type OperatorProofOperation =
   | OperatorInvitationProofOperation
-  | "researcher.sessions.revoke";
+  | "researcher.sessions.revoke"
+  | "data.refresh.market.submit";
 
 export type OperatorProofRequest =
   | Readonly<{
@@ -36,6 +68,13 @@ export type OperatorProofRequest =
       email?: never;
       operation: "researcher.sessions.revoke";
       researcherId: string;
+    }>
+  | Readonly<{
+      asOf: string;
+      email?: never;
+      idempotencyKey: string;
+      operation: "data.refresh.market.submit";
+      researcherId?: never;
     }>;
 
 export type OperatorProofClaim = Readonly<{
@@ -333,6 +372,82 @@ export class OperatorProofService {
     return consumed.rowCount === 1;
   }
 
+  async consumeExternal(
+    principal: OperatorPrincipal,
+    input: OperatorProofRequest & Readonly<{ proof: string }>,
+  ): Promise<"consumed" | "duplicate"> {
+    assertPrincipal(principal);
+    const request = normalizeProofRequest(input);
+    const parsedProof = parseOpaqueToken(input.proof);
+    if (parsedProof === null) throw new OperatorProofInvalidError();
+    const requestHash = operatorRequestHash(request);
+    const client = await this.#pool.connect();
+    try {
+      await client.query("BEGIN");
+      await lockAuthMutationShared(client);
+      await lockOperatorAssignment(client);
+      const result = await client.query<SessionProofRow>(
+        `
+          SELECT
+            proof.claimed_at,
+            proof.expires_at,
+            proof.operation,
+            proof.request_hash,
+            proof.state,
+            proof.token_hash,
+            login_session."expiresAt" AS session_expires_at
+          FROM auth.operator_proof AS proof
+          JOIN auth."session" AS login_session
+            ON login_session.id = proof.session_id
+          JOIN auth."user" AS researcher
+            ON researcher.id = login_session."userId"
+           AND researcher.active IS TRUE
+          JOIN auth.operator_assignment AS assignment
+            ON assignment.researcher_id = researcher.id
+           AND assignment.singleton IS TRUE
+          WHERE proof.id = $1
+            AND proof.session_id = $2
+            AND researcher.id = $3
+          FOR UPDATE OF proof, login_session, researcher, assignment
+        `,
+        [parsedProof.id, principal.sessionId, principal.researcherId],
+      );
+      const row = result.rows[0];
+      const consumedAt = this.#clock();
+      if (
+        row === undefined
+        || (row.state !== "available" && row.state !== "consumed")
+        || row.expires_at.getTime() <= consumedAt.getTime()
+        || row.session_expires_at.getTime() <= consumedAt.getTime()
+        || row.operation !== request.operation
+        || !tokenHashMatches(row.token_hash, parsedProof.hash)
+        || !tokenHashMatches(row.request_hash, requestHash)
+      ) {
+        throw new OperatorProofInvalidError();
+      }
+      if (row.state === "consumed") {
+        await client.query("COMMIT");
+        return "duplicate";
+      }
+      const consumed = await client.query(
+        `
+          UPDATE auth.operator_proof
+          SET state = 'consumed', claimed_at = $2, consumed_at = $2
+          WHERE id = $1 AND state = 'available'
+        `,
+        [parsedProof.id, consumedAt],
+      );
+      if (consumed.rowCount !== 1) throw new OperatorProofInvalidError();
+      await client.query("COMMIT");
+      return "consumed";
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async releaseClaim(
     client: PoolClient,
     claim: OperatorProofClaim,
@@ -391,13 +506,22 @@ export class OperatorProofService {
 }
 
 function operatorRequestHash(request: OperatorProofRequest): Buffer {
-  return request.operation === "researcher.sessions.revoke"
-    ? sha256(JSON.stringify({
+  if (request.operation === "researcher.sessions.revoke") {
+    return sha256(JSON.stringify({
         operation: request.operation,
         researcher_id: request.researcherId,
         version: 1,
-      }))
-    : sha256(JSON.stringify({
+      }));
+  }
+  if (request.operation === "data.refresh.market.submit") {
+    return sha256(JSON.stringify({
+      as_of: request.asOf,
+      idempotency_key: request.idempotencyKey,
+      operation: request.operation,
+      version: 1,
+    }));
+  }
+  return sha256(JSON.stringify({
         email: request.email,
         operation: request.operation,
         version: 1,
@@ -409,6 +533,21 @@ function normalizeProofRequest(request: OperatorProofRequest): OperatorProofRequ
     const researcherId = principalIdSchema.safeParse(request.researcherId);
     if (!researcherId.success) throw new OperatorProofInvalidError();
     return { operation: request.operation, researcherId: researcherId.data };
+  }
+  if (request.operation === "data.refresh.market.submit") {
+    if (
+      request.asOf.length === 0
+      || request.asOf.length > 128
+      || request.asOf !== request.asOf.trim()
+      || !isMarketRefreshIdempotencyKey(request.idempotencyKey)
+    ) {
+      throw new OperatorProofInvalidError();
+    }
+    return {
+      asOf: request.asOf,
+      idempotencyKey: request.idempotencyKey,
+      operation: request.operation,
+    };
   }
   return {
     email: canonicalizeEmail(request.email),

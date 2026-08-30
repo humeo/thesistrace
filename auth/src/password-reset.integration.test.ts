@@ -1235,6 +1235,9 @@ function resetHarness(
     async confirmOperatorProof() {
       throw new Error("OPERATOR_PROOF_UNAVAILABLE_IN_RESET_HARNESS");
     },
+    async consumeOperatorProof() {
+      throw new Error("OPERATOR_PROOF_UNAVAILABLE_IN_RESET_HARNESS");
+    },
     async consumeInvitationRateLimit() {
       return { allowed: true, retryAfterSeconds: 0 };
     },

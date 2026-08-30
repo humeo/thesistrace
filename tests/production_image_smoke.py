@@ -5,7 +5,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -21,7 +20,6 @@ from uuid import UUID
 import boto3
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.adapters.tushare_data import normalize_tushare_snapshot
 from thesistrace.data import MountedDatasetHeadStore
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.product_state import product_state_counts
@@ -2128,108 +2126,61 @@ def _request_health(
     return status, payload, elapsed
 
 
-def _build_data_refresh_replay(replay: dict[str, object]) -> dict[str, object]:
-    replay.pop("financial")
-    snapshot = replay["snapshot"]
-    assert isinstance(snapshot, dict)
-    _source, canonical = normalize_tushare_snapshot(snapshot)
-    calendar = canonical["research_calendar"]
-    request_start = calendar[-20]
-    request_end = calendar[-1]
-    compact_start = request_start.replace("-", "")
-    compact_end = request_end.replace("-", "")
-    for table in ("calendar_sse", "calendar_szse"):
-        snapshot[table] = [
-            row
-            for row in snapshot[table]
-            if compact_start <= str(row["cal_date"]) <= compact_end
-        ]
-    for table in (
-        "daily",
-        "adjustments",
-        "suspensions",
-        "price_limits",
-        "industry_membership",
-    ):
-        snapshot[table] = []
-    snapshot["benchmark_index_daily"] = []
-    for instrument in snapshot["stock_basic"]:
-        instrument["list_date"] = EXPECTED_OVERVIEW["market_coverage"]["start"].replace(
-            "-", ""
-        )
-    replay.update(
-        {
-            "format": "thesistrace-tushare-refresh-replay",
-            "version": 2,
-            "request_start": request_start,
-            "request_end": request_end,
-        }
-    )
-    return replay
-
-
 def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
-    fixture = Path("/smoke/fixtures/tushare-financial-product-replay.json")
-    replay = _build_data_refresh_replay(json.loads(fixture.read_text()))
-    with tempfile.TemporaryDirectory(prefix="thesistrace-image-refresh-") as directory:
-        replay_path = Path(directory) / "refresh-replay.json"
-        replay_path.write_text(json.dumps(replay, sort_keys=True, separators=(",", ":")))
-        submitted = subprocess.run(
+    submitted = subprocess.run(
+        [
+            "thesistrace-data-operator",
+            "refresh",
+            "--idempotency-key",
+            "image-smoke-observability-refresh",
+            "--as-of",
+            "2026-08-06T15:00:00+08:00",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    (evidence_dir / "data-refresh-submit.stdout.json").write_text(submitted.stdout)
+    (evidence_dir / "data-refresh-submit.stderr.log").write_text(submitted.stderr)
+    assert submitted.returncode == 0, submitted.stderr
+    assert json.loads(submitted.stdout)["status"] == "accepted"
+    assert submitted.stderr == ""
+
+    deadline = time.monotonic() + 60
+    interval = Event()
+    inspected: subprocess.CompletedProcess[str] | None = None
+    outcome: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        inspected = subprocess.run(
             [
                 "thesistrace-data-operator",
-                "refresh",
+                "inspect-refresh",
                 "--idempotency-key",
                 "image-smoke-observability-refresh",
-                "--as-of",
-                "2026-08-06T15:00:00+08:00",
             ],
             capture_output=True,
             text=True,
             timeout=30,
             check=False,
         )
-        processed = subprocess.run(
-            [
-                "thesistrace-data-operator",
-                "work-refresh",
-                "--replay",
-                str(replay_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    (evidence_dir / "data-refresh-submit.stdout.json").write_text(submitted.stdout)
-    (evidence_dir / "data-refresh-submit.stderr.log").write_text(submitted.stderr)
-    (evidence_dir / "data-refresh.stdout.json").write_text(processed.stdout)
-    (evidence_dir / "data-refresh.events.jsonl").write_text(processed.stderr)
-    assert submitted.returncode == 0, submitted.stderr
-    assert processed.returncode == 0, processed.stderr
-    assert json.loads(submitted.stdout)["status"] == "accepted"
-    assert submitted.stderr == ""
-    assert json.loads(processed.stdout) == {"status": "processed"}
-    events = [json.loads(line) for line in processed.stderr.splitlines()]
-    expected_phases = [
-        "current_head",
-        "market",
-        "validation",
-        "materialization",
-        "benchmark",
-        "candidate_validation",
-        "publication",
-    ]
-    assert [event["event"] for event in events] == [
-        "data_refresh_started",
-        *("data_refresh_phase_completed" for _phase in expected_phases),
-        "data_refresh_succeeded",
-    ]
-    assert [
-        event["phase"]
-        for event in events
-        if event["event"] == "data_refresh_phase_completed"
-    ] == expected_phases
-    return {"data_refresh_event_count": len(events), "data_refresh_stdout_verified": True}
+        assert inspected.returncode == 0, inspected.stderr
+        outcome = json.loads(inspected.stdout)
+        if outcome.get("status") == "succeeded":
+            break
+        if outcome.get("status") == "failed":
+            raise AssertionError(outcome)
+        interval.wait(0.1)
+    else:
+        raise AssertionError({"data_refresh_timeout": True, "last": outcome})
+    assert inspected is not None
+    (evidence_dir / "data-refresh.stdout.json").write_text(inspected.stdout)
+    (evidence_dir / "data-refresh.stderr.log").write_text(inspected.stderr)
+    assert outcome is not None
+    return {
+        "data_refresh_outcome": outcome["outcome"],
+        "data_refresh_stdout_verified": True,
+    }
 
 
 def _verify_packaged_diagnostics(
@@ -2354,10 +2305,10 @@ def _verify_observability_evidence(
         for event in caddy_access
     )
     refresh_events = [
-        json.loads(line)
-        for line in (evidence_dir / "data-refresh.events.jsonl").read_text().splitlines()
+        event for event in workers if event.get("component") == "data_operator"
     ]
     assert any(event.get("event") == "data_refresh_phase_completed" for event in refresh_events)
+    assert any(event.get("event") == "data_refresh_succeeded" for event in refresh_events)
     for path in (
         evidence_dir / "diagnose-research-run.stdout.json",
         evidence_dir / "diagnose-daily-track.stdout.json",

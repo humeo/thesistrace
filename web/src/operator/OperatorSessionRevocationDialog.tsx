@@ -1,6 +1,7 @@
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
+import { containDialogKeyboardFocus } from "./operatorDialog";
 import {
   confirmSessionRevocationProof,
   OperatorMutationError,
@@ -73,32 +74,6 @@ export function OperatorSessionRevocationDialog({
     }
   }
 
-  function containKeyboardFocus(event: KeyboardEvent<HTMLDialogElement>): void {
-    if (event.key !== "Tab") return;
-    const element = dialog.current;
-    if (element === null) return;
-    const targets = Array.from(
-      element.querySelectorAll<HTMLElement>(
-        "input:not(:disabled), button:not(:disabled)",
-      ),
-    );
-    const first = targets[0];
-    const last = targets.at(-1);
-    if (first === undefined || last === undefined) {
-      event.preventDefault();
-      return;
-    }
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-      return;
-    }
-    if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
-
   return (
     <dialog
       aria-describedby="operator-session-revocation-description"
@@ -109,7 +84,7 @@ export function OperatorSessionRevocationDialog({
         event.preventDefault();
         if (!submitting) onDismiss();
       }}
-      onKeyDown={containKeyboardFocus}
+      onKeyDown={(event) => containDialogKeyboardFocus(event, dialog.current)}
       ref={dialog}
     >
       <form

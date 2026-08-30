@@ -1,0 +1,65 @@
+import { expect, test } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import {
+  MarketRefreshReceipt,
+  OperatorDataPage,
+  marketRefreshPollGenerationIsCurrent,
+  suggestMarketRefreshKey,
+} from "./OperatorDataPage";
+
+test("renders the focused Market form with free-form CLI inputs and Operator routes", () => {
+  const markup = renderToStaticMarkup(<OperatorDataPage />);
+
+  expect(markup).toContain('href="/operator/researchers"');
+  expect(markup).toContain('aria-current="page" href="/operator/data"');
+  expect(markup).toContain("Market Refresh");
+  expect(markup).toContain(">As-of<");
+  expect(markup).toContain('type="text"');
+  expect(markup).not.toContain('type="date"');
+  expect(markup).not.toContain('type="datetime-local"');
+  expect(markup).toContain(">Idempotency key<");
+  expect(markup).toContain("Accepted is queued, not published.");
+});
+
+test("suggests a stable kind-and-time key without selecting an as-of target", () => {
+  expect(
+    suggestMarketRefreshKey(new Date("2026-08-30T05:06:07.000Z")),
+  ).toBe("market-20260830T050607Z");
+  expect(
+    suggestMarketRefreshKey(new Date("2026-08-30T05:06:07.996Z")),
+  ).toBe("market-20260830T050607Z");
+});
+
+test("keeps the last known running state honest when status polling fails", () => {
+  const markup = renderToStaticMarkup(
+    <MarketRefreshReceipt
+      operation={{
+        asOf: "2026-08-11T10:00:00+00:00",
+        attemptCount: 1,
+        dataThroughSession: null,
+        failureCode: null,
+        idempotencyKey: "market-running",
+        kind: "market",
+        lastFailureCode: null,
+        lastRefreshAt: null,
+        outcome: null,
+        status: "running",
+      }}
+      pollError
+    />,
+  );
+
+  expect(markup).toContain("Refresh running");
+  expect(markup).toContain('aria-live="polite"');
+  expect(markup).toContain('role="status"');
+  expect(markup).toContain("Showing the last known state");
+  expect(markup).not.toContain("remains queued");
+});
+
+test("fences stale operation polls and reconciled submissions independently", () => {
+  expect(marketRefreshPollGenerationIsCurrent("operation", 4, 9, 4)).toBe(true);
+  expect(marketRefreshPollGenerationIsCurrent("operation", 4, 9, 5)).toBe(false);
+  expect(marketRefreshPollGenerationIsCurrent("pending", 9, 9, 4)).toBe(true);
+  expect(marketRefreshPollGenerationIsCurrent("pending", 9, 10, 4)).toBe(false);
+});

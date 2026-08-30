@@ -25,6 +25,11 @@ const OperatorResearchersPage = lazy(() =>
     default: OperatorResearchersPage,
   })),
 );
+const OperatorDataPage = lazy(() =>
+  import("../operator/OperatorDataPage").then(({ OperatorDataPage }) => ({
+    default: OperatorDataPage,
+  })),
+);
 
 export function CoreApp({ currentPath, isOperator, researcherId }: {
   currentPath: string;
@@ -51,7 +56,9 @@ export function CoreApp({ currentPath, isOperator, researcherId }: {
         {currentPath === "/operator/researchers" && isOperator ? (
           <OperatorResearchersPage operatorResearcherId={researcherId} />
         ) : null}
-        {currentPath === "/operator/researchers" && !isOperator ? (
+        {currentPath === "/operator/data" && isOperator ? <OperatorDataPage /> : null}
+        {(currentPath === "/operator/researchers" || currentPath === "/operator/data")
+        && !isOperator ? (
           <section aria-label="Not found" className="page-section state-section">
             <h1>Not found</h1>
             <p>The requested resource is not available.</p>
@@ -60,6 +67,7 @@ export function CoreApp({ currentPath, isOperator, researcherId }: {
         {currentPath !== "/data" &&
         currentPath !== "/research" &&
         currentPath !== "/operator/researchers" &&
+        currentPath !== "/operator/data" &&
         !currentPath.startsWith("/research-runs") &&
         !currentPath.startsWith("/daily-tracks") ? (
           <div aria-label="Resource outlet" />

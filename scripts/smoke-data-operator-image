@@ -17,6 +17,7 @@ compose() {
     THESISTRACE_TEST_BUCKET="$bucket_name" \
     THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
     THESISTRACE_TEST_BENCHMARK_MOUNT="$benchmark_mount" \
+    THESISTRACE_TUSHARE_TOKEN=test-data-operator-token \
     docker compose \
     --project-name "$project_name" \
     --file "$base_file" \

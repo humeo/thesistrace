@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -162,11 +162,14 @@ class DatasetLifecycle:
         operation_id: str,
         generation_manifest_sha256: str,
         lease_seconds: float,
+        admission_guard: Callable[[PostgresTransaction], None] | None = None,
     ) -> None:
         _require_identity(operation_id, "candidate operation")
         _require_lease(lease_seconds)
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
+            if admission_guard is not None:
+                admission_guard(transaction)
             if collection_is_active(transaction):
                 raise DataLifecycleError("Data collection is active")
             row = transaction.execute(
@@ -183,7 +186,10 @@ class DatasetLifecycle:
                     """
                     INSERT INTO data.generation_candidates (
                         operation_id, generation_manifest_sha256, status, lease_expires_at
-                    ) VALUES (%s, %s, 'live', now() + make_interval(secs => %s))
+                    ) VALUES (
+                        %s, %s, 'live',
+                        clock_timestamp() + make_interval(secs => %s)
+                    )
                     """,
                     (operation_id, generation_manifest_sha256, lease_seconds),
                 )
@@ -197,7 +203,8 @@ class DatasetLifecycle:
                 transaction.execute(
                     """
                     UPDATE data.generation_candidates
-                    SET lease_expires_at = now() + make_interval(secs => %s), updated_at = now()
+                    SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                        updated_at = clock_timestamp()
                     WHERE operation_id = %s AND status = 'live'
                     """,
                     (lease_seconds, operation_id),
@@ -219,7 +226,10 @@ class DatasetLifecycle:
             """
             INSERT INTO data.generation_candidates (
                 operation_id, generation_manifest_sha256, status, lease_expires_at
-            ) VALUES (%s, %s, 'live', now() + make_interval(secs => %s))
+            ) VALUES (
+                %s, %s, 'live',
+                clock_timestamp() + make_interval(secs => %s)
+            )
             ON CONFLICT (operation_id) DO UPDATE
             SET generation_manifest_sha256 = EXCLUDED.generation_manifest_sha256,
                 status = 'live',
@@ -253,11 +263,13 @@ class DatasetLifecycle:
         operation_id: str,
         generation_manifest_sha256: str,
         lease_seconds: float,
+        admission_guard: Callable[[PostgresTransaction], None] | None = None,
     ) -> Iterator[ProtectedRefreshCandidate]:
         self._register_candidate(
             operation_id=operation_id,
             generation_manifest_sha256=generation_manifest_sha256,
             lease_seconds=lease_seconds,
+            admission_guard=admission_guard,
         )
         # Market refresh materialization validates the replacement window and preserves
         # unchanged content-addressed Families. Resolve only the resulting root here so
@@ -275,39 +287,44 @@ class DatasetLifecycle:
         expected_generation_manifest_sha256: str | None,
         candidate: ProtectedRefreshCandidate,
         prepared_at: datetime | None = None,
+        publication_guard: (
+            Callable[[PostgresTransaction], AbstractContextManager[None]] | None
+        ) = None,
     ) -> DatasetHeadPointer:
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
-            protected = transaction.execute(
-                """
-                SELECT generation_manifest_sha256, status
-                FROM data.generation_candidates
-                WHERE operation_id = %s
-                  AND status = 'live'
-                  AND lease_expires_at > now()
-                FOR UPDATE
-                """,
-                (candidate.operation_id,),
-            ).fetchone()
-            if protected != {
-                "generation_manifest_sha256": candidate.generation_manifest_sha256,
-                "status": "live",
-            }:
-                raise DataLifecycleError("Head candidate is not protected by live work")
-            head = self._heads.compare_and_swap_pointer_resolved(
-                expected_generation_manifest_sha256=(expected_generation_manifest_sha256),
-                candidate=candidate.resolved_candidate,  # type: ignore[arg-type]
-                prepared_at=prepared_at,
-            )
-            transaction.execute(
-                """
-                UPDATE data.generation_candidates
-                SET status = 'released', released_at = now(), updated_at = now()
-                WHERE operation_id = %s AND status = 'live'
-                """,
-                (candidate.operation_id,),
-            )
-            return head
+            guard = nullcontext() if publication_guard is None else publication_guard(transaction)
+            with guard:
+                protected = transaction.execute(
+                    """
+                    SELECT generation_manifest_sha256, status
+                    FROM data.generation_candidates
+                    WHERE operation_id = %s
+                      AND status = 'live'
+                      AND lease_expires_at > clock_timestamp()
+                    FOR UPDATE
+                    """,
+                    (candidate.operation_id,),
+                ).fetchone()
+                if protected != {
+                    "generation_manifest_sha256": candidate.generation_manifest_sha256,
+                    "status": "live",
+                }:
+                    raise DataLifecycleError("Head candidate is not protected by live work")
+                head = self._heads.compare_and_swap_pointer_resolved(
+                    expected_generation_manifest_sha256=(expected_generation_manifest_sha256),
+                    candidate=candidate.resolved_candidate,  # type: ignore[arg-type]
+                    prepared_at=prepared_at,
+                )
+                transaction.execute(
+                    """
+                    UPDATE data.generation_candidates
+                    SET status = 'released', released_at = now(), updated_at = now()
+                    WHERE operation_id = %s AND status = 'live'
+                    """,
+                    (candidate.operation_id,),
+                )
+                return head
 
     def compare_and_swap_head(
         self,
@@ -330,10 +347,10 @@ class DatasetLifecycle:
                 candidate = transaction.execute(
                     """
                     SELECT generation_manifest_sha256, status
-                    FROM data.generation_candidates
-                    WHERE operation_id = %s
-                      AND status = 'live'
-                      AND lease_expires_at > now()
+                FROM data.generation_candidates
+                WHERE operation_id = %s
+                  AND status = 'live'
+                  AND lease_expires_at > clock_timestamp()
                     FOR UPDATE
                     """,
                     (operation_id,),

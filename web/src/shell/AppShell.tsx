@@ -20,6 +20,7 @@ const resourceRoutes = [
 ] as const;
 
 const operatorRoute = {
+  activeRoot: "/operator",
   path: "/operator/researchers",
   label: "Operator",
   icon: ShieldCheck,
@@ -36,10 +37,7 @@ export function AppShell({ currentPath, children, isOperator }: AppShellProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isNavigationOpen, setIsNavigationOpen] = useState(false);
   const currentResource = [...resourceRoutes, ...(isOperator ? [operatorRoute] : [])]
-    .find(
-      (resource) => currentPath === resource.path
-        || currentPath.startsWith(`${resource.path}/`),
-    );
+    .find((resource) => isResourceCurrent(currentPath, resource));
 
   return (
     <div
@@ -133,14 +131,23 @@ function ResourceLink({
     icon: typeof Database;
     label: string;
     path: string;
+    activeRoot?: string;
   }>;
 }) {
   const Icon = resource.icon;
-  const isCurrent = currentPath === resource.path || currentPath.startsWith(`${resource.path}/`);
+  const isCurrent = isResourceCurrent(currentPath, resource);
   return (
     <a aria-current={isCurrent ? "page" : undefined} href={resource.path} title={resource.label}>
       <Icon aria-hidden="true" size={18} weight={isCurrent ? "fill" : "regular"} />
       <span>{resource.label}</span>
     </a>
   );
+}
+
+function isResourceCurrent(
+  currentPath: string,
+  resource: Readonly<{ activeRoot?: string; path: string }>,
+): boolean {
+  const activeRoot = resource.activeRoot ?? resource.path;
+  return currentPath === resource.path || currentPath.startsWith(`${activeRoot}/`);
 }

@@ -1,0 +1,978 @@
+{
+  "format": "thesistrace-tushare-refresh-replay",
+  "version": 2,
+  "request_start": "2026-07-15",
+  "request_end": "2026-08-11",
+  "snapshot": {
+    "benchmark_index_daily": [
+      {
+        "ts_code": "399300.SZ",
+        "trade_date": "20260806",
+        "open": "4421.06"
+      },
+      {
+        "ts_code": "399300.SZ",
+        "trade_date": "20260807",
+        "open": "4422.07"
+      },
+      {
+        "ts_code": "399300.SZ",
+        "trade_date": "20260810",
+        "open": "4423.10"
+      },
+      {
+        "ts_code": "399300.SZ",
+        "trade_date": "20260811",
+        "open": "4424.11"
+      }
+    ],
+    "calendar_sse": [
+      {
+        "exchange": "SSE",
+        "cal_date": "20260709",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260710",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260711",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260712",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260713",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260714",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260715",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260716",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260717",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260718",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260719",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260720",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260721",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260722",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260723",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260724",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260725",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260726",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260727",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260728",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260729",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260730",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260731",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260801",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260802",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260803",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260804",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260805",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260806",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260807",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260808",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260809",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260810",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260811",
+        "is_open": "1"
+      }
+    ],
+    "calendar_szse": [
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260709",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260710",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260711",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260712",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260713",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260714",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260715",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260716",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260717",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260718",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260719",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260720",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260721",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260722",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260723",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260724",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260725",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260726",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260727",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260728",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260729",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260730",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260731",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260801",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260802",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260803",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260804",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260805",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260806",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260807",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260808",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260809",
+        "is_open": "0"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260810",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260811",
+        "is_open": "1"
+      }
+    ],
+    "stock_basic": [
+      {
+        "ts_code": "000001.SZ",
+        "exchange": "SZSE",
+        "market": "主板",
+        "list_status": "L",
+        "list_date": "19910403",
+        "delist_date": ""
+      }
+    ],
+    "daily": [
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260709",
+        "open": "20",
+        "high": "21",
+        "low": "19",
+        "close": "20.5",
+        "pre_close": "20",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260710",
+        "open": "21",
+        "high": "22",
+        "low": "20",
+        "close": "21.5",
+        "pre_close": "21",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260713",
+        "open": "22",
+        "high": "23",
+        "low": "21",
+        "close": "22.5",
+        "pre_close": "22",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260714",
+        "open": "23",
+        "high": "24",
+        "low": "22",
+        "close": "23.5",
+        "pre_close": "23",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260715",
+        "open": "24",
+        "high": "25",
+        "low": "23",
+        "close": "24.5",
+        "pre_close": "24",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260716",
+        "open": "25",
+        "high": "26",
+        "low": "24",
+        "close": "25.5",
+        "pre_close": "25",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260717",
+        "open": "26",
+        "high": "27",
+        "low": "25",
+        "close": "26.5",
+        "pre_close": "26",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260720",
+        "open": "27",
+        "high": "28",
+        "low": "26",
+        "close": "27.5",
+        "pre_close": "27",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260721",
+        "open": "28",
+        "high": "29",
+        "low": "27",
+        "close": "28.5",
+        "pre_close": "28",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260722",
+        "open": "29",
+        "high": "30",
+        "low": "28",
+        "close": "29.5",
+        "pre_close": "29",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260723",
+        "open": "30",
+        "high": "31",
+        "low": "29",
+        "close": "30.5",
+        "pre_close": "30",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260724",
+        "open": "31",
+        "high": "32",
+        "low": "30",
+        "close": "31.5",
+        "pre_close": "31",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260727",
+        "open": "32",
+        "high": "33",
+        "low": "31",
+        "close": "32.5",
+        "pre_close": "32",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260728",
+        "open": "33",
+        "high": "34",
+        "low": "32",
+        "close": "33.5",
+        "pre_close": "33",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260729",
+        "open": "34",
+        "high": "35",
+        "low": "33",
+        "close": "34.5",
+        "pre_close": "34",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260730",
+        "open": "35",
+        "high": "36",
+        "low": "34",
+        "close": "35.5",
+        "pre_close": "35",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260731",
+        "open": "36",
+        "high": "37",
+        "low": "35",
+        "close": "36.5",
+        "pre_close": "36",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260803",
+        "open": "37",
+        "high": "38",
+        "low": "36",
+        "close": "37.5",
+        "pre_close": "37",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260804",
+        "open": "38",
+        "high": "39",
+        "low": "37",
+        "close": "38.5",
+        "pre_close": "38",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260805",
+        "open": "39",
+        "high": "40",
+        "low": "38",
+        "close": "39.5",
+        "pre_close": "39",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260806",
+        "open": "40",
+        "high": "41",
+        "low": "39",
+        "close": "40.5",
+        "pre_close": "40",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260807",
+        "open": "41",
+        "high": "42",
+        "low": "40",
+        "close": "41.5",
+        "pre_close": "41",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260810",
+        "open": "42",
+        "high": "43",
+        "low": "41",
+        "close": "42.5",
+        "pre_close": "42",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260811",
+        "open": "43",
+        "high": "44",
+        "low": "42",
+        "close": "43.5",
+        "pre_close": "43",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      }
+    ],
+    "adjustments": [
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260709",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260710",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260713",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260714",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260715",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260716",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260717",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260720",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260721",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260722",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260723",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260724",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260727",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260728",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260729",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260730",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260731",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260803",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260804",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260805",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260806",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260807",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260810",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260811",
+        "adj_factor": "1"
+      }
+    ],
+    "suspensions": [],
+    "price_limits": [
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260709",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260710",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260713",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260714",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260715",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260716",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260717",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260720",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260721",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260722",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260723",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260724",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260727",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260728",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260729",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260730",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260731",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260803",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260804",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260805",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260806",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260807",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260810",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260811",
+        "up_limit": "99",
+        "down_limit": "1"
+      }
+    ],
+    "industry_membership": [
+      {
+        "ts_code": "000001.SZ",
+        "l1_code": "801010",
+        "l2_code": "801011",
+        "l3_code": "850111",
+        "in_date": "20100104",
+        "out_date": "",
+        "is_new": "Y"
+      }
+    ]
+  }
+}

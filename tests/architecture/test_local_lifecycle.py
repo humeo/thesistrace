@@ -717,7 +717,8 @@ def test_development_watch_assigns_service_appropriate_actions() -> None:
     for service, next_service in (
         ("research-worker", "batch-research-worker"),
         ("batch-research-worker", "tracking-worker"),
-        ("tracking-worker", "web"),
+        ("tracking-worker", "data-operator-worker"),
+        ("data-operator-worker", "web"),
     ):
         assert f"  {service}:\n" in development
         section = development.split(f"  {service}:\n", maxsplit=1)[1].split(
@@ -1308,7 +1309,12 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
-    for role in ("research-worker", "batch-research-worker", "tracking-worker"):
+    for role in (
+        "research-worker",
+        "batch-research-worker",
+        "tracking-worker",
+        "data-operator-worker",
+    ):
         assert (
             f"docker image tag {project_name}-initialize {project_name}-{role}\n"
             in commands
@@ -1321,7 +1327,8 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert "wait initialize auth-initialize\n" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 300 "
-        "auth api research-worker batch-research-worker tracking-worker web\n"
+        "auth api research-worker batch-research-worker tracking-worker "
+        "data-operator-worker web\n"
         in commands
     )
     assert "--build" not in commands
@@ -1342,6 +1349,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
         "research-worker",
         "batch-research-worker",
         "tracking-worker",
+        "data-operator-worker",
         "initialize",
         "auth",
         "web",
@@ -1508,7 +1516,12 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
-    for role in ("research-worker", "batch-research-worker", "tracking-worker"):
+    for role in (
+        "research-worker",
+        "batch-research-worker",
+        "tracking-worker",
+        "data-operator-worker",
+    ):
         assert (
             f"docker image tag {project_name}-initialize {project_name}-{role}\n"
             in commands
@@ -1525,7 +1538,8 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     )
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
-        "research-worker batch-research-worker tracking-worker\n" in commands
+        "research-worker batch-research-worker tracking-worker "
+        "data-operator-worker\n" in commands
     )
     assert "production_mcp_image_smoke.py preflight" in commands
     assert "production_mcp_image_smoke.py http-before" in commands
@@ -1536,7 +1550,8 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert "THESISTRACE_TEST_RANDOM_SEED=1401" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
-        "api research-worker batch-research-worker tracking-worker\n" in commands
+        "api research-worker batch-research-worker tracking-worker "
+        "data-operator-worker\n" in commands
     )
     provision_lines = [
         line
@@ -1613,7 +1628,13 @@ def test_failed_image_build_stops_smoke_before_runtime_phases(tmp_path: Path) ->
 
 @pytest.mark.parametrize(
     "target",
-    ("api", "research-worker", "batch-research-worker", "tracking-worker"),
+    (
+        "api",
+        "research-worker",
+        "batch-research-worker",
+        "tracking-worker",
+        "data-operator-worker",
+    ),
 )
 def test_failed_backend_image_tag_stops_smoke_before_runtime_phases(
     tmp_path: Path,

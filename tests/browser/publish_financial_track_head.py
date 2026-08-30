@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import time
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, FinancialCandidateStore, MountedGenerationStore
@@ -18,20 +20,17 @@ def main() -> None:
     parser.add_argument("mode", choices=("lagged", "recovered"))
     mode = parser.parse_args().mode
     settings = CoreSettings.from_environment()
-    fixture_root = Path(__file__).resolve().parents[1] / "fixtures"
     if mode == "lagged":
-        _run_operator(
+        outcome = _run_operator(
             "refresh",
             "--idempotency-key",
             "financial-release-market-refresh",
             "--as-of",
             "2026-08-11T18:00:00+08:00",
         )
-        outcome = _run_operator(
-            "work-refresh",
-            "--replay",
-            str(fixture_root / "tushare-financial-market-refresh-replay.json"),
-        )
+        if outcome.get("status") != "accepted":
+            raise RuntimeError(f"Market Refresh was not accepted: {outcome}")
+        outcome = _wait_for_market_refresh("financial-release-market-refresh")
     else:
         database = PostgresDatabase(settings.database_url)
         database.open()
@@ -133,6 +132,24 @@ def _run_operator(*arguments: str) -> dict[str, object]:
     if not isinstance(outcome, dict):
         raise RuntimeError("private Data Operator returned an invalid outcome")
     return outcome
+
+
+def _wait_for_market_refresh(idempotency_key: str) -> dict[str, object]:
+    deadline = time.monotonic() + 60
+    interval = Event()
+    last: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        last = _run_operator(
+            "inspect-refresh",
+            "--idempotency-key",
+            idempotency_key,
+        )
+        if last.get("status") == "succeeded":
+            return last
+        if last.get("status") == "failed":
+            raise RuntimeError(f"Market Refresh failed: {last}")
+        interval.wait(0.1)
+    raise RuntimeError(f"Market Refresh did not finish: {last}")
 
 
 if __name__ == "__main__":

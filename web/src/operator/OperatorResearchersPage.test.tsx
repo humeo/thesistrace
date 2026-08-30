@@ -81,6 +81,8 @@ describe("Operator Researcher view", () => {
 
     expect(markup).toContain("Researchers");
     expect(markup).toContain("Invitations");
+    expect(markup).toContain('aria-current="page" href="/operator/researchers"');
+    expect(markup).toContain('href="/operator/data"');
     expect(markup).toContain("Research Lead");
     expect(markup).toContain("researcher@example.com");
     expect(markup).toContain("Current sessions");

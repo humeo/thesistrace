@@ -525,6 +525,8 @@ def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None
         ("get", "/api/alpha/catalog"),
         ("post", "/api/alpha/diagnostics"),
         ("get", "/api/data"),
+        ("get", "/api/operator/data/refreshes/market"),
+        ("post", "/api/operator/data/refreshes/market"),
         ("post", "/api/researcher/bootstrap"),
         ("get", "/api/research-folders"),
         ("post", "/api/research-folders"),
@@ -904,7 +906,7 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     assert "benchmark-data:/var/lib/thesistrace/benchmark-data" in compose_source
     assert compose_source.count(
         "benchmark-data:/var/lib/thesistrace/benchmark-data"
-    ) == 1
+    ) == 2
     assert (
         "batch-attempt-control:/var/lib/thesistrace/.batch-attempts"
         in compose_source
@@ -912,7 +914,7 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     assert "/canonical-data/.batch-attempts" not in compose_source
     assert ":/var/lib/thesistrace/canonical-data:ro" in test_compose_source
     assert ":/var/lib/thesistrace/benchmark-data" in test_compose_source
-    assert test_compose_source.count(":/var/lib/thesistrace/benchmark-data") == 1
+    assert test_compose_source.count(":/var/lib/thesistrace/benchmark-data") == 2
     assert (
         ":/var/lib/thesistrace/.batch-attempts" in test_compose_source
     )

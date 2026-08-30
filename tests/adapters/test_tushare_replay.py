@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
 
 from thesistrace.adapters import tushare_replay
 from thesistrace.adapters.tushare_benchmark import TushareBenchmarkSource
-from thesistrace.adapters.tushare_provider import TushareSourceError
-from thesistrace.adapters.tushare_replay import ReplayTushareProvider
+from thesistrace.adapters.tushare_data import TushareDataSource
+from thesistrace.adapters.tushare_provider import (
+    TushareSourceError,
+    normalize_tushare_snapshot,
+)
+from thesistrace.adapters.tushare_replay import (
+    ReplayTushareProvider,
+    ReplayTushareRefreshBundle,
+)
+from thesistrace.data.source import refresh_collection_plan
 
 
 @pytest.mark.parametrize("unsafe_kind", ("symlink", "fifo", "oversized"))
@@ -59,6 +67,63 @@ def test_refresh_replay_is_bound_to_the_recorded_window(tmp_path: Path) -> None:
             as_of=date(2026, 8, 31),
         )
     assert failure.value.reason_code == "REPLAY_WINDOW_MISMATCH"
+
+
+def test_operator_console_replay_matches_the_post_publication_head() -> None:
+    fixture_root = Path(__file__).resolve().parents[1] / "fixtures"
+    product = json.loads(
+        (fixture_root / "tushare-financial-product-replay.json").read_text()
+    )
+    _, initial = normalize_tushare_snapshot(product["snapshot"])
+    as_of = datetime.fromisoformat("2026-08-11T18:00:00+08:00")
+    first = TushareDataSource(
+        provider=ReplayTushareProvider(
+            fixture_root / "tushare-financial-market-refresh-replay.json"
+        )
+    ).collect(refresh_collection_plan(as_of, initial)).canonical
+    no_change_plan = refresh_collection_plan(as_of, first)
+
+    assert no_change_plan.overlap_start_session == "2026-07-15"
+    repeated = TushareDataSource(
+        provider=ReplayTushareProvider(
+            fixture_root / "tushare-operator-console-market-refresh-replay.json"
+        )
+    ).collect(no_change_plan).canonical
+
+    assert repeated == first
+
+
+def test_refresh_bundle_selects_each_exact_worker_window_and_rejects_duplicates() -> None:
+    fixture_root = Path(__file__).resolve().parents[1] / "fixtures"
+    financial = fixture_root / "tushare-financial-market-refresh-replay.json"
+    console = fixture_root / "tushare-operator-console-market-refresh-replay.json"
+    image_smoke = fixture_root / "tushare-image-smoke-market-refresh-replay.json"
+    provider = ReplayTushareRefreshBundle((financial, console, image_smoke))
+
+    first = provider.collect_incremental_snapshot(
+        last_session="2026-07-09",
+        as_of=date(2026, 8, 11),
+    )
+    second = provider.collect_incremental_snapshot(
+        last_session="2026-07-15",
+        as_of=date(2026, 8, 11),
+    )
+    smoke = provider.collect_incremental_snapshot(
+        last_session="2026-07-09",
+        as_of=date(2026, 8, 5),
+    )
+
+    assert first["calendar_sse"]
+    assert second["calendar_sse"]
+    assert smoke["stock_basic"]
+    with pytest.raises(TushareSourceError) as mismatch:
+        provider.collect_incremental_snapshot(
+            last_session="2026-07-16",
+            as_of=date(2026, 8, 11),
+        )
+    assert mismatch.value.reason_code == "REPLAY_WINDOW_MISMATCH"
+    with pytest.raises(ValueError, match="duplicate window"):
+        ReplayTushareRefreshBundle((financial, financial))
 
 
 def test_product_replay_serves_market_and_exact_financial_responses(tmp_path: Path) -> None:

@@ -5174,7 +5174,7 @@ def _refresh_via_private_operator(
     assert submitted["status"] == "accepted"
     processed = _run_data_operator(
         settings,
-        ["work-refresh", "--replay", os.fspath(replay)],
+        ["worker", "--once", "--replay", os.fspath(replay)],
     )
     assert processed == {"status": "processed"}
     return _run_data_operator(

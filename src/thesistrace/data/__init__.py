@@ -80,7 +80,12 @@ from thesistrace.data.models import (
 )
 from thesistrace.data.operator import BootstrapOutcome, DataOperator, DataOperatorError
 from thesistrace.data.overview import DatasetOverviewService
-from thesistrace.data.refresh import DataRefreshError, DataRefreshService, RefreshOutcome
+from thesistrace.data.refresh import (
+    DataRefreshError,
+    DataRefreshService,
+    RefreshOutcome,
+    validate_market_refresh_request,
+)
 from thesistrace.data.source import (
     DATA_SOURCE_ERROR_CATEGORIES,
     BootstrapCollectionPlan,
@@ -167,4 +172,5 @@ __all__ = [
     "refresh_collection_plan",
     "probe_financial_capability",
     "read_alpha_field_series",
+    "validate_market_refresh_request",
 ]

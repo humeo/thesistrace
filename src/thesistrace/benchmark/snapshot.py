@@ -8,7 +8,7 @@ import secrets
 import stat
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -317,10 +317,12 @@ class BenchmarkSnapshotUpdater:
         source: BenchmarkLevelSource,
         *,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        publication_guard: Callable[[], AbstractContextManager[None]] | None = None,
     ) -> None:
         self._store = store
         self._source = source
         self._clock = clock
+        self._publication_guard = publication_guard or nullcontext
 
     def update(
         self,
@@ -355,7 +357,8 @@ class BenchmarkSnapshotUpdater:
         selected_publication_time = self._clock() if published_at is None else published_at
         if not isinstance(selected_publication_time, datetime):
             raise BenchmarkSnapshotError("BENCHMARK_PUBLICATION_TIME_INVALID")
-        snapshot = self._store.publish(combined, published_at=selected_publication_time)
+        with self._publication_guard():
+            snapshot = self._store.publish(combined, published_at=selected_publication_time)
         return BenchmarkSnapshotUpdate(snapshot=snapshot, published=True)
 
 

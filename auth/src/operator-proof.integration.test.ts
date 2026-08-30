@@ -160,6 +160,61 @@ describe.sequential("Auth Operator Proof", () => {
     });
   });
 
+  it("consumes one exact Market submission proof and admits only duplicate delivery", async () => {
+    const proofService = service();
+    const request = {
+      asOf: "2026-08-11T18:00:00+08:00",
+      idempotencyKey: "market-20260811T180000+0800",
+      operation: "data.refresh.market.submit" as const,
+    };
+    const confirmed = await proofService.confirm(principal(), {
+      ...request,
+      password,
+    });
+
+    await expect(
+      proofService.consumeExternal(principal(), {
+        ...request,
+        proof: confirmed.proof,
+      }),
+    ).resolves.toBe("consumed");
+    await expect(
+      proofService.consumeExternal(principal(), {
+        ...request,
+        proof: confirmed.proof,
+      }),
+    ).resolves.toBe("duplicate");
+    await expect(
+      proofService.consumeExternal(principal(), {
+        ...request,
+        asOf: "2026-08-11T19:00:00+08:00",
+        proof: confirmed.proof,
+      }),
+    ).rejects.toEqual(new OperatorProofInvalidError());
+    await expect(
+      proofService.consumeExternal(principal(), {
+        ...request,
+        idempotencyKey: "different-market-key",
+        proof: confirmed.proof,
+      }),
+    ).rejects.toEqual(new OperatorProofInvalidError());
+    expect(
+      await owner.query<{ operation: string; state: string }>(
+        "SELECT operation, state FROM auth.operator_proof",
+      ),
+    ).toMatchObject({
+      rows: [{ operation: "data.refresh.market.submit", state: "consumed" }],
+    });
+
+    now = new Date("2026-08-29T06:01:00.000Z");
+    await expect(
+      proofService.consumeExternal(principal(), {
+        ...request,
+        proof: confirmed.proof,
+      }),
+    ).rejects.toEqual(new OperatorProofInvalidError());
+  });
+
   it("starts the lifetime after credential locking and rejects expiry reached behind a proof lock", async () => {
     const proofService = service();
     const credentialBlocker = await owner.connect();

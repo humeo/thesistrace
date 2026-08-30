@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
+import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
 
@@ -13,6 +14,8 @@ from thesistrace.entrypoints.authentication import (
     CoreAuthVerifier,
     CoreHttpSettings,
     InvalidLoginSession,
+    InvalidOperatorProof,
+    OperatorAccessNotFound,
 )
 from thesistrace.entrypoints.http import create_app
 from thesistrace.researcher import ResearcherIdentity
@@ -136,6 +139,72 @@ def test_core_auth_verifier_maps_transport_and_non_401_status_to_unavailable() -
                 raise AssertionError("Auth failure was accepted")
         finally:
             asyncio.run(verifier.aclose())
+
+
+def test_core_auth_verifier_authorizes_operator_and_consumes_exact_market_proof() -> None:
+    captured: list[httpx.Request] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(204)
+
+    verifier = CoreAuthVerifier(
+        AUTH_ORIGIN,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        asyncio.run(
+            verifier.authorize_operator("thesistrace.session_token=opaque")
+        )
+        asyncio.run(
+            verifier.consume_market_refresh_proof(
+                "thesistrace.session_token=opaque",
+                as_of="2026-08-11T18:00:00+08:00",
+                idempotency_key="market-20260811T180000+0800",
+                proof="opaque-proof",
+            )
+        )
+    finally:
+        asyncio.run(verifier.aclose())
+
+    assert [(request.method, request.url.path) for request in captured] == [
+        ("GET", "/internal/operator/page-access"),
+        ("POST", "/internal/operator/proofs/consume"),
+    ]
+    assert captured[0].content == b""
+    assert captured[1].headers["content-type"] == "application/json"
+    assert captured[1].headers["cookie"] == "thesistrace.session_token=opaque"
+    assert captured[1].content == (
+        b'{"as_of":"2026-08-11T18:00:00+08:00",'
+        b'"idempotency_key":"market-20260811T180000+0800",'
+        b'"operation":"data.refresh.market.submit","proof":"opaque-proof"}'
+    )
+
+
+def test_core_auth_verifier_fails_closed_for_operator_rejection() -> None:
+    async def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("page-access"):
+            return httpx.Response(404)
+        return httpx.Response(400, json={"code": "OPERATOR_PROOF_INVALID"})
+
+    verifier = CoreAuthVerifier(
+        AUTH_ORIGIN,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        with pytest.raises(OperatorAccessNotFound):
+            asyncio.run(verifier.authorize_operator("cookie"))
+        with pytest.raises(InvalidOperatorProof):
+            asyncio.run(
+                verifier.consume_market_refresh_proof(
+                    "cookie",
+                    as_of="2026-08-11T18:00:00+08:00",
+                    idempotency_key="market-key",
+                    proof="proof",
+                )
+            )
+    finally:
+        asyncio.run(verifier.aclose())
 
 
 def test_core_http_settings_require_two_exact_origins(monkeypatch) -> None:  # type: ignore[no-untyped-def]

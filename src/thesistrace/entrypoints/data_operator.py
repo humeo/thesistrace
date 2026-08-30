@@ -9,6 +9,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime
 from pathlib import Path
+from threading import Event
 from typing import NoReturn
 
 from thesistrace._postgres import PostgresDatabase
@@ -27,7 +28,10 @@ from thesistrace.adapters.tushare_provider import (
     TushareAdapter,
     TushareSourceError,
 )
-from thesistrace.adapters.tushare_replay import ReplayTushareProvider
+from thesistrace.adapters.tushare_replay import (
+    ReplayTushareProvider,
+    ReplayTushareRefreshBundle,
+)
 from thesistrace.benchmark import validate_independent_benchmark_mount
 from thesistrace.data import (
     BootstrapOutcome,
@@ -54,6 +58,7 @@ from thesistrace.data import (
     IndustryRefreshService,
     RefreshOutcome,
     probe_financial_capability,
+    validate_market_refresh_request,
 )
 from thesistrace.data.financial_announcements import FinancialAnnouncementDiscovery
 from thesistrace.data.source import RawSourceResponse
@@ -151,8 +156,9 @@ def _run(
     refresh.add_argument("--as-of", required=True)
     inspect = subcommands.add_parser("inspect-refresh")
     inspect.add_argument("--idempotency-key", required=True)
-    work = subcommands.add_parser("work-refresh")
-    work.add_argument("--replay", type=Path)
+    worker = subcommands.add_parser("worker")
+    worker.add_argument("--once", action="store_true")
+    worker.add_argument("--replay", action="append", type=Path)
     collect = subcommands.add_parser("collect")
     collect.add_argument("--idempotency-key", required=True)
     financial_probe = subcommands.add_parser("probe-financial")
@@ -187,6 +193,16 @@ def _run(
     industry_inspect.add_argument("--idempotency-key", required=True)
     parsed = parser.parse_args(arguments)
 
+    if parsed.command == "worker" and parsed.once and parsed.replay is None:
+        raise DataRefreshError("WORKER_REPLAY_REQUIRED")
+
+    market_request: tuple[str, datetime] | None = None
+    if parsed.command == "refresh":
+        market_request = validate_market_refresh_request(
+            idempotency_key=parsed.idempotency_key,
+            as_of=parsed.as_of,
+        )
+
     transport: HttpTushareTransport | None = None
     database: PostgresDatabase | None = None
     try:
@@ -219,13 +235,15 @@ def _run(
         database.open()
         verify_core_schema(database)
         if parsed.command == "refresh":
+            assert market_request is not None
+            idempotency_key, as_of = market_request
             return DataRefreshService(
                 database,
                 mount_root,
                 benchmark_mount_root=benchmark_mount,
             ).submit(
-                idempotency_key=parsed.idempotency_key,
-                as_of=datetime.fromisoformat(parsed.as_of),
+                idempotency_key=idempotency_key,
+                as_of=as_of,
             )
         if parsed.command == "inspect-refresh":
             return DataRefreshService(
@@ -254,7 +272,11 @@ def _run(
         rate_limit_events: dict[str, list[float]] = {}
         live_provider: TushareAdapter | None = None
         if replay is not None:
-            provider = ReplayTushareProvider(replay)
+            provider = (
+                ReplayTushareRefreshBundle(replay)
+                if parsed.command == "worker"
+                else ReplayTushareProvider(replay)
+            )
             financial_source = provider
         else:
             transport, live_provider = _create_live_tushare_provider(
@@ -266,7 +288,7 @@ def _run(
                 ),
                 operational_progress=(
                     None
-                    if parsed.command in {"work-refresh", "refresh-financial"}
+                    if parsed.command in {"worker", "refresh-financial"}
                     else _progress
                 ),
             )
@@ -388,16 +410,29 @@ def _run(
                         }
                     )
             return outcome
-        processed = DataRefreshService(
+        refresh_service = DataRefreshService(
             database,
             mount_root,
             benchmark_mount_root=benchmark_mount,
             lifecycle_event=_progress,
-        ).process_next(
-            source,
-            benchmark_source=TushareBenchmarkSource(provider),
         )
-        return {"status": "processed" if processed else "idle"}
+        benchmark_source = TushareBenchmarkSource(provider)
+        worker_wait = Event()
+        while True:
+            try:
+                processed = refresh_service.process_next(
+                    source,
+                    benchmark_source=benchmark_source,
+                )
+            except DataRefreshError:
+                if parsed.once:
+                    raise
+                worker_wait.wait(5)
+                continue
+            if parsed.once:
+                return {"status": "processed" if processed else "idle"}
+            if not processed:
+                worker_wait.wait(5)
     finally:
         if database is not None:
             database.close()
@@ -412,7 +447,7 @@ def _failure(
     command: str | None = None,
 ) -> NoReturn:
     payload: dict[str, object] = {"status": "failed", "code": code}
-    refresh_command = command in {"work-refresh", "refresh-financial"}
+    refresh_command = command in {"worker", "refresh-financial"}
     if diagnostic is not None and not refresh_command:
         payload["error"] = diagnostic
     print(

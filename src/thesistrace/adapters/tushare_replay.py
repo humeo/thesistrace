@@ -201,6 +201,82 @@ class ReplayTushareProvider:
         return [{field: row[field] for field in fields} for row in rows]
 
 
+class ReplayTushareRefreshBundle:
+    """Select one exact replay window for each operation claimed by a single Worker."""
+
+    def __init__(self, paths: Sequence[Path | str]) -> None:
+        if not paths:
+            raise ValueError("Tushare refresh replay bundle is empty")
+        self._providers: dict[tuple[date, date], ReplayTushareProvider] = {}
+        self._active: ReplayTushareProvider | None = None
+        for path in paths:
+            provider = ReplayTushareProvider(path)
+            if provider._kind != "refresh":
+                raise ValueError("Tushare refresh replay bundle contains a non-refresh replay")
+            window = (provider._request_start, provider._request_end)
+            if window in self._providers:
+                raise ValueError("Tushare refresh replay bundle contains a duplicate window")
+            self._providers[window] = provider
+
+    def collect_bootstrap_snapshot(
+        self,
+        *,
+        start_date: date,
+        completed_through_date: date,
+    ) -> dict[str, list[dict[str, object]]]:
+        del start_date, completed_through_date
+        raise TushareSourceError("REPLAY_REFRESH_ONLY", source_code=0)
+
+    def collect_incremental_snapshot(
+        self,
+        *,
+        last_session: str,
+        as_of: date,
+    ) -> dict[str, list[dict[str, object]]]:
+        try:
+            request_start = date.fromisoformat(last_session)
+        except ValueError as error:
+            raise TushareSourceError("REPLAY_WINDOW_MISMATCH", source_code=0) from error
+        provider = self._providers.get((request_start, as_of))
+        if provider is None:
+            raise TushareSourceError("REPLAY_WINDOW_MISMATCH", source_code=0)
+        snapshot = provider.collect_incremental_snapshot(
+            last_session=last_session,
+            as_of=as_of,
+        )
+        self._active = provider
+        return snapshot
+
+    def query_raw(
+        self,
+        api_name: str,
+        *,
+        params: Mapping[str, object],
+        fields: Sequence[str],
+    ) -> RawSourceResponse:
+        return self._selected().query_raw(api_name, params=params, fields=fields)
+
+    def query_paginated(
+        self,
+        api_name: str,
+        *,
+        params: Mapping[str, object],
+        fields: Sequence[str],
+        primary_key: Sequence[str],
+    ) -> list[dict[str, object]]:
+        return self._selected().query_paginated(
+            api_name,
+            params=params,
+            fields=fields,
+            primary_key=primary_key,
+        )
+
+    def _selected(self) -> ReplayTushareProvider:
+        if self._active is None:
+            raise TushareSourceError("REPLAY_WINDOW_NOT_SELECTED", source_code=0)
+        return self._active
+
+
 def _financial_responses(value: object) -> dict[tuple[str, str], RawSourceResponse]:
     if not isinstance(value, dict):
         raise ValueError("Tushare replay financial contract is invalid")

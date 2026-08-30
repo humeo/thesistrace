@@ -31,6 +31,7 @@ import {
   OperatorPasswordInvalidError,
   OperatorProofInvalidError,
   OperatorProofNotFoundError,
+  isMarketRefreshIdempotencyKey,
   type OperatorProofRequest,
 } from "./operator-proof.js";
 import { OperatorSessionTargetProtectedError } from "./operator-session-revocation.js";
@@ -75,7 +76,23 @@ const operatorProofSchema = z.union([
       researcher_id: z.uuid(),
     })
     .strict(),
+  z
+    .object({
+      as_of: z.string().min(1).max(128).refine((value) => value === value.trim()),
+      idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+      operation: z.literal("data.refresh.market.submit"),
+      password: z.string().min(12).max(128),
+    })
+    .strict(),
 ]);
+const internalOperatorProofConsumptionSchema = z
+  .object({
+    as_of: z.string().min(1).max(128).refine((value) => value === value.trim()),
+    idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+    operation: z.literal("data.refresh.market.submit"),
+    proof: z.string().length(80),
+  })
+  .strict();
 const operatorInvitationMutationSchema = z
   .object({
     email: z.string().min(1).max(512),
@@ -143,6 +160,10 @@ export type AuthAppDependencies = Readonly<{
     principal: OperatorPrincipal,
     input: OperatorProofRequest & Readonly<{ password: string }>,
   ) => Promise<Readonly<{ expiresAt: string; proof: string }>>;
+  consumeOperatorProof: (
+    principal: OperatorPrincipal,
+    input: OperatorProofRequest & Readonly<{ proof: string }>,
+  ) => Promise<void>;
   issueOperatorInvitation: (
     principal: OperatorPrincipal,
     input: Readonly<{ email: string; proof: string }>,
@@ -247,6 +268,35 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
     return context.body(null, 204);
   });
 
+  app.post("/internal/operator/proofs/consume", async (context) => {
+    const principal = await requireOperator(
+      dependencies,
+      context.req.raw.headers,
+    );
+    if (principal instanceof Response) return principal;
+    const body = await exactJson(
+      context.req.raw,
+      internalOperatorProofConsumptionSchema,
+    );
+    if (body === null) {
+      return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
+    }
+    try {
+      await dependencies.consumeOperatorProof(principal, {
+        asOf: body.as_of,
+        idempotencyKey: body.idempotency_key,
+        operation: body.operation,
+        proof: body.proof,
+      });
+      return context.body(null, 204);
+    } catch (error) {
+      if (error instanceof OperatorProofInvalidError) {
+        return context.json({ code: "OPERATOR_PROOF_INVALID" }, 400);
+      }
+      throw error;
+    }
+  });
+
   app.get("/api/auth/operator/capability", async (context) => {
     const principal = await requireOperator(
       dependencies,
@@ -333,6 +383,13 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
               password: body.password,
               researcherId: body.researcher_id,
             }
+          : body.operation === "data.refresh.market.submit"
+            ? {
+                asOf: body.as_of,
+                idempotencyKey: body.idempotency_key,
+                operation: body.operation,
+                password: body.password,
+              }
           : {
               email: canonicalizeEmail(body.email),
               operation: body.operation,
@@ -351,6 +408,9 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
         return context.json({ code: "OPERATOR_PASSWORD_INVALID" }, 400);
       }
       if (error instanceof InvalidEmailError) {
+        return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
+      }
+      if (error instanceof OperatorProofInvalidError) {
         return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
       }
       throw error;

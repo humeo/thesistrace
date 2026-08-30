@@ -272,6 +272,9 @@ describe.sequential("Researcher Invitation lifecycle", () => {
       async confirmOperatorProof() {
         throw new Error("OPERATOR_PROOF_UNAVAILABLE_IN_INVITATION_HARNESS");
       },
+      async consumeOperatorProof() {
+        throw new Error("OPERATOR_PROOF_UNAVAILABLE_IN_INVITATION_HARNESS");
+      },
       consumeInvitationRateLimit: (candidate, headers) =>
         limiter.consume(candidate, headers),
       async consumeOperatorProofRateLimit() {

@@ -391,6 +391,23 @@ select { color-scheme: dark; }
 /* Operator Console */
 .operator-page { display: grid; gap: 36px; }
 .operator-page > .page-hero { margin-bottom: 0; }
+.operator-subnav {
+  display: flex;
+  gap: 4px;
+  margin-top: -22px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.operator-subnav a {
+  min-height: 36px;
+  padding: 8px 10px;
+  color: var(--ink-soft);
+  border-radius: 6px;
+  font-size: 12px;
+  text-decoration: none;
+}
+.operator-subnav a:hover,
+.operator-subnav a[aria-current="page"] { color: var(--ink); background: var(--surface-2); }
 .operator-load-state {
   display: flex;
   min-height: 36px;
@@ -544,6 +561,64 @@ select { color-scheme: dark; }
   padding-top: 2px;
 }
 .operator-confirmation-actions button { min-height: 44px; }
+.operator-refresh-form {
+  display: grid;
+  width: min(760px, 100%);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  padding: 20px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.operator-refresh-form label { display: grid; align-content: start; gap: 7px; }
+.operator-refresh-form input { font-family: var(--mono); font-size: 13px; }
+.operator-refresh-form small { color: var(--ink-soft); font-size: 12px; font-weight: 400; line-height: 1.45; }
+.operator-refresh-form input[aria-invalid="true"] { border-color: var(--danger); }
+.operator-refresh-form .operator-field-error { color: #ff8b82; }
+.operator-refresh-form-error { grid-column: 1 / -1; margin: 0; }
+.operator-refresh-form footer {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 4px;
+}
+.operator-refresh-form footer p { margin: 0; color: var(--ink-soft); font-size: 12px; }
+.operator-refresh-receipt {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--primary);
+  border-radius: 10px;
+}
+.operator-refresh-receipt > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.operator-refresh-receipt > header .eyebrow { margin-bottom: 4px; }
+.operator-refresh-receipt > p { margin: 0; color: var(--ink-muted); font-size: 13px; }
+.operator-refresh-receipt > dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.operator-refresh-receipt > dl > div { min-width: 0; padding: 12px; }
+.operator-refresh-receipt > dl > div:nth-child(n + 4) { border-top: 1px solid var(--line); }
+.operator-refresh-receipt > dl > div:not(:nth-child(3n + 1)) { border-left: 1px solid var(--line); }
+.operator-refresh-receipt dt { color: var(--ink-soft); font-size: 12px; }
+.operator-refresh-receipt dd { margin: 5px 0 0; color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
+.operator-refresh-receipt code,
+.operator-refresh-receipt time { font-family: var(--mono); }
+.operator-refresh-published { border-left-color: var(--success); }
+.operator-refresh-failed { border-left-color: var(--danger); }
 
 /* Authentication and account access */
 .auth-page {
@@ -1414,7 +1489,10 @@ select { color-scheme: dark; }
   .account-password-form input,
   .account-password-form .button-primary,
   .operator-confirmation-field input,
+  .operator-subnav a,
   .operator-load-error button,
+  .operator-refresh-form input,
+  .operator-refresh-form footer button,
   .operator-row-action,
   .operator-section-header > button,
   .operator-search button,
@@ -1507,6 +1585,12 @@ select { color-scheme: dark; }
   .data-field-catalog > header,
   .data-field-dataset > header { align-items: flex-start; flex-direction: column; gap: 7px; }
   .operator-section-header { align-items: stretch; flex-direction: column; }
+  .operator-refresh-form { grid-template-columns: 1fr; }
+  .operator-refresh-form footer { grid-column: 1; align-items: stretch; flex-direction: column; }
+  .operator-refresh-form footer button { min-height: 44px; }
+  .operator-refresh-receipt > dl { grid-template-columns: 1fr; }
+  .operator-refresh-receipt > dl > div:nth-child(n) { border-top: 1px solid var(--line); border-left: 0; }
+  .operator-refresh-receipt > dl > div:first-child { border-top: 0; }
   .operator-search { width: 100%; }
   .operator-table-scroll { overflow: visible; }
   .operator-table { display: block; min-width: 0; }

@@ -4,7 +4,9 @@ import argparse
 import re
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
+from datetime import datetime
 from time import perf_counter_ns
+from typing import Literal
 from uuid import UUID, uuid4
 
 import uvicorn
@@ -12,6 +14,9 @@ from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
+from starlette.responses import Response
 from starlette.routing import Route
 
 from thesistrace.alpha_language import alpha_language
@@ -37,13 +42,22 @@ from thesistrace.daily_track import (
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
 )
-from thesistrace.data import DataOverview, DatasetOverviewService
+from thesistrace.data import (
+    DataOverview,
+    DataRefreshError,
+    DatasetOverviewService,
+    RefreshOutcome,
+    validate_market_refresh_request,
+)
 from thesistrace.entrypoints.alpha_http import install_alpha_http
 from thesistrace.entrypoints.authentication import (
     AuthSessionUnavailable,
     CoreAuthVerifier,
     CoreHttpSettings,
     InvalidLoginSession,
+    InvalidOperatorProof,
+    OperatorAccessNotFound,
+    OperatorAuthorizer,
     SessionVerifier,
 )
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
@@ -109,10 +123,34 @@ _JSON_CONTENT_TYPE = re.compile(
 )
 
 
+class MarketRefreshSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    as_of: str = Field(min_length=1, max_length=128)
+    idempotency_key: str = Field(min_length=1, max_length=512)
+    proof: str = Field(min_length=80, max_length=80)
+
+
+class MarketRefreshOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    as_of: datetime
+    attempt_count: int = Field(ge=0)
+    data_through_session: str | None
+    failure_code: str | None
+    idempotency_key: str
+    kind: Literal["market"]
+    last_failure_code: str | None
+    last_refresh_at: datetime | None
+    outcome: Literal["published", "no_change"] | None
+    status: Literal["accepted", "running", "succeeded", "failed"]
+
+
 def create_app(
     settings: CoreSettings | None = None,
     *,
     auth_verifier: SessionVerifier | None = None,
+    operator_authorizer: OperatorAuthorizer | None = None,
     event_sink: OperationalEventWriter | None = None,
     http_request_id_factory: Callable[[], str] | None = None,
     monotonic_ns: Callable[[], int] | None = None,
@@ -137,6 +175,7 @@ def create_app(
         selected_settings = settings or CoreSettings.from_environment()
         http_settings: CoreHttpSettings | None = None
         selected_verifier = auth_verifier
+        selected_operator_authorizer = operator_authorizer
         selected_public_origin = public_origin
         owned_verifier: CoreAuthVerifier | None = None
         if selected_verifier is None or selected_public_origin is None:
@@ -145,10 +184,16 @@ def create_app(
             assert http_settings is not None
             owned_verifier = CoreAuthVerifier(http_settings.auth_internal_origin)
             selected_verifier = owned_verifier
+        if selected_operator_authorizer is None and isinstance(
+            selected_verifier,
+            CoreAuthVerifier,
+        ):
+            selected_operator_authorizer = selected_verifier
         if selected_public_origin is None:
             assert http_settings is not None
             selected_public_origin = http_settings.public_origin
         app.state.auth_verifier = selected_verifier
+        app.state.operator_authorizer = selected_operator_authorizer
         app.state.public_origin = selected_public_origin
         try:
             with open_core_runtime(
@@ -172,6 +217,8 @@ def create_app(
     app = FastAPI(title="ThesisTrace Core", lifespan=lifespan)
     if auth_verifier is not None:
         app.state.auth_verifier = auth_verifier
+    if operator_authorizer is not None:
+        app.state.operator_authorizer = operator_authorizer
     if public_origin is not None:
         app.state.public_origin = public_origin
 
@@ -179,25 +226,42 @@ def create_app(
     async def authenticate_api_request(request: Request, call_next):  # type: ignore[no-untyped-def]
         if not request.url.path.startswith("/api/"):
             return await call_next(request)
-        verifier = getattr(request.app.state, "auth_verifier", None)
         expected_origin = getattr(request.app.state, "public_origin", None)
-        if verifier is None or not isinstance(expected_origin, str):
+        if not isinstance(expected_origin, str):
             return JSONResponse(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 content={"detail": "Authentication unavailable"},
             )
-        try:
-            researcher = await verifier.verify(request.headers.get("cookie"))
-        except InvalidLoginSession:
-            return JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content={"detail": "Authentication required"},
-            )
-        except AuthSessionUnavailable:
-            return JSONResponse(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                content={"detail": "Authentication unavailable"},
-            )
+        if request.url.path.startswith("/api/operator/"):
+            authorizer = _operator_authorizer(request)
+            if authorizer is None:
+                return _auth_unavailable_response()
+            try:
+                await authorizer.authorize_operator(request.headers.get("cookie"))
+            except OperatorAccessNotFound:
+                return Response(status_code=status.HTTP_404_NOT_FOUND)
+            except AuthSessionUnavailable:
+                return _auth_unavailable_response()
+        else:
+            verifier = getattr(request.app.state, "auth_verifier", None)
+            if verifier is None:
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={"detail": "Authentication unavailable"},
+                )
+            try:
+                researcher = await verifier.verify(request.headers.get("cookie"))
+            except InvalidLoginSession:
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content={"detail": "Authentication required"},
+                )
+            except AuthSessionUnavailable:
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={"detail": "Authentication unavailable"},
+                )
+            request.state.researcher = researcher
         if request.method in {"POST", "PATCH", "DELETE"}:
             if request.headers.get("origin") != expected_origin:
                 return JSONResponse(
@@ -209,7 +273,6 @@ def create_app(
                     status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
                     content={"detail": "JSON request required"},
                 )
-        request.state.researcher = researcher
         return await call_next(request)
 
     if research_agent_http is not None:
@@ -297,6 +360,11 @@ def create_app(
         request: Request,
         error: RequestValidationError,
     ):
+        if request.url.path == "/api/operator/data/refreshes/market":
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"code": "OPERATOR_REQUEST_INVALID"},
+            )
         if request.method == "POST" and request.url.path == "/api/research-batches":
             rejection = ResearchBatchAdmissionRejection(
                 issues=_batch_admission_validation_issues(error)
@@ -359,6 +427,96 @@ def create_app(
     @app.get("/api/data", response_model=DataOverview)
     def data_overview(request: Request) -> DataOverview:
         return _data_overview(request).overview()
+
+    @app.post(
+        "/api/operator/data/refreshes/market",
+        response_model=MarketRefreshOperation,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def submit_market_refresh(
+        request: Request,
+        command: MarketRefreshSubmission,
+    ) -> MarketRefreshOperation | Response:
+        try:
+            idempotency_key, as_of = validate_market_refresh_request(
+                idempotency_key=command.idempotency_key,
+                as_of=command.as_of,
+            )
+        except DataRefreshError:
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"code": "OPERATOR_REQUEST_INVALID"},
+            )
+        authorizer = _operator_authorizer(request)
+        if authorizer is None:
+            return _auth_unavailable_response()
+        try:
+            await authorizer.consume_market_refresh_proof(
+                request.headers.get("cookie"),
+                as_of=command.as_of,
+                idempotency_key=idempotency_key,
+                proof=command.proof,
+            )
+        except OperatorAccessNotFound:
+            return Response(status_code=status.HTTP_404_NOT_FOUND)
+        except InvalidOperatorProof:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"code": "OPERATOR_PROOF_INVALID"},
+            )
+        except AuthSessionUnavailable:
+            return _auth_unavailable_response()
+        try:
+            outcome = await run_in_threadpool(
+                _runtime(request).data_refreshes.submit,
+                idempotency_key=idempotency_key,
+                as_of=as_of,
+            )
+        except DataRefreshError as error:
+            if error.code == "IDEMPOTENCY_KEY_CONFLICT":
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content={"code": error.code},
+                )
+            if error.code == "DATA_NOT_READY":
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content={"code": error.code},
+                )
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"code": "OPERATOR_REQUEST_INVALID"},
+            )
+        return _market_refresh_operation(outcome)
+
+    @app.get(
+        "/api/operator/data/refreshes/market",
+        response_model=MarketRefreshOperation,
+    )
+    def inspect_market_refresh(
+        request: Request,
+        idempotency_key: str = Query(min_length=1, max_length=512),
+        as_of: str = Query(min_length=1, max_length=128),
+    ) -> MarketRefreshOperation | Response:
+        try:
+            normalized_key, normalized_as_of = validate_market_refresh_request(
+                idempotency_key=idempotency_key,
+                as_of=as_of,
+            )
+            outcome = _runtime(request).data_refreshes.inspect(normalized_key)
+        except DataRefreshError as error:
+            if error.code == "REFRESH_NOT_FOUND":
+                return Response(status_code=status.HTTP_404_NOT_FOUND)
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"code": "OPERATOR_REQUEST_INVALID"},
+            )
+        if outcome.as_of != normalized_as_of.isoformat():
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={"code": "IDEMPOTENCY_KEY_CONFLICT"},
+            )
+        return _market_refresh_operation(outcome)
 
     @app.post(
         "/api/researcher/bootstrap",
@@ -825,6 +983,21 @@ def _batch_validation_components(location: object) -> list[str | int]:
 
 def _runtime(request: Request) -> CoreRuntime:
     return request.app.state.core_runtime
+
+
+def _operator_authorizer(request: Request) -> OperatorAuthorizer | None:
+    return getattr(request.app.state, "operator_authorizer", None)
+
+
+def _auth_unavailable_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"code": "AUTH_SERVICE_UNAVAILABLE"},
+    )
+
+
+def _market_refresh_operation(outcome: RefreshOutcome) -> MarketRefreshOperation:
+    return MarketRefreshOperation.model_validate(outcome.__dict__)
 
 
 def _researcher(request: Request) -> ResearcherIdentity:

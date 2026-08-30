@@ -89,6 +89,24 @@ services:
     volumes:
       - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data
 
+  data-operator-worker:
+    command:
+      - thesistrace-data-operator
+      - worker
+      - --replay
+      - /test-fixtures/tushare-financial-market-refresh-replay.json
+      - --replay
+      - /test-fixtures/tushare-operator-console-market-refresh-replay.json
+      - --replay
+      - /test-fixtures/tushare-image-smoke-market-refresh-replay.json
+    environment:
+      <<: *test-environment
+      THESISTRACE_TUSHARE_TOKEN: ${THESISTRACE_TUSHARE_TOKEN}
+    volumes:
+      - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data
+      - ${THESISTRACE_TEST_BENCHMARK_MOUNT}:/var/lib/thesistrace/benchmark-data
+      - ../../tests/fixtures:/test-fixtures:ro
+
   web:
     ports:
       - 127.0.0.1:${THESISTRACE_TEST_CADDY_PORT}:${THESISTRACE_TEST_CADDY_PORT}

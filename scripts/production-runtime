@@ -129,6 +129,18 @@ resend_from=$(required_value RESEND_FROM_EMAIL)
 printf '%s\n' "$resend_from" | grep -Eq '^[^[:cntrl:]]+@[^[:cntrl:]<> ]+>?$' \
   || fail PRODUCTION_RESEND_FROM_INVALID
 
+tushare_token=$(required_value THESISTRACE_TUSHARE_TOKEN)
+test "${#tushare_token}" -ge 8 || fail PRODUCTION_TUSHARE_TOKEN_INVALID
+test "${#tushare_token}" -le 512 || fail PRODUCTION_TUSHARE_TOKEN_INVALID
+printf '%s\n' "$tushare_token" | grep -Eq '^[^[:space:]]+$' \
+  || fail PRODUCTION_TUSHARE_TOKEN_INVALID
+case "$tushare_token" in
+  test-* | development-* | placeholder*) fail PRODUCTION_TUSHARE_TOKEN_INVALID ;;
+esac
+if printf '%s\n' "$tushare_token" | grep -Eq '^<[^<>]+>$'; then
+  fail PRODUCTION_TUSHARE_TOKEN_INVALID
+fi
+
 auth_image=$(required_value THESISTRACE_AUTH_IMAGE)
 case "$auth_image" in
   *@*)
@@ -168,6 +180,7 @@ unset \
   BETTER_AUTH_SECRET \
   RESEND_API_KEY \
   RESEND_FROM_EMAIL \
+  THESISTRACE_TUSHARE_TOKEN \
   THESISTRACE_AUTH_IMAGE
 
 compose() {

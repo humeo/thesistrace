@@ -192,7 +192,7 @@ export function seedOperatorDirectory(): void {
   }
 }
 
-function resetAuthRateLimits(): void {
+export function resetAuthRateLimits(): void {
   const output = execFileSync(
     "docker",
     [

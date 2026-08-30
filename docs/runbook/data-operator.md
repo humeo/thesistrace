@@ -67,8 +67,9 @@ the manifest and its session content.
 
 ## Refresh and collection
 
-Refresh is a private two-step operation. Submission records the frozen request;
-work execution later claims the next request and collects from Tushare:
+Refresh submission records the frozen request and returns after PostgreSQL has
+durably accepted it. The always-running single-slot Data Operator Worker later
+claims accepted requests in FIFO order and collects from Tushare:
 
 ```sh
 docker compose -f deploy/core/compose.yaml run --rm api \
@@ -76,20 +77,23 @@ docker compose -f deploy/core/compose.yaml run --rm api \
   --idempotency-key refresh-2026-08-12 \
   --as-of 2026-08-12T18:00:00+08:00
 
-docker compose -f deploy/core/compose.yaml run --rm \
-  -e THESISTRACE_TUSHARE_TOKEN \
-  api thesistrace-data-operator work-refresh
 ```
 
-Use `work-refresh --replay /private/operator/replay.json` for deterministic
-reproduction. Inspect an operation without changing it:
+The deployed service runs `thesistrace-data-operator worker` continuously. Use
+`worker --once --replay /private/operator/replay.json` only for deterministic
+qualification; it is not a second production execution path. Inspect an
+operation without changing it:
+
+An offline qualification Worker may repeat `--replay PATH` to preload several
+distinct exact request windows. Duplicate windows and windows absent from that
+fixed bundle fail closed.
 
 ```sh
 thesistrace-data-operator inspect-refresh \
   --idempotency-key refresh-2026-08-12
 ```
 
-Before a Market Head publication, `work-refresh` validates the current
+Before a Market Head publication, the Worker validates the current
 Benchmark Snapshot, requests only required Research Sessions after its terminal
 session, and atomically appends them by replacing the complete JSON file in the
 same directory after flush/fsync. Published historical Levels are never
@@ -100,7 +104,8 @@ new Snapshot. Missing, duplicate, invalid, non-positive, non-finite, damaged,
 or insufficient Levels fail the Market operation; there is no alternate index,
 carry, remote runtime read, replay substitution, or other fallback.
 
-Live work requires `THESISTRACE_TUSHARE_TOKEN`. An explicit versioned replay
+Live work requires `THESISTRACE_TUSHARE_TOKEN`, which is delivered only to the
+Data Operator Worker. An explicit versioned replay
 must contain the same CSI 300 source response and enters the same source-neutral
 normalization and publication path; replay is never selected automatically.
 

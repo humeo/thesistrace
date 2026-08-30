@@ -1,0 +1,68 @@
+{
+  "format": "thesistrace-tushare-refresh-replay",
+  "version": 2,
+  "request_start": "2026-07-09",
+  "request_end": "2026-08-05",
+  "snapshot": {
+    "benchmark_index_daily": [],
+    "calendar_sse": [
+      {"exchange": "SSE", "cal_date": "20260709", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260710", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260713", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260714", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260715", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260716", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260717", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260720", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260721", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260722", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260723", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260724", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260727", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260728", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260729", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260730", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260731", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260803", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260804", "is_open": "1"},
+      {"exchange": "SSE", "cal_date": "20260805", "is_open": "1"}
+    ],
+    "calendar_szse": [
+      {"exchange": "SZSE", "cal_date": "20260709", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260710", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260713", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260714", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260715", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260716", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260717", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260720", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260721", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260722", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260723", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260724", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260727", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260728", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260729", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260730", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260731", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260803", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260804", "is_open": "1"},
+      {"exchange": "SZSE", "cal_date": "20260805", "is_open": "1"}
+    ],
+    "stock_basic": [
+      {
+        "ts_code": "000001.SZ",
+        "exchange": "SZSE",
+        "market": "主板",
+        "list_status": "L",
+        "list_date": "20091207",
+        "delist_date": ""
+      }
+    ],
+    "daily": [],
+    "adjustments": [],
+    "suspensions": [],
+    "price_limits": [],
+    "industry_membership": []
+  }
+}

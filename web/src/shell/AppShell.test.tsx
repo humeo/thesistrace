@@ -51,6 +51,12 @@ test("places the Operator destination at the bottom only for the Operator", () =
   expect(operatorMarkup).toContain("Operator researchers");
   expect(ordinaryMarkup).not.toContain('href="/operator/researchers"');
   expect(ordinaryMarkup).not.toContain(">Operator<");
+
+  const dataMarkup = renderShell("/operator/data", "Operator data", true);
+  expect(dataMarkup).toContain(
+    'aria-current="page" href="/operator/researchers"',
+  );
+  expect(dataMarkup).toContain('<strong>Operator</strong>');
 });
 
 test("keeps the Research header focused on navigation and folder context", () => {

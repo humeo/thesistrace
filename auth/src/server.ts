@@ -166,6 +166,9 @@ async function main(): Promise<void> {
       inspectInvitation: (token) => invitations.inspect(token),
       confirmOperatorProof: (principal, input) =>
         operatorProofs.confirm(principal, input),
+      consumeOperatorProof: async (principal, input) => {
+        await operatorProofs.consumeExternal(principal, input);
+      },
       issueOperatorInvitation: (principal, input) =>
         operatorInvitations.issue(principal, input),
       listOperatorInvitations: (principal, input) =>
