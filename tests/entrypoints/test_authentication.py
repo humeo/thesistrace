@@ -170,11 +170,20 @@ def test_core_auth_verifier_authorizes_operator_and_consumes_exact_market_proof(
                 proof="opaque-financial-proof",
             )
         )
+        asyncio.run(
+            verifier.consume_industry_refresh_proof(
+                "thesistrace.session_token=opaque",
+                idempotency_key="industry-20260814-custom",
+                observation_through_session="2026-08-14",
+                proof="opaque-industry-proof",
+            )
+        )
     finally:
         asyncio.run(verifier.aclose())
 
     assert [(request.method, request.url.path) for request in captured] == [
         ("GET", "/internal/operator/page-access"),
+        ("POST", "/internal/operator/proofs/consume"),
         ("POST", "/internal/operator/proofs/consume"),
         ("POST", "/internal/operator/proofs/consume"),
     ]
@@ -191,6 +200,12 @@ def test_core_auth_verifier_authorizes_operator_and_consumes_exact_market_proof(
         b'"observation_through_session":"2026-08-14",'
         b'"operation":"data.refresh.financial.submit",'
         b'"proof":"opaque-financial-proof"}'
+    )
+    assert captured[3].content == (
+        b'{"idempotency_key":"industry-20260814-custom",'
+        b'"observation_through_session":"2026-08-14",'
+        b'"operation":"data.refresh.industry.submit",'
+        b'"proof":"opaque-industry-proof"}'
     )
 
 

@@ -2,16 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   confirmFinancialRefreshProof,
+  confirmIndustryRefreshProof,
   confirmOperatorProof,
   confirmMarketRefreshProof,
   confirmSessionRevocationProof,
   isIsoResearchSession,
   isMarketRefreshIdempotencyKey,
   loadFinancialRefresh,
+  loadIndustryRefresh,
   loadMarketRefresh,
   OperatorMutationError,
   submitInvitationMutation,
   submitFinancialRefresh,
+  submitIndustryRefresh,
   submitMarketRefresh,
   submitSessionRevocation,
 } from "./operatorMutationClient";
@@ -321,6 +324,79 @@ describe("Operator mutation client", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/api/operator/data/refreshes/financial",
+      expect.objectContaining({
+        body: JSON.stringify({
+          idempotency_key: request.idempotencyKey,
+          observation_through_session: request.observationThroughSession,
+          proof,
+        }),
+      }),
+    );
+    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(password);
+  });
+
+  it("binds an Industry proof and parses the safe no-change receipt", async () => {
+    const password = "correct-horse-battery-staple";
+    const request = {
+      idempotencyKey: "industry-20260814-custom",
+      observationThroughSession: "2026-08-14",
+    };
+    const receipt = {
+      attempt_count: 1,
+      data_through_session: "2026-08-14",
+      failure_code: null,
+      idempotency_key: request.idempotencyKey,
+      kind: "industry",
+      last_failure_code: null,
+      last_refresh_at: "2026-08-14T10:00:00Z",
+      observation_through_session: request.observationThroughSession,
+      outcome: "no_change",
+      status: "succeeded",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({
+        expires_at: "2026-08-29T06:01:00.000Z",
+        proof,
+      }))
+      .mockResolvedValueOnce(Response.json(receipt, { status: 202 }))
+      .mockResolvedValueOnce(Response.json(receipt));
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+
+    const confirmation = await confirmIndustryRefreshProof(
+      request,
+      password,
+      signal,
+    );
+    const submitted = await submitIndustryRefresh(
+      request,
+      confirmation.proof,
+      signal,
+    );
+    const loaded = await loadIndustryRefresh(request, signal);
+
+    expect(submitted).toMatchObject({
+      dataThroughSession: "2026-08-14",
+      kind: "industry",
+      outcome: "no_change",
+    });
+    expect(loaded).toEqual(submitted);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/auth/operator/proofs",
+      expect.objectContaining({
+        body: JSON.stringify({
+          idempotency_key: request.idempotencyKey,
+          observation_through_session: request.observationThroughSession,
+          operation: "data.refresh.industry.submit",
+          password,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/operator/data/refreshes/industry",
       expect.objectContaining({
         body: JSON.stringify({
           idempotency_key: request.idempotencyKey,

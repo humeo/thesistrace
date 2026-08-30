@@ -90,6 +90,25 @@ class OperatorAuthorizer:
         if self.consume_error is not None:
             raise self.consume_error
 
+    async def consume_industry_refresh_proof(
+        self,
+        cookie: str | None,
+        *,
+        idempotency_key: str,
+        observation_through_session: str,
+        proof: str,
+    ) -> None:
+        self.consumed.append(
+            {
+                "cookie": cookie,
+                "idempotency_key": idempotency_key,
+                "observation_through_session": observation_through_session,
+                "proof": proof,
+            }
+        )
+        if self.consume_error is not None:
+            raise self.consume_error
+
 
 class Refreshes:
     def __init__(self) -> None:
@@ -138,6 +157,30 @@ class FinancialRefreshes(Refreshes):
         )
 
     def submit_financial(self, **request: object) -> RefreshOutcome:
+        self.submissions.append(request)
+        if self.submit_error is not None:
+            raise self.submit_error
+        return self.receipt
+
+
+class IndustryRefreshes(Refreshes):
+    def __init__(self) -> None:
+        super().__init__()
+        self.receipt = RefreshOutcome(
+            idempotency_key="industry-20260814-custom",
+            kind="industry",
+            as_of=None,
+            observation_through_session="2026-08-14",
+            status="accepted",
+            outcome=None,
+            data_through_session=None,
+            last_refresh_at=None,
+            failure_code=None,
+            last_failure_code=None,
+            attempt_count=0,
+        )
+
+    def submit_industry(self, **request: object) -> RefreshOutcome:
         self.submissions.append(request)
         if self.submit_error is not None:
             raise self.submit_error
@@ -238,6 +281,122 @@ def test_operator_financial_submission_consumes_exact_proof_and_returns_safe_rec
             "observation_through_session": "2026-08-14",
         }
     ]
+
+
+def test_operator_industry_submission_consumes_exact_proof_and_returns_safe_receipt() -> None:
+    authorizer = OperatorAuthorizer()
+    refreshes = IndustryRefreshes()
+    client = _client(authorizer, refreshes)
+
+    response = client.post(
+        "/api/operator/data/refreshes/industry",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "idempotency_key": "industry-20260814-custom",
+            "observation_through_session": "2026-08-14",
+            "proof": PROOF,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "attempt_count": 0,
+        "data_through_session": None,
+        "failure_code": None,
+        "idempotency_key": "industry-20260814-custom",
+        "kind": "industry",
+        "last_failure_code": None,
+        "last_refresh_at": None,
+        "observation_through_session": "2026-08-14",
+        "outcome": None,
+        "status": "accepted",
+    }
+    assert authorizer.consumed == [
+        {
+            "cookie": COOKIE,
+            "idempotency_key": "industry-20260814-custom",
+            "observation_through_session": "2026-08-14",
+            "proof": PROOF,
+        }
+    ]
+    assert refreshes.submissions == [
+        {
+            "idempotency_key": "industry-20260814-custom",
+            "observation_through_session": "2026-08-14",
+        }
+    ]
+
+
+def test_operator_industry_inspection_is_bound_to_the_exact_target() -> None:
+    authorizer = OperatorAuthorizer()
+    refreshes = IndustryRefreshes()
+    refreshes.receipt = RefreshOutcome(
+        **{
+            **refreshes.receipt.__dict__,
+            "status": "succeeded",
+            "outcome": "no_change",
+            "data_through_session": "2026-08-14",
+            "last_refresh_at": "2026-08-14T10:00:00+00:00",
+        }
+    )
+    client = _client(authorizer, refreshes)
+
+    matching = client.get(
+        "/api/operator/data/refreshes/industry",
+        headers={"cookie": COOKIE},
+        params={
+            "idempotency_key": refreshes.receipt.idempotency_key,
+            "observation_through_session": "2026-08-14",
+        },
+    )
+    assert matching.status_code == 200
+    assert matching.json()["outcome"] == "no_change"
+
+    conflict = client.get(
+        "/api/operator/data/refreshes/industry",
+        headers={"cookie": COOKIE},
+        params={
+            "idempotency_key": refreshes.receipt.idempotency_key,
+            "observation_through_session": "2026-08-13",
+        },
+    )
+    assert conflict.status_code == 409
+
+
+@pytest.mark.parametrize("invalid_target", ("2026-8-14", "0000-01-01"))
+def test_operator_industry_validation_and_proof_failure_have_no_side_effect(
+    invalid_target: str,
+) -> None:
+    authorizer = OperatorAuthorizer()
+    refreshes = IndustryRefreshes()
+    client = _client(authorizer, refreshes)
+
+    invalid = client.post(
+        "/api/operator/data/refreshes/industry",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "idempotency_key": "industry-key",
+            "observation_through_session": invalid_target,
+            "proof": PROOF,
+        },
+    )
+    assert invalid.status_code == 422
+    assert authorizer.consumed == []
+    assert refreshes.submissions == []
+
+    authorizer.consume_error = InvalidOperatorProof()
+    rejected = client.post(
+        "/api/operator/data/refreshes/industry",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "idempotency_key": "industry-key",
+            "observation_through_session": "2026-08-14",
+            "proof": PROOF,
+        },
+    )
+    assert rejected.status_code == 400
+    assert rejected.json() == {"code": "OPERATOR_PROOF_INVALID"}
+    assert refreshes.submissions == []
 
 
 @pytest.mark.parametrize("invalid_target", ("2026-8-14", "0000-01-01"))

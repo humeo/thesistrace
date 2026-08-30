@@ -7,15 +7,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from benchmark_support import benchmark_mount_for_data_mount
+from benchmark_support import FixtureBenchmarkSource, benchmark_mount_for_data_mount
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.tushare_industry import (
     IndustrySourceError,
     IndustrySourceSnapshot,
+    TushareIndustrySource,
 )
+from thesistrace.adapters.tushare_replay import ReplayTushareProvider
 from thesistrace.data import (
     DataGarbageCollector,
+    DataRefreshService,
     DatasetLifecycle,
     DatasetOverviewService,
     IndustryRefreshError,
@@ -28,6 +31,78 @@ from thesistrace.fixture import build_fixture, build_minimal_canonical_fixture
 from thesistrace.publication.serialization import canonical_json_bytes
 
 NOW = datetime(2026, 8, 14, 1, tzinfo=UTC)
+
+
+def test_shared_worker_publishes_and_then_records_replay_no_change(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        market = _market_generation(tmp_path)
+        _establish_head(database, tmp_path, market)
+        through = MountedGenerationStore(tmp_path).inspect_root(market).data_through_session
+        source = TushareIndustrySource(
+            ReplayTushareProvider(
+                Path(__file__).parents[1]
+                / "fixtures"
+                / "tushare-operator-console-market-refresh-replay.json"
+            )
+        )
+        refresh = DataRefreshService(
+            database,
+            tmp_path,
+            benchmark_mount_root=benchmark_mount_for_data_mount(tmp_path),
+            clock=lambda: NOW,
+        )
+
+        accepted = refresh.submit_industry(
+            idempotency_key="shared-industry-published",
+            observation_through_session=through,
+        )
+        assert accepted.status == "accepted"
+        assert (
+            refresh.process_next(
+                object(),  # type: ignore[arg-type]
+                benchmark_source=FixtureBenchmarkSource(),
+                industry_source=source,
+            )
+            is True
+        )
+        published = refresh.inspect("shared-industry-published")
+        assert published.status == "succeeded"
+        assert published.outcome == "published"
+        first_head = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert first_head is not None
+        assert first_head.generation_manifest_sha256 != market
+
+        no_change_accepted = refresh.submit_industry(
+            idempotency_key="shared-industry-no-change",
+            observation_through_session=through,
+        )
+        assert no_change_accepted.status == "accepted"
+        assert (
+            refresh.process_next(
+                object(),  # type: ignore[arg-type]
+                benchmark_source=FixtureBenchmarkSource(),
+                industry_source=source,
+            )
+            is True
+        )
+        no_change = refresh.inspect("shared-industry-no-change")
+        assert no_change.status == "succeeded"
+        assert no_change.outcome == "no_change"
+        second_head = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert second_head == first_head
+        assert (
+            refresh.submit_industry(
+                idempotency_key="shared-industry-no-change",
+                observation_through_session=through,
+            )
+            == no_change
+        )
+    finally:
+        database.close()
 
 
 def _overview_service(
@@ -524,8 +599,8 @@ def _database(settings: CoreSettings) -> PostgresDatabase:
     database.open()
     with database.transaction() as transaction:
         transaction.execute(
-            "TRUNCATE data.industry_refresh_operations, data.generation_pins, "
-            "data.generation_candidates"
+            "TRUNCATE data.refresh_operations, data.industry_refresh_operations, "
+            "data.generation_pins, data.generation_candidates"
         )
         transaction.execute(
             "UPDATE data.current_dataset_state SET last_industry_refresh_at = NULL"

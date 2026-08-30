@@ -54,6 +54,15 @@ class OperatorAuthorizer(Protocol):
         proof: str,
     ) -> None: ...
 
+    async def consume_industry_refresh_proof(
+        self,
+        cookie: str | None,
+        *,
+        idempotency_key: str,
+        observation_through_session: str,
+        proof: str,
+    ) -> None: ...
+
 
 class _VerifiedSession(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -199,6 +208,40 @@ class CoreAuthVerifier:
                     "idempotency_key": idempotency_key,
                     "observation_through_session": observation_through_session,
                     "operation": "data.refresh.financial.submit",
+                    "proof": proof,
+                },
+            )
+        except (httpx.HTTPError, OSError) as error:
+            raise AuthSessionUnavailable() from error
+        if response.status_code == 404:
+            raise OperatorAccessNotFound()
+        if response.status_code == 400:
+            try:
+                invalid_proof = response.json() == {"code": "OPERATOR_PROOF_INVALID"}
+            except ValueError:
+                invalid_proof = False
+            if invalid_proof:
+                raise InvalidOperatorProof()
+            raise AuthSessionUnavailable()
+        if response.status_code != 204:
+            raise AuthSessionUnavailable()
+
+    async def consume_industry_refresh_proof(
+        self,
+        cookie: str | None,
+        *,
+        idempotency_key: str,
+        observation_through_session: str,
+        proof: str,
+    ) -> None:
+        try:
+            response = await self._client.post(
+                "/internal/operator/proofs/consume",
+                headers=_cookie_headers(cookie),
+                json={
+                    "idempotency_key": idempotency_key,
+                    "observation_through_session": observation_through_session,
+                    "operation": "data.refresh.industry.submit",
                     "proof": proof,
                 },
             )

@@ -466,18 +466,87 @@ CREATE TABLE data.refresh_operations (
     finished_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT refresh_operations_attempt_count_check CHECK ((attempt_count >= 0)),
-    CONSTRAINT refresh_operations_check CHECK ((((status = 'accepted'::text) AND (owner_token IS NULL) AND (lease_expires_at IS NULL) AND (outcome IS NULL) AND (failure_code IS NULL)) OR ((status = 'running'::text) AND (outcome IS NULL) AND (owner_token IS NOT NULL) AND (lease_expires_at IS NOT NULL) AND (attempt_count > 0) AND (failure_code IS NULL) AND (started_at IS NOT NULL)) OR ((status = 'succeeded'::text) AND ((((kind = 'market'::text) AND (outcome = ANY (ARRAY['published'::text, 'no_change'::text]))) OR ((kind = 'financial'::text) AND (outcome = ANY (ARRAY['published'::text, 'no_change'::text, 'degraded'::text]))))) AND (generation_manifest_sha256 IS NOT NULL) AND (data_through_session IS NOT NULL) AND (last_refresh_at IS NOT NULL) AND (failure_code IS NULL) AND (last_failure_code IS NULL) AND (finished_at IS NOT NULL)) OR ((status = 'failed'::text) AND ((((kind = 'market'::text) AND (outcome IS NULL)) OR ((kind = 'financial'::text) AND (outcome = ANY (ARRAY['business_rejected'::text, 'infrastructure_failed'::text]))))) AND (failure_code IS NOT NULL) AND (finished_at IS NOT NULL)))),
+    CONSTRAINT refresh_operations_check CHECK ((((status = 'accepted'::text) AND (owner_token IS NULL) AND (lease_expires_at IS NULL) AND (outcome IS NULL) AND (failure_code IS NULL)) OR ((status = 'running'::text) AND (outcome IS NULL) AND (owner_token IS NOT NULL) AND (lease_expires_at IS NOT NULL) AND (attempt_count > 0) AND (failure_code IS NULL) AND (started_at IS NOT NULL)) OR ((status = 'succeeded'::text) AND ((((kind = ANY (ARRAY['market'::text, 'industry'::text])) AND (outcome = ANY (ARRAY['published'::text, 'no_change'::text]))) OR ((kind = 'financial'::text) AND (outcome = ANY (ARRAY['published'::text, 'no_change'::text, 'degraded'::text]))))) AND (generation_manifest_sha256 IS NOT NULL) AND (data_through_session IS NOT NULL) AND (last_refresh_at IS NOT NULL) AND (failure_code IS NULL) AND (last_failure_code IS NULL) AND (finished_at IS NOT NULL)) OR ((status = 'failed'::text) AND ((((kind = 'market'::text) AND (outcome IS NULL)) OR ((kind = ANY (ARRAY['financial'::text, 'industry'::text])) AND (outcome = ANY (ARRAY['business_rejected'::text, 'infrastructure_failed'::text]))))) AND (failure_code IS NOT NULL) AND (finished_at IS NOT NULL)))),
     CONSTRAINT refresh_operations_counts_check CHECK (((matched_trigger_count IS NULL OR matched_trigger_count >= 0) AND (checked_no_structured_change_count IS NULL OR checked_no_structured_change_count >= 0) AND (accepted_instrument_count IS NULL OR accepted_instrument_count >= 0) AND (failed_instrument_count IS NULL OR failed_instrument_count >= 0) AND (pending_instrument_count IS NULL OR pending_instrument_count >= 0) AND (discovery_gap_count IS NULL OR discovery_gap_count >= 0))),
     CONSTRAINT refresh_operations_expected_generation_manifest_sha256_check CHECK (((expected_generation_manifest_sha256 IS NULL) OR (expected_generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT refresh_operations_fingerprint_check CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT refresh_operations_financial_receipt_check CHECK (((kind = 'market'::text) AND (financial_complete_through_session IS NULL) AND (matched_trigger_count IS NULL) AND (checked_no_structured_change_count IS NULL) AND (accepted_instrument_count IS NULL) AND (failed_instrument_count IS NULL) AND (pending_instrument_count IS NULL) AND (discovery_gap_count IS NULL)) OR ((kind = 'financial'::text) AND ((((status = ANY (ARRAY['accepted'::text, 'running'::text])) AND (financial_complete_through_session IS NULL) AND (matched_trigger_count IS NULL) AND (checked_no_structured_change_count IS NULL) AND (accepted_instrument_count IS NULL) AND (failed_instrument_count IS NULL) AND (pending_instrument_count IS NULL) AND (discovery_gap_count IS NULL)) OR ((status = 'failed'::text) AND (financial_complete_through_session IS NULL) AND ((((matched_trigger_count IS NULL) AND (checked_no_structured_change_count IS NULL) AND (accepted_instrument_count IS NULL) AND (failed_instrument_count IS NULL) AND (pending_instrument_count IS NULL) AND (discovery_gap_count IS NULL)) OR ((matched_trigger_count IS NOT NULL) AND (checked_no_structured_change_count IS NOT NULL) AND (accepted_instrument_count IS NOT NULL) AND (failed_instrument_count IS NOT NULL) AND (pending_instrument_count IS NOT NULL) AND (discovery_gap_count IS NOT NULL))))) OR ((status = 'succeeded'::text) AND (financial_complete_through_session IS NOT NULL) AND (matched_trigger_count IS NOT NULL) AND (checked_no_structured_change_count IS NOT NULL) AND (accepted_instrument_count IS NOT NULL) AND (failed_instrument_count IS NOT NULL) AND (pending_instrument_count IS NOT NULL) AND (discovery_gap_count IS NOT NULL) AND ((((outcome = 'degraded'::text) AND ((pending_instrument_count > 0) OR (discovery_gap_count > 0))) OR ((outcome = ANY (ARRAY['published'::text, 'no_change'::text])) AND (pending_instrument_count = 0) AND (discovery_gap_count = 0))))))))),
+    CONSTRAINT refresh_operations_financial_receipt_check CHECK (
+        (
+            kind IN ('market', 'industry')
+            AND financial_complete_through_session IS NULL
+            AND matched_trigger_count IS NULL
+            AND checked_no_structured_change_count IS NULL
+            AND accepted_instrument_count IS NULL
+            AND failed_instrument_count IS NULL
+            AND pending_instrument_count IS NULL
+            AND discovery_gap_count IS NULL
+        )
+        OR (
+            kind = 'financial'
+            AND (
+                (
+                    status IN ('accepted', 'running')
+                    AND financial_complete_through_session IS NULL
+                    AND matched_trigger_count IS NULL
+                    AND checked_no_structured_change_count IS NULL
+                    AND accepted_instrument_count IS NULL
+                    AND failed_instrument_count IS NULL
+                    AND pending_instrument_count IS NULL
+                    AND discovery_gap_count IS NULL
+                )
+                OR (
+                    status = 'failed'
+                    AND financial_complete_through_session IS NULL
+                    AND (
+                        (
+                            matched_trigger_count IS NULL
+                            AND checked_no_structured_change_count IS NULL
+                            AND accepted_instrument_count IS NULL
+                            AND failed_instrument_count IS NULL
+                            AND pending_instrument_count IS NULL
+                            AND discovery_gap_count IS NULL
+                        )
+                        OR (
+                            matched_trigger_count IS NOT NULL
+                            AND checked_no_structured_change_count IS NOT NULL
+                            AND accepted_instrument_count IS NOT NULL
+                            AND failed_instrument_count IS NOT NULL
+                            AND pending_instrument_count IS NOT NULL
+                            AND discovery_gap_count IS NOT NULL
+                        )
+                    )
+                )
+                OR (
+                    status = 'succeeded'
+                    AND financial_complete_through_session IS NOT NULL
+                    AND matched_trigger_count IS NOT NULL
+                    AND checked_no_structured_change_count IS NOT NULL
+                    AND accepted_instrument_count IS NOT NULL
+                    AND failed_instrument_count IS NOT NULL
+                    AND pending_instrument_count IS NOT NULL
+                    AND discovery_gap_count IS NOT NULL
+                    AND (
+                        (
+                            outcome = 'degraded'
+                            AND (pending_instrument_count > 0 OR discovery_gap_count > 0)
+                        )
+                        OR (
+                            outcome IN ('published', 'no_change')
+                            AND pending_instrument_count = 0
+                            AND discovery_gap_count = 0
+                        )
+                    )
+                )
+            )
+        )
+    ),
     CONSTRAINT refresh_operations_generation_manifest_sha256_check CHECK (((generation_manifest_sha256 IS NULL) OR (generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT refresh_operations_idempotency_key_check CHECK (((idempotency_key <> ''::text) AND (idempotency_key = btrim(idempotency_key)))),
-    CONSTRAINT refresh_operations_kind_check CHECK ((kind = ANY (ARRAY['market'::text, 'financial'::text]))),
+    CONSTRAINT refresh_operations_kind_check CHECK ((kind = ANY (ARRAY['market'::text, 'financial'::text, 'industry'::text]))),
     CONSTRAINT refresh_operations_outcome_check CHECK (((outcome IS NULL) OR (outcome = ANY (ARRAY['published'::text, 'no_change'::text, 'degraded'::text, 'business_rejected'::text, 'infrastructure_failed'::text])))),
     CONSTRAINT refresh_operations_owner_token_check CHECK (((owner_token IS NULL) OR ((owner_token <> ''::text) AND (owner_token = btrim(owner_token))))),
     CONSTRAINT refresh_operations_status_check CHECK ((status = ANY (ARRAY['accepted'::text, 'running'::text, 'succeeded'::text, 'failed'::text]))),
-    CONSTRAINT refresh_operations_target_check CHECK ((((kind = 'market'::text) AND (as_of IS NOT NULL) AND (observation_through_session IS NULL)) OR ((kind = 'financial'::text) AND (as_of IS NULL) AND (observation_through_session IS NOT NULL))))
+    CONSTRAINT refresh_operations_target_check CHECK ((((kind = 'market'::text) AND (as_of IS NOT NULL) AND (observation_through_session IS NULL)) OR ((kind = ANY (ARRAY['financial'::text, 'industry'::text])) AND (as_of IS NULL) AND (observation_through_session IS NOT NULL))))
 );
 
 

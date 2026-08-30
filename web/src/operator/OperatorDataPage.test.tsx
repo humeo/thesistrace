@@ -15,6 +15,7 @@ test("renders the focused Market form with free-form CLI inputs and Operator rou
   expect(markup).toContain('aria-current="page" href="/operator/data"');
   expect(markup).toContain("Market Refresh");
   expect(markup).toContain("Financial Refresh");
+  expect(markup).toContain("Industry Refresh");
   expect(markup).toContain(">As-of<");
   expect(markup).toContain("Observation-through Research Session");
   expect(markup).toContain('type="text"');

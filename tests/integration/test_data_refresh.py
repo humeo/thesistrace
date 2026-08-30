@@ -948,7 +948,7 @@ def test_concurrent_distinct_submissions_both_enter_the_fifo(
         database.close()
 
 
-def test_financial_submission_shares_exact_idempotency_and_the_market_fifo(
+def test_financial_and_industry_submission_share_exact_idempotency_and_the_market_fifo(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
@@ -963,6 +963,10 @@ def test_financial_submission_shares_exact_idempotency_and_the_market_fifo(
             idempotency_key="fifo-financial",
             observation_through_session=current["research_calendar"][-1],
         )
+        industry = refresh.submit_industry(
+            idempotency_key="fifo-industry",
+            observation_through_session=current["research_calendar"][-1],
+        )
 
         assert market.kind == "market"
         assert market.as_of == AS_OF.isoformat()
@@ -971,6 +975,10 @@ def test_financial_submission_shares_exact_idempotency_and_the_market_fifo(
         assert financial.as_of is None
         assert financial.observation_through_session == current["research_calendar"][-1]
         assert financial.status == "accepted"
+        assert industry.kind == "industry"
+        assert industry.as_of is None
+        assert industry.observation_through_session == current["research_calendar"][-1]
+        assert industry.status == "accepted"
         assert (
             refresh.submit_financial(
                 idempotency_key="fifo-financial",
@@ -984,19 +992,35 @@ def test_financial_submission_shares_exact_idempotency_and_the_market_fifo(
                 observation_through_session=current["research_calendar"][-2],
             )
         assert conflict.value.code == "IDEMPOTENCY_KEY_CONFLICT"
+        assert (
+            refresh.submit_industry(
+                idempotency_key="fifo-industry",
+                observation_through_session=current["research_calendar"][-1],
+            )
+            == industry
+        )
+        with pytest.raises(DataRefreshError) as industry_conflict:
+            refresh.submit_industry(
+                idempotency_key="fifo-industry",
+                observation_through_session=current["research_calendar"][-2],
+            )
+        assert industry_conflict.value.code == "IDEMPOTENCY_KEY_CONFLICT"
 
         with database.transaction() as transaction:
             rows = transaction.execute(
                 """
                 SELECT idempotency_key, kind, as_of, observation_through_session
                 FROM data.refresh_operations
-                WHERE idempotency_key IN ('fifo-market', 'fifo-financial')
+                WHERE idempotency_key IN (
+                    'fifo-market', 'fifo-financial', 'fifo-industry'
+                )
                 ORDER BY created_at, idempotency_key
                 """
             ).fetchall()
         assert [row["idempotency_key"] for row in rows] == [
             "fifo-market",
             "fifo-financial",
+            "fifo-industry",
         ]
         assert rows[0]["as_of"] == AS_OF
         assert rows[0]["observation_through_session"] is None
@@ -1004,8 +1028,17 @@ def test_financial_submission_shares_exact_idempotency_and_the_market_fifo(
         assert (
             rows[1]["observation_through_session"].isoformat() == (current["research_calendar"][-1])
         )
+        assert rows[2]["as_of"] is None
+        assert (
+            rows[2]["observation_through_session"].isoformat() == (current["research_calendar"][-1])
+        )
     finally:
-        _delete_refresh_operations(database, "fifo-market", "fifo-financial")
+        _delete_refresh_operations(
+            database,
+            "fifo-market",
+            "fifo-financial",
+            "fifo-industry",
+        )
         database.close()
 
 
@@ -1384,6 +1417,193 @@ def test_financial_infrastructure_failure_retries_then_exhausts(
         assert receipt.attempt_count == 2
     finally:
         _delete_refresh_operations(database, "financial-infrastructure-failed")
+        database.close()
+
+
+@pytest.mark.parametrize(
+    ("canonical_changed", "expected_outcome"),
+    ((True, "published"), (False, "no_change")),
+)
+def test_shared_worker_dispatches_industry_and_distinguishes_terminal_outcomes(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    canonical_changed: bool,
+    expected_outcome: str,
+) -> None:
+    database = _database(core_settings)
+    key = f"industry-{expected_outcome}"
+    try:
+        current = _twenty_session_canonical()
+        manifest = _establish_head(database, tmp_path, current)
+        target = current["research_calendar"][-1]
+        refresh = _refresh_service(database, tmp_path)
+        refresh.submit_industry(
+            idempotency_key=key,
+            observation_through_session=target,
+        )
+        received: dict[str, object] = {}
+
+        class FakeIndustryService:
+            def __init__(
+                self,
+                selected_database: object,
+                mount_root: object,
+                industry_source: object,
+                **options: object,
+            ) -> None:
+                received.update(
+                    database=selected_database,
+                    mount_root=mount_root,
+                    industry_source=industry_source,
+                    options=options,
+                )
+
+            def publish(self, **arguments: object) -> object:
+                received.update(arguments)
+                return SimpleNamespace(
+                    generation_manifest_sha256=manifest,
+                    canonical_changed=canonical_changed,
+                )
+
+        monkeypatch.setattr(
+            refresh_module,
+            "IndustryRefreshService",
+            FakeIndustryService,
+        )
+        industry_source = object()
+        selected_targets: list[str] = []
+        assert (
+            refresh.process_next(
+                RecordingRefreshSource(current),
+                benchmark_source=FixtureBenchmarkSource(),
+                industry_source=industry_source,  # type: ignore[arg-type]
+                industry_source_target_selector=selected_targets.append,
+            )
+            is True
+        )
+
+        receipt = refresh.inspect(key)
+        assert received["industry_source"] is industry_source
+        assert received["idempotency_key"] == key
+        assert received["observation_through_session"] == target
+        assert callable(received["options"]["ownership_guard"])  # type: ignore[index]
+        assert callable(received["options"]["publication_guard"])  # type: ignore[index]
+        assert selected_targets == [target]
+        assert receipt.status == "succeeded"
+        assert receipt.outcome == expected_outcome
+        overview = _overview_service(database, tmp_path).overview()
+        assert overview.last_industry_refresh_at is not None
+    finally:
+        _delete_refresh_operations(database, key)
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                UPDATE data.current_dataset_state
+                SET last_industry_refresh_at = NULL
+                WHERE singleton = 1
+                """
+            )
+        database.close()
+
+
+def test_industry_business_rejection_is_terminal_without_retry(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path)
+        refresh.submit_industry(
+            idempotency_key="industry-business-rejected",
+            observation_through_session=current["research_calendar"][-1],
+        )
+
+        class RejectingIndustryService:
+            def __init__(self, *arguments: object, **options: object) -> None:
+                del arguments, options
+
+            def publish(self, **arguments: object) -> object:
+                del arguments
+                raise refresh_module.IndustryRefreshError(
+                    "OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION"
+                )
+
+        monkeypatch.setattr(
+            refresh_module,
+            "IndustryRefreshService",
+            RejectingIndustryService,
+        )
+        with pytest.raises(DataRefreshError) as failure:
+            refresh.process_next(
+                RecordingRefreshSource(current),
+                benchmark_source=FixtureBenchmarkSource(),
+                industry_source=object(),  # type: ignore[arg-type]
+            )
+        assert failure.value.code == "OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION"
+
+        receipt = refresh.inspect("industry-business-rejected")
+        assert receipt.status == "failed"
+        assert receipt.outcome == "business_rejected"
+        assert receipt.failure_code == "OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION"
+        assert receipt.attempt_count == 1
+    finally:
+        _delete_refresh_operations(database, "industry-business-rejected")
+        database.close()
+
+
+def test_industry_infrastructure_failure_retries_then_exhausts(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path, max_attempts=2)
+        refresh.submit_industry(
+            idempotency_key="industry-infrastructure-failed",
+            observation_through_session=current["research_calendar"][-1],
+        )
+
+        class FailingIndustryService:
+            def __init__(self, *arguments: object, **options: object) -> None:
+                del arguments, options
+
+            def publish(self, **arguments: object) -> object:
+                del arguments
+                raise RuntimeError("private industry infrastructure detail")
+
+        monkeypatch.setattr(
+            refresh_module,
+            "IndustryRefreshService",
+            FailingIndustryService,
+        )
+        for expected_status in ("accepted", "failed"):
+            with pytest.raises(DataRefreshError) as failure:
+                refresh.process_next(
+                    RecordingRefreshSource(current),
+                    benchmark_source=FixtureBenchmarkSource(),
+                    industry_source=object(),  # type: ignore[arg-type]
+                )
+            assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
+            assert (
+                refresh.inspect("industry-infrastructure-failed").status
+                == expected_status
+            )
+
+        receipt = refresh.inspect("industry-infrastructure-failed")
+        assert receipt.outcome == "infrastructure_failed"
+        assert receipt.failure_code == "RETRY_EXHAUSTED"
+        assert receipt.last_failure_code == "REFRESH_INFRASTRUCTURE_FAILURE"
+        assert receipt.attempt_count == 2
+    finally:
+        _delete_refresh_operations(database, "industry-infrastructure-failed")
         database.close()
 
 

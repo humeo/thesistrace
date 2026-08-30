@@ -1,7 +1,9 @@
 # Private Data Operator
 
-The Data Operator is a deployment-private command. It is not an HTTP route or
-a Web capability, and normal API/Worker startup never runs it.
+The Data Operator command and source credentials are deployment-private. The
+singleton Operator Console and private CLI may submit and inspect the same safe
+durable Refresh receipts, but neither HTTP nor a submission command executes
+source collection or publication inline.
 
 Bootstrap is explicit and only establishes the first Head of an empty mounted
 Canonical Data Store. Freeze a timezone-aware operator instant and supply an
@@ -67,9 +69,9 @@ the manifest and its session content.
 
 ## Refresh and collection
 
-Market and Financial Refresh submission record the frozen request and return
+Market, Financial, and Industry Refresh submission record the frozen request and return
 after PostgreSQL has durably accepted it. The always-running single-slot Data
-Operator Worker later claims both kinds from one FIFO and executes the selected
+Operator Worker later claims all three kinds from one FIFO and executes the selected
 source and publication path:
 
 ```sh
@@ -140,8 +142,16 @@ thesistrace-data-operator inspect-industry-refresh \
   --idempotency-key industry-2026-08-14
 ```
 
+`refresh-industry` is submit-only: it validates the same freely entered
+`YYYY-MM-DD` Research Session and exact editable idempotency key as the
+Operator Console, writes the shared receipt, and returns before any Tushare
+call. `inspect-industry-refresh` reads that same shared safe receipt. Live or
+explicit versioned replay source selection belongs only to the always-running
+Worker (or `worker --once` qualification); the former synchronous Industry
+execution path no longer exists.
+
 The requested observation-through date must be a Research Session in the
-current Market Coverage. A successful operation replaces only the immutable
+current Market Coverage. A published operation replaces only the immutable
 `equity.industry_membership` Family and composes it with the latest Market and
 Financial Families before the one Dataset Head CAS. A concurrent Market or
 Financial publication is therefore preserved. If another Industry publication
@@ -153,7 +163,12 @@ classification. Overlapping source intervals fail the Industry operation with
 `OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION`, retain bounded diagnostics and
 source lineage, and do not create a candidate or move Dataset Head. There is no
 automatic interval closing, winning-row selection, `UNKNOWN`, override, or
-fallback. `--replay` is an explicit deterministic test input only.
+fallback. Identical Canonical Industry content completes as `no_change` without
+moving Dataset Head. Dataset-rule rejection completes as `business_rejected`;
+infrastructure loss retries the same durable operation under the shared bounded
+attempt policy and completes as `infrastructure_failed` only after no retry
+remains. Published, no-change, rejection, and failure receipts expose stable
+bounded codes rather than provider or storage details.
 
 Financial collection and refresh require the live capability report and token
 in deployment. Deterministic acceptance may replace only the remote transport

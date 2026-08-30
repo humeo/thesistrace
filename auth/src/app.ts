@@ -93,6 +93,14 @@ const operatorProofSchema = z.union([
       password: z.string().min(12).max(128),
     })
     .strict(),
+  z
+    .object({
+      idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+      observation_through_session: z.string().refine(isIsoResearchSession),
+      operation: z.literal("data.refresh.industry.submit"),
+      password: z.string().min(12).max(128),
+    })
+    .strict(),
 ]);
 const internalOperatorProofConsumptionSchema = z.union([
   z
@@ -108,6 +116,14 @@ const internalOperatorProofConsumptionSchema = z.union([
       idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       observation_through_session: z.string().refine(isIsoResearchSession),
       operation: z.literal("data.refresh.financial.submit"),
+      proof: z.string().length(80),
+    })
+    .strict(),
+  z
+    .object({
+      idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+      observation_through_session: z.string().refine(isIsoResearchSession),
+      operation: z.literal("data.refresh.industry.submit"),
       proof: z.string().length(80),
     })
     .strict(),
@@ -420,17 +436,18 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
                 password: body.password,
               }
             : body.operation === "data.refresh.financial.submit"
+              || body.operation === "data.refresh.industry.submit"
               ? {
                   idempotencyKey: body.idempotency_key,
                   observationThroughSession: body.observation_through_session,
                   operation: body.operation,
                   password: body.password,
                 }
-          : {
-              email: canonicalizeEmail(body.email),
-              operation: body.operation,
-              password: body.password,
-            },
+              : {
+                  email: canonicalizeEmail(body.email),
+                  operation: body.operation,
+                  password: body.password,
+                },
       );
       return context.json({
         expires_at: result.expiresAt,

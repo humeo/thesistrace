@@ -54,10 +54,10 @@ from thesistrace.data import (
     FinancialRefreshError,
     FinancialRefreshService,
     IndustryRefreshError,
-    IndustryRefreshService,
     RefreshOutcome,
     probe_financial_capability,
     validate_financial_refresh_request,
+    validate_industry_refresh_request,
     validate_market_refresh_request,
 )
 from thesistrace.entrypoints.schema import verify_core_schema
@@ -70,12 +70,6 @@ _emit_data_operator_event = non_blocking_operational_event_sink(
     emit_operational_event_data,
     component="data_operator",
 )
-
-
-class _UnavailableIndustrySource:
-    def collect(self, *, allowed_codes: set[str]) -> NoReturn:
-        del allowed_codes
-        raise IndustrySourceError("INDUSTRY_SOURCE_UNAVAILABLE")
 
 
 def main(arguments: list[str] | None = None) -> None:
@@ -162,7 +156,6 @@ def _run(
     industry_refresh = subcommands.add_parser("refresh-industry")
     industry_refresh.add_argument("--idempotency-key", required=True)
     industry_refresh.add_argument("--observation-through-session", required=True)
-    industry_refresh.add_argument("--replay", type=Path)
     industry_inspect = subcommands.add_parser("inspect-industry-refresh")
     industry_inspect.add_argument("--idempotency-key", required=True)
     parsed = parser.parse_args(arguments)
@@ -172,6 +165,7 @@ def _run(
 
     market_request: tuple[str, datetime] | None = None
     financial_request: tuple[str, str] | None = None
+    industry_request: tuple[str, str] | None = None
     if parsed.command == "refresh":
         market_request = validate_market_refresh_request(
             idempotency_key=parsed.idempotency_key,
@@ -179,6 +173,11 @@ def _run(
         )
     elif parsed.command == "refresh-financial":
         financial_request = validate_financial_refresh_request(
+            idempotency_key=parsed.idempotency_key,
+            observation_through_session=parsed.observation_through_session,
+        )
+    elif parsed.command == "refresh-industry":
+        industry_request = validate_industry_refresh_request(
             idempotency_key=parsed.idempotency_key,
             observation_through_session=parsed.observation_through_session,
         )
@@ -242,11 +241,22 @@ def _run(
                 idempotency_key=idempotency_key,
                 observation_through_session=observation_through_session,
             )
-        if parsed.command == "inspect-industry-refresh":
-            return IndustryRefreshService(
+        if parsed.command == "refresh-industry":
+            assert industry_request is not None
+            idempotency_key, observation_through_session = industry_request
+            return DataRefreshService(
                 database,
                 mount_root,
-                _UnavailableIndustrySource(),
+                benchmark_mount_root=benchmark_mount,
+            ).submit_industry(
+                idempotency_key=idempotency_key,
+                observation_through_session=observation_through_session,
+            )
+        if parsed.command == "inspect-industry-refresh":
+            return DataRefreshService(
+                database,
+                mount_root,
+                benchmark_mount_root=benchmark_mount,
             ).inspect(parsed.idempotency_key)
         if parsed.command == "inspect-financial-refresh":
             return DataRefreshService(
@@ -262,6 +272,7 @@ def _run(
         rate_limit_events: dict[str, list[float]] = {}
         live_provider: TushareAdapter | None = None
         financial_source_window_selector: Callable[[str, str], None] | None = None
+        industry_source_target_selector: Callable[[str], None] | None = None
         if replay is not None:
             provider = (
                 ReplayTushareRefreshBundle(replay)
@@ -272,6 +283,8 @@ def _run(
             financial_announcement_source = provider
             if isinstance(provider, ReplayTushareRefreshBundle):
                 financial_source_window_selector = provider.select_financial_window
+                industry_source_target_selector = provider.select_industry_target
+            industry_source = TushareIndustrySource(provider)
         else:
             transport, live_provider = _create_live_tushare_provider(
                 rate_limit_events=rate_limit_events,
@@ -289,6 +302,7 @@ def _run(
                 if parsed.command == "worker"
                 else None
             )
+            industry_source = TushareIndustrySource(live_provider)
         if parsed.command in {"collect-financial", "bootstrap-financial"}:
             if live_provider is None and replay is None:
                 raise FinancialCollectionError("LIVE_FINANCIAL_COLLECTION_REQUIRED")
@@ -325,23 +339,6 @@ def _run(
                 "expected_shard_count": outcome.expected_shard_count,
                 "completed_shard_count": outcome.completed_shard_count,
                 "resumed_shard_count": outcome.resumed_shard_count,
-            }
-        if parsed.command == "refresh-industry":
-            outcome = IndustryRefreshService(
-                database,
-                mount_root,
-                TushareIndustrySource(provider),
-                progress=_progress,
-            ).publish(
-                idempotency_key=parsed.idempotency_key,
-                observation_through_session=parsed.observation_through_session,
-            )
-            return {
-                "idempotency_key": outcome.idempotency_key,
-                "status": "succeeded",
-                "candidate_manifest_sha256": outcome.candidate.manifest_sha256,
-                "generation_manifest_sha256": outcome.generation_manifest_sha256,
-                "source_lineage_sha256": outcome.source_lineage_sha256,
             }
         source = TushareDataSource(
             provider=provider,
@@ -396,6 +393,8 @@ def _run(
                     financial_announcement_source=financial_announcement_source,
                     financial_source=financial_source,
                     financial_source_window_selector=financial_source_window_selector,
+                    industry_source=industry_source,
+                    industry_source_target_selector=industry_source_target_selector,
                 )
             except DataRefreshError:
                 if parsed.once:

@@ -431,6 +431,8 @@ POST /api/operator/data/refreshes/market    -> durable accepted Market operation
 GET  /api/operator/data/refreshes/market    -> exact safe Market receipt
 POST /api/operator/data/refreshes/financial -> durable accepted Financial operation
 GET  /api/operator/data/refreshes/financial -> exact safe Financial receipt
+POST /api/operator/data/refreshes/industry  -> durable accepted Industry operation
+GET  /api/operator/data/refreshes/industry  -> exact safe Industry receipt
 ```
 
 Bootstrap and work execution remain private `thesistrace-data-operator` actions.
@@ -441,7 +443,7 @@ call or publication.
 Bootstrap creates the first Core Market Data Generation and Dataset Head.
 Market, Financial, and Industry publish independent immutable Family manifests
 which are composed into one Generation behind the one mutable Dataset Head.
-Market and Financial submissions enter one global FIFO. One single-slot Data
+Market, Financial, and Industry submissions enter one global FIFO. One single-slot Data
 Operator Worker holds the live source capability, renews each claim, dispatches
 the established per-kind pipeline, and reconciles a Head publication whose
 terminal receipt was interrupted before commit.
@@ -450,6 +452,12 @@ calling Industry endpoints. Financial and Industry Refresh each build and
 validate their own candidate, recompose it with the latest unaffected Families,
 and atomically move Head only if its target Family is still current. Any
 failure leaves the previous Head readable.
+
+Industry submission freezes an explicit observation-through Research Session
+and exact idempotency key, then returns `accepted` before source work. Its safe
+receipt distinguishes `published`, `no_change`, terminal `business_rejected`,
+and terminal `infrastructure_failed`; detailed source lineage and storage
+coordinates remain private Worker recovery state.
 
 Dataset Bootstrap and Market Refresh use one Benchmark-first publication
 barrier. The Data Operator obtains Tushare `index_daily` Open Levels for

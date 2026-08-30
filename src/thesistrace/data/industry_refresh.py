@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 from psycopg.types.json import Jsonb
 
-from thesistrace._postgres import PostgresDatabase
+from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data.generation_family import MountedDatasetFamilyDescriptor
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
@@ -36,6 +37,7 @@ class IndustryRefreshOutcome:
     fingerprint: str
     candidate: MountedDatasetFamilyDescriptor
     source_lineage_sha256: str
+    canonical_changed: bool
     generation_manifest_sha256: str | None = None
 
 
@@ -48,12 +50,28 @@ class IndustryRefreshService:
         *,
         clock: Callable[[], datetime] | None = None,
         progress: Callable[[dict[str, object]], None] | None = None,
+        ownership_guard: Callable[[], None] | None = None,
+        publication_guard: (
+            Callable[
+                [PostgresTransaction, str, str, datetime],
+                AbstractContextManager[None],
+            ]
+            | None
+        ) = None,
+        publication_operation_id: str | None = None,
+        publication_lease_seconds: float = 900,
     ) -> None:
+        if publication_lease_seconds <= 0:
+            raise ValueError("Industry publication lease must be positive")
         self._database = database
         self._root = Path(mount_root).resolve()
         self._source = source
         self._clock = clock or (lambda: datetime.now(UTC))
         self._progress = progress or (lambda _event: None)
+        self._ownership_guard = ownership_guard or (lambda: None)
+        self._publication_guard = publication_guard
+        self._publication_operation_id = publication_operation_id
+        self._publication_lease_seconds = publication_lease_seconds
         self._generations = MountedGenerationStore(self._root)
         self._lifecycle = DatasetLifecycle(database, self._root)
         self._files = AddressedFileStore(self._root)
@@ -71,6 +89,7 @@ class IndustryRefreshService:
         with self._database.session_advisory_lock(
             f"industry-refresh:{idempotency_key}"
         ):
+            self._ownership_guard()
             outcome = self._existing_outcome(idempotency_key, fingerprint)
             if outcome is not None and outcome.generation_manifest_sha256 is not None:
                 return outcome
@@ -148,7 +167,8 @@ class IndustryRefreshService:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT source_generation_manifest_sha256, status
+                SELECT source_generation_manifest_sha256,
+                       prior_industry_manifest_sha256, status
                 FROM data.industry_refresh_operations
                 WHERE idempotency_key = %s FOR UPDATE
                 """,
@@ -160,6 +180,11 @@ class IndustryRefreshService:
                 raise IndustryRefreshError("INDUSTRY_REFRESH_CLAIM_CONFLICT")
             return existing
         source_generation = str(row["source_generation_manifest_sha256"])
+        prior_industry_manifest = (
+            None
+            if row["prior_industry_manifest_sha256"] is None
+            else str(row["prior_industry_manifest_sha256"])
+        )
         identities = self._generations.read_historical_ordinary_a_share_lifecycles(
             source_generation
         )
@@ -174,6 +199,7 @@ class IndustryRefreshService:
         )
         try:
             snapshot = self._source.collect(allowed_codes=set(code_by_id.values()))
+            self._ownership_guard()
             self._store_raw(snapshot.source_lineage_sha256, snapshot.raw_payload())
             candidate = self._generations.materialize_industry_candidate(
                 source_generation,
@@ -200,6 +226,7 @@ class IndustryRefreshService:
             self._fail(key, code)
             self._failed_progress(key, code)
             raise IndustryRefreshError(code) from error
+        self._ownership_guard()
         finished_at = self._validated_clock()
         with self._database.transaction() as transaction:
             changed = transaction.execute(
@@ -234,6 +261,7 @@ class IndustryRefreshService:
             fingerprint=fingerprint,
             candidate=candidate,
             source_lineage_sha256=snapshot.source_lineage_sha256,
+            canonical_changed=(candidate.manifest_sha256 != prior_industry_manifest),
         )
 
     def _publish_candidate(
@@ -243,87 +271,117 @@ class IndustryRefreshService:
         reconciled = self._reconcile_publication(outcome)
         if reconciled is not None:
             return reconciled
-        with self._database.session_advisory_lock("industry-publication"):
-            reconciled = self._reconcile_publication(outcome)
-            if reconciled is not None:
-                return reconciled
-            operation = self.inspect(outcome.idempotency_key)
-            prior = operation["prior_industry_manifest_sha256"]
-            for attempt in range(4):
-                current = self._lifecycle.current_pointer()
-                if current is None:
-                    raise IndustryRefreshError("INDUSTRY_DATASET_NOT_READY")
-                descriptor = self._generations.inspect_root(
-                    current.generation_manifest_sha256
+        self._ownership_guard()
+        operation = self.inspect(outcome.idempotency_key)
+        prior = operation["prior_industry_manifest_sha256"]
+        if not outcome.canonical_changed:
+            current = self._lifecycle.current_pointer()
+            if current is None:
+                raise IndustryRefreshError("INDUSTRY_DATASET_NOT_READY")
+            descriptor = self._generations.inspect_root(
+                current.generation_manifest_sha256
+            )
+            if _industry_manifest(descriptor.families) != prior:
+                self._fail_publication_target(
+                    outcome.idempotency_key,
+                    "INDUSTRY_TARGET_CHANGED",
                 )
-                if descriptor.industry_publication_coordinate == outcome.fingerprint:
-                    self._complete_publication(
-                        outcome,
-                        descriptor.manifest_sha256,
-                        self._validated_clock(),
-                    )
-                    return replace(
-                        outcome,
-                        generation_manifest_sha256=descriptor.manifest_sha256,
-                    )
-                if _industry_manifest(descriptor.families) != prior:
-                    self._fail_publication_target(
-                        outcome.idempotency_key,
-                        "INDUSTRY_TARGET_CHANGED",
-                    )
-                    raise IndustryRefreshError("INDUSTRY_TARGET_CHANGED")
-                prepared_at = self._validated_clock()
-                operation_id = _publication_operation_id(outcome.idempotency_key, attempt)
-                with mounted_data_mutation_lock(self._database):
-                    composed = self._generations.compose_industry_candidate(
-                        current.generation_manifest_sha256,
-                        outcome.candidate.manifest_sha256,
-                        prepared_at=prepared_at,
-                        publication_coordinate=outcome.fingerprint,
-                    )
-                    self._record_publication_candidate(
-                        outcome.idempotency_key,
-                        composed.manifest_sha256,
-                        prepared_at,
-                    )
-                    self._lifecycle.protect_prevalidated_candidate(
-                        operation_id=operation_id,
-                        generation_manifest_sha256=composed.manifest_sha256,
-                        lease_seconds=900,
-                    )
-                    try:
-                        moved = self._lifecycle.compare_and_swap_head(
-                            expected_generation_manifest_sha256=(
-                                current.generation_manifest_sha256
-                            ),
-                            candidate_generation_manifest_sha256=(
-                                composed.manifest_sha256
-                            ),
-                            operation_id=operation_id,
-                            prepared_at=prepared_at,
-                            industry_publication_key=outcome.idempotency_key,
-                        )
-                    except DatasetHeadConflict:
-                        self._lifecycle.release_candidate(operation_id=operation_id)
-                        continue
+                raise IndustryRefreshError("INDUSTRY_TARGET_CHANGED")
+            self._ownership_guard()
+            self._complete_publication(
+                outcome,
+                current.generation_manifest_sha256,
+                self._validated_clock(),
+            )
+            return replace(
+                outcome,
+                generation_manifest_sha256=current.generation_manifest_sha256,
+            )
+        for attempt in range(4):
+            current = self._lifecycle.current_pointer()
+            if current is None:
+                raise IndustryRefreshError("INDUSTRY_DATASET_NOT_READY")
+            descriptor = self._generations.inspect_root(
+                current.generation_manifest_sha256
+            )
+            if descriptor.industry_publication_coordinate == outcome.fingerprint:
                 self._complete_publication(
                     outcome,
-                    moved.generation_manifest_sha256,
-                    prepared_at,
-                )
-                self._progress(
-                    {
-                        "event": "industry_refresh",
-                        "phase": "publication",
-                        "status": "completed",
-                        "idempotency_key": outcome.idempotency_key,
-                        "generation_manifest_sha256": moved.generation_manifest_sha256,
-                    }
+                    descriptor.manifest_sha256,
+                    self._validated_clock(),
                 )
                 return replace(
                     outcome,
-                    generation_manifest_sha256=moved.generation_manifest_sha256,
+                    generation_manifest_sha256=descriptor.manifest_sha256,
                 )
+            if _industry_manifest(descriptor.families) != prior:
+                self._fail_publication_target(
+                    outcome.idempotency_key,
+                    "INDUSTRY_TARGET_CHANGED",
+                )
+                raise IndustryRefreshError("INDUSTRY_TARGET_CHANGED")
+            prepared_at = self._validated_clock()
+            operation_id = (
+                _publication_operation_id(outcome.idempotency_key, attempt)
+                if self._publication_operation_id is None
+                else f"{self._publication_operation_id}:{attempt}"
+            )
+            with mounted_data_mutation_lock(self._database):
+                composed = self._generations.compose_industry_candidate(
+                    current.generation_manifest_sha256,
+                    outcome.candidate.manifest_sha256,
+                    prepared_at=prepared_at,
+                    publication_coordinate=outcome.fingerprint,
+                )
+                self._record_publication_candidate(
+                    outcome.idempotency_key,
+                    composed.manifest_sha256,
+                    prepared_at,
+                )
+                self._lifecycle.protect_prevalidated_candidate(
+                    operation_id=operation_id,
+                    generation_manifest_sha256=composed.manifest_sha256,
+                    lease_seconds=self._publication_lease_seconds,
+                )
+                self._ownership_guard()
+                try:
+                    moved = self._lifecycle.compare_and_swap_head(
+                        expected_generation_manifest_sha256=(
+                            current.generation_manifest_sha256
+                        ),
+                        candidate_generation_manifest_sha256=(
+                            composed.manifest_sha256
+                        ),
+                        operation_id=operation_id,
+                        prepared_at=prepared_at,
+                        industry_publication_key=outcome.idempotency_key,
+                        publication_guard=self._selected_publication_guard(
+                            current.generation_manifest_sha256,
+                            composed.manifest_sha256,
+                            prepared_at,
+                        ),
+                    )
+                except DatasetHeadConflict:
+                    self._lifecycle.release_candidate(operation_id=operation_id)
+                    continue
+            self._complete_publication(
+                outcome,
+                moved.generation_manifest_sha256,
+                prepared_at,
+            )
+            self._progress(
+                {
+                    "event": "industry_refresh",
+                    "phase": "publication",
+                    "status": "completed",
+                    "idempotency_key": outcome.idempotency_key,
+                    "generation_manifest_sha256": moved.generation_manifest_sha256,
+                }
+            )
+            return replace(
+                outcome,
+                generation_manifest_sha256=moved.generation_manifest_sha256,
+            )
         raise IndustryRefreshError("INDUSTRY_HEAD_CHANGED_REPEATEDLY")
 
     def _reconcile_publication(
@@ -338,14 +396,21 @@ class IndustryRefreshService:
         if current is None:
             return None
         descriptor = self._generations.inspect_root(current.generation_manifest_sha256)
-        if descriptor.industry_publication_coordinate != outcome.fingerprint:
+        publication_matches = (
+            descriptor.industry_publication_coordinate == outcome.fingerprint
+            if outcome.canonical_changed
+            else _industry_manifest(descriptor.families)
+            == outcome.candidate.manifest_sha256
+        )
+        if not publication_matches:
             return None
         completed_at = self._validated_clock()
-        self._record_head_moved_if_missing(
-            outcome.idempotency_key,
-            current.generation_manifest_sha256,
-            completed_at,
-        )
+        if outcome.canonical_changed:
+            self._record_head_moved_if_missing(
+                outcome.idempotency_key,
+                current.generation_manifest_sha256,
+                completed_at,
+            )
         self._complete_publication(
             outcome,
             current.generation_manifest_sha256,
@@ -365,6 +430,7 @@ class IndustryRefreshService:
             row = transaction.execute(
                 """
                 SELECT fingerprint, status, failure_code,
+                       prior_industry_manifest_sha256,
                        candidate_manifest_sha256, source_lineage_sha256,
                        published_generation_manifest_sha256
                 FROM data.industry_refresh_operations
@@ -388,12 +454,40 @@ class IndustryRefreshService:
             fingerprint=fingerprint,
             candidate=candidate,
             source_lineage_sha256=str(row["source_lineage_sha256"]),
+            canonical_changed=(
+                candidate.manifest_sha256
+                != (
+                    None
+                    if row["prior_industry_manifest_sha256"] is None
+                    else str(row["prior_industry_manifest_sha256"])
+                )
+            ),
             generation_manifest_sha256=(
                 None
                 if row["published_generation_manifest_sha256"] is None
                 else str(row["published_generation_manifest_sha256"])
             ),
         )
+
+    def _selected_publication_guard(
+        self,
+        expected_manifest: str,
+        candidate_manifest: str,
+        prepared_at: datetime,
+    ) -> Callable[[PostgresTransaction], AbstractContextManager[None]] | None:
+        selected = self._publication_guard
+        if selected is None:
+            return None
+
+        def guard(transaction: PostgresTransaction) -> AbstractContextManager[None]:
+            return selected(
+                transaction,
+                expected_manifest,
+                candidate_manifest,
+                prepared_at,
+            )
+
+        return guard
 
     def _record_publication_candidate(
         self,
@@ -442,48 +536,18 @@ class IndustryRefreshService:
         generation_manifest_sha256: str,
         completed_at: datetime,
     ) -> None:
-        snapshot = {
-            "candidate_manifest_sha256": outcome.candidate.manifest_sha256,
-            "source_lineage_sha256": outcome.source_lineage_sha256,
-            "family_id": outcome.candidate.family_id,
-            "coverage": outcome.candidate.dataset_coverage,
-        }
-        with self._database.transaction() as transaction:
-            changed = transaction.execute(
-                """
-                UPDATE data.industry_refresh_operations
-                SET published_generation_manifest_sha256 = %s,
-                    published_at = %s, published_outcome = %s,
-                    retention_released_at = COALESCE(retention_released_at, %s),
-                    updated_at = %s
-                WHERE idempotency_key = %s AND status = 'succeeded'
-                  AND published_generation_manifest_sha256 IS NULL
-                """,
-                (
-                    generation_manifest_sha256,
-                    completed_at,
-                    Jsonb(snapshot),
-                    completed_at,
-                    completed_at,
-                    outcome.idempotency_key,
-                ),
-            ).rowcount
-            if changed == 1:
-                transaction.execute(
-                    """
-                    UPDATE data.current_dataset_state
-                    SET last_industry_refresh_at = GREATEST(
-                        last_industry_refresh_at, %s
-                    )
-                    WHERE singleton = 1
-                    """,
-                    (completed_at,),
-                )
-        if changed == 0:
-            existing = self.inspect(outcome.idempotency_key)
-            if existing["published_generation_manifest_sha256"] == generation_manifest_sha256:
-                return
-        if changed != 1:
+        self._ownership_guard()
+        reconciled = reconcile_industry_publication(
+            self._database,
+            self._root,
+            idempotency_key=outcome.idempotency_key,
+            generation_manifest_sha256=generation_manifest_sha256,
+            completed_at=completed_at,
+        )
+        if reconciled != replace(
+            outcome,
+            generation_manifest_sha256=generation_manifest_sha256,
+        ):
             raise IndustryRefreshError("INDUSTRY_PUBLICATION_COMPLETION_CONFLICT")
 
     def _fail(
@@ -569,6 +633,125 @@ def _industry_manifest(families: tuple[MountedDatasetFamilyDescriptor, ...]) -> 
     )
 
 
+def reconcile_industry_publication(
+    database: PostgresDatabase,
+    mount_root: Path | str,
+    *,
+    idempotency_key: str,
+    generation_manifest_sha256: str,
+    completed_at: datetime,
+) -> IndustryRefreshOutcome:
+    generations = MountedGenerationStore(mount_root)
+    descriptor = generations.inspect_root(generation_manifest_sha256)
+    with database.transaction() as transaction:
+        row = transaction.execute(
+            """
+            SELECT fingerprint, status, prior_industry_manifest_sha256,
+                   candidate_manifest_sha256, source_lineage_sha256,
+                   published_generation_manifest_sha256
+            FROM data.industry_refresh_operations
+            WHERE idempotency_key = %s
+            """,
+            (idempotency_key,),
+        ).fetchone()
+    if (
+        row is None
+        or row["status"] != "succeeded"
+        or row["candidate_manifest_sha256"] is None
+        or row["source_lineage_sha256"] is None
+    ):
+        raise IndustryRefreshError("INDUSTRY_PUBLICATION_COMPLETION_CONFLICT")
+    candidate = generations.open_industry_candidate(
+        str(row["candidate_manifest_sha256"])
+    )
+    prior = (
+        None
+        if row["prior_industry_manifest_sha256"] is None
+        else str(row["prior_industry_manifest_sha256"])
+    )
+    canonical_changed = candidate.manifest_sha256 != prior
+    if canonical_changed:
+        publication_matches = (
+            descriptor.industry_publication_coordinate == str(row["fingerprint"])
+        )
+    else:
+        publication_matches = (
+            _industry_manifest(descriptor.families) == candidate.manifest_sha256
+        )
+    if not publication_matches:
+        raise IndustryRefreshError("INDUSTRY_PUBLICATION_COMPLETION_CONFLICT")
+    existing_generation = row["published_generation_manifest_sha256"]
+    if (
+        existing_generation is not None
+        and str(existing_generation) != generation_manifest_sha256
+    ):
+        raise IndustryRefreshError("INDUSTRY_PUBLICATION_COMPLETION_CONFLICT")
+    snapshot = {
+        "candidate_manifest_sha256": candidate.manifest_sha256,
+        "source_lineage_sha256": str(row["source_lineage_sha256"]),
+        "family_id": candidate.family_id,
+        "coverage": candidate.dataset_coverage,
+        "canonical_changed": canonical_changed,
+    }
+    with database.transaction() as transaction:
+        changed = transaction.execute(
+            """
+            UPDATE data.industry_refresh_operations
+            SET published_generation_manifest_sha256 = %s,
+                published_at = %s, published_outcome = %s,
+                retention_released_at = COALESCE(retention_released_at, %s),
+                updated_at = %s
+            WHERE idempotency_key = %s AND status = 'succeeded'
+              AND published_generation_manifest_sha256 IS NULL
+            """,
+            (
+                generation_manifest_sha256,
+                completed_at,
+                Jsonb(snapshot),
+                completed_at,
+                completed_at,
+                idempotency_key,
+            ),
+        ).rowcount
+        if changed == 0:
+            concurrent = transaction.execute(
+                """
+                SELECT published_generation_manifest_sha256
+                FROM data.industry_refresh_operations
+                WHERE idempotency_key = %s
+                FOR UPDATE
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if (
+                concurrent is None
+                or concurrent["published_generation_manifest_sha256"] is None
+                or str(concurrent["published_generation_manifest_sha256"])
+                != generation_manifest_sha256
+            ):
+                raise IndustryRefreshError(
+                    "INDUSTRY_PUBLICATION_COMPLETION_CONFLICT"
+                )
+        transaction.execute(
+            """
+            UPDATE data.current_dataset_state
+            SET last_industry_refresh_at = GREATEST(
+                last_industry_refresh_at, %s
+            )
+            WHERE singleton = 1
+            """,
+            (completed_at,),
+        )
+    return IndustryRefreshOutcome(
+        idempotency_key=idempotency_key,
+        fingerprint=str(row["fingerprint"]),
+        candidate=candidate,
+        source_lineage_sha256=str(row["source_lineage_sha256"]),
+        canonical_changed=canonical_changed,
+        generation_manifest_sha256=generation_manifest_sha256,
+    )
+
+
 def _publication_operation_id(idempotency_key: str, attempt: int) -> str:
     identity = hashlib.sha256(f"{idempotency_key}:{attempt}".encode()).hexdigest()[:32]
     return f"industry-refresh:{identity}"
@@ -612,4 +795,5 @@ __all__ = (
     "IndustryRefreshOutcome",
     "IndustryRefreshService",
     "IndustrySource",
+    "reconcile_industry_publication",
 )

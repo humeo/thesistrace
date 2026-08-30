@@ -228,6 +228,7 @@ class ReplayTushareRefreshBundle:
             raise ValueError("Tushare refresh replay bundle is empty")
         self._providers: dict[tuple[date, date], ReplayTushareProvider] = {}
         self._financial_providers: dict[tuple[date, date], ReplayTushareProvider] = {}
+        self._industry_providers: dict[date, ReplayTushareProvider] = {}
         self._active: ReplayTushareProvider | None = None
         for path in paths:
             provider = ReplayTushareProvider(path)
@@ -248,6 +249,15 @@ class ReplayTushareRefreshBundle:
                         "Tushare refresh replay bundle contains a duplicate Financial window"
                     )
                 self._financial_providers[financial_window] = provider
+            if provider._snapshot.get("industry_classification") and provider._snapshot.get(
+                "industry_membership"
+            ):
+                industry_target = provider._request_end
+                if industry_target in self._industry_providers:
+                    raise ValueError(
+                        "Tushare refresh replay bundle contains a duplicate Industry target"
+                    )
+                self._industry_providers[industry_target] = provider
 
     def collect_bootstrap_snapshot(
         self,
@@ -306,6 +316,17 @@ class ReplayTushareRefreshBundle:
     def select_financial_window(self, start_date: str, end_date: str) -> None:
         """Select the exact persisted Financial discovery window before resuming."""
         self._active = self._select_financial_provider(start_date, end_date)
+
+    def select_industry_target(self, observation_through_session: str) -> None:
+        """Select the exact replay carrying one Industry observation target."""
+        try:
+            target = date.fromisoformat(observation_through_session)
+        except ValueError as error:
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0) from error
+        provider = self._industry_providers.get(target)
+        if provider is None:
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
+        self._active = provider
 
     def _select_financial_provider(
         self,

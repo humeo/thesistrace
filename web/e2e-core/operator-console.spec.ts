@@ -26,6 +26,10 @@ test("only the singleton Operator can open and read the Operator Console", async
     idempotencyKey: string | null;
     observationThroughSession: string | null;
   }>> = [];
+  const industryStatusRequests: Array<Readonly<{
+    idempotencyKey: string | null;
+    observationThroughSession: string | null;
+  }>> = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
     const path = url.pathname;
@@ -41,6 +45,12 @@ test("only the singleton Operator can open and read the Operator Console", async
         observationThroughSession: url.searchParams.get("observation_through_session"),
       });
     }
+    if (request.method() === "GET" && path === "/api/operator/data/refreshes/industry") {
+      industryStatusRequests.push({
+        idempotencyKey: url.searchParams.get("idempotency_key"),
+        observationThroughSession: url.searchParams.get("observation_through_session"),
+      });
+    }
     if (
       request.method() === "POST"
       && (
@@ -49,6 +59,7 @@ test("only the singleton Operator can open and read the Operator Console", async
         || path === "/api/auth/operator/researchers/sessions/revoke"
         || path === "/api/operator/data/refreshes/market"
         || path === "/api/operator/data/refreshes/financial"
+        || path === "/api/operator/data/refreshes/industry"
       )
     ) {
       operatorMutationRequests.push({ body: request.postData() ?? "", path });
@@ -945,6 +956,155 @@ test("only the singleton Operator can open and read the Operator Console", async
   expect(financialMutation?.body).not.toContain(browserPassword);
   resetAuthRateLimits();
 
+  const industryRefreshSection = page.locator(
+    'section[aria-labelledby="operator-industry-refresh-heading"]',
+  );
+  const industryTarget = industryRefreshSection.getByLabel(
+    "Observation-through Research Session",
+  );
+  const industryKeyInput = industryRefreshSection.getByLabel("Idempotency key");
+  const industryReview = industryRefreshSection.getByRole("button", {
+    name: "Review Refresh",
+  });
+  await expect(industryTarget).toHaveAttribute("type", "text");
+  await expect(industryKeyInput).toHaveValue(/^industry-\d{8}T\d{6}Z$/);
+  const industryTargetSession = "2026-08-14";
+  const industryKey = "browser-industry-refresh-20260814";
+  await industryTarget.fill("0000-01-01");
+  await industryReview.click();
+  await expect(industryRefreshSection.getByRole("alert")).toContainText(
+    "exactly as accepted by the CLI",
+  );
+  await expect(page.getByRole("dialog", { name: "Submit Industry Refresh?" }))
+    .toHaveCount(0);
+  await industryTarget.fill(industryTargetSession);
+  await industryKeyInput.fill(industryKey);
+  await industryReview.click();
+  let industryConfirmation = page.getByRole("dialog", {
+    name: "Submit Industry Refresh?",
+  });
+  await expect(industryConfirmation).toContainText("Industry");
+  await expect(industryConfirmation).toContainText(industryTargetSession);
+  await expect(industryConfirmation).toContainText(industryKey);
+  await expect(industryConfirmation).toContainText("shared durable FIFO");
+  const industryPassword = industryConfirmation.getByLabel("Current password");
+  await expect(industryPassword).toBeFocused();
+  await industryPassword.fill(browserPassword);
+  await industryPassword.press("Enter");
+  await expect(industryConfirmation).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Industry Refresh accepted" }))
+    .toBeVisible({ timeout: 10_000 });
+  const industryReceipt = page.locator("section.operator-refresh-receipt").filter({
+    hasText: industryKey,
+  });
+  await expect(page.getByRole("heading", { name: "Industry data published" }))
+    .toBeVisible({ timeout: 30_000 });
+  await expect(industryReceipt.getByText("Published", { exact: true })).toBeVisible();
+  await expect(
+    industryReceipt
+      .locator("dt", { hasText: /^Observation through$/ })
+      .locator("..")
+      .locator("dd"),
+  ).toHaveText(industryTargetSession);
+  expect(industryStatusRequests).toContainEqual({
+    idempotencyKey: industryKey,
+    observationThroughSession: industryTargetSession,
+  });
+  const industryProof = operatorMutationRequests.find((request) => {
+    if (request.path !== "/api/auth/operator/proofs") return false;
+    const body = JSON.parse(request.body) as { operation?: unknown };
+    return body.operation === "data.refresh.industry.submit";
+  });
+  expect(JSON.parse(industryProof?.body ?? "{}")).toEqual({
+    idempotency_key: industryKey,
+    observation_through_session: industryTargetSession,
+    operation: "data.refresh.industry.submit",
+    password: browserPassword,
+  });
+  const industryMutation = operatorMutationRequests.find(
+    (request) => request.path === "/api/operator/data/refreshes/industry",
+  );
+  expect(JSON.parse(industryMutation?.body ?? "{}")).toEqual({
+    idempotency_key: industryKey,
+    observation_through_session: industryTargetSession,
+    proof: expect.any(String),
+  });
+  expect(industryMutation?.body).not.toContain(browserPassword);
+  resetAuthRateLimits();
+
+  const industryNoChangeKey = "browser-industry-no-change-20260814";
+  await industryKeyInput.fill(industryNoChangeKey);
+  await industryReview.click();
+  industryConfirmation = page.getByRole("dialog", {
+    name: "Submit Industry Refresh?",
+  });
+  await industryConfirmation.getByLabel("Current password").fill(browserPassword);
+  await industryConfirmation.getByLabel("Current password").press("Enter");
+  await expect(industryConfirmation).toHaveCount(0);
+  const industryNoChangeReceipt = page.locator("section.operator-refresh-receipt").filter({
+    hasText: industryNoChangeKey,
+  });
+  await expect(page.getByRole("heading", { name: "Industry Refresh completed" }))
+    .toBeVisible({ timeout: 30_000 });
+  await expect(industryNoChangeReceipt.getByText("No change", { exact: true }))
+    .toBeVisible();
+  resetAuthRateLimits();
+
+  const industryRejectedKey = "browser-industry-business-rejected";
+  const industryRejectedHandler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    if (body.idempotency_key !== industryRejectedKey) {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      body: JSON.stringify({
+        attempt_count: 1,
+        data_through_session: null,
+        failure_code: "OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION",
+        idempotency_key: industryRejectedKey,
+        kind: "industry",
+        last_failure_code: "OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION",
+        last_refresh_at: null,
+        observation_through_session: industryTargetSession,
+        outcome: "business_rejected",
+        status: "failed",
+      }),
+      contentType: "application/json",
+      status: 202,
+    });
+  };
+  await page.route(
+    "**/api/operator/data/refreshes/industry",
+    industryRejectedHandler,
+  );
+  await industryKeyInput.fill(industryRejectedKey);
+  await industryReview.click();
+  industryConfirmation = page.getByRole("dialog", {
+    name: "Submit Industry Refresh?",
+  });
+  await industryConfirmation.getByLabel("Current password").fill(browserPassword);
+  await industryConfirmation.getByLabel("Current password").press("Enter");
+  await expect(industryConfirmation).toHaveCount(0);
+  const industryRejectedReceipt = page.locator("section.operator-refresh-receipt").filter({
+    hasText: industryRejectedKey,
+  });
+  await expect(page.getByRole("heading", { name: "Industry Refresh rejected" }))
+    .toBeVisible();
+  await expect(industryRejectedReceipt.getByText("Rejected", { exact: true }))
+    .toBeVisible();
+  await expect(industryRejectedReceipt).toContainText("will not retry");
+  await page.unroute(
+    "**/api/operator/data/refreshes/industry",
+    industryRejectedHandler,
+  );
+  resetAuthRateLimits();
+
   const droppedFinancialKey = "browser-financial-dropped-after-acceptance";
   let markFinancialResponseDropped = (): void => {};
   const financialResponseDropped = new Promise<void>((resolve) => {
@@ -1501,6 +1661,15 @@ test("only the singleton Operator can open and read the Operator Console", async
       },
     ],
     [
+      "/api/auth/operator/proofs",
+      {
+        idempotency_key: "ordinary-denied-industry-refresh",
+        observation_through_session: "2026-08-11",
+        operation: "data.refresh.industry.submit",
+        password: browserPassword,
+      },
+    ],
+    [
       "/api/auth/operator/researchers/sessions/revoke",
       { proof: oldConsoleToken, researcher_id: deniedResearcher.id },
     ],
@@ -1561,6 +1730,26 @@ test("only the singleton Operator can open and read the Operator Console", async
   );
   expect(deniedFinancialMutation.status()).toBe(404);
   expect(await deniedFinancialMutation.text()).toBe("");
+  const deniedIndustryInspection = await page.request.get(
+    "/api/operator/data/refreshes/industry?"
+    + "idempotency_key=ordinary-denied-industry-refresh&"
+    + "observation_through_session=2026-08-11",
+  );
+  expect(deniedIndustryInspection.status()).toBe(404);
+  expect(await deniedIndustryInspection.text()).toBe("");
+  const deniedIndustryMutation = await page.request.post(
+    "/api/operator/data/refreshes/industry",
+    {
+      data: {
+        idempotency_key: "ordinary-denied-industry-refresh",
+        observation_through_session: "2026-08-11",
+        proof: oldConsoleToken,
+      },
+      headers: sameOriginHeaders(),
+    },
+  );
+  expect(deniedIndustryMutation.status()).toBe(404);
+  expect(await deniedIndustryMutation.text()).toBe("");
   const deniedDocument = await page.goto("/operator/researchers");
   expect(deniedDocument?.status()).toBe(404);
   expect(await deniedDocument?.text()).toBe("");

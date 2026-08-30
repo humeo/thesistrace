@@ -273,6 +273,39 @@ describe.sequential("Auth Operator Proof", () => {
     ).rejects.toEqual(new OperatorProofInvalidError());
   });
 
+  it("binds one Industry submission proof to the exact Session and key", async () => {
+    const proofService = service();
+    const request = {
+      idempotencyKey: "industry-20260814-custom",
+      observationThroughSession: "2026-08-14",
+      operation: "data.refresh.industry.submit" as const,
+    };
+    const confirmed = await proofService.confirm(principal(), {
+      ...request,
+      password,
+    });
+
+    await expect(
+      proofService.consumeExternal(principal(), {
+        ...request,
+        observationThroughSession: "2026-08-13",
+        proof: confirmed.proof,
+      }),
+    ).rejects.toEqual(new OperatorProofInvalidError());
+    await expect(
+      proofService.consumeExternal(principal(), {
+        ...request,
+        proof: confirmed.proof,
+      }),
+    ).resolves.toBe("consumed");
+    await expect(
+      proofService.consumeExternal(principal(), {
+        ...request,
+        proof: confirmed.proof,
+      }),
+    ).resolves.toBe("duplicate");
+  });
+
   it("starts the lifetime after credential locking and rejects expiry reached behind a proof lock", async () => {
     const proofService = service();
     const credentialBlocker = await owner.connect();

@@ -57,7 +57,8 @@ export type OperatorProofOperation =
   | OperatorInvitationProofOperation
   | "researcher.sessions.revoke"
   | "data.refresh.market.submit"
-  | "data.refresh.financial.submit";
+  | "data.refresh.financial.submit"
+  | "data.refresh.industry.submit";
 
 export type OperatorProofRequest =
   | Readonly<{
@@ -82,6 +83,13 @@ export type OperatorProofRequest =
       idempotencyKey: string;
       observationThroughSession: string;
       operation: "data.refresh.financial.submit";
+      researcherId?: never;
+    }>
+  | Readonly<{
+      email?: never;
+      idempotencyKey: string;
+      observationThroughSession: string;
+      operation: "data.refresh.industry.submit";
       researcherId?: never;
     }>;
 
@@ -529,7 +537,10 @@ function operatorRequestHash(request: OperatorProofRequest): Buffer {
       version: 1,
     }));
   }
-  if (request.operation === "data.refresh.financial.submit") {
+  if (
+    request.operation === "data.refresh.financial.submit"
+    || request.operation === "data.refresh.industry.submit"
+  ) {
     return sha256(JSON.stringify({
       idempotency_key: request.idempotencyKey,
       observation_through_session: request.observationThroughSession,
@@ -565,7 +576,10 @@ function normalizeProofRequest(request: OperatorProofRequest): OperatorProofRequ
       operation: request.operation,
     };
   }
-  if (request.operation === "data.refresh.financial.submit") {
+  if (
+    request.operation === "data.refresh.financial.submit"
+    || request.operation === "data.refresh.industry.submit"
+  ) {
     if (
       !isIsoResearchSession(request.observationThroughSession)
       || !isMarketRefreshIdempotencyKey(request.idempotencyKey)

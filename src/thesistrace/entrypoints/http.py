@@ -48,6 +48,7 @@ from thesistrace.data import (
     DatasetOverviewService,
     RefreshOutcome,
     validate_financial_refresh_request,
+    validate_industry_refresh_request,
     validate_market_refresh_request,
 )
 from thesistrace.entrypoints.alpha_http import install_alpha_http
@@ -183,6 +184,37 @@ class FinancialRefreshOperation(BaseModel):
         | None
     )
     pending_instrument_count: int | None = Field(default=None, ge=0)
+    status: Literal["accepted", "running", "succeeded", "failed"]
+
+
+class IndustryRefreshSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    idempotency_key: str = Field(min_length=1, max_length=512)
+    observation_through_session: str = Field(min_length=10, max_length=10)
+    proof: str = Field(min_length=80, max_length=80)
+
+
+class IndustryRefreshOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    attempt_count: int = Field(ge=0)
+    data_through_session: str | None
+    failure_code: str | None
+    idempotency_key: str
+    kind: Literal["industry"]
+    last_failure_code: str | None
+    last_refresh_at: datetime | None
+    observation_through_session: str
+    outcome: (
+        Literal[
+            "published",
+            "no_change",
+            "business_rejected",
+            "infrastructure_failed",
+        ]
+        | None
+    )
     status: Literal["accepted", "running", "succeeded", "failed"]
 
 
@@ -642,6 +674,91 @@ def create_app(
                 content={"code": "IDEMPOTENCY_KEY_CONFLICT"},
             )
         return _financial_refresh_operation(outcome)
+
+    @app.post(
+        "/api/operator/data/refreshes/industry",
+        response_model=IndustryRefreshOperation,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def submit_industry_refresh(
+        request: Request,
+        command: IndustryRefreshSubmission,
+    ) -> IndustryRefreshOperation | Response:
+        try:
+            idempotency_key, target = validate_industry_refresh_request(
+                idempotency_key=command.idempotency_key,
+                observation_through_session=command.observation_through_session,
+            )
+        except DataRefreshError:
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"code": "OPERATOR_REQUEST_INVALID"},
+            )
+        authorizer = _operator_authorizer(request)
+        if authorizer is None:
+            return _auth_unavailable_response()
+        try:
+            await authorizer.consume_industry_refresh_proof(
+                request.headers.get("cookie"),
+                idempotency_key=idempotency_key,
+                observation_through_session=command.observation_through_session,
+                proof=command.proof,
+            )
+        except OperatorAccessNotFound:
+            return Response(status_code=status.HTTP_404_NOT_FOUND)
+        except InvalidOperatorProof:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"code": "OPERATOR_PROOF_INVALID"},
+            )
+        except AuthSessionUnavailable:
+            return _auth_unavailable_response()
+        try:
+            outcome = await run_in_threadpool(
+                _runtime(request).data_refreshes.submit_industry,
+                idempotency_key=idempotency_key,
+                observation_through_session=target,
+            )
+        except DataRefreshError as error:
+            if error.code in {"IDEMPOTENCY_KEY_CONFLICT", "DATA_NOT_READY"}:
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content={"code": error.code},
+                )
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"code": "OPERATOR_REQUEST_INVALID"},
+            )
+        return _industry_refresh_operation(outcome)
+
+    @app.get(
+        "/api/operator/data/refreshes/industry",
+        response_model=IndustryRefreshOperation,
+    )
+    def inspect_industry_refresh(
+        request: Request,
+        idempotency_key: str = Query(min_length=1, max_length=512),
+        observation_through_session: str = Query(min_length=10, max_length=10),
+    ) -> IndustryRefreshOperation | Response:
+        try:
+            normalized_key, target = validate_industry_refresh_request(
+                idempotency_key=idempotency_key,
+                observation_through_session=observation_through_session,
+            )
+            outcome = _runtime(request).data_refreshes.inspect(normalized_key)
+        except DataRefreshError as error:
+            if error.code == "REFRESH_NOT_FOUND":
+                return Response(status_code=status.HTTP_404_NOT_FOUND)
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"code": "OPERATOR_REQUEST_INVALID"},
+            )
+        if outcome.kind != "industry" or outcome.observation_through_session != target:
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={"code": "IDEMPOTENCY_KEY_CONFLICT"},
+            )
+        return _industry_refresh_operation(outcome)
 
     @app.post(
         "/api/researcher/bootstrap",
@@ -1132,6 +1249,23 @@ def _financial_refresh_operation(outcome: RefreshOutcome) -> FinancialRefreshOpe
         observation_through_session=outcome.observation_through_session,
         outcome=outcome.outcome,  # type: ignore[arg-type]
         pending_instrument_count=outcome.pending_instrument_count,
+        status=outcome.status,  # type: ignore[arg-type]
+    )
+
+
+def _industry_refresh_operation(outcome: RefreshOutcome) -> IndustryRefreshOperation:
+    if outcome.kind != "industry" or outcome.observation_through_session is None:
+        raise DataRefreshError("REFRESH_RECEIPT_INVALID")
+    return IndustryRefreshOperation(
+        attempt_count=outcome.attempt_count,
+        data_through_session=outcome.data_through_session,
+        failure_code=outcome.failure_code,
+        idempotency_key=outcome.idempotency_key,
+        kind="industry",
+        last_failure_code=outcome.last_failure_code,
+        last_refresh_at=outcome.last_refresh_at,
+        observation_through_session=outcome.observation_through_session,
+        outcome=outcome.outcome,  # type: ignore[arg-type]
         status=outcome.status,  # type: ignore[arg-type]
     )
 

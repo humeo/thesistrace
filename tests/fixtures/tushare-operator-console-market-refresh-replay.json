@@ -1080,6 +1080,14 @@
         "down_limit": "1"
       }
     ],
+    "industry_classification": [
+      {
+        "index_code": "801010",
+        "industry_name": "Agriculture",
+        "level": "L1",
+        "src": "SW2021"
+      }
+    ],
     "industry_membership": [
       {
         "ts_code": "000001.SZ",

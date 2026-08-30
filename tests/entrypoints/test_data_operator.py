@@ -14,6 +14,7 @@ from thesistrace.data import (
     DataSourceError,
     FinancialCollectionError,
     validate_financial_refresh_request,
+    validate_industry_refresh_request,
     validate_market_refresh_request,
 )
 from thesistrace.entrypoints import data_operator
@@ -184,6 +185,16 @@ def test_financial_refresh_request_preserves_the_exact_key_and_canonical_session
     )
 
     assert key == "financial-20260814-custom"
+    assert target == "2026-08-14"
+
+
+def test_industry_refresh_request_preserves_the_exact_key_and_canonical_session() -> None:
+    key, target = validate_industry_refresh_request(
+        idempotency_key="industry-20260814-custom",
+        observation_through_session="2026-08-14",
+    )
+
+    assert key == "industry-20260814-custom"
     assert target == "2026-08-14"
 
 
@@ -386,7 +397,7 @@ def test_private_industry_operator_exposes_refresh_and_inspection_contracts(
     refresh_help = capsys.readouterr().out
     assert "--idempotency-key" in refresh_help
     assert "--observation-through-session" in refresh_help
-    assert "--replay" in refresh_help
+    assert "--replay" not in refresh_help
 
     with pytest.raises(SystemExit) as inspect_exit:
         data_operator.main(["inspect-industry-refresh", "--help"])
@@ -395,6 +406,110 @@ def test_private_industry_operator_exposes_refresh_and_inspection_contracts(
     inspect_help = capsys.readouterr().out
     assert "--idempotency-key" in inspect_help
     assert "--observation-through-session" not in inspect_help
+
+
+def test_industry_operator_submits_and_returns_without_opening_sources(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    received: dict[str, object] = {}
+
+    class FakeDatabase:
+        def __init__(self, _url: str) -> None:
+            pass
+
+        def open(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class FakeService:
+        def __init__(
+            self,
+            database: object,
+            mount_root: Path,
+            *,
+            benchmark_mount_root: Path,
+        ) -> None:
+            received.update(
+                database=database,
+                mount_root=mount_root,
+                benchmark_mount_root=benchmark_mount_root,
+            )
+
+        def submit_industry(self, **arguments: object) -> object:
+            received.update(arguments)
+            return SimpleNamespace(
+                idempotency_key="industry-live",
+                kind="industry",
+                as_of=None,
+                observation_through_session="2026-08-14",
+                status="accepted",
+                outcome=None,
+                data_through_session=None,
+                last_refresh_at=None,
+                failure_code=None,
+                last_failure_code=None,
+                attempt_count=0,
+                financial_complete_through_session=None,
+                matched_trigger_count=None,
+                checked_no_structured_change_count=None,
+                accepted_instrument_count=None,
+                failed_instrument_count=None,
+                pending_instrument_count=None,
+                discovery_gap_count=None,
+            )
+
+    monkeypatch.setenv("THESISTRACE_DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("THESISTRACE_DATA_MOUNT", str(tmp_path))
+    monkeypatch.setenv(
+        "THESISTRACE_BENCHMARK_MOUNT",
+        str(tmp_path.parent / f"{tmp_path.name}-benchmark-data"),
+    )
+    monkeypatch.setattr(data_operator, "PostgresDatabase", FakeDatabase)
+    monkeypatch.setattr(data_operator, "verify_core_schema", lambda _database: None)
+    monkeypatch.setattr(
+        data_operator,
+        "_create_live_tushare_provider",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("source opened")),
+    )
+    monkeypatch.setattr(data_operator, "DataRefreshService", FakeService)
+
+    data_operator.main(
+        [
+            "refresh-industry",
+            "--idempotency-key",
+            "industry-live",
+            "--observation-through-session",
+            "2026-08-14",
+        ]
+    )
+
+    assert received["mount_root"] == tmp_path
+    assert received["idempotency_key"] == "industry-live"
+    assert received["observation_through_session"] == "2026-08-14"
+    assert json.loads(capsys.readouterr().out) == {
+        "accepted_instrument_count": None,
+        "as_of": None,
+        "attempt_count": 0,
+        "checked_no_structured_change_count": None,
+        "data_through_session": None,
+        "discovery_gap_count": None,
+        "failed_instrument_count": None,
+        "failure_code": None,
+        "financial_complete_through_session": None,
+        "idempotency_key": "industry-live",
+        "kind": "industry",
+        "last_failure_code": None,
+        "last_refresh_at": None,
+        "matched_trigger_count": None,
+        "observation_through_session": "2026-08-14",
+        "outcome": None,
+        "pending_instrument_count": None,
+        "status": "accepted",
+    }
 
 
 def test_financial_probe_does_not_require_database_or_data_mount(

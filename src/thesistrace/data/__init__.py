@@ -85,6 +85,7 @@ from thesistrace.data.refresh import (
     DataRefreshService,
     RefreshOutcome,
     validate_financial_refresh_request,
+    validate_industry_refresh_request,
     validate_market_refresh_request,
 )
 from thesistrace.data.source import (
@@ -175,4 +176,5 @@ __all__ = [
     "read_alpha_field_series",
     "validate_market_refresh_request",
     "validate_financial_refresh_request",
+    "validate_industry_refresh_request",
 ]

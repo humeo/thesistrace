@@ -31,6 +31,13 @@ from thesistrace.data.head_store import (
     DatasetHeadPointer,
     MountedDatasetHeadStore,
 )
+from thesistrace.data.industry_refresh import (
+    IndustryRefreshError,
+    IndustryRefreshOutcome,
+    IndustryRefreshService,
+    reconcile_industry_publication,
+)
+from thesistrace.data.industry_source import IndustrySource, IndustrySourceError
 from thesistrace.data.lifecycle import (
     DataLifecycleError,
     DatasetLifecycle,
@@ -105,7 +112,7 @@ class _RefreshFailure:
 
 
 @dataclass(frozen=True)
-class _FinancialFailurePolicy:
+class _KindFailurePolicy:
     code: str
     retryable: bool
     category: str
@@ -271,6 +278,57 @@ class DataRefreshService:
             raise DataRefreshError("IDEMPOTENCY_KEY_CONFLICT")
         return _outcome(row)
 
+    def submit_industry(
+        self,
+        *,
+        idempotency_key: str,
+        observation_through_session: str,
+    ) -> RefreshOutcome:
+        key, target = validate_industry_refresh_request(
+            idempotency_key=idempotency_key,
+            observation_through_session=observation_through_session,
+        )
+        fingerprint = hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "command": "data-operator/industry-refresh",
+                    "observation_through_session": target,
+                }
+            )
+        ).hexdigest()
+        with self._database.transaction() as transaction:
+            existing = transaction.execute(
+                "SELECT * FROM data.refresh_operations WHERE idempotency_key = %s",
+                (key,),
+            ).fetchone()
+        if existing is not None:
+            if existing["fingerprint"] != fingerprint:
+                raise DataRefreshError("IDEMPOTENCY_KEY_CONFLICT")
+            return _outcome(existing)
+        if self._lifecycle.current_pointer() is None:
+            raise DataRefreshError("DATA_NOT_READY")
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                INSERT INTO data.refresh_operations (
+                    idempotency_key, kind, fingerprint, status,
+                    observation_through_session
+                ) VALUES (%s, 'industry', %s, 'accepted', %s)
+                ON CONFLICT (idempotency_key) DO NOTHING
+                RETURNING *
+                """,
+                (key, fingerprint, target),
+            ).fetchone()
+            if row is None:
+                row = transaction.execute(
+                    "SELECT * FROM data.refresh_operations WHERE idempotency_key = %s",
+                    (key,),
+                ).fetchone()
+        assert row is not None
+        if row["fingerprint"] != fingerprint:
+            raise DataRefreshError("IDEMPOTENCY_KEY_CONFLICT")
+        return _outcome(row)
+
     def process_next(
         self,
         source: DataSource,
@@ -279,6 +337,8 @@ class DataRefreshService:
         financial_announcement_source: FinancialAnnouncementSource | None = None,
         financial_source: FinancialRawSource | None = None,
         financial_source_window_selector: Callable[[str, str], None] | None = None,
+        industry_source: IndustrySource | None = None,
+        industry_source_target_selector: Callable[[str], None] | None = None,
     ) -> bool:
         with mounted_data_mutation_lock(self._database):
             return self._process_next(
@@ -287,6 +347,8 @@ class DataRefreshService:
                 financial_announcement_source=financial_announcement_source,
                 financial_source=financial_source,
                 financial_source_window_selector=financial_source_window_selector,
+                industry_source=industry_source,
+                industry_source_target_selector=industry_source_target_selector,
             )
 
     def _process_next(
@@ -297,6 +359,8 @@ class DataRefreshService:
         financial_announcement_source: FinancialAnnouncementSource | None,
         financial_source: FinancialRawSource | None,
         financial_source_window_selector: Callable[[str, str], None] | None,
+        industry_source: IndustrySource | None,
+        industry_source_target_selector: Callable[[str], None] | None,
     ) -> bool:
         reconciled = self._reconcile_pending_completion()
         recovered = self._recover_expired_claims()
@@ -309,6 +373,12 @@ class DataRefreshService:
                 announcement_source=financial_announcement_source,
                 financial_source=financial_source,
                 financial_source_window_selector=financial_source_window_selector,
+            )
+        if claim.kind == "industry":
+            return self._process_industry_claim(
+                claim,
+                industry_source=industry_source,
+                industry_source_target_selector=industry_source_target_selector,
             )
         head_moved = False
         operation_id = _operation_id(claim.key, claim.owner_token)
@@ -650,6 +720,131 @@ class DataRefreshService:
             )
         return True
 
+    def _process_industry_claim(
+        self,
+        claim: _RefreshClaim,
+        *,
+        industry_source: IndustrySource | None,
+        industry_source_target_selector: Callable[[str], None] | None,
+    ) -> bool:
+        operation_id = _operation_id(claim.key, claim.owner_token)
+        operation_started = self._monotonic()
+        phase = "industry"
+        successful_outcome: str | None = None
+        self._lifecycle_event(
+            _data_refresh_event(
+                "data_refresh_started",
+                operation_id=operation_id,
+                attempt_number=claim.attempt_count,
+                kind="industry",
+                status="running",
+            )
+        )
+        try:
+            if industry_source is None:
+                raise DataRefreshError("INDUSTRY_WORKER_SOURCE_MISSING")
+            with self._maintain_claim(claim) as heartbeat:
+                target = self._industry_target(claim)
+                if industry_source_target_selector is not None:
+                    industry_source_target_selector(target)
+                with self._timed_phase(operation_id, phase):
+                    outcome = IndustryRefreshService(
+                        self._database,
+                        self._generations.root,
+                        industry_source,
+                        clock=self._clock,
+                        progress=self._lifecycle_event,
+                        ownership_guard=heartbeat.assert_owned,
+                        publication_guard=lambda transaction, expected, candidate, prepared: (
+                            self._owned_industry_publication_transaction(
+                                transaction,
+                                claim,
+                                expected_manifest=expected,
+                                candidate_manifest=candidate,
+                                prepared_at=prepared,
+                            )
+                        ),
+                        publication_operation_id=operation_id,
+                        publication_lease_seconds=self._lease_seconds,
+                    ).publish(
+                        idempotency_key=claim.key,
+                        observation_through_session=target,
+                    )
+                heartbeat.assert_owned()
+                successful_outcome = self._complete_industry(claim, outcome)
+        except _RefreshFenced:
+            self._lifecycle_event(
+                _data_refresh_event(
+                    "data_refresh_fenced",
+                    level="WARNING",
+                    operation_id=operation_id,
+                    attempt_number=claim.attempt_count,
+                    kind="industry",
+                    phase=phase,
+                    outcome="fenced",
+                    duration_ms=_duration_ms(self._monotonic() - operation_started),
+                )
+            )
+            return True
+        except Exception as error:
+            publication_completed = self._industry_post_cas_state(claim) is not False
+            if publication_completed:
+                self._lifecycle_event(
+                    _data_refresh_event(
+                        "data_refresh_failed",
+                        level="ERROR",
+                        operation_id=operation_id,
+                        attempt_number=claim.attempt_count,
+                        kind="industry",
+                        phase=phase,
+                        status="running",
+                        outcome="completion_pending",
+                        duration_ms=_duration_ms(self._monotonic() - operation_started),
+                        failure_code="REFRESH_COMPLETION_PENDING",
+                        exception_type=type(error).__name__,
+                    )
+                )
+                raise DataRefreshError("REFRESH_COMPLETION_PENDING") from error
+            policy = _industry_failure_policy(error)
+            try:
+                failure = self._record_failure(
+                    claim,
+                    code=policy.code,
+                    retryable=policy.retryable,
+                    terminal_outcome=policy.category,
+                )
+            except _RefreshFenced:
+                return True
+            self._lifecycle_event(
+                _data_refresh_event(
+                    "data_refresh_failed",
+                    level="WARNING" if failure.retry else "ERROR",
+                    operation_id=operation_id,
+                    attempt_number=claim.attempt_count,
+                    kind="industry",
+                    phase=phase,
+                    status="accepted" if failure.retry else "failed",
+                    outcome="retry_scheduled" if failure.retry else "failed",
+                    duration_ms=_duration_ms(self._monotonic() - operation_started),
+                    failure_code=failure.code,
+                    exception_type=type(error).__name__,
+                )
+            )
+            raise DataRefreshError(policy.code) from error
+        if successful_outcome is not None:
+            self._lifecycle_event(
+                _data_refresh_event(
+                    "data_refresh_succeeded",
+                    operation_id=operation_id,
+                    attempt_number=claim.attempt_count,
+                    kind="industry",
+                    status="succeeded",
+                    outcome=successful_outcome,
+                    duration_ms=_duration_ms(self._monotonic() - operation_started),
+                )
+            )
+        return True
+
     def _update_benchmark(
         self,
         research_calendar: Sequence[str],
@@ -841,7 +1036,8 @@ class DataRefreshService:
                           AND lease_expires_at > clock_timestamp()
                           AND (
                               operation_id = %s
-                              OR (%s = 'financial' AND operation_id LIKE %s)
+                              OR (%s = ANY (ARRAY['financial', 'industry'])
+                                  AND operation_id LIKE %s)
                           )
                         """,
                         (
@@ -896,6 +1092,22 @@ class DataRefreshService:
             raise _RefreshFenced("Financial Refresh no longer owns work")
         return row["observation_through_session"].isoformat()
 
+    def _industry_target(self, claim: _RefreshClaim) -> str:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT observation_through_session
+                FROM data.refresh_operations
+                WHERE idempotency_key = %s AND kind = 'industry'
+                  AND status = 'running' AND owner_token = %s
+                  AND lease_expires_at > clock_timestamp()
+                """,
+                (claim.key, claim.owner_token),
+            ).fetchone()
+        if row is None or row["observation_through_session"] is None:
+            raise _RefreshFenced("Industry Refresh no longer owns work")
+        return row["observation_through_session"].isoformat()
+
     @contextmanager
     def _owned_financial_publication_transaction(
         self,
@@ -942,6 +1154,53 @@ class DataRefreshService:
         )
         if renewed.rowcount != 1:
             raise _RefreshFenced("Financial publication lost ownership before commit")
+
+    @contextmanager
+    def _owned_industry_publication_transaction(
+        self,
+        transaction: PostgresTransaction,
+        claim: _RefreshClaim,
+        *,
+        expected_manifest: str,
+        candidate_manifest: str,
+        prepared_at: datetime,
+    ) -> Iterator[None]:
+        updated = transaction.execute(
+            """
+            UPDATE data.refresh_operations
+            SET expected_generation_manifest_sha256 = %s,
+                generation_manifest_sha256 = %s,
+                candidate_prepared_at = %s,
+                lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                updated_at = clock_timestamp()
+            WHERE idempotency_key = %s AND kind = 'industry'
+              AND status = 'running' AND owner_token = %s
+              AND lease_expires_at > clock_timestamp()
+            """,
+            (
+                expected_manifest,
+                candidate_manifest,
+                prepared_at,
+                self._lease_seconds,
+                claim.key,
+                claim.owner_token,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise _RefreshFenced("Industry publication belongs to a stale owner")
+        yield
+        renewed = transaction.execute(
+            """
+            UPDATE data.refresh_operations
+            SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                updated_at = clock_timestamp()
+            WHERE idempotency_key = %s AND kind = 'industry'
+              AND status = 'running' AND owner_token = %s
+            """,
+            (self._lease_seconds, claim.key, claim.owner_token),
+        )
+        if renewed.rowcount != 1:
+            raise _RefreshFenced("Industry publication lost ownership before commit")
 
     def _complete_financial(
         self,
@@ -1004,6 +1263,52 @@ class DataRefreshService:
             )
             if updated.rowcount != 1:
                 raise _RefreshFenced("Financial Refresh completion belongs to a stale owner")
+        return publication_outcome
+
+    def _complete_industry(
+        self,
+        claim: _RefreshClaim,
+        outcome: IndustryRefreshOutcome,
+    ) -> str:
+        if outcome.generation_manifest_sha256 is None:
+            raise DataRefreshError("INDUSTRY_PUBLICATION_COMPLETION_PENDING")
+        completed_at = self._operator_time()
+        publication_outcome = "published" if outcome.canonical_changed else "no_change"
+        with self._database.transaction() as transaction:
+            lock_data_lifecycle(transaction)
+            pointer = self._heads.current_pointer()
+            if (
+                pointer is None
+                or pointer.generation_manifest_sha256
+                != outcome.generation_manifest_sha256
+            ):
+                raise DatasetHeadConflict(
+                    "Industry Refresh Head changed before receipt completion"
+                )
+            updated = transaction.execute(
+                """
+                UPDATE data.refresh_operations
+                SET status = 'succeeded', outcome = %s,
+                    generation_manifest_sha256 = %s,
+                    data_through_session = %s, last_refresh_at = %s,
+                    failure_code = NULL, last_failure_code = NULL,
+                    finished_at = clock_timestamp(), updated_at = clock_timestamp()
+                WHERE idempotency_key = %s AND kind = 'industry'
+                  AND status = 'running' AND owner_token = %s
+                  AND lease_expires_at > clock_timestamp()
+                """,
+                (
+                    publication_outcome,
+                    outcome.generation_manifest_sha256,
+                    pointer.data_through_session,
+                    completed_at,
+                    claim.key,
+                    claim.owner_token,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise _RefreshFenced("Industry Refresh completion belongs to a stale owner")
+            _update_last_industry_refresh(transaction, completed_at)
         return publication_outcome
 
     def _record_expected_head(self, claim: _RefreshClaim, expected_manifest: str) -> None:
@@ -1126,6 +1431,44 @@ class DataRefreshService:
             return None
         return current.financial_publication_coordinate == str(row["fingerprint"])
 
+    def _industry_post_cas_state(self, claim: _RefreshClaim) -> bool | None:
+        try:
+            with self._database.transaction() as transaction:
+                lock_data_lifecycle(transaction)
+                row = transaction.execute(
+                    """
+                    SELECT i.fingerprint, i.prior_industry_manifest_sha256,
+                           i.candidate_manifest_sha256,
+                           i.composed_generation_manifest_sha256,
+                           i.publication_head_moved_at,
+                           i.published_generation_manifest_sha256
+                    FROM data.refresh_operations AS r
+                    JOIN data.industry_refresh_operations AS i
+                      ON i.idempotency_key = r.idempotency_key
+                    WHERE r.idempotency_key = %s AND r.kind = 'industry'
+                      AND r.status = 'running' AND r.owner_token = %s
+                    """,
+                    (claim.key, claim.owner_token),
+                ).fetchone()
+                if row is None:
+                    return False
+                if row["published_generation_manifest_sha256"] is not None:
+                    return True
+                if row["publication_head_moved_at"] is not None:
+                    return True
+                if row["composed_generation_manifest_sha256"] is None:
+                    return False
+                pointer = self._heads.current_pointer()
+        except Exception:
+            return None
+        if pointer is None:
+            return False
+        try:
+            current = self._generations.inspect_root(pointer.generation_manifest_sha256)
+        except Exception:
+            return None
+        return current.industry_publication_coordinate == str(row["fingerprint"])
+
     def _complete_published(
         self,
         claim: _RefreshClaim,
@@ -1160,8 +1503,8 @@ class DataRefreshService:
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
             operation_id = _operation_id(claim.key, claim.owner_token)
-            if claim.kind == "financial":
-                _release_financial_generation_candidates(
+            if claim.kind in {"financial", "industry"}:
+                _release_child_generation_candidates(
                     transaction,
                     operation_id=operation_id,
                 )
@@ -1169,6 +1512,19 @@ class DataRefreshService:
                 release_generation_candidate(transaction, operation_id=operation_id)
             retry = retryable and claim.attempt_count < self._max_attempts
             if retry:
+                if claim.kind == "industry":
+                    transaction.execute(
+                        """
+                        UPDATE data.industry_refresh_operations
+                        SET status = 'running', failure_code = NULL,
+                            failure_diagnostic = NULL,
+                            source_lineage_sha256 = NULL, finished_at = NULL,
+                            updated_at = now()
+                        WHERE idempotency_key = %s AND status = 'failed'
+                          AND published_generation_manifest_sha256 IS NULL
+                        """,
+                        (claim.key,),
+                    )
                 updated = transaction.execute(
                     """
                     UPDATE data.refresh_operations
@@ -1193,6 +1549,18 @@ class DataRefreshService:
                         """
                         UPDATE data.financial_daily_refresh_operations
                         SET status = 'failed', failure_code = %s,
+                            finished_at = now(), updated_at = now()
+                        WHERE idempotency_key = %s AND status = 'running'
+                          AND published_generation_manifest_sha256 IS NULL
+                        """,
+                        (terminal_code, claim.key),
+                    )
+                elif claim.kind == "industry":
+                    transaction.execute(
+                        """
+                        UPDATE data.industry_refresh_operations
+                        SET status = 'failed', failure_code = %s,
+                            candidate_manifest_sha256 = NULL,
                             finished_at = now(), updated_at = now()
                         WHERE idempotency_key = %s AND status = 'running'
                           AND published_generation_manifest_sha256 IS NULL
@@ -1243,21 +1611,37 @@ class DataRefreshService:
                 SELECT r.*,
                        f.fingerprint AS financial_fingerprint,
                        f.publication_head_moved_at AS financial_publication_head_moved_at,
+                       i.fingerprint AS industry_fingerprint,
+                       i.publication_head_moved_at AS industry_publication_head_moved_at,
+                       i.published_generation_manifest_sha256 AS industry_published_manifest,
                        CASE
                            WHEN r.kind = 'financial' THEN COALESCE(
                                f.published_generation_manifest_sha256,
                                f.composed_generation_manifest_sha256
+                           )
+                           WHEN r.kind = 'industry' THEN COALESCE(
+                               i.published_generation_manifest_sha256,
+                               i.composed_generation_manifest_sha256
                            )
                            ELSE r.generation_manifest_sha256
                        END AS reconciliation_generation_manifest_sha256
                 FROM data.refresh_operations AS r
                 LEFT JOIN data.financial_daily_refresh_operations AS f
                   ON f.idempotency_key = r.idempotency_key
+                LEFT JOIN data.industry_refresh_operations AS i
+                  ON i.idempotency_key = r.idempotency_key
                 WHERE r.status = 'running' AND (
                     (r.kind = 'market' AND r.generation_manifest_sha256 = %s)
                     OR (
                         r.kind = 'financial'
                         AND f.composed_generation_manifest_sha256 IS NOT NULL
+                    )
+                    OR (
+                        r.kind = 'industry'
+                        AND (
+                            i.published_generation_manifest_sha256 IS NOT NULL
+                            OR i.composed_generation_manifest_sha256 IS NOT NULL
+                        )
                     )
                 )
                 ORDER BY r.created_at, r.idempotency_key
@@ -1283,12 +1667,41 @@ class DataRefreshService:
                 or row["financial_publication_head_moved_at"] is not None
                 or row["financial_fingerprint"] == current_financial_coordinate
             ]
-        recovery: dict[str, tuple[str, str, FinancialDailyRefreshOutcome | None]] = {}
+        if any(
+            str(row["kind"]) == "industry"
+            and row["industry_published_manifest"] is None
+            and row["industry_publication_head_moved_at"] is None
+            for row in candidates
+        ):
+            current_industry_coordinate = (
+                None
+                if current_manifest is None
+                else self._generations.inspect_root(
+                    current_manifest
+                ).industry_publication_coordinate
+            )
+            candidates = [
+                row
+                for row in candidates
+                if str(row["kind"]) != "industry"
+                or row["industry_published_manifest"] is not None
+                or row["industry_publication_head_moved_at"] is not None
+                or row["industry_fingerprint"] == current_industry_coordinate
+            ]
+        recovery: dict[
+            str,
+            tuple[
+                str,
+                str,
+                FinancialDailyRefreshOutcome | None,
+                IndustryRefreshOutcome | None,
+            ],
+        ] = {}
         for row in candidates:
             key = str(row["idempotency_key"])
             manifest = str(row["reconciliation_generation_manifest_sha256"])
             generation = self._generations.inspect_root(manifest)
-            outcome = (
+            financial_outcome = (
                 reconcile_daily_financial_publication(
                     self._database,
                     self._generations.root,
@@ -1299,7 +1712,23 @@ class DataRefreshService:
                 if str(row["kind"]) == "financial"
                 else None
             )
-            recovery[key] = (manifest, generation.data_through_session, outcome)
+            industry_outcome = (
+                reconcile_industry_publication(
+                    self._database,
+                    self._generations.root,
+                    idempotency_key=key,
+                    generation_manifest_sha256=manifest,
+                    completed_at=self._operator_time(),
+                )
+                if str(row["kind"]) == "industry"
+                else None
+            )
+            recovery[key] = (
+                manifest,
+                generation.data_through_session,
+                financial_outcome,
+                industry_outcome,
+            )
         reconciled = False
         lifecycle_events: list[dict[str, object]] = []
         with self._database.transaction() as transaction:
@@ -1318,8 +1747,13 @@ class DataRefreshService:
             ).fetchall()
             for row in rows:
                 key = str(row["idempotency_key"])
-                manifest, data_through_session, financial_outcome = recovery[key]
-                if str(row["kind"]) == "market" and (
+                (
+                    manifest,
+                    data_through_session,
+                    financial_outcome,
+                    industry_outcome,
+                ) = recovery[key]
+                if str(row["kind"]) in {"market", "industry"} and (
                     current is None or current.generation_manifest_sha256 != manifest
                 ):
                     continue
@@ -1327,7 +1761,7 @@ class DataRefreshService:
                 completed_at = self._operator_time()
                 if str(row["kind"]) == "financial":
                     assert financial_outcome is not None
-                    _release_financial_generation_candidates(
+                    _release_child_generation_candidates(
                         transaction,
                         operation_id=operation_id,
                     )
@@ -1335,6 +1769,19 @@ class DataRefreshService:
                         transaction,
                         row,
                         outcome=financial_outcome,
+                        data_through_session=data_through_session,
+                        completed_at=completed_at,
+                    )
+                elif str(row["kind"]) == "industry":
+                    assert industry_outcome is not None
+                    _release_child_generation_candidates(
+                        transaction,
+                        operation_id=operation_id,
+                    )
+                    publication_outcome = _complete_reconciled_industry_operation(
+                        transaction,
+                        row,
+                        outcome=industry_outcome,
                         data_through_session=data_through_session,
                         completed_at=completed_at,
                     )
@@ -1393,8 +1840,8 @@ class DataRefreshService:
                 recovered = True
                 owner_token = str(row["owner_token"])
                 operation_id = _operation_id(str(row["idempotency_key"]), owner_token)
-                if str(row["kind"]) == "financial":
-                    _release_financial_generation_candidates(
+                if str(row["kind"]) in {"financial", "industry"}:
+                    _release_child_generation_candidates(
                         transaction,
                         operation_id=operation_id,
                     )
@@ -1420,11 +1867,24 @@ class DataRefreshService:
                             """,
                             (row["idempotency_key"],),
                         )
+                    elif str(row["kind"]) == "industry":
+                        transaction.execute(
+                            """
+                            UPDATE data.industry_refresh_operations
+                            SET status = 'failed', failure_code = 'RETRY_EXHAUSTED',
+                                candidate_manifest_sha256 = NULL,
+                                finished_at = now(), updated_at = now()
+                            WHERE idempotency_key = %s AND status = 'running'
+                              AND published_generation_manifest_sha256 IS NULL
+                            """,
+                            (row["idempotency_key"],),
+                        )
                     transaction.execute(
                         """
                         UPDATE data.refresh_operations
                         SET status = 'failed', outcome = CASE
-                                WHEN kind = 'financial' THEN 'infrastructure_failed'
+                                WHEN kind IN ('financial', 'industry')
+                                    THEN 'infrastructure_failed'
                                 ELSE NULL
                             END,
                             failure_code = 'RETRY_EXHAUSTED',
@@ -1450,6 +1910,19 @@ class DataRefreshService:
                         ),
                     )
                 else:
+                    if str(row["kind"]) == "industry":
+                        transaction.execute(
+                            """
+                            UPDATE data.industry_refresh_operations
+                            SET status = 'running', failure_code = NULL,
+                                failure_diagnostic = NULL,
+                                source_lineage_sha256 = NULL, finished_at = NULL,
+                                updated_at = now()
+                            WHERE idempotency_key = %s AND status = 'failed'
+                              AND published_generation_manifest_sha256 IS NULL
+                            """,
+                            (row["idempotency_key"],),
+                        )
                     transaction.execute(
                         """
                         UPDATE data.refresh_operations
@@ -1583,7 +2056,42 @@ def _complete_reconciled_financial_operation(
     return publication_outcome
 
 
-def _release_financial_generation_candidates(
+def _complete_reconciled_industry_operation(
+    transaction: PostgresTransaction,
+    row: dict[str, object],
+    *,
+    outcome: IndustryRefreshOutcome,
+    data_through_session: str,
+    completed_at: datetime,
+) -> str:
+    if outcome.generation_manifest_sha256 is None:
+        raise _RefreshFenced("Industry Refresh reconciliation has no publication")
+    publication_outcome = "published" if outcome.canonical_changed else "no_change"
+    updated = transaction.execute(
+        """
+        UPDATE data.refresh_operations
+        SET status = 'succeeded', outcome = %s,
+            generation_manifest_sha256 = %s, data_through_session = %s,
+            last_refresh_at = %s, failure_code = NULL, last_failure_code = NULL,
+            finished_at = now(), updated_at = now()
+        WHERE idempotency_key = %s AND kind = 'industry'
+          AND status = 'running'
+        """,
+        (
+            publication_outcome,
+            outcome.generation_manifest_sha256,
+            data_through_session,
+            completed_at,
+            row["idempotency_key"],
+        ),
+    )
+    if updated.rowcount != 1:
+        raise _RefreshFenced("Industry Refresh reconciliation lost its operation")
+    _update_last_industry_refresh(transaction, completed_at)
+    return publication_outcome
+
+
+def _release_child_generation_candidates(
     transaction: PostgresTransaction,
     *,
     operation_id: str,
@@ -1674,6 +2182,20 @@ def _update_last_refresh(transaction: PostgresTransaction, completed_at: datetim
     )
 
 
+def _update_last_industry_refresh(
+    transaction: PostgresTransaction,
+    completed_at: datetime,
+) -> None:
+    transaction.execute(
+        """
+        UPDATE data.current_dataset_state
+        SET last_industry_refresh_at = GREATEST(last_industry_refresh_at, %s)
+        WHERE singleton = 1
+        """,
+        (completed_at,),
+    )
+
+
 def _failure_policy(error: Exception) -> tuple[str, bool]:
     if isinstance(error, DataRefreshError):
         retryable = error.code in {"DATA_NOT_READY", "HEAD_CHANGED"}
@@ -1691,9 +2213,9 @@ def _failure_policy(error: Exception) -> tuple[str, bool]:
     return "REFRESH_INFRASTRUCTURE_FAILURE", True
 
 
-def _financial_failure_policy(error: Exception) -> _FinancialFailurePolicy:
+def _financial_failure_policy(error: Exception) -> _KindFailurePolicy:
     if isinstance(error, FinancialDailyRefreshError):
-        return _FinancialFailurePolicy(
+        return _KindFailurePolicy(
             code=error.code,
             retryable=error.retryable
             or error.code
@@ -1708,7 +2230,7 @@ def _financial_failure_policy(error: Exception) -> _FinancialFailurePolicy:
             ),
         )
     if isinstance(error, DataRefreshError):
-        return _FinancialFailurePolicy(
+        return _KindFailurePolicy(
             code=error.code,
             retryable=error.code
             in {
@@ -1718,14 +2240,71 @@ def _financial_failure_policy(error: Exception) -> _FinancialFailurePolicy:
             category="infrastructure_failed",
         )
     if isinstance(error, DatasetHeadConflict):
-        return _FinancialFailurePolicy("HEAD_CHANGED", True, "infrastructure_failed")
+        return _KindFailurePolicy("HEAD_CHANGED", True, "infrastructure_failed")
     if isinstance(error, (GenerationStoreError, DataLifecycleError, OSError, RuntimeError)):
-        return _FinancialFailurePolicy(
+        return _KindFailurePolicy(
             "REFRESH_INFRASTRUCTURE_FAILURE",
             True,
             "infrastructure_failed",
         )
-    return _FinancialFailurePolicy(
+    return _KindFailurePolicy(
+        "REFRESH_INFRASTRUCTURE_FAILURE",
+        True,
+        "infrastructure_failed",
+    )
+
+
+_INDUSTRY_BUSINESS_FAILURE_CODES = frozenset(
+    {
+        "INDUSTRY_CAPABILITY_UNAVAILABLE",
+        "INDUSTRY_CANDIDATE_INVALID",
+        "INDUSTRY_COVERAGE_EXCEEDS_MARKET",
+        "INDUSTRY_SOURCE_LINEAGE_INVALID",
+        "INDUSTRY_TARGET_CHANGED",
+        "MISSING_PERMISSION",
+        "OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION",
+        "PERMISSION_DENIED",
+        "TOKEN_MISSING",
+        "UPSTREAM_REJECTED",
+    }
+)
+_INDUSTRY_RETRYABLE_FAILURE_CODES = frozenset(
+    {
+        "INDUSTRY_DATASET_NOT_READY",
+        "INDUSTRY_HEAD_CHANGED_REPEATEDLY",
+        "INDUSTRY_PUBLICATION_COMPLETION_PENDING",
+        "INDUSTRY_WORKER_SOURCE_MISSING",
+        "UPSTREAM_RATE_LIMITED",
+        "UPSTREAM_UNAVAILABLE",
+    }
+)
+
+
+def _industry_failure_policy(error: Exception) -> _KindFailurePolicy:
+    if isinstance(error, (IndustryRefreshError, IndustrySourceError)):
+        code = error.code
+        if code in _INDUSTRY_BUSINESS_FAILURE_CODES:
+            return _KindFailurePolicy(code, False, "business_rejected")
+        if code in _INDUSTRY_RETRYABLE_FAILURE_CODES:
+            return _KindFailurePolicy(code, True, "infrastructure_failed")
+        return _KindFailurePolicy(
+            "REFRESH_INFRASTRUCTURE_FAILURE",
+            True,
+            "infrastructure_failed",
+        )
+    if isinstance(error, DataRefreshError):
+        if error.code in _INDUSTRY_BUSINESS_FAILURE_CODES:
+            return _KindFailurePolicy(error.code, False, "business_rejected")
+        if error.code in _INDUSTRY_RETRYABLE_FAILURE_CODES:
+            return _KindFailurePolicy(error.code, True, "infrastructure_failed")
+        return _KindFailurePolicy(
+            "REFRESH_INFRASTRUCTURE_FAILURE",
+            True,
+            "infrastructure_failed",
+        )
+    if isinstance(error, DatasetHeadConflict):
+        return _KindFailurePolicy("HEAD_CHANGED", True, "infrastructure_failed")
+    return _KindFailurePolicy(
         "REFRESH_INFRASTRUCTURE_FAILURE",
         True,
         "infrastructure_failed",
@@ -1807,6 +2386,17 @@ def validate_financial_refresh_request(
     return key, normalized
 
 
+def validate_industry_refresh_request(
+    *,
+    idempotency_key: str,
+    observation_through_session: str,
+) -> tuple[str, str]:
+    return validate_financial_refresh_request(
+        idempotency_key=idempotency_key,
+        observation_through_session=observation_through_session,
+    )
+
+
 def _outcome(row: dict[str, object]) -> RefreshOutcome:
     as_of = row["as_of"]
     if as_of is not None and not isinstance(as_of, datetime):
@@ -1861,5 +2451,6 @@ __all__ = (
     "DataRefreshService",
     "RefreshOutcome",
     "validate_financial_refresh_request",
+    "validate_industry_refresh_request",
     "validate_market_refresh_request",
 )

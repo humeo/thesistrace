@@ -47,6 +47,24 @@ export type FinancialRefreshOperation = Readonly<{
   status: "accepted" | "running" | "succeeded" | "failed";
 }>;
 
+export type IndustryRefreshRequest = Readonly<{
+  idempotencyKey: string;
+  observationThroughSession: string;
+}>;
+
+export type IndustryRefreshOperation = Readonly<{
+  attemptCount: number;
+  dataThroughSession: string | null;
+  failureCode: string | null;
+  idempotencyKey: string;
+  kind: "industry";
+  lastFailureCode: string | null;
+  lastRefreshAt: string | null;
+  observationThroughSession: string;
+  outcome: "published" | "no_change" | "business_rejected" | "infrastructure_failed" | null;
+  status: "accepted" | "running" | "succeeded" | "failed";
+}>;
+
 export type OperatorMutationErrorCode =
   | "conflict"
   | "delivery-failed"
@@ -271,6 +289,62 @@ export async function loadFinancialRefresh(
   });
   return financialRefreshOperation(await operatorGet(
     `/api/operator/data/refreshes/financial?${query.toString()}`,
+    signal,
+  ));
+}
+
+export async function confirmIndustryRefreshProof(
+  request: IndustryRefreshRequest,
+  password: string,
+  signal: AbortSignal,
+): Promise<Readonly<{ expiresAt: string; proof: string }>> {
+  const value = await operatorPost(
+    "/api/auth/operator/proofs",
+    {
+      idempotency_key: request.idempotencyKey,
+      observation_through_session: request.observationThroughSession,
+      operation: "data.refresh.industry.submit",
+      password,
+    },
+    signal,
+  );
+  if (
+    !hasExactKeys(value, ["expires_at", "proof"])
+    || !isIsoTimestamp(value.expires_at)
+    || typeof value.proof !== "string"
+    || !isOpaqueProof(value.proof)
+  ) {
+    throw new OperatorMutationError("unavailable");
+  }
+  return { expiresAt: value.expires_at, proof: value.proof };
+}
+
+export async function submitIndustryRefresh(
+  request: IndustryRefreshRequest,
+  proof: string,
+  signal: AbortSignal,
+): Promise<IndustryRefreshOperation> {
+  return industryRefreshOperation(await operatorPost(
+    "/api/operator/data/refreshes/industry",
+    {
+      idempotency_key: request.idempotencyKey,
+      observation_through_session: request.observationThroughSession,
+      proof,
+    },
+    signal,
+  ));
+}
+
+export async function loadIndustryRefresh(
+  request: IndustryRefreshRequest,
+  signal: AbortSignal,
+): Promise<IndustryRefreshOperation> {
+  const query = new URLSearchParams({
+    idempotency_key: request.idempotencyKey,
+    observation_through_session: request.observationThroughSession,
+  });
+  return industryRefreshOperation(await operatorGet(
+    `/api/operator/data/refreshes/industry?${query.toString()}`,
     signal,
   ));
 }
@@ -535,6 +609,65 @@ function financialRefreshOperation(value: unknown): FinancialRefreshOperation {
     observationThroughSession: value.observation_through_session,
     outcome: value.outcome,
     pendingInstrumentCount: value.pending_instrument_count,
+    status: value.status,
+  };
+}
+
+function industryRefreshOperation(value: unknown): IndustryRefreshOperation {
+  const keys = [
+    "attempt_count",
+    "data_through_session",
+    "failure_code",
+    "idempotency_key",
+    "kind",
+    "last_failure_code",
+    "last_refresh_at",
+    "observation_through_session",
+    "outcome",
+    "status",
+  ] as const;
+  if (
+    !hasExactKeys(value, keys)
+    || !isCount(value.attempt_count)
+    || !isOptionalSession(value.data_through_session)
+    || (value.failure_code !== null && typeof value.failure_code !== "string")
+    || typeof value.idempotency_key !== "string"
+    || !isMarketRefreshIdempotencyKey(value.idempotency_key)
+    || value.kind !== "industry"
+    || (value.last_failure_code !== null && typeof value.last_failure_code !== "string")
+    || (value.last_refresh_at !== null && !isIsoTimestamp(value.last_refresh_at))
+    || !isIsoResearchSession(value.observation_through_session)
+    || (value.outcome !== null
+      && value.outcome !== "published"
+      && value.outcome !== "no_change"
+      && value.outcome !== "business_rejected"
+      && value.outcome !== "infrastructure_failed")
+    || (value.status !== "accepted"
+      && value.status !== "running"
+      && value.status !== "succeeded"
+      && value.status !== "failed")
+    || (value.status === "succeeded"
+      && value.outcome !== "published"
+      && value.outcome !== "no_change")
+    || (value.status === "failed"
+      && value.outcome !== "business_rejected"
+      && value.outcome !== "infrastructure_failed")
+    || (["accepted", "running"].includes(String(value.status)) && value.outcome !== null)
+    || (value.status === "failed" && value.failure_code === null)
+    || (value.status !== "failed" && value.failure_code !== null)
+  ) {
+    throw new OperatorMutationError("unavailable");
+  }
+  return {
+    attemptCount: value.attempt_count,
+    dataThroughSession: value.data_through_session,
+    failureCode: value.failure_code,
+    idempotencyKey: value.idempotency_key,
+    kind: value.kind,
+    lastFailureCode: value.last_failure_code,
+    lastRefreshAt: value.last_refresh_at,
+    observationThroughSession: value.observation_through_session,
+    outcome: value.outcome,
     status: value.status,
   };
 }

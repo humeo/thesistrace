@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { OperatorConsoleNavigation } from "./OperatorConsoleNavigation";
 import { OperatorFinancialRefreshPanel } from "./OperatorFinancialRefreshPanel";
+import { OperatorIndustryRefreshPanel } from "./OperatorIndustryRefreshPanel";
 import { OperatorMarketRefreshDialog } from "./OperatorMarketRefreshDialog";
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
 import {
@@ -398,6 +399,7 @@ export function OperatorDataPage() {
         )}
 
         <OperatorFinancialRefreshPanel onAccessNotFound={showNotFound} />
+        <OperatorIndustryRefreshPanel onAccessNotFound={showNotFound} />
       </section>
       {confirmation === null ? null : (
         <OperatorMarketRefreshDialog
