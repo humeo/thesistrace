@@ -5,7 +5,6 @@ import {
   type BaseEvent,
   type Message,
 } from "@ag-ui/core";
-import { z } from "zod";
 
 import {
   DURABLE_TOOL_FAILURE,
@@ -17,6 +16,7 @@ import {
   SAFE_TOOL_COMPLETED,
   SAFE_TOOL_FAILED,
 } from "./safe-tool-result.js";
+import { isCanonicalUuid } from "./uuid.js";
 
 export { SAFE_TOOL_COMPLETED, SAFE_TOOL_FAILED } from "./safe-tool-result.js";
 
@@ -408,14 +408,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-const uuidSchema = z.uuid();
-
 function safeAssistantMessageId(value: unknown): string {
   if (typeof value !== "string") throw new BrowserTranscriptError();
   const parentId = splitAssistantTextParentId(value);
   if (
-    !uuidSchema.safeParse(value).success
-    && (parentId === null || !uuidSchema.safeParse(parentId).success)
+    !isCanonicalUuid(value)
+    && (parentId === null || !isCanonicalUuid(parentId))
   ) {
     throw new BrowserTranscriptError();
   }

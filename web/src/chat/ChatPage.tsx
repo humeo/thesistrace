@@ -4,7 +4,6 @@ import { UseAgentUpdate, useAgent } from "@copilotkit/react-core/v2/headless";
 import {
   ArrowUp,
   ChartLineUp,
-  ChatCircle,
   CheckCircle,
   CircleNotch,
   ClockCounterClockwise,
@@ -29,6 +28,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { AccountMenu } from "../auth/AccountMenu";
+import { isUuid } from "../uuid";
+import { chatSessionHref, handleChatNavigation } from "./chatNavigation";
 import {
   chatNavigationReducer,
   initialChatNavigationState,
@@ -42,6 +43,7 @@ import {
   type AgentModelCatalog,
 } from "./modelCatalog";
 import { ResearchChatCopilotProvider } from "./ResearchChatCopilotProvider";
+import { SessionHistoryList } from "./SessionHistoryList";
 import {
   AgentSessionPreferenceInvalidError,
   AgentSessionPreferenceNotFoundError,
@@ -55,10 +57,15 @@ import {
   type SafeResearchRunResource,
   type SafeToolResult,
 } from "./toolResult";
+import {
+  useSelectedSession,
+  useSessionHistory,
+  type SelectedSessionState,
+  type SessionHistoryController,
+} from "./useSessionHistory";
 
 const MAX_CHAT_MESSAGE_BYTES = 16 * 1024;
 const RESEARCH_AGENT_ID = "research";
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const workspaceRoutes = [
   { path: "/data", label: "Data", icon: Database },
   { path: "/research", label: "Research", icon: Flask },
@@ -73,10 +80,10 @@ export type AgentCatalogState =
   | Readonly<{ status: "invalid" }>
   | Readonly<{ status: "unavailable" }>;
 
-export type BrowserChatThread = Readonly<{
-  id: string;
-  persisted: boolean;
-}>;
+export type BrowserChatThread =
+  | Readonly<{ id: string; kind: "new" }>
+  | Readonly<{ id: string; kind: "session" }>
+  | Readonly<{ id: null; kind: "invalid" }>;
 
 export type AgentSessionPreferenceState =
   | Readonly<{ status: "not-required" }>
@@ -86,7 +93,7 @@ export type AgentSessionPreferenceState =
   | Readonly<{ status: "invalid" }>
   | Readonly<{ status: "unavailable" }>;
 
-type ConversationStatus =
+export type ConversationStatus =
   | "idle"
   | "loading-history"
   | "starting"
@@ -104,6 +111,19 @@ type ConversationSubscriberOptions = Readonly<{
   onRunError: () => void;
   onRunStarted: () => void;
   startTool: (id: string, name: string) => void;
+}>;
+
+type ExistingSessionConnectionOptions = Readonly<{
+  connect: (subscriber: AgentSubscriber) => Promise<void>;
+  failRunningTools: () => void;
+  finishTool: (id: string, result: SafeToolResult | null) => void;
+  onSessionChanged: () => void;
+  onTitleMaySettle: (threadId: string) => void;
+  setError: (error: string) => void;
+  setStatus: (status: ConversationStatus) => void;
+  shouldWatchTitle: () => boolean;
+  startTool: (id: string, name: string) => void;
+  threadId: string;
 }>;
 
 export type ChatToolActivity = Readonly<{
@@ -128,16 +148,46 @@ type ChatTimelineItem =
       kind: "tool";
     }>;
 
-export function ChatPage() {
+export function ChatPage({ researcherId }: { researcherId: string }) {
+  return <ResearcherChatPage key={researcherId} researcherId={researcherId} />;
+}
+
+function ResearcherChatPage({ researcherId }: { researcherId: string }) {
   const { reload, state } = useAgentCatalog();
-  const [thread] = useState(() => readBrowserChatThread(window.location.search));
-  const preferenceState = useAgentSessionPreference(thread);
+  const [thread, setThread] = useState(() => readBrowserChatThread(window.location.search));
+  const sessionHistory = useSessionHistory(researcherId);
+  const listedSession = thread.id === null
+    ? undefined
+    : sessionHistory.sessions.find((session) => session.id === thread.id);
+  const selectedSessionState = useSelectedSession(
+    thread.kind === "session" ? thread.id : null,
+    listedSession,
+    researcherId,
+    sessionHistory.status,
+    sessionHistory.refreshVersion,
+  );
+  const preferenceState = useAgentSessionPreference(thread, researcherId);
+
+  useEffect(() => {
+    const synchronize = () => setThread(readBrowserChatThread(window.location.search));
+    window.addEventListener("popstate", synchronize);
+    return () => window.removeEventListener("popstate", synchronize);
+  }, []);
+
+  const navigateChat = useCallback((href: string) => {
+    window.history.pushState(window.history.state, "", href);
+    setThread(readBrowserChatThread(window.location.search));
+  }, []);
+
   return (
     <ResearchChatCopilotProvider>
       <ChatShell
         catalogState={state}
+        navigateChat={navigateChat}
         preferenceState={preferenceState}
         reloadCatalog={reload}
+        selectedSessionState={selectedSessionState}
+        sessionHistory={sessionHistory}
         thread={thread}
       />
     </ResearchChatCopilotProvider>
@@ -146,13 +196,19 @@ export function ChatPage() {
 
 export function ChatShell({
   catalogState,
+  navigateChat,
   preferenceState,
   reloadCatalog,
+  selectedSessionState,
+  sessionHistory,
   thread,
 }: {
   catalogState: AgentCatalogState;
+  navigateChat: (href: string) => void;
   preferenceState: AgentSessionPreferenceState;
   reloadCatalog: () => void;
+  selectedSessionState: SelectedSessionState;
+  sessionHistory: SessionHistoryController;
   thread?: BrowserChatThread;
 }) {
   const [navigation, dispatchNavigation] = useReducer(
@@ -161,10 +217,11 @@ export function ChatShell({
   );
   const [requestedModelKey, setRequestedModelKey] = useState<string | null>(null);
   const [requestedReasoning, setRequestedReasoning] = useState<string | null>(null);
-  const [accepted, setAccepted] = useState(thread?.persisted ?? false);
+  const [accepted, setAccepted] = useState(thread?.kind === "session");
   const mobileViewport = useMobileViewport();
   const mobileNavigationToggleRef = useRef<HTMLButtonElement>(null);
   const mobileNavigationCloseRef = useRef<HTMLButtonElement>(null);
+  const newChatRef = useRef<HTMLAnchorElement>(null);
   const storedPreference = preferenceState.status === "ready"
     ? preferenceState.preference
     : null;
@@ -172,8 +229,12 @@ export function ChatShell({
   const effectiveReasoning = requestedModelKey === null
     ? requestedReasoning ?? storedPreference?.reasoning_effort ?? null
     : requestedReasoning;
-  const preferenceReady = thread?.persisted !== true
+  const preferenceReady = thread?.kind !== "session"
     || preferenceState.status === "ready";
+  const currentSession = thread?.id === null || thread?.id === undefined
+    ? undefined
+    : sessionHistory.sessions.find((session) => session.id === thread.id)
+      ?? (selectedSessionState.status === "ready" ? selectedSessionState.session : undefined);
   const selection = catalogState.status === "ready" && preferenceReady
     ? resolveModelSelection(
       catalogState.catalog,
@@ -181,12 +242,25 @@ export function ChatShell({
       effectiveReasoning,
     )
     : null;
+  const contextTitle = chatContextTitle({
+    accepted,
+    currentSessionTitle: currentSession?.title,
+    preferenceState,
+    selectedSessionState,
+    thread,
+  });
 
   useEffect(() => {
     if (navigation.mobileNavigationOpen) {
       mobileNavigationCloseRef.current?.focus();
     }
   }, [navigation.mobileNavigationOpen]);
+
+  useEffect(() => {
+    setAccepted(thread?.kind === "session");
+    setRequestedModelKey(null);
+    setRequestedReasoning(null);
+  }, [thread?.id, thread?.kind]);
 
   function closeMobileNavigation(): void {
     dispatchNavigation({ type: "close-mobile-navigation" });
@@ -219,9 +293,14 @@ export function ChatShell({
   }
 
   function acceptThread(): void {
-    if (thread === undefined || accepted) return;
+    if (thread === undefined || thread.id === null || accepted) return;
     window.history.replaceState(window.history.state, "", chatSessionHref(thread.id));
     setAccepted(true);
+  }
+
+  function openChat(href: string): void {
+    navigateChat(href);
+    if (navigation.mobileNavigationOpen) closeMobileNavigation();
   }
 
   const modelControls = (
@@ -267,7 +346,14 @@ export function ChatShell({
           </button>
         </div>
 
-        <a aria-current={!accepted ? "page" : undefined} className="chat-new" href="/chat" title="New Chat">
+        <a
+          aria-current={!accepted && thread?.kind !== "invalid" ? "page" : undefined}
+          className="chat-new"
+          href="/chat"
+          onClick={(event) => handleChatNavigation(event, () => openChat("/chat"))}
+          ref={newChatRef}
+          title="New Chat"
+        >
           <NotePencil aria-hidden="true" size={18} weight="regular" />
           <span className="chat-sidebar-label">New Chat</span>
         </a>
@@ -285,18 +371,22 @@ export function ChatShell({
         </nav>
 
         <section aria-labelledby="chat-session-heading" className="chat-session-region">
-          <h2 id="chat-session-heading">Chats</h2>
-          {accepted ? (
-            <a aria-current="page" className="chat-session-current" href={chatSessionHref(thread?.id ?? "")}>
-              <ChatCircle aria-hidden="true" size={16} weight="regular" />
-              <span>Current research chat</span>
-            </a>
-          ) : (
-            <div className="chat-session-empty">
-              <ChatCircle aria-hidden="true" size={16} weight="regular" />
-              <span>No conversations yet</span>
-            </div>
-          )}
+          <h2 data-collapsed-label="C" id="chat-session-heading">Chats</h2>
+          <SessionHistoryList
+            controller={sessionHistory}
+            currentSessionId={accepted && thread?.id !== null ? thread?.id ?? null : null}
+            navigate={openChat}
+            navigationInteractive={!mobileViewport || navigation.mobileNavigationOpen}
+            restoreFocus={(deletedCurrentSession) => {
+              if (mobileViewport && (
+                deletedCurrentSession || !navigation.mobileNavigationOpen
+              )) {
+                mobileNavigationToggleRef.current?.focus();
+              } else {
+                newChatRef.current?.focus();
+              }
+            }}
+          />
         </section>
 
         <div className="chat-account-area">
@@ -329,7 +419,7 @@ export function ChatShell({
               <SidebarSimple aria-hidden="true" size={18} weight="regular" />
             </button>
             <div className="chat-session-title">
-              <strong>{accepted ? "Research chat" : "New chat"}</strong>
+              <strong>{contextTitle}</strong>
               <span>Research Agent</span>
             </div>
           </div>
@@ -344,25 +434,38 @@ export function ChatShell({
 
         {thread === undefined ? (
           <StaticChatMain modelControls={modelControls} status="idle" />
-        ) : thread.persisted && preferenceState.status === "loading" ? (
+        ) : thread.kind === "invalid"
+          || selectedSessionState.status === "not-found"
+          || preferenceState.status === "not-found" ? (
+          <ChatNotFoundMain navigate={() => openChat("/chat")} />
+        ) : thread.kind === "session" && (
+          preferenceState.status === "loading"
+          || selectedSessionState.status === "loading"
+        ) ? (
           <StaticChatMain
             modelControls={<p className="chat-catalog-status" role="status">Loading Session settings…</p>}
             status="loading-history"
           />
-        ) : thread.persisted && preferenceState.status !== "ready" ? (
+        ) : thread.kind === "session" && (
+          preferenceState.status !== "ready"
+          || selectedSessionState.status !== "ready"
+        ) ? (
           <StaticChatMain
-            error={preferenceState.status === "not-found"
-              ? "The Research Agent session could not be loaded."
-              : "The Research Agent Session settings could not be loaded."}
+            error="The Research Agent Session could not be loaded."
             modelControls={null}
             status="disconnected"
           />
         ) : (
           <AgentConversation
-            existingSession={thread.persisted}
+            key={thread.id}
+            existingSession={thread.kind === "session"}
             modelControls={modelControls}
             onAccepted={acceptThread}
+            onSessionChanged={sessionHistory.refresh}
+            onTitleMaySettle={sessionHistory.watchGeneratedTitle}
             selection={selection}
+            titleMaySettle={currentSession?.title === "Untitled"
+              || (!accepted && thread.kind === "new")}
             threadId={thread.id}
           />
         )}
@@ -382,13 +485,19 @@ function AgentConversation({
   existingSession,
   modelControls,
   onAccepted,
+  onSessionChanged,
+  onTitleMaySettle,
   selection,
+  titleMaySettle,
   threadId,
 }: {
   existingSession: boolean;
   modelControls: React.ReactNode;
   onAccepted: () => void;
+  onSessionChanged: () => void;
+  onTitleMaySettle: (threadId: string) => void;
   selection: ReturnType<typeof resolveModelSelection> | null;
+  titleMaySettle: boolean;
   threadId: string;
 }) {
   const { agent, isReady } = useAgent({
@@ -410,6 +519,9 @@ function AgentConversation({
     () => new Map(),
   );
   const connectedAgent = useRef<AbstractAgent | null>(null);
+  const sessionEstablished = useRef(existingSession);
+  const titleMaySettleRef = useRef(titleMaySettle);
+  titleMaySettleRef.current = titleMaySettle;
   const messageBytes = chatMessageBytes(draft);
   const messageTooLarge = messageBytes > MAX_CHAT_MESSAGE_BYTES;
   const timeline = chatTimelineItems(agent.messages, [...toolActivities.values()]);
@@ -472,52 +584,31 @@ function AgentConversation({
   useEffect(() => {
     if (!existingSession || !isReady || connectedAgent.current === agent) return;
     connectedAgent.current = agent;
-    let disposed = false;
-    let failed = false;
-    const subscriber = createConversationSubscriber({
+    return startExistingSessionConnection({
+      connect: async (subscriber) => {
+        await agent.connectAgent(undefined, subscriber);
+      },
       failRunningTools,
-      onRunStarted: () => {
-        if (!disposed) setStatus("running");
-      },
-      onRunFinished: () => {
-        if (!disposed) setStatus("complete");
-      },
-      onRunError: () => {
-        failed = true;
-        if (!disposed) {
-          setError("The previous Research Agent run did not complete.");
-          setStatus("failed");
-        }
-      },
-      onRunFailed: () => {
-        failed = true;
-        if (!disposed) {
-          setError("The Research Agent session could not be loaded.");
-          setStatus("disconnected");
-        }
-      },
-      startTool: (id, name) => {
-        if (!disposed) startTool(id, name);
-      },
-      finishTool: (id, result) => {
-        if (!disposed) finishTool(id, result);
-      },
+      finishTool,
+      onSessionChanged,
+      onTitleMaySettle,
+      setError,
+      setStatus,
+      shouldWatchTitle: () => titleMaySettleRef.current,
+      startTool,
+      threadId,
     });
-    setStatus("loading-history");
-    void agent.connectAgent(undefined, subscriber)
-      .then(() => {
-        if (!disposed && !failed) setStatus("idle");
-      })
-      .catch(() => {
-        if (!disposed) {
-          setError("The Research Agent session could not be loaded.");
-          setStatus("disconnected");
-        }
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [agent, existingSession, failRunningTools, finishTool, isReady, startTool]);
+  }, [
+    agent,
+    existingSession,
+    failRunningTools,
+    finishTool,
+    isReady,
+    onSessionChanged,
+    onTitleMaySettle,
+    startTool,
+    threadId,
+  ]);
 
   async function submit(event?: FormEvent): Promise<void> {
     event?.preventDefault();
@@ -526,7 +617,13 @@ function AgentConversation({
     const content = draft;
     const messageId = crypto.randomUUID();
     let accepted = false;
+    let titleWatchStarted = false;
     let terminal: "none" | "complete" | "failed" = "none";
+    const startTitleWatch = () => {
+      if (!accepted || !titleMaySettle || titleWatchStarted) return;
+      titleWatchStarted = true;
+      onTitleMaySettle(threadId);
+    };
     const subscriber = createConversationSubscriber({
       failRunningTools,
       finishTool,
@@ -536,22 +633,30 @@ function AgentConversation({
       },
       onRunStarted: () => {
         accepted = true;
+        sessionEstablished.current = true;
         onAccepted();
+        onSessionChanged();
         setStatus("running");
       },
       onRunFinished: () => {
         terminal = "complete";
         setStatus("complete");
+        onSessionChanged();
+        startTitleWatch();
       },
       onRunError: () => {
         terminal = "failed";
         setError("The Research Agent could not complete this run.");
         setStatus("failed");
+        onSessionChanged();
+        startTitleWatch();
       },
       onRunFailed: () => {
         terminal = "failed";
         setError("The Research Agent connection was interrupted.");
         setStatus("disconnected");
+        onSessionChanged();
+        startTitleWatch();
       },
       startTool,
     });
@@ -566,14 +671,22 @@ function AgentConversation({
           thesistrace: {
             modelKey: selection.model.key,
             reasoningEffort: selection.reasoningEffort,
+            sessionMode: sessionEstablished.current ? "existing" : "new",
           },
         },
       }, subscriber);
-      if (terminal === "none") setStatus("complete");
+      if (terminal === "none") {
+        setStatus("complete");
+        startTitleWatch();
+      }
     } catch {
-      terminal = "failed";
-      setError("The Research Agent connection was interrupted.");
-      setStatus("disconnected");
+      if (terminal === "none") {
+        terminal = "failed";
+        setError("The Research Agent connection was interrupted.");
+        setStatus("disconnected");
+        onSessionChanged();
+        startTitleWatch();
+      }
     }
 
     if (!accepted && terminal === "failed") {
@@ -681,6 +794,71 @@ function createConversationSubscriber(
   };
 }
 
+export function startExistingSessionConnection(
+  options: ExistingSessionConnectionOptions,
+): () => void {
+  let disposed = false;
+  let failed = false;
+  const watchUnsettledTitle = () => {
+    if (!disposed && options.shouldWatchTitle()) {
+      options.onTitleMaySettle(options.threadId);
+    }
+  };
+  const subscriber = createConversationSubscriber({
+    failRunningTools: options.failRunningTools,
+    onRunStarted: () => {
+      if (!disposed) {
+        options.setStatus("running");
+        options.onSessionChanged();
+      }
+    },
+    onRunFinished: () => {
+      if (!disposed) {
+        options.setStatus("complete");
+        options.onSessionChanged();
+        watchUnsettledTitle();
+      }
+    },
+    onRunError: () => {
+      failed = true;
+      if (!disposed) {
+        options.setError("The previous Research Agent run did not complete.");
+        options.setStatus("failed");
+        options.onSessionChanged();
+        watchUnsettledTitle();
+      }
+    },
+    onRunFailed: () => {
+      failed = true;
+      if (!disposed) {
+        options.setError("The Research Agent session could not be loaded.");
+        options.setStatus("disconnected");
+        options.onSessionChanged();
+      }
+    },
+    startTool: (id, name) => {
+      if (!disposed) options.startTool(id, name);
+    },
+    finishTool: (id, result) => {
+      if (!disposed) options.finishTool(id, result);
+    },
+  });
+  options.setStatus("loading-history");
+  void options.connect(subscriber)
+    .then(() => {
+      if (!disposed && !failed) options.setStatus("idle");
+    })
+    .catch(() => {
+      if (!disposed) {
+        options.setError("The Research Agent session could not be loaded.");
+        options.setStatus("disconnected");
+      }
+    });
+  return () => {
+    disposed = true;
+  };
+}
+
 function StaticChatMain({
   error,
   modelControls,
@@ -714,6 +892,27 @@ function StaticChatMain({
         </div>
         <p>Text only · Registered models · 16 KiB maximum</p>
       </div>
+    </main>
+  );
+}
+
+function ChatNotFoundMain({ navigate }: { navigate: () => void }) {
+  return (
+    <main className="chat-main chat-not-found-main">
+      <section className="chat-not-found" role="alert">
+        <p className="eyebrow">Chat Session</p>
+        <h1>Chat not found</h1>
+        <p>
+          This Chat does not exist or is not available to the current Researcher.
+        </p>
+        <a
+          className="button button-primary"
+          href="/chat"
+          onClick={(event) => handleChatNavigation(event, navigate)}
+        >
+          Start a New Chat
+        </a>
+      </section>
     </main>
   );
 }
@@ -871,32 +1070,83 @@ function useAgentCatalog(): Readonly<{
 
 function useAgentSessionPreference(
   thread: BrowserChatThread,
+  researcherId: string,
 ): AgentSessionPreferenceState {
-  const [state, setState] = useState<AgentSessionPreferenceState>(
-    thread.persisted ? { status: "loading" } : { status: "not-required" },
-  );
+  const preferenceKey = `${researcherId}:${thread.kind}:${thread.id ?? "invalid"}`;
+  const [owned, setOwned] = useState<Readonly<{
+    key: string;
+    state: AgentSessionPreferenceState;
+  }>>(() => ({
+    key: preferenceKey,
+    state: thread.kind === "session" ? { status: "loading" } : { status: "not-required" },
+  }));
   useEffect(() => {
-    if (!thread.persisted) {
-      setState({ status: "not-required" });
+    if (thread.kind !== "session") {
+      setOwned({ key: preferenceKey, state: { status: "not-required" } });
       return;
     }
     const controller = new AbortController();
-    setState({ status: "loading" });
+    let current = true;
+    setOwned({ key: preferenceKey, state: { status: "loading" } });
     void loadAgentSessionPreference(thread.id, controller.signal)
-      .then((preference) => setState({ preference, status: "ready" }))
+      .then((preference) => {
+        if (!current) return;
+        setOwned({
+          key: preferenceKey,
+          state: { preference, status: "ready" },
+        });
+      })
       .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError") return;
+        if (!current || (error instanceof DOMException && error.name === "AbortError")) return;
         if (error instanceof AgentSessionPreferenceNotFoundError) {
-          setState({ status: "not-found" });
+          setOwned({ key: preferenceKey, state: { status: "not-found" } });
         } else if (error instanceof AgentSessionPreferenceInvalidError) {
-          setState({ status: "invalid" });
+          setOwned({ key: preferenceKey, state: { status: "invalid" } });
         } else {
-          setState({ status: "unavailable" });
+          setOwned({ key: preferenceKey, state: { status: "unavailable" } });
         }
       });
-    return () => controller.abort();
-  }, [thread.id, thread.persisted]);
-  return state;
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [preferenceKey, thread.id, thread.kind]);
+  return owned.key === preferenceKey
+    ? owned.state
+    : thread.kind === "session" ? { status: "loading" } : { status: "not-required" };
+}
+
+function chatContextTitle(options: Readonly<{
+  accepted: boolean;
+  currentSessionTitle: string | undefined;
+  preferenceState: AgentSessionPreferenceState;
+  selectedSessionState: SelectedSessionState;
+  thread: BrowserChatThread | undefined;
+}>): string {
+  if (
+    options.thread?.kind === "invalid"
+    || options.preferenceState.status === "not-found"
+    || options.selectedSessionState.status === "not-found"
+  ) {
+    return "Chat not found";
+  }
+  if (options.thread?.kind === "session") {
+    if (
+      options.preferenceState.status === "loading"
+      || options.selectedSessionState.status === "loading"
+    ) {
+      return "Loading Chat";
+    }
+    if (
+      options.preferenceState.status !== "ready"
+      || options.selectedSessionState.status !== "ready"
+    ) {
+      return "Chat unavailable";
+    }
+    return options.selectedSessionState.session.title;
+  }
+  if (options.accepted) return options.currentSessionTitle ?? "Untitled";
+  return "New chat";
 }
 
 export function readBrowserChatThread(
@@ -904,17 +1154,21 @@ export function readBrowserChatThread(
   createId: () => string = () => crypto.randomUUID(),
 ): BrowserChatThread {
   const parameters = new URLSearchParams(search);
+  const keys = [...parameters.keys()];
   const sessions = parameters.getAll("session");
-  const session = sessions.length === 1 ? sessions[0] : undefined;
-  if (session !== undefined && uuidPattern.test(session)) {
-    return { id: session.toLowerCase(), persisted: true };
+  if (keys.length === 0) {
+    return { id: createId(), kind: "new" };
   }
-  return { id: createId(), persisted: false };
-}
-
-export function chatSessionHref(threadId: string): string {
-  const parameters = new URLSearchParams({ session: threadId });
-  return `/chat?${parameters.toString()}`;
+  const session = sessions.length === 1 ? sessions[0] : undefined;
+  if (
+    keys.every((key) => key === "session")
+    && keys.length === 1
+    && session !== undefined
+    && isUuid(session)
+  ) {
+    return { id: session.toLowerCase(), kind: "session" };
+  }
+  return { id: null, kind: "invalid" };
 }
 
 export function chatMessageBytes(message: string): number {

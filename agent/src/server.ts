@@ -9,11 +9,15 @@ async function main(): Promise<void> {
   const settings = readAgentSettings();
   const researchRuntime = await createResearchRuntime(settings);
   const app = createAgentApp({
+    deleteSession: researchRuntime.deleteSession,
     handleRuntime: researchRuntime.handle,
     modelCatalog: settings.modelRegistry.safeCatalog,
     publicOrigin: settings.publicOrigin,
     readiness: researchRuntime.ready,
+    renameSession: researchRuntime.renameSession,
+    session: researchRuntime.session,
     sessionPreference: researchRuntime.preference,
+    sessions: researchRuntime.sessions,
     verifySession: createSessionVerifier({
       authInternalOrigin: settings.authInternalOrigin,
     }),

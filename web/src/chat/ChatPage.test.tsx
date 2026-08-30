@@ -1,3 +1,4 @@
+import type { AgentSubscriber } from "@ag-ui/client";
 import type { Message } from "@ag-ui/core";
 import { expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -8,10 +9,20 @@ import {
   ChatShell,
   ToolActivityRow,
   chatMessageBytes,
-  chatSessionHref,
   chatTimelineItems,
   readBrowserChatThread,
+  startExistingSessionConnection,
+  type ConversationStatus,
 } from "./ChatPage";
+import { chatSessionHref } from "./chatNavigation";
+import {
+  SessionHistoryList,
+  sessionDialogErrorMessage,
+} from "./SessionHistoryList";
+import {
+  AgentSessionInvalidError,
+  AgentSessionTitleInvalidError,
+} from "./sessionHistory";
 
 const safeRunMarker = JSON.stringify({
   outcome: "completed",
@@ -44,14 +55,34 @@ const catalogState = {
     ],
   },
 };
+const sessionHistory = {
+  deleteSession: vi.fn(async () => undefined),
+  error: null,
+  loadMore: vi.fn(async () => undefined),
+  loadingMore: false,
+  nextCursor: null,
+  refresh: vi.fn(),
+  refreshVersion: 0,
+  renameSession: vi.fn(async (session, title: string) => ({
+    id: session.id,
+    title,
+    version: session.version,
+  })),
+  sessions: [],
+  status: "ready" as const,
+  watchGeneratedTitle: vi.fn(),
+};
 
 test("renders the standalone Chat hierarchy and safe model controls", () => {
   const markup = renderToStaticMarkup(
     <AuthProvider>
       <ChatShell
         catalogState={catalogState}
+        navigateChat={vi.fn()}
         preferenceState={{ status: "not-required" }}
         reloadCatalog={vi.fn()}
+        selectedSessionState={{ status: "not-required" }}
+        sessionHistory={sessionHistory}
       />
     </AuthProvider>,
   );
@@ -82,32 +113,160 @@ test("renders the standalone Chat hierarchy and safe model controls", () => {
   expect(markup).not.toMatch(/temperature|top-p|token budget|endpoint|byok/i);
 });
 
+test("uses explicit loading and Not Found titles instead of an Untitled fallback", () => {
+  const thread = {
+    id: "00000000-0000-4000-8000-000000000111",
+    kind: "session" as const,
+  };
+  const loading = renderToStaticMarkup(
+    <AuthProvider>
+      <ChatShell
+        catalogState={catalogState}
+        navigateChat={vi.fn()}
+        preferenceState={{ status: "loading" }}
+        reloadCatalog={vi.fn()}
+        selectedSessionState={{ status: "loading" }}
+        sessionHistory={sessionHistory}
+        thread={thread}
+      />
+    </AuthProvider>,
+  );
+  expect(loading).toContain("Loading Chat");
+  expect(loading).not.toContain("<strong>Untitled</strong>");
+
+  const missing = renderToStaticMarkup(
+    <AuthProvider>
+      <ChatShell
+        catalogState={catalogState}
+        navigateChat={vi.fn()}
+        preferenceState={{ status: "not-found" }}
+        reloadCatalog={vi.fn()}
+        selectedSessionState={{ status: "not-found" }}
+        sessionHistory={sessionHistory}
+        thread={thread}
+      />
+    </AuthProvider>,
+  );
+  expect(missing).toContain("<strong>Chat not found</strong>");
+  expect(missing).not.toContain("<strong>Untitled</strong>");
+});
+
 test("keeps New Chat ephemeral until a valid opaque session is present", () => {
   const generated = "00000000-0000-4000-8000-000000000111";
   expect(readBrowserChatThread("", () => generated)).toEqual({
     id: generated,
-    persisted: false,
+    kind: "new",
   });
   expect(readBrowserChatThread("?session=prototype", () => generated)).toEqual({
-    id: generated,
-    persisted: false,
+    id: null,
+    kind: "invalid",
   });
   expect(readBrowserChatThread(
     "?session=AA000000-0000-4000-8000-000000000222",
     () => generated,
   )).toEqual({
     id: "aa000000-0000-4000-8000-000000000222",
-    persisted: true,
+    kind: "session",
   });
+  expect(readBrowserChatThread(
+    "?session=00000000-0000-4000-8000-000000000111&session=00000000-0000-4000-8000-000000000222",
+    () => generated,
+  )).toEqual({ id: null, kind: "invalid" });
+  expect(readBrowserChatThread(
+    "?session=00000000-0000-0000-0000-000000000000",
+    () => generated,
+  )).toEqual({ id: null, kind: "invalid" });
+  expect(readBrowserChatThread(
+    "?session=ffffffff-ffff-ffff-ffff-ffffffffffff",
+    () => generated,
+  )).toEqual({ id: null, kind: "invalid" });
   expect(chatSessionHref(generated)).toBe(
     "/chat?session=00000000-0000-4000-8000-000000000111",
   );
+});
+
+test("renders explicit full and compact text for an active Agent run", () => {
+  const markup = renderToStaticMarkup(
+    <SessionHistoryList
+      controller={{
+        ...sessionHistory,
+        sessions: [{
+          active_run: true,
+          activity_at: "2020-01-02T00:00:00.000000Z",
+          created_at: "2020-01-01T00:00:00.000000Z",
+          id: "00000000-0000-4000-8000-000000000111",
+          title: "Quality Alpha",
+          version: "2020-01-02T00:00:00.000000Z",
+        }],
+      }}
+      currentSessionId={null}
+      navigate={vi.fn()}
+      navigationInteractive={true}
+      restoreFocus={vi.fn()}
+    />,
+  );
+
+  expect(markup).toContain('class="chat-session-run-full">Running</span>');
+  expect(markup).toContain('class="chat-session-run-compact">Run</span>');
+  expect(markup).toContain('aria-label="Quality Alpha, Running"');
 });
 
 test("counts the UTF-8 payload rather than JavaScript code units", () => {
   expect(chatMessageBytes("alpha")).toBe(5);
   expect(chatMessageBytes("低波动")).toBe(9);
   expect(chatMessageBytes("α")).toBe(2);
+});
+
+test("keeps an active reconnect subscribed when its title settles before the terminal event", async () => {
+  const connectionState: {
+    resolve?: () => void;
+    subscriber?: AgentSubscriber;
+  } = {};
+  let titleMaySettle = true;
+  const statuses: ConversationStatus[] = [];
+  const onTitleMaySettle = vi.fn();
+  const connection = new Promise<void>((resolve) => {
+    connectionState.resolve = resolve;
+  });
+  const dispose = startExistingSessionConnection({
+    connect: async (candidate) => {
+      connectionState.subscriber = candidate;
+      await connection;
+    },
+    failRunningTools: vi.fn(),
+    finishTool: vi.fn(),
+    onSessionChanged: vi.fn(),
+    onTitleMaySettle,
+    setError: vi.fn(),
+    setStatus: (status) => statuses.push(status),
+    shouldWatchTitle: () => titleMaySettle,
+    startTool: vi.fn(),
+    threadId: "00000000-0000-4000-8000-000000000111",
+  });
+  const subscriber = connectionState.subscriber;
+  if (subscriber === undefined) throw new Error("Reconnect did not install its subscriber");
+
+  await subscriber.onRunStartedEvent?.({} as never);
+  expect(statuses.at(-1)).toBe("running");
+
+  titleMaySettle = false;
+  await subscriber.onRunFinishedEvent?.({} as never);
+  expect(statuses.at(-1)).toBe("complete");
+  expect(onTitleMaySettle).not.toHaveBeenCalled();
+
+  connectionState.resolve?.();
+  await connection;
+  await vi.waitFor(() => expect(statuses.at(-1)).toBe("idle"));
+  dispose();
+});
+
+test("shows distinct rename guidance for local input and malformed server responses", () => {
+  expect(sessionDialogErrorMessage("rename", new AgentSessionTitleInvalidError())).toBe(
+    "Choose a title between 1 and 80 characters other than Untitled.",
+  );
+  expect(sessionDialogErrorMessage("rename", new AgentSessionInvalidError())).toBe(
+    "The Chat title response was invalid.",
+  );
 });
 
 test("renders Tool lifecycle metadata without arguments or results", () => {

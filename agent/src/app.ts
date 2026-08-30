@@ -1,10 +1,30 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 
 import { AgentAuthenticationUnavailableError } from "./failure.js";
+import { isChatThreadId } from "./chat-request.js";
 import type { SafeModelCatalog } from "./model-registry.js";
+import {
+  MAX_SESSION_RENAME_BODY_BYTES,
+  SessionInputError,
+  readRenameSessionInput,
+  readSessionCursor,
+  type SessionCursor,
+} from "./session-management.js";
+import {
+  SessionActiveRunError,
+  SessionNotFoundError,
+  SessionVersionConflictError,
+  type RenamedSession,
+  type SessionPage,
+} from "./session-repository.js";
 import type { VerifiedResearcher } from "./session-verifier.js";
 
 export type AgentAppDependencies = Readonly<{
+  deleteSession: (
+    threadId: string,
+    researcher: VerifiedResearcher,
+  ) => Promise<void>;
   handleRuntime: (
     request: Request,
     researcher: VerifiedResearcher,
@@ -12,6 +32,20 @@ export type AgentAppDependencies = Readonly<{
   modelCatalog: SafeModelCatalog;
   publicOrigin: string;
   readiness?: () => Promise<boolean>;
+  renameSession: (
+    threadId: string,
+    researcher: VerifiedResearcher,
+    title: string,
+    expectedVersion: Date,
+  ) => Promise<RenamedSession>;
+  session: (
+    threadId: string,
+    researcher: VerifiedResearcher,
+  ) => Promise<SessionPage["sessions"][number]>;
+  sessions: (
+    cursor: SessionCursor | undefined,
+    researcher: VerifiedResearcher,
+  ) => Promise<SessionPage>;
   sessionPreference: (
     threadId: string,
     researcher: VerifiedResearcher,
@@ -69,6 +103,79 @@ export function createAgentApp(dependencies: AgentAppDependencies): Hono<AgentAp
     return context.json(dependencies.modelCatalog);
   });
 
+  app.get("/api/agent/sessions", async (context) => {
+    try {
+      const page = await dependencies.sessions(
+        readSessionCursor(context.req.raw),
+        context.get("researcher"),
+      );
+      return context.json({
+        next_cursor: page.nextCursor,
+        sessions: page.sessions.map(sessionResponse),
+      });
+    } catch (error) {
+      return sessionErrorResponse(context, error);
+    }
+  });
+
+  app.get("/api/agent/sessions/:threadId", async (context) => {
+    const threadId = context.req.param("threadId");
+    if (!isChatThreadId(threadId)) {
+      return context.json({ code: "CHAT_SESSION_NOT_FOUND" }, 404);
+    }
+    try {
+      return context.json(sessionResponse(await dependencies.session(
+        threadId,
+        context.get("researcher"),
+      )));
+    } catch (error) {
+      return sessionErrorResponse(context, error);
+    }
+  });
+
+  app.patch(
+    "/api/agent/sessions/:threadId",
+    bodyLimit({
+      maxSize: MAX_SESSION_RENAME_BODY_BYTES,
+      onError: (context) => context.json({ code: "INVALID_CHAT_SESSION_REQUEST" }, 400),
+    }),
+    async (context) => {
+      const threadId = context.req.param("threadId");
+      if (!isChatThreadId(threadId)) {
+        return context.json({ code: "CHAT_SESSION_NOT_FOUND" }, 404);
+      }
+      try {
+        const input = await readRenameSessionInput(context.req.raw);
+        const session = await dependencies.renameSession(
+          threadId,
+          context.get("researcher"),
+          input.title,
+          input.expectedVersion,
+        );
+        return context.json({
+          id: session.id,
+          title: session.title,
+          version: session.version,
+        });
+      } catch (error) {
+        return sessionErrorResponse(context, error);
+      }
+    },
+  );
+
+  app.delete("/api/agent/sessions/:threadId", async (context) => {
+    const threadId = context.req.param("threadId");
+    if (!isChatThreadId(threadId) || new URL(context.req.url).search.length > 0) {
+      return context.json({ code: "CHAT_SESSION_NOT_FOUND" }, 404);
+    }
+    try {
+      await dependencies.deleteSession(threadId, context.get("researcher"));
+      return context.body(null, 204);
+    } catch (error) {
+      return sessionErrorResponse(context, error);
+    }
+  });
+
   app.get("/api/agent/sessions/:threadId/preferences", async (context) => {
     const preference = await dependencies.sessionPreference(
       context.req.param("threadId"),
@@ -88,6 +195,36 @@ export function createAgentApp(dependencies: AgentAppDependencies): Hono<AgentAp
   });
 
   return app;
+}
+
+function sessionResponse(session: SessionPage["sessions"][number]) {
+  return {
+    active_run: session.activeRun,
+    activity_at: session.activityAt,
+    created_at: session.createdAt,
+    id: session.id,
+    title: session.title,
+    version: session.version,
+  };
+}
+
+function sessionErrorResponse(
+  context: Parameters<Parameters<Hono<AgentAppEnvironment>["onError"]>[0]>[1],
+  error: unknown,
+): Response {
+  if (error instanceof SessionInputError) {
+    return context.json({ code: "INVALID_CHAT_SESSION_REQUEST" }, 400);
+  }
+  if (error instanceof SessionNotFoundError) {
+    return context.json({ code: "CHAT_SESSION_NOT_FOUND" }, 404);
+  }
+  if (error instanceof SessionVersionConflictError) {
+    return context.json({ code: "CHAT_SESSION_CHANGED" }, 409);
+  }
+  if (error instanceof SessionActiveRunError) {
+    return context.json({ code: "CHAT_SESSION_RUN_ACTIVE" }, 409);
+  }
+  throw error;
 }
 
 function isSameOriginBrowserRequest(headers: Headers, publicOrigin: string): boolean {

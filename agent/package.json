@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "eval:session-title": "pnpm build && node scripts/eval-session-title.mjs",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
     "test:integration": "./scripts/test-runtime integration",

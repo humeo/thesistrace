@@ -21,7 +21,10 @@ import {
 
 import { safeBrowserMessages } from "./browser-message-safety.js";
 import { chatRunFingerprint } from "./chat-request.js";
-import type { ResearchSessionRepository } from "./session-repository.js";
+import {
+  SessionActiveRunError,
+  type ResearchSessionRepository,
+} from "./session-repository.js";
 
 export const RESEARCHER_ID_HEADER = "x-thesistrace-agent-researcher-id";
 
@@ -34,12 +37,16 @@ type ActiveRun = Readonly<{
 export class DurableResearchAgentRunner extends AgentRunner {
   private readonly delegate = new InMemoryAgentRunner({ onConcurrentRun: "throw" });
   private readonly active = new Map<string, ActiveRun>();
+  private readonly sessionMutations = new Set<string>();
 
   constructor(private readonly repository: ResearchSessionRepository) {
     super();
   }
 
   run(request: AgentRunnerRunRequest): Observable<BaseEvent> {
+    if (this.sessionMutations.has(request.threadId)) {
+      throw new SessionActiveRunError();
+    }
     const current = this.active.get(request.threadId);
     const fingerprint = chatRunFingerprint(request.input);
     if (current?.runId === request.input.runId) {
@@ -126,6 +133,21 @@ export class DurableResearchAgentRunner extends AgentRunner {
 
   stop(request: AgentRunnerStopRequest): Promise<boolean | undefined> {
     return this.delegate.stop(request);
+  }
+
+  async mutateSessionWhenIdle<T>(
+    threadId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (this.active.has(threadId) || this.sessionMutations.has(threadId)) {
+      throw new SessionActiveRunError();
+    }
+    this.sessionMutations.add(threadId);
+    try {
+      return await operation();
+    } finally {
+      this.sessionMutations.delete(threadId);
+    }
   }
 
   private removeActive(threadId: string, runId: string): void {

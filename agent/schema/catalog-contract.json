@@ -860,8 +860,8 @@
       "relation": "chat_session"
     },
     {
-      "definition": "CREATE INDEX chat_session_researcher_created_idx ON agent.chat_session USING btree (researcher_id, created_at DESC, id)",
-      "name": "chat_session_researcher_created_idx",
+      "definition": "CREATE INDEX chat_session_researcher_activity_idx ON agent.chat_session USING btree (researcher_id, updated_at DESC, id DESC)",
+      "name": "chat_session_researcher_activity_idx",
       "relation": "chat_session"
     },
     {

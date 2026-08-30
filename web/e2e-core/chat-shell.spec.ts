@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 
 import {
   createResearcher,
@@ -72,8 +72,10 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   await expect(sidebar.getByLabel("Account menu")).toBeVisible();
 
   const collapse = page.getByRole("button", { name: "Collapse sidebar" });
+  await expect(page.getByText("No conversations yet", { exact: true })).toBeVisible();
   await collapse.click();
   await expect(page.locator(".chat-shell")).toHaveClass(/chat-shell-collapsed/);
+  await expect(sidebar.getByText("Empty", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute(
     "aria-expanded",
     "false",
@@ -123,18 +125,21 @@ test("an unknown durable Session URL fails closed instead of becoming a new Chat
   const unknownSession = "00000000-0000-4000-8000-000000000999";
   await page.goto(`/chat?session=${unknownSession}`);
 
-  await expect(page.getByRole("alert")).toHaveText(
-    "The Research Agent session could not be loaded.",
-  );
-  await expect(agentRunStatus(page)).toHaveText("Agent disconnected");
-  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "Chat not found" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Start a New Chat" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`/chat\\?session=${unknownSession}$`));
+
+  await page.goto(`/chat?session=${unknownSession}&session=${unknownSession}`);
+  await expect(page.getByRole("heading", { name: "Chat not found" })).toBeVisible();
+  await expect(page).toHaveURL(/\/chat\?session=.*&session=.*/);
 });
 
 test("first Chat turn streams through Caddy and reload replays without another run", async ({ page }) => {
   const runRequests: string[] = [];
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname.endsWith("/agent/research/run")) {
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/agent/research/run")) {
       runRequests.push(request.url());
     }
   });
@@ -142,6 +147,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await page.goto("/chat");
   const message = page.getByRole("textbox", { name: "Message", exact: true });
   await expect(message).toBeEnabled();
+  await expect(page.getByText("No conversations yet", { exact: true })).toBeVisible();
   expect(new URL(page.url()).searchParams.get("session")).toBeNull();
   await page.getByLabel("Model", { exact: true }).selectOption(
     "scripted-deep-research",
@@ -170,13 +176,211 @@ test("first Chat turn streams through Caddy and reload replays without another r
   expect(assistantText.trim().length).toBeGreaterThan(0);
   expect(new TextEncoder().encode(assistantText).byteLength).toBeLessThanOrEqual(512);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
+  const generatedTitleElement = page.locator(".chat-session-title strong");
+  await expect.poll(async () => {
+    const value = (await generatedTitleElement.textContent())?.trim();
+    return value !== undefined
+      && !["", "New Chat", "Loading Chat", "Untitled"].includes(value)
+      ? value
+      : null;
+  }).not.toBeNull();
+  const generatedTitle = (await generatedTitleElement.textContent())?.trim();
+  if (generatedTitle === undefined || generatedTitle.length === 0) {
+    throw new Error("Accepted Chat exposed no generated title");
+  }
+  expect([...generatedTitle].length).toBeLessThanOrEqual(80);
+  await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
+  const generatedSessionLink = page.getByRole("link", { name: generatedTitle, exact: true });
+  await expect(generatedSessionLink).toHaveAttribute("aria-current", "page");
+  const durableUrl = page.url();
+  const durableSession = new URL(durableUrl).searchParams.get("session");
+  if (durableSession === null) throw new Error("Accepted Chat exposed no durable Session id");
+  setAgentSessionTitle(durableSession, "Untitled");
+  await page.reload();
+  await expect(page.locator(".chat-session-title strong")).toHaveText("Untitled");
+  await expect(agentRunStatus(page)).toHaveText("Ready");
+  const failedDelete = async (route: Route) => {
+    if (route.request().method() !== "DELETE") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      body: JSON.stringify({ code: "AGENT_SERVICE_UNAVAILABLE" }),
+      contentType: "application/json",
+      status: 503,
+    });
+  };
+  await page.route("**/api/agent/sessions/*", failedDelete);
+  await page.getByRole("button", { name: "Actions for Untitled" }).click();
+  await page.getByRole("menuitem", { name: "Delete Chat" }).click();
+  const failedDeleteDialog = page.getByRole("dialog", { name: "Delete Chat?" });
+  await failedDeleteDialog.getByRole("button", { name: "Delete Chat" }).click();
+  await expect(failedDeleteDialog.getByRole("alert")).toHaveText(
+    "The Chat could not be deleted.",
+  );
+  await page.unroute("**/api/agent/sessions/*", failedDelete);
+  await failedDeleteDialog.getByRole("button", { name: "Close dialog" }).click();
+  await expect(failedDeleteDialog).toHaveCount(0);
+  const recoveredTitle = "Recovered Chat title";
+  const transitioningActions = page.getByRole("button", { name: "Actions for Untitled" });
+  await transitioningActions.click();
+  const transitioningDelete = page.getByRole("menuitem", { name: "Delete Chat" });
+  await page.keyboard.press("Tab");
+  await expect(transitioningDelete).toBeFocused();
+  setAgentSessionActiveRun(durableSession, true);
+  try {
+    setAgentSessionTitle(durableSession, recoveredTitle);
+    await expect(page.getByRole("menu", { name: "Actions for Untitled" })).toHaveCount(0);
+    await expect(page.getByRole("button", {
+      name: `Actions for ${recoveredTitle}`,
+    })).toBeFocused();
+    await expect(page.getByRole("link", {
+      exact: true,
+      name: `${recoveredTitle}, Running`,
+    })).toHaveAttribute("aria-current", "page");
+  } finally {
+    setAgentSessionActiveRun(durableSession, false);
+  }
+  await expect(page.locator(".chat-session-title strong")).toHaveText(recoveredTitle);
+  seedActiveAgentLayoutSession(durableSession);
+  await page.reload();
+  const activeLayoutRow = page.locator(".chat-session-row").filter({
+    hasText: "Active layout session",
+  });
+  await expect(activeLayoutRow).toBeVisible();
+  await page.getByRole("button", { name: "Collapse sidebar" }).click();
+  const activeLayoutIconBounds = await activeLayoutRow.locator("a svg").boundingBox();
+  const activeLayoutStatus = activeLayoutRow.locator(".chat-session-run-compact");
+  await expect(activeLayoutStatus).toHaveText("Run");
+  await expect(activeLayoutStatus).toHaveCSS("font-size", "12px");
+  await expect(activeLayoutRow.getByRole("link", {
+    exact: true,
+    name: "Active layout session, Running",
+  })).toBeVisible();
+  const currentIndicator = await page.locator(".chat-session-row-current").evaluate((element) => {
+    const style = window.getComputedStyle(element, "::before");
+    return { backgroundColor: style.backgroundColor, width: style.width };
+  });
+  expect(currentIndicator.width).toBe("2px");
+  expect(currentIndicator.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+  const activeLayoutStatusBounds = await activeLayoutStatus.boundingBox();
+  if (activeLayoutIconBounds === null || activeLayoutStatusBounds === null) {
+    throw new Error("Collapsed active Session did not expose measurable icon and status");
+  }
+  expect(activeLayoutIconBounds.y + activeLayoutIconBounds.height)
+    .toBeLessThanOrEqual(activeLayoutStatusBounds.y);
+  const collapsedActions = page.getByRole("button", { name: `Actions for ${recoveredTitle}` });
+  await expect(collapsedActions).toBeVisible();
+  const collapsedActionTarget = await collapsedActions.boundingBox();
+  expect(collapsedActionTarget?.width).toBeGreaterThanOrEqual(36);
+  expect(collapsedActionTarget?.height).toBeGreaterThanOrEqual(36);
+  await collapsedActions.click();
+  const collapsedRenameMenuItem = page.getByRole("menuitem", { name: "Rename" });
+  await expect(collapsedRenameMenuItem).toBeVisible();
+  await expect(collapsedRenameMenuItem).toBeFocused();
+  const collapsedMenu = page.getByRole("menu", { name: `Actions for ${recoveredTitle}` });
+  const collapsedMenuBounds = await collapsedMenu.boundingBox();
+  const viewport = page.viewportSize();
+  expect(collapsedMenuBounds?.width).toBeGreaterThanOrEqual(150);
+  expect(collapsedMenuBounds?.x).toBeGreaterThanOrEqual(0);
+  expect((collapsedMenuBounds?.x ?? 0) + (collapsedMenuBounds?.width ?? 0))
+    .toBeLessThanOrEqual(viewport?.width ?? 0);
+  await page.keyboard.press("Escape");
+  await expect(collapsedActions).toBeFocused();
+  await page.getByRole("button", { name: "Expand sidebar" }).click();
+  removeActiveAgentLayoutSession();
+  await page.reload();
 
   const response = await responsePromise;
   expect(response.status).toBe(200);
   expect(response.headers["content-type"]).toContain("text/event-stream");
   expect(runRequests).toHaveLength(1);
 
-  const durableUrl = page.url();
+  const sessionActions = page.getByRole("button", { name: `Actions for ${recoveredTitle}` });
+  await sessionActions.click();
+  const renameMenuItem = page.getByRole("menuitem", { name: "Rename" });
+  const deleteMenuItem = page.getByRole("menuitem", { name: "Delete Chat" });
+  await expect(renameMenuItem).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(deleteMenuItem).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(renameMenuItem).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(deleteMenuItem).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(sessionActions).toBeFocused();
+  await sessionActions.click();
+  await expect(renameMenuItem).toBeFocused();
+  await page.evaluate(() => window.dispatchEvent(new Event("resize")));
+  await expect(page.getByRole("menu", { name: `Actions for ${recoveredTitle}` })).toHaveCount(0);
+  await expect(sessionActions).toBeFocused();
+  await sessionActions.click();
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  const renameDialog = page.getByRole("dialog", { name: "Rename Chat" });
+  await expect(renameDialog.getByLabel("Title")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(renameDialog).toHaveCount(0);
+  await expect(sessionActions).toBeFocused();
+  await sessionActions.click();
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  const renamedTitle = "😀".repeat(80);
+  await renameDialog.getByLabel("Title").fill("Untitled");
+  await renameDialog.getByRole("button", { name: "Save title" }).click();
+  await expect(renameDialog.getByRole("alert")).toHaveText(
+    "Choose a title between 1 and 80 characters other than Untitled.",
+  );
+
+  const malformedRename = async (route: Route) => {
+    if (route.request().method() !== "PATCH") {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      body: JSON.stringify({
+        id: durableSession,
+        title: "Malformed response",
+        version: "2026-08-30T04:00:01.000Z",
+      }),
+      contentType: "application/json",
+      status: 200,
+    });
+  };
+  await page.route("**/api/agent/sessions/*", malformedRename);
+  await renameDialog.getByLabel("Title").fill("Valid local title");
+  await renameDialog.getByRole("button", { name: "Save title" }).click();
+  await expect(renameDialog.getByRole("alert")).toHaveText(
+    "The Chat title response was invalid.",
+  );
+  await page.unroute("**/api/agent/sessions/*", malformedRename);
+
+  await renameDialog.getByLabel("Title").fill(renamedTitle);
+  await renameDialog.getByRole("button", { name: "Save title" }).click();
+  await expect(renameDialog).toHaveCount(0);
+  await expect(page.locator(".chat-session-title strong")).toHaveText(renamedTitle);
+  await expect(page.getByRole("link", { name: renamedTitle, exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+
+  await page.getByRole("link", { name: "New Chat", exact: true }).click();
+  await expect(page).toHaveURL(/\/chat$/);
+  await expect(
+    page.getByRole("heading", { name: "Turn an investment idea into Alpha" }),
+  ).toBeVisible();
+  await page.getByRole("textbox", { name: "Message", exact: true }).fill(
+    "This unsent draft belongs only to the ephemeral Chat.",
+  );
+  await page.goBack();
+  await expect(page).toHaveURL(durableUrl);
+  await expect(page.getByText("Build a low volatility Alpha.", { exact: true })).toBeVisible();
+  await expect(page.locator(".chat-session-title strong")).toHaveText(renamedTitle);
+  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue("");
+  await page.goForward();
+  await expect(page).toHaveURL(/\/chat$/);
+  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue("");
+  await page.getByRole("link", { name: renamedTitle, exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/chat\\?session=${durableSession}$`));
+
   await page.reload();
   await expect(page).toHaveURL(durableUrl);
   await expect(agentRunStatus(page)).toHaveText("Ready");
@@ -191,7 +395,78 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await expect(page.locator(".chat-message-assistant .chat-message-content")).toHaveText(
     assistantText,
   );
+  await expect(page.locator(".chat-session-title strong")).toHaveText(renamedTitle);
   expect(runRequests).toHaveLength(1);
+
+  await page.setViewportSize({ height: 844, width: 390 });
+  const openNavigation = page.getByRole("button", { name: "Open navigation" });
+  await openNavigation.click();
+  const mobileActions = page.getByRole("button", { name: `Actions for ${renamedTitle}` });
+  const mobileSessionLink = page.getByRole("link", { name: renamedTitle, exact: true });
+  for (const target of [mobileActions, mobileSessionLink]) {
+    const bounds = await target.boundingBox();
+    expect(bounds?.width).toBeGreaterThanOrEqual(44);
+    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+  }
+  await mobileActions.click();
+  await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toBeVisible();
+  const navigationBackdrop = page.locator(".chat-navigation-backdrop");
+  const navigationBackdropBounds = await navigationBackdrop.boundingBox();
+  if (navigationBackdropBounds === null) {
+    throw new Error("Mobile navigation exposed no clickable backdrop");
+  }
+  await navigationBackdrop.click({
+    position: {
+      x: navigationBackdropBounds.width - 8,
+      y: navigationBackdropBounds.height / 2,
+    },
+  });
+  await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toHaveCount(0);
+  await expect(page.locator("#chat-navigation")).toHaveAttribute("inert", "");
+  await expect(openNavigation).toBeFocused();
+  await openNavigation.click();
+  await mobileActions.click();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".chat-shell")).toHaveClass(/chat-shell-navigation-open/);
+  await expect(mobileActions).toBeFocused();
+  await mobileActions.click();
+  await page.getByRole("menuitem", { name: "Rename" }).click();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".chat-shell")).toHaveClass(/chat-shell-navigation-open/);
+  await expect(mobileActions).toBeFocused();
+  await mobileActions.click();
+  await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toBeVisible();
+  expect((await page.request.delete(`/api/agent/sessions/${durableSession}`, {
+    headers: sameOriginHeaders(),
+  })).status()).toBe(204);
+  await page.evaluate(async () => {
+    const input = document.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Message"]',
+    );
+    const form = input?.closest("form");
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    if (
+      !(input instanceof HTMLTextAreaElement)
+      || !(form instanceof HTMLFormElement)
+      || valueSetter === undefined
+    ) {
+      throw new Error("Chat composer is unavailable");
+    }
+    valueSetter.call(input, "Refresh the deleted Session state.");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    form.requestSubmit();
+  });
+  await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toHaveCount(0);
+  await expect(page.getByText("No conversations yet", { exact: true })).toBeVisible();
+  await expect(page.locator(".chat-shell")).toHaveClass(/chat-shell-navigation-open/);
+  await expect(page.getByRole("link", { name: "New Chat", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".chat-shell")).not.toHaveClass(/chat-shell-navigation-open/);
+  await expect(openNavigation).toBeFocused();
 });
 
 test("Chat executes a real protected MCP read Tool and renders only its safe lifecycle", async ({ page }) => {
@@ -270,9 +545,15 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
     assistantText,
   );
   await expect(page.locator("body")).not.toContainText("Tool completed.");
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("link", { name: "New Chat", exact: true }).click();
+  await expect(page.getByRole("article", {
+    name: "Tool get_research_context: Completed",
+  })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue("");
 });
 
-test("an admitted Factor outlives its Agent Run and a later Chat Run explains the real Result", async ({
+test("admitted Research artifacts and a DailyTrack outlive the Chat that created them", async ({
   page,
   researcher,
 }) => {
@@ -362,14 +643,66 @@ test("an admitted Factor outlives its Agent Run and a later Chat Run explains th
   await expect(result.locator("li")).not.toHaveCount(0);
   await expect(result.locator("a.chat-markdown-run-link")).toHaveAttribute("href", runHref);
 
+  await message.fill(scriptedStrategyPrompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
+  const strategyAdmission = page.getByRole("article", {
+    name: "Tool submit_research_run: Completed",
+  }).last();
+  const strategyRunHref = await strategyAdmission.locator("a.chat-tool-resource")
+    .getAttribute("href");
+  if (strategyRunHref === null) throw new Error("Strategy Tool exposed no safe Run route");
+  const strategyRunId = strategyRunHref.split("/").at(-1);
+  if (strategyRunId === undefined || !/^run_[a-f0-9]{20}$/.test(strategyRunId)) {
+    throw new Error("Strategy Tool exposed an invalid ResearchRun id");
+  }
+  expect(strategyRunId).not.toBe(runId);
+  const trackResponse = await page.request.post(
+    `/api/research-runs/${strategyRunId}/daily-tracks`,
+    {
+      data: { request_id: `chat-independence-${strategyRunId}` },
+      headers: sameOriginHeaders(),
+    },
+  );
+  expect(trackResponse.status()).toBe(201);
+  const track = await trackResponse.json() as { id: string };
+  expect(track.id).toMatch(/^track_[a-f0-9]{20}$/);
+  const stopTrack = await page.request.post(`/api/daily-tracks/${track.id}/stop`, {
+    data: { request_id: `chat-independence-stop-${track.id}` },
+    headers: sameOriginHeaders(),
+  });
+  expect(stopTrack.status()).toBe(202);
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/daily-tracks/${track.id}`);
+    if (!response.ok()) return `http:${response.status()}`;
+    return ((await response.json()) as { status: string }).status;
+  }, { timeout: 30_000 }).toBe("stopped");
+  const dailyTrackBeforeDelete = await (
+    await page.request.get(`/api/daily-tracks/${track.id}`)
+  ).json() as Record<string, unknown>;
+  expect(dailyTrackBeforeDelete).toMatchObject({
+    id: track.id,
+    origin: { seed_run_id: strategyRunId },
+    status: "stopped",
+  });
+
   const durableUrl = page.url();
   await page.reload();
   await expect(page).toHaveURL(durableUrl);
   await expect(agentRunStatus(page)).toHaveText("Ready");
   await expect(page.locator(".chat-tool-resource").filter({ hasText: runId }).first())
     .toHaveAttribute("href", runHref);
-  await expect(page.locator(".chat-message-assistant .chat-assistant-markdown").last())
+  await expect(page.locator(".chat-message-assistant .chat-assistant-markdown").filter({
+    hasText: rankIc,
+  }).last())
     .toContainText(rankIc);
+  const chatSessionId = new URL(durableUrl).searchParams.get("session");
+  if (chatSessionId === null) throw new Error("Durable Research Chat exposed no Session id");
+  const agentFactsBeforeDelete = agentChatDatabaseFacts(chatSessionId);
+  expect(agentFactsBeforeDelete.sessions).toBe(1);
+  expect(agentFactsBeforeDelete.threads).toBe(1);
+  expect(agentFactsBeforeDelete.messages).toBeGreaterThan(0);
+  expect(agentFactsBeforeDelete.runs).toBeGreaterThanOrEqual(2);
   await page.setViewportSize({ height: 900, width: 768 });
   const durableRunLink = page.locator("a.chat-markdown-run-link").last();
   await durableRunLink.scrollIntoViewIfNeeded();
@@ -385,11 +718,70 @@ test("an admitted Factor outlives its Agent Run and a later Chat Run explains th
   expect(foreignBootstrap.status()).toBe(200);
   expect(foreign.id).not.toBe(researcher.id);
   expect((await page.request.get(`/api/research-runs/${runId}`)).status()).toBe(404);
+  expect((await page.request.get(`/api/daily-tracks/${track.id}`)).status()).toBe(404);
+  await page.goto(durableUrl);
+  await expect(page.getByRole("heading", { name: "Chat not found" })).toBeVisible();
+  await expect(page.getByText(detailBody.input.hypothesis, { exact: true })).toHaveCount(0);
   await restoreResearcherSession(page, researcher);
   expect((await page.request.get(`/api/research-runs/${runId}`)).status()).toBe(200);
+  expect((await page.request.get(`/api/daily-tracks/${track.id}`)).status()).toBe(200);
+
+  await page.setViewportSize({ height: 900, width: 1280 });
+  await page.goto(durableUrl);
+  await expect(page.locator(".chat-message-assistant .chat-assistant-markdown").filter({
+    hasText: rankIc,
+  }).last())
+    .toContainText(rankIc);
+  const currentTitleText = await page.locator(".chat-session-title strong").textContent();
+  const currentTitle = currentTitleText?.trim();
+  if (currentTitle === undefined || currentTitle.length === 0) {
+    throw new Error("Durable Research Chat exposed no title");
+  }
+  await page.getByRole("button", { name: `Actions for ${currentTitle}` }).click();
+  await page.getByRole("menuitem", { name: "Delete Chat" }).click();
+  const deleteDialog = page.getByRole("dialog", { name: "Delete Chat?" });
+  await expect(deleteDialog).toContainText(
+    "ResearchRuns, Results, and Daily Tracks remain independent and are not deleted.",
+  );
+  await expect(deleteDialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await deleteDialog.getByRole("button", { name: "Delete Chat" }).click();
+  await expect(page).toHaveURL(/\/chat$/);
+  await expect(page.getByRole("heading", { name: "Turn an investment idea into Alpha" }))
+    .toBeVisible();
+  await expect(page.getByRole("link", { name: "New Chat", exact: true })).toBeFocused();
+  const deletedSessionResponse = await page.request.get(
+    `/api/agent/sessions/${chatSessionId}`,
+    { headers: sameOriginHeaders() },
+  );
+  expect(deletedSessionResponse.status()).toBe(404);
+  expect(await deletedSessionResponse.json()).toEqual({
+    code: "CHAT_SESSION_NOT_FOUND",
+  });
+
+  const agentFactsAfterDelete = agentChatDatabaseFacts(
+    chatSessionId,
+    agentFactsBeforeDelete.run_ids,
+  );
+  expect(agentFactsAfterDelete).toEqual({
+    messages: 0,
+    observational_memory: 0,
+    run_ids: [],
+    runs: 0,
+    sessions: 0,
+    snapshots: 0,
+    threads: 0,
+  });
 
   await page.goto(durableUrl);
-  await page.locator("a.chat-markdown-run-link").last().click();
+  await expect(page.getByRole("heading", { name: "Chat not found" })).toBeVisible();
+  const detailAfterChatDelete = await page.request.get(`/api/research-runs/${runId}`);
+  expect(detailAfterChatDelete.status()).toBe(200);
+  expect(await detailAfterChatDelete.json()).toEqual(detailBody);
+  const dailyTrackAfterChatDelete = await page.request.get(`/api/daily-tracks/${track.id}`);
+  expect(dailyTrackAfterChatDelete.status()).toBe(200);
+  expect(await dailyTrackAfterChatDelete.json()).toEqual(dailyTrackBeforeDelete);
+
+  await page.goto(runHref);
   await expect(page).toHaveURL(new RegExp(`/research-runs/${runId}$`));
   await expect(page.locator(".research-run-facts")).toContainText("Status succeeded");
   await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
@@ -695,6 +1087,242 @@ type ResearchAdmissionDatabaseFacts = Readonly<{
   run_id: string;
   status: string;
 }>;
+
+type AgentChatDatabaseFacts = Readonly<{
+  messages: number;
+  observational_memory: number;
+  run_ids: readonly string[];
+  runs: number;
+  sessions: number;
+  snapshots: number;
+  threads: number;
+}>;
+
+const activeLayoutSessionId = "00000000-0000-4000-8000-00000000f501";
+const activeLayoutRunId = "00000000-0000-4000-8000-00000000f502";
+const menuFocusRunId = "00000000-0000-4000-8000-00000000f503";
+
+function setAgentSessionActiveRun(threadId: string, active: boolean): void {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  if (!uuid.test(threadId)) {
+    throw new Error("Active Agent menu Session requires a safe source id");
+  }
+  if (!active) {
+    runAgentOwnerSql(`
+      DELETE FROM agent.agent_run
+      WHERE id = '${menuFocusRunId}'::uuid
+        AND thread_id = '${threadId}'::uuid;
+    `);
+    return;
+  }
+  runAgentOwnerSql(`
+    BEGIN;
+    DELETE FROM agent.agent_run WHERE id = '${menuFocusRunId}'::uuid;
+    INSERT INTO agent.agent_run (
+      id, thread_id, request_fingerprint, model_key, provider_model_id,
+      reasoning_effort, agent_build_revision, status
+    ) VALUES (
+      '${menuFocusRunId}'::uuid, '${threadId}'::uuid,
+      decode(repeat('56', 32), 'hex'), 'scripted-research', 'scripted-v1',
+      'medium', 'browser-menu-focus-test', 'running'
+    );
+    COMMIT;
+  `);
+}
+
+function seedActiveAgentLayoutSession(sourceThreadId: string): void {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  if (!uuid.test(sourceThreadId)) {
+    throw new Error("Active Agent layout Session requires a safe source id");
+  }
+  runAgentOwnerSql(`
+    BEGIN;
+    INSERT INTO agent.chat_session (
+      id, researcher_id, selected_model_key, selected_reasoning_effort,
+      created_at, updated_at
+    )
+    SELECT
+      '${activeLayoutSessionId}'::uuid, researcher_id,
+      selected_model_key, selected_reasoning_effort,
+      pg_catalog.now(), pg_catalog.now()
+    FROM agent.chat_session
+    WHERE id = '${sourceThreadId}'::uuid;
+    INSERT INTO agent."mastra_threads" (
+      id, "resourceId", title, metadata, "createdAt", "updatedAt",
+      "createdAtZ", "updatedAtZ"
+    )
+    SELECT
+      '${activeLayoutSessionId}', "resourceId", 'Active layout session', NULL,
+      pg_catalog.now()::timestamp without time zone,
+      pg_catalog.now()::timestamp without time zone,
+      pg_catalog.now(), pg_catalog.now()
+    FROM agent."mastra_threads"
+    WHERE id = '${sourceThreadId}';
+    INSERT INTO agent.agent_run (
+      id, thread_id, request_fingerprint, model_key, provider_model_id,
+      reasoning_effort, agent_build_revision, status
+    ) VALUES (
+      '${activeLayoutRunId}'::uuid, '${activeLayoutSessionId}'::uuid,
+      decode(repeat('55', 32), 'hex'), 'scripted-research', 'scripted-v1',
+      'medium', 'browser-layout-test', 'running'
+    );
+    COMMIT;
+  `);
+}
+
+function removeActiveAgentLayoutSession(): void {
+  runAgentOwnerSql(`
+    BEGIN;
+    DELETE FROM agent.chat_session WHERE id = '${activeLayoutSessionId}'::uuid;
+    DELETE FROM agent."mastra_threads" WHERE id = '${activeLayoutSessionId}';
+    COMMIT;
+  `);
+}
+
+function setAgentSessionTitle(threadId: string, title: string): void {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(threadId)
+    || !/^[A-Za-z ]{1,80}$/.test(title)
+  ) {
+    throw new Error("Agent Chat title setup requires safe values");
+  }
+  runAgentOwnerSql(`
+    UPDATE agent."mastra_threads"
+    SET title = '${title}',
+        "updatedAt" = pg_catalog.clock_timestamp()::timestamp without time zone,
+        "updatedAtZ" = pg_catalog.clock_timestamp()
+    WHERE id = '${threadId}';
+  `);
+}
+
+function runAgentOwnerSql(command: string): void {
+  execFileSync(
+    "docker",
+    [
+      "exec",
+      "--env",
+      "PGPASSWORD=owner-test-password",
+      `${testProjectName()}-postgres-1`,
+      "psql",
+      "--username",
+      "thesistrace_owner",
+      "--dbname",
+      "thesistrace",
+      "--set",
+      "ON_ERROR_STOP=1",
+      "--command",
+      command,
+    ],
+    { encoding: "utf8" },
+  );
+}
+
+function agentChatDatabaseFacts(
+  threadId: string,
+  snapshotRunIds: readonly string[] = [],
+): AgentChatDatabaseFacts {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  if (!uuid.test(threadId) || snapshotRunIds.some((runId) => !uuid.test(runId))) {
+    throw new Error("Agent Chat database inspection requires safe ids");
+  }
+  const snapshotIds = snapshotRunIds.length === 0
+    ? "ARRAY[]::text[]"
+    : `ARRAY[${snapshotRunIds.map((runId) => `'${runId}'`).join(", ")}]::text[]`;
+  const output = execFileSync(
+    "docker",
+    [
+      "exec",
+      "--env",
+      "PGPASSWORD=owner-test-password",
+      `${testProjectName()}-postgres-1`,
+      "psql",
+      "--username",
+      "thesistrace_owner",
+      "--dbname",
+      "thesistrace",
+      "--tuples-only",
+      "--no-align",
+      "--command",
+      `
+        SELECT json_build_object(
+          'messages', (
+            SELECT count(*)::integer
+            FROM agent."mastra_messages"
+            WHERE thread_id = '${threadId}'
+          ),
+          'observational_memory', (
+            SELECT count(*)::integer
+            FROM agent."mastra_observational_memory"
+            WHERE "threadId" = '${threadId}'
+          ),
+          'run_ids', COALESCE((
+            SELECT json_agg(id::text ORDER BY id)
+            FROM agent.agent_run
+            WHERE thread_id = '${threadId}'::uuid
+          ), '[]'::json),
+          'runs', (
+            SELECT count(*)::integer
+            FROM agent.agent_run
+            WHERE thread_id = '${threadId}'::uuid
+          ),
+          'sessions', (
+            SELECT count(*)::integer
+            FROM agent.chat_session
+            WHERE id = '${threadId}'::uuid
+          ),
+          'snapshots', (
+            SELECT count(*)::integer
+            FROM agent."mastra_workflow_snapshot"
+            WHERE run_id = ANY(${snapshotIds})
+          ),
+          'threads', (
+            SELECT count(*)::integer
+            FROM agent."mastra_threads"
+            WHERE id = '${threadId}'
+          )
+        )::text
+      `,
+    ],
+    {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+    },
+  ).trim();
+  const parsed = JSON.parse(output) as unknown;
+  if (
+    parsed === null
+    || typeof parsed !== "object"
+    || Array.isArray(parsed)
+    || !Object.hasOwn(parsed, "messages")
+    || !Object.hasOwn(parsed, "observational_memory")
+    || !Object.hasOwn(parsed, "run_ids")
+    || !Object.hasOwn(parsed, "runs")
+    || !Object.hasOwn(parsed, "sessions")
+    || !Object.hasOwn(parsed, "snapshots")
+    || !Object.hasOwn(parsed, "threads")
+  ) {
+    throw new Error("Agent Chat database facts are invalid");
+  }
+  const record = parsed as Record<string, unknown>;
+  const counts = [
+    record.messages,
+    record.observational_memory,
+    record.runs,
+    record.sessions,
+    record.snapshots,
+    record.threads,
+  ];
+  if (
+    !counts.every((count) => Number.isInteger(count) && Number(count) >= 0)
+    || !Array.isArray(record.run_ids)
+    || record.run_ids.some((runId: unknown) => typeof runId !== "string" || !uuid.test(runId))
+  ) {
+    throw new Error("Agent Chat database facts are invalid");
+  }
+  return record as AgentChatDatabaseFacts;
+}
 
 function researchRunDatabaseFacts(runId: string): ResearchRunDatabaseFacts {
   if (!/^run_[a-f0-9]{20}$/.test(runId)) {

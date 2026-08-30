@@ -11,6 +11,7 @@ import {
   parseSafeToolResult,
 } from "./safe-tool-result.js";
 import type { ModelRegistry, ReasoningEffort } from "./model-registry.js";
+import { isCanonicalUuid } from "./uuid.js";
 
 export const MAX_CHAT_MESSAGE_BYTES = 16 * 1024;
 const MAX_TRANSCRIPT_MESSAGES = 256;
@@ -19,10 +20,10 @@ const MAX_ASSISTANT_MESSAGE_BYTES = 256 * 1024;
 const MAX_TOOL_CALLS_PER_MESSAGE = 32;
 const MAX_TOOL_CALL_ID_BYTES = 512;
 const TOOL_NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
-const uuidSchema = z.uuid();
 const selectionSchema = z.object({
   modelKey: z.string(),
   reasoningEffort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]),
+  sessionMode: z.enum(["new", "existing"]),
 }).strict();
 
 export type ValidatedChatRun = Readonly<{
@@ -30,6 +31,7 @@ export type ValidatedChatRun = Readonly<{
   latestUserMessage: Readonly<{ content: string; id: string; role: "user" }>;
   modelKey: string;
   reasoningEffort: ReasoningEffort;
+  sessionMode: "new" | "existing";
 }>;
 
 export class ChatRequestError extends Error {
@@ -56,8 +58,8 @@ export async function readValidatedChatRun(
   if (!parsed.success) throw invalidRequest();
   const input = parsed.data;
   if (
-    !uuidSchema.safeParse(input.threadId).success
-    || !uuidSchema.safeParse(input.runId).success
+    !isCanonicalUuid(input.threadId)
+    || !isCanonicalUuid(input.runId)
     || input.parentRunId !== undefined
     || input.resume !== undefined
     || !isEmptyRecord(input.state)
@@ -108,6 +110,7 @@ export async function readValidatedChatRun(
     },
     modelKey: model.key,
     reasoningEffort: selection.data.reasoningEffort,
+    sessionMode: selection.data.sessionMode,
   };
 }
 
@@ -119,14 +122,14 @@ export async function readThreadId(request: Request): Promise<string> {
     throw invalidRequest();
   }
   const parsed = RunAgentInputSchema.safeParse(body);
-  if (!parsed.success || !uuidSchema.safeParse(parsed.data.threadId).success) {
+  if (!parsed.success || !isCanonicalUuid(parsed.data.threadId)) {
     throw invalidRequest();
   }
   return parsed.data.threadId;
 }
 
 export function isChatThreadId(value: string): boolean {
-  return uuidSchema.safeParse(value).success;
+  return isCanonicalUuid(value);
 }
 
 export function chatRunFingerprint(input: RunAgentInput): Buffer {
@@ -139,6 +142,9 @@ export function chatRunFingerprint(input: RunAgentInput): Buffer {
     modelKey: typeof forwarded.modelKey === "string" ? forwarded.modelKey : null,
     reasoningEffort: typeof forwarded.reasoningEffort === "string"
       ? forwarded.reasoningEffort
+      : null,
+    sessionMode: typeof forwarded.sessionMode === "string"
+      ? forwarded.sessionMode
       : null,
     runId: input.runId,
     threadId: input.threadId,
@@ -157,10 +163,10 @@ function validateBrowserTranscript(messages: RunAgentInput["messages"]): void {
       : null;
     if (
       (
-        !uuidSchema.safeParse(message.id).success
+        !isCanonicalUuid(message.id)
         && (
           splitTextParentId === null
-          || !uuidSchema.safeParse(splitTextParentId).success
+          || !isCanonicalUuid(splitTextParentId)
         )
       )
       || messageIds.has(message.id)

@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createAgentApp, type AgentAppDependencies } from "./app.js";
 import { AgentAuthenticationUnavailableError } from "./failure.js";
+import { encodeSessionCursor } from "./session-management.js";
+import {
+  SessionActiveRunError,
+  SessionNotFoundError,
+  SessionVersionConflictError,
+} from "./session-repository.js";
 
 const researcher = {
   active: true as const,
@@ -23,9 +29,27 @@ function dependencies(
   overrides: Partial<AgentAppDependencies> = {},
 ): AgentAppDependencies {
   return {
+    deleteSession: vi.fn(async () => undefined),
     handleRuntime: vi.fn(async () => new Response("runtime-response")),
     modelCatalog: catalog,
     publicOrigin: "http://agent.test",
+    renameSession: vi.fn(async (threadId, _researcher, title) => ({
+      id: threadId,
+      title,
+      version: "2026-08-30T02:03:05.000Z",
+    })),
+    session: vi.fn(async (threadId) => ({
+      activeRun: false,
+      activityAt: "2026-08-30T02:03:04.000000Z",
+      createdAt: "2026-08-29T02:03:04.000000Z",
+      id: threadId,
+      title: "Quality Alpha",
+      version: "2026-08-30T02:03:05.000Z",
+    })),
+    sessions: vi.fn(async () => ({
+      nextCursor: null,
+      sessions: [],
+    })),
     sessionPreference: vi.fn(async () => ({
       model_key: "research-primary",
       reasoning_effort: "medium",
@@ -158,5 +182,205 @@ describe("Agent Host HTTP boundary", () => {
     );
     expect(hidden.status).toBe(404);
     expect(await hidden.json()).toEqual({ code: "CHAT_SESSION_NOT_FOUND" });
+  });
+
+  it("lists one bounded owner-scoped Session page with an opaque cursor", async () => {
+    const nextCursor = encodeSessionCursor({
+      activityAt: "2026-08-29T01:02:03.000000Z",
+      id: "00000000-0000-4000-8000-000000000111",
+    });
+    const sessions = vi.fn(async () => ({
+      nextCursor,
+      sessions: [{
+        activeRun: false,
+        activityAt: "2026-08-30T01:02:03.000000Z",
+        createdAt: "2026-08-29T01:02:03.000000Z",
+        id: "00000000-0000-4000-8000-000000000222",
+        title: "Quality Alpha",
+        version: "2026-08-30T01:02:04.000Z",
+      }],
+    }));
+    const response = await createAgentApp(dependencies({ sessions })).request(
+      "http://agent.test/api/agent/sessions",
+      { headers: { origin: "http://agent.test" } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      next_cursor: nextCursor,
+      sessions: [{
+        active_run: false,
+        activity_at: "2026-08-30T01:02:03.000000Z",
+        created_at: "2026-08-29T01:02:03.000000Z",
+        id: "00000000-0000-4000-8000-000000000222",
+        title: "Quality Alpha",
+        version: "2026-08-30T01:02:04.000Z",
+      }],
+    });
+    expect(sessions).toHaveBeenCalledWith(undefined, researcher);
+
+    const invalid = await createAgentApp(dependencies({ sessions })).request(
+      "http://agent.test/api/agent/sessions?page=1",
+      { headers: { origin: "http://agent.test" } },
+    );
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({ code: "INVALID_CHAT_SESSION_REQUEST" });
+    expect(sessions).toHaveBeenCalledOnce();
+  });
+
+  it("loads one owned Session for a direct URL without enumerating history", async () => {
+    const threadId = "00000000-0000-4000-8000-000000000222";
+    const appDependencies = dependencies();
+    const response = await createAgentApp(appDependencies).request(
+      `http://agent.test/api/agent/sessions/${threadId}`,
+      { headers: { origin: "http://agent.test" } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      active_run: false,
+      activity_at: "2026-08-30T02:03:04.000000Z",
+      created_at: "2026-08-29T02:03:04.000000Z",
+      id: threadId,
+      title: "Quality Alpha",
+      version: "2026-08-30T02:03:05.000Z",
+    });
+    expect(appDependencies.session).toHaveBeenCalledWith(threadId, researcher);
+
+    const hidden = await createAgentApp(dependencies({
+      session: vi.fn(async () => {
+        throw new SessionNotFoundError();
+      }),
+    })).request(
+      `http://agent.test/api/agent/sessions/${threadId}`,
+      { headers: { origin: "http://agent.test" } },
+    );
+    expect(hidden.status).toBe(404);
+    expect(await hidden.json()).toEqual({ code: "CHAT_SESSION_NOT_FOUND" });
+  });
+
+  it("renames one owned Session with optimistic concurrency", async () => {
+    const renameSession = vi.fn(async (threadId, _researcher, title) => ({
+      id: threadId,
+      title,
+      version: "2026-08-30T02:03:05.000Z",
+    }));
+    const response = await createAgentApp(dependencies({ renameSession })).request(
+      "http://agent.test/api/agent/sessions/00000000-0000-4000-8000-000000000111",
+      {
+        body: JSON.stringify({
+          title: "Quality Alpha",
+          version: "2026-08-30T02:03:04.000Z",
+        }),
+        headers: {
+          "content-type": "application/json",
+          origin: "http://agent.test",
+        },
+        method: "PATCH",
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      id: "00000000-0000-4000-8000-000000000111",
+      title: "Quality Alpha",
+      version: "2026-08-30T02:03:05.000Z",
+    });
+    expect(renameSession).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000111",
+      researcher,
+      "Quality Alpha",
+      new Date("2026-08-30T02:03:04.000Z"),
+    );
+  });
+
+  it("bounds a streamed rename body before parsing or calling storage", async () => {
+    const renameSession = vi.fn();
+    const encoded = new TextEncoder().encode(JSON.stringify({
+      title: "a".repeat(2_000),
+      version: "2026-08-30T02:03:04.000Z",
+    }));
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoded.slice(0, 700));
+        controller.enqueue(encoded.slice(700, 1_400));
+        controller.enqueue(encoded.slice(1_400));
+        controller.close();
+      },
+    });
+    const request = new Request(
+      "http://agent.test/api/agent/sessions/00000000-0000-4000-8000-000000000111",
+      {
+        body,
+        duplex: "half",
+        headers: {
+          "content-type": "application/json",
+          origin: "http://agent.test",
+        },
+        method: "PATCH",
+      } as RequestInit & { duplex: "half" },
+    );
+
+    const response = await createAgentApp(dependencies({ renameSession })).request(request);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ code: "INVALID_CHAT_SESSION_REQUEST" });
+    expect(renameSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [new SessionNotFoundError(), 404, "CHAT_SESSION_NOT_FOUND"],
+    [new SessionVersionConflictError(), 409, "CHAT_SESSION_CHANGED"],
+    [new SessionActiveRunError(), 409, "CHAT_SESSION_RUN_ACTIVE"],
+  ] as const)("maps Session management errors without leaking storage", async (
+    error,
+    status,
+    code,
+  ) => {
+    const rename = await createAgentApp(dependencies({
+      renameSession: vi.fn(async () => {
+        throw error;
+      }),
+    })).request(
+      "http://agent.test/api/agent/sessions/00000000-0000-4000-8000-000000000111",
+      {
+        body: JSON.stringify({
+          title: "Quality Alpha",
+          version: "2026-08-30T02:03:04.000Z",
+        }),
+        headers: { "content-type": "application/json", origin: "http://agent.test" },
+        method: "PATCH",
+      },
+    );
+
+    const body = await rename.text();
+    expect(rename.status).toBe(status);
+    expect(JSON.parse(body)).toEqual({ code });
+    expect(body).not.toContain("storage");
+  });
+
+  it("deletes only an idle owned Chat Session through the management dependency", async () => {
+    const deleteSession = vi.fn(async () => undefined);
+    const response = await createAgentApp(dependencies({ deleteSession })).request(
+      "http://agent.test/api/agent/sessions/00000000-0000-4000-8000-000000000111",
+      { headers: { origin: "http://agent.test" }, method: "DELETE" },
+    );
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe("");
+    expect(deleteSession).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000111",
+      researcher,
+    );
+
+    const active = await createAgentApp(dependencies({
+      deleteSession: vi.fn(async () => {
+        throw new SessionActiveRunError();
+      }),
+    })).request(
+      "http://agent.test/api/agent/sessions/00000000-0000-4000-8000-000000000111",
+      { headers: { origin: "http://agent.test" }, method: "DELETE" },
+    );
+    expect(active.status).toBe(409);
+    expect(await active.json()).toEqual({ code: "CHAT_SESSION_RUN_ACTIVE" });
   });
 });

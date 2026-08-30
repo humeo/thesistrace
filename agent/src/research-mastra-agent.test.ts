@@ -48,6 +48,7 @@ test("subscriber disposal terminates a new Run whose preparation is still pendin
   subscription.unsubscribe();
   prepared.resolve({
     durableMessages: [],
+    generateTitle: false,
     kind: "new",
     status: "running",
   });
@@ -326,6 +327,86 @@ test("parallel Tool results cannot transfer one call's transport failure to anot
   expect(repository.markCompleted).not.toHaveBeenCalled();
 });
 
+test("a newly accepted Untitled session schedules title generation once", async () => {
+  const { agent, input, scheduleTitle } = testAgent({
+    agentStream: async () => ({
+      processDataStream: async ({
+        onChunk,
+      }: {
+        onChunk: (chunk: unknown) => Promise<void>;
+      }) => {
+        await onChunk({ payload: { text: "A research response." }, type: "text-delta" });
+      },
+    }),
+    mcpRun: async () => ({
+      close: async () => undefined,
+      hasFatalToolFailure: () => false,
+      toolFailure: () => undefined,
+      tools: {},
+    }),
+    prepareRun: async () => ({
+      durableMessages: [],
+      generateTitle: true,
+      kind: "new",
+      status: "running",
+    }),
+    runMaxWallMs: 1_000,
+  });
+
+  await lastValueFrom(agent.run(input).pipe(toArray()));
+
+  expect(scheduleTitle).toHaveBeenCalledOnce();
+});
+
+test("a slow title never delays the terminal event or Runner release", async () => {
+  vi.useFakeTimers();
+  const { agent, input, repository, scheduleTitle } = testAgent({
+    agentStream: async () => ({
+      processDataStream: async ({
+        onChunk,
+      }: {
+        onChunk: (chunk: unknown) => Promise<void>;
+      }) => {
+        await onChunk({ payload: { text: "A research response." }, type: "text-delta" });
+      },
+    }),
+    mcpRun: async () => ({
+      close: async () => undefined,
+      hasFatalToolFailure: () => false,
+      toolFailure: () => undefined,
+      tools: {},
+    }),
+    prepareRun: async () => ({
+      durableMessages: [],
+      generateTitle: true,
+      kind: "new",
+      status: "running",
+    }),
+    runMaxWallMs: 50,
+  });
+  let titleCompleted = false;
+  scheduleTitle.mockImplementation(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    titleCompleted = true;
+  });
+
+  const events = await lastValueFrom(agent.run(input).pipe(toArray()));
+
+  expect(repository.markCompleted).toHaveBeenCalledOnce();
+  expect(repository.markFailed).not.toHaveBeenCalled();
+  expect(events.map((event) => event.type)).toEqual([
+    "RUN_STARTED",
+    "TEXT_MESSAGE_CHUNK",
+    "RUN_FINISHED",
+  ]);
+  expect(titleCompleted).toBe(false);
+  expect(repository.markFailed).not.toHaveBeenCalled();
+  expect(scheduleTitle).toHaveBeenCalledOnce();
+
+  await vi.advanceTimersByTimeAsync(100);
+  expect(titleCompleted).toBe(true);
+});
+
 function testAgent(options: Readonly<{
   agentStream?: () => Promise<unknown>;
   mcpRun: () => Promise<McpRun>;
@@ -354,6 +435,7 @@ function testAgent(options: Readonly<{
     },
     modelKey: "scripted",
     reasoningEffort: "medium",
+    sessionMode: "new",
   };
   const repository = {
     awaitDurableToolResult: vi.fn(async () => undefined),
@@ -362,6 +444,7 @@ function testAgent(options: Readonly<{
     markFailed: vi.fn(async () => undefined),
     prepareRun: vi.fn(options.prepareRun ?? (async () => ({
       durableMessages: [],
+      generateTitle: false,
       kind: "new" as const,
       status: "running" as const,
     }))),
@@ -375,6 +458,7 @@ function testAgent(options: Readonly<{
     requestContext,
     resourceId: "00000000-0000-4000-8000-000000000010",
   } as unknown as MastraAgentConfig;
+  const scheduleTitle = vi.fn(async () => undefined);
   const agent = new ResearchMastraAgent(bridgeConfig, {
     agentBuildRevision: "test-build",
     mcpRun: options.mcpRun,
@@ -384,9 +468,10 @@ function testAgent(options: Readonly<{
     researcherId: "00000000-0000-4000-8000-000000000010",
     run,
     runMaxWallMs: options.runMaxWallMs,
+    scheduleTitle,
     usage: () => undefined,
   });
-  return { agent, input, repository, requestContext };
+  return { agent, input, repository, requestContext, scheduleTitle };
 }
 
 function deferred<T>() {

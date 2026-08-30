@@ -33,7 +33,7 @@ export function CoreApp({ currentPath, researcherId }: {
       <Suspense
         fallback={<section className="state-section chat-route-loading"><p>Loading Chat…</p></section>}
       >
-        <ChatPage />
+        <ChatPage researcherId={researcherId} />
       </Suspense>
     );
   }

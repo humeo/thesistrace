@@ -6,7 +6,10 @@ import { firstValueFrom, Subject, toArray } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
 
 import { DurableResearchAgentRunner } from "./durable-agent-runner.js";
-import type { ResearchSessionRepository } from "./session-repository.js";
+import {
+  SessionActiveRunError,
+  type ResearchSessionRepository,
+} from "./session-repository.js";
 
 class HoldingAgent extends AbstractAgent {
   readonly events = new Subject<BaseEvent>();
@@ -162,6 +165,49 @@ describe("DurableResearchAgentRunner", () => {
       { type: "RUN_ERROR", code: "AGENT_RUN_FAILED" },
     ]);
   });
+
+  it("rejects Session mutation immediately while the Thread Run is active", async () => {
+    const runner = new DurableResearchAgentRunner({} as ResearchSessionRepository);
+    const agent = new HoldingAgent();
+    const threadId = fixedUuid(201);
+    const released = new Promise<void>((resolve) => {
+      runner.run({ agent, input: input(threadId, fixedUuid(202)), threadId })
+        .subscribe({ complete: resolve });
+    });
+
+    await expect(runner.mutateSessionWhenIdle(threadId, async () => "deleted"))
+      .rejects.toBeInstanceOf(SessionActiveRunError);
+
+    agent.events.complete();
+    await released;
+    await expect(runner.mutateSessionWhenIdle(threadId, async () => "deleted"))
+      .resolves.toBe("deleted");
+  });
+
+  it("prevents a new Turn from racing an idle Session mutation", async () => {
+    const runner = new DurableResearchAgentRunner({} as ResearchSessionRepository);
+    const threadId = fixedUuid(211);
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const mutation = runner.mutateSessionWhenIdle(threadId, async () => {
+      await held;
+      return "deleted";
+    });
+
+    expect(() => runner.run({
+      agent: new HoldingAgent(),
+      input: input(threadId, fixedUuid(212)),
+      threadId,
+    })).toThrow(SessionActiveRunError);
+
+    release();
+    await expect(mutation).resolves.toBe("deleted");
+    const agent = new HoldingAgent();
+    runner.run({ agent, input: input(threadId, fixedUuid(213)), threadId }).subscribe();
+    agent.events.complete();
+  });
 });
 
 function input(threadId: string, runId: string): RunAgentInput {
@@ -174,4 +220,8 @@ function input(threadId: string, runId: string): RunAgentInput {
     threadId,
     tools: [],
   };
+}
+
+function fixedUuid(suffix: number): string {
+  return `00000000-0000-4000-8000-${suffix.toString().padStart(12, "0")}`;
 }

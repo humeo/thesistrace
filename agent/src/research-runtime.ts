@@ -40,7 +40,11 @@ import { createAgentReadiness } from "./readiness.js";
 import {
   ResearchSessionRepository,
   SessionNotFoundError,
+  type RenamedSession,
+  type SessionPage,
 } from "./session-repository.js";
+import type { SessionCursor } from "./session-management.js";
+import { SessionTitleGenerator } from "./session-title.js";
 import type { VerifiedResearcher } from "./session-verifier.js";
 import { verifyAgentSchema } from "./schema-contract.js";
 import { RunUsageCapture } from "./usage-capture.js";
@@ -56,12 +60,27 @@ State assumptions and distinguish proposals from persisted Research facts. Never
 
 export type ResearchRuntime = Readonly<{
   close: () => Promise<void>;
+  deleteSession: (threadId: string, researcher: VerifiedResearcher) => Promise<void>;
   handle: (request: Request, researcher: VerifiedResearcher) => Promise<Response>;
   preference: (
     threadId: string,
     researcher: VerifiedResearcher,
   ) => Promise<Readonly<{ model_key: string; reasoning_effort: string }> | null>;
+  renameSession: (
+    threadId: string,
+    researcher: VerifiedResearcher,
+    title: string,
+    expectedVersion: Date,
+  ) => Promise<RenamedSession>;
   ready: () => Promise<boolean>;
+  session: (
+    threadId: string,
+    researcher: VerifiedResearcher,
+  ) => Promise<import("./session-repository.js").SessionSummary>;
+  sessions: (
+    cursor: SessionCursor | undefined,
+    researcher: VerifiedResearcher,
+  ) => Promise<SessionPage>;
 }>;
 export type ResearchRuntimeDependencies = Readonly<{
   mcpRunFactory?: McpRunFactory;
@@ -81,6 +100,13 @@ export async function createResearchRuntime(
   }
 
   const repository = new ResearchSessionRepository(pool);
+  try {
+    await repository.failInterruptedRunsAfterHostRestart();
+  } catch (error) {
+    await pool.end();
+    throw error;
+  }
+  const titleGenerator = new SessionTitleGenerator(repository);
   const readinessPool = createAgentReadinessPool(settings.databaseUrl);
   const readiness = createAgentReadiness(settings, readinessPool, {
     fetch: dependencies.readinessFetch,
@@ -158,6 +184,9 @@ export async function createResearchRuntime(
             validated.reasoningEffort,
             usageCapture,
           );
+      const titleSelection = validated === undefined
+        ? undefined
+        : modelRuntime.resolve(validated.modelKey, validated.reasoningEffort);
       const requestContext = createRequestContext(selection);
 
       if (validated === undefined) {
@@ -176,6 +205,9 @@ export async function createResearchRuntime(
       if (usageCapture === undefined) {
         throw new Error("RUN_USAGE_CAPTURE_NOT_CREATED");
       }
+      if (titleSelection === undefined) {
+        throw new Error("TITLE_MODEL_SELECTION_NOT_CREATED");
+      }
 
       return {
         [RESEARCH_AGENT_ID]: createRunAgent({
@@ -191,6 +223,8 @@ export async function createResearchRuntime(
           researcherId,
           run: validated,
           runMaxWallMs: settings.runMaxWallSeconds * 1_000,
+          titleGenerator,
+          titleSelection,
           usageCapture,
         }),
       };
@@ -210,11 +244,16 @@ export async function createResearchRuntime(
 
   return {
     close: async () => {
+      await titleGenerator.settled();
       await memory.settled();
       await storage.close();
       await readinessPool.end();
       await pool.end();
     },
+    deleteSession: (threadId, researcher) => runner.mutateSessionWhenIdle(
+      threadId,
+      () => repository.deleteSession(threadId, researcher.researcher_id),
+    ),
     handle: (request, researcher) => handleAuthenticatedRuntimeRequest({
       repository,
       request,
@@ -233,7 +272,23 @@ export async function createResearchRuntime(
         reasoning_effort: preference.reasoningEffort,
       };
     },
+    renameSession: (threadId, researcher, title, expectedVersion) => (
+      repository.renameSession(
+        threadId,
+        researcher.researcher_id,
+        title,
+        expectedVersion,
+      )
+    ),
     ready: readiness,
+    session: (threadId, researcher) => repository.session(
+      threadId,
+      researcher.researcher_id,
+    ),
+    sessions: (cursor, researcher) => repository.listSessions(
+      researcher.researcher_id,
+      cursor,
+    ),
   };
 }
 
@@ -247,6 +302,8 @@ function createRunAgent(options: Readonly<{
   researcherId: string;
   run: ValidatedChatRun;
   runMaxWallMs: number;
+  titleGenerator: SessionTitleGenerator;
+  titleSelection: ResolvedModelSelection;
   usageCapture: RunUsageCapture;
 }>): ResearchMastraAgent {
   const agent = options.mastra.getAgent(RESEARCH_AGENT_ID);
@@ -269,6 +326,13 @@ function createRunAgent(options: Readonly<{
     researcherId: options.researcherId,
     run: options.run,
     runMaxWallMs: options.runMaxWallMs,
+    scheduleTitle: () => options.titleGenerator.schedule({
+      languageModel: options.titleSelection.languageModel,
+      message: options.run.latestUserMessage.content,
+      providerOptions: options.titleSelection.providerOptions,
+      researcherId: options.researcherId,
+      threadId: options.run.input.threadId,
+    }),
     usage: () => options.usageCapture.value(),
   });
 }

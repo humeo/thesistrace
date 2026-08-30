@@ -7,7 +7,7 @@ import {
   MCP_CALL_TOOL_CONTENT,
   MCP_CALL_TOOL_META,
 } from "@mastra/mcp";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
@@ -18,7 +18,7 @@ import {
 } from "./browser-message-safety.js";
 import { parseSafeToolResult } from "./safe-tool-result.js";
 import type { AgentSettings } from "./config.js";
-import { chatRunFingerprint } from "./chat-request.js";
+import { chatRunFingerprint, readValidatedChatRun } from "./chat-request.js";
 import { createMcpRunFactory, type McpRun } from "./mcp-run.js";
 import { readModelRegistry } from "./model-registry.js";
 import { createResearchRuntime, type ResearchRuntime } from "./research-runtime.js";
@@ -27,7 +27,19 @@ import {
   SCRIPTED_FACTOR_IDEA_PROMPT,
   SCRIPTED_TOOL_PROMPT,
 } from "./scripted-language-model.js";
-import { ResearchSessionRepository } from "./session-repository.js";
+import {
+  ResearchSessionRepository,
+  SessionActiveRunError,
+  SessionNotFoundError,
+  SessionVersionConflictError,
+  type RenamedSession,
+} from "./session-repository.js";
+import {
+  SessionInputError,
+  UNTITLED_SESSION_TITLE,
+  decodeSessionCursor,
+} from "./session-management.js";
+import { parseGeneratedSessionTitle } from "./session-title.js";
 import type { VerifiedResearcher } from "./session-verifier.js";
 
 const ownerDatabaseUrl = process.env.THESISTRACE_AGENT_TEST_OWNER_DATABASE_URL;
@@ -41,6 +53,7 @@ const runtimeDatabaseUrl = roleDatabaseUrl(
   "agent_runtime",
   "agent-test-password",
 );
+const agentStore = new Pool({ connectionString: runtimeDatabaseUrl, max: 2 });
 const primaryResearcher = researcher("00000000-0000-4000-8000-000000000101");
 const foreignResearcher = researcher("00000000-0000-4000-8000-000000000102");
 const modelRegistry = readModelRegistry(JSON.stringify({
@@ -112,6 +125,7 @@ describe.sequential("durable Research Agent runtime", () => {
   });
 
   afterAll(async () => {
+    await agentStore.end();
     await owner.query("DROP SCHEMA IF EXISTS agent CASCADE");
     await owner.end();
   });
@@ -295,6 +309,506 @@ describe.sequential("durable Research Agent runtime", () => {
       { content: "First by instant.", id: userMessageId, role: "user" },
       { content: "Second by instant.", id: assistantMessageId, role: "assistant" },
     ]);
+  });
+
+  it("paginates owner-scoped session history with an equal-time stable ID tie-break", async () => {
+    const activityAt = new Date("2026-08-30T06:00:00.000Z");
+    const sessionIds = Array.from({ length: 32 }, (_, index) => (
+      `00000000-0000-4000-8000-${(index + 1).toString(16).padStart(12, "0")}`
+    ));
+    for (const [index, id] of sessionIds.entries()) {
+      await seedSession({
+        activityAt,
+        id,
+        researcherId: primaryResearcher.researcher_id,
+        title: `Session ${index + 1}`,
+      });
+    }
+    const foreignId = "00000000-0000-4000-8000-0000000000ff";
+    await seedSession({
+      activityAt: new Date("2026-08-30T07:00:00.000Z"),
+      id: foreignId,
+      researcherId: foreignResearcher.researcher_id,
+      title: "Foreign Session",
+    });
+
+    const repository = new ResearchSessionRepository(agentStore);
+    const first = await repository.listSessions(primaryResearcher.researcher_id);
+    expect(first.sessions).toHaveLength(30);
+    expect(first.sessions.map((session) => session.id)).toEqual(
+      [...sessionIds].reverse().slice(0, 30),
+    );
+    expect(first.sessions.every((session) => (
+      session.activityAt === "2026-08-30T06:00:00.000000Z"
+    )))
+      .toBe(true);
+    expect(first.sessions.some((session) => session.id === foreignId)).toBe(false);
+    expect(first.nextCursor).not.toBeNull();
+    expect(decodeSessionCursor(first.nextCursor ?? "")).toEqual({
+      activityAt: "2026-08-30T06:00:00.000000Z",
+      id: sessionIds[2],
+    });
+
+    const second = await new ResearchSessionRepository(agentStore).listSessions(
+      primaryResearcher.researcher_id,
+      decodeSessionCursor(first.nextCursor ?? ""),
+    );
+    expect(second.sessions.map((session) => session.id)).toEqual([
+      sessionIds[1],
+      sessionIds[0],
+    ]);
+    expect(second.nextCursor).toBeNull();
+    expect(new Set([...first.sessions, ...second.sessions].map((session) => session.id)).size)
+      .toBe(32);
+
+    for (const [index, id] of sessionIds.entries()) {
+      await owner.query(`
+        UPDATE agent.chat_session
+        SET updated_at = $2::timestamp with time zone
+        WHERE id = $1::uuid
+      `, [
+        id,
+        `2026-08-30T06:00:00.${(index + 1).toString().padStart(6, "0")}Z`,
+      ]);
+    }
+    const microsecondFirst = await repository.listSessions(primaryResearcher.researcher_id);
+    expect(microsecondFirst.sessions.map((session) => session.id)).toEqual(
+      [...sessionIds].reverse().slice(0, 30),
+    );
+    expect(decodeSessionCursor(microsecondFirst.nextCursor ?? "")).toEqual({
+      activityAt: "2026-08-30T06:00:00.000003Z",
+      id: sessionIds[2],
+    });
+    const microsecondSecond = await repository.listSessions(
+      primaryResearcher.researcher_id,
+      decodeSessionCursor(microsecondFirst.nextCursor ?? ""),
+    );
+    expect(microsecondSecond.sessions.map((session) => session.id)).toEqual([
+      sessionIds[1],
+      sessionIds[0],
+    ]);
+
+    const foreign = await repository.listSessions(foreignResearcher.researcher_id);
+    expect(foreign.sessions.map((session) => session.id)).toEqual([foreignId]);
+  });
+
+  it("fails interrupted host Runs at startup so history and deletion cannot stay blocked", async () => {
+    const threadId = fixedUuid(401);
+    const runId = fixedUuid(402);
+    await seedSession({
+      id: threadId,
+      researcherId: primaryResearcher.researcher_id,
+      title: "Interrupted research",
+    });
+    await owner.query(`
+      INSERT INTO agent.agent_run (
+        id, thread_id, request_fingerprint, model_key, provider_model_id,
+        reasoning_effort, agent_build_revision, status
+      ) VALUES (
+        $1, $2, decode(repeat('44', 32), 'hex'), 'scripted-research',
+        'scripted-v1', 'medium', 'interrupted-build', 'running'
+      )
+    `, [runId, threadId]);
+
+    const runtime = await createIntegrationRuntime();
+    try {
+      const interrupted = await owner.query<{
+        completed_at: Date;
+        status: string;
+        terminal_error_code: string;
+        token_usage: Record<string, unknown>;
+      }>(`
+        SELECT status, terminal_error_code, token_usage, completed_at
+        FROM agent.agent_run
+        WHERE id = $1
+      `, [runId]);
+      expect(interrupted.rows).toEqual([{
+        completed_at: expect.any(Date),
+        status: "failed",
+        terminal_error_code: "AGENT_RUN_INTERRUPTED",
+        token_usage: { reported: false },
+      }]);
+      await expect(runtime.session(threadId, primaryResearcher)).resolves.toMatchObject({
+        activeRun: false,
+      });
+      await expect(runtime.deleteSession(threadId, primaryResearcher)).resolves.toBeUndefined();
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("renames one title optimistically and never lets generated text overwrite it", async () => {
+    const threadId = fixedUuid(410);
+    await seedSession({
+      id: threadId,
+      researcherId: primaryResearcher.researcher_id,
+      title: UNTITLED_SESSION_TITLE,
+    });
+    const repository = new ResearchSessionRepository(agentStore);
+    const generatedTitleRepository = new ResearchSessionRepository(agentStore);
+    const before = (await repository.listSessions(primaryResearcher.researcher_id)).sessions[0];
+    if (before === undefined) throw new Error("SEEDED_SESSION_MISSING");
+
+    await expect(repository.renameSession(
+      threadId,
+      primaryResearcher.researcher_id,
+      UNTITLED_SESSION_TITLE,
+      new Date(before.version),
+    )).rejects.toBeInstanceOf(SessionInputError);
+    await expect(repository.storeGeneratedTitle(
+      threadId,
+      primaryResearcher.researcher_id,
+      UNTITLED_SESSION_TITLE,
+    )).rejects.toBeInstanceOf(SessionInputError);
+    await expect(repository.session(threadId, primaryResearcher.researcher_id))
+      .resolves.toMatchObject({ title: UNTITLED_SESSION_TITLE, version: before.version });
+
+    const blocker = await holdSessionMutationLock(threadId);
+    const renamePromise = repository.renameSession(
+        threadId,
+        primaryResearcher.researcher_id,
+        "  Stable   Quality   Research  ",
+        new Date(before.version),
+      );
+    const generatedTitlePromise = generatedTitleRepository.storeGeneratedTitle(
+      threadId,
+      primaryResearcher.researcher_id,
+      "Concurrent generated title",
+    );
+    const concurrent = Promise.allSettled([renamePromise, generatedTitlePromise]);
+    try {
+      await waitForAdvisoryLockWaiters(2);
+    } finally {
+      await releaseSessionMutationLock(blocker);
+    }
+    const [renameOutcome, generatedTitleOutcome] = await concurrent;
+    if (renameOutcome === undefined || generatedTitleOutcome === undefined) {
+      throw new Error("SESSION_TITLE_RACE_RESULTS_MISSING");
+    }
+
+    let renamed: RenamedSession;
+    if (renameOutcome.status === "fulfilled") {
+      renamed = renameOutcome.value;
+      expect(generatedTitleOutcome).toMatchObject({ status: "fulfilled", value: false });
+    } else {
+      expect(renameOutcome.reason).toBeInstanceOf(SessionVersionConflictError);
+      expect(generatedTitleOutcome).toMatchObject({ status: "fulfilled", value: true });
+      const generated = await repository.session(
+        threadId,
+        primaryResearcher.researcher_id,
+      );
+      renamed = await repository.renameSession(
+        threadId,
+        primaryResearcher.researcher_id,
+        "Stable Quality Research",
+        new Date(generated.version),
+      );
+    }
+    expect(renamed).toMatchObject({
+      id: threadId,
+      title: "Stable Quality Research",
+    });
+    expect(renamed.version).not.toBe(before.version);
+    await expect(repository.renameSession(
+      threadId,
+      primaryResearcher.researcher_id,
+      "Stale rename",
+      new Date(before.version),
+    )).rejects.toBeInstanceOf(SessionVersionConflictError);
+    await expect(generatedTitleRepository.storeGeneratedTitle(
+      threadId,
+      primaryResearcher.researcher_id,
+      "Late generated title",
+    )).resolves.toBe(false);
+    await expect(repository.renameSession(
+      threadId,
+      foreignResearcher.researcher_id,
+      "Foreign rename",
+      new Date(renamed.version),
+    )).rejects.toBeInstanceOf(SessionNotFoundError);
+
+    const after = (await repository.listSessions(primaryResearcher.researcher_id)).sessions[0];
+    expect(after?.title).toBe("Stable Quality Research");
+  });
+
+  it("keeps Run admission versions monotonic and rejects the stale pre-admission rename", async () => {
+    const threadId = fixedUuid(411);
+    const runId = fixedUuid(412);
+    const futureVersion = new Date("2099-01-01T00:00:00.000Z");
+    await seedSession({
+      activityAt: futureVersion,
+      id: threadId,
+      researcherId: primaryResearcher.researcher_id,
+      title: "Monotonic admission",
+    });
+    const repository = new ResearchSessionRepository(agentStore);
+    const before = await repository.session(threadId, primaryResearcher.researcher_id);
+    expect(before.version).toBe(futureVersion.toISOString());
+
+    const validatedRun = await readValidatedChatRun(runRequest(runInput({
+      messageId: fixedUuid(413),
+      runId,
+      sessionMode: "existing",
+      threadId,
+    })), modelRegistry);
+    await expect(repository.prepareRun({
+      agentBuildRevision: "monotonic-version-build",
+      providerModelId: "scripted-v1",
+      researcherId: primaryResearcher.researcher_id,
+      run: validatedRun,
+    })).resolves.toMatchObject({ kind: "new", status: "running" });
+
+    const afterAdmission = await repository.session(
+      threadId,
+      primaryResearcher.researcher_id,
+    );
+    expect(new Date(afterAdmission.version).getTime())
+      .toBe(futureVersion.getTime() + 1);
+    await repository.markFailed(runId, undefined);
+    await expect(repository.renameSession(
+      threadId,
+      primaryResearcher.researcher_id,
+      "Stale rename",
+      new Date(before.version),
+    )).rejects.toBeInstanceOf(SessionVersionConflictError);
+    await expect(repository.renameSession(
+      threadId,
+      primaryResearcher.researcher_id,
+      "Current rename",
+      new Date(afterAdmission.version),
+    )).resolves.toMatchObject({ title: "Current rename" });
+  });
+
+  it("generates a bounded first title and retries after an independent title failure", async () => {
+    const successfulThreadId = fixedUuid(420);
+    let runtime = await createIntegrationRuntime();
+    try {
+      await run(runtime, runInput({
+        content: "Build a low volatility quality Alpha.",
+        messageId: fixedUuid(421),
+        runId: fixedUuid(422),
+        threadId: successfulThreadId,
+      }), primaryResearcher);
+    } finally {
+      await runtime.close();
+    }
+    const successfulTitle = await owner.query<{ title: string }>(`
+      SELECT title FROM agent."mastra_threads" WHERE id = $1
+    `, [successfulThreadId]);
+    expect(successfulTitle.rows).toHaveLength(1);
+    const firstGeneratedTitle = successfulTitle.rows[0]?.title;
+    if (firstGeneratedTitle === undefined) throw new Error("SESSION_TITLE_MISSING");
+    expect(firstGeneratedTitle).not.toBe(UNTITLED_SESSION_TITLE);
+    expect(parseGeneratedSessionTitle(firstGeneratedTitle)).toBe(firstGeneratedTitle);
+
+    const retryThreadId = fixedUuid(423);
+    runtime = await createIntegrationRuntime();
+    try {
+      const failed = await run(runtime, runInput({
+        content: "Test an earnings stability Alpha.",
+        messageId: fixedUuid(424),
+        modelKey: "scripted-failure",
+        runId: fixedUuid(425),
+        threadId: retryThreadId,
+      }), primaryResearcher);
+      expect(failed.map((event) => event.type)).toEqual(["RUN_STARTED", "RUN_ERROR"]);
+    } finally {
+      await runtime.close();
+    }
+    const failedTitle = await owner.query<{ title: string }>(`
+      SELECT title FROM agent."mastra_threads" WHERE id = $1
+    `, [retryThreadId]);
+    expect(failedTitle.rows).toEqual([{ title: UNTITLED_SESSION_TITLE }]);
+
+    runtime = await createIntegrationRuntime();
+    try {
+      const durable = snapshotMessages(await connect(
+        runtime,
+        retryThreadId,
+        primaryResearcher,
+      ));
+      await run(runtime, runInput({
+        content: "Now refine it with balance-sheet quality.",
+        messageId: fixedUuid(426),
+        messages: [...durable, {
+          content: "Now refine it with balance-sheet quality.",
+          id: fixedUuid(427),
+          role: "user",
+        }],
+        runId: fixedUuid(428),
+        threadId: retryThreadId,
+      }), primaryResearcher);
+    } finally {
+      await runtime.close();
+    }
+    const retriedTitle = await owner.query<{ title: string }>(`
+      SELECT title FROM agent."mastra_threads" WHERE id = $1
+    `, [retryThreadId]);
+    expect(retriedTitle.rows).toHaveLength(1);
+    const retriedGeneratedTitle = retriedTitle.rows[0]?.title;
+    if (retriedGeneratedTitle === undefined) throw new Error("SESSION_TITLE_MISSING");
+    expect(retriedGeneratedTitle).not.toBe(UNTITLED_SESSION_TITLE);
+    expect(parseGeneratedSessionTitle(retriedGeneratedTitle)).toBe(retriedGeneratedTitle);
+  });
+
+  it("deletes only owned idle Agent records and preserves researcher-wide memory", async () => {
+    const threadId = fixedUuid(430);
+    const runId = fixedUuid(431);
+    await seedSession({
+      id: threadId,
+      researcherId: primaryResearcher.researcher_id,
+      title: "ResearchRun result explanation",
+    });
+    await owner.query(`
+      INSERT INTO agent.agent_run (
+        id, thread_id, request_fingerprint, model_key, provider_model_id,
+        reasoning_effort, agent_build_revision, status, token_usage, completed_at
+      ) VALUES (
+        $1, $2, decode(repeat('00', 32), 'hex'), 'scripted-research',
+        'scripted-v1', 'medium', 'integration-build', 'completed',
+        '{"reported":false}'::jsonb, pg_catalog.now()
+      )
+    `, [runId, threadId]);
+    await owner.query(`
+      INSERT INTO agent."mastra_messages" (
+        id, thread_id, content, role, type, "createdAt", "resourceId", "createdAtZ"
+      ) VALUES ($1, $2, $3, 'user', 'v2', pg_catalog.now(), $4, pg_catalog.now())
+    `, [
+      fixedUuid(432),
+      threadId,
+      JSON.stringify([{ type: "text", text: "Explain ResearchRun core-run-42." }]),
+      primaryResearcher.researcher_id,
+    ]);
+    await owner.query(`
+      INSERT INTO agent."mastra_workflow_snapshot" (
+        "workflow_name", run_id, "resourceId", snapshot, "createdAt", "updatedAt"
+      ) VALUES ('durable-agent', $1, $2, '{"status":"completed"}'::jsonb,
+                pg_catalog.now(), pg_catalog.now())
+    `, [runId, primaryResearcher.researcher_id]);
+    await owner.query(`
+      INSERT INTO agent."mastra_resources" (
+        id, "workingMemory", metadata, "createdAt", "updatedAt"
+      ) VALUES ($1, 'researcher-wide', '{}'::jsonb, pg_catalog.now(), pg_catalog.now())
+    `, [primaryResearcher.researcher_id]);
+
+    const repository = new ResearchSessionRepository(agentStore);
+    await expect(repository.deleteSession(
+      threadId,
+      foreignResearcher.researcher_id,
+    )).rejects.toBeInstanceOf(SessionNotFoundError);
+    const before = await agentRecordCounts(threadId, runId);
+    expect(before).toEqual({ messages: "1", runs: "1", sessions: "1", snapshots: "1", threads: "1" });
+
+    await repository.deleteSession(threadId, primaryResearcher.researcher_id);
+    expect(await agentRecordCounts(threadId, runId)).toEqual({
+      messages: "0",
+      runs: "0",
+      sessions: "0",
+      snapshots: "0",
+      threads: "0",
+    });
+    const resources = await owner.query<{ count: string }>(`
+      SELECT count(*)::text AS count
+      FROM agent."mastra_resources"
+      WHERE id = $1
+    `, [primaryResearcher.researcher_id]);
+    expect(resources.rows).toEqual([{ count: "1" }]);
+
+    const activeThreadId = fixedUuid(433);
+    const activeRunId = fixedUuid(434);
+    await seedSession({
+      id: activeThreadId,
+      researcherId: primaryResearcher.researcher_id,
+      title: "Active session",
+    });
+    await owner.query(`
+      INSERT INTO agent.agent_run (
+        id, thread_id, request_fingerprint, model_key, provider_model_id,
+        reasoning_effort, agent_build_revision, status
+      ) VALUES (
+        $1, $2, decode(repeat('11', 32), 'hex'), 'scripted-research',
+        'scripted-v1', 'medium', 'integration-build', 'running'
+      )
+    `, [activeRunId, activeThreadId]);
+    await expect(repository.deleteSession(
+      activeThreadId,
+      primaryResearcher.researcher_id,
+    )).rejects.toBeInstanceOf(SessionActiveRunError);
+    expect((await repository.listSessions(primaryResearcher.researcher_id)).sessions[0])
+      .toMatchObject({ activeRun: true, id: activeThreadId });
+  });
+
+  it("serializes deletion with admission across repository instances and never recreates a deleted Session", async () => {
+    const threadId = fixedUuid(440);
+    await seedSession({
+      id: threadId,
+      researcherId: primaryResearcher.researcher_id,
+      title: "Admission race",
+    });
+    const firstRunId = fixedUuid(441);
+    const firstInput = runInput({
+      messageId: fixedUuid(442),
+      runId: firstRunId,
+      sessionMode: "existing",
+      threadId,
+    });
+    const firstRun = await readValidatedChatRun(runRequest(firstInput), modelRegistry);
+    const firstRepository = new ResearchSessionRepository(agentStore);
+    const secondRepository = new ResearchSessionRepository(agentStore);
+    const blocker = await holdSessionMutationLock(threadId);
+    const admissionPromise = firstRepository.prepareRun({
+      agentBuildRevision: "concurrent-build",
+      providerModelId: "scripted-v1",
+      researcherId: primaryResearcher.researcher_id,
+      run: firstRun,
+    });
+    const deletionPromise = secondRepository.deleteSession(
+      threadId,
+      primaryResearcher.researcher_id,
+    );
+    const concurrent = Promise.allSettled([admissionPromise, deletionPromise]);
+    try {
+      await waitForAdvisoryLockWaiters(2);
+    } finally {
+      await releaseSessionMutationLock(blocker);
+    }
+    const [admissionOutcome, deletionOutcome] = await concurrent;
+    if (admissionOutcome === undefined || deletionOutcome === undefined) {
+      throw new Error("SESSION_ADMISSION_DELETE_RACE_RESULTS_MISSING");
+    }
+
+    if (admissionOutcome.status === "fulfilled") {
+      expect(admissionOutcome.value).toMatchObject({ kind: "new", status: "running" });
+      expect(deletionOutcome.status).toBe("rejected");
+      if (deletionOutcome.status === "rejected") {
+        expect(deletionOutcome.reason).toBeInstanceOf(SessionActiveRunError);
+      }
+      await firstRepository.markFailed(firstRunId, undefined);
+      await secondRepository.deleteSession(threadId, primaryResearcher.researcher_id);
+    } else {
+      expect(admissionOutcome.reason).toBeInstanceOf(SessionNotFoundError);
+      expect(deletionOutcome.status).toBe("fulfilled");
+    }
+
+    const secondInput = runInput({
+      messageId: fixedUuid(443),
+      runId: fixedUuid(444),
+      sessionMode: "existing",
+      threadId,
+    });
+    const secondRun = await readValidatedChatRun(runRequest(secondInput), modelRegistry);
+    await expect(firstRepository.prepareRun({
+      agentBuildRevision: "concurrent-build",
+      providerModelId: "scripted-v1",
+      researcherId: primaryResearcher.researcher_id,
+      run: secondRun,
+    })).rejects.toBeInstanceOf(SessionNotFoundError);
+    const recreated = await owner.query<{ count: string }>(`
+      SELECT count(*)::text AS count
+      FROM agent.chat_session
+      WHERE id = $1
+    `, [threadId]);
+    expect(recreated.rows).toEqual([{ count: "0" }]);
   });
 
   it("keeps transcript order exact and applies a changed selection only to the next run", async () => {
@@ -970,8 +1484,8 @@ describe.sequential("durable Research Agent runtime", () => {
       await owner.query(`
         INSERT INTO agent."mastra_threads" (
           id, "resourceId", title, metadata, "createdAt", "updatedAt"
-        ) VALUES ($1, $2, 'New chat', NULL, pg_catalog.now(), pg_catalog.now())
-      `, [threadId, primaryResearcher.researcher_id]);
+        ) VALUES ($1, $2, $3, NULL, pg_catalog.now(), pg_catalog.now())
+      `, [threadId, primaryResearcher.researcher_id, UNTITLED_SESSION_TITLE]);
       await owner.query(`
         INSERT INTO agent.agent_run (
           id, thread_id, request_fingerprint, model_key, provider_model_id,
@@ -1008,6 +1522,37 @@ describe.sequential("durable Research Agent runtime", () => {
         status: "running",
         terminal_error_code: null,
       }]);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("rejects non-canonical UUIDs at the authenticated runtime boundary", async () => {
+    const runtime = await createIntegrationRuntime();
+    try {
+      const invalidInputs = [
+        runInput({
+          messageId: "00000000-0000-4000-8000-000000001481",
+          runId: "00000000-0000-4000-8000-000000001482",
+          threadId: "00000000-0000-0000-0000-000000000000",
+        }),
+        runInput({
+          messageId: "00000000-0000-4000-8000-000000001483",
+          runId: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+          threadId: "00000000-0000-4000-8000-000000001484",
+        }),
+      ];
+      for (const input of invalidInputs) {
+        const response = await runtime.handle(runRequest(input), primaryResearcher);
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({ code: "INVALID_CHAT_REQUEST" });
+      }
+
+      const nilSession = await owner.query<{ count: string }>(
+        "SELECT count(*)::text FROM agent.chat_session WHERE id = $1",
+        ["00000000-0000-0000-0000-000000000000"],
+      );
+      expect(nilSession.rows).toEqual([{ count: "0" }]);
     } finally {
       await runtime.close();
     }
@@ -1218,6 +1763,118 @@ function researchLoopTools(
   };
 }
 
+async function seedSession(options: Readonly<{
+  activityAt?: Date;
+  id: string;
+  researcherId: string;
+  title: string;
+}>): Promise<void> {
+  const activityAt = options.activityAt ?? new Date("2026-08-30T05:00:00.000Z");
+  const createdAt = new Date(activityAt.getTime() - 60_000);
+  await owner.query(`
+    INSERT INTO agent.chat_session (
+      id, researcher_id, selected_model_key, selected_reasoning_effort,
+      created_at, updated_at
+    ) VALUES ($1, $2, 'scripted-research', 'medium', $3, $4)
+  `, [options.id, options.researcherId, createdAt, activityAt]);
+  await owner.query(`
+    INSERT INTO agent."mastra_threads" (
+      id, "resourceId", title, metadata, "createdAt", "updatedAt",
+      "createdAtZ", "updatedAtZ"
+    ) VALUES (
+      $1, $2, $3, NULL,
+      $4::timestamp without time zone,
+      $5::timestamp without time zone,
+      $6::timestamp with time zone,
+      $7::timestamp with time zone
+    )
+  `, [
+    options.id,
+    options.researcherId,
+    options.title,
+    createdAt.toISOString().replace("Z", ""),
+    activityAt.toISOString().replace("Z", ""),
+    createdAt,
+    activityAt,
+  ]);
+}
+
+async function agentRecordCounts(
+  threadId: string,
+  runId: string,
+): Promise<Readonly<{
+  messages: string;
+  runs: string;
+  sessions: string;
+  snapshots: string;
+  threads: string;
+}>> {
+  const result = await owner.query<{
+    messages: string;
+    runs: string;
+    sessions: string;
+    snapshots: string;
+    threads: string;
+  }>(`
+    SELECT
+      (SELECT count(*)::text FROM agent.chat_session WHERE id = $1::uuid) AS sessions,
+      (SELECT count(*)::text FROM agent.agent_run WHERE thread_id = $1::uuid) AS runs,
+      (SELECT count(*)::text FROM agent."mastra_threads" WHERE id = $1::uuid::text) AS threads,
+      (SELECT count(*)::text FROM agent."mastra_messages" WHERE thread_id = $1::uuid::text) AS messages,
+      (SELECT count(*)::text FROM agent."mastra_workflow_snapshot" WHERE run_id = $2) AS snapshots
+  `, [threadId, runId]);
+  const counts = result.rows[0];
+  if (counts === undefined) throw new Error("AGENT_RECORD_COUNTS_MISSING");
+  return counts;
+}
+
+async function holdSessionMutationLock(threadId: string): Promise<PoolClient> {
+  const client = await owner.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL search_path = pg_catalog");
+    await client.query(
+      "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))",
+      [`thesistrace:agent-thread:${threadId}`],
+    );
+    return client;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    client.release();
+    throw error;
+  }
+}
+
+async function releaseSessionMutationLock(client: PoolClient): Promise<void> {
+  try {
+    await client.query("COMMIT");
+  } finally {
+    client.release();
+  }
+}
+
+async function waitForAdvisoryLockWaiters(expected: number): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  let observed = 0;
+  while (Date.now() < deadline) {
+    const result = await owner.query<{ count: string }>(`
+      SELECT count(*)::text AS count
+      FROM pg_catalog.pg_locks
+      WHERE locktype = 'advisory'
+        AND NOT granted
+        AND database = (
+          SELECT oid
+          FROM pg_catalog.pg_database
+          WHERE datname = pg_catalog.current_database()
+        )
+    `);
+    observed = Number(result.rows[0]?.count ?? "0");
+    if (observed >= expected) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`ADVISORY_LOCK_WAITERS_TIMEOUT: expected ${expected}, observed ${observed}`);
+}
+
 function researcher(id: string): VerifiedResearcher {
   return {
     active: true,
@@ -1270,6 +1927,7 @@ function runInput(options: Readonly<{
   messages?: Message[];
   modelKey?: string;
   reasoningEffort?: "medium" | "none";
+  sessionMode?: "new" | "existing";
   runId: string;
   threadId: string;
 }>): RunAgentInput {
@@ -1288,6 +1946,7 @@ function runInput(options: Readonly<{
       thesistrace: {
         modelKey: options.modelKey ?? "scripted-research",
         reasoningEffort: options.reasoningEffort ?? "medium",
+        sessionMode: options.sessionMode ?? (options.messages === undefined ? "new" : "existing"),
       },
     },
   };
@@ -1400,4 +2059,8 @@ function roleDatabaseUrl(base: string, username: string, password: string): stri
   url.username = username;
   url.password = password;
   return url.toString();
+}
+
+function fixedUuid(suffix: number): string {
+  return `00000000-0000-4000-8000-${suffix.toString().padStart(12, "0")}`;
 }

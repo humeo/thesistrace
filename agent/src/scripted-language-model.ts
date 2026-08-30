@@ -175,6 +175,14 @@ type ScriptedResponse = Readonly<{
 }>;
 
 function scriptedResponse(options: LanguageModelV3CallOptions): ScriptedResponse {
+  const sessionTitle = scriptedSessionTitle(options);
+  if (sessionTitle !== null) {
+    return {
+      chunks: [sessionTitle],
+      text: sessionTitle,
+      tool: null,
+    };
+  }
   const research = scriptedResearchDecision(options);
   if (research !== null) return responseFromResearchDecision(research);
   const tool = scriptedTool(options);
@@ -193,6 +201,29 @@ function scriptedResponse(options: LanguageModelV3CallOptions): ScriptedResponse
     text: selectedText,
     tool: null,
   };
+}
+
+function scriptedSessionTitle(options: LanguageModelV3CallOptions): string | null {
+  const titleRequest = options.prompt.some((message) => (
+    message.role === "system"
+    && typeof message.content === "string"
+    && message.content.includes("[thesistrace-session-title]")
+  ));
+  if (!titleRequest) return null;
+  for (let index = options.prompt.length - 1; index >= 0; index -= 1) {
+    const message = options.prompt[index];
+    if (message?.role !== "user" || !Array.isArray(message.content)) continue;
+    const text = message.content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join(" ")
+      .toLowerCase();
+    if (/low[- ]volatility/u.test(text) && text.includes("quality")) {
+      return "Low-volatility quality Alpha";
+    }
+    return "Research Alpha idea";
+  }
+  return "Research Alpha idea";
 }
 
 function responseFromResearchDecision(

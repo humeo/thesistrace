@@ -28,6 +28,7 @@ test("accepts the one strict text-only AG-UI run shape", async () => {
   await expect(readValidatedChatRun(request, registry)).resolves.toMatchObject({
     modelKey: "scripted",
     reasoningEffort: "medium",
+    sessionMode: "new",
     latestUserMessage: {
       content: "Build an Alpha.",
       id: "00000000-0000-4000-8000-000000000003",
@@ -37,6 +38,24 @@ test("accepts the one strict text-only AG-UI run shape", async () => {
   await expect(readThreadId(request)).resolves.toBe(
     "00000000-0000-4000-8000-000000000001",
   );
+});
+
+test.each([
+  { threadId: "00000000-0000-0000-0000-000000000000" },
+  { runId: "ffffffff-ffff-ffff-ffff-ffffffffffff" },
+  { threadId: "00000000-0000-4000-8000-00000000000A" },
+])("rejects a non-canonical browser UUID at the run boundary %#", async (override) => {
+  const request = runRequest(override);
+  await expect(readValidatedChatRun(request, registry)).rejects.toMatchObject({
+    code: "INVALID_CHAT_REQUEST",
+    status: 400,
+  } satisfies Partial<ChatRequestError>);
+  if ("threadId" in override) {
+    await expect(readThreadId(request)).rejects.toMatchObject({
+      code: "INVALID_CHAT_REQUEST",
+      status: 400,
+    } satisfies Partial<ChatRequestError>);
+  }
 });
 
 test("accepts CopilotKit's exact split Assistant text shape on a later turn", async () => {
@@ -167,7 +186,11 @@ function runRequest(override: Record<string, unknown> = {}): Request {
     tools: [],
     context: [],
     forwardedProps: {
-      thesistrace: { modelKey: "scripted", reasoningEffort: "medium" },
+      thesistrace: {
+        modelKey: "scripted",
+        reasoningEffort: "medium",
+        sessionMode: "new",
+      },
     },
     ...override,
   };

@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "lezer-generator --typeScript --noTerms --output src/research/alpha-language-parser.ts src/research/alpha-language.grammar && tsc -b && vite build && node scripts/assert-product-bundle.mjs",
     "typecheck": "tsc -b --pretty false",
-    "test:shell": "vitest run src/auth/routing.test.ts src/auth/session.test.ts src/auth/coreFetch.test.ts src/auth/draft-isolation.test.ts src/auth/AccountMenu.test.tsx src/chat/modelCatalog.test.ts src/chat/sessionPreference.test.ts src/chat/chatState.test.ts src/chat/toolResult.test.ts src/chat/ChatPage.test.tsx src/shell/AppShell.test.tsx src/data/DataPage.test.tsx src/research/ResearchWorkspacePage.test.tsx src/research-runs/ResearchRunsPage.test.tsx src/daily-tracks/DailyTracksPage.test.tsx src/analysis/StrategyPerformanceChart.test.ts",
+    "test:shell": "vitest run src/auth/routing.test.ts src/auth/session.test.ts src/auth/coreFetch.test.ts src/auth/draft-isolation.test.ts src/auth/AccountMenu.test.tsx src/chat/modelCatalog.test.ts src/chat/sessionPreference.test.ts src/chat/sessionHistory.test.ts src/chat/useSessionHistory.test.tsx src/chat/chatState.test.ts src/chat/toolResult.test.ts src/chat/ChatPage.test.tsx src/shell/AppShell.test.tsx src/data/DataPage.test.tsx src/research/ResearchWorkspacePage.test.tsx src/research-runs/ResearchRunsPage.test.tsx src/daily-tracks/DailyTracksPage.test.tsx src/analysis/StrategyPerformanceChart.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -36,6 +36,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "happy-dom": "^20.12.0",
     "typescript": "~5.7.2",
     "vite": "^6.0.5",
     "vitest": "^3.2.4"

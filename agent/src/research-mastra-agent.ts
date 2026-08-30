@@ -32,6 +32,7 @@ type ResearchExecutionContext = Readonly<{
   requestContext: import("@mastra/core/request-context").RequestContext;
   run: ValidatedChatRun;
   runMaxWallMs: number;
+  scheduleTitle: () => Promise<void>;
   usage: () => PersistedTokenUsage | undefined;
 }>;
 
@@ -66,6 +67,8 @@ export class ResearchMastraAgent extends MastraAgent {
       let disposed = false;
       let ownsRun = false;
       let terminalStarted = false;
+      let shouldScheduleTitle = false;
+      let titleScheduled = false;
       let activeMcpRun: McpRun | undefined;
       let mcpRunPromise: Promise<McpRun> | undefined;
       let mcpClosePromise: Promise<void> | undefined;
@@ -82,6 +85,16 @@ export class ResearchMastraAgent extends MastraAgent {
         })();
         return mcpClosePromise;
       };
+      const scheduleTitle = async () => {
+        if (!shouldScheduleTitle || titleScheduled) return;
+        titleScheduled = true;
+        try {
+          await this.execution.scheduleTitle();
+        } catch {
+          // Title generation is a separate best-effort operation. It cannot
+          // change the already accepted primary Run's terminal outcome.
+        }
+      };
 
       const source = defer(async () => {
         const prepared = await this.execution.repository.prepareRun({
@@ -90,6 +103,12 @@ export class ResearchMastraAgent extends MastraAgent {
           researcherId: this.execution.researcherId,
           run: this.execution.run,
         });
+        shouldScheduleTitle = prepared.kind === "new" && prepared.generateTitle;
+        // The first accepted message owns title generation, but the title is
+        // not part of the Agent Run lifecycle. Start it once admission is
+        // durable and never hold RUN_FINISHED/RUN_ERROR or Runner cleanup open
+        // for this independent best-effort operation.
+        if (shouldScheduleTitle) void scheduleTitle();
         if (disposed && prepared.kind === "new") {
           ownsRun = true;
           terminalStarted = true;
@@ -158,7 +177,11 @@ export class ResearchMastraAgent extends MastraAgent {
                 ) {
                   terminalStarted = true;
                 }
-                return this.persistTerminalEvent(event, input.runId, closeMcp);
+                return this.persistTerminalEvent(
+                  event,
+                  input.runId,
+                  closeMcp,
+                );
               }),
             ),
           );
@@ -171,7 +194,7 @@ export class ResearchMastraAgent extends MastraAgent {
         }),
       );
 
-      return withTotalTimeout(source, this.execution.runMaxWallMs).pipe(
+      const boundedRun = withTotalTimeout(source, this.execution.runMaxWallMs).pipe(
         // Once prepareRun inserts a Run, every later failure owns that row and
         // must durably terminate it. Preparation conflicts never mutate a Run.
         catchError((error) => {
@@ -182,6 +205,9 @@ export class ResearchMastraAgent extends MastraAgent {
           terminalStarted = true;
           return this.persistFailure(input.runId, closeMcp);
         }),
+      );
+
+      return boundedRun.pipe(
         finalize(() => {
           disposed = true;
           if (ownsRun && !terminalStarted) {

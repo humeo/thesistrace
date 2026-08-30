@@ -193,7 +193,7 @@ CREATE INDEX agent_mastra_workflow_snapshot_name_status_createdat_idx
         (("snapshot" ->> 'status'::text)),
         "createdAt" DESC
     );
-CREATE INDEX chat_session_researcher_created_idx
-    ON agent.chat_session USING btree (researcher_id, created_at DESC, id);
+CREATE INDEX chat_session_researcher_activity_idx
+    ON agent.chat_session USING btree (researcher_id, updated_at DESC, id DESC);
 CREATE INDEX agent_run_thread_started_idx
     ON agent.agent_run USING btree (thread_id, started_at, id);
