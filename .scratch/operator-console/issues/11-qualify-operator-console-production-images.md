@@ -7,7 +7,7 @@ topology that will be deployed.
 **Blocked by:** 03 — Revoke another Researcher's Login Sessions; 10 — Retain
 operation receipts without retaining Data Generations.
 
-**Status:** in-progress
+**Status:** complete
 
 ## Implementation Plan
 
@@ -72,7 +72,7 @@ operation receipts without retaining Data Generations.
 - [x] The deployment and operational documentation describes the new Worker,
   assignment/transfer commands, secret boundary, submission-versus-publication
   distinction, recovery behavior, and supported Console operations.
-- [ ] The complete local release command passes against committed final changes,
+- [x] The complete local release command passes against committed final changes,
   and diagnostic artifacts identify image versions, operation IDs, request IDs,
   logs, responses, and browser screenshots on failure.
 
@@ -108,9 +108,35 @@ operation receipts without retaining Data Generations.
   now normalizes whitespace before checking every original boundary phrase.
   The narrow regression passed, Ruff passed, and all 74 lifecycle tests passed
   in 104.70 seconds. No production code or authorization rule changed.
-- The release check against a clean, committed implementation is still pending.
-  This issue remains in progress until that check passes and the completion
-  record is committed.
+
+### Final committed-code gate
+
+- `pnpm check:release` passed with exit status zero at
+  `9faef367b23b76323fbdf2187d96889d66e600b3`. The worktree was clean before and
+  after the command. Implementation commit `6d556de` and document-contract
+  correction `9faef36` were both committed before this run; the subsequent
+  completion record changes only this issue and the feature spec.
+- Ruff, both TypeScript typechecks, 931 Python tests, 171 Auth tests, and 148 Web
+  tests passed. The sole Python warning remains the pre-existing `forkpty()`
+  deprecation.
+- Core run `20260830t192123z-850-6b92b90e` passed 416 primary real-dependency
+  tests in 885.53 seconds, with eight marker-selected tests deferred, followed
+  by all six independent restart/recovery phases. Auth integration run
+  `20260830t193917z-17585-171bd0e2` passed all 128 tests.
+- Real Caddy browser run `20260830t194044z-18410-cdd84467` passed all 16 tests
+  in 5.4 minutes, including the complete Operator workflow and keyboard,
+  mobile-drawer, and touch-target acceptance.
+- Final Production Image run `20260830t194654z-23136-eb74a984` passed all 86
+  recorded phases. Its separate Operator browser phase passed in 92 seconds.
+  Evidence confirms ordinary-Researcher `404`, one-time Proof consumption,
+  durable acceptance while the Worker is unavailable, successful publication,
+  former-Operator Session revocation, successor access, receipt removal, and
+  an unchanged Dataset Head after collection.
+- The separate Auth image run `20260830t200000z-28517-5a4f25a2` and Caddy image
+  run `20260830t200029z-28721-2c47039d` passed. Core integration, browser, and
+  image metadata all record the exact committed revision,
+  `git_worktree_dirty=false`, every phase at status zero, successful runtime-
+  secret cleanup, successful Compose cleanup, and overall status zero.
 
 ## Review
 
@@ -136,7 +162,7 @@ operation receipts without retaining Data Generations.
 - The post-commit document-contract correction was reviewed against Standards
   and Spec: it removes sensitivity to Markdown line wrapping without removing
   or weakening any required operational-boundary phrase. No review finding
-  remains; the full committed-code gate must still be rerun.
+  remains; the full committed-code gate subsequently passed at `9faef36`.
 
 ## Comments
 
@@ -148,3 +174,8 @@ operation receipts without retaining Data Generations.
   assertion. Reproduced it, normalized only the test's whitespace handling,
   passed the regression and all lifecycle tests, and re-reviewed the correction
   before a separate Ticket 11 fix commit and another clean release gate.
+- 2026-08-31: The full release gate passed against clean commit `9faef36`,
+  including real dependency recovery, all 16 browser tests, all 86 final-image
+  phases, and the separate Auth/Caddy image checks. All acceptance criteria and
+  review findings are closed. Marked this issue complete with a documentation-
+  only completion record; the qualified implementation remains unchanged.

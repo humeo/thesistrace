@@ -1,6 +1,6 @@
 # Operator Console
 
-**Status:** ready-for-agent
+**Status:** complete
 
 ## Problem Statement
 
@@ -353,11 +353,11 @@ services, including one durable Data Operator Worker for all three Refresh kinds
 
 ## Further Notes
 
-- The current Market Refresh flow is a private two-step CLI process: submission
-  is followed by a separately invoked one-shot worker command. Financial and
-  Industry Refreshes currently execute synchronously in one-shot CLI processes.
-  This specification replaces all three execution shapes with the single durable
-  Data Operator Worker described above.
+- Before this feature, Market Refresh used a private two-step CLI process:
+  submission followed by a separately invoked one-shot worker command.
+  Financial and Industry Refreshes executed synchronously in one-shot CLI
+  processes. The implementation replaces all three execution shapes with the
+  single durable Data Operator Worker described above.
 - Submission, processing, publication, and Dataset Head advancement remain
   distinct facts. UI copy and tests must never use `accepted` as a synonym for
   `published`.
@@ -390,3 +390,10 @@ services, including one durable Data Operator Worker for all three Refresh kinds
   deterministic full-stack browser and image qualification with external fakes.
 - 2026-08-29: `to-spec` published the confirmed design with the
   `ready-for-agent` triage state and the agreed test seams.
+- 2026-08-31: All 11 implementation issues were delivered serially with an
+  implementation plan, Standards/Spec review, fixes and re-review, verification,
+  tracker updates, and independent implementation commits. The complete
+  `pnpm check:release` gate passed against clean commit `9faef36`, including
+  real-dependency recovery, 16 browser tests, and final Production Image Smoke.
+  Ticket 11 records the exact run IDs and evidence. This completion record
+  changes only tracker documentation; the qualified implementation is unchanged.
