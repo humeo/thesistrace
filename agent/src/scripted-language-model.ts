@@ -8,8 +8,18 @@ import type {
 
 import {
   scriptedResearchDecision,
-  type ScriptedResearchDecision,
 } from "./scripted-research-model.js";
+import type { ScriptedResearchDecision } from "./scripted-research-support.js";
+import { scriptedBatchDecision } from "./scripted-batch-model.js";
+
+export {
+  SCRIPTED_FACTOR_BATCH_PROMPT,
+  SCRIPTED_STRATEGY_SWEEP_PROMPT,
+  SCRIPTED_RESUME_BATCH_PROMPT,
+  SCRIPTED_BATCH_LIST_PROMPT,
+  SCRIPTED_BATCH_OBSERVATIONS_PROMPT,
+  SCRIPTED_AMBIGUOUS_BATCH_PROMPT,
+} from "./scripted-batch-model.js";
 
 export {
   SCRIPTED_ADMISSION_REPAIR_IDEA_PROMPT,
@@ -193,6 +203,8 @@ function scriptedResponse(options: LanguageModelV3CallOptions): ScriptedResponse
   }
   const research = scriptedResearchDecision(options);
   if (research !== null) return responseFromResearchDecision(research);
+  const batch = scriptedBatchDecision(options);
+  if (batch !== null) return responseFromResearchDecision(batch);
   const invalidA2UI = scriptedInvalidA2UI(options);
   if (invalidA2UI !== null) return invalidA2UI;
   const tableA2UI = scriptedLargeA2UITable(options);

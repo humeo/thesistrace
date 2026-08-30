@@ -2,8 +2,11 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 
 import { testProjectName } from "./auth-fixture";
 
-export function controlWorker(action: "pause" | "unpause"): void {
-  execFileSync("docker", [action, `${testProjectName()}-research-worker-1`], {
+export function controlWorker(
+  action: "pause" | "unpause",
+  service: "research-worker" | "batch-research-worker" = "research-worker",
+): void {
+  execFileSync("docker", [action, `${testProjectName()}-${service}-1`], {
     stdio: "pipe",
   });
 }

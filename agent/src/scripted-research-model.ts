@@ -1,6 +1,26 @@
 import type { LanguageModelV3CallOptions } from "@ai-sdk/provider";
 
 import {
+  latestUserText,
+  textContent,
+  toolObservations,
+  latestSuccessfulOutput,
+  latestUnresolvedTransportFailure,
+  requiredTool,
+  boundedWindowStart,
+  preferredEnum,
+  boundedConstraintDefault,
+  effectRequestId,
+  readRetryAfter,
+  factorSurfaceMetrics,
+  strategySurfaceMetrics,
+  isRecord,
+  type JsonRecord,
+  type ScriptedResearchDecision,
+  type ToolObservation,
+} from "./scripted-research-support.js";
+
+import {
   projectResearchA2UIContent,
   RESEARCH_A2UI_CATALOG_ID,
   RESEARCH_A2UI_PROTOCOL_VERSION,
@@ -23,7 +43,6 @@ export const SCRIPTED_RETRY_INTERRUPTED_PROMPT =
 export const SCRIPTED_RESUME_RESEARCH_PROMPT =
   "Resume the accepted ResearchRun from this Chat and explain its authoritative Result when available.";
 
-const RUN_IDENTITY_PATTERN = /Agent Run identity: ([0-9a-f-]{36})\./;
 const RESEARCH_RUN_ID_PATTERN = /^run_[a-f0-9]{20}$/;
 const MAX_SCRIPTED_POLLS = 6;
 const LOW_VOLATILITY_FORMULA = "rank(-abs(pct_change(close, 1)))";
@@ -38,27 +57,6 @@ const A2UI_SURFACE_IDS = Object.freeze({
   result: "research-result",
   status: "research-run-status",
 });
-
-type JsonRecord = Record<string, unknown>;
-type ToolObservation = Readonly<{
-  input: JsonRecord;
-  name: string;
-  output: JsonRecord;
-  promptIndex: number;
-  toolCallId: string;
-}>;
-
-export type ScriptedResearchDecision =
-  | Readonly<{
-      input: JsonRecord;
-      kind: "tool";
-      name: string;
-      waitSeconds?: number;
-    }>
-  | Readonly<{
-      kind: "text";
-      text: string;
-    }>;
 
 export function scriptedResearchDecision(
   options: LanguageModelV3CallOptions,
@@ -87,8 +85,7 @@ export function scriptedResearchDecision(
     };
   }
 
-  const calls = toolCalls(options, originalIdea.index);
-  const observations = toolObservations(options, originalIdea.index, calls);
+  const observations = toolObservations(options, originalIdea.index);
   if (retryInterrupted || resumeResearch) {
     const unresolved = latestUnresolvedTransportFailure(observations);
     if (unresolved !== undefined) {
@@ -211,7 +208,7 @@ export function scriptedResearchDecision(
         text: admissionCannotBeCorrectedText(latestRejection),
       };
     }
-    const requestId = effectRequestId(options, rejections.length + 1);
+    const requestId = effectRequestId(options, "research", rejections.length + 1);
     if (requestId === null) {
       return {
         kind: "text",
@@ -566,169 +563,6 @@ function latestRecognizedIdea(
   return null;
 }
 
-function latestUserText(
-  options: LanguageModelV3CallOptions,
-): Readonly<{ index: number; text: string }> | undefined {
-  for (let index = options.prompt.length - 1; index >= 0; index -= 1) {
-    const message = options.prompt[index];
-    if (message?.role === "user") {
-      return { index, text: textContent(message.content) };
-    }
-  }
-  return undefined;
-}
-
-function textContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((part): part is Readonly<{ text: string; type: "text" }> => (
-      isRecord(part) && part.type === "text" && typeof part.text === "string"
-    ))
-    .map((part) => part.text)
-    .join("");
-}
-
-function toolCalls(
-  options: LanguageModelV3CallOptions,
-  afterIndex: number,
-): ReadonlyMap<string, Readonly<{
-  input: JsonRecord;
-  name: string;
-  promptIndex: number;
-}>> {
-  const calls = new Map<string, Readonly<{
-    input: JsonRecord;
-    name: string;
-    promptIndex: number;
-  }>>();
-  for (let promptIndex = afterIndex + 1; promptIndex < options.prompt.length; promptIndex += 1) {
-    const message = options.prompt[promptIndex];
-    if (message === undefined) continue;
-    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-    for (const part of message.content) {
-      if (
-        part.type !== "tool-call"
-        || typeof part.toolCallId !== "string"
-        || typeof part.toolName !== "string"
-        || !isRecord(part.input)
-      ) continue;
-      calls.set(part.toolCallId, { input: part.input, name: part.toolName, promptIndex });
-    }
-  }
-  return calls;
-}
-
-function toolObservations(
-  options: LanguageModelV3CallOptions,
-  afterIndex: number,
-  calls: ReadonlyMap<string, Readonly<{
-    input: JsonRecord;
-    name: string;
-    promptIndex: number;
-  }>>,
-): readonly ToolObservation[] {
-  const observations: ToolObservation[] = [];
-  for (let promptIndex = afterIndex + 1; promptIndex < options.prompt.length; promptIndex += 1) {
-    const message = options.prompt[promptIndex];
-    if (message === undefined) continue;
-    if (message.role !== "tool" || !Array.isArray(message.content)) continue;
-    for (const part of message.content) {
-      if (part.type !== "tool-result" || typeof part.toolCallId !== "string") continue;
-      const call = calls.get(part.toolCallId);
-      const name = typeof part.toolName === "string" ? part.toolName : call?.name;
-      const output = unwrapOutput(part.output);
-      if (name === undefined || call === undefined || !isRecord(output)) continue;
-      observations.push({
-        input: call.input,
-        name,
-        output,
-        promptIndex,
-        toolCallId: part.toolCallId,
-      });
-    }
-  }
-  return observations;
-}
-
-function unwrapOutput(value: unknown): unknown {
-  if (isRecord(value) && value.type === "json" && "value" in value) {
-    return unwrapOutput(value.value);
-  }
-  if (isRecord(value) && value.type === "text" && typeof value.value === "string") {
-    try {
-      const parsed: unknown = JSON.parse(value.value);
-      return isRecord(parsed) ? parsed : value;
-    } catch {
-      return value;
-    }
-  }
-  if (isRecord(value) && isRecord(value.structuredContent)) {
-    return unwrapOutput(value.structuredContent);
-  }
-  if (isRecord(value) && Array.isArray(value.content)) {
-    for (const part of value.content) {
-      if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") {
-        continue;
-      }
-      try {
-        const parsed: unknown = JSON.parse(part.text);
-        if (isRecord(parsed)) return parsed;
-      } catch {
-        // The structured result, when present, remains authoritative.
-      }
-    }
-  }
-  return value;
-}
-
-function latestSuccessfulOutput(
-  observations: readonly ToolObservation[],
-  name: string,
-): JsonRecord | undefined {
-  return [...observations].reverse().find(
-    (observation) => observation.name === name
-      && typeof observation.output.code !== "string",
-  )?.output;
-}
-
-function latestUnresolvedTransportFailure(
-  observations: readonly ToolObservation[],
-): ToolObservation | undefined {
-  for (let index = observations.length - 1; index >= 0; index -= 1) {
-    const observation = observations[index];
-    if (observation?.output.code !== "MCP_TRANSPORT_UNAVAILABLE") continue;
-    const laterReplay = observations.slice(index + 1).some((candidate) => (
-      candidate.name === observation.name
-      && canonicalJson(candidate.input) === canonicalJson(observation.input)
-    ));
-    if (!laterReplay) return observation;
-  }
-  return undefined;
-}
-
-function requiredTool(
-  options: LanguageModelV3CallOptions,
-  name: string,
-  input: JsonRecord,
-  waitSeconds?: number,
-): ScriptedResearchDecision {
-  const available = options.tools?.some(
-    (tool) => tool.type === "function" && tool.name === name,
-  ) === true;
-  return available
-    ? {
-        input,
-        kind: "tool",
-        name,
-        ...(waitSeconds === undefined ? {} : { waitSeconds }),
-      }
-    : {
-        kind: "text",
-        text: `The authenticated MCP discovery did not provide the required ${name} capability, so I stopped without claiming or mutating Research.`,
-      };
-}
-
 function researchCommand(options: Readonly<{
   context: JsonRecord;
   mode: NonNullable<ReturnType<typeof ideaMode>>;
@@ -795,84 +629,9 @@ function researchCommand(options: Readonly<{
   };
 }
 
-function boundedWindowStart(coverageStart: string, coverageEnd: string): string | null {
-  const start = strictIsoDate(coverageStart);
-  const end = strictIsoDate(coverageEnd);
-  if (start === null || end === null || start > end) return null;
-  end.setUTCDate(end.getUTCDate() - 90);
-  const candidate = end.toISOString().slice(0, 10);
-  return candidate < coverageStart ? coverageStart : candidate;
-}
-
-function strictIsoDate(value: string): Date | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return Number.isNaN(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== value
-    ? null
-    : parsed;
-}
-
-function preferredEnum(
-  context: JsonRecord,
-  key: string,
-  preferred: string,
-): string | null {
-  const constraints = isRecord(context.authoring_constraints)
-    ? context.authoring_constraints
-    : undefined;
-  const values = constraints?.[key];
-  if (
-    !Array.isArray(values)
-    || values.length === 0
-    || values.some((value) => typeof value !== "string" || value.length === 0)
-  ) return null;
-  if (values.includes(preferred)) return preferred;
-  return values[0] as string;
-}
-
-function boundedConstraintDefault(
-  context: JsonRecord,
-  key: string,
-  preferred: number,
-): number | null {
-  const constraints = isRecord(context.authoring_constraints)
-    ? context.authoring_constraints
-    : undefined;
-  const bounds = isRecord(constraints?.[key]) ? constraints[key] : undefined;
-  const minimum = bounds?.minimum;
-  const maximum = bounds?.maximum;
-  if (
-    typeof minimum !== "number"
-    || typeof maximum !== "number"
-    || !Number.isSafeInteger(minimum)
-    || !Number.isSafeInteger(maximum)
-    || minimum < 1
-    || maximum < minimum
-  ) return null;
-  return Math.min(maximum, Math.max(minimum, preferred));
-}
-
-function effectRequestId(options: LanguageModelV3CallOptions, revision: number): string | null {
-  for (const message of options.prompt) {
-    if (message.role !== "system") continue;
-    const match = textContent(message.content).match(RUN_IDENTITY_PATTERN);
-    if (match?.[1] !== undefined) {
-      return `agent_${match[1].replaceAll("-", "")}_research_v${revision}`;
-    }
-  }
-  return null;
-}
-
 function catalogSupportsFormula(catalog: JsonRecord): boolean {
   if (!Array.isArray(catalog.unknown_identifiers)) return false;
   return catalog.unknown_identifiers.length === 0;
-}
-
-function readRetryAfter(output: JsonRecord): number | undefined {
-  const value = output.retry_after_seconds;
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 60
-    ? value
-    : undefined;
 }
 
 function availableSections(output: JsonRecord): readonly string[] {
@@ -968,94 +727,13 @@ function researchResultMarkdown(options: Readonly<{
 }
 
 function factorMetricLines(result: JsonRecord): readonly string[] | null {
-  const factor = isRecord(result.factor) ? result.factor : undefined;
-  const horizons = isRecord(factor?.horizons) ? factor.horizons : undefined;
-  const five = isRecord(horizons?.["5"]) ? horizons["5"] : undefined;
-  const summary = isRecord(five?.summary) ? five.summary : undefined;
-  const rankIc = isRecord(summary?.rank_ic) ? summary.rank_ic : undefined;
-  if (
-    !hasFiniteNumberOrNull(rankIc, "mean")
-    || !hasFiniteNumberOrNull(summary, "top_bottom_return")
-  ) return null;
-  return [
-    `- **5-session Rank IC:** ${formatMetric(rankIc.mean)}`,
-    `- **5-session top-bottom return:** ${formatPercent(summary.top_bottom_return)}`,
-  ];
-}
-
-function factorSurfaceMetrics(result: JsonRecord): readonly JsonRecord[] | null {
-  const factor = isRecord(result.factor) ? result.factor : undefined;
-  const horizons = isRecord(factor?.horizons) ? factor.horizons : undefined;
-  const five = isRecord(horizons?.["5"]) ? horizons["5"] : undefined;
-  const summary = isRecord(five?.summary) ? five.summary : undefined;
-  const rankIc = isRecord(summary?.rank_ic) ? summary.rank_ic : undefined;
-  if (
-    !hasFiniteNumberOrNull(rankIc, "mean")
-    || !hasFiniteNumberOrNull(summary, "top_bottom_return")
-  ) return null;
-  return [
-    { label: "5-session Rank IC", value: formatMetric(rankIc.mean) },
-    { label: "5-session top-bottom return", value: formatPercent(summary.top_bottom_return) },
-  ];
+  return factorSurfaceMetrics(result)?.map(
+    (metric) => `- **${String(metric.label)}:** ${String(metric.value)}`,
+  ) ?? null;
 }
 
 function strategyMetricLines(result: JsonRecord): readonly string[] | null {
-  const metrics = isRecord(result.metrics) ? result.metrics : undefined;
-  const drawdown = isRecord(metrics?.maximum_drawdown)
-    ? metrics.maximum_drawdown
-    : undefined;
-  if (
-    !hasFiniteNumberOrNull(metrics, "sharpe")
-    || !hasFiniteNumberOrNull(metrics, "net_cumulative_return")
-    || !hasFiniteNumberOrNull(drawdown, "value")
-  ) return null;
-  return [
-    `- **Sharpe:** ${formatMetric(metrics?.sharpe)}`,
-    `- **Net cumulative return:** ${formatPercent(metrics?.net_cumulative_return)}`,
-    `- **Maximum drawdown:** ${formatPercent(drawdown?.value)}`,
-  ];
-}
-
-function strategySurfaceMetrics(result: JsonRecord): readonly JsonRecord[] | null {
-  const metrics = isRecord(result.metrics) ? result.metrics : undefined;
-  const drawdown = isRecord(metrics?.maximum_drawdown)
-    ? metrics.maximum_drawdown
-    : undefined;
-  if (
-    !hasFiniteNumberOrNull(metrics, "sharpe")
-    || !hasFiniteNumberOrNull(metrics, "net_cumulative_return")
-    || !hasFiniteNumberOrNull(drawdown, "value")
-  ) return null;
-  return [
-    { label: "Sharpe", value: formatMetric(metrics.sharpe) },
-    { label: "Net cumulative return", value: formatPercent(metrics.net_cumulative_return) },
-    { label: "Maximum drawdown", value: formatPercent(drawdown.value) },
-  ];
-}
-
-function hasFiniteNumberOrNull(
-  record: JsonRecord | undefined,
-  key: string,
-): record is JsonRecord & Record<string, number | null> {
-  if (record === undefined || !Object.hasOwn(record, key)) return false;
-  const value = record[key];
-  return value === null || (typeof value === "number" && Number.isFinite(value));
-}
-
-function formatMetric(value: number | null): string {
-  return value === null ? "Unavailable" : value.toFixed(4);
-}
-
-function formatPercent(value: number | null): string {
-  return value === null ? "Unavailable" : `${(value * 100).toFixed(2)}%`;
-}
-
-function canonicalJson(value: JsonRecord): string {
-  return JSON.stringify(Object.fromEntries(Object.entries(value).sort(([a], [b]) => (
-    a.localeCompare(b)
-  ))));
-}
-
-function isRecord(value: unknown): value is JsonRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return strategySurfaceMetrics(result)?.map(
+    (metric) => `- **${String(metric.label)}:** ${String(metric.value)}`,
+  ) ?? null;
 }

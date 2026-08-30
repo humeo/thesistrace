@@ -11,6 +11,8 @@ import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { BATCH_ID, BATCH_TOOL_NAMES, CHILD_IDS, batchFixtureOutput } from "../test-fixtures/batch-research.js";
+
 import {
   RESEARCH_A2UI_ACTIVITY_TYPE,
   RESEARCH_A2UI_CATALOG_ID,
@@ -31,6 +33,8 @@ import { createResearchRuntime, type ResearchRuntime } from "./research-runtime.
 import { initializeAgentSchema } from "./schema-initialize.js";
 import {
   SCRIPTED_FACTOR_IDEA_PROMPT,
+  SCRIPTED_FACTOR_BATCH_PROMPT,
+  SCRIPTED_STRATEGY_SWEEP_PROMPT,
   SCRIPTED_INVALID_A2UI_PROMPT,
   SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT,
   SCRIPTED_INVALID_A2UI_DATA_PROMPT,
@@ -1224,6 +1228,72 @@ describe.sequential("durable Research Agent runtime", () => {
     } finally {
       release();
       await terminal;
+      await runtime.close();
+    }
+  });
+
+  it.each([
+    ["factor_evaluation", SCRIPTED_FACTOR_BATCH_PROMPT],
+    ["strategy_sweep", SCRIPTED_STRATEGY_SWEEP_PROMPT],
+  ] as const)("persists and replays a model-owned %s comparison without another MCP admission", async (mode, prompt) => {
+    const calls: Array<{ input: Record<string, unknown>; name: string }> = [];
+    const makeRuntime = () => createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => undefined,
+        hasFatalToolFailure: () => false,
+        toolFailure: () => undefined,
+        tools: Object.fromEntries(BATCH_TOOL_NAMES.map((name) => [name, createTool({
+          id: name,
+          description: `Discovered Batch fixture capability: ${name}`,
+          inputSchema: z.record(z.string(), z.unknown()),
+          execute: async (input) => {
+            const call = { name, input };
+            calls.push(call);
+            return batchFixtureOutput(mode, call);
+          },
+        })])),
+      }),
+    });
+    let runtime = await makeRuntime();
+    const threadId = randomUUID();
+    const agentRunId = randomUUID();
+    const input = runInput({ content: prompt, messageId: randomUUID(), runId: agentRunId, threadId });
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      const json = JSON.stringify(events);
+      expect(json).toContain(BATCH_ID);
+      expect(json).toContain("Ordered child ResearchRun results");
+      expect(json).not.toContain("private-batch-core-provenance");
+      for (const childId of CHILD_IDS) expect(json).toContain(`/research-runs/${childId}`);
+      const admission = calls.find((call) => call.name === "submit_research_batch");
+      expect(admission?.input).toMatchObject({
+        batch_kind: mode,
+        request_id: `agent_${agentRunId.replaceAll("-", "")}_batch_v1`,
+      });
+      expect(admission?.input).not.toHaveProperty("folder_id");
+      const surfaces = a2uiMessages(events);
+      expect(surfaces).toHaveLength(2);
+      const stored = await owner.query<{ content: unknown; lifecycle_status: string }>(`
+        SELECT content, lifecycle_status FROM agent.a2ui_message
+        WHERE thread_id = $1::uuid ORDER BY sequence
+      `, [threadId]);
+      expect(stored.rows.map((row) => row.lifecycle_status)).toEqual(["ready", "ready"]);
+      expect(stored.rows.map((row) => row.content)).toEqual(surfaces.map((surface) => surface.content));
+      const outcomes = await owner.query<{ content: string }>(`
+        SELECT content FROM agent.mastra_messages WHERE thread_id = $1
+      `, [threadId]);
+      expect(JSON.stringify(outcomes.rows)).toContain("private-batch-core-provenance");
+      const beforeReplay = [...calls];
+      const replay = await run(runtime, input, primaryResearcher);
+      expect(a2uiMessages(snapshotMessages(replay)).map((surface) => surface.content)).toEqual(stored.rows.map((row) => row.content));
+      expect(calls).toEqual(beforeReplay);
+      await runtime.close();
+      runtime = await makeRuntime();
+      const restarted = await connect(runtime, threadId, primaryResearcher);
+      expect(a2uiMessages(snapshotMessages(restarted)).map((surface) => surface.content)).toEqual(stored.rows.map((row) => row.content));
+      expect(calls).toEqual(beforeReplay);
+    } finally {
       await runtime.close();
     }
   });
