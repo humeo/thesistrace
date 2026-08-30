@@ -1606,7 +1606,12 @@ select { color-scheme: dark; }
   .operator-row-action,
   .operator-section-header > button,
   .operator-search button,
-  .operator-pagination button { min-height: 44px; }
+  .operator-pagination button,
+  .mobile-navigation-toggle,
+  .mobile-navigation-close,
+  .resource-nav a { min-height: 44px; }
+  .mobile-navigation-toggle,
+  .mobile-navigation-close { min-width: 44px; }
   .operator-data-operation-drawer header button { min-width: 44px; min-height: 44px; }
   .account-menu > summary { min-width: 44px; }
 }

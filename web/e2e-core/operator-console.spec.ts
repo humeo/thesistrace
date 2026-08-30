@@ -1,11 +1,12 @@
-import type { Page, Route } from "@playwright/test";
+import type { Locator, Page, Route } from "@playwright/test";
 
 import {
+  assertDataOperatorWorkerLeaseReleased,
   browserPassword,
   createResearcher,
   emailToken,
+  ensureOperatorDataBaseline,
   exhaustDataRefresh,
-  expireDataOperatorWorkerLease,
   expireDataRefreshClaim,
   expect,
   issueInvitation,
@@ -80,6 +81,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     researcher_id: operator.id,
     status: "assigned",
   });
+  await ensureOperatorDataBaseline(page);
 
   const ordinary = await createResearcher(page, "browser-ordinary@example.test");
   await bootstrapResearcher(page, ordinary);
@@ -112,6 +114,71 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(operatorRow.locator('[data-label="Current sessions"]')).toHaveText("1");
   await expect(operatorRow.locator('[data-label="Effective invitation"]')).toHaveText("None");
   await expect(researcherTable.getByText(ordinary.email, { exact: true })).toBeVisible();
+
+  const initialViewport = page.viewportSize();
+  const applicationShell = page.locator(".app-shell");
+  const applicationSidebar = page.locator(".application-sidebar");
+  const collapseSidebar = page.getByRole("button", { name: "Collapse sidebar" });
+  await expect(collapseSidebar).toBeVisible();
+  await collapseSidebar.focus();
+  await collapseSidebar.press("Enter");
+  await expect(applicationShell).toHaveClass(/app-shell-collapsed/);
+  const expandSidebar = page.getByRole("button", { name: "Expand sidebar" });
+  await expect(expandSidebar).toBeFocused();
+  await expect(page.getByRole("link", { name: "Operator", exact: true })).toBeVisible();
+  await expandSidebar.press("Enter");
+  await expect(applicationShell).not.toHaveClass(/app-shell-collapsed/);
+
+  await page.setViewportSize({ width: 820, height: 1_080 });
+  await expect(collapseSidebar).toBeVisible();
+  await collapseSidebar.click();
+  await expect.poll(async () => applicationSidebar.evaluate(
+    (element) => Number.parseFloat(getComputedStyle(element).width),
+  )).toBeLessThan(100);
+  await page.getByRole("button", { name: "Expand sidebar" }).click();
+  await expect.poll(async () => applicationSidebar.evaluate(
+    (element) => Number.parseFloat(getComputedStyle(element).width),
+  )).toBeGreaterThan(200);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const openNavigation = page.getByRole("button", { name: "Open navigation" });
+  await expect(openNavigation).toBeVisible();
+  await expectMinimumTouchTarget(openNavigation);
+  await openNavigation.focus();
+  await openNavigation.press("Enter");
+  await expect(applicationShell).toHaveClass(/app-shell-navigation-open/);
+  const closeNavigation = page.locator(".mobile-navigation-close");
+  await expect(closeNavigation).toBeFocused();
+  await expectMinimumTouchTarget(closeNavigation);
+  const mobileOperatorLink = page.getByRole("link", { name: "Operator", exact: true });
+  const mobileHomeLink = page.getByRole("link", { name: "ThesisTrace home" });
+  await expect(mobileOperatorLink).toBeVisible();
+  await mobileHomeLink.focus();
+  await mobileHomeLink.press("Shift+Tab");
+  await expect(mobileOperatorLink).toBeFocused();
+  await mobileOperatorLink.press("Tab");
+  await expect(mobileHomeLink).toBeFocused();
+  const reducedTransitionSeconds = await page.locator(".navigation-backdrop").evaluate(
+    (element) => {
+      const value = getComputedStyle(element).transitionDuration;
+      const duration = Number.parseFloat(value) || 0;
+      return value.endsWith("ms") ? duration / 1_000 : duration;
+    },
+  );
+  expect(reducedTransitionSeconds).toBeLessThanOrEqual(0.00001);
+  await page.keyboard.press("Escape");
+  await expect(applicationShell).not.toHaveClass(/app-shell-navigation-open/);
+  await expect(openNavigation).toBeFocused();
+  await expect(operatorRow.locator('[data-label="Researcher ID"]')).toBeVisible();
+  await expect(operatorRow.locator('[data-label="Access"]')).toHaveText("Active");
+  await expect(operatorRow.locator('[data-label="Current sessions"]')).toHaveText("1");
+  await expectMinimumTouchTarget(
+    page.getByRole("button", { name: "Invite Researcher" }),
+  );
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  if (initialViewport !== null) await page.setViewportSize(initialViewport);
+
   const invitationTable = page.getByRole("table", { name: "Invitations" });
   const invitationRows = invitationTable.getByRole("row").filter({ hasText: invitationEmail });
   await expect(invitationRows).toHaveCount(2);
@@ -1591,7 +1658,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await page.unroute("**/api/operator/data/status**", statusPollingHandler);
 
   stopDataOperatorWorker();
-  expireDataOperatorWorkerLease();
+  assertDataOperatorWorkerLeaseReleased();
   resetAuthRateLimits();
   const recoveryKey = "browser-market-worker-recovery";
   await submitAcceptedMarket(recoveryKey);
@@ -1646,18 +1713,22 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(recoveryRow.locator('[data-label="Attempt / phase"] strong')).toHaveText("2");
 
   stopDataOperatorWorker();
-  expireDataOperatorWorkerLease();
-  exhaustDataRefresh(recoveryKey);
+  assertDataOperatorWorkerLeaseReleased();
+  const exhaustionKey = "browser-market-worker-exhaustion";
+  await submitAcceptedMarket(exhaustionKey);
+  markDataRefreshRunning(exhaustionKey);
+  expireDataRefreshClaim(exhaustionKey);
+  exhaustDataRefresh(exhaustionKey);
   const exhaustedReload = page.waitForResponse(
     (response) => new URL(response.url()).pathname === "/api/operator/data/status",
   );
   await datasetStatus.getByRole("button", { name: "Reload" }).click();
   await exhaustedReload;
-  const exhaustedRow = recoveryRow;
+  const exhaustedRow = operationHistory.getByRole("row").filter({ hasText: exhaustionKey });
   await expect(exhaustedRow.getByText("Failed", { exact: true })).toBeVisible();
   await expect(exhaustedRow.locator('[data-label="Attempt / phase"] strong')).toHaveText("3");
   await exhaustedRow.getByRole("button", {
-    name: `View details for ${recoveryKey}`,
+    name: `View details for ${exhaustionKey}`,
   }).click();
   const exhaustedDrawer = page.getByRole("dialog", { name: "Operation details" });
   await expect(exhaustedDrawer).toContainText("RETRY_EXHAUSTED");
@@ -2270,4 +2341,11 @@ async function nextAnimationFrame(page: Page): Promise<void> {
 async function settleReactUpdates(page: Page): Promise<void> {
   await nextAnimationFrame(page);
   await nextAnimationFrame(page);
+}
+
+async function expectMinimumTouchTarget(locator: Locator): Promise<void> {
+  const box = await locator.boundingBox();
+  expect(box, "touch target should have a rendered bounding box").not.toBeNull();
+  expect(box?.height, "touch target height").toBeGreaterThanOrEqual(44);
+  expect(box?.width, "touch target width").toBeGreaterThanOrEqual(44);
 }

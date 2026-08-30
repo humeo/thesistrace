@@ -8,7 +8,7 @@ import {
   SidebarSimple,
   X,
 } from "@phosphor-icons/react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { AccountMenu } from "../auth/AccountMenu";
 
@@ -36,14 +36,61 @@ export function AppShell({ currentPath, children, isOperator }: AppShellProps) {
   const isResearch = currentPath === "/research";
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isNavigationOpen, setIsNavigationOpen] = useState(false);
+  const mobileNavigationRef = useRef<HTMLElement>(null);
+  const mobileNavigationCloseRef = useRef<HTMLButtonElement>(null);
+  const mobileNavigationToggleRef = useRef<HTMLButtonElement>(null);
   const currentResource = [...resourceRoutes, ...(isOperator ? [operatorRoute] : [])]
     .find((resource) => isResourceCurrent(currentPath, resource));
+
+  useEffect(() => {
+    if (!isNavigationOpen) return;
+    mobileNavigationCloseRef.current?.focus();
+    const handleNavigationKeyboard = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setIsNavigationOpen(false);
+        requestAnimationFrame(() => mobileNavigationToggleRef.current?.focus());
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const navigation = mobileNavigationRef.current;
+      if (navigation === null) return;
+      const focusable = [...navigation.querySelectorAll<HTMLElement>(
+        "a[href], button:not([disabled]), [tabindex]:not([tabindex='-1'])",
+      )].filter((element) => element.getAttribute("aria-hidden") !== "true");
+      const first = focusable.at(0);
+      const last = focusable.at(-1);
+      if (first === undefined || last === undefined) return;
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !navigation.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !navigation.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleNavigationKeyboard);
+    return () => document.removeEventListener("keydown", handleNavigationKeyboard);
+  }, [isNavigationOpen]);
+
+  const closeNavigation = () => {
+    setIsNavigationOpen(false);
+    requestAnimationFrame(() => mobileNavigationToggleRef.current?.focus());
+  };
 
   return (
     <div
       className={`app-shell${isResearch ? " app-shell-research" : ""}${isCollapsed ? " app-shell-collapsed" : ""}${isNavigationOpen ? " app-shell-navigation-open" : ""}`}
     >
-      <aside className="application-sidebar" id="primary-navigation">
+      <aside
+        aria-label={isNavigationOpen ? "Navigation" : undefined}
+        aria-modal={isNavigationOpen ? true : undefined}
+        className="application-sidebar"
+        id="primary-navigation"
+        ref={mobileNavigationRef}
+        role={isNavigationOpen ? "dialog" : undefined}
+      >
         <div className="sidebar-brand-row">
           <a className="brand" aria-label="ThesisTrace home" href="/data">
             <span className="brand-mark" aria-hidden="true">T</span>
@@ -52,7 +99,8 @@ export function AppShell({ currentPath, children, isOperator }: AppShellProps) {
           <button
             aria-label="Close navigation"
             className="mobile-navigation-close"
-            onClick={() => setIsNavigationOpen(false)}
+            onClick={closeNavigation}
+            ref={mobileNavigationCloseRef}
             type="button"
           >
             <X aria-hidden="true" size={18} weight="regular" />
@@ -88,6 +136,7 @@ export function AppShell({ currentPath, children, isOperator }: AppShellProps) {
               aria-label="Open navigation"
               className="mobile-navigation-toggle"
               onClick={() => setIsNavigationOpen(true)}
+              ref={mobileNavigationToggleRef}
               type="button"
             >
               <List aria-hidden="true" size={19} weight="regular" />
@@ -115,7 +164,7 @@ export function AppShell({ currentPath, children, isOperator }: AppShellProps) {
       <button
         aria-label="Close navigation"
         className="navigation-backdrop"
-        onClick={() => setIsNavigationOpen(false)}
+        onClick={closeNavigation}
         type="button"
       />
     </div>

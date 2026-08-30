@@ -7,37 +7,128 @@ topology that will be deployed.
 **Blocked by:** 03 — Revoke another Researcher's Login Sessions; 10 — Retain
 operation receipts without retaining Data Generations.
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
-- [ ] Final Auth, Core, Data Operator Worker, Web, Caddy, PostgreSQL, and RustFS
+## Implementation Plan
+
+1. Extend the final-image harness with a private, file-backed Operator fixture
+   that creates an initial Operator, a transfer target, and a revocation target
+   without exposing Cookies or passwords in evidence. Qualify assignment,
+   ordinary-Researcher `404`, exact Proof consumption, Invitation issue/reissue,
+   other-Researcher Session revocation, atomic transfer, and preserved new-
+   Operator access through Caddy.
+2. Before the Data Operator Worker starts, submit one replay-backed Market
+   Refresh through the Operator APIs and prove Core returns a durable `accepted`
+   receipt while status reports the Worker unavailable. Prove missing and
+   placeholder Worker credentials fail before execution, then start exactly one
+   long-running non-`--once` Worker and observe the accepted receipt complete.
+3. Age that terminal qualification receipt through a test-only fixture, run the
+   final-image private Garbage Collection command, and prove the receipt is
+   removed without changing the current Dataset Head. Keep static architecture
+   assertions for the one-service, one-replica, Worker-only Secret topology and
+   the absence of a production one-shot or per-kind execution path.
+4. Run the existing end-to-end Operator Console workflow as an explicit
+   Production Image Smoke phase. Extend it with desktop, collapsed-sidebar,
+   tablet, mobile-drawer, keyboard/focus/Escape, reduced-motion, touch-target,
+   accessible-name, narrow-field, and non-color-state assertions while retaining
+   its real PostgreSQL/RustFS, Resend fake, and versioned replay coverage for all
+   three Refresh kinds, FIFO, outcomes, status, Cancel, Retry, and Worker
+   recovery.
+5. Update the Production and Data Operator runbooks for singleton assignment and
+   transfer, supported Console operations, accepted-versus-published semantics,
+   the single Worker and Secret boundary, recovery, offline qualification, and
+   diagnostic artifacts. Add/adjust low-cost contract tests first, run focused
+   Auth/Core/Web checks, then run the complete `pnpm check:release` gate against
+   the final changes.
+
+## Acceptance Criteria
+
+- [x] Final Auth, Core, Data Operator Worker, Web, Caddy, PostgreSQL, and RustFS
   images start, become healthy, and expose only their intended public and private
   boundaries.
-- [ ] The final topology contains exactly one always-running, single-slot Data
+- [x] The final topology contains exactly one always-running, single-slot Data
   Operator Worker and no obsolete one-shot or parallel Refresh execution path.
-- [ ] Production Image Smoke proves Operator assignment and transfer,
+- [x] Production Image Smoke proves Operator assignment and transfer,
   ordinary-Researcher `404`, Operator Proof consumption, Invitation issue and
   reissue, other-Researcher Session revocation, and preserved Operator access.
-- [ ] Production Image Smoke proves Market, Financial, and Industry submission,
+- [x] Production Image Smoke proves Market, Financial, and Industry submission,
   global FIFO execution, publication/no-change/degraded outcomes, Dataset Head
   status, Cancel, Retry, Worker restart recovery, and receipt cleanup.
-- [ ] The Tushare Secret exists only in the Worker environment, never appears in
+- [x] The Tushare Secret exists only in the Worker environment, never appears in
   logs or responses, and a missing or placeholder value fails Worker startup
   without breaking durable submission through healthy Core.
-- [ ] Real browser E2E through Caddy uses one Operator and one ordinary
+- [x] Real browser E2E through Caddy uses one Operator and one ordinary
   Researcher, real PostgreSQL and RustFS, a Resend fake, and versioned Tushare
   replay to cover every critical user workflow.
-- [ ] Browser acceptance covers desktop, collapsed sidebar, tablet, mobile
+- [x] Browser acceptance covers desktop, collapsed sidebar, tablet, mobile
   navigation drawer, keyboard-only operation, focus containment and restoration,
   Escape behavior, reduced motion, accessible names, touch targets, and
   non-color-only state.
-- [ ] The Console follows the repository's dense, dark product workbench without
+- [x] The Console follows the repository's dense, dark product workbench without
   adding a generic administration dashboard, light-theme fallback, or hidden
   critical provenance.
-- [ ] Ordinary qualification uses no public internet and no live Tushare request;
+- [x] Ordinary qualification uses no public internet and no live Tushare request;
   live Tushare verification remains a separate explicit gate.
-- [ ] The deployment and operational documentation describes the new Worker,
+- [x] The deployment and operational documentation describes the new Worker,
   assignment/transfer commands, secret boundary, submission-versus-publication
   distinction, recovery behavior, and supported Console operations.
 - [ ] The complete local release command passes against committed final changes,
   and diagnostic artifacts identify image versions, operation IDs, request IDs,
   logs, responses, and browser screenshots on failure.
+
+## Verification
+
+- The pre-commit `pnpm check:release` gate passed in full: Ruff, 931 Python
+  tests, both TypeScript typechecks, 171 Auth tests, and 148 Web tests. The only
+  Python warning was the existing local-lifecycle `forkpty()` deprecation.
+- Core integration run `20260830t183336z-41563-73166e05` passed 416 primary
+  PostgreSQL/RustFS tests, with eight marker-selected tests deferred, followed
+  by all six independent database/dependency restart phases. Auth integration
+  run `20260830t185209z-61698-f5d5a08e` passed 128 tests.
+- Real Caddy browser run `20260830t185305z-62112-d434b341` passed all 16 tests
+  in 4.0 minutes, including the final mobile focus-containment fix.
+- Production Image Smoke run `20260830t185810z-64937-0988f5f1` reported status
+  zero for every phase. It proved assignment, ordinary-Researcher `404`, exact
+  single-use Proof consumption, Invitation issue/reissue, other-Researcher
+  Session revocation, atomic transfer, queued submission without a Worker,
+  Worker-only credentials, one continuous Worker, processing and publication,
+  and receipt cleanup without changing the Dataset Head. The explicit Operator
+  browser phase passed in 94 seconds, covering all three Refresh kinds, FIFO,
+  outcomes, status, Cancel, Retry, recovery, and responsive accessibility.
+- The separate Auth image run `20260830t190914z-68576-7e666766` and Caddy image
+  run `20260830t190936z-68794-c4c37a1c` also passed. Runtime-secret cleanup,
+  Compose cleanup, and overall status were zero for the Core integration,
+  browser, and image runs. Evidence remains under each isolated run directory;
+  no live Tushare or public Resend request was used.
+- The release check against a clean, committed implementation is still pending.
+  This issue remains in progress until that check passes and the completion
+  record is committed.
+
+## Review
+
+- Standards review found a mobile-navigation focus-containment gap. The drawer
+  now exposes its modal semantics, cycles Tab and Shift+Tab inside its links
+  and controls, handles Escape, and restores focus to the trigger. Browser
+  acceptance proves both wrap directions. Re-review found no remaining
+  Standards findings.
+- Spec review passed: the singleton capability and Auth/Core authority split,
+  exact password Proof, one global FIFO, accepted-versus-published distinction,
+  safe operational status, recovery, receipt retention, Worker-only Secret,
+  responsive shell, and private-only exceptional operations all retain their
+  agreed boundaries. No fallback, migration, compatibility, per-kind Worker,
+  deactivation UI, or unified audit surface was introduced.
+- Qualification exposed stale fixture assumptions around the Dataset baseline
+  and graceful Worker shutdown. The image browser now starts from a fresh,
+  run-scoped dataset and prepares both Market and Financial boundaries.
+  SIGTERM stops the Worker after its current attempt and releases its lease;
+  browser fixtures assert the release rather than expiring an already-released
+  lease. Retry exhaustion uses its own genuinely running, expired receipt and
+  never rewrites a successfully published receipt into failure. Unit, full
+  browser, and final-image checks pass with these corrections.
+
+## Comments
+
+- 2026-08-31: Completed implementation, qualification fixes, Standards/Spec
+  review, and the pre-commit full release gate. Commit the implementation before
+  rerunning the exact release command on a clean revision; record completion
+  only after that final committed-code gate passes.

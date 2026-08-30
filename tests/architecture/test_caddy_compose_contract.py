@@ -172,7 +172,7 @@ def test_base_compose_has_independent_auth_and_core_identities() -> None:
     assert "THESISTRACE_API_ORIGIN" not in web
 
 
-def test_base_compose_has_one_worker_only_market_refresh_runtime() -> None:
+def test_base_compose_has_one_single_slot_data_refresh_runtime() -> None:
     compose = (DEPLOY / "compose.yaml").read_text()
     test_overlay = (DEPLOY / "compose.test-run.yaml").read_text()
     runner = (ROOT / "scripts" / "test-runtime").read_text()
@@ -186,6 +186,10 @@ def test_base_compose_has_one_worker_only_market_refresh_runtime() -> None:
     assert compose.count("  data-operator-worker:\n") == 1
     assert "deploy:\n      replicas: 1" in worker
     assert "thesistrace-data-operator\n      - worker" in worker
+    assert "--once" not in worker
+    assert "market-refresh-worker:" not in compose
+    assert "financial-refresh-worker:" not in compose
+    assert "industry-refresh-worker:" not in compose
     assert "canonical-data:/var/lib/thesistrace/canonical-data" in worker
     assert "benchmark-data:/var/lib/thesistrace/benchmark-data" in worker
     assert ":ro" not in "\n".join(
@@ -198,6 +202,7 @@ def test_base_compose_has_one_worker_only_market_refresh_runtime() -> None:
     assert "restart: unless-stopped" in worker
     assert "data-operator-worker:" in test_overlay
     assert "worker\n      - --replay" in test_overlay
+    assert "--once" not in _service(test_overlay, "data-operator-worker", "web")
     assert "tushare-financial-market-refresh-replay.json" in test_overlay
     assert "tushare-operator-console-market-refresh-replay.json" in test_overlay
     assert "tushare-image-smoke-market-refresh-replay.json" in test_overlay

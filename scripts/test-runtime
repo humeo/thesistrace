@@ -240,7 +240,6 @@ run_playwright() {
   THESISTRACE_TEST_WEB_ORIGIN="$public_origin" \
   THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
   THESISTRACE_TEST_PROJECT_NAME="$project_name" \
-  THESISTRACE_TEST_RESEND_ORIGIN="$resend_test_origin" \
   THESISTRACE_DATABASE_URL="postgresql://thesistrace_owner:$owner_database_password@127.0.0.1:$postgres_port/thesistrace" \
   THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
   THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
@@ -251,6 +250,14 @@ run_playwright() {
   THESISTRACE_DATA_MOUNT="$data_mount" \
   THESISTRACE_BENCHMARK_MOUNT="$benchmark_mount" \
   THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
+    "$@"
+}
+
+run_operator_playwright() {
+  THESISTRACE_ENVIRONMENT=test \
+  THESISTRACE_TEST_WEB_ORIGIN="$public_origin" \
+  THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
+  THESISTRACE_TEST_PROJECT_NAME="$project_name" \
     "$@"
 }
 
@@ -536,6 +543,49 @@ verify_tushare_secret_scope() {
   fi
 }
 
+verify_data_operator_worker_secret_rejection() {
+  for scenario in missing placeholder; do
+    case "$scenario" in
+      missing) token= ;;
+      placeholder) token=placeholder-image-smoke-token ;;
+    esac
+    stdout="$evidence_dir/data-operator-worker-$scenario-token.stdout.json"
+    stderr="$evidence_dir/data-operator-worker-$scenario-token.stderr.log"
+    if compose_run \
+      -e "THESISTRACE_TUSHARE_TOKEN=$token" \
+      data-operator-worker thesistrace-data-operator worker \
+      >"$stdout" 2>"$stderr"; then
+      echo "Data Operator Worker accepted a $scenario Tushare credential" >&2
+      return 1
+    fi
+    if ! grep -E '"code"[[:space:]]*:[[:space:]]*"WORKER_TUSHARE_TOKEN_INVALID"' \
+      "$stdout" "$stderr" >/dev/null; then
+      echo "Data Operator Worker did not report the $scenario credential failure" >&2
+      return 1
+    fi
+  done
+  verify_image_health data-operator-secret-rejected
+}
+
+verify_single_data_operator_worker() {
+  worker_ids=$(compose ps --status running --quiet data-operator-worker)
+  worker_count=$(printf '%s\n' "$worker_ids" | sed '/^$/d' | wc -l | tr -d ' ')
+  test "$worker_count" = 1 || {
+    echo "expected exactly one running Data Operator Worker, found $worker_count" >&2
+    return 1
+  }
+  worker_id=$(printf '%s\n' "$worker_ids" | sed -n '1p')
+  docker inspect --format '{{json .Config.Cmd}}' "$worker_id" \
+    >"$evidence_dir/data-operator-worker-command.json"
+  grep -F 'thesistrace-data-operator' \
+    "$evidence_dir/data-operator-worker-command.json" >/dev/null
+  grep -F 'worker' "$evidence_dir/data-operator-worker-command.json" >/dev/null
+  if grep -F -- '--once' "$evidence_dir/data-operator-worker-command.json" >/dev/null; then
+    echo "Production Data Operator Worker is running as a one-shot command" >&2
+    return 1
+  fi
+}
+
 verify_research_child_cgroup_oom_detection() {
   backend_image=$(runtime_image_name initialize)
   output="$evidence_dir/research-child-cgroup-oom.json"
@@ -654,6 +704,9 @@ cleanup_runtime_secrets() {
   test -n "${secret_dir:-}" || return 0
   if [ -n "${auth_session_file:-}" ]; then
     rm -f -- "$auth_session_file" || return $?
+  fi
+  if [ -n "${operator_sessions_file:-}" ]; then
+    rm -f -- "$operator_sessions_file" || return $?
   fi
   rmdir "$secret_dir"
 }
@@ -937,6 +990,7 @@ validate_test_project
 mkdir -p "$evidence_dir" "$data_mount" "$benchmark_mount" "$batch_attempt_control_directory"
 secret_dir=
 auth_session_file=
+operator_sessions_file=
 if [ "$command" = image-smoke ] \
   || [ "$command" = benchmark ] \
   || [ "$command" = performance ]; then
@@ -945,6 +999,9 @@ if [ "$command" = image-smoke ] \
   chmod 700 "$secret_root"
   secret_dir=$(mktemp -d "$secret_root/$run_id.XXXXXX")
   auth_session_file="$secret_dir/auth-session.json"
+  if [ "$command" = image-smoke ]; then
+    operator_sessions_file="$secret_dir/operator-sessions.json"
+  fi
 fi
 git_revision=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf unknown)
 git_worktree_dirty=false
@@ -1161,10 +1218,8 @@ case "$command" in
       --wait --wait-timeout 300 \
       auth api research-worker batch-research-worker tracking-worker data-operator-worker web
     run_phase e2e-tushare-secret-scope verify_tushare_secret_scope
-    resend_port=$(mapped_port resend-fake 8300)
-    resend_test_origin="http://127.0.0.1:$resend_port"
-    printf 'postgres_port=%s\ns3_port=%s\nresend_port=%s\n' \
-      "$postgres_port" "$s3_port" "$resend_port" >>"$run_metadata"
+    printf 'postgres_port=%s\ns3_port=%s\n' \
+      "$postgres_port" "$s3_port" >>"$run_metadata"
     run_phase e2e-caddy-single-origin verify_caddy_single_origin
     run_phase e2e-playwright run_playwright pnpm --dir web test:e2e
     ;;
@@ -1217,10 +1272,73 @@ case "$command" in
     run_phase image-smoke-auth-readiness \
       verify_service_readiness_outage auth auth
     run_phase image-smoke-dataset-readiness verify_dataset_readiness_outage
+    run_phase image-smoke-operator-fixture run_with_environment uv run python \
+      tests/acceptance/qualify_operator_image_smoke.py provision \
+      "$operator_sessions_file" \
+      >"$evidence_dir/operator-provision.json" \
+      2>"$evidence_dir/operator-provision.stderr.log"
+    run_phase image-smoke-operator-worker-unavailable compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_OPERATOR_SESSION_FILE=/smoke-secrets/operator-sessions.json \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/production_image_smoke.py operator-unavailable \
+      >"$evidence_dir/operator-unavailable.json" \
+      2>"$evidence_dir/operator-unavailable.stderr.log"
+    run_phase image-smoke-data-operator-secret-rejection \
+      verify_data_operator_worker_secret_rejection
     run_phase image-smoke-workers compose up --detach --no-build \
       --wait --wait-timeout 120 \
       research-worker batch-research-worker tracking-worker data-operator-worker
+    run_phase image-smoke-single-data-operator-worker \
+      verify_single_data_operator_worker
     run_phase image-smoke-tushare-secret-scope verify_tushare_secret_scope
+    run_phase image-smoke-operator-processed compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_OPERATOR_SESSION_FILE=/smoke-secrets/operator-sessions.json \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/production_image_smoke.py operator-processed \
+      >"$evidence_dir/operator-processed.json" \
+      2>"$evidence_dir/operator-processed.stderr.log"
+    run_phase image-smoke-operator-transfer run_with_environment uv run python \
+      tests/acceptance/qualify_operator_image_smoke.py transfer \
+      "$operator_sessions_file" \
+      >"$evidence_dir/operator-transfer.json" \
+      2>"$evidence_dir/operator-transfer.stderr.log"
+    run_phase image-smoke-operator-transferred compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_OPERATOR_SESSION_FILE=/smoke-secrets/operator-sessions.json \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/production_image_smoke.py operator-transferred \
+      >"$evidence_dir/operator-transferred.json" \
+      2>"$evidence_dir/operator-transferred.stderr.log"
+    run_phase image-smoke-receipt-age compose_run initialize \
+      python /smoke/acceptance/age_operator_image_smoke_receipt.py \
+      image-smoke-operator-market-refresh \
+      >"$evidence_dir/operator-receipt-aged.json" \
+      2>"$evidence_dir/operator-receipt-aged.stderr.log"
+    run_phase image-smoke-receipt-collection compose_run initialize \
+      thesistrace-data-operator collect \
+      --idempotency-key image-smoke-operator-receipt-retention \
+      >"$evidence_dir/operator-receipt-collection.json" \
+      2>"$evidence_dir/operator-receipt-collection.stderr.log"
+    run_phase image-smoke-receipt-collection-count grep -F \
+      '"deleted_receipt_count":1' \
+      "$evidence_dir/operator-receipt-collection.json"
+    run_phase image-smoke-operator-receipt-cleaned compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_OPERATOR_SESSION_FILE=/smoke-secrets/operator-sessions.json \
+      -e THESISTRACE_TEST_OPERATOR_STATE=/smoke-evidence/operator-processed.json \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/production_image_smoke.py operator-receipt-cleaned \
+      >"$evidence_dir/operator-receipt-cleaned.json" \
+      2>"$evidence_dir/operator-receipt-cleaned.stderr.log"
+    run_phase image-smoke-receipt-worker-stop compose stop data-operator-worker
+    run_phase image-smoke-receipt-worker-reopen compose up --detach --no-build \
+      --wait --wait-timeout 120 data-operator-worker
     network_internal=$(docker network inspect "${project_name}_default" \
       --format '{{.Internal}}')
     test "$network_internal" = true
@@ -1367,5 +1485,35 @@ case "$command" in
     run_phase image-smoke-mcp-evidence run_mcp_image_smoke evidence \
       >"$evidence_dir/mcp-image-evidence.json" \
       2>"$evidence_dir/mcp-image-evidence.stderr.log"
+    operator_browser_state_root="$run_root/operator-browser-state"
+    data_mount="$operator_browser_state_root/canonical-data"
+    benchmark_mount="$operator_browser_state_root/benchmark-data"
+    batch_attempt_control_directory="$operator_browser_state_root/batch-attempt-control/.batch-attempts"
+    mkdir -p "$data_mount" "$benchmark_mount" "$batch_attempt_control_directory"
+    printf 'operator_browser_state_root=%s\n' \
+      "$operator_browser_state_root" >>"$run_metadata"
+    run_phase image-smoke-operator-browser-reset reset_product_state
+    run_phase image-smoke-operator-browser-bootstrap compose_run initialize \
+      thesistrace-data-operator bootstrap \
+      --idempotency-key financial-release-bootstrap \
+      --as-of 2026-08-05T18:00:00+08:00 \
+      --start-date 2010-01-04 \
+      --replay /smoke/fixtures/tushare-financial-product-replay.json
+    run_phase image-smoke-operator-browser-prepare-data compose_run initialize \
+      python /smoke/browser/prepare_current_data.py
+    run_phase image-smoke-operator-browser-worker compose up --detach --no-build \
+      --wait --wait-timeout 120 data-operator-worker
+    run_phase image-smoke-operator-browser-market-baseline compose_run initialize \
+      python /smoke/browser/publish_financial_track_head.py lagged
+    run_phase image-smoke-operator-browser-financial-baseline compose_run initialize \
+      python /smoke/browser/publish_financial_track_head.py recovered
+    run_phase image-smoke-operator-browser-application compose up --detach --no-build \
+      --wait --wait-timeout 300 \
+      auth api research-worker batch-research-worker tracking-worker \
+      data-operator-worker web
+    run_phase image-smoke-operator-browser run_operator_playwright \
+      pnpm --dir web exec playwright test operator-console.spec.ts
+    run_phase image-smoke-final-evidence capture_evidence
+    run_phase image-smoke-final-secret-scan scan_secret_canaries
     ;;
 esac

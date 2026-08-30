@@ -69,10 +69,11 @@ the manifest and its session content.
 
 ## Refresh and collection
 
-Market, Financial, and Industry Refresh submission record the frozen request and return
-after PostgreSQL has durably accepted it. The always-running single-slot Data
-Operator Worker later claims all three kinds from one FIFO and executes the selected
-source and publication path:
+Market, Financial, and Industry Refresh submission record the frozen request and
+return after PostgreSQL has durably accepted it. The
+one always-running, single-slot Data Operator Worker later claims all three
+kinds. Operationally, all three Refresh kinds share one global FIFO and execute
+the selected source and publication path:
 
 ```sh
 docker compose -f deploy/core/compose.yaml run --rm api \
@@ -82,10 +83,11 @@ docker compose -f deploy/core/compose.yaml run --rm api \
 
 ```
 
-The deployed service runs `thesistrace-data-operator worker` continuously. Use
-`worker --once --replay /private/operator/replay.json` only for deterministic
-qualification; it is not a second production execution path. Inspect an
-operation without changing it:
+The deployed service runs `thesistrace-data-operator worker` continuously.
+`worker --once --replay /private/operator/replay.json` exists only for isolated,
+offline qualification; it is not a second production execution path and never
+appears in the Production Compose service. Inspect an operation without changing
+it:
 
 An offline qualification Worker may repeat `--replay PATH` to preload several
 distinct exact request windows. Duplicate windows and windows absent from that
@@ -111,6 +113,9 @@ Live work requires `THESISTRACE_TUSHARE_TOKEN`, which is delivered only to the
 Data Operator Worker. An explicit versioned replay
 must contain the same CSI 300 source response and enters the same source-neutral
 normalization and publication path; replay is never selected automatically.
+The deterministic release gate uses replay, a Resend fake, real PostgreSQL and
+RustFS, and no public internet. A live Tushare call is always a separate,
+explicit operator action.
 
 Garbage collection is explicit and idempotent:
 
@@ -133,7 +138,6 @@ Market refresh:
 
 ```sh
 docker compose -f deploy/core/compose.yaml run --rm \
-  -e THESISTRACE_TUSHARE_TOKEN \
   api thesistrace-data-operator refresh-industry \
   --idempotency-key industry-2026-08-14 \
   --observation-through-session 2026-08-14

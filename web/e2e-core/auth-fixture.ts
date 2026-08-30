@@ -51,9 +51,10 @@ export const test = securityTest.extend<{ researcher: AuthenticatedResearcher }>
 export { expect };
 
 export async function issueInvitation(email: string): Promise<string> {
-  const resendOrigin = requiredEnvironment("THESISTRACE_TEST_RESEND_ORIGIN");
-  const cleared = await fetch(`${resendOrigin}/__test/emails`, { method: "DELETE" });
-  if (!cleared.ok) throw new Error("Could not reset the local Resend acceptance fixture");
+  const cleared = requestResendFixture("DELETE");
+  if (!isRecord(cleared) || cleared.status !== true) {
+    throw new Error("Could not reset the local Resend acceptance fixture");
+  }
   runAuthOperator("invite", "--email", email);
   return emailToken(email, "/accept-invitation#token=");
 }
@@ -111,13 +112,10 @@ export async function restoreResearcherSession(
 }
 
 export async function emailToken(email: string, path: string): Promise<string> {
-  const resendOrigin = requiredEnvironment("THESISTRACE_TEST_RESEND_ORIGIN");
   const deadline = Date.now() + 5_000;
   let lastEmailCount = 0;
   while (Date.now() < deadline) {
-    const response = await fetch(`${resendOrigin}/__test/emails`);
-    if (!response.ok) throw new Error("Could not read the local Resend acceptance fixture");
-    const payload = await response.json() as unknown;
+    const payload = requestResendFixture("GET");
     if (!isRecord(payload) || !Array.isArray(payload.emails)) {
       throw new Error("Local Resend acceptance fixture response is invalid");
     }
@@ -135,6 +133,29 @@ export async function emailToken(email: string, path: string): Promise<string> {
     await new Promise<void>((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`Invitation email was not delivered; observed ${lastEmailCount} email(s)`);
+}
+
+function requestResendFixture(method: "DELETE" | "GET"): unknown {
+  const program = [
+    'const response = await fetch("http://127.0.0.1:8300/__test/emails",',
+    "  { method: process.argv[1] });",
+    "if (!response.ok) process.exit(2);",
+    "process.stdout.write(await response.text());",
+  ].join("\n");
+  const output = execFileSync(
+    "docker",
+    [
+      "exec",
+      `${testProjectName()}-resend-fake-1`,
+      "node",
+      "--input-type=module",
+      "--eval",
+      program,
+      method,
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  return JSON.parse(output) as unknown;
 }
 
 export function runAuthOperator(...args: string[]): unknown {
@@ -226,17 +247,92 @@ export function startDataOperatorWorker(): void {
   );
 }
 
-export function expireDataOperatorWorkerLease(): void {
+export async function ensureOperatorDataBaseline(page: Page): Promise<void> {
+  const overviewResponse = await page.request.get("/api/data");
+  if (!overviewResponse.ok()) {
+    throw new Error(`Could not inspect the Operator browser Dataset: ${overviewResponse.status()}`);
+  }
+  const overview = await overviewResponse.json() as unknown;
+  if (!isRecord(overview) || typeof overview.data_through_session !== "string") {
+    throw new Error("Operator browser Dataset response is invalid");
+  }
+  const financialCoverage = overview.financial_coverage;
+  const financialComplete = isRecord(financialCoverage)
+    && typeof financialCoverage.discovery_complete_through_session === "string"
+    ? financialCoverage.discovery_complete_through_session
+    : null;
+  if (
+    overview.data_through_session === "2026-08-11"
+    && financialComplete === "2026-08-11"
+  ) return;
+  if (
+    overview.data_through_session !== "2026-08-05"
+    || financialComplete !== "2026-08-05"
+  ) {
+    throw new Error(
+      "Operator browser Dataset has an unexpected baseline: "
+        + `${overview.data_through_session}/${financialComplete ?? "unavailable"}`,
+    );
+  }
+
+  const idempotencyKey = "browser-operator-baseline-market-refresh";
+  const accepted = runDataOperator(
+    "refresh",
+    "--idempotency-key",
+    idempotencyKey,
+    "--as-of",
+    "2026-08-11T18:00:00+08:00",
+  );
+  if (!isRecord(accepted) || accepted.status !== "accepted") {
+    throw new Error("Operator browser market baseline was not accepted");
+  }
+
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const receipt = runDataOperator("inspect-refresh", "--idempotency-key", idempotencyKey);
+    if (!isRecord(receipt) || typeof receipt.status !== "string") {
+      throw new Error("Operator browser market baseline receipt is invalid");
+    }
+    if (receipt.status === "succeeded") {
+      if (receipt.data_through_session !== "2026-08-11") {
+        throw new Error("Operator browser market baseline published the wrong Research Session");
+      }
+      publishOperatorFinancialBaseline();
+      const readyResponse = await page.request.get("/api/data");
+      const ready = await readyResponse.json() as unknown;
+      const readyFinancial = isRecord(ready) ? ready.financial_coverage : null;
+      if (
+        !readyResponse.ok()
+        || !isRecord(ready)
+        || ready.data_through_session !== "2026-08-11"
+        || !isRecord(readyFinancial)
+        || readyFinancial.discovery_complete_through_session !== "2026-08-11"
+      ) {
+        throw new Error("Operator browser Financial baseline was not published");
+      }
+      return;
+    }
+    if (receipt.status === "failed" || receipt.status === "cancelled") {
+      throw new Error(
+        `Operator browser market baseline ${receipt.status}: ${String(receipt.failure_code)}`,
+      );
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("Operator browser market baseline did not reach a terminal state");
+}
+
+export function assertDataOperatorWorkerLeaseReleased(): void {
   const result = runDataStateCommand(`
-    WITH expired AS (
-      UPDATE data.refresh_worker_leases
-      SET lease_expires_at = last_heartbeat_at + interval '1 microsecond'
-      WHERE singleton = 1 AND owner_token IS NOT NULL
-      RETURNING singleton
-    ) SELECT singleton FROM expired
+    SELECT CASE
+      WHEN owner_token IS NULL AND lease_expires_at IS NULL THEN 1
+      ELSE 0
+    END
+    FROM data.refresh_worker_leases
+    WHERE singleton = 1
   `);
   if (result !== "1") {
-    throw new Error(`Could not expire Data Operator Worker lease: ${result || "no row"}`);
+    throw new Error(`Data Operator Worker lease was not released: ${result || "no row"}`);
   }
 }
 
@@ -285,7 +381,9 @@ export function exhaustDataRefresh(idempotencyKey: string): void {
           started_at = clock_timestamp(), finished_at = clock_timestamp(),
           updated_at = clock_timestamp()
       WHERE idempotency_key = '${idempotencyKey}'
-        AND status = 'running' AND attempt_count = 2
+        AND status = 'running'
+        AND attempt_count >= 1
+        AND lease_expires_at <= clock_timestamp()
       RETURNING status
     ) SELECT status FROM exhausted
   `);
@@ -314,6 +412,33 @@ function runDataStateCommand(statement: string): string {
     ],
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   ).trim();
+}
+
+function runDataOperator(...args: string[]): unknown {
+  const output = execFileSync(
+    "docker",
+    [
+      "exec",
+      `${testProjectName()}-data-operator-worker-1`,
+      "thesistrace-data-operator",
+      ...args,
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  return JSON.parse(output) as unknown;
+}
+
+function publishOperatorFinancialBaseline(): void {
+  execFileSync(
+    "uv",
+    [
+      "run",
+      "python",
+      "../tests/browser/publish_financial_track_head.py",
+      "recovered",
+    ],
+    { cwd: process.cwd(), env: process.env, stdio: ["ignore", "pipe", "pipe"] },
+  );
 }
 
 function assertDataRefreshKey(idempotencyKey: string): void {

@@ -99,6 +99,8 @@ if "up" in arguments and "auth" in arguments and "api" in arguments:
 if arguments[0] == "inspect":
     if any(argument.startswith('{"status"') for argument in arguments):
         print('{"status":"exited","exit_code":143,"oom_killed":false}')
+    elif any("Config.Cmd" in argument for argument in arguments):
+        print('["thesistrace-data-operator","worker","--replay","fixture.json"]')
     elif any("Config.Env" in argument for argument in arguments):
         failing_target = os.environ.get("FAKE_ENV_INSPECT_FAILURE_TARGET")
         if failing_target and arguments[-1].endswith(f"-{failing_target}-1"):
@@ -196,6 +198,25 @@ if (
     data_mount = Path(os.environ["THESISTRACE_TEST_DATA_MOUNT"])
     data_mount.mkdir(parents=True, exist_ok=True)
     (data_mount / "HEAD.json").write_text("fake Dataset Head")
+if (
+    "run" in arguments
+    and "thesistrace-data-operator" in arguments
+    and "worker" in arguments
+    and "--replay" not in arguments
+    and any(
+        argument == "THESISTRACE_TUSHARE_TOKEN="
+        or argument.startswith("THESISTRACE_TUSHARE_TOKEN=placeholder")
+        for argument in arguments
+    )
+):
+    print('{"code":"WORKER_TUSHARE_TOKEN_INVALID","status":"failed"}')
+    raise SystemExit(2)
+if (
+    "run" in arguments
+    and "thesistrace-data-operator" in arguments
+    and "collect" in arguments
+):
+    print('{"deleted_receipt_count":1,"status":"succeeded"}')
 smoke_script = next(
     (argument for argument in arguments if argument.endswith("production_image_smoke.py")),
     None,
@@ -1439,9 +1460,13 @@ def test_image_smoke_provisions_auth_inside_the_private_compose_network() -> Non
         ROOT / "tests" / "acceptance" / "provision_image_smoke_auth.py"
     ).read_text()
     overlay = (ROOT / "deploy" / "core" / "compose.image-smoke.yaml").read_text()
+    browser_fixture = (ROOT / "web" / "e2e-core" / "auth-fixture.ts").read_text()
 
     assert "auth_port=$(mapped_port auth 8200)" not in image_smoke
     assert "resend_port=$(mapped_port resend-fake 8300)" not in image_smoke
+    assert "THESISTRACE_TEST_RESEND_ORIGIN" not in image_smoke
+    assert "`${testProjectName()}-resend-fake-1`" in browser_fixture
+    assert 'fetch("http://127.0.0.1:8300/__test/emails"' in browser_fixture
     assert "create_private_compose_login_session" in provisioner
     assert "../../auth/test-fixtures:/test-fixtures:ro" in overlay
 
@@ -1612,6 +1637,68 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert "production_image_smoke.py health" in commands
     assert "production_image_smoke.py readiness-outage" in commands
     assert "--build" not in commands
+
+
+def test_operator_console_release_qualification_runs_inside_final_images() -> None:
+    runtime = (ROOT / "scripts" / "test-runtime").read_text()
+    smoke = (ROOT / "tests" / "production_image_smoke.py").read_text()
+    fixture = (
+        ROOT / "tests" / "acceptance" / "qualify_operator_image_smoke.py"
+    ).read_text()
+    retention = (
+        ROOT / "tests" / "acceptance" / "age_operator_image_smoke_receipt.py"
+    ).read_text()
+
+    for phase in (
+        "operator-unavailable",
+        "operator-processed",
+        "operator-transferred",
+        "operator-receipt-cleaned",
+    ):
+        assert f'"{phase}"' in smoke
+        assert f"production_image_smoke.py {phase}" in runtime
+    assert "verify_data_operator_worker_secret_rejection" in runtime
+    assert "verify_single_data_operator_worker" in runtime
+    assert "qualify_operator_image_smoke.py provision" in runtime
+    assert "qualify_operator_image_smoke.py transfer" in runtime
+    assert "age_operator_image_smoke_receipt.py" in runtime
+    assert "thesistrace-data-operator collect" in runtime
+    assert "image-smoke-operator-browser-reset reset_product_state" in runtime
+    assert 'operator_browser_state_root="$run_root/operator-browser-state"' in runtime
+    assert "image-smoke-operator-browser-bootstrap compose_run initialize" in runtime
+    assert "python /smoke/browser/prepare_current_data.py" in runtime
+    assert "image-smoke-operator-browser-worker compose up" in runtime
+    assert "python /smoke/browser/publish_financial_track_head.py lagged" in runtime
+    assert "python /smoke/browser/publish_financial_track_head.py recovered" in runtime
+    assert "playwright test operator-console.spec.ts" in runtime
+    assert "create_private_compose_login_session" in fixture
+    assert "run_auth_operator" in fixture
+    assert "operator-sessions.json" in runtime
+    assert "UPDATE data.refresh_operations" in retention
+    assert "WORKER_TUSHARE_TOKEN_INVALID" in runtime
+
+
+def test_operator_console_runbooks_define_the_supported_production_boundary() -> None:
+    production = (
+        ROOT / "docs" / "runbook" / "single-node-production.md"
+    ).read_text()
+    data_operator = (ROOT / "docs" / "runbook" / "data-operator.md").read_text()
+
+    for current in (
+        "assign-operator",
+        "transfer-operator",
+        "exactly one Operator",
+        "accepted is not published",
+        "Data Operator Worker",
+        "Worker-only Tushare Secret",
+        "Operator Console",
+        "playwright-results",
+    ):
+        assert current in production
+    assert "Researcher deactivation is not a Console operation" in production
+    assert "one always-running, single-slot Data Operator Worker" in data_operator
+    assert "all three Refresh kinds share one global FIFO" in data_operator
+    assert "public internet" in data_operator
 
 
 def test_image_smoke_mounts_explicit_local_mcp_api_without_changing_production_image() -> None:

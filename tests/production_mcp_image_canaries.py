@@ -16,4 +16,7 @@ SENSITIVE_CANARIES = (
     "observability-outage-canary",
     "observability-secret-canary",
     "observability-request-canary",
+    "0f3d7a91c4e6482b8d5f106a79c2e4b3",
+    "correct-horse-battery-staple",
+    "Browser-acceptance-password-2026",
 )

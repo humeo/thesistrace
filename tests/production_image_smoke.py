@@ -14,7 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from statistics import median
 from threading import Event, Thread
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from uuid import UUID
 
 import boto3
@@ -72,6 +72,9 @@ UNAVAILABLE_DEPENDENCY_CODES = {
     "auth": "AUTH_UNAVAILABLE",
 }
 HTTP_REQUEST_TIMEOUT_SECONDS = 10
+OPERATOR_IMAGE_SMOKE_PASSWORD = "correct-horse-battery-staple"
+OPERATOR_IMAGE_SMOKE_MARKET_KEY = "image-smoke-operator-market-refresh"
+OPERATOR_IMAGE_SMOKE_MARKET_AS_OF = "2026-08-06T15:00:00+08:00"
 
 BATCH_PERFORMANCE_WARMUP_SAMPLES = 1
 BATCH_PERFORMANCE_MEASURED_SAMPLES = 4
@@ -92,6 +95,10 @@ def main() -> None:
         "health",
         "readiness-outage",
         "observability",
+        "operator-processed",
+        "operator-receipt-cleaned",
+        "operator-transferred",
+        "operator-unavailable",
         "reset",
     }
     if len(sys.argv) != 2 or sys.argv[1] not in phases:
@@ -128,6 +135,17 @@ def main() -> None:
             caddy_events=Path(_required_environment("THESISTRACE_TEST_CADDY_EVENTS")),
             worker_events=Path(_required_environment("THESISTRACE_TEST_WORKER_EVENTS")),
         )
+    elif phase == "operator-unavailable":
+        result = _qualify_operator_while_worker_unavailable(web_origin)
+    elif phase == "operator-processed":
+        result = _qualify_operator_refresh_processed(web_origin)
+    elif phase == "operator-transferred":
+        result = _qualify_operator_transfer(web_origin)
+    elif phase == "operator-receipt-cleaned":
+        result = _qualify_operator_receipt_cleanup(
+            web_origin,
+            Path(_required_environment("THESISTRACE_TEST_OPERATOR_STATE")),
+        )
     elif phase == "before":
         result = _before_restart(
             api_origin,
@@ -163,6 +181,395 @@ def main() -> None:
         expected.update(result)
         state_path.write_text(json.dumps(expected, sort_keys=True))
     print(json.dumps(result, sort_keys=True))
+
+
+def _qualify_operator_while_worker_unavailable(
+    gateway_origin: str,
+) -> dict[str, object]:
+    sessions = _operator_sessions()
+    operator = sessions["initial_operator"]
+    successor = sessions["successor_operator"]
+    revocation_target = sessions["revocation_target"]
+    ordinary = _auth_session()
+
+    status, capability, capability_request_id = _gateway_json(
+        gateway_origin,
+        "GET",
+        "/api/auth/operator/capability",
+        cookie=operator["cookie"],
+    )
+    assert status == 200
+    assert capability == {"operator": True}
+    for denied_cookie, path in (
+        (ordinary["cookie"], "/api/auth/operator/capability"),
+        (successor["cookie"], "/api/auth/operator/researchers"),
+        (ordinary["cookie"], "/api/operator/data/status"),
+        (ordinary["cookie"], "/operator/researchers"),
+    ):
+        denied_status, denied_body, _ = _gateway_json(
+            gateway_origin,
+            "GET",
+            path,
+            cookie=denied_cookie,
+        )
+        assert denied_status == 404
+        assert denied_body is None
+
+    page_status, page_body, _ = _gateway_bytes(
+        gateway_origin,
+        "GET",
+        "/operator/researchers",
+        cookie=operator["cookie"],
+    )
+    assert page_status == 200
+    assert b'<div id="root"></div>' in page_body
+    directory_status, directory, directory_request_id = _gateway_json(
+        gateway_origin,
+        "GET",
+        "/api/auth/operator/researchers",
+        cookie=operator["cookie"],
+    )
+    assert directory_status == 200
+    assert isinstance(directory, dict)
+    items = directory.get("items")
+    assert isinstance(items, list)
+    researcher_ids = {
+        item.get("researcher_id") for item in items if isinstance(item, dict)
+    }
+    assert {
+        operator["researcher_id"],
+        successor["researcher_id"],
+        revocation_target["researcher_id"],
+    } <= researcher_ids
+
+    invitation_email = "image-smoke-console-invitation@example.test"
+    issue_proof = _operator_proof(
+        gateway_origin,
+        operator["cookie"],
+        {
+            "email": invitation_email,
+            "operation": "invitation.issue",
+            "password": OPERATOR_IMAGE_SMOKE_PASSWORD,
+        },
+    )
+    issue_body = {"email": invitation_email, "proof": issue_proof}
+    issue_status, issued, issue_request_id = _gateway_json(
+        gateway_origin,
+        "POST",
+        "/api/auth/operator/invitations/issue",
+        cookie=operator["cookie"],
+        body=issue_body,
+    )
+    assert issue_status == 200
+    assert isinstance(issued, dict)
+    assert issued.get("email") == invitation_email
+    assert issued.get("status") == "delivered"
+    invitation_id = issued.get("invitation_id")
+    assert isinstance(invitation_id, str) and invitation_id
+
+    replay_status, replayed, _ = _gateway_json(
+        gateway_origin,
+        "POST",
+        "/api/auth/operator/invitations/issue",
+        cookie=operator["cookie"],
+        body=issue_body,
+    )
+    assert replay_status == 400
+    assert replayed == {"code": "OPERATOR_PROOF_INVALID"}
+
+    reissue_proof = _operator_proof(
+        gateway_origin,
+        operator["cookie"],
+        {
+            "email": invitation_email,
+            "operation": "invitation.reissue",
+            "password": OPERATOR_IMAGE_SMOKE_PASSWORD,
+        },
+    )
+    reissue_status, reissued, reissue_request_id = _gateway_json(
+        gateway_origin,
+        "POST",
+        "/api/auth/operator/invitations/reissue",
+        cookie=operator["cookie"],
+        body={"email": invitation_email, "proof": reissue_proof},
+    )
+    assert reissue_status == 200
+    assert isinstance(reissued, dict)
+    assert reissued.get("email") == invitation_email
+    assert reissued.get("status") == "delivered"
+    reissued_invitation_id = reissued.get("invitation_id")
+    assert isinstance(reissued_invitation_id, str)
+    assert reissued_invitation_id != invitation_id
+
+    revoke_proof = _operator_proof(
+        gateway_origin,
+        operator["cookie"],
+        {
+            "operation": "researcher.sessions.revoke",
+            "password": OPERATOR_IMAGE_SMOKE_PASSWORD,
+            "researcher_id": revocation_target["researcher_id"],
+        },
+    )
+    revoke_status, revoked, revoke_request_id = _gateway_json(
+        gateway_origin,
+        "POST",
+        "/api/auth/operator/researchers/sessions/revoke",
+        cookie=operator["cookie"],
+        body={
+            "proof": revoke_proof,
+            "researcher_id": revocation_target["researcher_id"],
+        },
+    )
+    assert revoke_status == 200
+    assert isinstance(revoked, dict)
+    assert revoked.get("researcher_id") == revocation_target["researcher_id"]
+    assert revoked.get("revoked_session_count") == 1
+    revoked_session_status, revoked_session, _ = _gateway_json(
+        gateway_origin,
+        "GET",
+        "/api/auth/get-session",
+        cookie=revocation_target["cookie"],
+    )
+    assert revoked_session_status == 200
+    assert revoked_session is None
+    preserved_status, preserved_capability, _ = _gateway_json(
+        gateway_origin,
+        "GET",
+        "/api/auth/operator/capability",
+        cookie=operator["cookie"],
+    )
+    assert preserved_status == 200
+    assert preserved_capability == {"operator": True}
+
+    market_proof = _operator_proof(
+        gateway_origin,
+        operator["cookie"],
+        {
+            "as_of": OPERATOR_IMAGE_SMOKE_MARKET_AS_OF,
+            "idempotency_key": OPERATOR_IMAGE_SMOKE_MARKET_KEY,
+            "operation": "data.refresh.market.submit",
+            "password": OPERATOR_IMAGE_SMOKE_PASSWORD,
+        },
+    )
+    submit_status, submitted, submit_request_id = _gateway_json(
+        gateway_origin,
+        "POST",
+        "/api/operator/data/refreshes/market",
+        cookie=operator["cookie"],
+        body={
+            "as_of": OPERATOR_IMAGE_SMOKE_MARKET_AS_OF,
+            "idempotency_key": OPERATOR_IMAGE_SMOKE_MARKET_KEY,
+            "proof": market_proof,
+        },
+    )
+    assert submit_status == 202
+    assert isinstance(submitted, dict)
+    assert submitted.get("idempotency_key") == OPERATOR_IMAGE_SMOKE_MARKET_KEY
+    assert submitted.get("status") == "accepted"
+    data_status_code, data_status, status_request_id = _gateway_json(
+        gateway_origin,
+        "GET",
+        "/api/operator/data/status",
+        cookie=operator["cookie"],
+    )
+    assert data_status_code == 200
+    assert isinstance(data_status, dict)
+    assert data_status.get("worker") == {
+        "available": False,
+        "last_heartbeat_at": None,
+    }
+    operations = data_status.get("operations")
+    assert isinstance(operations, list)
+    accepted = next(
+        item
+        for item in operations
+        if isinstance(item, dict)
+        and item.get("idempotency_key") == OPERATOR_IMAGE_SMOKE_MARKET_KEY
+    )
+    assert accepted.get("status") == "accepted"
+    return {
+        "accepted_operation": OPERATOR_IMAGE_SMOKE_MARKET_KEY,
+        "assignment_researcher_id": operator["researcher_id"],
+        "invitation_ids": [invitation_id, reissued_invitation_id],
+        "ordinary_404_verified": True,
+        "operator_access_preserved": True,
+        "proof_consumed_once": True,
+        "request_ids": _request_ids(
+            capability_request_id,
+            directory_request_id,
+            issue_request_id,
+            reissue_request_id,
+            revoke_request_id,
+            submit_request_id,
+            status_request_id,
+        ),
+        "revoked_researcher_id": revocation_target["researcher_id"],
+        "worker_available": False,
+    }
+
+
+def _qualify_operator_refresh_processed(gateway_origin: str) -> dict[str, object]:
+    operator = _operator_sessions()["initial_operator"]
+    query = urlencode(
+        {
+            "as_of": OPERATOR_IMAGE_SMOKE_MARKET_AS_OF,
+            "idempotency_key": OPERATOR_IMAGE_SMOKE_MARKET_KEY,
+        }
+    )
+    deadline = time.monotonic() + 60
+    interval = Event()
+    receipt: dict[str, object] | None = None
+    request_id: str | None = None
+    while time.monotonic() < deadline:
+        status, candidate, request_id = _gateway_json(
+            gateway_origin,
+            "GET",
+            f"/api/operator/data/refreshes/market?{query}",
+            cookie=operator["cookie"],
+        )
+        assert status == 200
+        assert isinstance(candidate, dict)
+        receipt = candidate
+        if receipt.get("status") == "succeeded":
+            break
+        if receipt.get("status") == "failed":
+            raise AssertionError(receipt)
+        interval.wait(0.1)
+    else:
+        raise AssertionError({"operator_refresh_timeout": True, "last": receipt})
+    assert receipt is not None
+    assert receipt.get("outcome") == "published"
+    status_code, data_status, status_request_id = _gateway_json(
+        gateway_origin,
+        "GET",
+        "/api/operator/data/status",
+        cookie=operator["cookie"],
+    )
+    assert status_code == 200
+    assert isinstance(data_status, dict)
+    worker = data_status.get("worker")
+    assert isinstance(worker, dict)
+    assert worker.get("available") is True
+    head = data_status.get("head")
+    assert isinstance(head, dict)
+    assert isinstance(head.get("data_identity"), str)
+    return {
+        "head": head,
+        "receipt": receipt,
+        "request_ids": _request_ids(request_id, status_request_id),
+        "worker_available": True,
+    }
+
+
+def _qualify_operator_transfer(gateway_origin: str) -> dict[str, object]:
+    sessions = _operator_sessions()
+    former = sessions["initial_operator"]
+    successor = sessions["successor_operator"]
+    former_status, former_session, former_request_id = _gateway_json(
+        gateway_origin,
+        "GET",
+        "/api/auth/get-session",
+        cookie=former["cookie"],
+    )
+    assert former_status == 200
+    assert former_session is None
+    former_capability_status, former_capability, _ = _gateway_json(
+        gateway_origin,
+        "GET",
+        "/api/auth/operator/capability",
+        cookie=former["cookie"],
+    )
+    assert former_capability_status in {401, 404}
+    assert former_capability is None
+    successor_status, successor_capability, successor_request_id = _gateway_json(
+        gateway_origin,
+        "GET",
+        "/api/auth/operator/capability",
+        cookie=successor["cookie"],
+    )
+    assert successor_status == 200
+    assert successor_capability == {"operator": True}
+    page_status, page_body, page_request_id = _gateway_bytes(
+        gateway_origin,
+        "GET",
+        "/operator/data",
+        cookie=successor["cookie"],
+    )
+    assert page_status == 200
+    assert b'<div id="root"></div>' in page_body
+    ordinary_status, ordinary_data, ordinary_request_id = _gateway_json(
+        gateway_origin,
+        "GET",
+        "/api/data",
+        cookie=_auth_session()["cookie"],
+    )
+    assert ordinary_status == 200
+    assert isinstance(ordinary_data, dict)
+    denied_status, denied_body, _ = _gateway_json(
+        gateway_origin,
+        "GET",
+        "/api/auth/operator/capability",
+        cookie=_auth_session()["cookie"],
+    )
+    assert denied_status == 404
+    assert denied_body is None
+    return {
+        "former_operator_session_revoked": True,
+        "request_ids": _request_ids(
+            former_request_id,
+            successor_request_id,
+            page_request_id,
+            ordinary_request_id,
+        ),
+        "successor_researcher_id": successor["researcher_id"],
+        "successor_operator_access": True,
+    }
+
+
+def _qualify_operator_receipt_cleanup(
+    gateway_origin: str,
+    processed_state_path: Path,
+) -> dict[str, object]:
+    successor = _operator_sessions()["successor_operator"]
+    processed = json.loads(processed_state_path.read_text())
+    assert isinstance(processed, dict)
+    expected_head = processed.get("head")
+    assert isinstance(expected_head, dict)
+    query = urlencode(
+        {
+            "as_of": OPERATOR_IMAGE_SMOKE_MARKET_AS_OF,
+            "idempotency_key": OPERATOR_IMAGE_SMOKE_MARKET_KEY,
+        }
+    )
+    receipt_status, receipt, receipt_request_id = _gateway_json(
+        gateway_origin,
+        "GET",
+        f"/api/operator/data/refreshes/market?{query}",
+        cookie=successor["cookie"],
+    )
+    assert receipt_status == 404
+    assert receipt is None
+    status_code, data_status, status_request_id = _gateway_json(
+        gateway_origin,
+        "GET",
+        "/api/operator/data/status",
+        cookie=successor["cookie"],
+    )
+    assert status_code == 200
+    assert isinstance(data_status, dict)
+    assert data_status.get("head") == expected_head
+    operations = data_status.get("operations")
+    assert isinstance(operations, list)
+    assert not any(
+        isinstance(item, dict)
+        and item.get("idempotency_key") == OPERATOR_IMAGE_SMOKE_MARKET_KEY
+        for item in operations
+    )
+    return {
+        "dataset_head_preserved": True,
+        "receipt_removed": True,
+        "request_ids": _request_ids(receipt_request_id, status_request_id),
+    }
 
 
 def _before_restart(
@@ -2898,6 +3305,116 @@ def _request_json(
             {"status": status, "method": method, "path": path, "body": response_body}
         )
     return value
+
+
+def _gateway_json(
+    gateway_origin: str,
+    method: str,
+    path: str,
+    *,
+    cookie: str,
+    body: dict[str, object] | None = None,
+) -> tuple[int, object | None, str | None]:
+    status, content, request_id = _gateway_bytes(
+        gateway_origin,
+        method,
+        path,
+        cookie=cookie,
+        body=body,
+    )
+    if not content:
+        return status, None, request_id
+    value = json.loads(content)
+    return status, value, request_id
+
+
+def _gateway_bytes(
+    gateway_origin: str,
+    method: str,
+    path: str,
+    *,
+    cookie: str,
+    body: dict[str, object] | None = None,
+) -> tuple[int, bytes, str | None]:
+    public_origin = urlsplit(_required_environment("THESISTRACE_PUBLIC_ORIGIN"))
+    if not public_origin.netloc:
+        raise RuntimeError("THESISTRACE_PUBLIC_ORIGIN has no host")
+    payload = None if body is None else json.dumps(body).encode()
+    headers = {
+        "Cookie": cookie,
+        "Host": public_origin.netloc,
+    }
+    if method in {"POST", "PATCH", "DELETE"}:
+        headers["Origin"] = _required_environment("THESISTRACE_PUBLIC_ORIGIN")
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        f"{gateway_origin}{path}",
+        data=payload,
+        headers=headers,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(
+            request, timeout=HTTP_REQUEST_TIMEOUT_SECONDS
+        ) as response:
+            return (
+                response.status,
+                response.read(),
+                response.headers.get("X-Request-ID"),
+            )
+    except urllib.error.HTTPError as error:
+        return error.code, error.read(), error.headers.get("X-Request-ID")
+
+
+def _operator_proof(
+    gateway_origin: str,
+    cookie: str,
+    request_body: dict[str, object],
+) -> str:
+    status, value, _ = _gateway_json(
+        gateway_origin,
+        "POST",
+        "/api/auth/operator/proofs",
+        cookie=cookie,
+        body=request_body,
+    )
+    assert status == 200
+    assert isinstance(value, dict)
+    proof = value.get("proof")
+    assert isinstance(proof, str) and proof
+    return proof
+
+
+@lru_cache(maxsize=1)
+def _operator_sessions() -> dict[str, dict[str, str]]:
+    path = Path(_required_environment("THESISTRACE_TEST_OPERATOR_SESSION_FILE"))
+    value = json.loads(path.read_text())
+    expected_roles = {
+        "initial_operator",
+        "revocation_target",
+        "successor_operator",
+    }
+    if not isinstance(value, dict) or set(value) != expected_roles:
+        raise RuntimeError("Production Image Operator Sessions are invalid")
+    sessions: dict[str, dict[str, str]] = {}
+    for role, item in value.items():
+        if (
+            not isinstance(role, str)
+            or not isinstance(item, dict)
+            or set(item) != {"cookie", "researcher_id"}
+            or not all(isinstance(field, str) and field for field in item.values())
+        ):
+            raise RuntimeError("Production Image Operator Session is invalid")
+        sessions[role] = item
+    return sessions
+
+
+def _request_ids(*values: str | None) -> list[str]:
+    request_ids = [value for value in values if isinstance(value, str) and value]
+    assert request_ids
+    assert all(len(value) <= 128 for value in request_ids)
+    return request_ids
 
 
 def _request_json_for_polling(

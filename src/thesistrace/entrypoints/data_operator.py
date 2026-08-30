@@ -4,12 +4,15 @@ import argparse
 import json
 import logging
 import os
+import signal
 import stat
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import date, datetime
 from pathlib import Path
 from threading import Event
+from types import FrameType
 from typing import NoReturn
 
 from thesistrace._postgres import PostgresDatabase
@@ -390,35 +393,50 @@ def _run(
             lifecycle_event=_progress,
         )
         benchmark_source = TushareBenchmarkSource(provider)
-        worker_wait = Event()
-        with DataRefreshWorkerLease(database).maintain() as worker_owner:
-            while True:
-                worker_owner.assert_owned()
-                try:
-                    processed = refresh_service.process_next(
-                        source,
-                        benchmark_source=benchmark_source,
-                        financial_announcement_source=financial_announcement_source,
-                        financial_source=financial_source,
-                        financial_source_window_selector=financial_source_window_selector,
-                        industry_source=industry_source,
-                        industry_source_target_selector=industry_source_target_selector,
-                    )
-                except DataRefreshError:
+        with _stop_worker_on_sigterm() as worker_stop:
+            with DataRefreshWorkerLease(database).maintain() as worker_owner:
+                while not worker_stop.is_set():
+                    worker_owner.assert_owned()
+                    try:
+                        processed = refresh_service.process_next(
+                            source,
+                            benchmark_source=benchmark_source,
+                            financial_announcement_source=financial_announcement_source,
+                            financial_source=financial_source,
+                            financial_source_window_selector=financial_source_window_selector,
+                            industry_source=industry_source,
+                            industry_source_target_selector=industry_source_target_selector,
+                        )
+                    except DataRefreshError:
+                        if parsed.once:
+                            raise
+                        worker_stop.wait(5)
+                        continue
+                    worker_owner.assert_owned()
                     if parsed.once:
-                        raise
-                    worker_wait.wait(5)
-                    continue
-                worker_owner.assert_owned()
-                if parsed.once:
-                    return {"status": "processed" if processed else "idle"}
-                if not processed:
-                    worker_wait.wait(5)
+                        return {"status": "processed" if processed else "idle"}
+                    if not processed:
+                        worker_stop.wait(5)
+        return {"status": "stopped"}
     finally:
         if database is not None:
             database.close()
         if transport is not None:
             transport.close()
+
+
+@contextmanager
+def _stop_worker_on_sigterm() -> Iterator[Event]:
+    stopped = Event()
+
+    def request_stop(_signum: int, _frame: FrameType | None) -> None:
+        stopped.set()
+
+    previous_handler = signal.signal(signal.SIGTERM, request_stop)
+    try:
+        yield stopped
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
 
 
 def _failure(

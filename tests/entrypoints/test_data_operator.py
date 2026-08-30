@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import signal
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -95,6 +96,100 @@ def test_live_worker_rejects_missing_or_placeholder_tushare_token_before_databas
         "code": "WORKER_TUSHARE_TOKEN_INVALID",
         "status": "failed",
     }
+
+
+def test_long_running_worker_releases_lease_on_sigterm(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    lifecycle: list[str] = []
+    original_handler = signal.getsignal(signal.SIGTERM)
+
+    class FakeDatabase:
+        def __init__(self, _url: str) -> None:
+            pass
+
+        def open(self) -> None:
+            lifecycle.append("database-opened")
+
+        def close(self) -> None:
+            lifecycle.append("database-closed")
+
+    class FakeOwner:
+        @staticmethod
+        def assert_owned() -> None:
+            lifecycle.append("lease-owned")
+
+    class FakeLeaseContext:
+        def __enter__(self) -> FakeOwner:
+            lifecycle.append("lease-acquired")
+            return FakeOwner()
+
+        def __exit__(self, *_error: object) -> None:
+            lifecycle.append("lease-released")
+
+    class FakeLease:
+        def __init__(self, _database: object) -> None:
+            pass
+
+        @staticmethod
+        def maintain() -> FakeLeaseContext:
+            return FakeLeaseContext()
+
+    class FakeRefreshService:
+        def __init__(self, *_arguments: object, **_keywords: object) -> None:
+            pass
+
+        @staticmethod
+        def process_next(*_arguments: object, **_keywords: object) -> bool:
+            handler = signal.getsignal(signal.SIGTERM)
+            assert callable(handler)
+            handler(signal.SIGTERM, None)
+            lifecycle.append("stop-requested")
+            return False
+
+    class FakeReplayBundle:
+        def __init__(self, _paths: list[Path]) -> None:
+            pass
+
+        @staticmethod
+        def select_financial_window(_start: str, _end: str) -> None:
+            pass
+
+        @staticmethod
+        def select_industry_target(_target: str) -> None:
+            pass
+
+    data_mount = tmp_path / "data"
+    benchmark_mount = tmp_path / "benchmark"
+    data_mount.mkdir()
+    benchmark_mount.mkdir()
+    monkeypatch.setenv("THESISTRACE_DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("THESISTRACE_DATA_MOUNT", str(data_mount))
+    monkeypatch.setenv("THESISTRACE_BENCHMARK_MOUNT", str(benchmark_mount))
+    monkeypatch.setattr(data_operator, "PostgresDatabase", FakeDatabase)
+    monkeypatch.setattr(data_operator, "verify_core_schema", lambda _database: None)
+    monkeypatch.setattr(data_operator, "DataRefreshWorkerLease", FakeLease)
+    monkeypatch.setattr(data_operator, "DataRefreshService", FakeRefreshService)
+    monkeypatch.setattr(data_operator, "ReplayTushareRefreshBundle", FakeReplayBundle)
+    monkeypatch.setattr(data_operator, "TushareIndustrySource", lambda provider: provider)
+    monkeypatch.setattr(data_operator, "TushareDataSource", lambda **_keywords: object())
+    monkeypatch.setattr(data_operator, "TushareBenchmarkSource", lambda _provider: object())
+
+    data_operator.main(["worker", "--replay", str(tmp_path / "replay.json")])
+
+    assert json.loads(capsys.readouterr().out) == {"status": "stopped"}
+    assert lifecycle == [
+        "database-opened",
+        "lease-acquired",
+        "lease-owned",
+        "stop-requested",
+        "lease-owned",
+        "lease-released",
+        "database-closed",
+    ]
+    assert signal.getsignal(signal.SIGTERM) is original_handler
 
 
 @pytest.mark.parametrize(
