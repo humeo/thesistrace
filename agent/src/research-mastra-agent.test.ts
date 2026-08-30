@@ -7,6 +7,10 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { ValidatedChatRun } from "./chat-request.js";
 import type { McpRun } from "./mcp-run.js";
 import { ResearchMastraAgent } from "./research-mastra-agent.js";
+import {
+  SAFE_TOOL_COMPLETED,
+  SAFE_TOOL_FAILED,
+} from "./safe-tool-result.js";
 import type {
   PreparedRun,
   ResearchSessionRepository,
@@ -179,7 +183,7 @@ test("one MCP Tool failure terminates the Run before later model output", async 
     "RUN_ERROR",
   ]);
   expect(events.find((event) => event.type === "TOOL_CALL_RESULT")).toMatchObject({
-    content: "Tool failed.",
+    content: SAFE_TOOL_FAILED,
   });
   expect(JSON.stringify(events)).not.toContain("result-canary");
   expect(JSON.stringify(events)).not.toContain("must not reach");
@@ -246,7 +250,7 @@ test("a Core business rejection is a failed Tool but the Agent Run may continue"
     "RUN_FINISHED",
   ]);
   expect(events.find((event) => event.type === "TOOL_CALL_RESULT")).toMatchObject({
-    content: "Tool failed.",
+    content: SAFE_TOOL_FAILED,
     toolCallId: "business-call",
   });
   expect(repository.markFailed).not.toHaveBeenCalled();
@@ -304,11 +308,11 @@ test("parallel Tool results cannot transfer one call's transport failure to anot
 
   expect(results).toEqual([
     expect.objectContaining({
-      content: "Tool completed.",
+      content: SAFE_TOOL_COMPLETED,
       toolCallId: "successful-call",
     }),
     expect.objectContaining({
-      content: "Tool failed.",
+      content: SAFE_TOOL_FAILED,
       toolCallId: "failed-call",
     }),
   ]);

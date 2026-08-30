@@ -1243,7 +1243,12 @@ case "$command" in
     printf 'postgres_port=%s\ns3_port=%s\nresend_port=%s\n' \
       "$postgres_port" "$s3_port" "$resend_port" >>"$run_metadata"
     run_phase e2e-caddy-single-origin verify_caddy_single_origin
-    run_phase e2e-playwright run_playwright pnpm --dir web test:e2e
+    if [ -n "${THESISTRACE_TEST_PLAYWRIGHT_GREP:-}" ]; then
+      run_phase e2e-playwright run_playwright pnpm --dir web exec playwright test \
+        --grep "$THESISTRACE_TEST_PLAYWRIGHT_GREP"
+    else
+      run_phase e2e-playwright run_playwright pnpm --dir web test:e2e
+    fi
     ;;
   image-smoke)
     smoke_state=/smoke-evidence/image-smoke-state.json

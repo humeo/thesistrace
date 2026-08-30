@@ -51,7 +51,6 @@ def test_agent_host_is_a_private_node_package_without_research_authority() -> No
         "from thesistrace",
         "import thesistrace",
         "../src/",
-        "research_run",
         "canonical-data",
         "RustFS",
     ):

@@ -4,17 +4,90 @@ import { describe, expect, it } from "vitest";
 
 import {
   BrowserEventProjector,
+  canonicalSubmittedBrowserMessages,
   projectDurableUiMessages,
   SAFE_TOOL_COMPLETED,
   SAFE_TOOL_FAILED,
   safeToolResultMessageId,
 } from "./browser-message-safety.js";
+import { parseSafeToolResult } from "./safe-tool-result.js";
 import {
   DURABLE_TOOL_FAILURE,
   DURABLE_TOOL_OUTCOME_FIELD,
 } from "./tool-outcome.js";
 
 describe("browser message safety", () => {
+  it("canonicalizes only CopilotKit's exact split Assistant text shape", () => {
+    const assistantId = "00000000-0000-4000-8000-000000000001";
+    expect(canonicalSubmittedBrowserMessages([{
+      id: assistantId,
+      role: "assistant",
+      toolCalls: [{
+        function: { arguments: "{}", name: "submit_research_run" },
+        id: "provider-call-1",
+        type: "function",
+      }],
+    }, {
+      content: SAFE_TOOL_COMPLETED,
+      id: safeToolResultMessageId("provider-call-1"),
+      role: "tool",
+      toolCallId: "provider-call-1",
+    }, {
+      content: "Core Worker continues independently.",
+      id: `${assistantId}-agui-text`,
+      role: "assistant",
+    }])).toEqual([{
+      content: "Core Worker continues independently.",
+      id: assistantId,
+      role: "assistant",
+      toolCalls: [{
+        function: { arguments: "{}", name: "submit_research_run" },
+        id: "provider-call-1",
+        type: "function",
+      }],
+    }, {
+      content: SAFE_TOOL_COMPLETED,
+      id: safeToolResultMessageId("provider-call-1"),
+      role: "tool",
+      toolCallId: "provider-call-1",
+    }]);
+
+    expect(() => canonicalSubmittedBrowserMessages([{
+      content: "orphan",
+      id: `${assistantId}-agui-text`,
+      role: "assistant",
+    }])).toThrow("BROWSER_TRANSCRIPT_PROJECTION_FAILED");
+  });
+
+  it("preserves Assistant text emitted before a Tool when joining its continuation", () => {
+    const assistantId = "00000000-0000-4000-8000-000000000011";
+    const messages = canonicalSubmittedBrowserMessages([{
+      content: "I will inspect the current context. ",
+      id: assistantId,
+      role: "assistant",
+      toolCalls: [{
+        function: { arguments: "{}", name: "get_research_context" },
+        id: "provider-call-before-text",
+        type: "function",
+      }],
+    }, {
+      content: SAFE_TOOL_COMPLETED,
+      id: safeToolResultMessageId("provider-call-before-text"),
+      role: "tool",
+      toolCallId: "provider-call-before-text",
+    }, {
+      content: "The context is now available.",
+      id: `${assistantId}-agui-text`,
+      role: "assistant",
+    }]);
+
+    expect(messages[0]).toMatchObject({
+      content: "I will inspect the current context. The context is now available.",
+      id: assistantId,
+      role: "assistant",
+    });
+  });
+
   it("projects durable Tool history without arguments or results", () => {
     const messages = projectDurableUiMessages([{
       content: "",
@@ -127,6 +200,113 @@ describe("browser message safety", () => {
     expect(JSON.stringify(structuredError)).not.toContain("private retry guidance");
   });
 
+  it("allowlists Assistant text event fields and rejects unsafe text roles or ids", () => {
+    const projector = new BrowserEventProjector();
+    const messageId = "00000000-0000-4000-8000-000000000021";
+    expect(projector.project({
+      messageId,
+      name: "provider-name",
+      providerSecret: "must-not-cross",
+      rawEvent: { private: true },
+      role: "assistant",
+      timestamp: 42,
+      type: EventType.TEXT_MESSAGE_START,
+    })).toEqual([{
+      messageId,
+      role: "assistant",
+      type: EventType.TEXT_MESSAGE_START,
+    }]);
+    expect(projector.project({
+      delta: "Safe text",
+      messageId,
+      providerSecret: "must-not-cross",
+      type: EventType.TEXT_MESSAGE_CONTENT,
+    })).toEqual([{
+      delta: "Safe text",
+      messageId,
+      type: EventType.TEXT_MESSAGE_CONTENT,
+    }]);
+    expect(projector.project({
+      messageId,
+      providerSecret: "must-not-cross",
+      type: EventType.TEXT_MESSAGE_END,
+    })).toEqual([{
+      messageId,
+      type: EventType.TEXT_MESSAGE_END,
+    }]);
+
+    expect(() => projector.project({
+      messageId: "00000000-0000-4000-8000-000000000022",
+      role: "system",
+      type: EventType.TEXT_MESSAGE_START,
+    })).toThrow("BROWSER_TRANSCRIPT_PROJECTION_FAILED");
+    expect(() => projector.project({
+      delta: "unsafe",
+      messageId: "provider-message-id",
+      role: "assistant",
+      type: EventType.TEXT_MESSAGE_CHUNK,
+    })).toThrow("BROWSER_TRANSCRIPT_PROJECTION_FAILED");
+  });
+
+  it("preserves only a validated ResearchRun identity and status across live and durable replay", () => {
+    const projector = new BrowserEventProjector();
+    const live = projector.project({
+      content: JSON.stringify({
+        formula: "private-formula",
+        replayed: false,
+        run_id: "run_0123456789abcdef0123",
+        status: "queued",
+      }),
+      messageId: "raw-result-message",
+      role: "tool",
+      toolCallId: "submit-call",
+      type: EventType.TOOL_CALL_RESULT,
+    });
+    const liveResult = live[0];
+    expect(liveResult?.type).toBe(EventType.TOOL_CALL_RESULT);
+    expect(parseSafeToolResult(
+      liveResult?.type === EventType.TOOL_CALL_RESULT ? liveResult.content : null,
+    )).toEqual({
+      outcome: "completed",
+      resource: {
+        id: "run_0123456789abcdef0123",
+        kind: "research_run",
+        status: "queued",
+      },
+    });
+    expect(JSON.stringify(live)).not.toMatch(/private-formula|replayed/);
+
+    const durable = projectDurableUiMessages([{
+      content: "",
+      id: "00000000-0000-4000-8000-000000000009",
+      parts: [{
+        toolInvocation: {
+          args: { request_id: "private-request-id" },
+          result: {
+            private_worker: "private-worker",
+            run_id: "run_0123456789abcdef0123",
+            status: "succeeded",
+          },
+          state: "result",
+          toolCallId: "detail-call",
+          toolName: "get_research_run",
+        },
+        type: "tool-invocation",
+      }],
+      role: "assistant",
+    }]);
+    const toolMessage = durable.find((message) => message.role === "tool");
+    expect(parseSafeToolResult(toolMessage?.content)).toEqual({
+      outcome: "completed",
+      resource: {
+        id: "run_0123456789abcdef0123",
+        kind: "research_run",
+        status: "succeeded",
+      },
+    });
+    expect(JSON.stringify(durable)).not.toMatch(/private-request-id|private-worker/);
+  });
+
   it("sanitizes reconnect snapshots and rejects unsupported roles", () => {
     const projector = new BrowserEventProjector();
     const messages: Message[] = [{
@@ -141,7 +321,7 @@ describe("browser message safety", () => {
       type: EventType.MESSAGES_SNAPSHOT,
     })).toEqual([{
       messages: [{
-        content: "Tool failed.",
+        content: SAFE_TOOL_FAILED,
         id: safeToolResultMessageId("provider-call-2"),
         role: "tool",
         toolCallId: "provider-call-2",

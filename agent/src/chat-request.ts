@@ -4,9 +4,12 @@ import { RunAgentInputSchema, type RunAgentInput } from "@ag-ui/core";
 import { z } from "zod";
 
 import {
-  SAFE_TOOL_COMPLETED,
-  SAFE_TOOL_FAILED,
+  canonicalSubmittedBrowserMessages,
+  splitAssistantTextParentId,
 } from "./browser-message-safety.js";
+import {
+  parseSafeToolResult,
+} from "./safe-tool-result.js";
 import type { ModelRegistry, ReasoningEffort } from "./model-registry.js";
 
 export const MAX_CHAT_MESSAGE_BYTES = 16 * 1024;
@@ -145,16 +148,28 @@ export function chatRunFingerprint(input: RunAgentInput): Buffer {
 function validateBrowserTranscript(messages: RunAgentInput["messages"]): void {
   const openToolCalls = new Set<string>();
   const completedToolCalls = new Set<string>();
+  const messageIds = new Set<string>();
   let transcriptBytes = 0;
 
   for (const message of messages) {
+    const splitTextParentId = message.role === "assistant"
+      ? splitAssistantTextParentId(message.id)
+      : null;
     if (
-      !uuidSchema.safeParse(message.id).success
+      (
+        !uuidSchema.safeParse(message.id).success
+        && (
+          splitTextParentId === null
+          || !uuidSchema.safeParse(splitTextParentId).success
+        )
+      )
+      || messageIds.has(message.id)
       || ("name" in message && message.name !== undefined)
       || ("encryptedValue" in message && message.encryptedValue !== undefined)
     ) {
       throw invalidRequest();
     }
+    messageIds.add(message.id);
     if (message.role === "user") {
       if (typeof message.content !== "string") throw invalidRequest();
       transcriptBytes += Buffer.byteLength(message.content, "utf8");
@@ -193,7 +208,7 @@ function validateBrowserTranscript(messages: RunAgentInput["messages"]): void {
     }
     if (message.role === "tool") {
       if (
-        (message.content !== SAFE_TOOL_COMPLETED && message.content !== SAFE_TOOL_FAILED)
+        parseSafeToolResult(message.content) === null
         || message.error !== undefined
         || !openToolCalls.has(message.toolCallId)
         || completedToolCalls.has(message.toolCallId)
@@ -208,6 +223,11 @@ function validateBrowserTranscript(messages: RunAgentInput["messages"]): void {
   }
 
   if (transcriptBytes > MAX_TRANSCRIPT_BYTES) throw invalidRequest();
+  try {
+    canonicalSubmittedBrowserMessages(messages);
+  } catch {
+    throw invalidRequest();
+  }
 }
 
 function fingerprintMessage(message: RunAgentInput["messages"][number]): unknown {

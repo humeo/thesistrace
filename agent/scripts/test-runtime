@@ -176,7 +176,7 @@ case "$command" in
     grep -F '"type":"RUN_STARTED"' "$evidence_root/run.sse" >/dev/null
     grep -F '"type":"TOOL_CALL_START"' "$evidence_root/run.sse" >/dev/null
     grep -F '"toolCallName":"get_research_context"' "$evidence_root/run.sse" >/dev/null
-    grep -F '"content":"Tool completed."' "$evidence_root/run.sse" >/dev/null
+    node "$agent_root/scripts/assert-safe-tool-sse.mjs" "$evidence_root/run.sse"
     grep -F '"type":"TEXT_MESSAGE_CONTENT"' "$evidence_root/run.sse" >/dev/null
     grep -F '"type":"RUN_FINISHED"' "$evidence_root/run.sse" >/dev/null
     test "$(grep -F -c '"delta":"{}"' "$evidence_root/run.sse")" -eq 1

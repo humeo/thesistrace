@@ -25,6 +25,8 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { AccountMenu } from "../auth/AccountMenu";
 import {
@@ -46,6 +48,13 @@ import {
   loadAgentSessionPreference,
   type AgentSessionPreference,
 } from "./sessionPreference";
+import {
+  parseResearchRunHref,
+  parseSafeToolResult,
+  researchRunHref,
+  type SafeResearchRunResource,
+  type SafeToolResult,
+} from "./toolResult";
 
 const MAX_CHAT_MESSAGE_BYTES = 16 * 1024;
 const RESEARCH_AGENT_ID = "research";
@@ -88,7 +97,7 @@ type ConversationStatus =
 
 type ConversationSubscriberOptions = Readonly<{
   failRunningTools: () => void;
-  finishTool: (id: string, failed: boolean) => void;
+  finishTool: (id: string, result: SafeToolResult | null) => void;
   onRunFailed: () => void;
   onRunFinished: () => void;
   onRunInitialized?: () => void;
@@ -101,6 +110,7 @@ export type ChatToolActivity = Readonly<{
   durationMs?: number;
   id: string;
   name: string;
+  resource?: SafeResearchRunResource;
   startedAtMs?: number;
   status: "running" | "completed" | "failed";
 }>;
@@ -422,7 +432,7 @@ function AgentConversation({
       return next;
     });
   }, []);
-  const finishTool = useCallback((id: string, failed: boolean) => {
+  const finishTool = useCallback((id: string, result: SafeToolResult | null) => {
     const finishedAtMs = monotonicNow();
     setToolActivities((current) => {
       const existing = current.get(id);
@@ -433,7 +443,8 @@ function AgentConversation({
         durationMs: existing.startedAtMs === undefined
           ? undefined
           : Math.max(0, finishedAtMs - existing.startedAtMs),
-        status: failed ? "failed" : "completed",
+        ...(result?.resource === undefined ? {} : { resource: result.resource }),
+        status: result?.outcome ?? "failed",
       });
       return next;
     });
@@ -488,8 +499,8 @@ function AgentConversation({
       startTool: (id, name) => {
         if (!disposed) startTool(id, name);
       },
-      finishTool: (id, toolFailed) => {
-        if (!disposed) finishTool(id, toolFailed);
+      finishTool: (id, result) => {
+        if (!disposed) finishTool(id, result);
       },
     });
     setStatus("loading-history");
@@ -594,7 +605,11 @@ function AgentConversation({
                 {item.role === "assistant" ? "ThesisTrace" : "You"}
               </p>
               <div className="chat-message-content">
-                {item.content.length === 0 ? "Responding…" : item.content}
+                {item.content.length === 0
+                  ? "Responding…"
+                  : item.role === "assistant"
+                    ? <AssistantMarkdown content={item.content} />
+                    : item.content}
               </div>
             </article>
           ))}
@@ -658,7 +673,7 @@ function createConversationSubscriber(
     },
     onRunStartedEvent: options.onRunStarted,
     onToolCallResultEvent: ({ event }) => {
-      options.finishTool(event.toolCallId, event.content === "Tool failed.");
+      options.finishTool(event.toolCallId, parseSafeToolResult(event.content));
     },
     onToolCallStartEvent: ({ event }) => {
       options.startTool(event.toolCallId, event.toolCallName);
@@ -911,13 +926,10 @@ export function chatTimelineItems(
   liveActivities: readonly ChatToolActivity[] = [],
 ): readonly ChatTimelineItem[] {
   const liveById = new Map(liveActivities.map((activity) => [activity.id, activity]));
-  const resultByToolCall = new Map<string, "completed" | "failed">();
+  const resultByToolCall = new Map<string, SafeToolResult | null>();
   for (const message of messages) {
     if (message.role !== "tool") continue;
-    resultByToolCall.set(
-      message.toolCallId,
-      message.content === "Tool failed." ? "failed" : "completed",
-    );
+    resultByToolCall.set(message.toolCallId, parseSafeToolResult(message.content));
   }
 
   const representedToolCalls = new Set<string>();
@@ -935,28 +947,33 @@ export function chatTimelineItems(
     if (message.role !== "assistant") continue;
     const content = typeof message.content === "string" ? message.content : "";
     const toolCalls = message.toolCalls ?? [];
+    for (const toolCall of toolCalls) {
+      representedToolCalls.add(toolCall.id);
+      const live = liveById.get(toolCall.id);
+      const persistedResult = resultByToolCall.get(toolCall.id);
+      items.push({
+        activity: {
+          ...(live?.durationMs === undefined ? {} : { durationMs: live.durationMs }),
+          id: toolCall.id,
+          name: toolCall.function.name,
+          ...(persistedResult?.resource === undefined && live?.resource === undefined
+            ? {}
+            : { resource: persistedResult?.resource ?? live?.resource }),
+          ...(live?.startedAtMs === undefined ? {} : { startedAtMs: live.startedAtMs }),
+          status: resultByToolCall.has(toolCall.id)
+            ? persistedResult?.outcome ?? "failed"
+            : live?.status ?? "running",
+        },
+        id: `tool:${toolCall.id}`,
+        kind: "tool",
+      });
+    }
     if (content.length > 0 || toolCalls.length === 0) {
       items.push({
         content,
         id: `message:${message.id}`,
         kind: "message",
         role: "assistant",
-      });
-    }
-    for (const toolCall of toolCalls) {
-      representedToolCalls.add(toolCall.id);
-      const live = liveById.get(toolCall.id);
-      const persistedStatus = resultByToolCall.get(toolCall.id);
-      items.push({
-        activity: {
-          ...(live?.durationMs === undefined ? {} : { durationMs: live.durationMs }),
-          id: toolCall.id,
-          name: toolCall.function.name,
-          ...(live?.startedAtMs === undefined ? {} : { startedAtMs: live.startedAtMs }),
-          status: persistedStatus ?? live?.status ?? "running",
-        },
-        id: `tool:${toolCall.id}`,
-        kind: "tool",
       });
     }
   }
@@ -992,8 +1009,76 @@ export function ToolActivityRow({ activity }: { activity: ChatToolActivity }) {
           ? activity.status === "running" ? "In progress" : "Duration unavailable"
           : formatToolDuration(activity.durationMs)}
       </span>
+      {activity.resource === undefined ? null : (
+        <a
+          className="chat-tool-resource"
+          href={researchRunHref(activity.resource)}
+        >
+          <span>ResearchRun</span>
+          <code>{activity.resource.id}</code>
+          <span>{activity.resource.status}</span>
+        </a>
+      )}
     </article>
   );
+}
+
+const RESEARCH_MARKDOWN_REMARK_PLUGINS = [remarkGfm];
+
+export function AssistantMarkdown({
+  content,
+  streaming = true,
+}: {
+  content: string;
+  streaming?: boolean;
+}) {
+  return (
+    <div
+      className={`chat-assistant-markdown chat-assistant-markdown-${streaming ? "streaming" : "static"}`}
+    >
+      <ReactMarkdown
+        components={{
+          a: SafeMarkdownLink,
+          code: SafeMarkdownCode,
+          img: HiddenMarkdownImage,
+          pre: SafeMarkdownPre,
+        }}
+        remarkPlugins={RESEARCH_MARKDOWN_REMARK_PLUGINS}
+        skipHtml
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function SafeMarkdownLink({
+  children,
+  href,
+}: React.AnchorHTMLAttributes<HTMLAnchorElement> & { node?: unknown }) {
+  const safeHref = parseResearchRunHref(href);
+  return safeHref === null
+    ? <span className="chat-markdown-link-disabled">{children}</span>
+    : <a className="chat-markdown-run-link" href={safeHref}>{children}</a>;
+}
+
+function SafeMarkdownCode({
+  children,
+  className,
+}: React.HTMLAttributes<HTMLElement> & { node?: unknown }) {
+  return <code className={className}>{children}</code>;
+}
+
+function SafeMarkdownPre({
+  children,
+}: React.HTMLAttributes<HTMLPreElement> & { node?: unknown }) {
+  return <pre>{children}</pre>;
+}
+
+function HiddenMarkdownImage(
+  _props: React.ImgHTMLAttributes<HTMLImageElement> & { node?: unknown },
+) {
+  return null;
 }
 
 function conversationStatusLabel(status: ConversationStatus, ready: boolean): string {

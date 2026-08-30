@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { AuthProvider } from "../auth/AuthProvider";
 import {
+  AssistantMarkdown,
   ChatShell,
   ToolActivityRow,
   chatMessageBytes,
@@ -11,6 +12,17 @@ import {
   chatTimelineItems,
   readBrowserChatThread,
 } from "./ChatPage";
+
+const safeRunMarker = JSON.stringify({
+  outcome: "completed",
+  resource: {
+    id: "run_0123456789abcdef0123",
+    kind: "research_run",
+    status: "queued",
+  },
+  type: "thesistrace.tool-result",
+  version: 1,
+});
 
 const catalogState = {
   status: "ready" as const,
@@ -116,7 +128,7 @@ test("renders Tool lifecycle metadata without arguments or results", () => {
       type: "function",
     }],
   }, {
-    content: "server-result-must-not-render",
+    content: safeRunMarker,
     id: "00000000-0000-4000-8000-000000000003",
     role: "tool",
     toolCallId: "provider-tool-call-1",
@@ -133,22 +145,96 @@ test("renders Tool lifecycle metadata without arguments or results", () => {
       activity: {
         durationMs: 42.6,
         name: "get_research_context",
+        resource: {
+          id: "run_0123456789abcdef0123",
+          kind: "research_run",
+          status: "queued",
+        },
         status: "completed",
       },
       kind: "tool",
     },
   ]);
-  expect(JSON.stringify(timeline)).not.toMatch(/browser-must-not-render|server-result-must-not-render/);
+  expect(JSON.stringify(timeline)).not.toMatch(/browser-must-not-render/);
 
   const markup = renderToStaticMarkup(<ToolActivityRow activity={{
     durationMs: 42.6,
     id: "provider-tool-call-1",
     name: "get_research_context",
+    resource: {
+      id: "run_0123456789abcdef0123",
+      kind: "research_run",
+      status: "queued",
+    },
     status: "completed",
   }} />);
   expect(markup).toContain("MCP Tool");
   expect(markup).toContain("get_research_context");
   expect(markup).toContain("Completed");
   expect(markup).toContain("43 ms");
+  expect(markup).toContain('href="/research-runs/run_0123456789abcdef0123"');
+  expect(markup).toContain("queued");
   expect(markup).not.toMatch(/argument|result/i);
+});
+
+test("keeps Tool and final Assistant text in the same order before and after reload", () => {
+  const assistantId = "00000000-0000-4000-8000-000000000002";
+  const toolCall = {
+    function: { arguments: "{}", name: "get_research_run_result" },
+    id: "provider-tool-call-order",
+    type: "function" as const,
+  };
+  const toolResult: Message = {
+    content: safeRunMarker,
+    id: "00000000-0000-4000-8000-000000000003",
+    role: "tool",
+    toolCallId: toolCall.id,
+  };
+  const live = chatTimelineItems([{
+    content: "",
+    id: assistantId,
+    role: "assistant",
+    toolCalls: [toolCall],
+  }, toolResult, {
+    content: "Authoritative result artifact",
+    id: `${assistantId}-agui-text`,
+    role: "assistant",
+  }]);
+  const replay = chatTimelineItems([{
+    content: "Authoritative result artifact",
+    id: assistantId,
+    role: "assistant",
+    toolCalls: [toolCall],
+  }, toolResult]);
+
+  expect(live.map((item) => item.kind)).toEqual(["tool", "message"]);
+  expect(replay.map((item) => item.kind)).toEqual(["tool", "message"]);
+  expect(live.map((item) => item.kind === "message" ? item.content : item.activity.name))
+    .toEqual(replay.map((item) => (
+      item.kind === "message" ? item.content : item.activity.name
+    )));
+});
+
+test("renders research Markdown while disabling raw HTML, images, and non-Run links", () => {
+  const markup = renderToStaticMarkup(
+    <AssistantMarkdown
+      content={`### Research completed
+
+**Formula:** \`rank(-abs(pct_change(close, 1)))\`
+
+[Open ResearchRun](/research-runs/run_0123456789abcdef0123)
+[External](https://example.com/private)
+![remote](https://example.com/pixel.png)
+<img src="https://example.com/raw.png" onerror="alert(1)">
+<script>alert("unsafe")</script>`}
+      streaming={false}
+    />,
+  );
+
+  expect(markup).toContain("Research completed");
+  expect(markup).toContain("rank(-abs(pct_change(close, 1)))");
+  expect(markup).toContain('href="/research-runs/run_0123456789abcdef0123"');
+  expect(markup).toContain("External");
+  expect(markup).not.toContain("https://example.com/private");
+  expect(markup).not.toMatch(/<img|<script|onerror|pixel\.png|raw\.png/);
 });

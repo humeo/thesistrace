@@ -3,8 +3,8 @@ import type { Message } from "@ag-ui/core";
 import type { Pool, PoolClient } from "pg";
 
 import {
+  canonicalSubmittedBrowserMessages,
   projectDurableUiMessages,
-  safeBrowserMessages,
 } from "./browser-message-safety.js";
 import {
   chatRunFingerprint,
@@ -476,14 +476,16 @@ function assertOneNewUserMessage(
   submitted: readonly Message[],
   durable: readonly Message[],
 ): void {
-  if (submitted.length !== durable.length + 1) throw new TranscriptConflictError();
   let safeSubmitted: readonly Message[];
   try {
-    safeSubmitted = safeBrowserMessages(submitted.slice(0, -1));
+    safeSubmitted = canonicalSubmittedBrowserMessages(submitted.slice(0, -1));
   } catch {
     throw new TranscriptConflictError();
   }
-  if (JSON.stringify(safeSubmitted) !== JSON.stringify(durable)) {
+  if (
+    safeSubmitted.length !== durable.length
+    || JSON.stringify(safeSubmitted) !== JSON.stringify(durable)
+  ) {
     throw new TranscriptConflictError();
   }
   const latest = submitted.at(-1);

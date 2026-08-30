@@ -48,8 +48,11 @@ import { RunUsageCapture } from "./usage-capture.js";
 const RESEARCH_AGENT_ID = "research";
 const RESEARCH_AGENT_INSTRUCTIONS = `You are the ThesisTrace Research Agent.
 Help a researcher turn an investment idea into a precise, testable Alpha research plan.
-State assumptions, use only available ThesisTrace tools, and distinguish proposals from persisted Research facts.
-Never claim that a ResearchRun or Result exists unless a tool result confirms it.`;
+Use only the Tools supplied by the current authenticated MCP discovery. You own Tool selection, arguments, Folder choice, Formula authoring and correction, Research type, dates, universe, neutralization, Strategy parameters, polling decisions, Result-section selection, and the final response.
+Use reliable platform defaults when the investment intent is clear. Ask a focused follow-up only when missing intent would materially change the Research; do not turn clear requests into a parameter wizard.
+Treat Formula diagnostics and admission rejection as structured correctable results. Preserve stable authentication, authorization, lifecycle, transient, and internal Tool error meanings. Retry a transient Tool call only when appropriate, after its retry_after_seconds guidance, with the exact same arguments.
+For every effectful Tool call, derive a caller-stable request_id from the current Agent Run identity plus an operation and revision. Reuse that exact request_id and command after an uncertain response; allocate a new revision only when a structured rejection requires a changed command.
+State assumptions and distinguish proposals from persisted Research facts. Never claim that a ResearchRun or Result exists unless an authoritative Tool result confirms it. Once Research is admitted, remember that the Core Worker continues independently if this Agent Run ends.`;
 
 export type ResearchRuntime = Readonly<{
   close: () => Promise<void>;
@@ -102,7 +105,7 @@ export async function createResearchRuntime(
   });
   const agent = new Agent({
     defaultOptions: ({ requestContext }) => ({
-      maxSteps: 8,
+      maxSteps: 16,
       providerOptions: selectionFrom(requestContext).providerOptions,
       // A transport/protocol failure is converted into one safe Tool result so
       // AG-UI can close that exact invocation. Stop before another provider
@@ -110,7 +113,7 @@ export async function createResearchRuntime(
       stopWhen: () => mcpRunFrom(requestContext)?.hasFatalToolFailure() === true,
     }),
     id: RESEARCH_AGENT_ID,
-    instructions: RESEARCH_AGENT_INSTRUCTIONS,
+    instructions: ({ requestContext }) => researchAgentInstructions(requestContext),
     maxRetries: 0,
     memory,
     model: ({ requestContext }) => selectionFrom(requestContext).languageModel,
@@ -248,6 +251,7 @@ function createRunAgent(options: Readonly<{
 }>): ResearchMastraAgent {
   const agent = options.mastra.getAgent(RESEARCH_AGENT_ID);
   if (agent === undefined) throw new Error("RESEARCH_AGENT_NOT_REGISTERED");
+  options.requestContext.set("agentRunId", options.run.input.runId);
   return new ResearchMastraAgent({
     agent,
     agentId: RESEARCH_AGENT_ID,
@@ -390,6 +394,13 @@ function mcpToolsFrom(context: RequestContext): DiscoveredMcpTools {
 
 function mcpRunFrom(context: RequestContext): import("./mcp-run.js").McpRun | undefined {
   return context.get<string, import("./mcp-run.js").McpRun | undefined>("mcpRun");
+}
+
+function researchAgentInstructions(context: RequestContext): string {
+  const agentRunId = context.get<string, string | undefined>("agentRunId");
+  return agentRunId === undefined
+    ? RESEARCH_AGENT_INSTRUCTIONS
+    : `${RESEARCH_AGENT_INSTRUCTIONS}\nAgent Run identity: ${agentRunId}.`;
 }
 
 function safeJsonResponse(code: string, status: number): Response {

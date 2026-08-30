@@ -8,6 +8,7 @@ let discoveryRequests = 0;
 let toolListRequests = 0;
 let toolCallRequests = 0;
 let disconnectedToolResponses = 0;
+let disconnectedSubmitResponses = 0;
 let metadataMode = "pass";
 let metadataRequests = 0;
 let disconnectedMetadataResponses = 0;
@@ -21,6 +22,7 @@ http.createServer(async (request, response) => {
   if (request.method === "GET" && url.pathname === "/__test/state") {
     json(response, 200, {
       disconnected_tool_responses: disconnectedToolResponses,
+      disconnected_submit_responses: disconnectedSubmitResponses,
       disconnected_metadata_responses: disconnectedMetadataResponses,
       discovery_requests: discoveryRequests,
       metadata_mode: metadataMode,
@@ -80,7 +82,7 @@ http.createServer(async (request, response) => {
     const body = await readJson(request, 1_024);
     if (
       body === null
-      || (body.mode !== "pass" && body.mode !== "disconnect")
+      || !["pass", "disconnect", "disconnect-submit"].includes(body.mode)
       || typeof body.reset !== "boolean"
     ) {
       json(response, 400, { code: "MCP_PROXY_CONTROL_INVALID" });
@@ -92,6 +94,7 @@ http.createServer(async (request, response) => {
       toolListRequests = 0;
       toolCallRequests = 0;
       disconnectedToolResponses = 0;
+      disconnectedSubmitResponses = 0;
     }
     json(response, 200, { tool_call_mode: toolCallMode });
     return;
@@ -109,13 +112,16 @@ http.createServer(async (request, response) => {
     return;
   }
   const methods = rpcMethods(body);
+  const toolNames = rpcToolNames(body);
   if (methods.includes("initialize") || methods.includes("server/discover")) {
     discoveryRequests += 1;
   }
   if (methods.includes("tools/list")) toolListRequests += 1;
   if (methods.includes("tools/call")) toolCallRequests += 1;
+  const disconnectSubmitResponse = toolCallMode === "disconnect-submit"
+    && toolNames.includes("submit_research_run");
   const disconnectResponse = methods.includes("tools/call")
-    && toolCallMode === "disconnect";
+    && (toolCallMode === "disconnect" || disconnectSubmitResponse);
 
   try {
     const headers = forwardedHeaders(request.headers);
@@ -129,6 +135,7 @@ http.createServer(async (request, response) => {
     const responseBody = new Uint8Array(await upstream.arrayBuffer());
     if (disconnectResponse) {
       disconnectedToolResponses += 1;
+      if (disconnectSubmitResponse) disconnectedSubmitResponses += 1;
       response.destroy();
       return;
     }
@@ -197,6 +204,28 @@ function rpcMethods(body) {
       && !Array.isArray(message)
       && typeof message.method === "string"
         ? [message.method]
+        : []
+    ));
+  } catch {
+    return [];
+  }
+}
+
+function rpcToolNames(body) {
+  if (body.byteLength === 0) return [];
+  try {
+    const value = JSON.parse(Buffer.from(body).toString("utf8"));
+    const messages = Array.isArray(value) ? value : [value];
+    return messages.flatMap((message) => (
+      message !== null
+      && typeof message === "object"
+      && !Array.isArray(message)
+      && message.method === "tools/call"
+      && message.params !== null
+      && typeof message.params === "object"
+      && !Array.isArray(message.params)
+      && typeof message.params.name === "string"
+        ? [message.params.name]
         : []
     ));
   } catch {

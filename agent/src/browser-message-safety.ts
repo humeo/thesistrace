@@ -5,14 +5,20 @@ import {
   type BaseEvent,
   type Message,
 } from "@ag-ui/core";
+import { z } from "zod";
 
 import {
   DURABLE_TOOL_FAILURE,
   DURABLE_TOOL_OUTCOME_FIELD,
 } from "./tool-outcome.js";
+import {
+  parseSafeToolResult,
+  projectSafeToolResult,
+  SAFE_TOOL_COMPLETED,
+  SAFE_TOOL_FAILED,
+} from "./safe-tool-result.js";
 
-export const SAFE_TOOL_COMPLETED = "Tool completed.";
-export const SAFE_TOOL_FAILED = "Tool failed.";
+export { SAFE_TOOL_COMPLETED, SAFE_TOOL_FAILED } from "./safe-tool-result.js";
 
 type DurableUiMessage = Readonly<{
   content?: unknown;
@@ -115,9 +121,15 @@ export function safeBrowserMessages(messages: readonly Message[]): readonly Mess
         : { content, id: message.id, role: "assistant", toolCalls };
     }
     if (message.role === "tool") {
-      const failed = message.error !== undefined || message.content === SAFE_TOOL_FAILED;
+      const marker = parseSafeToolResult(message.content);
+      const failed = message.error !== undefined || marker?.outcome === "failed";
       return {
-        content: failed ? SAFE_TOOL_FAILED : SAFE_TOOL_COMPLETED,
+        content: marker?.resource === undefined
+          ? projectSafeToolResult(message.content, failed)
+          : projectSafeToolResult({
+              run_id: marker.resource.id,
+              status: marker.resource.status,
+            }, failed),
         id: safeToolResultMessageId(message.toolCallId),
         role: "tool",
         toolCallId: message.toolCallId,
@@ -128,12 +140,74 @@ export function safeBrowserMessages(messages: readonly Message[]): readonly Mess
 }
 
 /**
+ * CopilotKit represents the final text of a Tool-calling Assistant message as
+ * a second message whose id is `<assistant-id>-agui-text`. Collapse only that
+ * exact shape before comparing browser history with the durable projection.
+ */
+export function canonicalSubmittedBrowserMessages(
+  messages: readonly Message[],
+): readonly Message[] {
+  const safe = safeBrowserMessages(messages);
+  const canonical: Message[] = [];
+  for (const message of safe) {
+    const parentId = message.role === "assistant"
+      ? splitAssistantTextParentId(message.id)
+      : null;
+    if (parentId === null) {
+      canonical.push(message);
+      continue;
+    }
+
+    const parentIndex = canonical.findIndex((candidate) => (
+      candidate.role === "assistant" && candidate.id === parentId
+    ));
+    const parent = canonical[parentIndex];
+    if (
+      message.role !== "assistant"
+      || parent?.role !== "assistant"
+      || parent.toolCalls === undefined
+      || parent.toolCalls.length === 0
+      || message.toolCalls !== undefined
+      || typeof message.content !== "string"
+    ) {
+      throw new BrowserTranscriptError();
+    }
+
+    const expectedToolCalls = new Set(parent.toolCalls.map((toolCall) => toolCall.id));
+    const intervening = canonical.slice(parentIndex + 1);
+    if (
+      intervening.length !== expectedToolCalls.size
+      || intervening.some((candidate) => (
+        candidate.role !== "tool"
+        || !expectedToolCalls.delete(candidate.toolCallId)
+      ))
+      || expectedToolCalls.size !== 0
+    ) {
+      throw new BrowserTranscriptError();
+    }
+    canonical[parentIndex] = {
+      ...parent,
+      content: `${parent.content ?? ""}${message.content}`,
+    };
+  }
+  return canonical;
+}
+
+export function splitAssistantTextParentId(messageId: string): string | null {
+  const suffix = "-agui-text";
+  return messageId.endsWith(suffix)
+    ? messageId.slice(0, -suffix.length)
+    : null;
+}
+
+/**
  * Stateful AG-UI event projector. TOOL_CALL_ARGS is replaced by one empty JSON
  * object so AG-UI clients can assemble a valid ToolCall without receiving the
  * real arguments. Raw Tool results are replaced with a terminal marker.
  */
 export class BrowserEventProjector {
   private readonly openToolCalls = new Set<string>();
+  private readonly openTextMessages = new Set<string>();
 
   project(event: BaseEvent, toolFailed = false): readonly BaseEvent[] {
     switch (event.type) {
@@ -190,19 +264,48 @@ export class BrowserEventProjector {
       case EventType.TOOL_CALL_RESULT:
         if (typeof event.toolCallId !== "string") throw new BrowserTranscriptError();
         return [{
-          content: toolFailed || isStructuredToolError(event.content)
-            ? SAFE_TOOL_FAILED
-            : SAFE_TOOL_COMPLETED,
+          content: projectSafeToolResult(
+            event.content,
+            toolFailed || isStructuredToolError(event.content),
+          ),
           messageId: safeToolResultMessageId(event.toolCallId),
           role: "tool",
           toolCallId: event.toolCallId,
           type: EventType.TOOL_CALL_RESULT,
         }];
-      case EventType.TEXT_MESSAGE_START:
-      case EventType.TEXT_MESSAGE_CONTENT:
-      case EventType.TEXT_MESSAGE_END:
+      case EventType.TEXT_MESSAGE_START: {
+        const messageId = safeAssistantMessageId(event.messageId);
+        if (event.role !== "assistant" || this.openTextMessages.has(messageId)) {
+          throw new BrowserTranscriptError();
+        }
+        this.openTextMessages.add(messageId);
+        return [{ messageId, role: "assistant", type: EventType.TEXT_MESSAGE_START }];
+      }
+      case EventType.TEXT_MESSAGE_CONTENT: {
+        const messageId = safeAssistantMessageId(event.messageId);
+        if (!this.openTextMessages.has(messageId) || typeof event.delta !== "string") {
+          throw new BrowserTranscriptError();
+        }
+        return [{ delta: event.delta, messageId, type: EventType.TEXT_MESSAGE_CONTENT }];
+      }
+      case EventType.TEXT_MESSAGE_END: {
+        const messageId = safeAssistantMessageId(event.messageId);
+        if (!this.openTextMessages.delete(messageId)) throw new BrowserTranscriptError();
+        return [{ messageId, type: EventType.TEXT_MESSAGE_END }];
+      }
       case EventType.TEXT_MESSAGE_CHUNK:
-        return [withoutRawEvent(event)];
+        if (
+          event.role !== "assistant"
+          || typeof event.delta !== "string"
+        ) {
+          throw new BrowserTranscriptError();
+        }
+        return [{
+          delta: event.delta,
+          messageId: safeAssistantMessageId(event.messageId),
+          role: "assistant",
+          type: EventType.TEXT_MESSAGE_CHUNK,
+        }];
       default:
         // State, reasoning, custom, activity, interrupt, and raw provider events
         // are not part of the Research Chat browser contract.
@@ -235,12 +338,12 @@ export function safeToolResultMessageId(toolCallId: string): string {
 
 function readDurableToolInvocations(parts: unknown): ReadonlyArray<{
   invocation: SafeInvocation;
-  terminal: typeof SAFE_TOOL_COMPLETED | typeof SAFE_TOOL_FAILED | null;
+  terminal: string | null;
 }> {
   if (!Array.isArray(parts)) throw new BrowserTranscriptError();
   const result: Array<{
     invocation: SafeInvocation;
-    terminal: typeof SAFE_TOOL_COMPLETED | typeof SAFE_TOOL_FAILED | null;
+    terminal: string | null;
   }> = [];
   for (const part of parts) {
     if (!isRecord(part) || part.type !== "tool-invocation") continue;
@@ -265,9 +368,7 @@ function readDurableToolInvocations(parts: unknown): ReadonlyArray<{
   return result;
 }
 
-function terminalMarker(
-  invocation: DurableToolInvocation,
-): typeof SAFE_TOOL_COMPLETED | typeof SAFE_TOOL_FAILED | null {
+function terminalMarker(invocation: DurableToolInvocation): string | null {
   if (
     invocation.isError === true
     || invocation.state === "output-error"
@@ -276,7 +377,9 @@ function terminalMarker(
   ) {
     return SAFE_TOOL_FAILED;
   }
-  return invocation.state === "result" ? SAFE_TOOL_COMPLETED : null;
+  return invocation.state === "result"
+    ? projectSafeToolResult(invocation.result, false)
+    : null;
 }
 
 function nestedToolResultFailed(result: unknown): boolean {
@@ -301,13 +404,22 @@ function safeBrowserRunError(): BaseEvent {
   };
 }
 
-function withoutRawEvent(event: BaseEvent): BaseEvent {
-  const { rawEvent: _rawEvent, ...safe } = event;
-  return safe as BaseEvent;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const uuidSchema = z.uuid();
+
+function safeAssistantMessageId(value: unknown): string {
+  if (typeof value !== "string") throw new BrowserTranscriptError();
+  const parentId = splitAssistantTextParentId(value);
+  if (
+    !uuidSchema.safeParse(value).success
+    && (parentId === null || !uuidSchema.safeParse(parentId).success)
+  ) {
+    throw new BrowserTranscriptError();
+  }
+  return value;
 }
 
 function requiredString(value: unknown): string {

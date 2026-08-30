@@ -478,7 +478,6 @@ code { font-family: var(--mono); }
   font-size: 14px;
   line-height: 1.65;
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
 }
 .chat-message-user .chat-message-content {
   padding: 9px 12px;
@@ -486,7 +485,82 @@ code { font-family: var(--mono); }
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: 10px;
+  white-space: pre-wrap;
 }
+.chat-assistant-markdown {
+  display: grid;
+  gap: 12px;
+  white-space: normal;
+}
+.chat-assistant-markdown > * { margin: 0; }
+.chat-assistant-markdown h1,
+.chat-assistant-markdown h2,
+.chat-assistant-markdown h3 {
+  margin: 5px 0 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.45;
+}
+.chat-assistant-markdown p,
+.chat-assistant-markdown li { color: var(--ink-muted); }
+.chat-assistant-markdown ul,
+.chat-assistant-markdown ol {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 20px;
+}
+.chat-assistant-markdown code {
+  padding: 1px 4px;
+  color: var(--ink);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: 12px/1.55 var(--mono);
+}
+.chat-assistant-markdown pre {
+  max-width: 100%;
+  margin: 0;
+  overflow-x: auto;
+  padding: 10px 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.chat-assistant-markdown pre code {
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+.chat-assistant-markdown blockquote {
+  margin: 0;
+  padding-left: 12px;
+  color: var(--ink-soft);
+  border-left: 2px solid var(--line-strong);
+}
+.chat-assistant-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.chat-assistant-markdown th,
+.chat-assistant-markdown td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+.chat-markdown-run-link {
+  color: var(--primary-hover);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--primary-hover) 45%, transparent);
+  text-underline-offset: 3px;
+}
+.chat-markdown-run-link:hover { color: var(--ink); }
+.chat-markdown-run-link:focus-visible { outline: 2px solid var(--primary-focus); outline-offset: 3px; }
+.chat-markdown-link-disabled { color: var(--ink-muted); }
+.chat-assistant-markdown img { display: none; }
 .chat-tool-activity {
   display: grid;
   width: min(100%, 680px);
@@ -526,6 +600,27 @@ code { font-family: var(--mono); }
   font: 12px/1.4 var(--mono);
   white-space: nowrap;
 }
+.chat-tool-resource {
+  display: flex;
+  min-width: 0;
+  grid-column: 2 / -1;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  text-decoration: none;
+}
+.chat-tool-resource code {
+  color: var(--primary-hover);
+  text-overflow: ellipsis;
+}
+.chat-tool-resource > span:last-child {
+  margin-left: auto;
+  color: var(--ink-soft);
+  font: 11px/1.4 var(--mono);
+}
+.chat-tool-resource:hover code { color: var(--ink); }
+.chat-tool-resource:focus-visible { outline: 2px solid var(--primary-focus); outline-offset: 3px; }
 .chat-model-controls {
   display: grid;
   width: 100%;
@@ -1652,7 +1747,14 @@ select { color-scheme: dark; }
   .chat-workspace-navigation a,
   .chat-model-controls select,
   .chat-session-current,
+  .chat-tool-resource,
   .chat-composer-preview button { min-height: 44px; }
+  .chat-markdown-run-link {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+  }
   .chat-composer-preview button { right: 5px; bottom: 5px; width: 44px; }
   .account-menu > summary { min-width: 44px; }
   .chat-mobile-navigation-toggle,
@@ -1921,6 +2023,11 @@ select { color-scheme: dark; }
   .chat-tool-activity code { grid-area: name; }
   .chat-tool-status { grid-area: status; }
   .chat-tool-duration { grid-area: duration; }
+  .chat-tool-resource {
+    grid-column: 1 / -1;
+    padding-top: 5px;
+    border-top: 1px solid var(--line);
+  }
   .chat-model-controls { grid-template-columns: 1fr; }
   .chat-composer-dock > p { display: none; }
   .context-breadcrumb > span:first-child,

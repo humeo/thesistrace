@@ -12,16 +12,21 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { z } from "zod";
 
 import {
+  canonicalSubmittedBrowserMessages,
   SAFE_TOOL_COMPLETED,
   SAFE_TOOL_FAILED,
 } from "./browser-message-safety.js";
+import { parseSafeToolResult } from "./safe-tool-result.js";
 import type { AgentSettings } from "./config.js";
 import { chatRunFingerprint } from "./chat-request.js";
 import { createMcpRunFactory, type McpRun } from "./mcp-run.js";
 import { readModelRegistry } from "./model-registry.js";
 import { createResearchRuntime, type ResearchRuntime } from "./research-runtime.js";
 import { initializeAgentSchema } from "./schema-initialize.js";
-import { SCRIPTED_TOOL_PROMPT } from "./scripted-language-model.js";
+import {
+  SCRIPTED_FACTOR_IDEA_PROMPT,
+  SCRIPTED_TOOL_PROMPT,
+} from "./scripted-language-model.js";
 import { ResearchSessionRepository } from "./session-repository.js";
 import type { VerifiedResearcher } from "./session-verifier.js";
 
@@ -441,10 +446,15 @@ describe.sequential("durable Research Agent runtime", () => {
       });
 
       const followUpMessageId = randomUUID();
+      const durableSnapshot = snapshotMessages(duplicate);
+      const submittedHistory = splitAssistantTextForCopilotKit(durableSnapshot);
+      expect(canonicalSubmittedBrowserMessages(submittedHistory)).toEqual(
+        durableSnapshot,
+      );
       const followUp = await run(runtime, runInput({
         messageId: followUpMessageId,
         messages: [
-          ...snapshotMessages(duplicate),
+          ...submittedHistory,
           {
             content: "Explain the next research step.",
             id: followUpMessageId,
@@ -478,6 +488,113 @@ describe.sequential("durable Research Agent runtime", () => {
         "server-only-sensitive-result",
       );
       expect(JSON.stringify(afterFollowUp.rows)).not.toContain(SAFE_TOOL_COMPLETED);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("persists a complete model-owned Factor trajectory and replays only safe Run resources", async () => {
+    const coreRunId = "run_0123456789abcdef0123";
+    const calls: Array<Readonly<{ input: Record<string, unknown>; name: string }>> = [];
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => undefined,
+        hasFatalToolFailure: () => false,
+        toolFailure: () => undefined,
+        tools: researchLoopTools(coreRunId, calls),
+      }),
+    });
+    const threadId = randomUUID();
+    const agentRunId = randomUUID();
+    const input = runInput({
+      content: SCRIPTED_FACTOR_IDEA_PROMPT,
+      messageId: randomUUID(),
+      runId: agentRunId,
+      threadId,
+    });
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+      expect(events.filter((event) => event.type === "TOOL_CALL_START").map((event) => (
+        event.toolCallName
+      ))).toEqual([
+        "get_research_context",
+        "get_alpha_catalog",
+        "diagnose_alpha_formula",
+        "submit_research_run",
+        "get_research_run",
+        "get_research_run_result",
+      ]);
+      expect(calls.map((call) => call.name)).toEqual([
+        "get_research_context",
+        "get_alpha_catalog",
+        "diagnose_alpha_formula",
+        "submit_research_run",
+        "get_research_run",
+        "get_research_run_result",
+      ]);
+      const submission = calls.find((call) => call.name === "submit_research_run");
+      expect(submission?.input).toMatchObject({
+        folder_id: "folder_default",
+        formula: "rank(-abs(pct_change(close, 1)))",
+        neutralization: "none",
+        request_id: `agent_${agentRunId.replaceAll("-", "")}_research_v1`,
+        research_kind: "factor_evaluation",
+        universe: "top1000",
+      });
+
+      const safeResults = events
+        .filter((event) => event.type === "TOOL_CALL_RESULT")
+        .map((event) => parseSafeToolResult(event.content));
+      expect(safeResults).toContainEqual({
+        outcome: "completed",
+        resource: {
+          id: coreRunId,
+          kind: "research_run",
+          status: "queued",
+        },
+      });
+      expect(safeResults).toContainEqual({
+        outcome: "completed",
+        resource: {
+          id: coreRunId,
+          kind: "research_run",
+          status: "succeeded",
+        },
+      });
+      const browserJson = JSON.stringify(events);
+      expect(browserJson).toContain("rank(-abs(pct_change(close, 1)))");
+      expect(browserJson).toContain("0.1200");
+      expect(browserJson).toContain("3.40%");
+      expect(browserJson).toContain(`/research-runs/${coreRunId}`);
+      expect(browserJson).not.toContain("private-core-provenance");
+
+      const durable = await owner.query<{ content: string }>(`
+        SELECT content
+        FROM agent."mastra_messages"
+        WHERE thread_id = $1
+        ORDER BY "createdAtZ", id
+      `, [threadId]);
+      const durableJson = JSON.stringify(durable.rows);
+      expect(durableJson).toContain("private-core-provenance");
+      expect(durableJson).toContain("rank(-abs(pct_change(close, 1)))");
+      expect(durableJson).toContain("0.1200");
+      expect(durableJson).toContain(`/research-runs/${coreRunId}`);
+      const workflowRows = await owner.query<{ count: string }>(`
+        SELECT count(*)::text AS count
+        FROM agent."mastra_workflow_snapshot"
+      `);
+      expect(workflowRows.rows).toEqual([{ count: "0" }]);
+
+      const duplicate = await run(runtime, input, primaryResearcher);
+      expect(duplicate.map((event) => event.type)).toEqual([
+        "RUN_STARTED",
+        "MESSAGES_SNAPSHOT",
+        "RUN_FINISHED",
+      ]);
+      const duplicateJson = JSON.stringify(duplicate);
+      expect(duplicateJson).toContain(coreRunId);
+      expect(duplicateJson).not.toContain("private-core-provenance");
+      expect(calls).toHaveLength(6);
     } finally {
       await runtime.close();
     }
@@ -640,7 +757,7 @@ describe.sequential("durable Research Agent runtime", () => {
         "RUN_ERROR",
       ]);
       expect(events.find((event) => event.type === "TOOL_CALL_RESULT")).toMatchObject({
-        content: "Tool failed.",
+        content: SAFE_TOOL_FAILED,
       });
       expect(JSON.stringify(events)).not.toContain("private-disconnect-canary");
       expect(disconnect).toHaveBeenCalledOnce();
@@ -673,7 +790,7 @@ describe.sequential("durable Research Agent runtime", () => {
         "RUN_ERROR",
       ]);
       expect(snapshotMessages(replay)).toContainEqual(expect.objectContaining({
-        content: "Tool failed.",
+        content: SAFE_TOOL_FAILED,
         role: "tool",
       }));
       expect(JSON.stringify(replay)).not.toContain(
@@ -968,6 +1085,139 @@ describe.sequential("durable Research Agent runtime", () => {
   });
 });
 
+function researchLoopTools(
+  coreRunId: string,
+  calls: Array<Readonly<{ input: Record<string, unknown>; name: string }>>,
+) {
+  const record = (name: string, input: Record<string, unknown>) => {
+    calls.push({ input: { ...input }, name });
+  };
+  return {
+    get_research_context: createTool({
+      description: "Read current Research Context and authoring constraints.",
+      execute: async (input) => {
+        record("get_research_context", input);
+        return {
+          authoring_constraints: {
+            holdings_count: { maximum: 100, minimum: 1 },
+            neutralizations: ["none", "industry"],
+            rebalance_every_sessions: { maximum: 20, minimum: 1 },
+            universes: ["top300", "top1000"],
+          },
+          data_overview: {
+            market_coverage: { end: "2024-01-31", start: "2024-01-02" },
+          },
+          folders: {
+            items: [{ id: "folder_default", is_default: true, name: "Research" }],
+          },
+          private_provenance: "private-core-provenance",
+        };
+      },
+      id: "get_research_context",
+      inputSchema: z.object({}).strict(),
+    }),
+    get_alpha_catalog: createTool({
+      description: "Inspect Alpha fields and operators.",
+      execute: async (input) => {
+        record("get_alpha_catalog", input);
+        return {
+          builtins: [
+            { identifier: "abs" },
+            { identifier: "pct_change" },
+            { identifier: "rank" },
+          ],
+          fields: [{ identifier: "close" }],
+          unknown_identifiers: [],
+        };
+      },
+      id: "get_alpha_catalog",
+      inputSchema: z.object({ identifiers: z.array(z.string()) }).strict(),
+    }),
+    diagnose_alpha_formula: createTool({
+      description: "Diagnose an Alpha Formula.",
+      execute: async (input) => {
+        record("diagnose_alpha_formula", input);
+        return { diagnostics: [], valid: true };
+      },
+      id: "diagnose_alpha_formula",
+      inputSchema: z.object({ source: z.string() }).strict(),
+    }),
+    submit_research_run: createTool({
+      description: "Admit a ResearchRun with a caller-stable request ID.",
+      execute: async (input) => {
+        record("submit_research_run", input);
+        return {
+          outcome: "accepted",
+          replayed: false,
+          run_id: coreRunId,
+          status: "queued",
+        };
+      },
+      id: "submit_research_run",
+      inputSchema: z.object({
+        end_date: z.string(),
+        folder_id: z.string(),
+        formula: z.string(),
+        holdings_count: z.number().int().optional(),
+        hypothesis: z.string(),
+        name: z.string(),
+        neutralization: z.string(),
+        rebalance_every_sessions: z.number().int().optional(),
+        request_id: z.string(),
+        research_kind: z.enum(["factor_evaluation", "strategy_backtest"]),
+        start_date: z.string(),
+        universe: z.string(),
+      }).strict(),
+    }),
+    get_research_run: createTool({
+      description: "Read a ResearchRun lifecycle and available Result sections.",
+      execute: async (input) => {
+        record("get_research_run", input);
+        return {
+          available_result_sections: ["factor", "provenance"],
+          id: coreRunId,
+          input: {
+            formula: "rank(-abs(pct_change(close, 1)))",
+            hypothesis: "Stocks with smaller recent absolute returns should be stable.",
+            research_kind: "factor_evaluation",
+          },
+          retry_after_seconds: null,
+          status: "succeeded",
+        };
+      },
+      id: "get_research_run",
+      inputSchema: z.object({ run_id: z.string() }).strict(),
+    }),
+    get_research_run_result: createTool({
+      description: "Read one authoritative ResearchRun Result section.",
+      execute: async (input) => {
+        record("get_research_run_result", input);
+        return {
+          factor: {
+            horizons: {
+              "5": {
+                summary: {
+                  rank_ic: { mean: 0.12 },
+                  top_bottom_return: 0.034,
+                },
+              },
+            },
+          },
+          private_provenance: "private-core-provenance",
+          research_kind: "factor_evaluation",
+          run_id: coreRunId,
+          section: "factor",
+        };
+      },
+      id: "get_research_run_result",
+      inputSchema: z.object({
+        run_id: z.string(),
+        section: z.literal("factor"),
+      }).strict(),
+    }),
+  };
+}
+
 function researcher(id: string): VerifiedResearcher {
   return {
     active: true,
@@ -1109,6 +1359,32 @@ function snapshotMessages(events: readonly AGUIEvent[]): Message[] {
     throw new Error("expected message snapshot");
   }
   return [...snapshot.messages];
+}
+
+function splitAssistantTextForCopilotKit(messages: readonly Message[]): Message[] {
+  const assistantIndex = messages.findIndex((message) => (
+    message.role === "assistant"
+    && message.toolCalls !== undefined
+    && typeof message.content === "string"
+    && message.content.length > 0
+  ));
+  const assistant = messages[assistantIndex];
+  if (assistant?.role !== "assistant" || typeof assistant.content !== "string") {
+    throw new Error("expected one Tool-calling Assistant message with text");
+  }
+  let toolEnd = assistantIndex + 1;
+  while (messages[toolEnd]?.role === "tool") toolEnd += 1;
+  return [
+    ...messages.slice(0, assistantIndex),
+    { ...assistant, content: undefined },
+    ...messages.slice(assistantIndex + 1, toolEnd),
+    {
+      content: assistant.content,
+      id: `${assistant.id}-agui-text`,
+      role: "assistant",
+    },
+    ...messages.slice(toolEnd),
+  ];
 }
 
 function durableTextContent(text: string, createdAt: number): string {

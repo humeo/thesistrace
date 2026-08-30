@@ -6,9 +6,30 @@ import type {
   LanguageModelV3Usage,
 } from "@ai-sdk/provider";
 
+import {
+  scriptedResearchDecision,
+  type ScriptedResearchDecision,
+} from "./scripted-research-model.js";
+
+export {
+  SCRIPTED_ADMISSION_REPAIR_IDEA_PROMPT,
+  SCRIPTED_AMBIGUOUS_IDEA_PROMPT,
+  SCRIPTED_FACTOR_IDEA_PROMPT,
+  SCRIPTED_FORMULA_REPAIR_IDEA_PROMPT,
+  SCRIPTED_RETRY_INTERRUPTED_PROMPT,
+  SCRIPTED_RESUME_RESEARCH_PROMPT,
+  SCRIPTED_STRATEGY_IDEA_PROMPT,
+  SCRIPTED_SUBMIT_ONLY_IDEA_PROMPT,
+} from "./scripted-research-model.js";
+
 export type ScriptedLanguageModelMode = "reply" | "throw-before-stream";
 export const SCRIPTED_FAILURE_MODEL_ID = "scripted-failure-v1";
 export const SCRIPTED_TOOL_PROMPT = "[scripted-tool-turn] Inspect the available research context.";
+
+export type ScriptedGuidanceWait = (
+  seconds: number,
+  signal: AbortSignal | undefined,
+) => Promise<void>;
 
 const responseText = "I can help turn that idea into a testable Alpha.";
 const toolResponseText = "I checked the available ThesisTrace research data and can now refine the Alpha.";
@@ -41,18 +62,23 @@ export class ScriptedLanguageModel implements LanguageModelV3 {
   constructor(
     readonly modelId: string,
     private readonly mode: ScriptedLanguageModelMode = "reply",
+    private readonly guidanceWait: ScriptedGuidanceWait = waitForGuidance,
   ) {}
 
   async doGenerate(
     options: LanguageModelV3CallOptions,
   ): Promise<LanguageModelV3GenerateResult> {
     this.assertAvailable();
-    const tool = scriptedTool(options);
+    const response = scriptedResponse(options);
+    if (response.waitSeconds !== undefined) {
+      await this.guidanceWait(response.waitSeconds, options.abortSignal);
+    }
+    const tool = response.tool;
     if (tool !== null) {
       const toolCallId = nextScriptedToolCallId(options);
       return {
         content: [{
-          input: "{}",
+          input: JSON.stringify(tool.input),
           toolCallId,
           toolName: tool.name,
           type: "tool-call",
@@ -66,7 +92,7 @@ export class ScriptedLanguageModel implements LanguageModelV3 {
     return {
       content: [{
         type: "text",
-        text: hasScriptedToolResult(options) ? toolResponseText : responseText,
+        text: response.text,
       }],
       finishReason: { unified: "stop", raw: "scripted-stop" },
       response: responseMetadata(this.modelId),
@@ -80,12 +106,13 @@ export class ScriptedLanguageModel implements LanguageModelV3 {
   ): Promise<{ stream: ReadableStream<LanguageModelV3StreamPart> }> {
     this.assertAvailable();
     const modelId = this.modelId;
-    const tool = scriptedTool(options);
+    const response = scriptedResponse(options);
+    if (response.waitSeconds !== undefined) {
+      await this.guidanceWait(response.waitSeconds, options.abortSignal);
+    }
+    const tool = response.tool;
     const toolCallId = tool === null ? null : nextScriptedToolCallId(options);
-    const selectedText = hasScriptedToolResult(options) ? toolResponseText : responseText;
-    const selectedChunks = selectedText === toolResponseText
-      ? ["I checked the available ThesisTrace research data ", "and can now refine the Alpha."]
-      : responseChunks;
+    const selectedChunks = response.chunks;
     return {
       stream: new ReadableStream<LanguageModelV3StreamPart>({
         start(controller) {
@@ -98,7 +125,7 @@ export class ScriptedLanguageModel implements LanguageModelV3 {
           });
           if (tool !== null && toolCallId !== null) {
             controller.enqueue({
-              input: "{}",
+              input: JSON.stringify(tool.input),
               toolCallId,
               toolName: tool.name,
               type: "tool-call",
@@ -135,6 +162,89 @@ export class ScriptedLanguageModel implements LanguageModelV3 {
       throw new Error("SCRIPTED_MODEL_FAILURE_INTERNAL_DETAIL");
     }
   }
+}
+
+type ScriptedResponse = Readonly<{
+  chunks: readonly string[];
+  text: string;
+  tool: Readonly<{
+    input: Readonly<Record<string, unknown>>;
+    name: string;
+  }> | null;
+  waitSeconds?: number;
+}>;
+
+function scriptedResponse(options: LanguageModelV3CallOptions): ScriptedResponse {
+  const research = scriptedResearchDecision(options);
+  if (research !== null) return responseFromResearchDecision(research);
+  const tool = scriptedTool(options);
+  if (tool !== null) {
+    return {
+      chunks: [],
+      text: "",
+      tool: { input: {}, name: tool.name },
+    };
+  }
+  const selectedText = hasScriptedToolResult(options) ? toolResponseText : responseText;
+  return {
+    chunks: selectedText === toolResponseText
+      ? ["I checked the available ThesisTrace research data ", "and can now refine the Alpha."]
+      : responseChunks,
+    text: selectedText,
+    tool: null,
+  };
+}
+
+function responseFromResearchDecision(
+  decision: ScriptedResearchDecision,
+): ScriptedResponse {
+  if (decision.kind === "text") {
+    return {
+      chunks: chunkResponse(decision.text),
+      text: decision.text,
+      tool: null,
+    };
+  }
+  return {
+    chunks: [],
+    text: "",
+    tool: { input: decision.input, name: decision.name },
+    ...(decision.waitSeconds === undefined
+      ? {}
+      : { waitSeconds: decision.waitSeconds }),
+  };
+}
+
+function chunkResponse(text: string): readonly string[] {
+  if (text.length <= 256) return [text];
+  const chunks: string[] = [];
+  for (let offset = 0; offset < text.length; offset += 256) {
+    chunks.push(text.slice(offset, offset + 256));
+  }
+  return chunks;
+}
+
+function waitForGuidance(
+  seconds: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted === true) {
+      reject(signal.reason ?? new Error("SCRIPTED_GUIDANCE_WAIT_ABORTED"));
+      return;
+    }
+    const timer = setTimeout(finish, seconds * 1_000);
+    const abort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(signal?.reason ?? new Error("SCRIPTED_GUIDANCE_WAIT_ABORTED"));
+    };
+    function finish() {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function scriptedTool(

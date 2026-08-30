@@ -7,6 +7,7 @@ import {
   readValidatedChatRun,
 } from "./chat-request.js";
 import { readModelRegistry } from "./model-registry.js";
+import { SAFE_TOOL_COMPLETED } from "./safe-tool-result.js";
 
 const registry = readModelRegistry(JSON.stringify({
   default_model_key: "scripted",
@@ -36,6 +37,96 @@ test("accepts the one strict text-only AG-UI run shape", async () => {
   await expect(readThreadId(request)).resolves.toBe(
     "00000000-0000-4000-8000-000000000001",
   );
+});
+
+test("accepts CopilotKit's exact split Assistant text shape on a later turn", async () => {
+  const assistantId = "00000000-0000-4000-8000-000000000004";
+  await expect(readValidatedChatRun(runRequest({ messages: [{
+    id: "00000000-0000-4000-8000-000000000003",
+    role: "user",
+    content: "Build an Alpha.",
+  }, {
+    id: assistantId,
+    role: "assistant",
+    toolCalls: [{
+      id: "provider-call-1",
+      type: "function",
+      function: {
+        arguments: "{}",
+        name: "submit_research_run",
+      },
+    }],
+  }, {
+    id: "00000000-0000-4000-8000-000000000005",
+    role: "tool",
+    toolCallId: "provider-call-1",
+    content: SAFE_TOOL_COMPLETED,
+  }, {
+    id: `${assistantId}-agui-text`,
+    role: "assistant",
+    content: "The Core Worker continues independently.",
+  }, {
+    id: "00000000-0000-4000-8000-000000000006",
+    role: "user",
+    content: "Read the completed Result.",
+  }] }), registry)).resolves.toMatchObject({
+    latestUserMessage: {
+      content: "Read the completed Result.",
+      id: "00000000-0000-4000-8000-000000000006",
+      role: "user",
+    },
+  });
+});
+
+test.each([
+  { messages: [{
+    id: "00000000-0000-4000-8000-000000000003",
+    role: "user",
+    content: "Build an Alpha.",
+  }, {
+    id: "00000000-0000-4000-8000-000000000004-agui-text",
+    role: "assistant",
+    content: "Orphan text.",
+  }, {
+    id: "00000000-0000-4000-8000-000000000006",
+    role: "user",
+    content: "Continue.",
+  }] },
+  { messages: [{
+    id: "00000000-0000-4000-8000-000000000003",
+    role: "user",
+    content: "Build an Alpha.",
+  }, {
+    id: "00000000-0000-4000-8000-000000000004",
+    role: "assistant",
+    toolCalls: [{
+      id: "provider-call-1",
+      type: "function",
+      function: { arguments: "{}", name: "submit_research_run" },
+    }],
+  }, {
+    id: "00000000-0000-4000-8000-000000000004-agui-text",
+    role: "assistant",
+    content: "Text before the Tool result.",
+  }, {
+    id: "00000000-0000-4000-8000-000000000006",
+    role: "user",
+    content: "Continue.",
+  }] },
+  { messages: [{
+    id: "00000000-0000-4000-8000-000000000003",
+    role: "user",
+    content: "Build an Alpha.",
+  }, {
+    id: "00000000-0000-4000-8000-000000000003",
+    role: "user",
+    content: "Duplicate id.",
+  }] },
+])("rejects malformed split Assistant history %#", async ({ messages }) => {
+  await expect(readValidatedChatRun(runRequest({ messages }), registry)).rejects.toMatchObject({
+    code: "INVALID_CHAT_REQUEST",
+    status: 400,
+  } satisfies Partial<ChatRequestError>);
 });
 
 test("rejects an oversized UTF-8 message before execution", async () => {

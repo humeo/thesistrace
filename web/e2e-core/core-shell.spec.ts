@@ -1255,10 +1255,27 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const trackId = page.url().split("/").at(-1);
     expect(trackId).toMatch(/^track_[a-f0-9]+$/);
     if (trackId === undefined) throw new Error("DailyTrack route is missing track id");
-    await expect(page.getByRole("link", { name: reusedRunId, exact: true })).toBeVisible();
+    const sourceRunLink = page.getByRole("link", { name: reusedRunId, exact: true });
+    await expect(sourceRunLink).toBeVisible();
     await expect(page.getByRole("button", { name: "Delete DailyTrack" })).toHaveCount(0);
 
-    await page.goto(`/research-runs/${reusedRunId}`);
+    let injectedDetailFailures = 0;
+    const reusedRunPath = `**/api/research-runs/${reusedRunId}`;
+    await page.route(reusedRunPath, async (route) => {
+      if (route.request().method() === "GET" && injectedDetailFailures === 0) {
+        injectedDetailFailures += 1;
+        await route.fulfill({ json: { detail: "Authentication unavailable" }, status: 503 });
+        return;
+      }
+      await route.continue();
+    });
+    await sourceRunLink.click();
+    await expect(page).toHaveURL(new RegExp(`/research-runs/${reusedRunId}$`));
+    await expect(page.getByRole("alert")).toHaveText("ResearchRun unavailable");
+    expect(injectedDetailFailures).toBe(1);
+    await page.unroute(reusedRunPath);
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Delete Research", exact: true })).toBeVisible();
     const deleteDialog = await openResearchDeleteDialog(page);
     await deleteDialog.getByRole("button", { name: "Keep Research" }).click();
     await expect(page).toHaveURL(new RegExp(`/research-runs/${reusedRunId}$`));
