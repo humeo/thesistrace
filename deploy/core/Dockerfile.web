@@ -8,6 +8,7 @@ COPY web/package.json ./web/package.json
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
+COPY contracts ./contracts
 COPY web ./web
 RUN pnpm --dir web build
 

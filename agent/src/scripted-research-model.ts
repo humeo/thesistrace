@@ -1,5 +1,11 @@
 import type { LanguageModelV3CallOptions } from "@ai-sdk/provider";
 
+import {
+  projectResearchA2UIContent,
+  RESEARCH_A2UI_CATALOG_ID,
+  RESEARCH_A2UI_PROTOCOL_VERSION,
+} from "../../contracts/research-a2ui.mjs";
+
 export const SCRIPTED_FACTOR_IDEA_PROMPT =
   "Evaluate a low-volatility Alpha idea as a Factor Evaluation using reliable ThesisTrace defaults.";
 export const SCRIPTED_STRATEGY_IDEA_PROMPT =
@@ -25,6 +31,13 @@ const INVALID_LOW_VOLATILITY_FORMULA = "rank(-abs(pct_change(clsoe, 1)))";
 const LOW_VOLATILITY_HYPOTHESIS =
   "Stocks with smaller recent absolute returns should exhibit more stable near-term performance.";
 const CATALOG_IDENTIFIERS = ["abs", "close", "pct_change", "rank"] as const;
+const A2UI_TOOL_NAME = "render_a2ui";
+const A2UI_SURFACE_IDS = Object.freeze({
+  progress: "research-run-progress",
+  proposal: "alpha-proposal",
+  result: "research-result",
+  status: "research-run-status",
+});
 
 type JsonRecord = Record<string, unknown>;
 type ToolObservation = Readonly<{
@@ -138,6 +151,40 @@ export function scriptedResearchDecision(
     });
   }
 
+  if (
+    hasFunctionTool(options, A2UI_TOOL_NAME)
+    && !hasA2UIStage(observations, "proposal")
+  ) {
+    const proposal = researchCommand({
+      context,
+      mode: originalIdea.mode,
+      repairCalculationWarmup: false,
+      requestId: "agent_a2ui_preview",
+    });
+    if (proposal !== null) {
+      return renderResearchSurface(options, "proposal", {
+        explanation: "This Chat-owned proposal turns the low-volatility hypothesis into a bounded, diagnosable Alpha before any ResearchRun exists.",
+        formula: proposal.formula,
+        hypothesis: proposal.hypothesis,
+        period: `${proposal.start_date} to ${proposal.end_date}`,
+        researchType: proposal.research_kind === "strategy_backtest"
+          ? "Strategy Backtest"
+          : "Factor Evaluation",
+        strategy: proposal.research_kind === "strategy_backtest"
+          ? [
+              { label: "Holdings", value: String(proposal.holdings_count) },
+              { label: "Rebalance", value: `Every ${String(proposal.rebalance_every_sessions)} sessions` },
+              { label: "Neutralization", value: String(proposal.neutralization) },
+            ]
+          : [{ label: "Neutralization", value: String(proposal.neutralization) }],
+        title: proposal.research_kind === "strategy_backtest"
+          ? "Low-volatility strategy"
+          : "Low-volatility factor",
+        universe: String(proposal.universe),
+      });
+    }
+  }
+
   const submissions = observations.filter(
     (observation) => observation.name === "submit_research_run",
   );
@@ -195,6 +242,17 @@ export function scriptedResearchDecision(
       text: "Research admission returned no safe ResearchRun identifier, so I cannot claim that a run exists.",
     };
   }
+  if (
+    hasFunctionTool(options, A2UI_TOOL_NAME)
+    && !hasA2UIStage(observations, "status")
+  ) {
+    return renderResearchSurface(options, "status", {
+      formula: accepted.input.formula,
+      phase: "Accepted by ThesisTrace Core; the Research Worker now owns execution.",
+      runId,
+      status: accepted.output.status,
+    });
+  }
   if (originalIdea.mode === "submit-only" && !resumeResearch) {
     const status = typeof accepted.output.status === "string"
       ? accepted.output.status
@@ -223,6 +281,21 @@ export function scriptedResearchDecision(
 
   const status = lastPoll.output.status;
   if (status === "queued" || status === "running" || status === "cancelling") {
+    if (
+      status === "running"
+      && hasFunctionTool(options, A2UI_TOOL_NAME)
+      && !hasA2UIStage(observations, "progress")
+    ) {
+      const authoritativeInput = isRecord(lastPoll.output.input) ? lastPoll.output.input : null;
+      const progress = isRecord(lastPoll.output.progress) ? lastPoll.output.progress : null;
+      if (lastPoll.output.id !== runId) return invalidResearchSurface();
+      return renderResearchSurface(options, "progress", {
+        formula: authoritativeInput?.formula,
+        phase: progress?.phase,
+        runId: lastPoll.output.id,
+        status,
+      });
+    }
     const retryAfter = readRetryAfter(lastPoll.output);
     if (retryAfter !== undefined && currentTurnPolls.length < MAX_SCRIPTED_POLLS) {
       return requiredTool(options, "get_research_run", { run_id: runId }, retryAfter);
@@ -281,10 +354,188 @@ export function scriptedResearchDecision(
     result: result.output,
     runId,
   });
+  const surfaceMetrics = originalIdea.mode === "strategy"
+    ? strategySurfaceMetrics(result.output)
+    : factorSurfaceMetrics(result.output);
+  if (
+    artifact !== null
+    && surfaceMetrics !== null
+    && hasFunctionTool(options, A2UI_TOOL_NAME)
+    && !hasA2UIStage(observations, "result")
+  ) {
+    return renderResearchSurface(options, "result", {
+      formula: submittedInput.formula,
+      metrics: surfaceMetrics,
+      researchType: originalIdea.mode === "strategy"
+        ? "Strategy Backtest"
+        : "Factor Evaluation",
+      resultSection,
+      runId,
+      status: "succeeded",
+    });
+  }
   return {
     kind: "text",
     text: artifact ?? "The authoritative Research Result is incomplete, so I cannot construct a Result artifact without inventing fields.",
   };
+}
+
+function renderResearchSurface(
+  options: LanguageModelV3CallOptions,
+  stage: keyof typeof A2UI_SURFACE_IDS,
+  payload: JsonRecord,
+): ScriptedResearchDecision {
+  const input = stage === "proposal"
+    ? proposalSurface(payload)
+    : stage === "result"
+      ? resultSurface(payload)
+      : statusSurface(stage, payload);
+  if (input === null) return invalidResearchSurface();
+  const projected = projectResearchA2UIContent({
+    a2ui_operations: [{
+      createSurface: {
+        catalogId: RESEARCH_A2UI_CATALOG_ID,
+        surfaceId: input.surfaceId,
+      },
+      version: RESEARCH_A2UI_PROTOCOL_VERSION,
+    }, {
+      updateComponents: { components: input.components, surfaceId: input.surfaceId },
+      version: RESEARCH_A2UI_PROTOCOL_VERSION,
+    }],
+  });
+  return projected.valid && projected.kind === "ready"
+    ? requiredTool(options, A2UI_TOOL_NAME, input)
+    : invalidResearchSurface();
+}
+
+function invalidResearchSurface(): ScriptedResearchDecision {
+  return {
+    kind: "text",
+    text: "The authoritative research display data is incomplete or outside the display limits. I did not create a surface or invent replacement Research facts.",
+  };
+}
+
+function hasA2UIStage(
+  observations: readonly ToolObservation[],
+  stage: keyof typeof A2UI_SURFACE_IDS,
+): boolean {
+  return observations.some((observation) => (
+    observation.name === A2UI_TOOL_NAME
+    && observation.input.surfaceId === A2UI_SURFACE_IDS[stage]
+  ));
+}
+
+function proposalSurface(payload: JsonRecord): JsonRecord {
+  return {
+    components: [
+      { component: "Column", gap: "normal", id: "root", children: ["proposal", "formula"] },
+      {
+        component: "AlphaProposal",
+        explanation: payload.explanation,
+        formula: payload.formula,
+        hypothesis: payload.hypothesis,
+        id: "proposal",
+        period: payload.period,
+        researchType: payload.researchType,
+        strategy: payload.strategy,
+        title: payload.title,
+        universe: payload.universe,
+      },
+      { component: "Formula", expression: payload.formula, id: "formula", label: "Proposed formula" },
+    ],
+    data: {},
+    surfaceId: A2UI_SURFACE_IDS.proposal,
+  };
+}
+
+function statusSurface(
+  stage: "progress" | "status",
+  payload: JsonRecord,
+): JsonRecord | null {
+  const runId = payload.runId;
+  if (typeof runId !== "string") return null;
+  return {
+    components: [
+      { component: "Column", gap: "compact", id: "root", children: ["status", "navigation"] },
+      {
+        component: "ResearchRunStatus",
+        formula: payload.formula,
+        id: "status",
+        phase: payload.phase,
+        runId,
+        status: payload.status,
+      },
+      {
+        component: "Navigation",
+        href: `/research-runs/${runId}`,
+        id: "navigation",
+        label: "Open authoritative ResearchRun",
+      },
+    ],
+    data: {},
+    surfaceId: A2UI_SURFACE_IDS[stage],
+  };
+}
+
+function resultSurface(payload: JsonRecord): JsonRecord | null {
+  const { runId, metrics, resultSection, researchType } = payload;
+  if (
+    typeof runId !== "string"
+    || typeof resultSection !== "string"
+    || typeof researchType !== "string"
+    || !Array.isArray(metrics)
+    || !metrics.every(isRecord)
+  ) return null;
+  return {
+    components: [
+      {
+        component: "Column",
+        gap: "normal",
+        id: "root",
+        children: ["status", "metrics", "table", "provenance", "navigation"],
+      },
+      {
+        component: "ResearchRunStatus",
+        formula: payload.formula,
+        id: "status",
+        phase: "Authoritative immutable Result is available.",
+        runId,
+        status: "succeeded",
+      },
+      { component: "ResultMetrics", id: "metrics", metrics, title: `${researchType} result` },
+      {
+        caption: `Authoritative ${resultSection} metrics`,
+        columns: ["Metric", "Value"],
+        component: "Table",
+        id: "table",
+        initiallyExpanded: false,
+        rows: metrics.map((metric) => [metric.label, metric.value]),
+        summary: "Inspect result metrics",
+      },
+      {
+        component: "Provenance",
+        entries: [
+          { label: "ResearchRun", value: runId },
+          { label: "Result section", value: resultSection },
+          { label: "Research type", value: researchType },
+        ],
+        id: "provenance",
+        summary: "Inspect provenance",
+      },
+      {
+        component: "Navigation",
+        href: `/research-runs/${runId}`,
+        id: "navigation",
+        label: "Open authoritative ResearchRun",
+      },
+    ],
+    data: {},
+    surfaceId: A2UI_SURFACE_IDS.result,
+  };
+}
+
+function hasFunctionTool(options: LanguageModelV3CallOptions, name: string): boolean {
+  return options.tools?.some((tool) => tool.type === "function" && tool.name === name) === true;
 }
 
 function ideaMode(text: string): "factor" | "strategy" | "formula-repair" | "admission-repair" | "submit-only" | null {
@@ -732,6 +983,22 @@ function factorMetricLines(result: JsonRecord): readonly string[] | null {
   ];
 }
 
+function factorSurfaceMetrics(result: JsonRecord): readonly JsonRecord[] | null {
+  const factor = isRecord(result.factor) ? result.factor : undefined;
+  const horizons = isRecord(factor?.horizons) ? factor.horizons : undefined;
+  const five = isRecord(horizons?.["5"]) ? horizons["5"] : undefined;
+  const summary = isRecord(five?.summary) ? five.summary : undefined;
+  const rankIc = isRecord(summary?.rank_ic) ? summary.rank_ic : undefined;
+  if (
+    !hasFiniteNumberOrNull(rankIc, "mean")
+    || !hasFiniteNumberOrNull(summary, "top_bottom_return")
+  ) return null;
+  return [
+    { label: "5-session Rank IC", value: formatMetric(rankIc.mean) },
+    { label: "5-session top-bottom return", value: formatPercent(summary.top_bottom_return) },
+  ];
+}
+
 function strategyMetricLines(result: JsonRecord): readonly string[] | null {
   const metrics = isRecord(result.metrics) ? result.metrics : undefined;
   const drawdown = isRecord(metrics?.maximum_drawdown)
@@ -746,6 +1013,23 @@ function strategyMetricLines(result: JsonRecord): readonly string[] | null {
     `- **Sharpe:** ${formatMetric(metrics?.sharpe)}`,
     `- **Net cumulative return:** ${formatPercent(metrics?.net_cumulative_return)}`,
     `- **Maximum drawdown:** ${formatPercent(drawdown?.value)}`,
+  ];
+}
+
+function strategySurfaceMetrics(result: JsonRecord): readonly JsonRecord[] | null {
+  const metrics = isRecord(result.metrics) ? result.metrics : undefined;
+  const drawdown = isRecord(metrics?.maximum_drawdown)
+    ? metrics.maximum_drawdown
+    : undefined;
+  if (
+    !hasFiniteNumberOrNull(metrics, "sharpe")
+    || !hasFiniteNumberOrNull(metrics, "net_cumulative_return")
+    || !hasFiniteNumberOrNull(drawdown, "value")
+  ) return null;
+  return [
+    { label: "Sharpe", value: formatMetric(metrics.sharpe) },
+    { label: "Net cumulative return", value: formatPercent(metrics.net_cumulative_return) },
+    { label: "Maximum drawdown", value: formatPercent(drawdown.value) },
   ];
 }
 

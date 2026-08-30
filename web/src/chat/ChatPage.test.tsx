@@ -368,10 +368,35 @@ test("keeps Tool and final Assistant text in the same order before and after rel
 
   expect(live.map((item) => item.kind)).toEqual(["tool", "message"]);
   expect(replay.map((item) => item.kind)).toEqual(["tool", "message"]);
-  expect(live.map((item) => item.kind === "message" ? item.content : item.activity.name))
+  expect(live.map((item) => item.kind === "message"
+    ? item.content
+    : item.kind === "tool" ? item.activity.name : item.message.id))
     .toEqual(replay.map((item) => (
-      item.kind === "message" ? item.content : item.activity.name
+      item.kind === "message"
+        ? item.content
+        : item.kind === "tool" ? item.activity.name : item.message.id
     )));
+});
+
+test("places a durable A2UI Activity in the timeline without an empty Assistant placeholder", () => {
+  const timeline = chatTimelineItems([{
+    content: "",
+    id: "00000000-0000-4000-8000-000000000120",
+    role: "assistant",
+  }, {
+    activityType: "a2ui-surface",
+    content: {
+      a2ui_operations: [],
+    },
+    id: "a2ui-surface-generate-call",
+    role: "activity",
+  }]);
+
+  expect(timeline).toMatchObject([{
+    id: "a2ui:a2ui-surface-generate-call",
+    kind: "a2ui",
+  }]);
+  expect(JSON.stringify(timeline)).not.toContain("Responding");
 });
 
 test("renders research Markdown while disabling raw HTML, images, and non-Run links", () => {

@@ -1,7 +1,12 @@
 import { type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 
 import { expect, sameOriginHeaders, test } from "./auth-fixture";
+import {
+  controlledWorkerExit,
+  controlWorker,
+  startControlledResearchRun,
+} from "./research-run-control";
 
 test("ResearchRun return keeps the selected Type without a document reload", async ({ page }) => {
   const documentRequests: string[] = [];
@@ -1399,54 +1404,6 @@ function testContainer(service: "postgres" | "research-worker"): string {
     throw new Error("Browser acceptance requires an isolated ThesisTrace Test project");
   }
   return `${project}-${service}-1`;
-}
-
-function controlWorker(action: "pause" | "unpause"): void {
-  execFileSync("docker", [action, testContainer("research-worker")], { stdio: "pipe" });
-}
-
-function startControlledResearchRun(runId: string) {
-  const process = spawn(
-    "uv",
-    [
-      "run", "python", "../tests/browser/process_research_run_with_barrier.py",
-      runId,
-    ],
-    { cwd: globalThis.process.cwd(), env: globalThis.process.env, stdio: "pipe" },
-  );
-  const claimed = new Promise<void>((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
-    process.stdout?.setEncoding("utf8");
-    process.stderr?.setEncoding("utf8");
-    process.stderr?.on("data", (chunk: string) => { stderr += chunk; });
-    process.stdout?.on("data", (chunk: string) => {
-      stdout += chunk;
-      if (stdout.includes(`claimed:${runId}`)) resolve();
-    });
-    process.once("error", reject);
-    process.once("exit", (code) => {
-      if (!stdout.includes(`claimed:${runId}`)) {
-        reject(new Error(`Controlled ResearchRun worker exited ${code}: ${stderr}`));
-      }
-    });
-  });
-  return { claimed, process };
-}
-
-function controlledWorkerExit(process: ChildProcess, allowTermination = false): Promise<void> {
-  if (process.exitCode !== null) {
-    return process.exitCode === 0
-      ? Promise.resolve()
-      : Promise.reject(new Error(`Controlled ResearchRun worker exited with ${process.exitCode}`));
-  }
-  return new Promise((resolve, reject) => {
-    process.once("error", reject);
-    process.once("exit", (code, signal) => {
-      if (code === 0 || (allowTermination && (signal === "SIGTERM" || code === 143))) resolve();
-      else reject(new Error(`Controlled ResearchRun worker exited with ${code ?? signal}`));
-    });
-  });
 }
 
 function publishFinancialTrackHead(mode: "lagged" | "recovered"): void {

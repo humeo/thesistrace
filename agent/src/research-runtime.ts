@@ -1,5 +1,5 @@
 import { Agent } from "@mastra/core/agent";
-import { ConsoleLogger } from "@mastra/core/logger";
+import { noopLogger } from "@mastra/core/logger";
 import { Mastra } from "@mastra/core/mastra";
 import { RequestContext } from "@mastra/core/request-context";
 import { Memory } from "@mastra/memory";
@@ -9,6 +9,11 @@ import {
   createCopilotRuntimeHandler,
 } from "@copilotkit/runtime/v2";
 import { MastraAgent } from "@ag-ui/mastra";
+
+import {
+  RESEARCH_A2UI_CATALOG_ID,
+  RESEARCH_A2UI_INLINE_CATALOG,
+} from "../../contracts/research-a2ui.mjs";
 
 import {
   ChatRequestError,
@@ -36,6 +41,10 @@ import {
   type McpRunFactory,
 } from "./mcp-run.js";
 import { ResearchMastraAgent } from "./research-mastra-agent.js";
+import {
+  RESEARCH_A2UI_TOOL_NAME,
+  researchA2UITool,
+} from "./research-a2ui-tool.js";
 import { createAgentReadiness } from "./readiness.js";
 import {
   ResearchSessionRepository,
@@ -56,7 +65,9 @@ Use only the Tools supplied by the current authenticated MCP discovery. You own 
 Use reliable platform defaults when the investment intent is clear. Ask a focused follow-up only when missing intent would materially change the Research; do not turn clear requests into a parameter wizard.
 Treat Formula diagnostics and admission rejection as structured correctable results. Preserve stable authentication, authorization, lifecycle, transient, and internal Tool error meanings. Retry a transient Tool call only when appropriate, after its retry_after_seconds guidance, with the exact same arguments.
 For every effectful Tool call, derive a caller-stable request_id from the current Agent Run identity plus an operation and revision. Reuse that exact request_id and command after an uncertain response; allocate a new revision only when a structured rejection requires a changed command.
-State assumptions and distinguish proposals from persisted Research facts. Never claim that a ResearchRun or Result exists unless an authoritative Tool result confirms it. Once Research is admitted, remember that the Core Worker continues independently if this Agent Run ends.`;
+State assumptions and distinguish proposals from persisted Research facts. Never claim that a ResearchRun or Result exists unless an authoritative Tool result confirms it. Once Research is admitted, remember that the Core Worker continues independently if this Agent Run ends.
+Use render_a2ui to present a concrete Alpha proposal and each authoritative ResearchRun status or Result that would benefit from structured display. A proposal is Chat-owned and must never imply persistence. Populate ResearchRun identity, status, Formula, Result metrics, sections, provenance, and links only from Tool results from this run or authoritative memory. Keep an ordinary concise text explanation alongside the surface.
+Generate each surface with a unique lowercase-hyphenated surfaceId and a flat component array rooted at id "root". Use only registered components and literal props; omit data or pass an empty object. Do not emit bindings, actions, events, functions, HTML, CSS, JavaScript, media, network requests, editable controls, submit, retry, cancel, stop, or delete. Navigation hrefs must be registered ThesisTrace routes, and every non-root component must be referenced exactly once by a Row or Column.`;
 
 export type ResearchRuntime = Readonly<{
   close: () => Promise<void>;
@@ -133,6 +144,9 @@ export async function createResearchRuntime(
     defaultOptions: ({ requestContext }) => ({
       maxSteps: 16,
       providerOptions: selectionFrom(requestContext).providerOptions,
+      // Completed tool steps must be durable while a later MCP call is still
+      // running so their validated surfaces can reference persisted messages.
+      savePerStep: true,
       // A transport/protocol failure is converted into one safe Tool result so
       // AG-UI can close that exact invocation. Stop before another provider
       // step; ResearchMastraAgent will persist the failed product Run.
@@ -144,23 +158,31 @@ export async function createResearchRuntime(
     memory,
     model: ({ requestContext }) => selectionFrom(requestContext).languageModel,
     name: "ThesisTrace Research Agent",
-    tools: ({ requestContext }) => mcpToolsFrom(requestContext),
+    tools: ({ requestContext }) => researchToolsFrom(requestContext),
   });
   const mastra = new Mastra({
     agents: { [RESEARCH_AGENT_ID]: agent },
-    logger: new ConsoleLogger({
-      level: "info",
-      // Provider errors can contain prompts, response bodies, or credentials.
-      // The product run row and safe AG-UI error remain the operator/client
-      // boundary; never emit Mastra's raw provider error object.
-      filter: ({ message }) => message !== "Error in agent stream"
-        && message !== "Upstream LLM API error",
-    }),
+    // Framework validation and provider logs can contain complete Tool input,
+    // conversation content, and credentials. Do not maintain a message-name
+    // denylist: durable product Run metadata is the safe diagnostic boundary.
+    logger: noopLogger,
     recovery: { durableAgents: "off" },
     storage,
   });
   const runner = new DurableResearchAgentRunner(repository);
   const runtime = new CopilotRuntime({
+    a2ui: {
+      agents: [RESEARCH_AGENT_ID],
+      a2uiToolNames: [RESEARCH_A2UI_TOOL_NAME],
+      defaultCatalogId: RESEARCH_A2UI_CATALOG_ID,
+      injectA2UITool: false,
+      recovery: {
+        debugExposure: "hidden",
+        maxAttempts: 2,
+        showProgressTokens: false,
+      },
+      schema: RESEARCH_A2UI_INLINE_CATALOG,
+    },
     agents: async ({ request }) => {
       const researcherId = request.headers.get(RESEARCHER_ID_HEADER);
       if (researcherId === null) throw new SessionNotFoundError();
@@ -194,7 +216,7 @@ export async function createResearchRuntime(
           [RESEARCH_AGENT_ID]: new MastraAgent({
             agent,
             agentId: RESEARCH_AGENT_ID,
-            a2ui: { injectA2UITool: false },
+            a2ui: researchA2UIBridgeConfig(),
             emitInterruptOutcome: true,
             observationalMemory: false,
             requestContext,
@@ -312,7 +334,7 @@ function createRunAgent(options: Readonly<{
   return new ResearchMastraAgent({
     agent,
     agentId: RESEARCH_AGENT_ID,
-    a2ui: { injectA2UITool: false },
+    a2ui: researchA2UIBridgeConfig(),
     emitInterruptOutcome: true,
     observationalMemory: false,
     requestContext: options.requestContext,
@@ -335,6 +357,10 @@ function createRunAgent(options: Readonly<{
     }),
     usage: () => options.usageCapture.value(),
   });
+}
+
+function researchA2UIBridgeConfig() {
+  return { injectA2UITool: false } as const;
 }
 
 async function handleAuthenticatedRuntimeRequest(options: Readonly<{
@@ -454,6 +480,14 @@ function selectionFrom(context: RequestContext): ResolvedModelSelection {
 
 function mcpToolsFrom(context: RequestContext): DiscoveredMcpTools {
   return context.get<string, DiscoveredMcpTools>("mcpTools");
+}
+
+function researchToolsFrom(context: RequestContext): DiscoveredMcpTools {
+  const mcpTools = mcpToolsFrom(context);
+  if (Object.hasOwn(mcpTools, RESEARCH_A2UI_TOOL_NAME)) {
+    throw new Error("MCP_TOOL_NAME_RESERVED");
+  }
+  return { ...mcpTools, [RESEARCH_A2UI_TOOL_NAME]: researchA2UITool };
 }
 
 function mcpRunFrom(context: RequestContext): import("./mcp-run.js").McpRun | undefined {

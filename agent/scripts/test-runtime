@@ -7,9 +7,9 @@ CDPATH= cd -- "$agent_root"
 command=${1:-}
 
 case "$command" in
-  integration | image-smoke) ;;
+  integration | image-smoke | schema-generate) ;;
   *)
-    echo "usage: $0 {integration|image-smoke}" >&2
+    echo "usage: $0 {integration|image-smoke|schema-generate}" >&2
     exit 2
     ;;
 esac
@@ -114,7 +114,7 @@ start_postgres() {
 }
 
 case "$command" in
-  integration)
+  integration | schema-generate)
     start_postgres
     address=$(compose port postgres 5432)
     postgres_port=${address##*:}
@@ -124,12 +124,19 @@ case "$command" in
         exit 1
         ;;
     esac
-    COPILOTKIT_TELEMETRY_DISABLED=true \
+    if [ "$command" = schema-generate ]; then
+      pnpm build
+      THESISTRACE_AGENT_SCHEMA_GENERATION=isolated \
+        THESISTRACE_AGENT_TEST_OWNER_DATABASE_URL="postgresql://thesistrace_owner:owner-test-password@127.0.0.1:$postgres_port/thesistrace" \
+        node "$agent_root/scripts/generate-schema-contract.mjs"
+    else
+      COPILOTKIT_TELEMETRY_DISABLED=true \
       TZ=Asia/Seoul \
       THESISTRACE_AGENT_TEST_OWNER_DATABASE_URL="postgresql://thesistrace_owner:owner-test-password@127.0.0.1:$postgres_port/thesistrace" \
       "$agent_root/node_modules/.bin/vitest" run \
         --root "$agent_root" \
         --config "$agent_root/vitest.integration.config.ts"
+    fi
     ;;
   image-smoke)
     mkdir -p "$(dirname -- "$stale_image_canary")"

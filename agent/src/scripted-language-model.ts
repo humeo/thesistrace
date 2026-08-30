@@ -25,6 +25,14 @@ export {
 export type ScriptedLanguageModelMode = "reply" | "throw-before-stream";
 export const SCRIPTED_FAILURE_MODEL_ID = "scripted-failure-v1";
 export const SCRIPTED_TOOL_PROMPT = "[scripted-tool-turn] Inspect the available research context.";
+export const SCRIPTED_INVALID_A2UI_PROMPT =
+  "[scripted-invalid-a2ui] Attempt one unsafe research surface.";
+export const SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT =
+  "[scripted-invalid-a2ui-top-level] Attempt an unknown top-level render field.";
+export const SCRIPTED_INVALID_A2UI_DATA_PROMPT =
+  "[scripted-invalid-a2ui-data] Attempt non-empty render data.";
+export const SCRIPTED_LARGE_A2UI_TABLE_PROMPT =
+  "[scripted-a2ui-table] Show a large renderer acceptance sample, not research evidence.";
 
 export type ScriptedGuidanceWait = (
   seconds: number,
@@ -185,6 +193,10 @@ function scriptedResponse(options: LanguageModelV3CallOptions): ScriptedResponse
   }
   const research = scriptedResearchDecision(options);
   if (research !== null) return responseFromResearchDecision(research);
+  const invalidA2UI = scriptedInvalidA2UI(options);
+  if (invalidA2UI !== null) return invalidA2UI;
+  const tableA2UI = scriptedLargeA2UITable(options);
+  if (tableA2UI !== null) return tableA2UI;
   const tool = scriptedTool(options);
   if (tool !== null) {
     return {
@@ -200,6 +212,98 @@ function scriptedResponse(options: LanguageModelV3CallOptions): ScriptedResponse
       : responseChunks,
     text: selectedText,
     tool: null,
+  };
+}
+
+function scriptedInvalidA2UI(
+  options: LanguageModelV3CallOptions,
+): ScriptedResponse | null {
+  const scenario = [
+    { kind: "component", prompt: SCRIPTED_INVALID_A2UI_PROMPT },
+    { kind: "top-level", prompt: SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT },
+    { kind: "data", prompt: SCRIPTED_INVALID_A2UI_DATA_PROMPT },
+  ].map((candidate) => ({
+    ...candidate,
+    promptIndex: latestExactUserPromptIndex(options, candidate.prompt),
+  })).find((candidate) => candidate.promptIndex >= 0);
+  if (scenario === undefined) return null;
+  const { promptIndex } = scenario;
+  const observedResult = options.prompt.slice(promptIndex + 1).some((message) => (
+    message.role === "tool"
+    && message.content.some((part) => (
+      part.type === "tool-result" && part.toolName === "render_a2ui"
+    ))
+  ));
+  if (observedResult) {
+    const text = "The unsafe research surface was rejected. This Chat remains usable, and no action was executed.";
+    return { chunks: [text], text, tool: null };
+  }
+  const available = options.tools?.some((tool) => (
+    tool.type === "function" && tool.name === "render_a2ui"
+  )) === true;
+  if (!available) {
+    const text = "The registered Agent tools do not include the required research renderer.";
+    return { chunks: [text], text, tool: null };
+  }
+  return {
+    chunks: [],
+    text: "",
+    tool: {
+      input: {
+        components: [{
+          ...(scenario.kind === "component" ? { action: { name: "delete_research" } } : {}),
+          component: "Text",
+          id: "root",
+          text: "MALICIOUS_A2UI_SHOULD_NOT_RENDER",
+        }],
+        data: scenario.kind === "data" ? { private: "MALICIOUS_A2UI_SHOULD_NOT_RENDER" } : {},
+        surfaceId: "unsafe-research-surface",
+        ...(scenario.kind === "top-level" ? { unexpected: true } : {}),
+      },
+      name: "render_a2ui",
+    },
+  };
+}
+
+function scriptedLargeA2UITable(options: LanguageModelV3CallOptions): ScriptedResponse | null {
+  const promptIndex = latestExactUserPromptIndex(options, SCRIPTED_LARGE_A2UI_TABLE_PROMPT);
+  if (promptIndex < 0) return null;
+  const rendered = options.prompt.slice(promptIndex + 1).some((message) => (
+    message.role === "tool" && message.content.some((part) => (
+      part.type === "tool-result" && part.toolName === "render_a2ui"
+    ))
+  ));
+  const available = options.tools?.some((tool) => (
+    tool.type === "function" && tool.name === "render_a2ui"
+  )) === true;
+  if (rendered || !available) {
+    const text = rendered
+      ? "This is a renderer acceptance sample, not a Research Result."
+      : "The registered Agent tools do not include the required research renderer.";
+    return { chunks: [text], text, tool: null };
+  }
+  return {
+    chunks: [],
+    text: "",
+    tool: {
+      name: "render_a2ui",
+      input: {
+        components: [{
+          caption: "Renderer acceptance sample — not research evidence",
+          columns: Array.from({ length: 12 }, (_, index) => `Field ${index + 1}`),
+          component: "Table",
+          id: "root",
+          rows: Array.from({ length: 100 }, (_, row) => (
+            Array.from({ length: 12 }, (_, column) => (
+              `Sample ${row + 1}:${column + 1} ${"x".repeat(36)}`
+            ))
+          )),
+          summary: "Inspect 100 sample rows",
+        }],
+        data: {},
+        surfaceId: "large-table-acceptance-sample",
+      },
+    },
   };
 }
 
@@ -318,6 +422,21 @@ function latestScriptedToolPromptIndex(
     ) {
       return index;
     }
+  }
+  return -1;
+}
+
+function latestExactUserPromptIndex(
+  options: LanguageModelV3CallOptions,
+  expected: string,
+): number {
+  for (let index = options.prompt.length - 1; index >= 0; index -= 1) {
+    const message = options.prompt[index];
+    if (message?.role !== "user") continue;
+    return Array.isArray(message.content)
+      && message.content.some((part) => part.type === "text" && part.text === expected)
+      ? index
+      : -1;
   }
   return -1;
 }

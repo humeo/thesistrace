@@ -3,6 +3,15 @@ import type { Message } from "@ag-ui/core";
 import type { Pool, PoolClient } from "pg";
 
 import {
+  isResearchA2UIMessageId,
+  projectResearchA2UIContent,
+  safeResearchA2UIErrorContent,
+  RESEARCH_A2UI_ACTIVITY_TYPE,
+  RESEARCH_A2UI_CATALOG_ID,
+  RESEARCH_A2UI_PROTOCOL_VERSION,
+} from "../../contracts/research-a2ui.mjs";
+
+import {
   canonicalSubmittedBrowserMessages,
   projectDurableUiMessages,
 } from "./browser-message-safety.js";
@@ -53,6 +62,20 @@ export type RenamedSession = Readonly<{
   title: string;
   version: string;
 }>;
+export type PersistedA2UIActivity = Readonly<{
+  content: Record<string, unknown>;
+  lifecycle: "error" | "loading" | "ready";
+  messageId: string;
+  ownerMessageId: string;
+  runId: string;
+  sequence: number;
+  threadId: string;
+}>;
+
+type StoredA2UIActivity = Readonly<{
+  message: Extract<Message, { role: "activity" }>;
+  ownerMessageId: string;
+}>;
 
 export class SessionNotFoundError extends Error {
   constructor() {
@@ -100,15 +123,36 @@ export class ResearchSessionRepository {
   constructor(private readonly pool: Pool) {}
 
   async failInterruptedRunsAfterHostRestart(): Promise<number> {
-    const result = await this.pool.query(`
-      UPDATE agent.agent_run
-      SET status = 'failed',
-          token_usage = '{"reported":false}'::jsonb,
-          terminal_error_code = 'AGENT_RUN_INTERRUPTED',
-          completed_at = pg_catalog.now()
-      WHERE status = 'running'
-    `);
-    return result.rowCount ?? 0;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SET LOCAL search_path = pg_catalog");
+      await client.query(`
+        UPDATE agent.a2ui_message AS activity
+        SET lifecycle_status = 'error',
+            content = $1::jsonb,
+            updated_at = pg_catalog.now()
+        FROM agent.agent_run AS run
+        WHERE activity.run_id = run.id
+          AND activity.lifecycle_status = 'loading'
+          AND run.status = 'running'
+      `, [JSON.stringify(safeResearchA2UIErrorContent())]);
+      const result = await client.query(`
+        UPDATE agent.agent_run
+        SET status = 'failed',
+            token_usage = '{"reported":false}'::jsonb,
+            terminal_error_code = 'AGENT_RUN_INTERRUPTED',
+            completed_at = pg_catalog.now()
+        WHERE status = 'running'
+      `);
+      await client.query("COMMIT");
+      return result.rowCount ?? 0;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async ownership(threadId: string, researcherId: string): Promise<SessionOwnership> {
@@ -661,6 +705,152 @@ export class ResearchSessionRepository {
     return loadDurableMessages(this.pool, threadId, researcherId);
   }
 
+  async persistA2UIActivity(activity: PersistedA2UIActivity): Promise<void> {
+    if (
+      !isResearchA2UIMessageId(activity.messageId)
+      || activity.ownerMessageId.length === 0
+      || activity.ownerMessageId.length > 220
+      || /[\u0000-\u001f\u007f]/.test(activity.ownerMessageId)
+      || !Number.isInteger(activity.sequence)
+      || activity.sequence < 1
+      || activity.sequence > 1_000_000
+    ) {
+      throw new TranscriptConflictError();
+    }
+    const projected = projectResearchA2UIContent(activity.content);
+    if (
+      canonicalJson(projected.content) !== canonicalJson(activity.content)
+      || projected.kind !== activity.lifecycle
+    ) {
+      throw new TranscriptConflictError();
+    }
+    // Mastra emits Tool results before its owning Assistant message is always
+    // committed. This bounded persistence barrier keeps reconnect/restart from
+    // ever seeing an orphaned surface. The FK also enforces the invariant for
+    // every writer, while the join below enforces the owning Thread and role.
+    await waitForDurableCondition(async () => {
+      const owner = await this.pool.query<{
+        owner_role: string | null;
+        owner_thread_id: string | null;
+        status: string;
+      }>(`
+        SELECT message.role AS owner_role,
+               message.thread_id AS owner_thread_id,
+               run.status
+        FROM agent.agent_run AS run
+        LEFT JOIN agent."mastra_messages" AS message ON message.id = $3
+        WHERE run.id = $1::uuid AND run.thread_id = $2::uuid
+      `, [activity.runId, activity.threadId, activity.ownerMessageId]);
+      const row = owner.rows[0];
+      if (row === undefined) throw new TranscriptConflictError();
+      if (row.owner_thread_id !== null) {
+        if (row.owner_thread_id !== activity.threadId || row.owner_role !== "assistant") {
+          throw new TranscriptConflictError();
+        }
+        return true;
+      }
+      if (row.status !== "running") throw new TranscriptConflictError();
+      return false;
+    }, "A2UI_OWNER_PERSISTENCE_TIMEOUT");
+    const result = await this.pool.query(`
+      INSERT INTO agent.a2ui_message (
+        thread_id,
+        id,
+        run_id,
+        owner_message_id,
+        activity_type,
+        protocol_version,
+        catalog_id,
+        lifecycle_status,
+        sequence,
+        content
+      )
+      SELECT
+        run.thread_id,
+        $3,
+        run.id,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10::jsonb
+      FROM agent.agent_run AS run
+      JOIN agent."mastra_messages" AS message
+        ON message.id = $4
+       AND message.thread_id = run.thread_id::text
+       AND message.role = 'assistant'
+      WHERE run.id = $1::uuid AND run.thread_id = $2::uuid
+      ON CONFLICT (thread_id, id) DO UPDATE
+      SET lifecycle_status = EXCLUDED.lifecycle_status,
+          content = EXCLUDED.content,
+          updated_at = pg_catalog.now()
+      WHERE agent.a2ui_message.run_id = EXCLUDED.run_id
+        AND agent.a2ui_message.owner_message_id = EXCLUDED.owner_message_id
+        AND agent.a2ui_message.activity_type = EXCLUDED.activity_type
+        AND agent.a2ui_message.protocol_version = EXCLUDED.protocol_version
+        AND agent.a2ui_message.catalog_id = EXCLUDED.catalog_id
+        AND agent.a2ui_message.sequence = EXCLUDED.sequence
+      RETURNING id
+    `, [
+      activity.runId,
+      activity.threadId,
+      activity.messageId,
+      activity.ownerMessageId,
+      RESEARCH_A2UI_ACTIVITY_TYPE,
+      RESEARCH_A2UI_PROTOCOL_VERSION,
+      RESEARCH_A2UI_CATALOG_ID,
+      activity.lifecycle,
+      activity.sequence,
+      JSON.stringify(activity.content),
+    ]);
+    if (result.rowCount !== 1) throw new TranscriptConflictError();
+  }
+
+  async durableBrowserMessages(
+    threadId: string,
+    researcherId: string,
+  ): Promise<readonly Message[]> {
+    const client = await this.pool.connect();
+    try {
+      // Messages and surfaces must come from one database snapshot. Separate
+      // read-committed queries can straddle an owner/surface commit and make a
+      // valid FK-backed surface appear orphaned to a reconnecting client.
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      await client.query("SET LOCAL search_path = pg_catalog");
+      const owner = await client.query<{ researcher_id: string }>(`
+        SELECT researcher_id::text FROM agent.chat_session WHERE id = $1::uuid
+      `, [threadId]);
+      if (owner.rows[0] === undefined) {
+        await client.query("COMMIT");
+        return [];
+      }
+      if (owner.rows[0].researcher_id !== researcherId) throw new SessionNotFoundError();
+      const messages = await loadDurableMessages(client, threadId, researcherId);
+      const activities = await loadA2UIActivities(client, threadId, researcherId);
+      const merged = mergeA2UIActivities(messages, activities);
+      await client.query("COMMIT");
+      return merged;
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async durableBrowserMessagesForThread(threadId: string): Promise<readonly Message[]> {
+    const owner = await this.pool.query<{ researcher_id: string }>(`
+      SELECT researcher_id::text
+      FROM agent.chat_session
+      WHERE id = $1::uuid
+    `, [threadId]);
+    const researcherId = owner.rows[0]?.researcher_id;
+    if (researcherId === undefined) throw new SessionNotFoundError();
+    return this.durableBrowserMessages(threadId, researcherId);
+  }
+
   async latestRun(threadId: string, researcherId: string): Promise<TerminalRun | null> {
     const ownership = await this.ownership(threadId, researcherId);
     if (ownership !== "owned") return null;
@@ -682,6 +872,37 @@ export class ResearchSessionRepository {
       terminalErrorCode: row.terminal_error_code,
     };
   }
+}
+
+export function mergeA2UIActivities(
+  messages: readonly Message[],
+  activities: readonly StoredA2UIActivity[],
+): readonly Message[] {
+  const merged = [...messages];
+  const insertedAfterOwner = new Map<string, number>();
+  for (const activity of activities) {
+    const ownerIndex = merged.findIndex((message) => message.id === activity.ownerMessageId);
+    if (ownerIndex < 0) {
+      throw new TranscriptConflictError();
+    }
+    const previousCount = insertedAfterOwner.get(activity.ownerMessageId) ?? 0;
+    let insertionIndex = ownerIndex + 1 + previousCount;
+    const owner = merged[ownerIndex];
+    if (owner?.role === "assistant" && previousCount === 0) {
+      const ownedToolCalls = new Set(owner.toolCalls?.map((call) => call.id) ?? []);
+      while (insertionIndex < merged.length) {
+        const candidate = merged[insertionIndex];
+        if (candidate?.role !== "tool" || !ownedToolCalls.has(candidate.toolCallId)) break;
+        insertionIndex += 1;
+      }
+    }
+    merged.splice(insertionIndex, 0, activity.message);
+    insertedAfterOwner.set(
+      activity.ownerMessageId,
+      previousCount + 1 + (insertionIndex - ownerIndex - 1 - previousCount),
+    );
+  }
+  return merged;
 }
 
 type SessionSummaryRow = Readonly<{
@@ -884,6 +1105,83 @@ async function loadDurableMessages(
   } catch {
     throw new TranscriptConflictError();
   }
+}
+
+async function loadA2UIActivities(
+  database: Pick<Pool | PoolClient, "query">,
+  threadId: string,
+  researcherId: string,
+): Promise<readonly StoredA2UIActivity[]> {
+  const result = await database.query<{
+    activity_type: string;
+    catalog_id: string;
+    content: unknown;
+    id: string;
+    lifecycle_status: "error" | "loading" | "ready";
+    owner_message_id: string;
+    protocol_version: string;
+    sequence: number;
+  }>(`
+    SELECT
+      activity.id,
+      activity.owner_message_id,
+      activity.activity_type,
+      activity.protocol_version,
+      activity.catalog_id,
+      activity.lifecycle_status,
+      activity.sequence,
+      activity.content
+    FROM agent.a2ui_message AS activity
+    JOIN agent.chat_session AS session
+      ON session.id = activity.thread_id
+    JOIN agent.agent_run AS run ON run.id = activity.run_id
+    WHERE activity.thread_id = $1::uuid
+      AND session.researcher_id = $2::uuid
+    ORDER BY run.started_at ASC, run.id ASC, activity.sequence ASC
+  `, [threadId, researcherId]);
+  return result.rows.map((row): StoredA2UIActivity => {
+    if (
+      row.activity_type !== RESEARCH_A2UI_ACTIVITY_TYPE
+      || row.catalog_id !== RESEARCH_A2UI_CATALOG_ID
+      || row.protocol_version !== RESEARCH_A2UI_PROTOCOL_VERSION
+      || !isResearchA2UIMessageId(row.id)
+      || row.owner_message_id.length === 0
+      || row.owner_message_id.length > 220
+      || /[\u0000-\u001f\u007f]/.test(row.owner_message_id)
+      || !Number.isInteger(row.sequence)
+      || row.sequence < 1
+      || row.sequence > 1_000_000
+    ) {
+      throw new TranscriptConflictError();
+    }
+    const projected = projectResearchA2UIContent(row.content);
+    if (
+      projected.kind !== row.lifecycle_status
+      || canonicalJson(projected.content) !== canonicalJson(row.content)
+    ) {
+      throw new TranscriptConflictError();
+    }
+    return {
+      message: {
+        activityType: RESEARCH_A2UI_ACTIVITY_TYPE,
+        content: projected.content,
+        id: row.id,
+        role: "activity",
+      },
+      ownerMessageId: row.owner_message_id,
+    };
+  });
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function assertOneNewUserMessage(

@@ -1,5 +1,5 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import type { Page, Route } from "@playwright/test";
+import { execFileSync, spawnSync, type ChildProcess } from "node:child_process";
+import type { Locator, Page, Route } from "@playwright/test";
 
 import {
   createResearcher,
@@ -10,13 +10,22 @@ import {
   test,
   testProjectName,
 } from "./auth-fixture";
+import {
+  controlledWorkerExit,
+  controlWorker,
+  startControlledResearchRun,
+} from "./research-run-control";
 
+const scriptedFactorIdeaPrompt =
+  "Evaluate a low-volatility Alpha idea as a Factor Evaluation using reliable ThesisTrace defaults.";
 const scriptedFactorSubmitOnlyPrompt =
   "Submit a low-volatility Factor Evaluation and return as soon as ThesisTrace accepts it.";
 const scriptedResumeResearchPrompt =
   "Resume the accepted ResearchRun from this Chat and explain its authoritative Result when available.";
 const scriptedStrategyPrompt =
   "Backtest a low-volatility Alpha strategy using reliable ThesisTrace defaults.";
+const scriptedLargeA2UITablePrompt =
+  "[scripted-a2ui-table] Show a large renderer acceptance sample, not research evidence.";
 
 function agentRunStatus(page: Page) {
   return page.locator(".chat-composer-status-row").getByRole("status");
@@ -553,11 +562,223 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
   await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue("");
 });
 
+for (const [scenario, prompt] of [
+  ["component action", "[scripted-invalid-a2ui] Attempt one unsafe research surface."],
+  ["top-level field", "[scripted-invalid-a2ui-top-level] Attempt an unknown top-level render field."],
+  ["non-empty data", "[scripted-invalid-a2ui-data] Attempt non-empty render data."],
+] as const) {
+test(`Chat rejects an invalid model-authored A2UI surface and remains usable: ${scenario}`, async ({ page }) => {
+  await page.goto("/chat");
+  await page.evaluate(() => {
+    const evidence = { sawUnsafeSurface: false };
+    Object.assign(window, { a2uiRejectionEvidence: evidence });
+    new MutationObserver(() => {
+      evidence.sawUnsafeSurface ||= document.body.textContent
+        ?.includes("MALICIOUS_A2UI_SHOULD_NOT_RENDER") === true;
+    }).observe(document.body, { characterData: true, childList: true, subtree: true });
+  });
+  const message = page.getByRole("textbox", { name: "Message", exact: true });
+  await message.fill(prompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  expect(await page.evaluate(() => (
+    window as Window & { a2uiRejectionEvidence?: { sawUnsafeSurface: boolean } }
+  ).a2uiRejectionEvidence?.sawUnsafeSurface)).toBe(false);
+  const safeError = page.getByRole("alert").filter({
+    hasText: "This research surface could not be displayed.",
+  });
+  await expect(safeError).toHaveText(
+    "This research surface could not be displayed. The conversation is still available.",
+  );
+  await expect(page.locator("body")).not.toContainText("MALICIOUS_A2UI_SHOULD_NOT_RENDER");
+  await expect(page.locator("body")).not.toContainText("delete_research");
+  await expect(page.getByRole("article", { name: /Tool render_a2ui:/ })).toHaveCount(0);
+  await expect(page.locator(".chat-message-assistant .chat-message-content").last())
+    .toContainText("unsafe research surface was rejected");
+  await expect(message).toBeEnabled();
+
+  const durableUrl = page.url();
+  const sessionId = new URL(durableUrl).searchParams.get("session");
+  if (sessionId === null) throw new Error("Rejected A2UI Chat exposed no Session id");
+  expect(agentChatDatabaseFacts(sessionId).a2ui).toBe(1);
+  await page.reload();
+  await expect(page).toHaveURL(durableUrl);
+  await expect(safeError).toHaveText(
+    "This research surface could not be displayed. The conversation is still available.",
+  );
+  expect(agentChatDatabaseFacts(sessionId).a2ui).toBe(1);
+
+  const assistantMessages = page.locator(".chat-message-assistant .chat-message-content");
+  const assistantCount = await assistantMessages.count();
+  const continuationResponse = page.waitForResponse((response) => (
+    new URL(response.url()).pathname.endsWith("/agent/research/run")
+  ));
+  await message.fill("Continue after rejecting that unsafe surface.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  expect((await continuationResponse).status()).toBe(200);
+  await expect(assistantMessages).toHaveCount(assistantCount + 1);
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  await expect(assistantMessages.last())
+    .toContainText("testable Alpha");
+  await expect(safeError).toBeVisible();
+});
+}
+
+test("A2UI shows real running state and supports keyboard and narrow-screen result interactions", async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  let worker: ChildProcess | undefined;
+  controlWorker("pause");
+  try {
+    await page.goto("/chat");
+    await page.getByRole("textbox", { name: "Message", exact: true }).fill(scriptedFactorIdeaPrompt);
+    await page.getByRole("button", { name: "Send message" }).click();
+    const admitted = page.getByRole("article", { name: "Tool submit_research_run: Completed" });
+    await expect(admitted).toBeVisible({ timeout: 30_000 });
+    const href = await admitted.locator("a.chat-tool-resource").getAttribute("href");
+    const runId = href?.split("/").at(-1);
+    if (runId === undefined || !/^run_[a-f0-9]{20}$/.test(runId)) {
+      throw new Error("Admission did not return a safe ResearchRun route");
+    }
+    const barrier = startControlledResearchRun(runId);
+    worker = barrier.process;
+    await barrier.claimed;
+    const detailResponse = await page.request.get(`/api/research-runs/${runId}`);
+    expect(detailResponse.status()).toBe(200);
+    const detail = await detailResponse.json() as {
+      input: { formula: string }; progress: { phase: string }; status: string;
+    };
+    expect(detail.status).toBe("running");
+    const running = page.getByRole("region", { name: `ResearchRun ${runId}: running` });
+    await expect(running).toContainText(detail.progress.phase, { timeout: 30_000 });
+    await expect(running).toContainText(detail.input.formula);
+    await testInfo.attach("a2ui-running.png", { body: await running.screenshot(), contentType: "image/png" });
+    worker.stdin?.end("1");
+    await controlledWorkerExit(worker);
+    worker = undefined;
+    await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
+    await expect(page.getByRole("article", { name: "Research surface" })).toHaveCount(4);
+    await expect(page.getByRole("region", { name: `ResearchRun ${runId}: succeeded` })).toBeVisible();
+
+    const formula = page.getByRole("region", { name: "Proposed formula" });
+    const copy = formula.getByRole("button", { name: "Copy" });
+    await keyboardFocus(page, copy);
+    await page.keyboard.press("Enter");
+    await expect(formula.getByText("Formula copied", { exact: true })).toBeAttached();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(detail.input.formula);
+
+    const result = page.getByRole("article", { name: "Research surface" }).last();
+    const collapsedControls = result.locator(".chat-a2ui-column > .chat-a2ui-child")
+      .filter({ has: page.locator("button[aria-expanded='false'], .chat-a2ui-navigation") });
+    await expect(collapsedControls).toHaveCount(3);
+    for (const control of await collapsedControls.all()) {
+      expect((await control.boundingBox())?.height).toBeLessThanOrEqual(64);
+    }
+    const disclosure = result.getByRole("button", { name: "Inspect result metrics" });
+    await keyboardFocus(page, disclosure);
+    await page.keyboard.press("Space");
+    await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    const table = result.getByRole("table", { name: "Authoritative factor metrics" });
+    await expect(table.getByRole("columnheader")).toHaveCount(2);
+    await page.keyboard.press("Enter");
+    await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    await page.keyboard.press("Enter");
+    await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    const provenance = result.getByRole("button", { name: "Inspect provenance" });
+    await keyboardFocus(page, provenance);
+    await page.keyboard.press("Enter");
+    await expect(provenance).toHaveAttribute("aria-expanded", "true");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expectAccessibleNarrowTable(table, 2);
+    const navigation = result.getByRole("link", { name: "Open authoritative ResearchRun" });
+    for (const target of [copy, disclosure, provenance, navigation]) {
+      const bounds = await target.boundingBox();
+      expect(bounds?.width).toBeGreaterThanOrEqual(44);
+      expect(bounds?.height).toBeGreaterThanOrEqual(44);
+    }
+    await table.scrollIntoViewIfNeeded();
+    await testInfo.attach("a2ui-result-mobile.png", { body: await page.screenshot(), contentType: "image/png" });
+    await keyboardFocus(page, navigation);
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(new RegExp(`/research-runs/${runId}$`));
+    await expect(page.locator(".research-run-facts")).toContainText("Status succeeded");
+  } finally {
+    try {
+      if (worker !== undefined) {
+        worker.kill("SIGTERM");
+        await controlledWorkerExit(worker, true);
+      }
+    } finally {
+      controlWorker("unpause");
+    }
+  }
+});
+
+test("a large A2UI table preserves column meaning and layout on a narrow screen", async ({ page }, testInfo) => {
+  await page.goto("/chat");
+  await page.getByRole("textbox", { name: "Message", exact: true }).fill(scriptedLargeA2UITablePrompt);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  const disclosure = page.getByRole("button", { name: "Inspect 100 sample rows" });
+  await keyboardFocus(page, disclosure);
+  await page.keyboard.press("Enter");
+  const table = page.getByRole("table", { name: "Renderer acceptance sample — not research evidence" });
+  await expect(table.getByRole("row")).toHaveCount(101);
+  await expect(table.getByRole("cell")).toHaveCount(1200);
+  await page.setViewportSize({ width: 320, height: 720 });
+  await expectAccessibleNarrowTable(table, 12);
+  await table.getByRole("cell").last().scrollIntoViewIfNeeded();
+  await expect(table.getByRole("cell").last()).toContainText("Sample 100:12");
+  await testInfo.attach("a2ui-large-table-mobile.png", { body: await page.screenshot(), contentType: "image/png" });
+  await page.reload();
+  await expect(agentRunStatus(page)).toHaveText("Ready");
+  await disclosure.click();
+  await expect(table.getByRole("cell")).toHaveCount(1200);
+  await expectAccessibleNarrowTable(table, 12);
+});
+
+async function keyboardFocus(page: Page, target: Locator): Promise<void> {
+  for (let tabPresses = 0; tabPresses < 80; tabPresses += 1) {
+    await page.keyboard.press("Tab");
+    if (await target.evaluate((element) => element === document.activeElement)) break;
+  }
+  await expect(target).toBeFocused();
+  await expect(target).toHaveCSS("outline-style", "solid");
+  await expect(target).toHaveCSS("outline-width", "2px");
+}
+
+async function expectAccessibleNarrowTable(table: Locator, columns: number): Promise<void> {
+  await expect(table.getByRole("columnheader")).toHaveCount(columns);
+  expect(await table.evaluate((element) => {
+    const cells = Array.from(element.querySelectorAll("td"));
+    return {
+      fieldsPreserved: cells.every((cell) => {
+        const header = document.getElementById(cell.getAttribute("headers") ?? "");
+        const label = cell.querySelector<HTMLElement>(".chat-a2ui-cell-label");
+        return header?.getAttribute("role") === "columnheader"
+          && label?.textContent === header.textContent
+          && label.getAttribute("aria-hidden") === "true"
+          && getComputedStyle(label).display !== "none";
+      }),
+      pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    };
+  })).toEqual({ fieldsPreserved: true, pageOverflow: false });
+}
+
 test("admitted Research artifacts and a DailyTrack outlive the Chat that created them", async ({
   page,
   researcher,
 }) => {
   test.setTimeout(240_000);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  let agentRunRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/agent/research/run")) {
+      agentRunRequests += 1;
+    }
+  });
   await page.goto("/chat");
   const message = page.getByRole("textbox", { name: "Message", exact: true });
   await message.fill(scriptedFactorSubmitOnlyPrompt);
@@ -579,6 +800,29 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   await expect(page.getByRole("article", {
     name: /Tool get_research_run:/,
   })).toHaveCount(0);
+  const proposalSurface = page.getByRole("region", {
+    name: "Alpha proposal: Low-volatility factor",
+  });
+  await expect(proposalSurface).toContainText("Chat-owned");
+  await expect(proposalSurface).toContainText("Factor Evaluation");
+  await expect(proposalSurface).toContainText("top1000");
+  await expect(proposalSurface).toContainText("rank(-abs(pct_change(close, 1)))");
+  const formulaSurface = page.getByRole("region", { name: "Proposed formula" });
+  const copyFormula = formulaSurface.getByRole("button", { name: "Copy" });
+  await copyFormula.click();
+  await expect(formulaSurface.getByText("Formula copied", { exact: true })).toBeAttached();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "rank(-abs(pct_change(close, 1)))",
+  );
+  const acceptedSurface = page.getByRole("region", {
+    name: `ResearchRun ${runId}: queued`,
+  });
+  await expect(acceptedSurface).toContainText("Accepted by ThesisTrace Core");
+  const acceptedNavigation = page.getByRole("link", {
+    name: "Open authoritative ResearchRun",
+  }).first();
+  await expect(acceptedNavigation).toHaveAttribute("href", `/research-runs/${runId}`);
+  await expect(page.getByRole("article", { name: "Research surface" })).toHaveCount(2);
 
   await expect.poll(async () => {
     const response = await page.request.get(`/api/research-runs/${runId}`);
@@ -642,9 +886,45 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   await expect(result).toContainText(spread);
   await expect(result.locator("li")).not.toHaveCount(0);
   await expect(result.locator("a.chat-markdown-run-link")).toHaveAttribute("href", runHref);
+  const resultSurface = page.getByRole("article", { name: "Research surface" }).last();
+  await expect(resultSurface.getByRole("region", {
+    name: `ResearchRun ${runId}: succeeded`,
+  })).toContainText("Authoritative immutable Result is available");
+  await expect(resultSurface.getByRole("region", {
+    name: "Factor Evaluation result",
+  })).toContainText(rankIc);
+  await expect(resultSurface).toContainText(spread);
+  const resultDisclosure = resultSurface.getByRole("button", {
+    name: "Inspect result metrics",
+  });
+  await expect(resultDisclosure).toHaveAttribute("aria-expanded", "false");
+  await resultDisclosure.click();
+  await expect(resultDisclosure).toHaveAttribute("aria-expanded", "true");
+  const resultTable = resultSurface.getByRole("table", {
+    name: "Authoritative factor metrics",
+  });
+  await expect(resultTable).toContainText("5-session Rank IC");
+  await expect(resultTable).toContainText(rankIc);
+  const provenanceDisclosure = resultSurface.getByRole("button", {
+    name: "Inspect provenance",
+  });
+  await provenanceDisclosure.click();
+  await expect(provenanceDisclosure).toHaveAttribute("aria-expanded", "true");
+  await expect(resultSurface).toContainText("Result section");
+  await expect(resultSurface).toContainText("factor");
+  await expect(resultSurface.getByRole("link", {
+    name: "Open authoritative ResearchRun",
+  })).toHaveAttribute("href", runHref);
+  await expect(page.getByRole("article", { name: "Research surface" })).toHaveCount(3);
+  await expect(resultSurface.getByRole("button", {
+    name: /Submit|Retry|Cancel|Stop|Delete/,
+  })).toHaveCount(0);
 
   await message.fill(scriptedStrategyPrompt);
   await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByRole("article", {
+    name: "Tool submit_research_run: Completed",
+  })).toHaveCount(2, { timeout: 30_000 });
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
   const strategyAdmission = page.getByRole("article", {
     name: "Tool submit_research_run: Completed",
@@ -687,22 +967,38 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   });
 
   const durableUrl = page.url();
+  const agentRunsBeforeReplay = agentRunRequests;
+  const replaySessionId = new URL(durableUrl).searchParams.get("session");
+  if (replaySessionId === null) throw new Error("Durable Research Chat exposed no Session id");
+  const surfaceFactsBeforeReplay = agentChatDatabaseFacts(replaySessionId);
+  expect(surfaceFactsBeforeReplay.a2ui).toBeGreaterThanOrEqual(6);
+  await expect(page.getByRole("article", { name: "Research surface" }))
+    .toHaveCount(surfaceFactsBeforeReplay.a2ui);
   await page.reload();
   await expect(page).toHaveURL(durableUrl);
   await expect(agentRunStatus(page)).toHaveText("Ready");
+  await expect(page.getByRole("article", { name: "Research surface" }))
+    .toHaveCount(surfaceFactsBeforeReplay.a2ui);
+  await expect(page.getByRole("region", {
+    name: "Alpha proposal: Low-volatility factor",
+  })).toContainText("Chat-owned");
+  await expect(page.getByRole("region", {
+    name: "Factor Evaluation result",
+  })).toContainText(rankIc);
+  expect(agentRunRequests).toBe(agentRunsBeforeReplay);
   await expect(page.locator(".chat-tool-resource").filter({ hasText: runId }).first())
     .toHaveAttribute("href", runHref);
   await expect(page.locator(".chat-message-assistant .chat-assistant-markdown").filter({
     hasText: rankIc,
   }).last())
     .toContainText(rankIc);
-  const chatSessionId = new URL(durableUrl).searchParams.get("session");
-  if (chatSessionId === null) throw new Error("Durable Research Chat exposed no Session id");
+  const chatSessionId = replaySessionId;
   const agentFactsBeforeDelete = agentChatDatabaseFacts(chatSessionId);
   expect(agentFactsBeforeDelete.sessions).toBe(1);
   expect(agentFactsBeforeDelete.threads).toBe(1);
   expect(agentFactsBeforeDelete.messages).toBeGreaterThan(0);
   expect(agentFactsBeforeDelete.runs).toBeGreaterThanOrEqual(2);
+  expect(agentFactsBeforeDelete.a2ui).toBeGreaterThanOrEqual(5);
   await page.setViewportSize({ height: 900, width: 768 });
   const durableRunLink = page.locator("a.chat-markdown-run-link").last();
   await durableRunLink.scrollIntoViewIfNeeded();
@@ -763,6 +1059,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
     agentFactsBeforeDelete.run_ids,
   );
   expect(agentFactsAfterDelete).toEqual({
+    a2ui: 0,
     messages: 0,
     observational_memory: 0,
     run_ids: [],
@@ -1089,6 +1386,7 @@ type ResearchAdmissionDatabaseFacts = Readonly<{
 }>;
 
 type AgentChatDatabaseFacts = Readonly<{
+  a2ui: number;
   messages: number;
   observational_memory: number;
   run_ids: readonly string[];
@@ -1245,6 +1543,11 @@ function agentChatDatabaseFacts(
       "--command",
       `
         SELECT json_build_object(
+          'a2ui', (
+            SELECT count(*)::integer
+            FROM agent.a2ui_message
+            WHERE thread_id = '${threadId}'::uuid
+          ),
           'messages', (
             SELECT count(*)::integer
             FROM agent."mastra_messages"
@@ -1295,6 +1598,7 @@ function agentChatDatabaseFacts(
     parsed === null
     || typeof parsed !== "object"
     || Array.isArray(parsed)
+    || !Object.hasOwn(parsed, "a2ui")
     || !Object.hasOwn(parsed, "messages")
     || !Object.hasOwn(parsed, "observational_memory")
     || !Object.hasOwn(parsed, "run_ids")
@@ -1307,6 +1611,7 @@ function agentChatDatabaseFacts(
   }
   const record = parsed as Record<string, unknown>;
   const counts = [
+    record.a2ui,
     record.messages,
     record.observational_memory,
     record.runs,

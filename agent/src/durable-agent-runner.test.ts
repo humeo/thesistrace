@@ -5,6 +5,11 @@ import { EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/core";
 import { firstValueFrom, Subject, toArray } from "rxjs";
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  RESEARCH_A2UI_ACTIVITY_TYPE,
+  RESEARCH_A2UI_CATALOG_ID,
+  RESEARCH_A2UI_PROTOCOL_VERSION,
+} from "../../contracts/research-a2ui.mjs";
 import { DurableResearchAgentRunner } from "./durable-agent-runner.js";
 import {
   SessionActiveRunError,
@@ -68,7 +73,7 @@ describe("DurableResearchAgentRunner", () => {
       resolveLatestRun = resolve;
     });
     const repository = {
-      durableMessages: vi.fn(async () => []),
+      durableBrowserMessages: vi.fn(async () => []),
       latestRun: vi.fn(() => latestRun),
     } as unknown as ResearchSessionRepository;
     const runner = new DurableResearchAgentRunner(repository);
@@ -102,7 +107,7 @@ describe("DurableResearchAgentRunner", () => {
     const threadId = randomUUID();
     const runId = randomUUID();
     const repository = {
-      durableMessages: vi.fn(async () => [{
+      durableBrowserMessages: vi.fn(async () => [{
         content: "Persisted idea",
         id: randomUUID(),
         role: "user" as const,
@@ -129,11 +134,77 @@ describe("DurableResearchAgentRunner", () => {
     expect(events[2]).toMatchObject({ runId, threadId });
   });
 
+  it("persists an A2UI Activity before exposing it and hides its raw Tool events", async () => {
+    const threadId = fixedUuid(181);
+    const runId = fixedUuid(182);
+    let releasePersistence: () => void = () => undefined;
+    const persistence = new Promise<void>((resolve) => {
+      releasePersistence = resolve;
+    });
+    const repository = {
+      persistA2UIActivity: vi.fn(() => persistence),
+    } as unknown as ResearchSessionRepository;
+    const runner = new DurableResearchAgentRunner(repository);
+    const agent = new HoldingAgent();
+    const events: BaseEvent[] = [];
+    const completed = new Promise<void>((resolve, reject) => {
+      runner.run({ agent, input: input(threadId, runId), threadId }).subscribe({
+        complete: resolve,
+        error: reject,
+        next: (event) => events.push(event),
+      });
+    });
+
+    await vi.waitFor(() => expect(agent.events.observed).toBe(true));
+    agent.events.next({ type: EventType.RUN_STARTED, threadId, runId });
+    agent.events.next({
+      parentMessageId: "assistant-owner",
+      toolCallId: "render-call",
+      toolCallName: "render_a2ui",
+      type: EventType.TOOL_CALL_START,
+    });
+    agent.events.next({
+      activityType: RESEARCH_A2UI_ACTIVITY_TYPE,
+      content: readyA2UIContent(),
+      messageId: "a2ui-surface-render-call",
+      replace: true,
+      type: EventType.ACTIVITY_SNAPSHOT,
+    });
+    expect(events.some((event) => event.type === EventType.ACTIVITY_SNAPSHOT)).toBe(false);
+    agent.events.next({
+      content: JSON.stringify(readyA2UIContent()),
+      messageId: "render-result",
+      role: "tool",
+      toolCallId: "render-call",
+      type: EventType.TOOL_CALL_RESULT,
+    });
+
+    await vi.waitFor(() => expect(repository.persistA2UIActivity).toHaveBeenCalledOnce());
+    expect(events.some((event) => event.type === EventType.ACTIVITY_SNAPSHOT)).toBe(false);
+    expect(events.some((event) => event.type === EventType.TOOL_CALL_START)).toBe(false);
+
+    releasePersistence();
+    await vi.waitFor(() => expect(
+      events.some((event) => event.type === EventType.ACTIVITY_SNAPSHOT),
+    ).toBe(true));
+    expect(repository.persistA2UIActivity).toHaveBeenCalledWith(expect.objectContaining({
+      lifecycle: "ready",
+      messageId: "a2ui-surface-render-call",
+      ownerMessageId: "assistant-owner",
+      runId,
+      sequence: 1,
+      threadId,
+    }));
+
+    agent.events.complete();
+    await completed;
+  });
+
   it("preserves a safe terminal error when an active Run fails before starting", async () => {
     const threadId = randomUUID();
     const runId = randomUUID();
     const repository = {
-      durableMessages: vi.fn(async () => []),
+      durableBrowserMessages: vi.fn(async () => []),
       latestRun: vi.fn(async () => ({
         id: runId,
         status: "running" as const,
@@ -224,4 +295,26 @@ function input(threadId: string, runId: string): RunAgentInput {
 
 function fixedUuid(suffix: number): string {
   return `00000000-0000-4000-8000-${suffix.toString().padStart(12, "0")}`;
+}
+
+function readyA2UIContent(): Record<string, unknown> {
+  return {
+    a2ui_operations: [{
+      createSurface: {
+        catalogId: RESEARCH_A2UI_CATALOG_ID,
+        surfaceId: "research-result",
+      },
+      version: RESEARCH_A2UI_PROTOCOL_VERSION,
+    }, {
+      updateComponents: {
+        components: [{
+          component: "Text",
+          id: "root",
+          text: "Research result available",
+        }],
+        surfaceId: "research-result",
+      },
+      version: RESEARCH_A2UI_PROTOCOL_VERSION,
+    }],
+  };
 }

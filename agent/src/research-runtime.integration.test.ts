@@ -12,6 +12,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { z } from "zod";
 
 import {
+  RESEARCH_A2UI_ACTIVITY_TYPE,
+  RESEARCH_A2UI_CATALOG_ID,
+  RESEARCH_A2UI_PROTOCOL_VERSION,
+  safeResearchA2UIErrorContent,
+} from "../../contracts/research-a2ui.mjs";
+import {
   canonicalSubmittedBrowserMessages,
   SAFE_TOOL_COMPLETED,
   SAFE_TOOL_FAILED,
@@ -25,6 +31,9 @@ import { createResearchRuntime, type ResearchRuntime } from "./research-runtime.
 import { initializeAgentSchema } from "./schema-initialize.js";
 import {
   SCRIPTED_FACTOR_IDEA_PROMPT,
+  SCRIPTED_INVALID_A2UI_PROMPT,
+  SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT,
+  SCRIPTED_INVALID_A2UI_DATA_PROMPT,
   SCRIPTED_TOOL_PROMPT,
 } from "./scripted-language-model.js";
 import {
@@ -32,6 +41,7 @@ import {
   SessionActiveRunError,
   SessionNotFoundError,
   SessionVersionConflictError,
+  TranscriptConflictError,
   type RenamedSession,
 } from "./session-repository.js";
 import {
@@ -107,6 +117,9 @@ const createIntegrationRuntime = () => createResearchRuntime(settings, {
 describe.sequential("durable Research Agent runtime", () => {
   beforeAll(async () => {
     await owner.query("DROP SCHEMA IF EXISTS agent CASCADE");
+    await owner.query("DROP SCHEMA IF EXISTS core CASCADE");
+    await owner.query("CREATE SCHEMA core");
+    await owner.query("CREATE TABLE core.research_canary (id integer PRIMARY KEY)");
     await initializeAgentSchema(owner);
   });
 
@@ -119,7 +132,8 @@ describe.sequential("durable Research Agent runtime", () => {
         agent."mastra_observational_memory",
         agent."mastra_resources",
         agent."mastra_threads",
-        agent."mastra_workflow_snapshot"
+        agent."mastra_workflow_snapshot",
+        core.research_canary
       CASCADE
     `);
   });
@@ -127,6 +141,7 @@ describe.sequential("durable Research Agent runtime", () => {
   afterAll(async () => {
     await agentStore.end();
     await owner.query("DROP SCHEMA IF EXISTS agent CASCADE");
+    await owner.query("DROP SCHEMA IF EXISTS core CASCADE");
     await owner.end();
   });
 
@@ -409,6 +424,22 @@ describe.sequential("durable Research Agent runtime", () => {
         'scripted-v1', 'medium', 'interrupted-build', 'running'
       )
     `, [runId, threadId]);
+    await seedAssistantMessage(threadId, fixedUuid(403));
+    await owner.query(`
+      INSERT INTO agent.a2ui_message (
+        thread_id, id, run_id, owner_message_id, activity_type,
+        protocol_version, catalog_id, lifecycle_status, sequence, content
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'loading', 1, $8::jsonb)
+    `, [
+      threadId,
+      "a2ui-surface-interrupted-test",
+      runId,
+      fixedUuid(403),
+      RESEARCH_A2UI_ACTIVITY_TYPE,
+      RESEARCH_A2UI_PROTOCOL_VERSION,
+      RESEARCH_A2UI_CATALOG_ID,
+      JSON.stringify({ debugExposure: "hidden", status: "building" }),
+    ]);
 
     const runtime = await createIntegrationRuntime();
     try {
@@ -427,6 +458,18 @@ describe.sequential("durable Research Agent runtime", () => {
         status: "failed",
         terminal_error_code: "AGENT_RUN_INTERRUPTED",
         token_usage: { reported: false },
+      }]);
+      const interruptedSurface = await owner.query<{
+        content: Record<string, unknown>;
+        lifecycle_status: string;
+      }>(`
+        SELECT lifecycle_status, content
+        FROM agent.a2ui_message
+        WHERE thread_id = $1::uuid
+      `, [threadId]);
+      expect(interruptedSurface.rows).toEqual([{
+        content: safeResearchA2UIErrorContent(),
+        lifecycle_status: "error",
       }]);
       await expect(runtime.session(threadId, primaryResearcher)).resolves.toMatchObject({
         activeRun: false,
@@ -672,11 +715,11 @@ describe.sequential("durable Research Agent runtime", () => {
     await owner.query(`
       INSERT INTO agent."mastra_messages" (
         id, thread_id, content, role, type, "createdAt", "resourceId", "createdAtZ"
-      ) VALUES ($1, $2, $3, 'user', 'v2', pg_catalog.now(), $4, pg_catalog.now())
+      ) VALUES ($1, $2, $3, 'assistant', 'v2', pg_catalog.now(), $4, pg_catalog.now())
     `, [
       fixedUuid(432),
       threadId,
-      JSON.stringify([{ type: "text", text: "Explain ResearchRun core-run-42." }]),
+      durableTextContent("Explain ResearchRun core-run-42.", 1_788_048_000_000),
       primaryResearcher.researcher_id,
     ]);
     await owner.query(`
@@ -685,6 +728,22 @@ describe.sequential("durable Research Agent runtime", () => {
       ) VALUES ('durable-agent', $1, $2, '{"status":"completed"}'::jsonb,
                 pg_catalog.now(), pg_catalog.now())
     `, [runId, primaryResearcher.researcher_id]);
+    await owner.query(`
+      INSERT INTO agent.a2ui_message (
+        thread_id, id, run_id, owner_message_id, activity_type,
+        protocol_version, catalog_id, lifecycle_status, sequence, content
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'error', 1, $8::jsonb)
+    `, [
+      threadId,
+      "a2ui-surface-deletion-test",
+      runId,
+      fixedUuid(432),
+      RESEARCH_A2UI_ACTIVITY_TYPE,
+      RESEARCH_A2UI_PROTOCOL_VERSION,
+      RESEARCH_A2UI_CATALOG_ID,
+      JSON.stringify(safeResearchA2UIErrorContent()),
+    ]);
+    await owner.query("INSERT INTO core.research_canary (id) VALUES (1)");
     await owner.query(`
       INSERT INTO agent."mastra_resources" (
         id, "workingMemory", metadata, "createdAt", "updatedAt"
@@ -697,10 +756,11 @@ describe.sequential("durable Research Agent runtime", () => {
       foreignResearcher.researcher_id,
     )).rejects.toBeInstanceOf(SessionNotFoundError);
     const before = await agentRecordCounts(threadId, runId);
-    expect(before).toEqual({ messages: "1", runs: "1", sessions: "1", snapshots: "1", threads: "1" });
+    expect(before).toEqual({ a2ui: "1", messages: "1", runs: "1", sessions: "1", snapshots: "1", threads: "1" });
 
     await repository.deleteSession(threadId, primaryResearcher.researcher_id);
     expect(await agentRecordCounts(threadId, runId)).toEqual({
+      a2ui: "0",
       messages: "0",
       runs: "0",
       sessions: "0",
@@ -713,6 +773,10 @@ describe.sequential("durable Research Agent runtime", () => {
       WHERE id = $1
     `, [primaryResearcher.researcher_id]);
     expect(resources.rows).toEqual([{ count: "1" }]);
+    const coreResearch = await owner.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM core.research_canary WHERE id = 1",
+    );
+    expect(coreResearch.rows).toEqual([{ count: "1" }]);
 
     const activeThreadId = fixedUuid(433);
     const activeRunId = fixedUuid(434);
@@ -1007,10 +1071,167 @@ describe.sequential("durable Research Agent runtime", () => {
     }
   });
 
+  it("keeps reconnect safe before the owner commits and replays equal-time surfaces by sequence", async () => {
+    const threadId = fixedUuid(470);
+    const runId = fixedUuid(471);
+    const ownerMessageId = fixedUuid(472);
+    const repository = new ResearchSessionRepository(agentStore);
+    let runtime = await createIntegrationRuntime();
+    try {
+      await prepareA2UIRepositoryRun(repository, threadId, runId, fixedUuid(473));
+      let persisted = false;
+      const first = {
+        content: safeResearchA2UIErrorContent(),
+        lifecycle: "error" as const,
+        messageId: "a2ui-surface-z-first",
+        ownerMessageId,
+        runId,
+        sequence: 1,
+        threadId,
+      };
+      const pending = repository.persistA2UIActivity(first).then(() => { persisted = true; });
+      const beforeOwner = await connect(runtime, threadId, primaryResearcher);
+      expect(snapshotMessages(beforeOwner).map((message) => message.role)).toEqual(["user"]);
+      expect(a2uiMessages(snapshotMessages(beforeOwner))).toEqual([]);
+      expect(persisted).toBe(false);
+      expect((await owner.query("SELECT count(*)::int AS count FROM agent.a2ui_message")).rows)
+        .toEqual([{ count: 0 }]);
+
+      await seedAssistantMessage(threadId, ownerMessageId);
+      await pending;
+      await repository.persistA2UIActivity({
+        ...first,
+        messageId: "a2ui-surface-a-second",
+        sequence: 2,
+      });
+      const largeTable = largeA2UITableContent();
+      expect(Buffer.byteLength(JSON.stringify(largeTable))).toBeLessThanOrEqual(65_536);
+      await repository.persistA2UIActivity({
+        ...first,
+        content: largeTable,
+        lifecycle: "ready",
+        messageId: "a2ui-surface-large-table",
+        sequence: 3,
+      });
+      await owner.query(`
+        UPDATE agent.a2ui_message
+        SET created_at = '2026-08-30T05:00:00Z', updated_at = '2026-08-30T05:00:00Z'
+        WHERE thread_id = $1::uuid
+      `, [threadId]);
+      const storedBytes = await owner.query<{ bytes: number }>(`
+        SELECT octet_length(content::text) AS bytes
+        FROM agent.a2ui_message WHERE id = 'a2ui-surface-large-table'
+      `);
+      expect(storedBytes.rows[0]?.bytes).toBeGreaterThan(65_536);
+      const expectedIds = [
+        "a2ui-surface-z-first",
+        "a2ui-surface-a-second",
+        "a2ui-surface-large-table",
+      ];
+      expect(a2uiMessages(await repository.durableBrowserMessages(
+        threadId,
+        primaryResearcher.researcher_id,
+      )).map((message) => message.id)).toEqual(expectedIds);
+      await repository.markCompleted(runId, undefined);
+      await runtime.close();
+      runtime = await createIntegrationRuntime();
+      const replay = a2uiMessages(snapshotMessages(await connect(runtime, threadId, primaryResearcher)));
+      expect(replay.map((message) => message.id)).toEqual(expectedIds);
+      expect(replay[2]?.content).toEqual(largeTable);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("leaves no orphaned A2UI when the host stops before its owner commits", async () => {
+    const threadId = fixedUuid(480);
+    const runId = fixedUuid(481);
+    const repository = new ResearchSessionRepository(agentStore);
+    let runtime = await createIntegrationRuntime();
+    try {
+      await prepareA2UIRepositoryRun(repository, threadId, runId, fixedUuid(483));
+      const pending = repository.persistA2UIActivity({
+        content: safeResearchA2UIErrorContent(),
+        lifecycle: "error",
+        messageId: "a2ui-surface-never-owned",
+        ownerMessageId: fixedUuid(482),
+        runId,
+        sequence: 1,
+        threadId,
+      }).then(() => null, (error: unknown) => error);
+      expect(snapshotMessages(await connect(runtime, threadId, primaryResearcher)))
+        .toHaveLength(1);
+      expect(await repository.failInterruptedRunsAfterHostRestart()).toBe(1);
+      expect(await pending).toBeInstanceOf(TranscriptConflictError);
+      expect((await owner.query("SELECT count(*)::int AS count FROM agent.a2ui_message")).rows)
+        .toEqual([{ count: 0 }]);
+      await runtime.close();
+      runtime = await createIntegrationRuntime();
+      const replay = await connect(runtime, threadId, primaryResearcher);
+      expect(snapshotMessages(replay).map((message) => message.role)).toEqual(["user"]);
+      expect(replay.at(-1)?.type).toBe("RUN_ERROR");
+      await expect(runtime.session(threadId, primaryResearcher)).resolves.toMatchObject({
+        activeRun: false,
+      });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("persists completed A2UI steps while a later MCP call is still running", async () => {
+    const threadId = fixedUuid(491);
+    const runId = fixedUuid(492);
+    const calls: Array<Readonly<{ input: Record<string, unknown>; name: string }>> = [];
+    let entered: () => void = () => undefined;
+    let release: () => void = () => undefined;
+    const enteredRead = new Promise<void>((resolve) => { entered = resolve; });
+    const heldRead = new Promise<void>((resolve) => { release = resolve; });
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => undefined,
+        hasFatalToolFailure: () => false,
+        toolFailure: () => undefined,
+        tools: researchLoopTools("run_0123456789abcdef0123", calls, async () => {
+          entered();
+          await heldRead;
+        }),
+      }),
+    });
+    const response = await runtime.handle(runRequest(runInput({
+      content: SCRIPTED_FACTOR_IDEA_PROMPT,
+      messageId: fixedUuid(493),
+      runId,
+      threadId,
+    })), primaryResearcher);
+    const terminal = response.text().then(sseEvents);
+    try {
+      await enteredRead;
+      await vi.waitFor(async () => {
+        const persisted = await owner.query(`
+          SELECT activity.lifecycle_status, message.role
+          FROM agent.a2ui_message AS activity
+          JOIN agent.mastra_messages AS message ON message.id = activity.owner_message_id
+          WHERE activity.thread_id = $1::uuid
+          ORDER BY activity.sequence
+        `, [threadId]);
+        expect(persisted.rows).toEqual([
+          { lifecycle_status: "ready", role: "assistant" },
+          { lifecycle_status: "ready", role: "assistant" },
+        ]);
+      }, { interval: 20, timeout: 1_500 });
+      const run = await owner.query("SELECT status FROM agent.agent_run WHERE id = $1::uuid", [runId]);
+      expect(run.rows).toEqual([{ status: "running" }]);
+    } finally {
+      release();
+      await terminal;
+      await runtime.close();
+    }
+  });
+
   it("persists a complete model-owned Factor trajectory and replays only safe Run resources", async () => {
     const coreRunId = "run_0123456789abcdef0123";
     const calls: Array<Readonly<{ input: Record<string, unknown>; name: string }>> = [];
-    const runtime = await createResearchRuntime(settings, {
+    let runtime = await createResearchRuntime(settings, {
       mcpRunFactory: async () => ({
         close: async () => undefined,
         hasFatalToolFailure: () => false,
@@ -1018,6 +1239,8 @@ describe.sequential("durable Research Agent runtime", () => {
         tools: researchLoopTools(coreRunId, calls),
       }),
     });
+    let runtimeOpen = true;
+    let restarted: ResearchRuntime | undefined;
     const threadId = randomUUID();
     const agentRunId = randomUUID();
     const input = runInput({
@@ -1036,6 +1259,7 @@ describe.sequential("durable Research Agent runtime", () => {
         "diagnose_alpha_formula",
         "submit_research_run",
         "get_research_run",
+        "get_research_run",
         "get_research_run_result",
       ]);
       expect(calls.map((call) => call.name)).toEqual([
@@ -1043,6 +1267,7 @@ describe.sequential("durable Research Agent runtime", () => {
         "get_alpha_catalog",
         "diagnose_alpha_formula",
         "submit_research_run",
+        "get_research_run",
         "get_research_run",
         "get_research_run_result",
       ]);
@@ -1080,7 +1305,19 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(browserJson).toContain("0.1200");
       expect(browserJson).toContain("3.40%");
       expect(browserJson).toContain(`/research-runs/${coreRunId}`);
+      expect(browserJson).toContain("AlphaProposal");
+      expect(browserJson).toContain("ResearchRunStatus");
+      expect(browserJson).toContain("ResultMetrics");
+      expect(browserJson).toContain("Provenance");
+      expect(browserJson).not.toMatch(/generate_a2ui|render_a2ui/);
       expect(browserJson).not.toContain("private-core-provenance");
+      const readySurfaceEvents = a2uiMessages(events).filter((message) => (
+        isRecord(message.content) && Array.isArray(message.content.a2ui_operations)
+      ));
+      expect(readySurfaceEvents).toHaveLength(4);
+      expect(new Set(readySurfaceEvents.map((message) => message.id)).size).toBe(4);
+      expect(JSON.stringify(readySurfaceEvents)).toContain('"phase":"research"');
+      expect(JSON.stringify(readySurfaceEvents)).toContain('"status":"running"');
 
       const durable = await owner.query<{ content: string }>(`
         SELECT content
@@ -1093,6 +1330,19 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(durableJson).toContain("rank(-abs(pct_change(close, 1)))");
       expect(durableJson).toContain("0.1200");
       expect(durableJson).toContain(`/research-runs/${coreRunId}`);
+      const storedSurfaces = await owner.query<{
+        content: Record<string, unknown>;
+        id: string;
+        lifecycle_status: string;
+      }>(`
+        SELECT id, lifecycle_status, content
+        FROM agent.a2ui_message
+        WHERE thread_id = $1::uuid
+        ORDER BY sequence
+      `, [threadId]);
+      expect(storedSurfaces.rows).toHaveLength(4);
+      expect(storedSurfaces.rows.every((row) => row.lifecycle_status === "ready")).toBe(true);
+      expect(JSON.stringify(storedSurfaces.rows)).not.toContain("private-core-provenance");
       const workflowRows = await owner.query<{ count: string }>(`
         SELECT count(*)::text AS count
         FROM agent."mastra_workflow_snapshot"
@@ -1108,9 +1358,88 @@ describe.sequential("durable Research Agent runtime", () => {
       const duplicateJson = JSON.stringify(duplicate);
       expect(duplicateJson).toContain(coreRunId);
       expect(duplicateJson).not.toContain("private-core-provenance");
-      expect(calls).toHaveLength(6);
+      expect(a2uiMessages(snapshotMessages(duplicate))).toHaveLength(4);
+      expect(calls).toHaveLength(7);
+
+      await runtime.close();
+      runtimeOpen = false;
+      restarted = await createResearchRuntime(settings, {
+        mcpRunFactory: async () => ({
+          close: async () => undefined,
+          hasFatalToolFailure: () => false,
+          toolFailure: () => undefined,
+          tools: researchLoopTools(coreRunId, calls),
+        }),
+      });
+      const afterRestart = await connect(restarted, threadId, primaryResearcher);
+      const restartedSurfaces = a2uiMessages(snapshotMessages(afterRestart));
+      expect(restartedSurfaces.map((message) => message.content)).toEqual(
+        storedSurfaces.rows.map((row) => row.content),
+      );
+      expect(calls).toHaveLength(7);
+    } finally {
+      if (runtimeOpen) await runtime.close();
+      await restarted?.close();
+    }
+  });
+
+  it.each([
+    SCRIPTED_INVALID_A2UI_PROMPT,
+    SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT,
+    SCRIPTED_INVALID_A2UI_DATA_PROMPT,
+  ])("turns a fully rejected A2UI input into only a durable safe error: %s", async (prompt) => {
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => undefined,
+        hasFatalToolFailure: () => false,
+        toolFailure: () => undefined,
+        tools: {},
+      }),
+    });
+    const threadId = randomUUID();
+    const input = runInput({
+      content: prompt,
+      messageId: randomUUID(),
+      runId: randomUUID(),
+      threadId,
+    });
+    const frameworkLogs = (["debug", "info", "log", "warn", "error"] as const)
+      .map((method) => vi.spyOn(console, method).mockImplementation(() => undefined));
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      const surfaces = a2uiMessages(events);
+      expect(surfaces).toHaveLength(1);
+      expect(surfaces.at(-1)?.content).toEqual(safeResearchA2UIErrorContent());
+      const browserJson = JSON.stringify(events);
+      expect(browserJson).toContain("unsafe research surface was rejected");
+      expect(browserJson).not.toContain("MALICIOUS_A2UI_SHOULD_NOT_RENDER");
+      expect(browserJson).not.toContain("delete_research");
+      expect(browserJson).not.toContain("render_a2ui");
+
+      const stored = await owner.query<{
+        content: Record<string, unknown>;
+        lifecycle_status: string;
+      }>(`
+        SELECT lifecycle_status, content
+        FROM agent.a2ui_message
+        WHERE thread_id = $1::uuid
+      `, [threadId]);
+      expect(stored.rows).toEqual([{
+        content: safeResearchA2UIErrorContent(),
+        lifecycle_status: "error",
+      }]);
+
+      const duplicate = await run(runtime, input, primaryResearcher);
+      expect(a2uiMessages(snapshotMessages(duplicate))).toEqual([{
+        content: safeResearchA2UIErrorContent(),
+        id: surfaces.at(-1)?.id,
+      }]);
+      expect(JSON.stringify(frameworkLogs.flatMap((log) => log.mock.calls)))
+        .not.toContain("MALICIOUS_A2UI_SHOULD_NOT_RENDER");
     } finally {
       await runtime.close();
+      for (const log of frameworkLogs) log.mockRestore();
     }
   });
 
@@ -1633,6 +1962,7 @@ describe.sequential("durable Research Agent runtime", () => {
 function researchLoopTools(
   coreRunId: string,
   calls: Array<Readonly<{ input: Record<string, unknown>; name: string }>>,
+  beforeDetail?: () => Promise<void>,
 ) {
   const record = (name: string, input: Record<string, unknown>) => {
     calls.push({ input: { ...input }, name });
@@ -1717,17 +2047,20 @@ function researchLoopTools(
     get_research_run: createTool({
       description: "Read a ResearchRun lifecycle and available Result sections.",
       execute: async (input) => {
+        await beforeDetail?.();
         record("get_research_run", input);
+        const running = calls.filter((call) => call.name === "get_research_run").length === 1;
         return {
-          available_result_sections: ["factor", "provenance"],
+          available_result_sections: running ? [] : ["factor", "provenance"],
           id: coreRunId,
           input: {
             formula: "rank(-abs(pct_change(close, 1)))",
             hypothesis: "Stocks with smaller recent absolute returns should be stable.",
             research_kind: "factor_evaluation",
           },
-          retry_after_seconds: null,
-          status: "succeeded",
+          progress: { phase: running ? "research" : "succeeded" },
+          retry_after_seconds: running ? 1 : null,
+          status: running ? "running" : "succeeded",
         };
       },
       id: "get_research_run",
@@ -1760,6 +2093,62 @@ function researchLoopTools(
         section: z.literal("factor"),
       }).strict(),
     }),
+  };
+}
+
+async function prepareA2UIRepositoryRun(
+  repository: ResearchSessionRepository,
+  threadId: string,
+  runId: string,
+  messageId: string,
+): Promise<void> {
+  const validated = await readValidatedChatRun(runRequest(runInput({
+    messageId,
+    runId,
+    threadId,
+  })), modelRegistry);
+  await repository.prepareRun({
+    agentBuildRevision: "a2ui-persistence-test",
+    providerModelId: "scripted-v1",
+    researcherId: primaryResearcher.researcher_id,
+    run: validated,
+  });
+}
+
+async function seedAssistantMessage(threadId: string, messageId: string): Promise<void> {
+  await owner.query(`
+    WITH instant AS (
+      SELECT COALESCE(MAX("createdAtZ"), '2026-08-30T05:00:00Z'::timestamptz)
+             + interval '1 millisecond' AS value
+      FROM agent."mastra_messages" WHERE thread_id = $2
+    )
+    INSERT INTO agent."mastra_messages" (
+      id, thread_id, content, role, type, "createdAt", "resourceId", "createdAtZ"
+    )
+    SELECT $1, $2, $3, 'assistant', 'v2', value AT TIME ZONE 'UTC', $4, value
+    FROM instant
+  `, [messageId, threadId, durableTextContent("", 1_788_048_000_000), primaryResearcher.researcher_id]);
+}
+
+function largeA2UITableContent(): Record<string, unknown> {
+  return {
+    a2ui_operations: [{
+      createSurface: { catalogId: RESEARCH_A2UI_CATALOG_ID, surfaceId: "large-table" },
+      version: RESEARCH_A2UI_PROTOCOL_VERSION,
+    }, {
+      updateComponents: {
+        components: [{
+          caption: "Large authoritative table",
+          columns: Array.from({ length: 12 }, (_, index) => `Column ${index + 1}`),
+          component: "Table",
+          id: "root",
+          rows: Array.from({ length: 100 }, () => Array.from({ length: 12 }, () => "x".repeat(51))),
+          summary: "Inspect all result fields",
+        }],
+        surfaceId: "large-table",
+      },
+      version: RESEARCH_A2UI_PROTOCOL_VERSION,
+    }],
   };
 }
 
@@ -1803,6 +2192,7 @@ async function agentRecordCounts(
   threadId: string,
   runId: string,
 ): Promise<Readonly<{
+  a2ui: string;
   messages: string;
   runs: string;
   sessions: string;
@@ -1810,6 +2200,7 @@ async function agentRecordCounts(
   threads: string;
 }>> {
   const result = await owner.query<{
+    a2ui: string;
     messages: string;
     runs: string;
     sessions: string;
@@ -1817,6 +2208,7 @@ async function agentRecordCounts(
     threads: string;
   }>(`
     SELECT
+      (SELECT count(*)::text FROM agent.a2ui_message WHERE thread_id = $1::uuid) AS a2ui,
       (SELECT count(*)::text FROM agent.chat_session WHERE id = $1::uuid) AS sessions,
       (SELECT count(*)::text FROM agent.agent_run WHERE thread_id = $1::uuid) AS runs,
       (SELECT count(*)::text FROM agent."mastra_threads" WHERE id = $1::uuid::text) AS threads,
@@ -2018,6 +2410,34 @@ function snapshotMessages(events: readonly AGUIEvent[]): Message[] {
     throw new Error("expected message snapshot");
   }
   return [...snapshot.messages];
+}
+
+function a2uiMessages(values: readonly unknown[]): Array<Readonly<{
+  content: unknown;
+  id: string;
+}>> {
+  return values.flatMap((value) => {
+    if (!isRecord(value)) return [];
+    if (
+      value.type === "ACTIVITY_SNAPSHOT"
+      && value.activityType === RESEARCH_A2UI_ACTIVITY_TYPE
+      && typeof value.messageId === "string"
+    ) {
+      return [{ content: value.content, id: value.messageId }];
+    }
+    if (
+      value.role === "activity"
+      && value.activityType === RESEARCH_A2UI_ACTIVITY_TYPE
+      && typeof value.id === "string"
+    ) {
+      return [{ content: value.content, id: value.id }];
+    }
+    return [];
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function splitAssistantTextForCopilotKit(messages: readonly Message[]): Message[] {

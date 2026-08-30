@@ -7,6 +7,10 @@ import {
   SCRIPTED_AMBIGUOUS_IDEA_PROMPT,
   SCRIPTED_FACTOR_IDEA_PROMPT,
   SCRIPTED_FORMULA_REPAIR_IDEA_PROMPT,
+  SCRIPTED_INVALID_A2UI_PROMPT,
+  SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT,
+  SCRIPTED_INVALID_A2UI_DATA_PROMPT,
+  SCRIPTED_LARGE_A2UI_TABLE_PROMPT,
   SCRIPTED_RETRY_INTERRUPTED_PROMPT,
   SCRIPTED_RESUME_RESEARCH_PROMPT,
   SCRIPTED_STRATEGY_IDEA_PROMPT,
@@ -148,6 +152,163 @@ test("calls a discovered no-argument Tool and then explains its result", async (
     toolName: "get_research_context",
     type: "tool-call",
   });
+});
+
+test.each([
+  SCRIPTED_INVALID_A2UI_PROMPT,
+  SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT,
+  SCRIPTED_INVALID_A2UI_DATA_PROMPT,
+])("attempts one deterministic unsafe A2UI surface and then continues safely: %s", async (prompt) => {
+  const model = new ScriptedLanguageModel("scripted-v1");
+  const firstOptions = researchOptions(prompt, researchTools(true));
+  const first = await readParts(await model.doStream(firstOptions));
+  const toolCall = first.find((part) => part.type === "tool-call");
+  expect(toolCall).toMatchObject({
+    toolName: "render_a2ui",
+    type: "tool-call",
+  });
+  if (toolCall?.type !== "tool-call") throw new Error("Expected unsafe A2UI Tool call");
+  expect(toolCall.input).toContain("MALICIOUS_A2UI_SHOULD_NOT_RENDER");
+  appendExchange(
+    firstOptions,
+    toolCall.toolCallId,
+    toolCall.toolName,
+    JSON.parse(toolCall.input) as Record<string, unknown>,
+    { error: true, message: "INVALID_RESEARCH_A2UI" },
+  );
+
+  const second = await readParts(await model.doStream(firstOptions));
+  const text = second
+    .filter((part) => part.type === "text-delta")
+    .map((part) => part.delta)
+    .join("");
+  expect(text).toContain("unsafe research surface was rejected");
+  expect(text).not.toContain("MALICIOUS_A2UI_SHOULD_NOT_RENDER");
+  expect(second.some((part) => part.type === "tool-call")).toBe(false);
+
+  firstOptions.prompt.push({
+    content: [{ type: "text", text }],
+    role: "assistant",
+  }, {
+    content: [{ type: "text", text: "Continue after rejecting that unsafe surface." }],
+    role: "user",
+  });
+  const continuation = await readParts(await model.doStream(firstOptions));
+  expect(continuation
+    .filter((part) => part.type === "text-delta")
+    .map((part) => part.delta)
+    .join(""))
+    .toBe("I can help turn that idea into a testable Alpha.");
+});
+
+test("drives deterministic proposal, status, and result surfaces through direct A2UI", async () => {
+  const trajectory = await runResearchTrajectory(
+    SCRIPTED_FACTOR_IDEA_PROMPT,
+    ({ input, name, occurrence }) => {
+      switch (name) {
+        case "get_research_context": return researchContext();
+        case "get_alpha_catalog": return alphaCatalog();
+        case "diagnose_alpha_formula": return { diagnostics: [], valid: true };
+        case "render_a2ui": return { a2ui_operations: [], rendered: input.surfaceId };
+        case "submit_research_run": return acceptedRun();
+        case "get_research_run": return occurrence === 1
+          ? pollingDetail(input, "running", [])
+          : pollingDetail(input, "succeeded", ["factor", "provenance"]);
+        case "get_research_run_result": return factorResult();
+        default: throw new Error(`Unexpected Tool call: ${name}`);
+      }
+    },
+    true,
+  );
+
+  const surfaces = trajectory.calls.filter((call) => call.name === "render_a2ui");
+  expect(surfaces.map((call) => call.input.surfaceId)).toEqual([
+    "alpha-proposal",
+    "research-run-status",
+    "research-run-progress",
+    "research-result",
+  ]);
+  expect(surfaceComponentNames(surfaces[0]?.input)).toEqual([
+    "Column",
+    "AlphaProposal",
+    "Formula",
+  ]);
+  expect(surfaceComponentNames(surfaces[1]?.input)).toEqual([
+    "Column",
+    "ResearchRunStatus",
+    "Navigation",
+  ]);
+  expect(surfaceComponentNames(surfaces[2]?.input)).toEqual([
+    "Column",
+    "ResearchRunStatus",
+    "Navigation",
+  ]);
+  expect(surfaces[2]?.input.components).toContainEqual(expect.objectContaining({
+    component: "ResearchRunStatus",
+    formula: "rank(-abs(pct_change(close, 1)))",
+    phase: "research",
+    runId: "run_0123456789abcdef0123",
+    status: "running",
+  }));
+  expect(surfaceComponentNames(surfaces[3]?.input)).toEqual([
+    "Column",
+    "ResearchRunStatus",
+    "ResultMetrics",
+    "Table",
+    "Provenance",
+    "Navigation",
+  ]);
+  expect(JSON.stringify(surfaces)).toContain("run_0123456789abcdef0123");
+  expect(JSON.stringify(surfaces)).toContain("0.1200");
+  expect(JSON.stringify(surfaces)).toContain("3.40%");
+});
+
+test("emits one explicitly non-research large table for renderer acceptance", async () => {
+  const trajectory = await runResearchTrajectory(SCRIPTED_LARGE_A2UI_TABLE_PROMPT, ({ name }) => {
+    expect(name).toBe("render_a2ui");
+    return { rendered: true };
+  }, true);
+  expect(trajectory.calls).toHaveLength(1);
+  expect(trajectory.calls[0]?.input.components).toEqual([expect.objectContaining({
+    caption: "Renderer acceptance sample — not research evidence",
+    columns: expect.any(Array),
+    component: "Table",
+    rows: expect.any(Array),
+  })]);
+  const table = (trajectory.calls[0]!.input.components as {
+    rows: string[][]; columns: string[];
+  }[])[0]!;
+  expect(table.rows).toHaveLength(100);
+  expect(table.columns).toHaveLength(12);
+  expect(table.rows.every((row) => row.length === 12)).toBe(true);
+  expect(trajectory.text).toContain("not a Research Result");
+});
+
+test.each([
+  { label: "missing admission state", admission: { status: undefined } },
+  { label: "unknown admission state", admission: { status: "finished" } },
+  { label: "mismatched running id", detail: { id: "run_aaaaaaaaaaaaaaaaaaaa" } },
+  { label: "missing running formula", detail: { input: {} } },
+  { label: "oversized running formula", detail: { input: { formula: "x".repeat(9000) } } },
+  { label: "invalid running phase", detail: { progress: { phase: 7 } } },
+])("does not invent replacement facts for $label", async ({ admission, detail }) => {
+  const trajectory = await runResearchTrajectory(SCRIPTED_FACTOR_IDEA_PROMPT, ({ input, name }) => {
+    switch (name) {
+      case "get_research_context": return researchContext();
+      case "get_alpha_catalog": return alphaCatalog();
+      case "diagnose_alpha_formula": return { diagnostics: [], valid: true };
+      case "render_a2ui": return { rendered: true };
+      case "submit_research_run": return { ...acceptedRun(), ...admission };
+      case "get_research_run": return { ...pollingDetail(input, "running", []), ...detail };
+      default: throw new Error(`Unexpected Tool call: ${name}`);
+    }
+  }, true);
+  const surfaces = trajectory.calls.filter((call) => call.name === "render_a2ui");
+  expect(surfaces.map((call) => call.input.surfaceId)).toEqual(admission === undefined
+    ? ["alpha-proposal", "research-run-status"]
+    : ["alpha-proposal"]);
+  expect(trajectory.text).toContain("did not create a surface or invent replacement Research facts");
+  expect(JSON.stringify(surfaces)).not.toContain("run_00000000000000000000");
 });
 
 test("drives the complete Factor loop from a natural-language idea", async () => {
@@ -784,6 +945,7 @@ type RecordedToolCall = Readonly<{
 async function runResearchTrajectory(
   prompt: string,
   output: (call: RecordedToolCall & { occurrence: number }) => unknown,
+  includeA2UI = false,
 ): Promise<Readonly<{
   calls: readonly RecordedToolCall[];
   text: string;
@@ -797,7 +959,7 @@ async function runResearchTrajectory(
       waits.push(seconds);
     },
   );
-  const options = researchOptions(prompt, researchTools());
+  const options = researchOptions(prompt, researchTools(includeA2UI));
   const calls: RecordedToolCall[] = [];
   const occurrences = new Map<string, number>();
   for (let step = 0; step < 24; step += 1) {
@@ -842,20 +1004,34 @@ function researchOptions(
   };
 }
 
-function researchTools(): NonNullable<LanguageModelV3CallOptions["tools"]> {
-  return [
+function researchTools(includeA2UI = false): NonNullable<LanguageModelV3CallOptions["tools"]> {
+  const names = [
     "get_research_context",
     "get_alpha_catalog",
     "diagnose_alpha_formula",
     "submit_research_run",
     "get_research_run",
     "get_research_run_result",
-  ].map((name) => ({
+  ];
+  if (includeA2UI) names.push("render_a2ui");
+  return names.map((name) => ({
     description: name,
     inputSchema: { additionalProperties: true, properties: {}, type: "object" },
     name,
     type: "function" as const,
   }));
+}
+
+function surfaceComponentNames(input: Record<string, unknown> | undefined): string[] {
+  if (!Array.isArray(input?.components)) return [];
+  return input.components.flatMap((component) => (
+    typeof component === "object"
+    && component !== null
+    && "component" in component
+    && typeof component.component === "string"
+      ? [component.component]
+      : []
+  ));
 }
 
 function appendExchange(
@@ -955,6 +1131,7 @@ function pollingDetail(
         ? "strategy_backtest"
         : "factor_evaluation",
     },
+    progress: { phase: status === "running" ? "research" : status },
     retry_after_seconds: ["queued", "running", "cancelling"].includes(status) ? 2 : null,
     status,
   };

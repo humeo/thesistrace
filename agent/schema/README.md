@@ -9,3 +9,10 @@ never creates or alters these objects.
 instance and compared byte-for-byte after canonical JSON normalization at
 initializer and runtime startup. A populated non-matching schema fails closed;
 there is no migration or compatibility path.
+
+Regenerate it with the isolated test runtime, which creates and cleans up its
+own PostgreSQL database and volume:
+
+```sh
+pnpm --dir agent schema:generate
+```

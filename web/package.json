@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "lezer-generator --typeScript --noTerms --output src/research/alpha-language-parser.ts src/research/alpha-language.grammar && tsc -b && vite build && node scripts/assert-product-bundle.mjs",
     "typecheck": "tsc -b --pretty false",
-    "test:shell": "vitest run src/auth/routing.test.ts src/auth/session.test.ts src/auth/coreFetch.test.ts src/auth/draft-isolation.test.ts src/auth/AccountMenu.test.tsx src/chat/modelCatalog.test.ts src/chat/sessionPreference.test.ts src/chat/sessionHistory.test.ts src/chat/useSessionHistory.test.tsx src/chat/chatState.test.ts src/chat/toolResult.test.ts src/chat/ChatPage.test.tsx src/shell/AppShell.test.tsx src/data/DataPage.test.tsx src/research/ResearchWorkspacePage.test.tsx src/research-runs/ResearchRunsPage.test.tsx src/daily-tracks/DailyTracksPage.test.tsx src/analysis/StrategyPerformanceChart.test.ts",
+    "test:shell": "vitest run src/auth/routing.test.ts src/auth/session.test.ts src/auth/coreFetch.test.ts src/auth/draft-isolation.test.ts src/auth/AccountMenu.test.tsx src/chat/modelCatalog.test.ts src/chat/sessionPreference.test.ts src/chat/sessionHistory.test.ts src/chat/useSessionHistory.test.tsx src/chat/chatState.test.ts src/chat/toolResult.test.ts src/chat/researchA2UI.test.tsx src/chat/ChatPage.test.tsx src/shell/AppShell.test.tsx src/data/DataPage.test.tsx src/research/ResearchWorkspacePage.test.tsx src/research-runs/ResearchRunsPage.test.tsx src/daily-tracks/DailyTracksPage.test.tsx src/analysis/StrategyPerformanceChart.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -18,6 +18,7 @@
     "@codemirror/lint": "^6.9.7",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.8",
+    "@copilotkit/a2ui-renderer": "1.69.3",
     "@copilotkit/react-core": "1.69.3",
     "@lezer/highlight": "^1.2.3",
     "@lezer/lr": "^1.4.10",
@@ -27,7 +28,8 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "10.1.0",
-    "remark-gfm": "4.0.1"
+    "remark-gfm": "4.0.1",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@lezer/generator": "^1.8.0",

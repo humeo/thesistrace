@@ -7,6 +7,12 @@ import {
 } from "@ag-ui/core";
 
 import {
+  isResearchA2UIMessageId,
+  projectResearchA2UIContent,
+  RESEARCH_A2UI_ACTIVITY_TYPE,
+} from "../../contracts/research-a2ui.mjs";
+
+import {
   DURABLE_TOOL_FAILURE,
   DURABLE_TOOL_OUTCOME_FIELD,
 } from "./tool-outcome.js";
@@ -41,6 +47,10 @@ type SafeInvocation = Readonly<{
   toolName: string;
 }>;
 
+export const A2UI_FRAMEWORK_TOOL_NAMES = Object.freeze(new Set([
+  "render_a2ui",
+]));
+
 export class BrowserTranscriptError extends Error {
   constructor() {
     super("BROWSER_TRANSCRIPT_PROJECTION_FAILED");
@@ -68,7 +78,9 @@ export function projectDurableUiMessages(
       throw new BrowserTranscriptError();
     }
 
-    const invocations = readDurableToolInvocations(message.parts);
+    const invocations = readDurableToolInvocations(message.parts).filter(
+      ({ invocation }) => !A2UI_FRAMEWORK_TOOL_NAMES.has(invocation.toolName),
+    );
     const assistant: Message = invocations.length === 0
       ? { content: message.content, id: message.id, role: "assistant" }
       : {
@@ -133,6 +145,21 @@ export function safeBrowserMessages(messages: readonly Message[]): readonly Mess
         id: safeToolResultMessageId(message.toolCallId),
         role: "tool",
         toolCallId: message.toolCallId,
+      };
+    }
+    if (message.role === "activity") {
+      if (
+        message.activityType !== RESEARCH_A2UI_ACTIVITY_TYPE
+        || !isResearchA2UIMessageId(message.id)
+      ) {
+        throw new BrowserTranscriptError();
+      }
+      const projected = projectResearchA2UIContent(message.content);
+      return {
+        activityType: RESEARCH_A2UI_ACTIVITY_TYPE,
+        content: projected.content,
+        id: message.id,
+        role: "activity",
       };
     }
     throw new BrowserTranscriptError();
@@ -208,6 +235,11 @@ export function splitAssistantTextParentId(messageId: string): string | null {
 export class BrowserEventProjector {
   private readonly openToolCalls = new Set<string>();
   private readonly openTextMessages = new Set<string>();
+  private readonly passthroughToolCalls = new Set<string>();
+
+  constructor(
+    private readonly passthroughToolNames: ReadonlySet<string> = new Set(),
+  ) {}
 
   project(event: BaseEvent, toolFailed = false): readonly BaseEvent[] {
     switch (event.type) {
@@ -232,6 +264,18 @@ export class BrowserEventProjector {
           type: EventType.MESSAGES_SNAPSHOT,
         }];
       case EventType.TOOL_CALL_START:
+        if (this.passthroughToolNames.has(requiredString(event.toolCallName))) {
+          const toolCallId = requiredString(event.toolCallId);
+          this.passthroughToolCalls.add(toolCallId);
+          return [{
+            ...(typeof event.parentMessageId !== "string"
+              ? {}
+              : { parentMessageId: event.parentMessageId }),
+            toolCallId,
+            toolCallName: event.toolCallName,
+            type: EventType.TOOL_CALL_START,
+          }];
+        }
         this.openToolCalls.add(requiredString(event.toolCallId));
         return [{
           ...(typeof event.parentMessageId !== "string"
@@ -242,10 +286,35 @@ export class BrowserEventProjector {
           type: EventType.TOOL_CALL_START,
         }];
       case EventType.TOOL_CALL_ARGS:
+        if (this.passthroughToolCalls.has(requiredString(event.toolCallId))) {
+          if (typeof event.delta !== "string") throw new BrowserTranscriptError();
+          return [{
+            delta: event.delta,
+            toolCallId: event.toolCallId,
+            type: EventType.TOOL_CALL_ARGS,
+          }];
+        }
+        return [];
       case EventType.TOOL_CALL_CHUNK:
+        if (
+          typeof event.toolCallId === "string"
+          && this.passthroughToolCalls.has(event.toolCallId)
+        ) {
+          return [{
+            ...(typeof event.delta === "string" ? { delta: event.delta } : {}),
+            toolCallId: event.toolCallId,
+            ...(typeof event.toolCallName === "string"
+              ? { toolCallName: event.toolCallName }
+              : {}),
+            type: EventType.TOOL_CALL_CHUNK,
+          }];
+        }
         return [];
       case EventType.TOOL_CALL_END: {
         const toolCallId = requiredString(event.toolCallId);
+        if (this.passthroughToolCalls.has(toolCallId)) {
+          return [{ toolCallId, type: EventType.TOOL_CALL_END }];
+        }
         const includeArguments = this.openToolCalls.delete(toolCallId);
         return [
           ...(includeArguments
@@ -263,6 +332,15 @@ export class BrowserEventProjector {
       }
       case EventType.TOOL_CALL_RESULT:
         if (typeof event.toolCallId !== "string") throw new BrowserTranscriptError();
+        if (this.passthroughToolCalls.delete(event.toolCallId)) {
+          return [{
+            content: requiredString(event.content),
+            messageId: requiredString(event.messageId),
+            role: "tool",
+            toolCallId: event.toolCallId,
+            type: EventType.TOOL_CALL_RESULT,
+          }];
+        }
         return [{
           content: projectSafeToolResult(
             event.content,

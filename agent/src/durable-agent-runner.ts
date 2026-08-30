@@ -10,6 +10,7 @@ import { EventType, type BaseEvent } from "@ag-ui/core";
 import {
   Observable,
   concat,
+  concatMap,
   defer,
   filter,
   from,
@@ -25,6 +26,7 @@ import {
   SessionActiveRunError,
   type ResearchSessionRepository,
 } from "./session-repository.js";
+import { ResearchA2UIEventProjector } from "./research-a2ui-events.js";
 
 export const RESEARCHER_ID_HEADER = "x-thesistrace-agent-researcher-id";
 
@@ -56,7 +58,33 @@ export class DurableResearchAgentRunner extends AgentRunner {
       return current.events;
     }
 
-    const source = this.delegate.run(request);
+    const a2ui = new ResearchA2UIEventProjector();
+    const source = this.delegate.run(request).pipe(
+      concatMap((event) => defer(async () => {
+        const batch = a2ui.project(event);
+        for (const activity of batch.activities) {
+          await this.repository.persistA2UIActivity({
+            ...activity,
+            runId: request.input.runId,
+            threadId: request.threadId,
+          });
+        }
+        const events: BaseEvent[] = [];
+        for (const projected of batch.events) {
+          if (projected.type !== EventType.MESSAGES_SNAPSHOT) {
+            events.push(projected);
+            continue;
+          }
+          events.push({
+            messages: [
+              ...await this.repository.durableBrowserMessagesForThread(request.threadId),
+            ],
+            type: EventType.MESSAGES_SNAPSHOT,
+          });
+        }
+        return events;
+      }).pipe(mergeMap((events) => from(events)))),
+    );
     const events = source.pipe(
       tap({
         complete: () => this.removeActive(request.threadId, request.input.runId),
@@ -80,7 +108,7 @@ export class DurableResearchAgentRunner extends AgentRunner {
     const active = this.active.get(request.threadId);
     return defer(async () => {
       const [messages, latestRun] = await Promise.all([
-        this.repository.durableMessages(request.threadId, researcherId),
+        this.repository.durableBrowserMessages(request.threadId, researcherId),
         this.repository.latestRun(request.threadId, researcherId),
       ]);
       return { latestRun, messages };

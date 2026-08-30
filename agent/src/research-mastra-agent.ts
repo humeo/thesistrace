@@ -17,7 +17,10 @@ import {
   throwError,
 } from "rxjs";
 
-import { BrowserEventProjector } from "./browser-message-safety.js";
+import {
+  A2UI_FRAMEWORK_TOOL_NAMES,
+  BrowserEventProjector,
+} from "./browser-message-safety.js";
 import type { ValidatedChatRun } from "./chat-request.js";
 import type { McpRun } from "./mcp-run.js";
 import type { ResearchSessionRepository } from "./session-repository.js";
@@ -72,7 +75,10 @@ export class ResearchMastraAgent extends MastraAgent {
       let activeMcpRun: McpRun | undefined;
       let mcpRunPromise: Promise<McpRun> | undefined;
       let mcpClosePromise: Promise<void> | undefined;
-      const projector = new BrowserEventProjector();
+      // CopilotKit's outer A2UI middleware must see the framework render Tool
+      // stream. The Durable Runner is the final boundary that removes those
+      // raw payloads after it has produced a validated Activity snapshot.
+      const projector = new BrowserEventProjector(A2UI_FRAMEWORK_TOOL_NAMES);
       const closeMcp = () => {
         this.execution.requestContext.set("mcpTools", {});
         mcpClosePromise ??= (async () => {

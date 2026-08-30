@@ -1,5 +1,5 @@
 import type { AbstractAgent, AgentSubscriber } from "@ag-ui/client";
-import type { Message } from "@ag-ui/core";
+import type { ActivityMessage, Message } from "@ag-ui/core";
 import { UseAgentUpdate, useAgent } from "@copilotkit/react-core/v2/headless";
 import {
   ArrowUp,
@@ -43,6 +43,7 @@ import {
   type AgentModelCatalog,
 } from "./modelCatalog";
 import { ResearchChatCopilotProvider } from "./ResearchChatCopilotProvider";
+import { ResearchA2UIActivity } from "./researchA2UI";
 import { SessionHistoryList } from "./SessionHistoryList";
 import {
   AgentSessionPreferenceInvalidError,
@@ -146,6 +147,11 @@ type ChatTimelineItem =
       activity: ChatToolActivity;
       id: string;
       kind: "tool";
+    }>
+  | Readonly<{
+      id: string;
+      kind: "a2ui";
+      message: ActivityMessage;
     }>;
 
 export function ChatPage({ researcherId }: { researcherId: string }) {
@@ -709,6 +715,8 @@ function AgentConversation({
         <section aria-label="Conversation" className="chat-conversation" aria-live="polite">
           {timeline.map((item) => item.kind === "tool" ? (
             <ToolActivityRow activity={item.activity} key={item.id} />
+          ) : item.kind === "a2ui" ? (
+            <ResearchA2UIActivity key={item.id} message={item.message} />
           ) : (
             <article
               className={`chat-message chat-message-${item.role}`}
@@ -1188,7 +1196,17 @@ export function chatTimelineItems(
 
   const representedToolCalls = new Set<string>();
   const items: ChatTimelineItem[] = [];
-  for (const message of messages) {
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+    const message = messages[messageIndex];
+    if (message === undefined) continue;
+    if (message.role === "activity") {
+      items.push({
+        id: `a2ui:${message.id}`,
+        kind: "a2ui",
+        message,
+      });
+      continue;
+    }
     if (message.role === "user" && typeof message.content === "string") {
       items.push({
         content: message.content,
@@ -1222,7 +1240,10 @@ export function chatTimelineItems(
         kind: "tool",
       });
     }
-    if (content.length > 0 || toolCalls.length === 0) {
+    const activityOwnsEmptyAssistant = content.length === 0
+      && toolCalls.length === 0
+      && messages[messageIndex + 1]?.role === "activity";
+    if (!activityOwnsEmptyAssistant && (content.length > 0 || toolCalls.length === 0)) {
       items.push({
         content,
         id: `message:${message.id}`,

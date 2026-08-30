@@ -169,6 +169,59 @@ CREATE TABLE agent.agent_run (
     )
 );
 
+CREATE TABLE agent.a2ui_message (
+    thread_id uuid NOT NULL,
+    id text NOT NULL,
+    run_id uuid NOT NULL,
+    owner_message_id text NOT NULL,
+    activity_type text NOT NULL,
+    protocol_version text NOT NULL,
+    catalog_id text NOT NULL,
+    lifecycle_status text NOT NULL,
+    sequence integer NOT NULL,
+    content jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
+    CONSTRAINT a2ui_message_pkey PRIMARY KEY (thread_id, id),
+    CONSTRAINT a2ui_message_thread_id_fkey FOREIGN KEY (thread_id)
+        REFERENCES agent.chat_session(id) ON DELETE CASCADE,
+    CONSTRAINT a2ui_message_run_id_fkey FOREIGN KEY (run_id)
+        REFERENCES agent.agent_run(id) ON DELETE CASCADE,
+    CONSTRAINT a2ui_message_owner_message_id_fkey FOREIGN KEY (owner_message_id)
+        REFERENCES agent."mastra_messages"(id) ON DELETE CASCADE,
+    CONSTRAINT a2ui_message_run_sequence_key UNIQUE (run_id, sequence),
+    CONSTRAINT a2ui_message_id_check CHECK (
+        id ~ '^a2ui-surface-[A-Za-z0-9._:-]{1,200}$'::text
+    ),
+    CONSTRAINT a2ui_message_owner_message_id_check CHECK (
+        pg_catalog.char_length(owner_message_id) BETWEEN 1 AND 220
+        AND owner_message_id !~ '[[:cntrl:]]'::text
+    ),
+    CONSTRAINT a2ui_message_activity_type_check CHECK (
+        activity_type = 'a2ui-surface'::text
+    ),
+    CONSTRAINT a2ui_message_protocol_version_check CHECK (
+        protocol_version = 'v0.9'::text
+    ),
+    CONSTRAINT a2ui_message_catalog_id_check CHECK (
+        catalog_id = 'urn:thesistrace:a2ui:research:v0.9'::text
+    ),
+    CONSTRAINT a2ui_message_lifecycle_status_check CHECK (
+        lifecycle_status = ANY (
+            ARRAY['loading'::text, 'ready'::text, 'error'::text]
+        )
+    ),
+    CONSTRAINT a2ui_message_sequence_check CHECK (sequence BETWEEN 1 AND 1000000),
+    CONSTRAINT a2ui_message_content_check CHECK (
+        pg_catalog.jsonb_typeof(content) = 'object'::text
+        -- The shared ingress contract is 64 KiB of compact JSON. PostgreSQL's
+        -- jsonb text adds insignificant spaces, so this storage bound must not
+        -- reject a valid ingress payload merely because of serialization.
+        AND pg_catalog.octet_length(content::text) <= 131072
+    ),
+    CONSTRAINT a2ui_message_timestamps_check CHECK (updated_at >= created_at)
+);
+
 CREATE TABLE agent.schema_contract (
     singleton boolean NOT NULL,
     schema_fingerprint text NOT NULL,
@@ -197,3 +250,5 @@ CREATE INDEX chat_session_researcher_activity_idx
     ON agent.chat_session USING btree (researcher_id, updated_at DESC, id DESC);
 CREATE INDEX agent_run_thread_started_idx
     ON agent.agent_run USING btree (thread_id, started_at, id);
+CREATE INDEX a2ui_message_owner_idx
+    ON agent.a2ui_message USING btree (thread_id, owner_message_id, sequence, id);
