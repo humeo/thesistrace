@@ -89,6 +89,7 @@ def test_private_collection_removes_retired_input_without_losing_run_or_track(
 
         assert outcome["status"] == "succeeded"
         assert int(outcome["deleted_file_count"]) > 0
+        assert int(outcome["deleted_receipt_count"]) >= 0
         assert outcome["remaining_file_count"] == 0
         with pytest.raises(GenerationStoreError, match="missing"):
             MountedGenerationStore(tmp_path).validate_generation(retired)

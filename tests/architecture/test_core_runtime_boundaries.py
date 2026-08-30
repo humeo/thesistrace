@@ -458,6 +458,8 @@ def test_postgres_support_contains_mechanics_but_no_product_sql() -> None:
     assert "last_heartbeat_at timestamp with time zone" in data_schema
     assert "phase text" in data_schema
     assert "'cancelled'::text" in data_schema
+    assert "deleted_receipt_count integer DEFAULT 0 NOT NULL" in data_schema
+    assert "CREATE INDEX data_refresh_retention_idx" in data_schema
     assert "data.releases" not in data_schema
 
 

@@ -401,10 +401,14 @@ function OperationHistoryTable({
     <section aria-labelledby="operator-operation-history-heading" className="operator-dataset-subsection">
       <header>
         <h3 id="operator-operation-history-heading">Operation history</h3>
-        <span>Newest first · 50 receipts per page</span>
+        <span>Newest first · 50 receipts per page · terminal receipts retained 180 days</span>
       </header>
       {operations.length === 0 ? (
-        <p className="operator-empty">No Data Refresh operations have been accepted.</p>
+        <p className="operator-empty">
+          {cursorDepth === 0
+            ? "No Data Refresh operations have been accepted."
+            : "This older page no longer contains retained receipts. Return to a newer page."}
+        </p>
       ) : (
         <div className="operator-table-scroll">
           <table

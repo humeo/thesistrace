@@ -32,6 +32,7 @@ from thesistrace.benchmark import (
 from thesistrace.data import (
     CanonicalSourceBatch,
     CollectionPlan,
+    DataGarbageCollector,
     DataRefreshError,
     DataRefreshService,
     DatasetLifecycle,
@@ -1090,7 +1091,12 @@ def test_operational_status_has_safe_head_latest_kinds_and_stable_fifty_row_page
             for index in range(53):
                 key = f"status-{index:03d}"
                 kind = ("market", "financial", "industry")[index % 3]
-                status = "cancelled" if index == 52 else "accepted"
+                status = "cancelled" if index in (0, 1, 3, 52) else "accepted"
+                receipt_created_at = (
+                    created_at - timedelta(days=201 - index)
+                    if index in (0, 1, 2, 3)
+                    else created_at
+                )
                 transaction.execute(
                     """
                     INSERT INTO data.refresh_operations (
@@ -1114,9 +1120,9 @@ def test_operational_status_has_safe_head_latest_kinds_and_stable_fifty_row_page
                         AS_OF,
                         kind,
                         target,
-                        created_at,
+                        receipt_created_at,
                         status,
-                        created_at,
+                        receipt_created_at,
                     ),
                 )
 
@@ -1148,6 +1154,28 @@ def test_operational_status_has_safe_head_latest_kinds_and_stable_fifty_row_page
         ):
             assert forbidden not in serialized
 
+        before_cleanup = service.status(cursor=first.next_cursor)
+        assert [item.idempotency_key for item in before_cleanup.operations] == [
+            "status-002",
+            "status-001",
+            "status-000",
+        ]
+        collection = DataGarbageCollector(
+            database,
+            tmp_path,
+            clock=lambda: created_at,
+        ).collect(idempotency_key="status-history-retention")
+        assert collection.deleted_receipt_count == 3
+
+        after_cleanup = service.status(cursor=first.next_cursor)
+        assert after_cleanup.head == first.head
+        assert after_cleanup.latest_by_kind == first.latest_by_kind
+        assert [item.idempotency_key for item in after_cleanup.operations] == ["status-002"]
+        assert after_cleanup.next_cursor is None
+        assert not {item.idempotency_key for item in first.operations} & {
+            item.idempotency_key for item in after_cleanup.operations
+        }
+
         with database.transaction() as transaction:
             transaction.execute(
                 """
@@ -1164,11 +1192,7 @@ def test_operational_status_has_safe_head_latest_kinds_and_stable_fifty_row_page
             )
 
         second = service.status(cursor=first.next_cursor)
-        assert [item.idempotency_key for item in second.operations] == [
-            "status-002",
-            "status-001",
-            "status-000",
-        ]
+        assert [item.idempotency_key for item in second.operations] == ["status-002"]
         assert second.next_cursor is None
         assert "status-newest" not in {
             item.idempotency_key for item in second.operations
@@ -1180,6 +1204,10 @@ def test_operational_status_has_safe_head_latest_kinds_and_stable_fifty_row_page
         with database.transaction() as transaction:
             transaction.execute(
                 "DELETE FROM data.refresh_operations WHERE idempotency_key LIKE 'status-%'"
+            )
+            transaction.execute(
+                "DELETE FROM data.collection_operations "
+                "WHERE idempotency_key = 'status-history-retention'"
             )
         database.close()
 

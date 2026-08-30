@@ -48,12 +48,14 @@ CREATE TABLE data.collection_operations (
     status text NOT NULL,
     target_count integer NOT NULL,
     deleted_count integer DEFAULT 0 NOT NULL,
+    deleted_receipt_count integer DEFAULT 0 NOT NULL,
     failure_code text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
     CONSTRAINT collection_operations_check CHECK (((deleted_count >= 0) AND (deleted_count <= target_count))),
     CONSTRAINT collection_operations_check1 CHECK ((((status = 'running'::text) AND (failure_code IS NULL) AND (finished_at IS NULL)) OR ((status = 'succeeded'::text) AND (deleted_count = target_count) AND (failure_code IS NULL) AND (finished_at IS NOT NULL)) OR ((status = 'failed'::text) AND (failure_code IS NOT NULL) AND (finished_at IS NOT NULL)))),
+    CONSTRAINT collection_operations_deleted_receipt_count_check CHECK ((deleted_receipt_count >= 0)),
     CONSTRAINT collection_operations_idempotency_key_check CHECK (((idempotency_key <> ''::text) AND (idempotency_key = btrim(idempotency_key)))),
     CONSTRAINT collection_operations_plan_sha256_check CHECK ((plan_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT collection_operations_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text]))),
@@ -815,6 +817,13 @@ CREATE INDEX data_refresh_history_idx ON data.refresh_operations USING btree (cr
 --
 
 CREATE INDEX data_refresh_latest_kind_idx ON data.refresh_operations USING btree (kind, created_at DESC, idempotency_key DESC);
+
+
+--
+-- Name: data_refresh_retention_idx; Type: INDEX; Schema: data; Owner: -
+--
+
+CREATE INDEX data_refresh_retention_idx ON data.refresh_operations USING btree (finished_at, idempotency_key) WHERE (status = ANY (ARRAY['succeeded'::text, 'failed'::text, 'cancelled'::text]));
 
 
 --

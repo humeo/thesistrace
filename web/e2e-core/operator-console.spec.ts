@@ -1442,6 +1442,10 @@ test("only the singleton Operator can open and read the Operator Console", async
   const operationHistory = datasetStatus.getByRole("table", {
     name: "Data Refresh operation history",
   });
+  await expect(datasetStatus.getByText(
+    "Newest first · 50 receipts per page · terminal receipts retained 180 days",
+    { exact: true },
+  )).toBeVisible();
   for (const key of [marketKey, financialKey, industryKey]) {
     await expect(operationHistory.getByText(key, { exact: true })).toBeVisible();
   }

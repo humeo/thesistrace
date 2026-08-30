@@ -57,11 +57,36 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("Market Refresh");
     expect(markup).toContain("Financial Refresh");
     expect(markup).toContain("Industry Refresh");
+    expect(markup).toContain("terminal receipts retained 180 days");
     expect(markup).toContain('aria-label="Cancel operation market-accepted"');
     expect(markup).toContain('aria-label="Retry operation market-failed"');
     expect(markup).toContain('aria-label="Retry operation industry-cancelled"');
     expect(markup).not.toContain('aria-label="Cancel operation financial-running"');
     expect(markup).not.toContain('aria-label="Retry operation industry-published"');
+  });
+
+  it("distinguishes an older page emptied by retention from unused history", () => {
+    const markup = renderToStaticMarkup(
+      <OperatorDatasetStatusView
+        cursorDepth={2}
+        data={statusPage({ operations: [], nextCursor: null })}
+        error={false}
+        loading={false}
+        onDetails={() => undefined}
+        onNext={() => undefined}
+        onPrevious={() => undefined}
+        onReload={() => undefined}
+        onAction={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain(
+      "This older page no longer contains retained receipts. Return to a newer page.",
+    );
+    expect(markup).not.toContain("No Data Refresh operations have been accepted.");
+    expect(markup).toContain(">Newer</button>");
+    expect(markup).not.toContain('<button disabled="" type="button">Newer</button>');
+    expect(markup).toContain("Page 3");
   });
 
   it("renders only bounded safe receipt facts in the labelled detail drawer", () => {

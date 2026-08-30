@@ -88,6 +88,18 @@ def test_financial_generation_pin_protects_transitive_evidence_until_release(
         assert _financial_value(store, generation_a) == result_a == "100"
         assert _financial_value(store, generation_b) == "200"
 
+        receipt_key = "retained-receipt-does-not-root-financial-a"
+        _insert_refresh_receipt(
+            database,
+            key=receipt_key,
+            kind="market",
+            status="succeeded",
+            outcome="published",
+            created_at=datetime(2026, 8, 20, 8, tzinfo=UTC),
+            finished_at=datetime(2026, 8, 20, 9, tzinfo=UTC),
+            generation_manifest_sha256=generation_a,
+        )
+
         lifecycle.release_pin(pin.id, owner_id=pin.owner_id)
         second = DataGarbageCollector(database, tmp_path).collect(
             idempotency_key="financial-a-released"
@@ -98,7 +110,142 @@ def test_financial_generation_pin_protects_transitive_evidence_until_release(
         assert a_only.isdisjoint(store.inventory())
         assert store.validate_generation(generation_b).manifest_sha256 == generation_b
         assert _financial_value(store, generation_b) == "200"
+        with database.transaction() as transaction:
+            assert transaction.execute(
+                "SELECT status FROM data.refresh_operations WHERE idempotency_key = %s",
+                (receipt_key,),
+            ).fetchone() == {"status": "succeeded"}
     finally:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.refresh_operations "
+                "WHERE idempotency_key = 'retained-receipt-does-not-root-financial-a'"
+            )
+        _clear_collection_state(database)
+        database.close()
+
+
+def test_collection_cleans_only_bounded_expired_terminal_refresh_receipts(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    initialize_core(core_settings.database_url)
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    now = datetime(2026, 8, 30, 12, tzinfo=UTC)
+    cutoff = now - timedelta(days=180)
+    expired = (
+        ("retention-published", "market", "succeeded", "published", "DONE", 190),
+        ("retention-no-change", "industry", "succeeded", "no_change", "DONE", 189),
+        ("retention-degraded", "financial", "succeeded", "degraded", "DONE", 188),
+        ("retention-failed", "market", "failed", None, "UPSTREAM_FAILURE", 187),
+        ("retention-cancelled", "industry", "cancelled", None, "DONE", 186),
+        ("retention-retry-exhausted", "market", "failed", None, "RETRY_EXHAUSTED", 185),
+    )
+    try:
+        _clear_collection_state(database)
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.refresh_operations WHERE idempotency_key LIKE 'retention-%'"
+            )
+        for key, kind, status, outcome, failure_code, age_days in expired:
+            finished_at = now - timedelta(days=age_days)
+            _insert_refresh_receipt(
+                database,
+                key=key,
+                kind=kind,
+                status=status,
+                outcome=outcome,
+                failure_code=None if failure_code == "DONE" else failure_code,
+                created_at=finished_at - timedelta(hours=1),
+                finished_at=finished_at,
+            )
+        _insert_refresh_receipt(
+            database,
+            key="retention-accepted-old",
+            kind="market",
+            status="accepted",
+            created_at=now - timedelta(days=220),
+            finished_at=None,
+        )
+        _insert_refresh_receipt(
+            database,
+            key="retention-exact-boundary",
+            kind="market",
+            status="cancelled",
+            created_at=cutoff - timedelta(hours=1),
+            finished_at=cutoff,
+        )
+        _insert_refresh_receipt(
+            database,
+            key="retention-recent",
+            kind="industry",
+            status="cancelled",
+            created_at=cutoff,
+            finished_at=cutoff + timedelta(microseconds=1),
+        )
+
+        collector = DataGarbageCollector(
+            database,
+            tmp_path,
+            clock=lambda: now,
+            receipt_cleanup_limit=3,
+        )
+        first = collector.collect(idempotency_key="retention-collection-first")
+        assert first.deleted_receipt_count == 3
+        assert _refresh_keys(database, "retention-%") == {
+            "retention-accepted-old",
+            "retention-cancelled",
+            "retention-exact-boundary",
+            "retention-failed",
+            "retention-recent",
+            "retention-retry-exhausted",
+        }
+
+        repeated = collector.collect(idempotency_key="retention-collection-first")
+        assert repeated == first
+        assert repeated.deleted_receipt_count == 3
+
+        second = collector.collect(idempotency_key="retention-collection-second")
+        assert second.deleted_receipt_count == 3
+        assert _refresh_keys(database, "retention-%") == {
+            "retention-accepted-old",
+            "retention-exact-boundary",
+            "retention-recent",
+        }
+        no_change = collector.collect(idempotency_key="retention-collection-empty")
+        assert no_change.deleted_receipt_count == 0
+
+        with database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT deleted_receipt_count, plan_sha256
+                FROM data.collection_operations
+                WHERE idempotency_key LIKE 'retention-collection-%'
+                ORDER BY idempotency_key
+                """
+            ).fetchall()
+        assert [int(row["deleted_receipt_count"]) for row in rows] == [0, 3, 3]
+        assert all(len(str(row["plan_sha256"])) == 64 for row in rows)
+        assert not any(key in str(row["plan_sha256"]) for key, *_ in expired for row in rows)
+
+        _insert_refresh_receipt(
+            database,
+            key="retention-running-old",
+            kind="market",
+            status="running",
+            created_at=now - timedelta(days=220),
+            finished_at=None,
+            lease_expires_at=now + timedelta(hours=1),
+        )
+        with pytest.raises(DataCollectionError, match="COLLECTION_DATA_WORK_ACTIVE"):
+            collector.collect(idempotency_key="retention-collection-running")
+        assert "retention-running-old" in _refresh_keys(database, "retention-%")
+    finally:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.refresh_operations WHERE idempotency_key LIKE 'retention-%'"
+            )
         _clear_collection_state(database)
         database.close()
 
@@ -244,6 +391,15 @@ def test_failed_deletion_records_progress_and_retry_does_not_widen_plan(
         head = _materialize(store, ordinal=1)
         retired = _materialize(store, ordinal=2)
         _install_head(lifecycle, head, operation_id="retry-head")
+        retention_now = datetime(2026, 8, 30, 12, tzinfo=UTC)
+        _insert_refresh_receipt(
+            database,
+            key="retention-retry-fixed-initial",
+            kind="market",
+            status="cancelled",
+            created_at=retention_now - timedelta(days=200, hours=1),
+            finished_at=retention_now - timedelta(days=200),
+        )
         original_delete = AddressedFileStore.delete
         deleted_once = False
 
@@ -256,7 +412,11 @@ def test_failed_deletion_records_progress_and_retry_does_not_widen_plan(
 
         monkeypatch.setattr(AddressedFileStore, "delete", fail_after_one)
         with pytest.raises(DataCollectionError) as failed:
-            DataGarbageCollector(database, tmp_path).collect(idempotency_key="retry-fixed-plan")
+            DataGarbageCollector(
+                database,
+                tmp_path,
+                clock=lambda: retention_now,
+            ).collect(idempotency_key="retry-fixed-plan")
         assert failed.value.code == "COLLECTION_FILESYSTEM_FAILURE"
         assert _collection_progress(database, "retry-fixed-plan") == {
             "status": "failed",
@@ -264,20 +424,47 @@ def test_failed_deletion_records_progress_and_retry_does_not_widen_plan(
             "pending_count": _pending_count(database, "retry-fixed-plan"),
         }
         assert _pending_count(database, "retry-fixed-plan") > 0
+        assert "retention-retry-fixed-initial" not in _refresh_keys(
+            database, "retention-retry-fixed-%"
+        )
 
         new_orphan = _materialize(store, ordinal=3)
-        monkeypatch.setattr(AddressedFileStore, "delete", original_delete)
-        resumed = DataGarbageCollector(database, tmp_path).collect(
-            idempotency_key="retry-fixed-plan"
+        _insert_refresh_receipt(
+            database,
+            key="retention-retry-fixed-later",
+            kind="industry",
+            status="cancelled",
+            created_at=retention_now - timedelta(days=190, hours=1),
+            finished_at=retention_now - timedelta(days=190),
         )
+        monkeypatch.setattr(AddressedFileStore, "delete", original_delete)
+        resumed = DataGarbageCollector(
+            database,
+            tmp_path,
+            clock=lambda: retention_now,
+        ).collect(idempotency_key="retry-fixed-plan")
 
         assert resumed.status == "succeeded"
         assert resumed.remaining_file_count == 0
+        assert resumed.deleted_receipt_count == 1
+        assert _refresh_keys(database, "retention-retry-fixed-%") == {
+            "retention-retry-fixed-later"
+        }
         _assert_generation_missing(store, retired)
         assert store.validate_generation(new_orphan).manifest_sha256 == new_orphan
-        DataGarbageCollector(database, tmp_path).collect(idempotency_key="collect-later-orphan")
+        later = DataGarbageCollector(
+            database,
+            tmp_path,
+            clock=lambda: retention_now,
+        ).collect(idempotency_key="collect-later-orphan")
+        assert later.deleted_receipt_count == 1
         _assert_generation_missing(store, new_orphan)
     finally:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.refresh_operations "
+                "WHERE idempotency_key LIKE 'retention-retry-fixed-%'"
+            )
         _clear_collection_state(database)
         database.close()
 
@@ -795,6 +982,105 @@ def _clear_collection_state(database: PostgresDatabase) -> None:
                      data.generation_pins, data.generation_candidates
             """
         )
+
+
+def _insert_refresh_receipt(
+    database: PostgresDatabase,
+    *,
+    key: str,
+    kind: str,
+    status: str,
+    created_at: datetime,
+    finished_at: datetime | None,
+    outcome: str | None = None,
+    failure_code: str | None = None,
+    generation_manifest_sha256: str | None = None,
+    lease_expires_at: datetime | None = None,
+) -> None:
+    succeeded = status == "succeeded"
+    running = status == "running"
+    failed = status == "failed"
+    phase = (
+        "claim"
+        if running or failed
+        else (
+            {"market": "publication", "financial": "financial", "industry": "industry"}[kind]
+            if succeeded
+            else None
+        )
+    )
+    heartbeat = created_at if running else finished_at if succeeded or failed else None
+    target_session = datetime(2026, 8, 14, tzinfo=UTC).date()
+    financial = succeeded and kind == "financial"
+    with database.transaction() as transaction:
+        transaction.execute(
+            """
+            INSERT INTO data.refresh_operations (
+                idempotency_key, kind, fingerprint, status,
+                owner_token, lease_expires_at, attempt_count, phase,
+                last_heartbeat_at, outcome, as_of, observation_through_session,
+                generation_manifest_sha256, data_through_session, last_refresh_at,
+                financial_complete_through_session, matched_trigger_count,
+                checked_no_structured_change_count, accepted_instrument_count,
+                failed_instrument_count, pending_instrument_count,
+                discovery_gap_count, failure_code, created_at, started_at,
+                finished_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s,
+                %s, %s,
+                %s, %s,
+                %s, %s,
+                %s, %s, %s, %s,
+                %s, %s
+            )
+            """,
+            (
+                key,
+                kind,
+                hashlib.sha256(key.encode()).hexdigest(),
+                status,
+                "retention-worker" if running else None,
+                lease_expires_at if running else None,
+                1 if running or succeeded or failed else 0,
+                phase,
+                heartbeat,
+                outcome,
+                created_at if kind == "market" else None,
+                None if kind == "market" else target_session,
+                (
+                    generation_manifest_sha256
+                    or hashlib.sha256(f"{key}-generation".encode()).hexdigest()
+                    if succeeded
+                    else None
+                ),
+                target_session if succeeded else None,
+                finished_at if succeeded else None,
+                target_session if financial else None,
+                1 if financial else None,
+                1 if financial else None,
+                1 if financial else None,
+                0 if financial else None,
+                1 if financial and outcome == "degraded" else 0 if financial else None,
+                0 if financial else None,
+                failure_code,
+                created_at,
+                created_at if running or succeeded or failed else None,
+                finished_at,
+                finished_at or created_at,
+            ),
+        )
+
+
+def _refresh_keys(database: PostgresDatabase, pattern: str) -> set[str]:
+    with database.transaction() as transaction:
+        rows = transaction.execute(
+            "SELECT idempotency_key FROM data.refresh_operations WHERE idempotency_key LIKE %s",
+            (pattern,),
+        ).fetchall()
+    return {str(row["idempotency_key"]) for row in rows}
 
 
 def _pending_count(database: PostgresDatabase, key: str) -> int:

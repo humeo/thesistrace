@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
@@ -26,21 +28,41 @@ class DataCollectionError(RuntimeError):
         self.code = code
 
 
+_REFRESH_RECEIPT_RETENTION_DAYS = 180
+_REFRESH_RECEIPT_CLEANUP_LIMIT = 500
+
+
 @dataclass(frozen=True)
 class CollectionOutcome:
     status: str
     target_file_count: int
     deleted_file_count: int
     remaining_file_count: int
+    deleted_receipt_count: int
 
 
 class DataGarbageCollector:
     """Explicit, fixed-plan collection behind the shared Data Lifecycle fence."""
 
-    def __init__(self, database: PostgresDatabase, mount_root: Path | str) -> None:
+    def __init__(
+        self,
+        database: PostgresDatabase,
+        mount_root: Path | str,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        receipt_cleanup_limit: int = _REFRESH_RECEIPT_CLEANUP_LIMIT,
+    ) -> None:
+        if (
+            not isinstance(receipt_cleanup_limit, int)
+            or isinstance(receipt_cleanup_limit, bool)
+            or receipt_cleanup_limit <= 0
+        ):
+            raise ValueError("Receipt cleanup limit must be a positive integer")
         self._database = database
         self._lifecycle = DatasetLifecycle(database, mount_root)
         self._generations = MountedGenerationStore(mount_root)
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._receipt_cleanup_limit = receipt_cleanup_limit
 
     def collect(self, *, idempotency_key: str) -> CollectionOutcome:
         key = _identity(idempotency_key)
@@ -61,6 +83,7 @@ class DataGarbageCollector:
         return self._outcome(key)
 
     def _ensure_plan(self, key: str) -> None:
+        receipt_cutoff: datetime | None = None
         for _ in range(4):
             root_ids, financial_outputs = self._snapshot_retention()
             retained = self._validated_retained_files(root_ids, financial_outputs)
@@ -86,19 +109,43 @@ class DataGarbageCollector:
                 if existing is not None and existing["status"] == "succeeded":
                     return
                 if existing is None:
+                    if receipt_cutoff is None:
+                        receipt_cutoff = self._validated_clock() - timedelta(
+                            days=_REFRESH_RECEIPT_RETENTION_DAYS
+                        )
                     targets = tuple(sorted(inventory - retained))
+                    receipt_rows = transaction.execute(
+                        """
+                        SELECT idempotency_key
+                        FROM data.refresh_operations
+                        WHERE status IN ('succeeded', 'failed', 'cancelled')
+                          AND finished_at < %s
+                        ORDER BY finished_at, idempotency_key
+                        LIMIT %s
+                        FOR UPDATE
+                        """,
+                        (receipt_cutoff, self._receipt_cleanup_limit),
+                    ).fetchall()
+                    receipt_keys = tuple(str(row["idempotency_key"]) for row in receipt_rows)
                     plan_sha256 = hashlib.sha256(
                         canonical_json_bytes(
-                            [{"kind": target.kind, "sha256": target.sha256} for target in targets]
+                            {
+                                "files": [
+                                    {"kind": target.kind, "sha256": target.sha256}
+                                    for target in targets
+                                ],
+                                "refresh_receipts": receipt_keys,
+                            }
                         )
                     ).hexdigest()
                     transaction.execute(
                         """
                         INSERT INTO data.collection_operations (
-                            idempotency_key, plan_sha256, status, target_count
-                        ) VALUES (%s, %s, 'running', %s)
+                            idempotency_key, plan_sha256, status, target_count,
+                            deleted_receipt_count
+                        ) VALUES (%s, %s, 'running', %s, %s)
                         """,
-                        (key, plan_sha256, len(targets)),
+                        (key, plan_sha256, len(targets), len(receipt_keys)),
                     )
                     with transaction.cursor() as cursor:
                         cursor.executemany(
@@ -112,6 +159,16 @@ class DataGarbageCollector:
                                 for ordinal, target in enumerate(targets)
                             ],
                         )
+                    if receipt_keys:
+                        deleted = transaction.execute(
+                            """
+                            DELETE FROM data.refresh_operations
+                            WHERE idempotency_key = ANY(%s::text[])
+                            """,
+                            (list(receipt_keys),),
+                        )
+                        if deleted.rowcount != len(receipt_keys):
+                            raise RuntimeError("Refresh receipt cleanup plan is inconsistent")
                 else:
                     if retained & _targets(transaction, key):
                         raise DataCollectionError("COLLECTION_ROOT_SET_CHANGED")
@@ -294,7 +351,7 @@ class DataGarbageCollector:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT status, target_count, deleted_count
+                SELECT status, target_count, deleted_count, deleted_receipt_count
                 FROM data.collection_operations
                 WHERE idempotency_key = %s
                 """,
@@ -309,7 +366,14 @@ class DataGarbageCollector:
             target_file_count=target_count,
             deleted_file_count=deleted_count,
             remaining_file_count=target_count - deleted_count,
+            deleted_receipt_count=int(row["deleted_receipt_count"]),
         )
+
+    def _validated_clock(self) -> datetime:
+        selected = self._clock()
+        if selected.tzinfo is None or selected.utcoffset() is None:
+            raise ValueError("Receipt cleanup clock must include a timezone")
+        return selected.astimezone(UTC)
 
 
 def _fail_operation(
