@@ -229,6 +229,107 @@ class DataRefreshService:
             raise DataRefreshError("REFRESH_NOT_FOUND")
         return _outcome(row)
 
+    def cancel(
+        self,
+        *,
+        idempotency_key: str,
+        kind: str,
+        target: str,
+    ) -> RefreshOutcome:
+        key = _identity(idempotency_key)
+        normalized_target = _normalized_refresh_target(kind=kind, target=target)
+        with self._database.transaction() as transaction:
+            lock_data_lifecycle(transaction)
+            row = transaction.execute(
+                """
+                SELECT * FROM data.refresh_operations
+                WHERE idempotency_key = %s
+                FOR UPDATE
+                """,
+                (key,),
+            ).fetchone()
+            if row is None:
+                raise DataRefreshError("REFRESH_NOT_FOUND")
+            _assert_refresh_action_target(
+                row,
+                kind=kind,
+                normalized_target=normalized_target,
+            )
+            if row["status"] != "accepted":
+                raise DataRefreshError("REFRESH_NOT_CANCELLABLE")
+            cancelled = transaction.execute(
+                """
+                UPDATE data.refresh_operations
+                SET status = 'cancelled', finished_at = clock_timestamp(),
+                    updated_at = clock_timestamp()
+                WHERE idempotency_key = %s AND status = 'accepted'
+                RETURNING *
+                """,
+                (key,),
+            ).fetchone()
+            if cancelled is None:
+                raise DataRefreshError("REFRESH_NOT_CANCELLABLE")
+        return _outcome(cancelled)
+
+    def retry(
+        self,
+        *,
+        source_idempotency_key: str,
+        idempotency_key: str,
+        kind: str,
+        target: str,
+    ) -> RefreshOutcome:
+        source_key = _identity(source_idempotency_key)
+        new_key = _identity(idempotency_key)
+        normalized_target = _normalized_refresh_target(kind=kind, target=target)
+        with self._database.transaction() as transaction:
+            lock_data_lifecycle(transaction)
+            source = transaction.execute(
+                """
+                SELECT * FROM data.refresh_operations
+                WHERE idempotency_key = %s
+                FOR UPDATE
+                """,
+                (source_key,),
+            ).fetchone()
+            if source is None:
+                raise DataRefreshError("REFRESH_NOT_FOUND")
+            _assert_refresh_action_target(
+                source,
+                kind=kind,
+                normalized_target=normalized_target,
+            )
+            if source["status"] not in {"failed", "cancelled"}:
+                raise DataRefreshError("REFRESH_NOT_RETRYABLE")
+            existing = transaction.execute(
+                """
+                SELECT idempotency_key FROM data.refresh_operations
+                WHERE idempotency_key = %s
+                FOR UPDATE
+                """,
+                (new_key,),
+            ).fetchone()
+            if existing is not None:
+                raise DataRefreshError("IDEMPOTENCY_KEY_CONFLICT")
+            retried = transaction.execute(
+                """
+                INSERT INTO data.refresh_operations (
+                    idempotency_key, kind, fingerprint, status,
+                    as_of, observation_through_session
+                ) VALUES (%s, %s, %s, 'accepted', %s, %s)
+                RETURNING *
+                """,
+                (
+                    new_key,
+                    source["kind"],
+                    source["fingerprint"],
+                    source["as_of"],
+                    source["observation_through_session"],
+                ),
+            ).fetchone()
+        assert retried is not None
+        return _outcome(retried)
+
     def submit_financial(
         self,
         *,
@@ -2424,6 +2525,61 @@ def validate_industry_refresh_request(
         idempotency_key=idempotency_key,
         observation_through_session=observation_through_session,
     )
+
+
+def validate_refresh_action_request(
+    *,
+    source_idempotency_key: str,
+    kind: str,
+    target: str,
+    new_idempotency_key: str | None = None,
+) -> tuple[str, str | None]:
+    source_key = _identity(source_idempotency_key)
+    new_key = None if new_idempotency_key is None else _identity(new_idempotency_key)
+    if new_key == source_key:
+        raise DataRefreshError("INVALID_RETRY_IDEMPOTENCY_KEY")
+    _normalized_refresh_target(kind=kind, target=target)
+    return source_key, new_key
+
+
+def _normalized_refresh_target(*, kind: str, target: str) -> datetime | str:
+    if kind == "market":
+        _, normalized = validate_market_refresh_request(
+            idempotency_key="refresh-action-target",
+            as_of=target,
+        )
+        return normalized
+    if kind == "financial":
+        _, normalized = validate_financial_refresh_request(
+            idempotency_key="refresh-action-target",
+            observation_through_session=target,
+        )
+        return normalized
+    if kind == "industry":
+        _, normalized = validate_industry_refresh_request(
+            idempotency_key="refresh-action-target",
+            observation_through_session=target,
+        )
+        return normalized
+    raise DataRefreshError("INVALID_REFRESH_KIND")
+
+
+def _assert_refresh_action_target(
+    row: dict[str, object],
+    *,
+    kind: str,
+    normalized_target: datetime | str,
+) -> None:
+    if row["kind"] != kind:
+        raise DataRefreshError("REFRESH_TARGET_CONFLICT")
+    if kind == "market":
+        as_of = row["as_of"]
+        if not isinstance(as_of, datetime) or as_of.astimezone(UTC) != normalized_target:
+            raise DataRefreshError("REFRESH_TARGET_CONFLICT")
+        return
+    observation = row["observation_through_session"]
+    if not isinstance(observation, date) or observation.isoformat() != normalized_target:
+        raise DataRefreshError("REFRESH_TARGET_CONFLICT")
 
 
 def _outcome(row: dict[str, object]) -> RefreshOutcome:

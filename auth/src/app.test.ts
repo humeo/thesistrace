@@ -1056,6 +1056,131 @@ describe("Auth HTTP boundary", () => {
     );
   });
 
+  it.each([
+    {
+      expected: {
+        kind: "market",
+        operation: "data.refresh.cancel",
+        sourceIdempotencyKey: "market-cancel-source",
+        target: "2026-08-11T10:00:00+00:00",
+      },
+      request: {
+        kind: "market",
+        operation: "data.refresh.cancel",
+        source_idempotency_key: "market-cancel-source",
+        target: "2026-08-11T10:00:00+00:00",
+      },
+    },
+    {
+      expected: {
+        kind: "industry",
+        newIdempotencyKey: "industry-retry-new",
+        operation: "data.refresh.retry",
+        sourceIdempotencyKey: "industry-failed-source",
+        target: "2026-08-14",
+      },
+      request: {
+        kind: "industry",
+        new_idempotency_key: "industry-retry-new",
+        operation: "data.refresh.retry",
+        source_idempotency_key: "industry-failed-source",
+        target: "2026-08-14",
+      },
+    },
+  ] as const)("confirms and privately consumes exact $request.operation proof", async ({
+    expected,
+    request,
+  }) => {
+    const appDependencies = dependencies();
+    const app = createAuthApp(appDependencies);
+    const confirmation = await app.request(
+      "http://auth.test/api/auth/operator/proofs",
+      {
+        body: JSON.stringify({
+          ...request,
+          password: "correct-horse-battery-staple",
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: "operator=fake",
+          origin: "http://auth.test",
+        },
+        method: "POST",
+      },
+    );
+
+    expect(confirmation.status).toBe(200);
+    expect(appDependencies.confirmOperatorProof).toHaveBeenCalledWith(
+      {
+        researcherId: "00000000-0000-4000-8000-000000000001",
+        sessionId: "00000000-0000-4000-8000-000000000010",
+      },
+      { ...expected, password: "correct-horse-battery-staple" },
+    );
+
+    const consumed = await app.request(
+      "http://auth.test/internal/operator/proofs/consume",
+      {
+        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        headers: {
+          "content-type": "application/json",
+          cookie: "operator=fake",
+        },
+        method: "POST",
+      },
+    );
+
+    expect(consumed.status).toBe(204);
+    expect(appDependencies.consumeOperatorProof).toHaveBeenCalledWith(
+      {
+        researcherId: "00000000-0000-4000-8000-000000000001",
+        sessionId: "00000000-0000-4000-8000-000000000010",
+      },
+      { ...expected, proof: opaqueInvitationToken },
+    );
+  });
+
+  it("rejects malformed action target at both proof HTTP boundaries", async () => {
+    const appDependencies = dependencies();
+    const app = createAuthApp(appDependencies);
+    const request = {
+      kind: "market",
+      operation: "data.refresh.cancel",
+      source_idempotency_key: "market-cancel-source",
+      target: "2026-08-11",
+    } as const;
+    const headers = {
+      "content-type": "application/json",
+      cookie: "operator=fake",
+      origin: "http://auth.test",
+    };
+
+    const confirmation = await app.request(
+      "http://auth.test/api/auth/operator/proofs",
+      {
+        body: JSON.stringify({
+          ...request,
+          password: "correct-horse-battery-staple",
+        }),
+        headers,
+        method: "POST",
+      },
+    );
+    const consumption = await app.request(
+      "http://auth.test/internal/operator/proofs/consume",
+      {
+        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        headers,
+        method: "POST",
+      },
+    );
+
+    expect(confirmation.status).toBe(400);
+    expect(consumption.status).toBe(400);
+    expect(appDependencies.confirmOperatorProof).not.toHaveBeenCalled();
+    expect(appDependencies.consumeOperatorProof).not.toHaveBeenCalled();
+  });
+
   it("rejects year zero at both Financial proof HTTP boundaries", async () => {
     const appDependencies = dependencies();
     const app = createAuthApp(appDependencies);

@@ -709,7 +709,7 @@
       "type": "c"
     },
     {
-      "definition": "CHECK ((operation = ANY (ARRAY['invitation.issue'::text, 'invitation.reissue'::text, 'researcher.sessions.revoke'::text, 'data.refresh.market.submit'::text, 'data.refresh.financial.submit'::text, 'data.refresh.industry.submit'::text])))",
+      "definition": "CHECK ((operation = ANY (ARRAY['invitation.issue'::text, 'invitation.reissue'::text, 'researcher.sessions.revoke'::text, 'data.refresh.market.submit'::text, 'data.refresh.financial.submit'::text, 'data.refresh.industry.submit'::text, 'data.refresh.cancel'::text, 'data.refresh.retry'::text])))",
       "name": "operator_proof_operation_check",
       "relation": "operator_proof",
       "type": "c"

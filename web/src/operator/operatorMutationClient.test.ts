@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   confirmFinancialRefreshProof,
+  confirmDataRefreshActionProof,
   confirmIndustryRefreshProof,
   confirmOperatorProof,
   confirmMarketRefreshProof,
@@ -14,6 +15,7 @@ import {
   OperatorMutationError,
   submitInvitationMutation,
   submitFinancialRefresh,
+  submitDataRefreshAction,
   submitIndustryRefresh,
   submitMarketRefresh,
   submitSessionRevocation,
@@ -440,5 +442,145 @@ describe("Operator mutation client", () => {
       `/api/operator/data/refreshes/market?as_of=2026-08-11T18%3A00%3A00%2B08%3A00&idempotency_key=${encodeURIComponent(idempotencyKey)}`,
       expect.objectContaining({ method: "GET" }),
     );
+  });
+
+  it("binds Cancel and Retry proofs to exact immutable receipt actions", async () => {
+    const password = "correct-horse-battery-staple";
+    const cancel = {
+      action: "cancel" as const,
+      kind: "market" as const,
+      sourceIdempotencyKey: "market-cancel-source",
+      target: "2026-08-11T10:00:00Z",
+    };
+    const retry = {
+      action: "retry" as const,
+      kind: "industry" as const,
+      newIdempotencyKey: "industry-retry-new",
+      sourceIdempotencyKey: "industry-failed-source",
+      target: "2026-08-14",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({
+        expires_at: "2026-08-29T06:01:00.000Z",
+        proof,
+      }))
+      .mockResolvedValueOnce(Response.json({
+        as_of: cancel.target,
+        idempotency_key: cancel.sourceIdempotencyKey,
+        kind: cancel.kind,
+        observation_through_session: null,
+        status: "cancelled",
+      }))
+      .mockResolvedValueOnce(Response.json({
+        expires_at: "2026-08-29T06:01:00.000Z",
+        proof,
+      }))
+      .mockResolvedValueOnce(Response.json({
+        as_of: null,
+        idempotency_key: retry.newIdempotencyKey,
+        kind: retry.kind,
+        observation_through_session: retry.target,
+        status: "accepted",
+      }, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+
+    const cancelProof = await confirmDataRefreshActionProof(
+      cancel,
+      password,
+      signal,
+    );
+    await expect(
+      submitDataRefreshAction(cancel, cancelProof.proof, signal),
+    ).resolves.toMatchObject({
+      idempotencyKey: cancel.sourceIdempotencyKey,
+      status: "cancelled",
+    });
+    const retryProof = await confirmDataRefreshActionProof(retry, password, signal);
+    await expect(
+      submitDataRefreshAction(retry, retryProof.proof, signal),
+    ).resolves.toMatchObject({
+      idempotencyKey: retry.newIdempotencyKey,
+      status: "accepted",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/auth/operator/proofs",
+      expect.objectContaining({
+        body: JSON.stringify({
+          kind: cancel.kind,
+          operation: "data.refresh.cancel",
+          password,
+          source_idempotency_key: cancel.sourceIdempotencyKey,
+          target: cancel.target,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/operator/data/refreshes/cancel",
+      expect.objectContaining({
+        body: JSON.stringify({
+          kind: cancel.kind,
+          proof,
+          source_idempotency_key: cancel.sourceIdempotencyKey,
+          target: cancel.target,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/auth/operator/proofs",
+      expect.objectContaining({
+        body: JSON.stringify({
+          kind: retry.kind,
+          new_idempotency_key: retry.newIdempotencyKey,
+          operation: "data.refresh.retry",
+          password,
+          source_idempotency_key: retry.sourceIdempotencyKey,
+          target: retry.target,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/operator/data/refreshes/retry",
+      expect.objectContaining({
+        body: JSON.stringify({
+          kind: retry.kind,
+          new_idempotency_key: retry.newIdempotencyKey,
+          proof,
+          source_idempotency_key: retry.sourceIdempotencyKey,
+          target: retry.target,
+        }),
+      }),
+    );
+    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(password);
+    expect(JSON.stringify(fetchMock.mock.calls[3])).not.toContain(password);
+  });
+
+  it.each([
+    ["REFRESH_NOT_CANCELLABLE", "not-cancellable"],
+    ["REFRESH_NOT_RETRYABLE", "not-retryable"],
+    ["REFRESH_NOT_FOUND", "invalid-target"],
+    ["REFRESH_TARGET_CONFLICT", "invalid-target"],
+  ] as const)("maps %s to %s without inventing success", async (serverCode, clientCode) => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValueOnce(
+      Response.json({ code: serverCode }, { status: 409 }),
+    ));
+    await expect(
+      submitDataRefreshAction(
+        {
+          action: "cancel",
+          kind: "market",
+          sourceIdempotencyKey: "market-cancel-source",
+          target: "2026-08-11T10:00:00Z",
+        },
+        proof,
+        new AbortController().signal,
+      ),
+    ).rejects.toEqual(new OperatorMutationError(clientCode));
   });
 });

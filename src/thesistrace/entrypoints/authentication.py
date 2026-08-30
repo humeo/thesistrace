@@ -63,6 +63,27 @@ class OperatorAuthorizer(Protocol):
         proof: str,
     ) -> None: ...
 
+    async def consume_data_refresh_cancel_proof(
+        self,
+        cookie: str | None,
+        *,
+        idempotency_key: str,
+        kind: str,
+        target: str,
+        proof: str,
+    ) -> None: ...
+
+    async def consume_data_refresh_retry_proof(
+        self,
+        cookie: str | None,
+        *,
+        idempotency_key: str,
+        kind: str,
+        new_idempotency_key: str,
+        target: str,
+        proof: str,
+    ) -> None: ...
+
 
 class _VerifiedSession(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -244,6 +265,75 @@ class CoreAuthVerifier:
                     "operation": "data.refresh.industry.submit",
                     "proof": proof,
                 },
+            )
+        except (httpx.HTTPError, OSError) as error:
+            raise AuthSessionUnavailable() from error
+        if response.status_code == 404:
+            raise OperatorAccessNotFound()
+        if response.status_code == 400:
+            try:
+                invalid_proof = response.json() == {"code": "OPERATOR_PROOF_INVALID"}
+            except ValueError:
+                invalid_proof = False
+            if invalid_proof:
+                raise InvalidOperatorProof()
+            raise AuthSessionUnavailable()
+        if response.status_code != 204:
+            raise AuthSessionUnavailable()
+
+    async def consume_data_refresh_cancel_proof(
+        self,
+        cookie: str | None,
+        *,
+        idempotency_key: str,
+        kind: str,
+        target: str,
+        proof: str,
+    ) -> None:
+        await self._consume_data_refresh_action_proof(
+            cookie,
+            payload={
+                "kind": kind,
+                "operation": "data.refresh.cancel",
+                "proof": proof,
+                "source_idempotency_key": idempotency_key,
+                "target": target,
+            },
+        )
+
+    async def consume_data_refresh_retry_proof(
+        self,
+        cookie: str | None,
+        *,
+        idempotency_key: str,
+        kind: str,
+        new_idempotency_key: str,
+        target: str,
+        proof: str,
+    ) -> None:
+        await self._consume_data_refresh_action_proof(
+            cookie,
+            payload={
+                "kind": kind,
+                "new_idempotency_key": new_idempotency_key,
+                "operation": "data.refresh.retry",
+                "proof": proof,
+                "source_idempotency_key": idempotency_key,
+                "target": target,
+            },
+        )
+
+    async def _consume_data_refresh_action_proof(
+        self,
+        cookie: str | None,
+        *,
+        payload: dict[str, str],
+    ) -> None:
+        try:
+            response = await self._client.post(
+                "/internal/operator/proofs/consume",
+                headers=_cookie_headers(cookie),
+                json=payload,
             )
         except (httpx.HTTPError, OSError) as error:
             raise AuthSessionUnavailable() from error

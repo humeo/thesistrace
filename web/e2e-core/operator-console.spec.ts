@@ -6,17 +6,19 @@ import {
   emailToken,
   expect,
   issueInvitation,
+  markDataRefreshRunning,
   resetAuthRateLimits,
   restoreResearcherSession,
   runAuthOperator,
   sameOriginHeaders,
   seedOperatorDirectory,
+  stopDataOperatorWorker,
   securityTest as test,
   type AuthenticatedResearcher,
 } from "./auth-fixture";
 
 test("only the singleton Operator can open and read the Operator Console", async ({ page }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(240_000);
   const operatorMutationRequests: Array<Readonly<{ path: string; body: string }>> = [];
   const marketStatusRequests: Array<Readonly<{
     asOf: string | null;
@@ -60,6 +62,8 @@ test("only the singleton Operator can open and read the Operator Console", async
         || path === "/api/operator/data/refreshes/market"
         || path === "/api/operator/data/refreshes/financial"
         || path === "/api/operator/data/refreshes/industry"
+        || path === "/api/operator/data/refreshes/cancel"
+        || path === "/api/operator/data/refreshes/retry"
       )
     ) {
       operatorMutationRequests.push({ body: request.postData() ?? "", path });
@@ -1576,6 +1580,155 @@ test("only the singleton Operator can open and read the Operator Console", async
   await manualResponse;
   await page.unroute("**/api/operator/data/status**", statusPollingHandler);
 
+  stopDataOperatorWorker();
+  const submitAcceptedMarket = async (key: string): Promise<string> => {
+    const proofResponse = await page.request.post("/api/auth/operator/proofs", {
+      data: {
+        as_of: marketAsOf,
+        idempotency_key: key,
+        operation: "data.refresh.market.submit",
+        password: browserPassword,
+      },
+      headers: sameOriginHeaders(),
+    });
+    expect(proofResponse.status()).toBe(200);
+    const confirmed = await proofResponse.json() as { proof?: unknown };
+    expect(typeof confirmed.proof).toBe("string");
+    const submitted = await page.request.post("/api/operator/data/refreshes/market", {
+      data: {
+        as_of: marketAsOf,
+        idempotency_key: key,
+        proof: confirmed.proof,
+      },
+      headers: sameOriginHeaders(),
+    });
+    expect(submitted.status()).toBe(202);
+    const receipt = await submitted.json() as { as_of?: unknown; status?: unknown };
+    expect(receipt.status).toBe("accepted");
+    expect(typeof receipt.as_of).toBe("string");
+    return receipt.as_of as string;
+  };
+
+  resetAuthRateLimits();
+  const cancelSourceKey = "browser-market-cancel-source";
+  const cancelSourceTarget = await submitAcceptedMarket(cancelSourceKey);
+  const cancelSourceReload = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/operator/data/status",
+  );
+  await datasetStatus.getByRole("button", { name: "Reload" }).click();
+  await cancelSourceReload;
+  const cancelSourceRow = operationHistory.getByRole("row").filter({
+    hasText: cancelSourceKey,
+  });
+  await expect(cancelSourceRow.getByText("Accepted · queued", { exact: true })).toBeVisible();
+  await expect(cancelSourceRow.getByRole("button", {
+    name: `Cancel operation ${cancelSourceKey}`,
+  })).toBeVisible();
+  await expect(cancelSourceRow.getByRole("button", {
+    name: `Retry operation ${cancelSourceKey}`,
+  })).toHaveCount(0);
+
+  await cancelSourceRow.getByRole("button", {
+    name: `Cancel operation ${cancelSourceKey}`,
+  }).click();
+  const cancelDialog = page.getByRole("dialog", { name: "Cancel queued Refresh?" });
+  await expect(cancelDialog).toContainText("Market Refresh");
+  await expect(cancelDialog).toContainText(cancelSourceTarget);
+  await expect(cancelDialog).toContainText(cancelSourceKey);
+  await expect(cancelDialog).toContainText("The Worker will never claim this queued receipt");
+  const cancelPassword = cancelDialog.getByLabel("Current password");
+  await expect(cancelPassword).toBeFocused();
+  await cancelPassword.fill(browserPassword);
+  await cancelPassword.press("Enter");
+  await expect(cancelDialog).toHaveCount(0);
+  await expect(cancelSourceRow.getByText("Cancelled", { exact: true })).toBeVisible();
+  await expect(cancelSourceRow.getByRole("button", {
+    name: `Cancel operation ${cancelSourceKey}`,
+  })).toHaveCount(0);
+  const retrySource = cancelSourceRow.getByRole("button", {
+    name: `Retry operation ${cancelSourceKey}`,
+  });
+  await expect(retrySource).toBeVisible();
+
+  await cancelSourceRow.getByRole("button", {
+    name: `View details for ${cancelSourceKey}`,
+  }).click();
+  const cancelledDrawer = page.getByRole("dialog", { name: "Operation details" });
+  await expect(cancelledDrawer).toContainText(cancelSourceKey);
+  await expect(cancelledDrawer.getByText("Cancelled", { exact: true })).toBeVisible();
+  resetAuthRateLimits();
+  await cancelledDrawer.getByRole("button", {
+    name: `Retry operation ${cancelSourceKey}`,
+  }).click();
+  const retryDialog = page.getByRole("dialog", { name: "Retry cancelled Refresh?" });
+  await expect(retryDialog).toContainText(
+    "The original cancelled receipt remains unchanged and inspectable",
+  );
+  const actionRetryKey = "browser-market-retry-new";
+  const retryKeyInput = retryDialog.getByLabel("New idempotency key");
+  await expect(retryKeyInput).toHaveValue(/^market-retry-\d{8}T\d{6}Z$/);
+  await retryKeyInput.fill(actionRetryKey);
+  await retryDialog.getByLabel("Current password").fill(browserPassword);
+  await retryDialog.getByLabel("Current password").press("Enter");
+  await expect(retryDialog).toHaveCount(0);
+  await expect(cancelledDrawer).toBeVisible();
+  await expect(cancelledDrawer).toContainText(cancelSourceKey);
+  await expect(cancelledDrawer.getByText("Cancelled", { exact: true })).toBeVisible();
+  await expect(cancelledDrawer).not.toContainText(actionRetryKey);
+  await cancelledDrawer.getByRole("button", { name: "Close operation details" }).click();
+  const retryRow = operationHistory.getByRole("row").filter({ hasText: actionRetryKey });
+  await expect(retryRow.getByText("Accepted · queued", { exact: true })).toBeVisible();
+  await expect(cancelSourceRow.getByText("Cancelled", { exact: true })).toBeVisible();
+
+  resetAuthRateLimits();
+  const claimedSourceKey = "browser-market-claimed-source";
+  await submitAcceptedMarket(claimedSourceKey);
+  const claimedSourceReload = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/operator/data/status",
+  );
+  await datasetStatus.getByRole("button", { name: "Reload" }).click();
+  await claimedSourceReload;
+  const claimedSourceRow = operationHistory.getByRole("row").filter({
+    hasText: claimedSourceKey,
+  });
+  await claimedSourceRow.getByRole("button", {
+    name: `Cancel operation ${claimedSourceKey}`,
+  }).click();
+  const rejectedCancel = page.getByRole("dialog", { name: "Cancel queued Refresh?" });
+  markDataRefreshRunning(claimedSourceKey);
+  await rejectedCancel.getByLabel("Current password").fill(browserPassword);
+  await rejectedCancel.getByLabel("Current password").press("Enter");
+  await expect(rejectedCancel.getByRole("alert")).toContainText(
+    "The Worker claimed this operation before Cancel won",
+  );
+  await expect(rejectedCancel.getByRole("button", { name: "Close" })).toBeVisible();
+  await expect(claimedSourceRow.getByText("Running · Claim", { exact: true })).toBeVisible();
+  await expect(claimedSourceRow.getByRole("button", {
+    name: `Cancel operation ${claimedSourceKey}`,
+  })).toHaveCount(0);
+  await rejectedCancel.getByRole("button", { name: "Close" }).click();
+
+  const actionProofRequests = operatorMutationRequests.filter((request) => {
+    if (request.path !== "/api/auth/operator/proofs") return false;
+    const body = JSON.parse(request.body) as { operation?: unknown };
+    return body.operation === "data.refresh.cancel" || body.operation === "data.refresh.retry";
+  });
+  const actionMutations = operatorMutationRequests.filter(
+    (request) => request.path === "/api/operator/data/refreshes/cancel"
+      || request.path === "/api/operator/data/refreshes/retry",
+  );
+  expect(actionProofRequests).toHaveLength(3);
+  expect(actionProofRequests.every((request) => request.body.includes(browserPassword)))
+    .toBe(true);
+  expect(actionMutations).toHaveLength(3);
+  expect(actionMutations.every((request) => !request.body.includes(browserPassword)))
+    .toBe(true);
+  expect(actionMutations.map((request) => request.path)).toEqual([
+    "/api/operator/data/refreshes/cancel",
+    "/api/operator/data/refreshes/retry",
+    "/api/operator/data/refreshes/cancel",
+  ]);
+
   await page.getByRole("navigation", { name: "Operator Console sections" })
     .getByRole("link", { name: "Researchers", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
@@ -1845,6 +1998,27 @@ test("only the singleton Operator can open and read the Operator Console", async
       },
     ],
     [
+      "/api/auth/operator/proofs",
+      {
+        kind: "market",
+        operation: "data.refresh.cancel",
+        password: browserPassword,
+        source_idempotency_key: "ordinary-denied-action-source",
+        target: "2026-08-11T10:00:00Z",
+      },
+    ],
+    [
+      "/api/auth/operator/proofs",
+      {
+        kind: "industry",
+        new_idempotency_key: "ordinary-denied-action-retry",
+        operation: "data.refresh.retry",
+        password: browserPassword,
+        source_idempotency_key: "ordinary-denied-action-source",
+        target: "2026-08-11",
+      },
+    ],
+    [
       "/api/auth/operator/researchers/sessions/revoke",
       { proof: oldConsoleToken, researcher_id: deniedResearcher.id },
     ],
@@ -1864,6 +2038,34 @@ test("only the singleton Operator can open and read the Operator Console", async
   const deniedDatasetStatus = await page.request.get("/api/operator/data/status");
   expect(deniedDatasetStatus.status()).toBe(404);
   expect(await deniedDatasetStatus.text()).toBe("");
+  for (const [path, data] of [
+    [
+      "/api/operator/data/refreshes/cancel",
+      {
+        kind: "market",
+        proof: oldConsoleToken,
+        source_idempotency_key: "ordinary-denied-action-source",
+        target: "2026-08-11T10:00:00Z",
+      },
+    ],
+    [
+      "/api/operator/data/refreshes/retry",
+      {
+        kind: "industry",
+        new_idempotency_key: "ordinary-denied-action-retry",
+        proof: oldConsoleToken,
+        source_idempotency_key: "ordinary-denied-action-source",
+        target: "2026-08-11",
+      },
+    ],
+  ] as const) {
+    const deniedAction = await page.request.post(path, {
+      data,
+      headers: sameOriginHeaders(),
+    });
+    expect(deniedAction.status()).toBe(404);
+    expect(await deniedAction.text()).toBe("");
+  }
   const deniedMalformedInspection = await page.request.get(
     "/api/operator/data/refreshes/market",
   );

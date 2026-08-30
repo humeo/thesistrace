@@ -58,7 +58,11 @@ export type OperatorProofOperation =
   | "researcher.sessions.revoke"
   | "data.refresh.market.submit"
   | "data.refresh.financial.submit"
-  | "data.refresh.industry.submit";
+  | "data.refresh.industry.submit"
+  | "data.refresh.cancel"
+  | "data.refresh.retry";
+
+export type DataRefreshKind = "market" | "financial" | "industry";
 
 export type OperatorProofRequest =
   | Readonly<{
@@ -91,6 +95,19 @@ export type OperatorProofRequest =
       observationThroughSession: string;
       operation: "data.refresh.industry.submit";
       researcherId?: never;
+    }>
+  | Readonly<{
+      kind: DataRefreshKind;
+      operation: "data.refresh.cancel";
+      sourceIdempotencyKey: string;
+      target: string;
+    }>
+  | Readonly<{
+      kind: DataRefreshKind;
+      newIdempotencyKey: string;
+      operation: "data.refresh.retry";
+      sourceIdempotencyKey: string;
+      target: string;
     }>;
 
 export type OperatorProofClaim = Readonly<{
@@ -548,6 +565,25 @@ function operatorRequestHash(request: OperatorProofRequest): Buffer {
       version: 1,
     }));
   }
+  if (request.operation === "data.refresh.cancel") {
+    return sha256(JSON.stringify({
+      kind: request.kind,
+      operation: request.operation,
+      source_idempotency_key: request.sourceIdempotencyKey,
+      target: request.target,
+      version: 1,
+    }));
+  }
+  if (request.operation === "data.refresh.retry") {
+    return sha256(JSON.stringify({
+      kind: request.kind,
+      new_idempotency_key: request.newIdempotencyKey,
+      operation: request.operation,
+      source_idempotency_key: request.sourceIdempotencyKey,
+      target: request.target,
+      version: 1,
+    }));
+  }
   return sha256(JSON.stringify({
         email: request.email,
         operation: request.operation,
@@ -592,6 +628,35 @@ function normalizeProofRequest(request: OperatorProofRequest): OperatorProofRequ
       operation: request.operation,
     };
   }
+  if (
+    request.operation === "data.refresh.cancel"
+    || request.operation === "data.refresh.retry"
+  ) {
+    if (
+      !isMarketRefreshIdempotencyKey(request.sourceIdempotencyKey)
+      || !isRefreshActionTarget(request.kind, request.target)
+      || (request.operation === "data.refresh.retry"
+        && (!isMarketRefreshIdempotencyKey(request.newIdempotencyKey)
+          || request.newIdempotencyKey === request.sourceIdempotencyKey))
+    ) {
+      throw new OperatorProofInvalidError();
+    }
+    if (request.operation === "data.refresh.cancel") {
+      return {
+        kind: request.kind,
+        operation: request.operation,
+        sourceIdempotencyKey: request.sourceIdempotencyKey,
+        target: request.target,
+      };
+    }
+    return {
+      kind: request.kind,
+      newIdempotencyKey: request.newIdempotencyKey,
+      operation: request.operation,
+      sourceIdempotencyKey: request.sourceIdempotencyKey,
+      target: request.target,
+    };
+  }
   return {
     email: canonicalizeEmail(request.email),
     operation: request.operation,
@@ -602,6 +667,15 @@ export function isIsoResearchSession(value: string): boolean {
   if (!/^(?!0000)\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00Z`);
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+export function isRefreshActionTarget(kind: DataRefreshKind, value: string): boolean {
+  if (kind !== "market") return isIsoResearchSession(value);
+  return value.length > 0
+    && value.length <= 128
+    && value === value.trim()
+    && /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/u.test(value)
+    && Number.isFinite(Date.parse(value));
 }
 
 function proofMatchesClaim(

@@ -109,6 +109,50 @@ class OperatorAuthorizer:
         if self.consume_error is not None:
             raise self.consume_error
 
+    async def consume_data_refresh_cancel_proof(
+        self,
+        cookie: str | None,
+        *,
+        idempotency_key: str,
+        kind: str,
+        proof: str,
+        target: str,
+    ) -> None:
+        self.consumed.append(
+            {
+                "cookie": cookie,
+                "idempotency_key": idempotency_key,
+                "kind": kind,
+                "proof": proof,
+                "target": target,
+            }
+        )
+        if self.consume_error is not None:
+            raise self.consume_error
+
+    async def consume_data_refresh_retry_proof(
+        self,
+        cookie: str | None,
+        *,
+        idempotency_key: str,
+        kind: str,
+        new_idempotency_key: str,
+        proof: str,
+        target: str,
+    ) -> None:
+        self.consumed.append(
+            {
+                "cookie": cookie,
+                "idempotency_key": idempotency_key,
+                "kind": kind,
+                "new_idempotency_key": new_idempotency_key,
+                "proof": proof,
+                "target": target,
+            }
+        )
+        if self.consume_error is not None:
+            raise self.consume_error
+
 
 class Refreshes:
     def __init__(self) -> None:
@@ -137,6 +181,24 @@ class Refreshes:
         if idempotency_key != self.receipt.idempotency_key:
             raise DataRefreshError("REFRESH_NOT_FOUND")
         return self.receipt
+
+    def cancel(self, **request: object) -> RefreshOutcome:
+        self.submissions.append(request)
+        if self.submit_error is not None:
+            raise self.submit_error
+        return RefreshOutcome(**{**self.receipt.__dict__, "status": "cancelled"})
+
+    def retry(self, **request: object) -> RefreshOutcome:
+        self.submissions.append(request)
+        if self.submit_error is not None:
+            raise self.submit_error
+        return RefreshOutcome(
+            **{
+                **self.receipt.__dict__,
+                "idempotency_key": str(request["idempotency_key"]),
+                "status": "accepted",
+            }
+        )
 
 
 class FinancialRefreshes(Refreshes):
@@ -325,6 +387,158 @@ def test_operator_industry_submission_consumes_exact_proof_and_returns_safe_rece
             "observation_through_session": "2026-08-14",
         }
     ]
+
+
+def test_operator_cancel_consumes_exact_proof_then_returns_cancelled_source() -> None:
+    authorizer = OperatorAuthorizer()
+    refreshes = Refreshes()
+    client = _client(authorizer, refreshes)
+
+    response = client.post(
+        "/api/operator/data/refreshes/cancel",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "kind": "market",
+            "proof": PROOF,
+            "source_idempotency_key": refreshes.receipt.idempotency_key,
+            "target": refreshes.receipt.as_of,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "as_of": "2026-08-11T10:00:00Z",
+        "idempotency_key": refreshes.receipt.idempotency_key,
+        "kind": "market",
+        "observation_through_session": None,
+        "status": "cancelled",
+    }
+    assert authorizer.consumed == [{
+        "cookie": COOKIE,
+        "idempotency_key": refreshes.receipt.idempotency_key,
+        "kind": "market",
+        "proof": PROOF,
+        "target": refreshes.receipt.as_of,
+    }]
+    assert refreshes.submissions == [{
+        "idempotency_key": refreshes.receipt.idempotency_key,
+        "kind": "market",
+        "target": refreshes.receipt.as_of,
+    }]
+
+
+def test_operator_retry_consumes_exact_proof_then_returns_new_accepted_receipt() -> None:
+    authorizer = OperatorAuthorizer()
+    refreshes = IndustryRefreshes()
+    refreshes.receipt = RefreshOutcome(
+        **{
+            **refreshes.receipt.__dict__,
+            "failure_code": "RETRY_EXHAUSTED",
+            "last_failure_code": "SOURCE_UNAVAILABLE",
+            "outcome": "infrastructure_failed",
+            "status": "failed",
+        }
+    )
+    client = _client(authorizer, refreshes)
+
+    response = client.post(
+        "/api/operator/data/refreshes/retry",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "kind": "industry",
+            "new_idempotency_key": "industry-retry-new",
+            "proof": PROOF,
+            "source_idempotency_key": refreshes.receipt.idempotency_key,
+            "target": refreshes.receipt.observation_through_session,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "as_of": None,
+        "idempotency_key": "industry-retry-new",
+        "kind": "industry",
+        "observation_through_session": "2026-08-14",
+        "status": "accepted",
+    }
+    assert authorizer.consumed == [{
+        "cookie": COOKIE,
+        "idempotency_key": refreshes.receipt.idempotency_key,
+        "kind": "industry",
+        "new_idempotency_key": "industry-retry-new",
+        "proof": PROOF,
+        "target": "2026-08-14",
+    }]
+    assert refreshes.submissions == [{
+        "idempotency_key": "industry-retry-new",
+        "kind": "industry",
+        "source_idempotency_key": refreshes.receipt.idempotency_key,
+        "target": "2026-08-14",
+    }]
+
+
+def test_operator_refresh_actions_validate_before_proof_and_map_conflicts() -> None:
+    authorizer = OperatorAuthorizer()
+    refreshes = Refreshes()
+    client = _client(authorizer, refreshes)
+
+    invalid = client.post(
+        "/api/operator/data/refreshes/cancel",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "kind": "market",
+            "proof": PROOF,
+            "source_idempotency_key": refreshes.receipt.idempotency_key,
+            "target": "2026-08-11",
+        },
+    )
+    assert invalid.status_code == 422
+    assert authorizer.consumed == []
+    assert refreshes.submissions == []
+
+    authorizer.consume_error = InvalidOperatorProof()
+    invalid_proof = client.post(
+        "/api/operator/data/refreshes/cancel",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "kind": "market",
+            "proof": PROOF,
+            "source_idempotency_key": refreshes.receipt.idempotency_key,
+            "target": refreshes.receipt.as_of,
+        },
+    )
+    assert invalid_proof.status_code == 400
+    assert invalid_proof.json() == {"code": "OPERATOR_PROOF_INVALID"}
+    assert refreshes.submissions == []
+
+    authorizer.consume_error = None
+    refreshes.submit_error = DataRefreshError("REFRESH_NOT_CANCELLABLE")
+    state_conflict = client.post(
+        "/api/operator/data/refreshes/cancel",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "kind": "market",
+            "proof": PROOF,
+            "source_idempotency_key": refreshes.receipt.idempotency_key,
+            "target": refreshes.receipt.as_of,
+        },
+    )
+    assert state_conflict.status_code == 409
+    assert state_conflict.json() == {"code": "REFRESH_NOT_CANCELLABLE"}
+
+    refreshes.submit_error = DataRefreshError("REFRESH_NOT_FOUND")
+    missing_source = client.post(
+        "/api/operator/data/refreshes/cancel",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "kind": "market",
+            "proof": PROOF,
+            "source_idempotency_key": refreshes.receipt.idempotency_key,
+            "target": refreshes.receipt.as_of,
+        },
+    )
+    assert missing_source.status_code == 409
+    assert missing_source.json() == {"code": "REFRESH_NOT_FOUND"}
 
 
 def test_operator_industry_inspection_is_bound_to_the_exact_target() -> None:
@@ -570,6 +784,19 @@ def test_operator_market_read_and_mutation_hide_the_surface_or_fail_unavailable(
     )
     assert hidden_invalid_mutation.status_code == 404
     assert hidden_invalid_mutation.text == ""
+
+    hidden_action = client.post(
+        "/api/operator/data/refreshes/cancel",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "kind": "market",
+            "proof": PROOF,
+            "source_idempotency_key": refreshes.receipt.idempotency_key,
+            "target": refreshes.receipt.as_of,
+        },
+    )
+    assert hidden_action.status_code == 404
+    assert hidden_action.text == ""
 
     authorizer.authorize_error = None
     authorizer.consume_error = OperatorAccessNotFound()

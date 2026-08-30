@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from "react";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
 import {
+  OperatorDataRefreshActionDialog,
+  type DataRefreshStatusAction,
+} from "./OperatorDataRefreshActionDialog";
+import {
   type DataRefreshKind,
   type DataRefreshOperationalStatus,
   type DatasetOperationalStatus,
@@ -25,11 +29,13 @@ export function OperatorDatasetStatus({
   const [cursors, setCursors] = useState<readonly (string | null)[]>([null]);
   const [manualReloadGeneration, setManualReloadGeneration] = useState(0);
   const [selected, setSelected] = useState<DataRefreshOperationalStatus | null>(null);
+  const [action, setAction] = useState<DataRefreshStatusAction | null>(null);
   const currentPage = useRef<Readonly<{
     cursor: string | null;
     data: DatasetOperationalStatus;
   }> | null>(null);
   const detailsTrigger = useRef<HTMLButtonElement | null>(null);
+  const actionTrigger = useRef<HTMLButtonElement | null>(null);
   const cursor = cursors.at(-1) ?? null;
 
   useEffect(() => {
@@ -112,9 +118,28 @@ export function OperatorDatasetStatus({
     };
   }, [cursor, manualReloadGeneration, onAccessNotFound, reloadGeneration]);
 
+  useEffect(() => {
+    if (data === null) return;
+    setSelected((current) => {
+      if (current === null) return null;
+      return [...data.operations, ...data.latestByKind].find(
+        (operation) => operation.idempotencyKey === current.idempotencyKey,
+      ) ?? current;
+    });
+  }, [data]);
+
   function dismissDetails(): void {
     setSelected(null);
     window.requestAnimationFrame(() => detailsTrigger.current?.focus());
+  }
+
+  function dismissAction(): void {
+    setAction(null);
+    window.requestAnimationFrame(() => actionTrigger.current?.focus());
+  }
+
+  function reloadAfterAction(): void {
+    setManualReloadGeneration((current) => current + 1);
   }
 
   return (
@@ -138,11 +163,32 @@ export function OperatorDatasetStatus({
           setCursors((current) => current.length > 1 ? current.slice(0, -1) : current);
         }}
         onReload={() => setManualReloadGeneration((current) => current + 1)}
+        onAction={(next, trigger) => {
+          actionTrigger.current = trigger;
+          setAction(next);
+        }}
       />
       {selected === null ? null : (
         <OperatorDataStatusDrawer
           onDismiss={dismissDetails}
+          onAction={(next, trigger) => {
+            actionTrigger.current = trigger;
+            setAction(next);
+          }}
           operation={selected}
+        />
+      )}
+      {action === null ? null : (
+        <OperatorDataRefreshActionDialog
+          action={action}
+          onAccessNotFound={onAccessNotFound}
+          onDismiss={dismissAction}
+          onStateChanged={reloadAfterAction}
+          onSucceeded={() => {
+            setAction(null);
+            reloadAfterAction();
+            window.requestAnimationFrame(() => actionTrigger.current?.focus());
+          }}
         />
       )}
     </>
@@ -158,6 +204,7 @@ export function OperatorDatasetStatusView({
   onNext,
   onPrevious,
   onReload,
+  onAction,
 }: Readonly<{
   cursorDepth: number;
   data: DatasetOperationalStatus | null;
@@ -167,6 +214,7 @@ export function OperatorDatasetStatusView({
   onNext: () => void;
   onPrevious: () => void;
   onReload: () => void;
+  onAction: (action: DataRefreshStatusAction, trigger: HTMLButtonElement) => void;
 }>) {
   return (
     <section
@@ -208,6 +256,7 @@ export function OperatorDatasetStatusView({
             onDetails={onDetails}
             onNext={onNext}
             onPrevious={onPrevious}
+            onAction={onAction}
             operations={data.operations}
           />
         </>
@@ -309,6 +358,7 @@ function OperationHistoryTable({
   onDetails,
   onNext,
   onPrevious,
+  onAction,
   operations,
 }: Readonly<{
   cursorDepth: number;
@@ -316,6 +366,7 @@ function OperationHistoryTable({
   onDetails: (operation: DataRefreshOperationalStatus, trigger: HTMLButtonElement) => void;
   onNext: () => void;
   onPrevious: () => void;
+  onAction: (action: DataRefreshStatusAction, trigger: HTMLButtonElement) => void;
   operations: readonly DataRefreshOperationalStatus[];
 }>) {
   return (
@@ -335,7 +386,7 @@ function OperationHistoryTable({
             <thead>
               <tr>
                 <th>Operation</th><th>Kind</th><th>State</th><th>Target</th>
-                <th>Attempt / phase</th><th>Heartbeat</th><th>Created</th><th>Details</th>
+                <th>Attempt / phase</th><th>Heartbeat</th><th>Created</th><th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -353,15 +404,18 @@ function OperationHistoryTable({
                   </td>
                   <td data-label="Heartbeat">{timestamp(operation.lastHeartbeatAt)}</td>
                   <td data-label="Created">{timestamp(operation.createdAt)}</td>
-                  <td data-label="Details">
-                    <button
-                      aria-label={`View details for ${operation.idempotencyKey}`}
-                      className="operator-row-action"
-                      onClick={(event) => onDetails(operation, event.currentTarget)}
-                      type="button"
-                    >
-                      Details
-                    </button>
+                  <td data-label="Actions">
+                    <div className="operator-row-actions">
+                      <OperationActionButton onAction={onAction} operation={operation} />
+                      <button
+                        aria-label={`View details for ${operation.idempotencyKey}`}
+                        className="operator-row-action"
+                        onClick={(event) => onDetails(operation, event.currentTarget)}
+                        type="button"
+                      >
+                        Details
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -385,9 +439,11 @@ function OperationState({ operation }: Readonly<{ operation: DataRefreshOperatio
 
 export function OperatorDataStatusDrawer({
   onDismiss,
+  onAction,
   operation,
 }: Readonly<{
   onDismiss: () => void;
+  onAction: (action: DataRefreshStatusAction, trigger: HTMLButtonElement) => void;
   operation: DataRefreshOperationalStatus;
 }>) {
   const dialog = useRef<HTMLDialogElement | null>(null);
@@ -442,8 +498,37 @@ export function OperatorDataStatusDrawer({
           <Detail label="Failure code" code value={operation.failureCode ?? "None"} />
           <Detail label="Previous attempt failure" code value={operation.lastFailureCode ?? "None"} />
         </dl>
+        <footer className="operator-operation-drawer-actions">
+          <OperationActionButton onAction={onAction} operation={operation} />
+        </footer>
       </article>
     </dialog>
+  );
+}
+
+function OperationActionButton({
+  onAction,
+  operation,
+}: Readonly<{
+  onAction: (action: DataRefreshStatusAction, trigger: HTMLButtonElement) => void;
+  operation: DataRefreshOperationalStatus;
+}>) {
+  const action = operation.status === "accepted"
+    ? "cancel"
+    : operation.status === "failed" || operation.status === "cancelled"
+      ? "retry"
+      : null;
+  if (action === null) return null;
+  const label = action === "cancel" ? "Cancel" : "Retry";
+  return (
+    <button
+      aria-label={`${label} operation ${operation.idempotencyKey}`}
+      className={`operator-row-action${action === "cancel" ? " operator-row-action-danger" : ""}`}
+      onClick={(event) => onAction({ action, operation }, event.currentTarget)}
+      type="button"
+    >
+      {label}
+    </button>
   );
 }
 

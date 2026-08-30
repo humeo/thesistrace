@@ -210,6 +210,51 @@ export function resetAuthRateLimits(): void {
   }
 }
 
+export function stopDataOperatorWorker(): void {
+  execFileSync(
+    "docker",
+    ["stop", "--time", "10", `${testProjectName()}-data-operator-worker-1`],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+}
+
+export function markDataRefreshRunning(idempotencyKey: string): void {
+  if (!/^[a-z0-9-]+$/.test(idempotencyKey)) {
+    throw new Error("Browser acceptance Data Refresh key is invalid");
+  }
+  const result = execFileSync(
+    "docker",
+    [
+      "exec",
+      `${testProjectName()}-postgres-1`,
+      "psql",
+      "--username",
+      "thesistrace_owner",
+      "--dbname",
+      "thesistrace",
+      "--set",
+      "ON_ERROR_STOP=1",
+      "--tuples-only",
+      "--no-align",
+      "--command",
+      `WITH claimed AS (
+        UPDATE data.refresh_operations
+        SET status = 'running', owner_token = 'browser-worker-claim',
+            lease_expires_at = clock_timestamp() + interval '10 minutes',
+            attempt_count = attempt_count + 1, phase = 'claim',
+            last_heartbeat_at = clock_timestamp(), started_at = clock_timestamp(),
+            updated_at = clock_timestamp()
+        WHERE idempotency_key = '${idempotencyKey}' AND status = 'accepted'
+        RETURNING status
+      ) SELECT status FROM claimed`,
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  ).trim();
+  if (result !== "running") {
+    throw new Error(`Could not mark Data Refresh running: ${result || "no row"}`);
+  }
+}
+
 export function sameOriginHeaders(): Record<string, string> {
   return { origin: requiredEnvironment("THESISTRACE_TEST_WEB_ORIGIN") };
 }

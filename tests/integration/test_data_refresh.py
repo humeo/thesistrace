@@ -1786,6 +1786,234 @@ def test_worker_waits_for_a_nonexpired_running_refresh_before_claiming_fifo(
         database.close()
 
 
+def test_operator_cancels_only_unclaimed_refresh_and_fifo_skips_it(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    keys = ("cancel-before-claim", "queued-after-cancel")
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path)
+        refresh.submit(idempotency_key=keys[0], as_of=AS_OF)
+        refresh.submit(idempotency_key=keys[1], as_of=AS_OF)
+
+        cancelled = refresh.cancel(
+            idempotency_key=keys[0],
+            kind="market",
+            target=AS_OF.isoformat(),
+        )
+
+        assert cancelled.status == "cancelled"
+        assert cancelled.attempt_count == 0
+        assert refresh.inspect(keys[0]) == cancelled
+        with pytest.raises(DataRefreshError) as duplicate:
+            refresh.cancel(
+                idempotency_key=keys[0],
+                kind="market",
+                target=AS_OF.isoformat(),
+            )
+        assert duplicate.value.code == "REFRESH_NOT_CANCELLABLE"
+
+        assert _process_next(refresh, RecordingRefreshSource(current)) is True
+        assert refresh.inspect(keys[0]).status == "cancelled"
+        assert refresh.inspect(keys[1]).status == "succeeded"
+    finally:
+        _delete_refresh_operations(database, *keys)
+        database.close()
+
+
+def test_cancel_and_worker_claim_race_has_exactly_one_winner(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    key = "cancel-claim-race"
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path)
+        refresh.submit(idempotency_key=key, as_of=AS_OF)
+        barrier = threading.Barrier(2)
+
+        def run_worker() -> bool:
+            barrier.wait()
+            return _process_next(refresh, RecordingRefreshSource(current))
+
+        def run_cancel() -> str:
+            barrier.wait()
+            try:
+                return refresh.cancel(
+                    idempotency_key=key,
+                    kind="market",
+                    target=AS_OF.isoformat(),
+                ).status
+            except DataRefreshError as error:
+                return error.code
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            worker = executor.submit(run_worker)
+            cancel = executor.submit(run_cancel)
+            worker_result = worker.result(timeout=10)
+            cancel_result = cancel.result(timeout=10)
+
+        receipt = refresh.inspect(key)
+        assert (worker_result, cancel_result, receipt.status) in {
+            (False, "cancelled", "cancelled"),
+            (True, "REFRESH_NOT_CANCELLABLE", "succeeded"),
+        }
+    finally:
+        _delete_refresh_operations(database, key)
+        database.close()
+
+
+def test_retry_inserts_new_receipt_without_changing_source_and_preserves_fifo(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    keys = ("failed-source", "fifo-before-retry", "failed-source-retry")
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path, max_attempts=1)
+        refresh.submit(idempotency_key=keys[0], as_of=AS_OF)
+        with pytest.raises(DataRefreshError):
+            _process_next(refresh, UnavailableRefreshSource())
+        assert refresh.inspect(keys[0]).status == "failed"
+        refresh.submit(idempotency_key=keys[1], as_of=AS_OF)
+        with database.transaction() as transaction:
+            source_before = transaction.execute(
+                "SELECT * FROM data.refresh_operations WHERE idempotency_key = %s",
+                (keys[0],),
+            ).fetchone()
+        assert source_before is not None
+
+        retried = refresh.retry(
+            source_idempotency_key=keys[0],
+            idempotency_key=keys[2],
+            kind="market",
+            target=AS_OF.isoformat(),
+        )
+
+        assert retried.idempotency_key == keys[2]
+        assert retried.status == "accepted"
+        assert retried.attempt_count == 0
+        assert retried.as_of == AS_OF.isoformat()
+        with database.transaction() as transaction:
+            source_after = transaction.execute(
+                "SELECT * FROM data.refresh_operations WHERE idempotency_key = %s",
+                (keys[0],),
+            ).fetchone()
+            retry_row = transaction.execute(
+                "SELECT * FROM data.refresh_operations WHERE idempotency_key = %s",
+                (keys[2],),
+            ).fetchone()
+        assert source_after == source_before
+        assert retry_row is not None
+        assert retry_row["fingerprint"] == source_before["fingerprint"]
+
+        with pytest.raises(DataRefreshError) as duplicate:
+            refresh.retry(
+                source_idempotency_key=keys[0],
+                idempotency_key=keys[2],
+                kind="market",
+                target=AS_OF.isoformat(),
+            )
+        assert duplicate.value.code == "IDEMPOTENCY_KEY_CONFLICT"
+
+        assert _process_next(refresh, RecordingRefreshSource(current)) is True
+        assert refresh.inspect(keys[1]).status == "succeeded"
+        assert refresh.inspect(keys[2]).status == "accepted"
+        assert refresh.inspect(keys[0]).status == "failed"
+    finally:
+        _delete_refresh_operations(database, *keys)
+        database.close()
+
+
+def test_cancelled_refresh_retries_as_a_distinct_accepted_receipt(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    keys = ("cancelled-retry-source", "cancelled-retry-new")
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path)
+        refresh.submit(idempotency_key=keys[0], as_of=AS_OF)
+        source = refresh.cancel(
+            idempotency_key=keys[0],
+            kind="market",
+            target=AS_OF.isoformat(),
+        )
+
+        retried = refresh.retry(
+            source_idempotency_key=keys[0],
+            idempotency_key=keys[1],
+            kind="market",
+            target=AS_OF.isoformat(),
+        )
+
+        assert source.status == "cancelled"
+        assert refresh.inspect(keys[0]) == source
+        assert retried.idempotency_key == keys[1]
+        assert retried.status == "accepted"
+        assert retried.as_of == source.as_of
+        assert retried.attempt_count == 0
+    finally:
+        _delete_refresh_operations(database, *keys)
+        database.close()
+
+
+def test_cancel_and_retry_reject_wrong_target_and_lifecycle_state(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    keys = ("action-source", "action-retry")
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path)
+        refresh.submit(idempotency_key=keys[0], as_of=AS_OF)
+
+        with pytest.raises(DataRefreshError) as wrong_target:
+            refresh.cancel(
+                idempotency_key=keys[0],
+                kind="market",
+                target=(AS_OF + timedelta(hours=1)).isoformat(),
+            )
+        assert wrong_target.value.code == "REFRESH_TARGET_CONFLICT"
+        assert refresh.inspect(keys[0]).status == "accepted"
+
+        with pytest.raises(DataRefreshError) as not_retryable:
+            refresh.retry(
+                source_idempotency_key=keys[0],
+                idempotency_key=keys[1],
+                kind="market",
+                target=AS_OF.isoformat(),
+            )
+        assert not_retryable.value.code == "REFRESH_NOT_RETRYABLE"
+        with pytest.raises(DataRefreshError) as missing:
+            refresh.cancel(
+                idempotency_key="missing-action-source",
+                kind="market",
+                target=AS_OF.isoformat(),
+            )
+        assert missing.value.code == "REFRESH_NOT_FOUND"
+        with database.transaction() as transaction:
+            retry_count = transaction.execute(
+                "SELECT count(*) AS count FROM data.refresh_operations WHERE idempotency_key = %s",
+                (keys[1],),
+            ).fetchone()
+        assert retry_count == {"count": 0}
+    finally:
+        _delete_refresh_operations(database, *keys)
+        database.close()
+
+
 def test_unavailable_refresh_retries_are_bounded_and_sanitized(
     core_settings: CoreSettings,
     tmp_path: Path,

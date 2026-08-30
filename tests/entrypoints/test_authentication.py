@@ -178,11 +178,32 @@ def test_core_auth_verifier_authorizes_operator_and_consumes_exact_market_proof(
                 proof="opaque-industry-proof",
             )
         )
+        asyncio.run(
+            verifier.consume_data_refresh_cancel_proof(
+                "thesistrace.session_token=opaque",
+                idempotency_key="market-cancel-source",
+                kind="market",
+                target="2026-08-11T10:00:00+00:00",
+                proof="opaque-cancel-proof",
+            )
+        )
+        asyncio.run(
+            verifier.consume_data_refresh_retry_proof(
+                "thesistrace.session_token=opaque",
+                idempotency_key="industry-failed-source",
+                kind="industry",
+                new_idempotency_key="industry-retry-new",
+                target="2026-08-14",
+                proof="opaque-retry-proof",
+            )
+        )
     finally:
         asyncio.run(verifier.aclose())
 
     assert [(request.method, request.url.path) for request in captured] == [
         ("GET", "/internal/operator/page-access"),
+        ("POST", "/internal/operator/proofs/consume"),
+        ("POST", "/internal/operator/proofs/consume"),
         ("POST", "/internal/operator/proofs/consume"),
         ("POST", "/internal/operator/proofs/consume"),
         ("POST", "/internal/operator/proofs/consume"),
@@ -206,6 +227,18 @@ def test_core_auth_verifier_authorizes_operator_and_consumes_exact_market_proof(
         b'"observation_through_session":"2026-08-14",'
         b'"operation":"data.refresh.industry.submit",'
         b'"proof":"opaque-industry-proof"}'
+    )
+    assert captured[4].content == (
+        b'{"kind":"market","operation":"data.refresh.cancel",'
+        b'"proof":"opaque-cancel-proof",'
+        b'"source_idempotency_key":"market-cancel-source",'
+        b'"target":"2026-08-11T10:00:00+00:00"}'
+    )
+    assert captured[5].content == (
+        b'{"kind":"industry","new_idempotency_key":"industry-retry-new",'
+        b'"operation":"data.refresh.retry","proof":"opaque-retry-proof",'
+        b'"source_idempotency_key":"industry-failed-source",'
+        b'"target":"2026-08-14"}'
     )
 
 

@@ -53,6 +53,7 @@ from thesistrace.data import (
     validate_financial_refresh_request,
     validate_industry_refresh_request,
     validate_market_refresh_request,
+    validate_refresh_action_request,
 )
 from thesistrace.entrypoints.alpha_http import install_alpha_http
 from thesistrace.entrypoints.authentication import (
@@ -219,6 +220,32 @@ class IndustryRefreshOperation(BaseModel):
         | None
     )
     status: Literal["accepted", "running", "succeeded", "failed"]
+
+
+DataRefreshKind = Literal["market", "financial", "industry"]
+
+
+class DataRefreshCancelCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: DataRefreshKind
+    proof: str = Field(min_length=80, max_length=80)
+    source_idempotency_key: str = Field(min_length=1, max_length=512)
+    target: str = Field(min_length=1, max_length=128)
+
+
+class DataRefreshRetryCommand(DataRefreshCancelCommand):
+    new_idempotency_key: str = Field(min_length=1, max_length=512)
+
+
+class DataRefreshActionReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    as_of: datetime | None
+    idempotency_key: str
+    kind: DataRefreshKind
+    observation_through_session: str | None
+    status: Literal["accepted", "cancelled"]
 
 
 def create_app(
@@ -518,6 +545,111 @@ def create_app(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={"code": "DATA_REFRESH_CURSOR_INVALID"},
             )
+
+    @app.post(
+        "/api/operator/data/refreshes/cancel",
+        response_model=DataRefreshActionReceipt,
+    )
+    async def cancel_data_refresh(
+        request: Request,
+        command: DataRefreshCancelCommand,
+    ) -> DataRefreshActionReceipt | Response:
+        try:
+            source_key, _ = validate_refresh_action_request(
+                source_idempotency_key=command.source_idempotency_key,
+                kind=command.kind,
+                target=command.target,
+            )
+        except DataRefreshError:
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"code": "OPERATOR_REQUEST_INVALID"},
+            )
+        authorizer = _operator_authorizer(request)
+        if authorizer is None:
+            return _auth_unavailable_response()
+        try:
+            await authorizer.consume_data_refresh_cancel_proof(
+                request.headers.get("cookie"),
+                idempotency_key=source_key,
+                kind=command.kind,
+                proof=command.proof,
+                target=command.target,
+            )
+        except OperatorAccessNotFound:
+            return Response(status_code=status.HTTP_404_NOT_FOUND)
+        except InvalidOperatorProof:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"code": "OPERATOR_PROOF_INVALID"},
+            )
+        except AuthSessionUnavailable:
+            return _auth_unavailable_response()
+        try:
+            outcome = await run_in_threadpool(
+                _runtime(request).data_refreshes.cancel,
+                idempotency_key=source_key,
+                kind=command.kind,
+                target=command.target,
+            )
+        except DataRefreshError as error:
+            return _data_refresh_action_error(error)
+        return _data_refresh_action_receipt(outcome)
+
+    @app.post(
+        "/api/operator/data/refreshes/retry",
+        response_model=DataRefreshActionReceipt,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def retry_data_refresh(
+        request: Request,
+        command: DataRefreshRetryCommand,
+    ) -> DataRefreshActionReceipt | Response:
+        try:
+            source_key, new_key = validate_refresh_action_request(
+                source_idempotency_key=command.source_idempotency_key,
+                kind=command.kind,
+                target=command.target,
+                new_idempotency_key=command.new_idempotency_key,
+            )
+        except DataRefreshError:
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"code": "OPERATOR_REQUEST_INVALID"},
+            )
+        assert new_key is not None
+        authorizer = _operator_authorizer(request)
+        if authorizer is None:
+            return _auth_unavailable_response()
+        try:
+            await authorizer.consume_data_refresh_retry_proof(
+                request.headers.get("cookie"),
+                idempotency_key=source_key,
+                kind=command.kind,
+                new_idempotency_key=new_key,
+                proof=command.proof,
+                target=command.target,
+            )
+        except OperatorAccessNotFound:
+            return Response(status_code=status.HTTP_404_NOT_FOUND)
+        except InvalidOperatorProof:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"code": "OPERATOR_PROOF_INVALID"},
+            )
+        except AuthSessionUnavailable:
+            return _auth_unavailable_response()
+        try:
+            outcome = await run_in_threadpool(
+                _runtime(request).data_refreshes.retry,
+                source_idempotency_key=source_key,
+                idempotency_key=new_key,
+                kind=command.kind,
+                target=command.target,
+            )
+        except DataRefreshError as error:
+            return _data_refresh_action_error(error)
+        return _data_refresh_action_receipt(outcome)
 
     @app.post(
         "/api/operator/data/refreshes/market",
@@ -1230,6 +1362,53 @@ def _auth_unavailable_response() -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={"code": "AUTH_SERVICE_UNAVAILABLE"},
+    )
+
+
+def _data_refresh_action_error(error: DataRefreshError) -> JSONResponse:
+    if error.code == "REFRESH_NOT_FOUND":
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"code": error.code},
+        )
+    if error.code in {
+        "IDEMPOTENCY_KEY_CONFLICT",
+        "REFRESH_NOT_CANCELLABLE",
+        "REFRESH_NOT_RETRYABLE",
+        "REFRESH_TARGET_CONFLICT",
+    }:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"code": error.code},
+        )
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"code": "OPERATOR_REQUEST_INVALID"},
+    )
+
+
+def _data_refresh_action_receipt(outcome: RefreshOutcome) -> DataRefreshActionReceipt:
+    target_is_valid = (
+        outcome.kind == "market"
+        and outcome.as_of is not None
+        and outcome.observation_through_session is None
+    ) or (
+        outcome.kind in {"financial", "industry"}
+        and outcome.as_of is None
+        and outcome.observation_through_session is not None
+    )
+    if (
+        outcome.kind not in {"market", "financial", "industry"}
+        or outcome.status not in {"accepted", "cancelled"}
+        or not target_is_valid
+    ):
+        raise DataRefreshError("REFRESH_RECEIPT_INVALID")
+    return DataRefreshActionReceipt(
+        as_of=outcome.as_of,
+        idempotency_key=outcome.idempotency_key,
+        kind=outcome.kind,  # type: ignore[arg-type]
+        observation_through_session=outcome.observation_through_session,
+        status=outcome.status,  # type: ignore[arg-type]
     )
 
 

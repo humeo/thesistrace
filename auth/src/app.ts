@@ -33,6 +33,7 @@ import {
   OperatorProofNotFoundError,
   isIsoResearchSession,
   isMarketRefreshIdempotencyKey,
+  isRefreshActionTarget,
   type OperatorProofRequest,
 } from "./operator-proof.js";
 import { OperatorSessionTargetProtectedError } from "./operator-session-revocation.js";
@@ -101,6 +102,30 @@ const operatorProofSchema = z.union([
       password: z.string().min(12).max(128),
     })
     .strict(),
+  z
+    .object({
+      kind: z.enum(["market", "financial", "industry"]),
+      operation: z.literal("data.refresh.cancel"),
+      password: z.string().min(12).max(128),
+      source_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+      target: z.string().min(1).max(128),
+    })
+    .strict()
+    .refine((value) => isRefreshActionTarget(value.kind, value.target)),
+  z
+    .object({
+      kind: z.enum(["market", "financial", "industry"]),
+      new_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+      operation: z.literal("data.refresh.retry"),
+      password: z.string().min(12).max(128),
+      source_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+      target: z.string().min(1).max(128),
+    })
+    .strict()
+    .refine((value) => (
+      value.new_idempotency_key !== value.source_idempotency_key
+      && isRefreshActionTarget(value.kind, value.target)
+    )),
 ]);
 const internalOperatorProofConsumptionSchema = z.union([
   z
@@ -127,6 +152,30 @@ const internalOperatorProofConsumptionSchema = z.union([
       proof: z.string().length(80),
     })
     .strict(),
+  z
+    .object({
+      kind: z.enum(["market", "financial", "industry"]),
+      operation: z.literal("data.refresh.cancel"),
+      proof: z.string().length(80),
+      source_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+      target: z.string().min(1).max(128),
+    })
+    .strict()
+    .refine((value) => isRefreshActionTarget(value.kind, value.target)),
+  z
+    .object({
+      kind: z.enum(["market", "financial", "industry"]),
+      new_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+      operation: z.literal("data.refresh.retry"),
+      proof: z.string().length(80),
+      source_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+      target: z.string().min(1).max(128),
+    })
+    .strict()
+    .refine((value) => (
+      value.new_idempotency_key !== value.source_idempotency_key
+      && isRefreshActionTarget(value.kind, value.target)
+    )),
 ]);
 const operatorInvitationMutationSchema = z
   .object({
@@ -326,12 +375,30 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
               operation: body.operation,
               proof: body.proof,
             }
-          : {
+          : body.operation === "data.refresh.financial.submit"
+            || body.operation === "data.refresh.industry.submit"
+          ? {
               idempotencyKey: body.idempotency_key,
               observationThroughSession: body.observation_through_session,
               operation: body.operation,
               proof: body.proof,
-            },
+            }
+          : body.operation === "data.refresh.cancel"
+            ? {
+                kind: body.kind,
+                operation: body.operation,
+                proof: body.proof,
+                sourceIdempotencyKey: body.source_idempotency_key,
+                target: body.target,
+              }
+            : {
+                kind: body.kind,
+                newIdempotencyKey: body.new_idempotency_key,
+                operation: body.operation,
+                proof: body.proof,
+                sourceIdempotencyKey: body.source_idempotency_key,
+                target: body.target,
+              },
       );
       return context.body(null, 204);
     } catch (error) {
@@ -443,6 +510,23 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
                   operation: body.operation,
                   password: body.password,
                 }
+              : body.operation === "data.refresh.cancel"
+                ? {
+                    kind: body.kind,
+                    operation: body.operation,
+                    password: body.password,
+                    sourceIdempotencyKey: body.source_idempotency_key,
+                    target: body.target,
+                  }
+                : body.operation === "data.refresh.retry"
+                  ? {
+                      kind: body.kind,
+                      newIdempotencyKey: body.new_idempotency_key,
+                      operation: body.operation,
+                      password: body.password,
+                      sourceIdempotencyKey: body.source_idempotency_key,
+                      target: body.target,
+                    }
               : {
                   email: canonicalizeEmail(body.email),
                   operation: body.operation,

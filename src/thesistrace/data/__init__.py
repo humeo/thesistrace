@@ -94,6 +94,7 @@ from thesistrace.data.refresh import (
     validate_financial_refresh_request,
     validate_industry_refresh_request,
     validate_market_refresh_request,
+    validate_refresh_action_request,
 )
 from thesistrace.data.source import (
     DATA_SOURCE_ERROR_CATEGORIES,
@@ -189,4 +190,5 @@ __all__ = [
     "validate_market_refresh_request",
     "validate_financial_refresh_request",
     "validate_industry_refresh_request",
+    "validate_refresh_action_request",
 ]

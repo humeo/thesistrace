@@ -306,6 +306,86 @@ describe.sequential("Auth Operator Proof", () => {
     ).resolves.toBe("duplicate");
   });
 
+  it("binds one Cancel proof to the exact source receipt, kind, and target", async () => {
+    const proofService = service();
+    const request = {
+      kind: "market" as const,
+      operation: "data.refresh.cancel" as const,
+      sourceIdempotencyKey: "market-cancel-source",
+      target: "2026-08-11T10:00:00+00:00",
+    };
+    const confirmed = await proofService.confirm(principal(), {
+      ...request,
+      password,
+    });
+
+    for (const mismatch of [
+      { ...request, sourceIdempotencyKey: "different-source" },
+      { ...request, kind: "financial" as const },
+      { ...request, target: "2026-08-11T11:00:00+00:00" },
+    ]) {
+      await expect(
+        proofService.consumeExternal(principal(), {
+          ...mismatch,
+          proof: confirmed.proof,
+        }),
+      ).rejects.toEqual(new OperatorProofInvalidError());
+    }
+    await expect(
+      proofService.consumeExternal(principal(), {
+        ...request,
+        proof: confirmed.proof,
+      }),
+    ).resolves.toBe("consumed");
+    await expect(
+      proofService.consumeExternal(principal(), {
+        ...request,
+        proof: confirmed.proof,
+      }),
+    ).resolves.toBe("duplicate");
+  });
+
+  it("binds one Retry proof to the exact source, target, and new key", async () => {
+    const proofService = service();
+    const request = {
+      kind: "industry" as const,
+      newIdempotencyKey: "industry-retry-new",
+      operation: "data.refresh.retry" as const,
+      sourceIdempotencyKey: "industry-failed-source",
+      target: "2026-08-14",
+    };
+    const confirmed = await proofService.confirm(principal(), {
+      ...request,
+      password,
+    });
+
+    for (const mismatch of [
+      { ...request, sourceIdempotencyKey: "different-source" },
+      { ...request, newIdempotencyKey: "different-new-key" },
+      { ...request, kind: "financial" as const },
+      { ...request, target: "2026-08-13" },
+    ]) {
+      await expect(
+        proofService.consumeExternal(principal(), {
+          ...mismatch,
+          proof: confirmed.proof,
+        }),
+      ).rejects.toEqual(new OperatorProofInvalidError());
+    }
+    await expect(
+      proofService.consumeExternal(principal(), {
+        ...request,
+        proof: confirmed.proof,
+      }),
+    ).resolves.toBe("consumed");
+    await expect(
+      proofService.consumeExternal(principal(), {
+        ...request,
+        proof: confirmed.proof,
+      }),
+    ).resolves.toBe("duplicate");
+  });
+
   it("starts the lifetime after credential locking and rejects expiry reached behind a proof lock", async () => {
     const proofService = service();
     const credentialBlocker = await owner.connect();

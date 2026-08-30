@@ -6,6 +6,10 @@ import {
   OperatorDataStatusDrawer,
   OperatorDatasetStatusView,
 } from "./OperatorDatasetStatus";
+import {
+  OperatorDataRefreshActionDialog,
+  suggestDataRefreshRetryKey,
+} from "./OperatorDataRefreshActionDialog";
 import type {
   DataRefreshOperationalStatus,
   DatasetOperationalStatus,
@@ -32,6 +36,7 @@ describe("Operator Dataset status", () => {
         onNext={() => undefined}
         onPrevious={() => undefined}
         onReload={() => undefined}
+        onAction={() => undefined}
       />,
     );
 
@@ -52,13 +57,18 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("Market Refresh");
     expect(markup).toContain("Financial Refresh");
     expect(markup).toContain("Industry Refresh");
-    expect(markup).not.toMatch(/Cancel operation|Retry operation/);
+    expect(markup).toContain('aria-label="Cancel operation market-accepted"');
+    expect(markup).toContain('aria-label="Retry operation market-failed"');
+    expect(markup).toContain('aria-label="Retry operation industry-cancelled"');
+    expect(markup).not.toContain('aria-label="Cancel operation financial-running"');
+    expect(markup).not.toContain('aria-label="Retry operation industry-published"');
   });
 
   it("renders only bounded safe receipt facts in the labelled detail drawer", () => {
     const markup = renderToStaticMarkup(
       <OperatorDataStatusDrawer
         onDismiss={() => undefined}
+        onAction={() => undefined}
         operation={operation({
           acceptedInstrumentCount: 3,
           checkedNoStructuredChangeCount: 4,
@@ -83,6 +93,66 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("Discovery gaps");
     expect(markup).toContain(">Close<");
     expect(markup).not.toMatch(/manifest|owner token|lease|object path|raw response/i);
+  });
+
+  it("shows exact Cancel facts and effect before asking for the password", () => {
+    const target = operation({
+      idempotencyKey: "market-cancel-source",
+      kind: "market",
+      status: "accepted",
+    });
+    const markup = renderToStaticMarkup(
+      <OperatorDataRefreshActionDialog
+        action={{ action: "cancel", operation: target }}
+        onAccessNotFound={() => undefined}
+        onDismiss={() => undefined}
+        onStateChanged={() => undefined}
+        onSucceeded={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("Cancel queued Refresh?");
+    expect(markup).toContain("Market Refresh");
+    expect(markup).toContain("2026-08-30T08:00:00Z");
+    expect(markup).toContain("market-cancel-source");
+    expect(markup).toContain("The Worker will never claim this queued receipt");
+    expect(markup.indexOf("Effect")).toBeLessThan(markup.indexOf("Current password"));
+    expect(markup).not.toContain("New idempotency key");
+  });
+
+  it("makes Retry use an editable new key and preserves immutable source copy", () => {
+    const source = operation({
+      idempotencyKey: "industry-failed-source",
+      kind: "industry",
+      status: "failed",
+    });
+    const now = new Date("2026-08-30T05:06:07.000Z");
+    expect(suggestDataRefreshRetryKey(source.kind, now)).toBe(
+      "industry-retry-20260830T050607Z",
+    );
+    expect(
+      suggestDataRefreshRetryKey(source.kind, new Date("2026-08-30T05:06:07.987Z")),
+    ).toBe("industry-retry-20260830T050607Z");
+    const markup = renderToStaticMarkup(
+      <OperatorDataRefreshActionDialog
+        action={{ action: "retry", operation: source }}
+        now={() => now}
+        onAccessNotFound={() => undefined}
+        onDismiss={() => undefined}
+        onStateChanged={() => undefined}
+        onSucceeded={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("Retry failed Refresh?");
+    expect(markup).toContain("industry-failed-source");
+    expect(markup).toContain("New idempotency key");
+    expect(markup).toContain('value="industry-retry-20260830T050607Z"');
+    expect(markup).toContain("The original failed receipt remains unchanged and inspectable");
+    expect(markup).toContain("accepted into the FIFO as new queued work");
+    expect(markup.indexOf("New idempotency key")).toBeLessThan(
+      markup.indexOf("Current password"),
+    );
   });
 
   it("polls only while latest or visible history contains non-terminal work", () => {

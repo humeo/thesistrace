@@ -523,6 +523,11 @@ select { color-scheme: dark; }
   font-weight: 500;
   overflow-wrap: anywhere;
 }
+.operator-confirmation-field .operator-field-error {
+  color: #ff8b82;
+  font-size: 12px;
+  line-height: 1.45;
+}
 .operator-confirmation-target {
   display: grid;
   gap: 0;
@@ -667,7 +672,7 @@ select { color-scheme: dark; }
 .operator-dataset-subsection h3 { font-size: 14px; font-weight: 600; }
 .operator-dataset-subsection > header span { color: var(--ink-soft); font-size: 11px; }
 .operator-latest-refresh-table { min-width: 760px; }
-.operator-data-operation-table { min-width: 1240px; }
+.operator-data-operation-table { min-width: 1320px; }
 .operator-data-operation-table th:first-child { width: 20%; }
 .operator-data-operation-table th:nth-child(2) { width: 10%; }
 .operator-data-operation-table th:nth-child(3) { width: 12%; }
@@ -675,7 +680,9 @@ select { color-scheme: dark; }
 .operator-data-operation-table th:nth-child(5) { width: 12%; }
 .operator-data-operation-table th:nth-child(6) { width: 13%; }
 .operator-data-operation-table th:nth-child(7) { width: 12%; }
-.operator-data-operation-table th:last-child { width: 76px; }
+.operator-data-operation-table th:last-child { width: 154px; }
+.operator-row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.operator-row-action-danger { color: #ff8b82; border-color: rgb(255 139 130 / 40%); }
 .operator-operation-phase { display: grid; gap: 2px; }
 .operator-operation-phase strong { color: var(--ink); font-family: var(--mono); font-weight: 500; }
 .operator-operation-phase small { color: var(--ink-soft); font-size: 11px; }
@@ -717,6 +724,11 @@ select { color-scheme: dark; }
 .operator-data-operation-drawer header button { min-height: 40px; }
 .operator-operation-details { display: grid; margin: 0; padding: 4px 22px 28px; }
 .operator-operation-details > div { min-width: 0; padding: 13px 0; border-bottom: 1px solid var(--line); }
+.operator-operation-drawer-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 22px 28px;
+}
 
 /* Authentication and account access */
 .auth-page {

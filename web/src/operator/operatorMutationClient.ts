@@ -65,6 +65,29 @@ export type IndustryRefreshOperation = Readonly<{
   status: "accepted" | "running" | "succeeded" | "failed";
 }>;
 
+export type DataRefreshKind = "market" | "financial" | "industry";
+
+type DataRefreshActionBase = Readonly<{
+  kind: DataRefreshKind;
+  sourceIdempotencyKey: string;
+  target: string;
+}>;
+
+export type DataRefreshActionRequest =
+  | (DataRefreshActionBase & Readonly<{ action: "cancel" }>)
+  | (DataRefreshActionBase & Readonly<{
+      action: "retry";
+      newIdempotencyKey: string;
+    }>);
+
+export type DataRefreshActionReceipt = Readonly<{
+  asOf: string | null;
+  idempotencyKey: string;
+  kind: DataRefreshKind;
+  observationThroughSession: string | null;
+  status: "accepted" | "cancelled";
+}>;
+
 export type OperatorMutationErrorCode =
   | "conflict"
   | "delivery-failed"
@@ -72,6 +95,8 @@ export type OperatorMutationErrorCode =
   | "invalid-target"
   | "invalid-password"
   | "invalid-proof"
+  | "not-cancellable"
+  | "not-retryable"
   | "protected-target"
   | "rate-limited"
   | "request-invalid"
@@ -349,6 +374,78 @@ export async function loadIndustryRefresh(
   ));
 }
 
+export async function confirmDataRefreshActionProof(
+  request: DataRefreshActionRequest,
+  password: string,
+  signal: AbortSignal,
+): Promise<Readonly<{ expiresAt: string; proof: string }>> {
+  let body: Readonly<Record<string, string>>;
+  if (request.action === "cancel") {
+    body = {
+      kind: request.kind,
+      operation: "data.refresh.cancel",
+      password,
+      source_idempotency_key: request.sourceIdempotencyKey,
+      target: request.target,
+    };
+  } else {
+    body = {
+      kind: request.kind,
+      new_idempotency_key: request.newIdempotencyKey,
+      operation: "data.refresh.retry",
+      password,
+      source_idempotency_key: request.sourceIdempotencyKey,
+      target: request.target,
+    };
+  }
+  const value = await operatorPost(
+    "/api/auth/operator/proofs",
+    body,
+    signal,
+  );
+  if (
+    !hasExactKeys(value, ["expires_at", "proof"])
+    || !isIsoTimestamp(value.expires_at)
+    || typeof value.proof !== "string"
+    || !isOpaqueProof(value.proof)
+  ) {
+    throw new OperatorMutationError("unavailable");
+  }
+  return { expiresAt: value.expires_at, proof: value.proof };
+}
+
+export async function submitDataRefreshAction(
+  request: DataRefreshActionRequest,
+  proof: string,
+  signal: AbortSignal,
+): Promise<DataRefreshActionReceipt> {
+  let body: Readonly<Record<string, string>>;
+  if (request.action === "cancel") {
+    body = {
+      kind: request.kind,
+      proof,
+      source_idempotency_key: request.sourceIdempotencyKey,
+      target: request.target,
+    };
+  } else {
+    body = {
+      kind: request.kind,
+      new_idempotency_key: request.newIdempotencyKey,
+      proof,
+      source_idempotency_key: request.sourceIdempotencyKey,
+      target: request.target,
+    };
+  }
+  return dataRefreshActionReceipt(
+    await operatorPost(
+      `/api/operator/data/refreshes/${request.action}`,
+      body,
+      signal,
+    ),
+    request,
+  );
+}
+
 export async function submitSessionRevocation(
   researcherId: string,
   proof: string,
@@ -454,6 +551,10 @@ async function responseErrorCode(
   if (code === "OPERATOR_REQUEST_INVALID") return "request-invalid";
   if (code === "DATA_NOT_READY") return "data-not-ready";
   if (code === "IDEMPOTENCY_KEY_CONFLICT") return "conflict";
+  if (code === "REFRESH_NOT_CANCELLABLE") return "not-cancellable";
+  if (code === "REFRESH_NOT_RETRYABLE") return "not-retryable";
+  if (code === "REFRESH_NOT_FOUND") return "invalid-target";
+  if (code === "REFRESH_TARGET_CONFLICT") return "invalid-target";
   if (code === "AUTH_RATE_LIMITED") return "rate-limited";
   return "unavailable";
 }
@@ -475,6 +576,63 @@ function isIsoTimestamp(value: unknown): value is string {
   const parsed = new Date(value);
   return Number.isFinite(parsed.getTime())
     && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(value);
+}
+
+function dataRefreshActionReceipt(
+  value: unknown,
+  request: DataRefreshActionRequest,
+): DataRefreshActionReceipt {
+  if (
+    !hasExactKeys(value, [
+      "as_of",
+      "idempotency_key",
+      "kind",
+      "observation_through_session",
+      "status",
+    ])
+    || !isDataRefreshKind(value.kind)
+    || value.kind !== request.kind
+    || typeof value.idempotency_key !== "string"
+    || value.idempotency_key !== (request.action === "cancel"
+      ? request.sourceIdempotencyKey
+      : request.newIdempotencyKey)
+    || (value.status !== "accepted" && value.status !== "cancelled")
+    || value.status !== (request.action === "cancel" ? "cancelled" : "accepted")
+    || (value.as_of !== null && !isIsoTimestamp(value.as_of))
+    || (value.observation_through_session !== null
+      && !isIsoResearchSession(value.observation_through_session))
+    || !actionTargetMatches(
+      request,
+      value.as_of,
+      value.observation_through_session,
+    )
+  ) {
+    throw new OperatorMutationError("unavailable");
+  }
+  return {
+    asOf: value.as_of,
+    idempotencyKey: value.idempotency_key,
+    kind: value.kind,
+    observationThroughSession: value.observation_through_session,
+    status: value.status,
+  };
+}
+
+function isDataRefreshKind(value: unknown): value is DataRefreshKind {
+  return value === "market" || value === "financial" || value === "industry";
+}
+
+function actionTargetMatches(
+  request: DataRefreshActionRequest,
+  asOf: unknown,
+  observationThroughSession: unknown,
+): asOf is string | null {
+  if (request.kind === "market") {
+    return isIsoTimestamp(asOf)
+      && observationThroughSession === null
+      && new Date(asOf).getTime() === new Date(request.target).getTime();
+  }
+  return asOf === null && observationThroughSession === request.target;
 }
 
 function marketRefreshOperation(value: unknown): MarketRefreshOperation {
