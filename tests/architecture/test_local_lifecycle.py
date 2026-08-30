@@ -1679,10 +1679,14 @@ def test_operator_console_release_qualification_runs_inside_final_images() -> No
 
 
 def test_operator_console_runbooks_define_the_supported_production_boundary() -> None:
-    production = (
-        ROOT / "docs" / "runbook" / "single-node-production.md"
-    ).read_text()
-    data_operator = (ROOT / "docs" / "runbook" / "data-operator.md").read_text()
+    production = " ".join(
+        (ROOT / "docs" / "runbook" / "single-node-production.md")
+        .read_text()
+        .split()
+    )
+    data_operator = " ".join(
+        (ROOT / "docs" / "runbook" / "data-operator.md").read_text().split()
+    )
 
     for current in (
         "assign-operator",

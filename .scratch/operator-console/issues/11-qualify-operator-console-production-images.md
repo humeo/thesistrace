@@ -100,6 +100,14 @@ operation receipts without retaining Data Generations.
   Compose cleanup, and overall status were zero for the Core integration,
   browser, and image runs. Evidence remains under each isolated run directory;
   no live Tushare or public Resend request was used.
+- The first committed-code gate at `6d556de` stopped with one failing document
+  contract and 930 passing Python tests. A final Markdown line wrap had split
+  the unchanged deactivation-boundary sentence across two lines. The exact
+  failing test reproduced in 0.04 seconds; reading the same confirmed worktree
+  file with whitespace folded preserved the full required sentence. The test
+  now normalizes whitespace before checking every original boundary phrase.
+  The narrow regression passed, Ruff passed, and all 74 lifecycle tests passed
+  in 104.70 seconds. No production code or authorization rule changed.
 - The release check against a clean, committed implementation is still pending.
   This issue remains in progress until that check passes and the completion
   record is committed.
@@ -125,6 +133,10 @@ operation receipts without retaining Data Generations.
   lease. Retry exhaustion uses its own genuinely running, expired receipt and
   never rewrites a successfully published receipt into failure. Unit, full
   browser, and final-image checks pass with these corrections.
+- The post-commit document-contract correction was reviewed against Standards
+  and Spec: it removes sensitivity to Markdown line wrapping without removing
+  or weakening any required operational-boundary phrase. No review finding
+  remains; the full committed-code gate must still be rerun.
 
 ## Comments
 
@@ -132,3 +144,7 @@ operation receipts without retaining Data Generations.
   review, and the pre-commit full release gate. Commit the implementation before
   rerunning the exact release command on a clean revision; record completion
   only after that final committed-code gate passes.
+- 2026-08-31: The first committed-code gate caught a line-wrap-sensitive runbook
+  assertion. Reproduced it, normalized only the test's whitespace handling,
+  passed the regression and all lifecycle tests, and re-reviewed the correction
+  before a separate Ticket 11 fix commit and another clean release gate.
