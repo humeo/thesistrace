@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { AgentAuthenticationUnavailableError } from "./failure.js";
+import { loginSessionCookieHeader } from "./login-session-cookie.js";
 
 const verifiedResearcherSchema = z
   .object({
@@ -23,8 +24,8 @@ export function createSessionVerifier(dependencies: Readonly<{
   const timeoutMs = dependencies.timeoutMs ?? 2_000;
   return async (headers) => {
     const forwarded = new Headers();
-    const cookie = headers.get("cookie");
-    if (cookie !== null) forwarded.set("cookie", cookie);
+    const cookie = loginSessionCookieHeader(headers.get("cookie"));
+    if (cookie !== undefined) forwarded.set("cookie", cookie);
 
     let response: Response;
     try {

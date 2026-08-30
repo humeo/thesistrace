@@ -44,6 +44,9 @@ importers:
       '@mastra/core':
         specifier: 1.63.1
         version: 1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3)
+      '@mastra/mcp':
+        specifier: 1.17.2
+        version: 1.17.2(@cfworker/json-schema@4.1.1)(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(hono@4.13.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@7.2.0)(zod@4.4.3)
       '@mastra/memory':
         specifier: 1.28.1
         version: 1.28.1(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))(supports-color@7.2.0)
@@ -1078,6 +1081,12 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
+  '@mastra/mcp@1.17.2':
+    resolution: {integrity: sha512-ipLVc8Hyeqextviwx/slTD4GcX3sillqdVSvscIdKmJvdW0qJtPT16g/U5kN7M+yq9B7/70zgcuCF8RVgYXt5w==}
+    engines: {node: '>=22.13.0'}
+    peerDependencies:
+      '@mastra/core': '>=1.0.0-0 <2.0.0-0'
+
   '@mastra/memory@1.28.1':
     resolution: {integrity: sha512-ZMKblBgsr7mVBVqsZTT2DYZ7yzCQq7Zc9iEsHrDDSFSa8s9k4ysS7fXNNWUzLzzr7jOiHtvrg6fmfH32snEy5w==}
     engines: {node: '>=22.13.0'}
@@ -1119,9 +1128,37 @@ packages:
       '@opentelemetry/api-logs':
         optional: true
 
+  '@modelcontextprotocol/client@2.0.0':
+    resolution: {integrity: sha512-8f1OghQ2rjzIOfqgUCP+8GiUWqRs89njoWLNqAe8kWmDePv3s1fZXseej+QXemssEuuOvLLmLO/kqM3IQHtISw==}
+    engines: {node: '>=20'}
+
   '@modelcontextprotocol/core@2.0.0':
     resolution: {integrity: sha512-pJCEwGG7Lfr/+PQp9ZTwKXNeO5wzbfKL7H3MYpCorM4oFBoQrdjnBgEoqG+RjhsvS1FKrDbKux+M1HhlnGWqcA==}
     engines: {node: '>=20'}
+
+  '@modelcontextprotocol/ext-apps@1.7.5':
+    resolution: {integrity: sha512-TjPH2S2y5UEGKhmI6+XGFuqfqOV4ppe1x6DA3txnUaEWkgtA4G5vo14jGKFZmegdkZ1H4QMLyujLvoU1BEdnAg==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@modelcontextprotocol/sdk': ^1.29.0
+      react: ^17.0.0 || ^18.0.0 || ^19.0.0
+      react-dom: ^17.0.0 || ^18.0.0 || ^19.0.0
+      zod: ^3.25.0 || ^4.0.0
+    peerDependenciesMeta:
+      react:
+        optional: true
+      react-dom:
+        optional: true
+
+  '@modelcontextprotocol/node@2.0.0':
+    resolution: {integrity: sha512-Y4hAC2XdGDUdDOCbLDOCA4+aL3NUldjsOWlDL/YwpAxrPhRm1xHd7lZ+mLacvZ9t3PaH28wgNoaLQGrIk1P2pg==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@modelcontextprotocol/server': ^2.0.0
+      hono: ^4.11.4
+    peerDependenciesMeta:
+      hono:
+        optional: true
 
   '@modelcontextprotocol/sdk@1.30.0':
     resolution: {integrity: sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==}
@@ -1131,6 +1168,16 @@ packages:
       zod: ^3.25 || ^4.0
     peerDependenciesMeta:
       '@cfworker/json-schema':
+        optional: true
+
+  '@modelcontextprotocol/server-legacy@2.0.0':
+    resolution: {integrity: sha512-LnffC1BSqFMHtMQxEz92lqDpHWma+ErV3ghdHDgdkCyYzVcCYKcUT5loq4kflty+Bf9C9qjJqbnphyBWyCqo8Q==}
+    engines: {node: '>=20'}
+    deprecated: This package is a frozen copy of v1's SSE transport and OAuth Authorization Server helpers for migration purposes only. Use StreamableHTTP from @modelcontextprotocol/server and a dedicated OAuth server in production. Will not receive new features.
+    peerDependencies:
+      express: ^4.18.0 || ^5.0.0
+    peerDependenciesMeta:
+      express:
         optional: true
 
   '@modelcontextprotocol/server@2.0.0':
@@ -2724,6 +2771,10 @@ packages:
   execa@9.6.1:
     resolution: {integrity: sha512-9Be3ZoN4LmYR90tUoVu2te2BsbzHfhJyfEiAVfz7N5/zv+jduIfLrV2xdQXOHbaD6KgpGdO9PRPM1Y4Q9QkPkA==}
     engines: {node: ^18.19.0 || >=20.5.0}
+
+  exit-hook@5.1.0:
+    resolution: {integrity: sha512-INjr2xyxHo7bhAqf5ong++GZPPnpcuBcaXUKt03yf7Fie9yWD7FapL4teOU0+awQazGs5ucBh7xWs/AD+6nhog==}
+    engines: {node: '>=20'}
 
   expect-type@1.4.0:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
@@ -5873,6 +5924,27 @@ snapshots:
       - utf-8-validate
       - workflow
 
+  '@mastra/mcp@1.17.2(@cfworker/json-schema@4.1.1)(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(hono@4.13.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@7.2.0)(zod@4.4.3)':
+    dependencies:
+      '@mastra/core': 1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3)
+      '@modelcontextprotocol/client': 2.0.0
+      '@modelcontextprotocol/core': 2.0.0
+      '@modelcontextprotocol/ext-apps': 1.7.5(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@7.2.0)(zod@4.4.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.4.3)
+      '@modelcontextprotocol/node': 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.5)
+      '@modelcontextprotocol/sdk': 1.30.0(@cfworker/json-schema@4.1.1)(supports-color@7.2.0)(zod@4.4.3)
+      '@modelcontextprotocol/server': 2.0.0
+      '@modelcontextprotocol/server-legacy': 2.0.0(express@5.2.1(supports-color@7.2.0))(supports-color@7.2.0)
+      exit-hook: 5.1.0
+      fast-deep-equal: 3.1.3
+    transitivePeerDependencies:
+      - '@cfworker/json-schema'
+      - express
+      - hono
+      - react
+      - react-dom
+      - supports-color
+      - zod
+
   '@mastra/memory@1.28.1(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))(supports-color@7.2.0)':
     dependencies:
       '@mastra/core': 1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3)
@@ -5936,9 +6008,35 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@modelcontextprotocol/client@2.0.0':
+    dependencies:
+      '@modelcontextprotocol/core': 2.0.0
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.1
+      jose: 6.2.10
+      pkce-challenge: 5.0.1
+      zod: 4.4.3
+
   '@modelcontextprotocol/core@2.0.0':
     dependencies:
       zod: 4.4.3
+
+  '@modelcontextprotocol/ext-apps@1.7.5(@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@7.2.0)(zod@4.4.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.4.3)':
+    dependencies:
+      '@modelcontextprotocol/sdk': 1.30.0(@cfworker/json-schema@4.1.1)(supports-color@7.2.0)(zod@4.4.3)
+      '@standard-schema/spec': 1.1.0
+      zod: 4.4.3
+    optionalDependencies:
+      react: 19.2.8
+      react-dom: 19.2.8(react@19.2.8)
+
+  '@modelcontextprotocol/node@2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.5)':
+    dependencies:
+      '@hono/node-server': 1.19.17(hono@4.13.5)
+      '@modelcontextprotocol/server': 2.0.0
+    optionalDependencies:
+      hono: 4.13.5
 
   '@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@7.2.0)(zod@3.25.76)':
     dependencies:
@@ -5961,6 +6059,44 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@3.25.76)
     optionalDependencies:
       '@cfworker/json-schema': 4.1.1
+    transitivePeerDependencies:
+      - supports-color
+
+  '@modelcontextprotocol/sdk@1.30.0(@cfworker/json-schema@4.1.1)(supports-color@7.2.0)(zod@4.4.3)':
+    dependencies:
+      '@hono/node-server': 2.1.1(hono@4.13.5)
+      ajv: 8.20.0
+      ajv-formats: 3.0.1(ajv@8.20.0)
+      content-type: 1.0.5
+      cors: 2.8.6
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.1
+      express: 5.2.1(supports-color@7.2.0)
+      express-rate-limit: 8.6.2(express@5.2.1(supports-color@7.2.0))(supports-color@7.2.0)
+      hono: 4.13.5
+      jose: 6.2.10
+      json-schema-typed: 8.0.2
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
+      zod: 4.4.3
+      zod-to-json-schema: 3.25.2(zod@4.4.3)
+    optionalDependencies:
+      '@cfworker/json-schema': 4.1.1
+    transitivePeerDependencies:
+      - supports-color
+
+  '@modelcontextprotocol/server-legacy@2.0.0(express@5.2.1(supports-color@7.2.0))(supports-color@7.2.0)':
+    dependencies:
+      '@modelcontextprotocol/core': 2.0.0
+      content-type: 1.0.5
+      cors: 2.8.6
+      express-rate-limit: 8.6.2(express@5.2.1(supports-color@7.2.0))(supports-color@7.2.0)
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
+      zod: 4.4.3
+    optionalDependencies:
+      express: 5.2.1(supports-color@7.2.0)
     transitivePeerDependencies:
       - supports-color
 
@@ -7577,6 +7713,8 @@ snapshots:
       signal-exit: 4.1.0
       strip-final-newline: 4.0.0
       yoctocolors: 2.2.0
+
+  exit-hook@5.1.0: {}
 
   expect-type@1.4.0: {}
 

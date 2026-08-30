@@ -1,11 +1,14 @@
+import type { Message } from "@ag-ui/core";
 import { expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { AuthProvider } from "../auth/AuthProvider";
 import {
   ChatShell,
+  ToolActivityRow,
   chatMessageBytes,
   chatSessionHref,
+  chatTimelineItems,
   readBrowserChatThread,
 } from "./ChatPage";
 
@@ -93,4 +96,59 @@ test("counts the UTF-8 payload rather than JavaScript code units", () => {
   expect(chatMessageBytes("alpha")).toBe(5);
   expect(chatMessageBytes("低波动")).toBe(9);
   expect(chatMessageBytes("α")).toBe(2);
+});
+
+test("renders Tool lifecycle metadata without arguments or results", () => {
+  const messages: Message[] = [{
+    content: "Check the current data.",
+    id: "00000000-0000-4000-8000-000000000001",
+    role: "user",
+  }, {
+    content: "",
+    id: "00000000-0000-4000-8000-000000000002",
+    role: "assistant",
+    toolCalls: [{
+      function: {
+        arguments: '{"formula":"browser-must-not-render-this"}',
+        name: "get_research_context",
+      },
+      id: "provider-tool-call-1",
+      type: "function",
+    }],
+  }, {
+    content: "server-result-must-not-render",
+    id: "00000000-0000-4000-8000-000000000003",
+    role: "tool",
+    toolCallId: "provider-tool-call-1",
+  }];
+  const timeline = chatTimelineItems(messages, [{
+    durationMs: 42.6,
+    id: "provider-tool-call-1",
+    name: "get_research_context",
+    status: "completed",
+  }]);
+  expect(timeline).toMatchObject([
+    { kind: "message", role: "user" },
+    {
+      activity: {
+        durationMs: 42.6,
+        name: "get_research_context",
+        status: "completed",
+      },
+      kind: "tool",
+    },
+  ]);
+  expect(JSON.stringify(timeline)).not.toMatch(/browser-must-not-render|server-result-must-not-render/);
+
+  const markup = renderToStaticMarkup(<ToolActivityRow activity={{
+    durationMs: 42.6,
+    id: "provider-tool-call-1",
+    name: "get_research_context",
+    status: "completed",
+  }} />);
+  expect(markup).toContain("MCP Tool");
+  expect(markup).toContain("get_research_context");
+  expect(markup).toContain("Completed");
+  expect(markup).toContain("43 ms");
+  expect(markup).not.toMatch(/argument|result/i);
 });

@@ -19,6 +19,7 @@ import {
   tap,
 } from "rxjs";
 
+import { safeBrowserMessages } from "./browser-message-safety.js";
 import { chatRunFingerprint } from "./chat-request.js";
 import type { ResearchSessionRepository } from "./session-repository.js";
 
@@ -80,7 +81,7 @@ export class DurableResearchAgentRunner extends AgentRunner {
       mergeMap(({ latestRun, messages }) => {
         const snapshot: BaseEvent = {
           type: EventType.MESSAGES_SNAPSHOT,
-          messages: [...messages],
+          messages: [...safeBrowserMessages(messages)],
         };
         if (active === undefined) {
           if (latestRun === null) return from([]);

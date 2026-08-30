@@ -21,6 +21,20 @@ const owner = new Pool({ connectionString: ownerDatabaseUrl, max: 2 });
 const operatorPath = fileURLToPath(new URL("../dist/operator.js", import.meta.url));
 const authRoot = fileURLToPath(new URL("..", import.meta.url));
 const requests: string[] = [];
+const mcpEnvironment = {
+  THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS: "300",
+  THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS: "360",
+  THESISTRACE_MCP_AGENT_SCOPES:
+    '["research:read","research:execute","tracking:read","tracking:execute"]',
+  THESISTRACE_MCP_CLIENT_ID: "thesistrace-agent",
+  THESISTRACE_MCP_CLOCK_SKEW_SECONDS: "30",
+  THESISTRACE_MCP_ISSUER_URL: "https://issuer.test/",
+  THESISTRACE_MCP_RESOURCE_URL: "https://core.test/mcp",
+  THESISTRACE_MCP_SIGNING_PRIVATE_JWK:
+    '{"alg":"EdDSA","crv":"Ed25519","d":"2SCCVM_DYKEJvq18KV1M4UNFhxTHLKtdXxQFXLGlEBs","kid":"test-signing-key-01","kty":"OKP","use":"sig","x":"3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8"}',
+  THESISTRACE_MCP_VERIFYING_PUBLIC_JWK:
+    '{"alg":"EdDSA","crv":"Ed25519","kid":"test-signing-key-01","kty":"OKP","use":"sig","x":"3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8"}',
+} as const;
 let resendServer: Server;
 let resendOrigin: string;
 let resendHold:
@@ -182,6 +196,7 @@ function runOperator(args: string[]): Promise<{
     const child = spawn(process.execPath, [operatorPath, ...args], {
       cwd: authRoot,
       env: {
+        ...mcpEnvironment,
         BETTER_AUTH_SECRET: "0123456789abcdef0123456789abcdef",
         RESEND_API_KEY: "resend-fake-key",
         RESEND_FROM_EMAIL: "ThesisTrace <noreply@thesistrace.test>",

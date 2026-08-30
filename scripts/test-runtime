@@ -21,6 +21,16 @@ resend_api_url=http://resend-fake:8300
 agent_model_registry='{"default_model_key":"scripted-research","models":[{"default_reasoning_effort":"medium","display_name":"Scripted Research","enabled":true,"key":"scripted-research","provider_adapter":"scripted","provider_model_id":"scripted-v1","reasoning_efforts":["low","medium","high"],"secret_env":"THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"},{"default_reasoning_effort":"high","display_name":"Scripted Deep Research","enabled":true,"key":"scripted-deep-research","provider_adapter":"scripted","provider_model_id":"scripted-v2","reasoning_efforts":["high"],"secret_env":"THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"}]}'
 agent_scripted_model_secret=scripted-test-provider-secret
 agent_build_revision=test-build-revision
+agent_run_max_wall_seconds=600
+mcp_access_token_ttl_seconds=660
+mcp_agent_scopes='["research:read","research:execute","tracking:read","tracking:execute"]'
+mcp_client_id=thesistrace-agent
+mcp_clock_skew_seconds=30
+mcp_deployment_tools='["diagnose_alpha_formula","get_alpha_catalog","get_daily_track","get_daily_track_result","get_research_batch","get_research_context","get_research_run","get_research_run_result","list_daily_tracks","list_research_batches","list_research_runs","retry_daily_track","start_daily_track","submit_research_batch","submit_research_run"]'
+mcp_issuer_url=https://research.thesistrace.test/api/auth
+mcp_resource_url=https://research.thesistrace.test/mcp
+mcp_signing_private_jwk='{"alg":"EdDSA","crv":"Ed25519","d":"2SCCVM_DYKEJvq18KV1M4UNFhxTHLKtdXxQFXLGlEBs","kid":"test-signing-key-01","kty":"OKP","use":"sig","x":"3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8"}'
+mcp_verifying_public_jwk='{"alg":"EdDSA","crv":"Ed25519","kid":"test-signing-key-01","kty":"OKP","use":"sig","x":"3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8"}'
 compose_cleanup_required=true
 
 new_run_id() {
@@ -66,6 +76,8 @@ set_test_origin() {
   esac
   public_origin="http://127.0.0.1:$caddy_port"
   auth_secret="test-only-$run_id-auth-secret-with-at-least-32-characters"
+  mcp_allowed_hosts="[\"api:8100\",\"127.0.0.1:$caddy_port\"]"
+  mcp_allowed_origins="[\"$public_origin\"]"
 }
 
 load_test_origin() {
@@ -112,7 +124,19 @@ compose() {
       THESISTRACE_AGENT_IMAGE="$project_name-agent" \
       THESISTRACE_AGENT_BUILD_REVISION="$agent_build_revision" \
       THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
+      THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS="$agent_run_max_wall_seconds" \
       THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET="$agent_scripted_model_secret" \
+      THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS="$mcp_access_token_ttl_seconds" \
+      THESISTRACE_MCP_AGENT_SCOPES="$mcp_agent_scopes" \
+      THESISTRACE_MCP_ALLOWED_HOSTS="$mcp_allowed_hosts" \
+      THESISTRACE_MCP_ALLOWED_ORIGINS="$mcp_allowed_origins" \
+      THESISTRACE_MCP_CLIENT_ID="$mcp_client_id" \
+      THESISTRACE_MCP_CLOCK_SKEW_SECONDS="$mcp_clock_skew_seconds" \
+      THESISTRACE_MCP_DEPLOYMENT_TOOLS="$mcp_deployment_tools" \
+      THESISTRACE_MCP_ISSUER_URL="$mcp_issuer_url" \
+      THESISTRACE_MCP_RESOURCE_URL="$mcp_resource_url" \
+      THESISTRACE_MCP_SIGNING_PRIVATE_JWK="$mcp_signing_private_jwk" \
+      THESISTRACE_MCP_VERIFYING_PUBLIC_JWK="$mcp_verifying_public_jwk" \
       BETTER_AUTH_SECRET="$auth_secret" \
       RESEND_API_KEY="$resend_api_key" \
       RESEND_FROM_EMAIL="$resend_from_email" \
@@ -140,7 +164,19 @@ compose() {
       THESISTRACE_AGENT_IMAGE="$project_name-agent" \
       THESISTRACE_AGENT_BUILD_REVISION="$agent_build_revision" \
       THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
+      THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS="$agent_run_max_wall_seconds" \
       THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET="$agent_scripted_model_secret" \
+      THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS="$mcp_access_token_ttl_seconds" \
+      THESISTRACE_MCP_AGENT_SCOPES="$mcp_agent_scopes" \
+      THESISTRACE_MCP_ALLOWED_HOSTS="$mcp_allowed_hosts" \
+      THESISTRACE_MCP_ALLOWED_ORIGINS="$mcp_allowed_origins" \
+      THESISTRACE_MCP_CLIENT_ID="$mcp_client_id" \
+      THESISTRACE_MCP_CLOCK_SKEW_SECONDS="$mcp_clock_skew_seconds" \
+      THESISTRACE_MCP_DEPLOYMENT_TOOLS="$mcp_deployment_tools" \
+      THESISTRACE_MCP_ISSUER_URL="$mcp_issuer_url" \
+      THESISTRACE_MCP_RESOURCE_URL="$mcp_resource_url" \
+      THESISTRACE_MCP_SIGNING_PRIVATE_JWK="$mcp_signing_private_jwk" \
+      THESISTRACE_MCP_VERIFYING_PUBLIC_JWK="$mcp_verifying_public_jwk" \
       BETTER_AUTH_SECRET="$auth_secret" \
       RESEND_API_KEY="$resend_api_key" \
       RESEND_FROM_EMAIL="$resend_from_email" \
@@ -167,7 +203,19 @@ base_compose() {
     THESISTRACE_AGENT_IMAGE="$project_name-agent" \
     THESISTRACE_AGENT_BUILD_REVISION="$agent_build_revision" \
     THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
+    THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS="$agent_run_max_wall_seconds" \
     THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET="$agent_scripted_model_secret" \
+    THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS="$mcp_access_token_ttl_seconds" \
+    THESISTRACE_MCP_AGENT_SCOPES="$mcp_agent_scopes" \
+    THESISTRACE_MCP_ALLOWED_HOSTS="$mcp_allowed_hosts" \
+    THESISTRACE_MCP_ALLOWED_ORIGINS="$mcp_allowed_origins" \
+    THESISTRACE_MCP_CLIENT_ID="$mcp_client_id" \
+    THESISTRACE_MCP_CLOCK_SKEW_SECONDS="$mcp_clock_skew_seconds" \
+    THESISTRACE_MCP_DEPLOYMENT_TOOLS="$mcp_deployment_tools" \
+    THESISTRACE_MCP_ISSUER_URL="$mcp_issuer_url" \
+    THESISTRACE_MCP_RESOURCE_URL="$mcp_resource_url" \
+    THESISTRACE_MCP_SIGNING_PRIVATE_JWK="$mcp_signing_private_jwk" \
+    THESISTRACE_MCP_VERIFYING_PUBLIC_JWK="$mcp_verifying_public_jwk" \
     BETTER_AUTH_SECRET="$auth_secret" \
     RESEND_API_KEY="$resend_api_key" \
     RESEND_FROM_EMAIL="$resend_from_email" \
@@ -364,6 +412,42 @@ verify_caddy_single_origin() {
     "$public_origin/api/agent/models")
   test "$agent_status" = 401
 
+  curl --fail --silent --show-error --max-time 10 \
+    "$public_origin/.well-known/oauth-protected-resource/mcp" \
+    >"$evidence_dir/caddy-mcp-metadata.json"
+  grep -F '"resource":"https://core.test/mcp"' \
+    "$evidence_dir/caddy-mcp-metadata.json"
+  mcp_unauthorized_status=$(curl --silent --show-error --max-time 10 \
+    --header 'Content-Type: application/json' \
+    --request POST --data '{}' \
+    --output "$evidence_dir/caddy-mcp-unauthorized.json" \
+    --write-out '%{http_code}' "$public_origin/mcp")
+  test "$mcp_unauthorized_status" = 401
+  mcp_query_token_status=$(curl --silent --show-error --max-time 10 \
+    --header 'Authorization: Bearer caddy-query-token-canary' \
+    --header 'Content-Type: application/json' \
+    --request POST --data '{}' \
+    --output /dev/null --write-out '%{http_code}' \
+    "$public_origin/mcp?access_token=caddy-query-token-canary")
+  test "$mcp_query_token_status" = 400
+  mcp_arbitrary_query_status=$(curl --silent --show-error --max-time 10 \
+    --header 'Content-Type: application/json' \
+    --request POST --data '{}' \
+    --output /dev/null --write-out '%{http_code}' \
+    "$public_origin/mcp?probe=caddy-query-canary")
+  test "$mcp_arbitrary_query_status" = 400
+  mcp_metadata_query_status=$(curl --silent --show-error --max-time 10 \
+    --output /dev/null --write-out '%{http_code}' \
+    "$public_origin/.well-known/oauth-protected-resource/mcp?probe=caddy-query-canary")
+  test "$mcp_metadata_query_status" = 400
+  for noncanonical_mcp_path in \
+    /mcp/ /mcp/sse /.well-known/oauth-protected-resource/mcp/; do
+    noncanonical_mcp_status=$(curl --silent --show-error --max-time 10 \
+      --output /dev/null --write-out '%{http_code}' \
+      "$public_origin$noncanonical_mcp_path")
+    test "$noncanonical_mcp_status" = 404
+  done
+
   auth_canary_status=$(curl --silent --show-error \
     --header "Origin: $public_origin" \
     --header 'Content-Type: application/json' \
@@ -374,7 +458,9 @@ verify_caddy_single_origin() {
     "$public_origin/api/auth/sign-in/email?token=observability-request-canary")
   test "$auth_canary_status" = 400 || test "$auth_canary_status" = 401
 
-  for private_path in /health/live /health/ready /internal/session/verify; do
+  for private_path in \
+    /health/live /health/ready \
+    /internal/session/verify /internal/session/exchange; do
     private_status=$(curl --silent --show-error \
       --output /dev/null --write-out '%{http_code}' \
       "$public_origin$private_path")
@@ -402,6 +488,8 @@ verify_caddy_backend_independence() {
 run_mcp_image_smoke() {
   phase=$1
   compose_run \
+    -e THESISTRACE_MCP_ALLOWED_HOSTS="$mcp_allowed_hosts" \
+    -e THESISTRACE_MCP_ALLOWED_ORIGINS="$mcp_allowed_origins" \
     -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
     -e THESISTRACE_TEST_EVIDENCE_DIR=/smoke-evidence \
     -e THESISTRACE_TEST_IMAGE_ID="$image_revision" \

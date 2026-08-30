@@ -22,7 +22,7 @@ describe("Agent Session verifier", () => {
     await expect(
       verify(new Headers({
         authorization: "Bearer browser-canary",
-        cookie: "thesistrace.session_token=session-canary",
+        cookie: "analytics=discard-me; thesistrace.session_token=session-canary",
         origin: "https://attacker.example",
         "x-request-id": "request-canary",
       })),

@@ -481,7 +481,17 @@ def test_mcp_evidence_discard_reports_unlink_failure(
     assert evidence.exists()
 
 
-def test_mcp_image_api_uses_only_explicit_local_token_grants() -> None:
+def test_mcp_image_api_uses_only_explicit_local_token_grants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "THESISTRACE_MCP_ALLOWED_HOSTS",
+        '["api:8100","core.test"]',
+    )
+    monkeypatch.setenv(
+        "THESISTRACE_MCP_ALLOWED_ORIGINS",
+        '["https://agent.test"]',
+    )
     smoke = _load_mcp_smoke_module()
     routes = {route.path for route in smoke.application().routes}
     assert "/mcp" in routes

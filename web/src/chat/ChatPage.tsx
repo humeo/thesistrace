@@ -5,15 +5,19 @@ import {
   ArrowUp,
   ChartLineUp,
   ChatCircle,
+  CheckCircle,
+  CircleNotch,
   ClockCounterClockwise,
   Database,
   Flask,
   List,
   NotePencil,
   SidebarSimple,
+  WarningCircle,
   X,
 } from "@phosphor-icons/react";
 import {
+  useCallback,
   useEffect,
   useReducer,
   useRef,
@@ -81,6 +85,38 @@ type ConversationStatus =
   | "complete"
   | "failed"
   | "disconnected";
+
+type ConversationSubscriberOptions = Readonly<{
+  failRunningTools: () => void;
+  finishTool: (id: string, failed: boolean) => void;
+  onRunFailed: () => void;
+  onRunFinished: () => void;
+  onRunInitialized?: () => void;
+  onRunError: () => void;
+  onRunStarted: () => void;
+  startTool: (id: string, name: string) => void;
+}>;
+
+export type ChatToolActivity = Readonly<{
+  durationMs?: number;
+  id: string;
+  name: string;
+  startedAtMs?: number;
+  status: "running" | "completed" | "failed";
+}>;
+
+type ChatTimelineItem =
+  | Readonly<{
+      content: string;
+      id: string;
+      kind: "message";
+      role: "assistant" | "user";
+    }>
+  | Readonly<{
+      activity: ChatToolActivity;
+      id: string;
+      kind: "tool";
+    }>;
 
 export function ChatPage() {
   const { reload, state } = useAgentCatalog();
@@ -360,10 +396,13 @@ function AgentConversation({
   const [status, setStatus] = useState<ConversationStatus>(
     existingSession ? "loading-history" : "idle",
   );
+  const [toolActivities, setToolActivities] = useState<ReadonlyMap<string, ChatToolActivity>>(
+    () => new Map(),
+  );
   const connectedAgent = useRef<AbstractAgent | null>(null);
   const messageBytes = chatMessageBytes(draft);
   const messageTooLarge = messageBytes > MAX_CHAT_MESSAGE_BYTES;
-  const messages = textChatMessages(agent.messages);
+  const timeline = chatTimelineItems(agent.messages, [...toolActivities.values()]);
   const busy = agent.isRunning
     || status === "loading-history"
     || status === "starting"
@@ -375,19 +414,64 @@ function AgentConversation({
     && draft.trim().length > 0
     && !messageTooLarge;
 
+  const startTool = useCallback((id: string, name: string) => {
+    const startedAtMs = monotonicNow();
+    setToolActivities((current) => {
+      const next = new Map(current);
+      next.set(id, { id, name, startedAtMs, status: "running" });
+      return next;
+    });
+  }, []);
+  const finishTool = useCallback((id: string, failed: boolean) => {
+    const finishedAtMs = monotonicNow();
+    setToolActivities((current) => {
+      const existing = current.get(id);
+      if (existing === undefined) return current;
+      const next = new Map(current);
+      next.set(id, {
+        ...existing,
+        durationMs: existing.startedAtMs === undefined
+          ? undefined
+          : Math.max(0, finishedAtMs - existing.startedAtMs),
+        status: failed ? "failed" : "completed",
+      });
+      return next;
+    });
+  }, []);
+  const failRunningTools = useCallback(() => {
+    const finishedAtMs = monotonicNow();
+    setToolActivities((current) => {
+      let changed = false;
+      const next = new Map(current);
+      for (const [id, activity] of current) {
+        if (activity.status !== "running") continue;
+        changed = true;
+        next.set(id, {
+          ...activity,
+          durationMs: activity.startedAtMs === undefined
+            ? undefined
+            : Math.max(0, finishedAtMs - activity.startedAtMs),
+          status: "failed",
+        });
+      }
+      return changed ? next : current;
+    });
+  }, []);
+
   useEffect(() => {
     if (!existingSession || !isReady || connectedAgent.current === agent) return;
     connectedAgent.current = agent;
     let disposed = false;
     let failed = false;
-    const subscriber: AgentSubscriber = {
-      onRunStartedEvent: () => {
+    const subscriber = createConversationSubscriber({
+      failRunningTools,
+      onRunStarted: () => {
         if (!disposed) setStatus("running");
       },
-      onRunFinishedEvent: () => {
+      onRunFinished: () => {
         if (!disposed) setStatus("complete");
       },
-      onRunErrorEvent: () => {
+      onRunError: () => {
         failed = true;
         if (!disposed) {
           setError("The previous Research Agent run did not complete.");
@@ -401,7 +485,13 @@ function AgentConversation({
           setStatus("disconnected");
         }
       },
-    };
+      startTool: (id, name) => {
+        if (!disposed) startTool(id, name);
+      },
+      finishTool: (id, toolFailed) => {
+        if (!disposed) finishTool(id, toolFailed);
+      },
+    });
     setStatus("loading-history");
     void agent.connectAgent(undefined, subscriber)
       .then(() => {
@@ -416,7 +506,7 @@ function AgentConversation({
     return () => {
       disposed = true;
     };
-  }, [agent, existingSession, isReady]);
+  }, [agent, existingSession, failRunningTools, finishTool, isReady, startTool]);
 
   async function submit(event?: FormEvent): Promise<void> {
     event?.preventDefault();
@@ -426,21 +516,23 @@ function AgentConversation({
     const messageId = crypto.randomUUID();
     let accepted = false;
     let terminal: "none" | "complete" | "failed" = "none";
-    const subscriber: AgentSubscriber = {
+    const subscriber = createConversationSubscriber({
+      failRunningTools,
+      finishTool,
       onRunInitialized: () => {
         setError(null);
         setStatus("starting");
       },
-      onRunStartedEvent: () => {
+      onRunStarted: () => {
         accepted = true;
         onAccepted();
         setStatus("running");
       },
-      onRunFinishedEvent: () => {
+      onRunFinished: () => {
         terminal = "complete";
         setStatus("complete");
       },
-      onRunErrorEvent: () => {
+      onRunError: () => {
         terminal = "failed";
         setError("The Research Agent could not complete this run.");
         setStatus("failed");
@@ -450,7 +542,8 @@ function AgentConversation({
         setError("The Research Agent connection was interrupted.");
         setStatus("disconnected");
       },
-    };
+      startTool,
+    });
 
     agent.addMessage({ content, id: messageId, role: "user" });
     setDraft("");
@@ -486,20 +579,22 @@ function AgentConversation({
 
   return (
     <main className="chat-main">
-      {messages.length === 0 ? (
+      {timeline.length === 0 ? (
         <ChatEmptyState status={status} />
       ) : (
         <section aria-label="Conversation" className="chat-conversation" aria-live="polite">
-          {messages.map((message) => (
+          {timeline.map((item) => item.kind === "tool" ? (
+            <ToolActivityRow activity={item.activity} key={item.id} />
+          ) : (
             <article
-              className={`chat-message chat-message-${message.role}`}
-              key={message.id}
+              className={`chat-message chat-message-${item.role}`}
+              key={item.id}
             >
               <p className="chat-message-author">
-                {message.role === "assistant" ? "ThesisTrace" : "You"}
+                {item.role === "assistant" ? "ThesisTrace" : "You"}
               </p>
               <div className="chat-message-content">
-                {message.content.length === 0 ? "Responding…" : message.content}
+                {item.content.length === 0 ? "Responding…" : item.content}
               </div>
             </article>
           ))}
@@ -542,6 +637,33 @@ function AgentConversation({
       </form>
     </main>
   );
+}
+
+function createConversationSubscriber(
+  options: ConversationSubscriberOptions,
+): AgentSubscriber {
+  return {
+    onRunFailed: () => {
+      options.failRunningTools();
+      options.onRunFailed();
+    },
+    onRunFinishedEvent: () => {
+      options.failRunningTools();
+      options.onRunFinished();
+    },
+    onRunInitialized: options.onRunInitialized,
+    onRunErrorEvent: () => {
+      options.failRunningTools();
+      options.onRunError();
+    },
+    onRunStartedEvent: options.onRunStarted,
+    onToolCallResultEvent: ({ event }) => {
+      options.finishTool(event.toolCallId, event.content === "Tool failed.");
+    },
+    onToolCallStartEvent: ({ event }) => {
+      options.startTool(event.toolCallId, event.toolCallName);
+    },
+  };
 }
 
 function StaticChatMain({
@@ -784,18 +906,94 @@ export function chatMessageBytes(message: string): number {
   return new TextEncoder().encode(message).byteLength;
 }
 
-function textChatMessages(messages: readonly Message[]): ReadonlyArray<Readonly<{
-  content: string;
-  id: string;
-  role: "assistant" | "user";
-}>> {
-  return messages.flatMap((message) => {
-    if (
-      (message.role !== "assistant" && message.role !== "user")
-      || typeof message.content !== "string"
-    ) return [];
-    return [{ content: message.content, id: message.id, role: message.role }];
-  });
+export function chatTimelineItems(
+  messages: readonly Message[],
+  liveActivities: readonly ChatToolActivity[] = [],
+): readonly ChatTimelineItem[] {
+  const liveById = new Map(liveActivities.map((activity) => [activity.id, activity]));
+  const resultByToolCall = new Map<string, "completed" | "failed">();
+  for (const message of messages) {
+    if (message.role !== "tool") continue;
+    resultByToolCall.set(
+      message.toolCallId,
+      message.content === "Tool failed." ? "failed" : "completed",
+    );
+  }
+
+  const representedToolCalls = new Set<string>();
+  const items: ChatTimelineItem[] = [];
+  for (const message of messages) {
+    if (message.role === "user" && typeof message.content === "string") {
+      items.push({
+        content: message.content,
+        id: `message:${message.id}`,
+        kind: "message",
+        role: "user",
+      });
+      continue;
+    }
+    if (message.role !== "assistant") continue;
+    const content = typeof message.content === "string" ? message.content : "";
+    const toolCalls = message.toolCalls ?? [];
+    if (content.length > 0 || toolCalls.length === 0) {
+      items.push({
+        content,
+        id: `message:${message.id}`,
+        kind: "message",
+        role: "assistant",
+      });
+    }
+    for (const toolCall of toolCalls) {
+      representedToolCalls.add(toolCall.id);
+      const live = liveById.get(toolCall.id);
+      const persistedStatus = resultByToolCall.get(toolCall.id);
+      items.push({
+        activity: {
+          ...(live?.durationMs === undefined ? {} : { durationMs: live.durationMs }),
+          id: toolCall.id,
+          name: toolCall.function.name,
+          ...(live?.startedAtMs === undefined ? {} : { startedAtMs: live.startedAtMs }),
+          status: persistedStatus ?? live?.status ?? "running",
+        },
+        id: `tool:${toolCall.id}`,
+        kind: "tool",
+      });
+    }
+  }
+  for (const activity of liveActivities) {
+    if (representedToolCalls.has(activity.id)) continue;
+    items.push({ activity, id: `tool:${activity.id}`, kind: "tool" });
+  }
+  return items;
+}
+
+export function ToolActivityRow({ activity }: { activity: ChatToolActivity }) {
+  const statusLabel = activity.status === "running"
+    ? "Running"
+    : activity.status === "completed"
+      ? "Completed"
+      : "Failed";
+  const Icon = activity.status === "running"
+    ? CircleNotch
+    : activity.status === "completed"
+      ? CheckCircle
+      : WarningCircle;
+  return (
+    <article
+      aria-label={`Tool ${activity.name}: ${statusLabel}`}
+      className={`chat-tool-activity chat-tool-activity-${activity.status}`}
+    >
+      <Icon aria-hidden="true" size={15} weight="regular" />
+      <span className="chat-tool-kind">MCP Tool</span>
+      <code>{activity.name}</code>
+      <span className="chat-tool-status">{statusLabel}</span>
+      <span className="chat-tool-duration">
+        {activity.durationMs === undefined
+          ? activity.status === "running" ? "In progress" : "Duration unavailable"
+          : formatToolDuration(activity.durationMs)}
+      </span>
+    </article>
+  );
 }
 
 function conversationStatusLabel(status: ConversationStatus, ready: boolean): string {
@@ -809,4 +1007,13 @@ function conversationStatusLabel(status: ConversationStatus, ready: boolean): st
     case "failed": return "Run failed";
     case "disconnected": return "Agent disconnected";
   }
+}
+
+function formatToolDuration(durationMs: number): string {
+  if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))} ms`;
+  return `${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 2 : 1)} s`;
+}
+
+function monotonicNow(): number {
+  return typeof performance === "undefined" ? Date.now() : performance.now();
 }

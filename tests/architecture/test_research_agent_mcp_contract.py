@@ -56,6 +56,7 @@ from thesistrace.research_agent.mcp_server import (
     RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES,
     RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES,
     RESEARCH_AGENT_RATE_WINDOW_SECONDS,
+    RESEARCH_AGENT_TOOL_OUTCOME_META_KEY,
     _wire_request_bytes,
     _wire_response_bytes,
 )
@@ -2118,6 +2119,12 @@ async def _exercise_in_memory_protocol() -> None:
         assert catalog.is_error is False
         validate(catalog.structured_content, tools["get_alpha_catalog"].output_schema)
         assert catalog.structured_content["unknown_identifiers"] == ["unknown_identifier"]
+        assert isinstance(catalog.content[0], TextContent)
+        assert json.loads(catalog.content[0].text) == catalog.structured_content
+        assert catalog.meta is not None
+        assert (
+            catalog.meta[RESEARCH_AGENT_TOOL_OUTCOME_META_KEY] == "succeeded"
+        )
 
         invalid = await client.call_tool(
             "diagnose_alpha_formula",
@@ -2307,8 +2314,10 @@ async def _exercise_sanitized_failure() -> None:
     assert result.is_error is True
     assert len(result.content) == 1
     assert isinstance(result.content[0], TextContent)
-    assert result.content[0].text == "Tool execution failed"
+    assert json.loads(result.content[0].text) == result.structured_content
     assert "private-formula-canary" not in result.content[0].text
+    assert result.meta is not None
+    assert result.meta[RESEARCH_AGENT_TOOL_OUTCOME_META_KEY] == "failed"
     assert result.structured_content == {
         "code": "INTERNAL",
         "message": "Tool execution failed",

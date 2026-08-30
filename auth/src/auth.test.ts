@@ -5,22 +5,11 @@ import {
   createThesisTraceAuth,
   type AuthLifecycleDependencies,
 } from "./auth.js";
-import type { AuthSettings } from "./config.js";
+import { authTestSettings } from "../test-fixtures/auth-settings.js";
 import { InvitationAdmission } from "./invitation-admission.js";
 import { passwordResetIdentifier } from "./password-reset-token.js";
 
-const settings: AuthSettings = {
-  databaseUrl: "postgresql://auth_runtime:password@127.0.0.1:5432/thesistrace",
-  environment: "test",
-  host: "127.0.0.1",
-  port: 8200,
-  publicOrigin: "http://127.0.0.1:5173",
-  resendApiKey: "test-resend-key",
-  resendApiUrl: "http://127.0.0.1:8300",
-  resendFromEmail: "ThesisTrace <noreply@thesistrace.test>",
-  secret: "0123456789abcdef0123456789abcdef",
-  secureCookies: false,
-};
+const settings = authTestSettings();
 
 function lifecycle(
   overrides: Partial<AuthLifecycleDependencies> = {},
@@ -73,7 +62,7 @@ describe("ThesisTrace Better Auth configuration", () => {
       expect(auth.options.baseURL).toBe(settings.publicOrigin);
       expect(auth.options.basePath).toBe("/api/auth");
       expect(auth.options.trustedOrigins).toEqual([settings.publicOrigin]);
-      expect("plugins" in auth.options).toBe(false);
+      expect(auth.options.plugins?.map((plugin) => plugin.id)).toEqual(["jwt"]);
       expect(auth.options.emailAndPassword).toMatchObject({
         enabled: true,
         maxPasswordLength: 128,

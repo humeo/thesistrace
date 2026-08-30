@@ -1,14 +1,28 @@
 import { randomUUID } from "node:crypto";
 
 import type { AGUIEvent, Message, RunAgentInput } from "@ag-ui/core";
+import { createTool } from "@mastra/core/tools";
+import {
+  getMcpCallToolContent,
+  MCP_CALL_TOOL_CONTENT,
+  MCP_CALL_TOOL_META,
+} from "@mastra/mcp";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
+import {
+  SAFE_TOOL_COMPLETED,
+  SAFE_TOOL_FAILED,
+} from "./browser-message-safety.js";
 import type { AgentSettings } from "./config.js";
 import { chatRunFingerprint } from "./chat-request.js";
+import { createMcpRunFactory, type McpRun } from "./mcp-run.js";
 import { readModelRegistry } from "./model-registry.js";
 import { createResearchRuntime, type ResearchRuntime } from "./research-runtime.js";
 import { initializeAgentSchema } from "./schema-initialize.js";
+import { SCRIPTED_TOOL_PROMPT } from "./scripted-language-model.js";
+import { ResearchSessionRepository } from "./session-repository.js";
 import type { VerifiedResearcher } from "./session-verifier.js";
 
 const ownerDatabaseUrl = process.env.THESISTRACE_AGENT_TEST_OWNER_DATABASE_URL;
@@ -55,10 +69,22 @@ const settings: AgentSettings = {
   databaseUrl: runtimeDatabaseUrl,
   environment: "test",
   host: "127.0.0.1",
+  mcpClockSkewSeconds: 30,
+  mcpInternalUrl: "http://core.invalid/mcp",
   modelRegistry,
   port: 8400,
   publicOrigin: "http://127.0.0.1:4317",
+  runMaxWallSeconds: 300,
 };
+
+const createIntegrationRuntime = () => createResearchRuntime(settings, {
+  mcpRunFactory: async () => ({
+    close: async () => undefined,
+    hasFatalToolFailure: () => false,
+    toolFailure: () => undefined,
+    tools: {},
+  }),
+});
 
 describe.sequential("durable Research Agent runtime", () => {
   beforeAll(async () => {
@@ -90,7 +116,7 @@ describe.sequential("durable Research Agent runtime", () => {
     const runId = randomUUID();
     const messageId = randomUUID();
     const input = runInput({ messageId, runId, threadId });
-    let runtime = await createResearchRuntime(settings);
+    let runtime = await createIntegrationRuntime();
     try {
       const first = await run(runtime, input, primaryResearcher);
       expect(first.map((event) => event.type)).toEqual([
@@ -156,7 +182,7 @@ describe.sequential("durable Research Agent runtime", () => {
       await runtime.close();
     }
 
-    runtime = await createResearchRuntime(settings);
+    runtime = await createIntegrationRuntime();
     try {
       await expect(runtime.preference(threadId, primaryResearcher)).resolves.toEqual({
         model_key: "scripted-research",
@@ -205,8 +231,69 @@ describe.sequential("durable Research Agent runtime", () => {
     }
   });
 
+  it("orders durable history by exact UTC instants on a non-UTC host", async () => {
+    expect(new Date("2026-08-30T00:00:00.000Z").getTimezoneOffset()).toBe(-540);
+    const threadId = randomUUID();
+    const userMessageId = randomUUID();
+    const assistantMessageId = randomUUID();
+    await owner.query(`
+      INSERT INTO agent.chat_session (
+        id, researcher_id, selected_model_key, selected_reasoning_effort
+      ) VALUES ($1, $2, 'scripted-research', 'medium')
+    `, [threadId, primaryResearcher.researcher_id]);
+    await owner.query(`
+      INSERT INTO agent."mastra_threads" (
+        id, "resourceId", title, "createdAt", "updatedAt",
+        "createdAtZ", "updatedAtZ"
+      ) VALUES (
+        $1, $2, 'UTC ordering',
+        '2026-08-30 09:00:00', '2026-08-30 09:00:01',
+        '2026-08-30T00:00:00.000Z', '2026-08-30T00:00:01.000Z'
+      )
+    `, [threadId, primaryResearcher.researcher_id]);
+    await owner.query(`
+      INSERT INTO agent."mastra_messages" (
+        id, thread_id, content, role, type, "createdAt", "resourceId", "createdAtZ"
+      ) VALUES
+        ($1, $3, $5, 'user', 'v2', '2099-01-01 00:00:00', $4,
+         '2026-08-30T00:00:00.123Z'),
+        ($2, $3, $6, 'assistant', 'v2', '2000-01-01 00:00:00', $4,
+         '2026-08-30T00:00:00.456Z')
+    `, [
+      userMessageId,
+      assistantMessageId,
+      threadId,
+      primaryResearcher.researcher_id,
+      durableTextContent("First by instant.", 1_788_048_000_123),
+      durableTextContent("Second by instant.", 1_788_048_000_456),
+    ]);
+
+    const instants = await owner.query<{ created_at: Date; id: string }>(`
+      SELECT id, "createdAtZ" AS created_at
+      FROM agent."mastra_messages"
+      WHERE thread_id = $1
+      ORDER BY "createdAtZ", id
+    `, [threadId]);
+    expect(instants.rows.map((row) => ({
+      id: row.id,
+      instant: row.created_at.toISOString(),
+    }))).toEqual([
+      { id: userMessageId, instant: "2026-08-30T00:00:00.123Z" },
+      { id: assistantMessageId, instant: "2026-08-30T00:00:00.456Z" },
+    ]);
+
+    const repository = new ResearchSessionRepository(owner);
+    await expect(repository.durableMessages(
+      threadId,
+      primaryResearcher.researcher_id,
+    )).resolves.toEqual([
+      { content: "First by instant.", id: userMessageId, role: "user" },
+      { content: "Second by instant.", id: assistantMessageId, role: "assistant" },
+    ]);
+  });
+
   it("keeps transcript order exact and applies a changed selection only to the next run", async () => {
-    const runtime = await createResearchRuntime(settings);
+    const runtime = await createIntegrationRuntime();
     try {
       const threadId = randomUUID();
       const firstRunId = randomUUID();
@@ -259,8 +346,471 @@ describe.sequential("durable Research Agent runtime", () => {
     }
   });
 
+  it("executes a discovered Tool while exposing only safe Tool lifecycle events", async () => {
+    let closes = 0;
+    let discoveries = 0;
+    let executions = 0;
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async (headers) => {
+        discoveries += 1;
+        expect(headers.get("cookie")).toBe("test-session-cookie=browser-only");
+        return {
+          close: async () => {
+            closes += 1;
+          },
+          hasFatalToolFailure: () => false,
+          toolFailure: () => undefined,
+          tools: {
+            get_research_context: createTool({
+              description: "Read the current ThesisTrace research context.",
+              execute: async () => {
+                executions += 1;
+                return {
+                  dataset: "server-only-sensitive-result",
+                  throughSession: "2026-08-28",
+                };
+              },
+              id: "get_research_context",
+              inputSchema: z.object({}).strict(),
+              outputSchema: z.object({
+                dataset: z.string(),
+                throughSession: z.string(),
+              }).strict(),
+            }),
+          },
+        };
+      },
+    });
+    try {
+      const threadId = randomUUID();
+      const runId = randomUUID();
+      const input = runInput({
+        content: SCRIPTED_TOOL_PROMPT,
+        messageId: randomUUID(),
+        runId,
+        threadId,
+      });
+      const events = await run(runtime, input, primaryResearcher);
+      expect(events.map((event) => event.type)).toEqual([
+        "RUN_STARTED",
+        "TOOL_CALL_START",
+        "TOOL_CALL_ARGS",
+        "TOOL_CALL_END",
+        "TOOL_CALL_RESULT",
+        "TEXT_MESSAGE_START",
+        "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_END",
+        "RUN_FINISHED",
+      ]);
+      expect(events.find((event) => event.type === "TOOL_CALL_START")).toMatchObject({
+        toolCallName: "get_research_context",
+      });
+      expect(events.find((event) => event.type === "TOOL_CALL_ARGS")).toMatchObject({
+        delta: "{}",
+      });
+      expect(events.find((event) => event.type === "TOOL_CALL_RESULT")).toMatchObject({
+        content: SAFE_TOOL_COMPLETED,
+      });
+      expect(JSON.stringify(events)).not.toContain("server-only-sensitive-result");
+      expect({ closes, discoveries, executions }).toEqual({
+        closes: 1,
+        discoveries: 1,
+        executions: 1,
+      });
+
+      const persisted = await owner.query<{ content: string }>(`
+        SELECT content
+        FROM agent."mastra_messages"
+        WHERE thread_id = $1
+        ORDER BY "createdAt", id
+      `, [threadId]);
+      expect(JSON.stringify(persisted.rows)).toContain("server-only-sensitive-result");
+
+      const duplicate = await run(runtime, input, primaryResearcher);
+      expect(duplicate.map((event) => event.type)).toEqual([
+        "RUN_STARTED",
+        "MESSAGES_SNAPSHOT",
+        "RUN_FINISHED",
+      ]);
+      expect(JSON.stringify(duplicate)).not.toContain("server-only-sensitive-result");
+      expect({ closes, discoveries, executions }).toEqual({
+        closes: 1,
+        discoveries: 1,
+        executions: 1,
+      });
+
+      const followUpMessageId = randomUUID();
+      const followUp = await run(runtime, runInput({
+        messageId: followUpMessageId,
+        messages: [
+          ...snapshotMessages(duplicate),
+          {
+            content: "Explain the next research step.",
+            id: followUpMessageId,
+            role: "user",
+          },
+        ],
+        runId: randomUUID(),
+        threadId,
+      }), primaryResearcher);
+      expect(followUp.map((event) => event.type)).toEqual([
+        "RUN_STARTED",
+        "TEXT_MESSAGE_START",
+        "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_END",
+        "RUN_FINISHED",
+      ]);
+      expect({ closes, discoveries, executions }).toEqual({
+        closes: 2,
+        discoveries: 2,
+        executions: 1,
+      });
+      const afterFollowUp = await owner.query<{ content: string }>(`
+        SELECT content
+        FROM agent."mastra_messages"
+        WHERE thread_id = $1
+        ORDER BY "createdAt", id
+      `, [threadId]);
+      expect(afterFollowUp.rows.slice(0, persisted.rows.length)).toEqual(persisted.rows);
+      expect(JSON.stringify(afterFollowUp.rows)).toContain(
+        "server-only-sensitive-result",
+      );
+      expect(JSON.stringify(afterFollowUp.rows)).not.toContain(SAFE_TOOL_COMPLETED);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("keeps an accepted User message durable when MCP preparation fails", async () => {
+    let failNextPreparation = true;
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => {
+        if (failNextPreparation) {
+          failNextPreparation = false;
+          throw new Error("private-pre-model-mcp-failure");
+        }
+        return {
+          close: async () => undefined,
+          hasFatalToolFailure: () => false,
+          toolFailure: () => undefined,
+          tools: {
+            get_research_context: createTool({
+              description: "Read the current ThesisTrace research context.",
+              execute: async () => ({ status: "ok" }),
+              id: "get_research_context",
+              inputSchema: z.object({}).strict(),
+            }),
+          },
+        };
+      },
+    });
+    const threadId = randomUUID();
+    const firstInput = runInput({
+      content: SCRIPTED_TOOL_PROMPT,
+      messageId: randomUUID(),
+      runId: randomUUID(),
+      threadId,
+    });
+    try {
+      const failed = await run(runtime, firstInput, primaryResearcher);
+      expect(failed.map((event) => event.type)).toEqual([
+        "RUN_STARTED",
+        "RUN_ERROR",
+      ]);
+      expect(JSON.stringify(failed)).not.toContain("private-pre-model-mcp-failure");
+
+      const persistedAfterFailure = await owner.query<{ content: string }>(`
+        SELECT content
+        FROM agent."mastra_messages"
+        WHERE thread_id = $1
+        ORDER BY "createdAt", id
+      `, [threadId]);
+      expect(persistedAfterFailure.rows).toHaveLength(1);
+      expect(persistedAfterFailure.rows[0]?.content).toContain(SCRIPTED_TOOL_PROMPT);
+
+      const replay = await run(runtime, firstInput, primaryResearcher);
+      expect(replay.map((event) => event.type)).toEqual([
+        "RUN_STARTED",
+        "MESSAGES_SNAPSHOT",
+        "RUN_ERROR",
+      ]);
+      expect(snapshotMessages(replay)).toEqual([firstInput.messages[0]]);
+      const stateAfterReplay = await owner.query<{ messages: string; runs: string }>(`
+        SELECT
+          (SELECT count(*) FROM agent."mastra_messages" WHERE thread_id = $1) AS messages,
+          (SELECT count(*) FROM agent.agent_run WHERE thread_id = $1::uuid) AS runs
+      `, [threadId]);
+      expect(stateAfterReplay.rows).toEqual([{ messages: "1", runs: "1" }]);
+
+      const followUpMessageId = randomUUID();
+      const followUp = await run(runtime, runInput({
+        content: "Continue with the available research context.",
+        messageId: followUpMessageId,
+        messages: [
+          ...snapshotMessages(replay),
+          {
+            content: "Continue with the available research context.",
+            id: followUpMessageId,
+            role: "user",
+          },
+        ],
+        runId: randomUUID(),
+        threadId,
+      }), primaryResearcher);
+      expect(followUp.map((event) => event.type)).toContain("TOOL_CALL_START");
+      expect(followUp.find((event) => event.type === "TOOL_CALL_START")).toMatchObject({
+        toolCallName: "get_research_context",
+      });
+      expect(followUp.at(-1)?.type).toBe("RUN_FINISHED");
+      const outcomes = await owner.query<{
+        status: string;
+        terminal_error_code: string | null;
+      }>(`
+        SELECT status, terminal_error_code
+        FROM agent.agent_run
+        WHERE thread_id = $1::uuid
+        ORDER BY status
+      `, [threadId]);
+      expect(outcomes.rows).toEqual([
+        { status: "completed", terminal_error_code: null },
+        { status: "failed", terminal_error_code: "AGENT_RUN_FAILED" },
+      ]);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("turns a rejected MCP transport call into one safe failed Tool and terminal Run", async () => {
+    let observedMcpRun: McpRun | undefined;
+    const disconnect = vi.fn(async () => undefined);
+    const transportFactory = createMcpRunFactory(settings, {
+      fetch: async () => Response.json({
+        access_token: "integration-mcp-token",
+        expires_in: 360,
+        token_type: "Bearer",
+      }),
+      mcpClient: () => ({
+        __setLogger: vi.fn(),
+        disconnect,
+        listToolsetsWithErrors: async () => ({
+          errorDetails: {},
+          errors: {},
+          toolsets: {
+            thesistrace: {
+              get_research_context: createTool({
+                description: "Read the current ThesisTrace research context.",
+                execute: async () => {
+                  throw new Error("private-disconnect-canary");
+                },
+                id: "get_research_context",
+                inputSchema: z.object({}).strict(),
+              }),
+            },
+          },
+        }),
+      }),
+    });
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async (_headers, runId) => {
+        observedMcpRun = await transportFactory(new Headers({
+          cookie: "thesistrace.session_token=integration-session",
+        }), runId);
+        return observedMcpRun;
+      },
+    });
+    const runId = randomUUID();
+    const input = runInput({
+      content: SCRIPTED_TOOL_PROMPT,
+      messageId: randomUUID(),
+      runId,
+      threadId: randomUUID(),
+    });
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+
+      expect(observedMcpRun?.toolFailure("scripted-tool-call-1")).toBe("transport");
+      expect(events.map((event) => event.type)).toEqual([
+        "RUN_STARTED",
+        "TOOL_CALL_START",
+        "TOOL_CALL_ARGS",
+        "TOOL_CALL_END",
+        "TOOL_CALL_RESULT",
+        "RUN_ERROR",
+      ]);
+      expect(events.find((event) => event.type === "TOOL_CALL_RESULT")).toMatchObject({
+        content: "Tool failed.",
+      });
+      expect(JSON.stringify(events)).not.toContain("private-disconnect-canary");
+      expect(disconnect).toHaveBeenCalledOnce();
+      const persisted = await owner.query<{
+        status: string;
+        terminal_error_code: string;
+      }>(`
+        SELECT status, terminal_error_code
+        FROM agent.agent_run
+        WHERE id = $1
+      `, [runId]);
+      expect(persisted.rows).toEqual([{
+        status: "failed",
+        terminal_error_code: "AGENT_RUN_FAILED",
+      }]);
+      const persistedMessages = await owner.query<{ content: string }>(`
+        SELECT content
+        FROM agent."mastra_messages"
+        WHERE thread_id = $1
+        ORDER BY "createdAt", id
+      `, [input.threadId]);
+      expect(JSON.stringify(persistedMessages.rows)).not.toContain(
+        "I checked the available ThesisTrace research data",
+      );
+
+      const replay = await run(runtime, input, primaryResearcher);
+      expect(replay.map((event) => event.type)).toEqual([
+        "RUN_STARTED",
+        "MESSAGES_SNAPSHOT",
+        "RUN_ERROR",
+      ]);
+      expect(snapshotMessages(replay)).toContainEqual(expect.objectContaining({
+        content: "Tool failed.",
+        role: "tool",
+      }));
+      expect(JSON.stringify(replay)).not.toContain(
+        "I checked the available ThesisTrace research data",
+      );
+      expect(JSON.stringify(replay)).not.toContain("private-disconnect-canary");
+      expect(disconnect).toHaveBeenCalledOnce();
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("keeps a structured Core business rejection model-visible and browser-safe", async () => {
+    let observedMcpRun: McpRun | undefined;
+    const businessError = {
+      code: "TEMPORARILY_UNAVAILABLE",
+      context: { tool_name: "get_research_context" },
+      message: "Business error model detail",
+      retry_after_seconds: 3,
+      retryable: true,
+      trace_id: "private-business-trace-canary",
+    };
+    const disconnect = vi.fn(async () => undefined);
+    const businessFactory = createMcpRunFactory(settings, {
+      fetch: async () => Response.json({
+        access_token: "integration-mcp-token",
+        expires_in: 360,
+        token_type: "Bearer",
+      }),
+      mcpClient: () => ({
+        __setLogger: vi.fn(),
+        disconnect,
+        listToolsetsWithErrors: async () => ({
+          errorDetails: {},
+          errors: {},
+          toolsets: {
+            thesistrace: {
+              get_research_context: createTool({
+                description: "Read the current ThesisTrace research context.",
+                execute: async () => adaptedCoreResult({
+                  content: [{
+                    text: JSON.stringify(businessError),
+                    type: "text",
+                  }],
+                  isError: true,
+                  structuredContent: businessError,
+                  _meta: { "thesistrace/tool-outcome": "failed" },
+                }),
+                id: "get_research_context",
+                inputSchema: z.object({}).strict(),
+                toModelOutput: (output) => ({
+                  type: "text",
+                  value: modelTextFromMcpOutput(output),
+                }),
+              }),
+            },
+          },
+        }),
+      }),
+    });
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async (_headers, runId) => {
+        observedMcpRun = await businessFactory(
+          new Headers({ cookie: "thesistrace.session_token=integration-session" }),
+          runId,
+        );
+        return observedMcpRun;
+      },
+    });
+    const threadId = randomUUID();
+    const runId = randomUUID();
+    const input = runInput({
+      content: SCRIPTED_TOOL_PROMPT,
+      messageId: randomUUID(),
+      runId,
+      threadId,
+    });
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+
+      expect(observedMcpRun?.toolFailure("scripted-tool-call-1")).toBe("business");
+      expect(events.map((event) => event.type)).toEqual([
+        "RUN_STARTED",
+        "TOOL_CALL_START",
+        "TOOL_CALL_ARGS",
+        "TOOL_CALL_END",
+        "TOOL_CALL_RESULT",
+        "TEXT_MESSAGE_START",
+        "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_CONTENT",
+        "TEXT_MESSAGE_END",
+        "RUN_FINISHED",
+      ]);
+      expect(events.find((event) => event.type === "TOOL_CALL_RESULT")).toMatchObject({
+        content: SAFE_TOOL_FAILED,
+      });
+      expect(JSON.stringify(events)).not.toContain(businessError.code);
+      expect(JSON.stringify(events)).not.toContain(businessError.trace_id);
+      expect(disconnect).toHaveBeenCalledOnce();
+
+      const persisted = await owner.query<{ content: string }>(`
+        SELECT content
+        FROM agent."mastra_messages"
+        WHERE thread_id = $1
+        ORDER BY "createdAt", id
+      `, [threadId]);
+      const durableJson = JSON.stringify(persisted.rows);
+      expect(durableJson).toContain(businessError.code);
+      expect(durableJson).toContain(businessError.message);
+      expect(durableJson).toContain(businessError.trace_id);
+      expect(durableJson).toContain("modelOutput");
+
+      const productRun = await owner.query<{ status: string }>(`
+        SELECT status FROM agent.agent_run WHERE id = $1
+      `, [runId]);
+      expect(productRun.rows).toEqual([{ status: "completed" }]);
+
+      const replay = await run(runtime, input, primaryResearcher);
+      expect(replay.map((event) => event.type)).toEqual([
+        "RUN_STARTED",
+        "MESSAGES_SNAPSHOT",
+        "RUN_FINISHED",
+      ]);
+      expect(snapshotMessages(replay)).toContainEqual(expect.objectContaining({
+        content: SAFE_TOOL_FAILED,
+        role: "tool",
+      }));
+      expect(JSON.stringify(replay)).not.toContain(businessError.code);
+      expect(JSON.stringify(replay)).not.toContain(businessError.trace_id);
+      expect(disconnect).toHaveBeenCalledOnce();
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it("rolls back first-session metadata when the paired Mastra Thread cannot be created", async () => {
-    const runtime = await createResearchRuntime(settings);
+    const runtime = await createIntegrationRuntime();
     try {
       const threadId = randomUUID();
       await owner.query(`
@@ -286,7 +836,7 @@ describe.sequential("durable Research Agent runtime", () => {
   });
 
   it("does not mutate an existing running Run when its request fingerprint conflicts", async () => {
-    const runtime = await createResearchRuntime(settings);
+    const runtime = await createIntegrationRuntime();
     try {
       const threadId = randomUUID();
       const runId = randomUUID();
@@ -347,7 +897,17 @@ describe.sequential("durable Research Agent runtime", () => {
   });
 
   it("rejects oversized text before persistence and redacts model failures", async () => {
-    const runtime = await createResearchRuntime(settings);
+    let closes = 0;
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => {
+          closes += 1;
+        },
+        hasFatalToolFailure: () => false,
+        toolFailure: () => undefined,
+        tools: {},
+      }),
+    });
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     try {
       const oversizedThread = randomUUID();
@@ -400,6 +960,7 @@ describe.sequential("durable Research Agent runtime", () => {
         terminal_error_code: "AGENT_RUN_FAILED",
         token_usage: { reported: false },
       }]);
+      expect(closes).toBe(1);
     } finally {
       consoleError.mockRestore();
       await runtime.close();
@@ -414,6 +975,43 @@ function researcher(id: string): VerifiedResearcher {
     email: `${id.slice(-3)}@example.test`,
     researcher_id: id,
   };
+}
+
+type RawCoreResult = Readonly<{
+  _meta: Record<string, unknown>;
+  content: readonly unknown[];
+  isError: boolean;
+  structuredContent: Record<string, unknown>;
+}>;
+
+function adaptedCoreResult(result: RawCoreResult): Record<string, unknown> {
+  const output = { ...result.structuredContent };
+  Object.defineProperties(output, {
+    [MCP_CALL_TOOL_CONTENT]: { value: result.content },
+    [MCP_CALL_TOOL_META]: { value: result._meta },
+  });
+  return output;
+}
+
+function modelTextFromMcpOutput(output: unknown): string {
+  const content = getMcpCallToolContent(output);
+  if (!Array.isArray(content)) throw new Error("MCP_MODEL_CONTENT_MISSING");
+  const text = content.find((part) => (
+    part !== null
+    && typeof part === "object"
+    && "type" in part
+    && part.type === "text"
+    && "text" in part
+    && typeof part.text === "string"
+  ));
+  if (
+    text === undefined
+    || !("text" in text)
+    || typeof text.text !== "string"
+  ) {
+    throw new Error("MCP_MODEL_TEXT_MISSING");
+  }
+  return text.text;
 }
 
 function runInput(options: Readonly<{
@@ -450,7 +1048,10 @@ function runRequest(input: Record<string, unknown>): Request {
     "http://agent.test/api/agent/copilotkit/agent/research/run",
     {
       body: JSON.stringify(input),
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        cookie: "test-session-cookie=browser-only",
+      },
       method: "POST",
     },
   );
@@ -508,6 +1109,14 @@ function snapshotMessages(events: readonly AGUIEvent[]): Message[] {
     throw new Error("expected message snapshot");
   }
   return [...snapshot.messages];
+}
+
+function durableTextContent(text: string, createdAt: number): string {
+  return JSON.stringify({
+    format: 2,
+    parts: [{ createdAt, text, type: "text" }],
+    content: text,
+  });
 }
 
 function roleDatabaseUrl(base: string, username: string, password: string): string {

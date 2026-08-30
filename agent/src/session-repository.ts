@@ -3,6 +3,10 @@ import type { Message } from "@ag-ui/core";
 import type { Pool, PoolClient } from "pg";
 
 import {
+  projectDurableUiMessages,
+  safeBrowserMessages,
+} from "./browser-message-safety.js";
+import {
   chatRunFingerprint,
   type ValidatedChatRun,
 } from "./chat-request.js";
@@ -156,9 +160,16 @@ export class ResearchSessionRepository {
             options.researcherId,
           );
       assertOneNewUserMessage(options.run.input.messages, durableMessages);
+      const acceptedAt = new Date();
+      const acceptedAtUtc = acceptedAt.toISOString();
+      const acceptedUserMessage = durableUserMessage(
+        options.run.latestUserMessage,
+        options.run.input.threadId,
+        options.researcherId,
+        acceptedAt,
+      );
 
       if (existingOwner === undefined) {
-        const now = new Date();
         await client.query(`
           INSERT INTO agent.chat_session (
             id,
@@ -185,7 +196,7 @@ export class ResearchSessionRepository {
           options.run.input.threadId,
           options.researcherId,
           "New chat",
-          now,
+          acceptedAtUtc,
         ]);
       } else {
         await client.query(`
@@ -200,6 +211,37 @@ export class ResearchSessionRepository {
           options.run.reasoningEffort,
         ]);
       }
+
+      // Acceptance is one atomic product boundary: Session, Run, and the
+      // unique new User Message commit together. Mastra later saves the same
+      // message id with ON CONFLICT semantics, so successful execution adds
+      // only its Assistant/Tool output while pre-model failure still replays
+      // the accepted input and recalls it on the next Turn.
+      await client.query(`
+        INSERT INTO agent."mastra_messages" (
+          id,
+          thread_id,
+          content,
+          "createdAt",
+          "createdAtZ",
+          role,
+          type,
+          "resourceId"
+        ) VALUES ($1, $2, $3, $4, $5, 'user', 'v2', $6)
+      `, [
+        acceptedUserMessage.id,
+        options.run.input.threadId,
+        JSON.stringify(acceptedUserMessage.content),
+        acceptedAtUtc,
+        acceptedAtUtc,
+        options.researcherId,
+      ]);
+      await client.query(`
+        UPDATE agent."mastra_threads"
+        SET "updatedAt" = $2,
+            "updatedAtZ" = $3
+        WHERE id = $1
+      `, [options.run.input.threadId, acceptedAtUtc, acceptedAtUtc]);
 
       await client.query(`
         INSERT INTO agent.agent_run (
@@ -260,8 +302,7 @@ export class ResearchSessionRepository {
   }
 
   async awaitFrameworkRunSettled(runId: string): Promise<void> {
-    const deadline = Date.now() + 5_000;
-    while (true) {
+    await waitForDurableCondition(async () => {
       const result = await this.pool.query<{ settled: boolean }>(`
         SELECT NOT EXISTS (
           SELECT 1
@@ -269,12 +310,25 @@ export class ResearchSessionRepository {
           WHERE run_id = $1
         ) AS settled
       `, [runId]);
-      if (result.rows[0]?.settled === true) return;
-      if (Date.now() >= deadline) {
-        throw new Error("MASTRA_RUN_CLEANUP_TIMEOUT");
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
-    }
+      return result.rows[0]?.settled === true;
+    }, "MASTRA_RUN_CLEANUP_TIMEOUT");
+  }
+
+  async awaitDurableToolResult(
+    threadId: string,
+    researcherId: string,
+    toolCallId: string,
+  ): Promise<void> {
+    await waitForDurableCondition(async () => {
+      const messages = await loadDurableMessages(
+        this.pool,
+        threadId,
+        researcherId,
+      );
+      return messages.some((message) => (
+        message.role === "tool" && message.toolCallId === toolCallId
+      ));
+    }, "MASTRA_TOOL_RESULT_PERSISTENCE_TIMEOUT");
   }
 
   async durableMessages(
@@ -310,8 +364,49 @@ export class ResearchSessionRepository {
   }
 }
 
+function durableUserMessage(
+  message: ValidatedChatRun["latestUserMessage"],
+  threadId: string,
+  researcherId: string,
+  createdAt: Date,
+): MastraDBMessage {
+  try {
+    const converted = convertMessages([message]).to("Mastra.V2");
+    const durable = converted[0];
+    if (
+      converted.length !== 1
+      || durable === undefined
+      || durable.id !== message.id
+      || durable.role !== "user"
+    ) {
+      throw new TranscriptConflictError();
+    }
+    return {
+      ...durable,
+      createdAt,
+      resourceId: researcherId,
+      threadId,
+      type: "v2",
+    };
+  } catch {
+    throw new TranscriptConflictError();
+  }
+}
+
 function persistedUsage(usage: PersistedTokenUsage | undefined): string {
   return JSON.stringify(usage ?? { reported: false });
+}
+
+async function waitForDurableCondition(
+  condition: () => Promise<boolean>,
+  timeoutCode: string,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (true) {
+    if (await condition()) return;
+    if (Date.now() >= deadline) throw new Error(timeoutCode);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 async function loadDurableMessages(
@@ -333,7 +428,7 @@ async function loadDurableMessages(
 
   const result = await database.query<{
     content: string;
-    created_at: Date;
+    created_at: Date | null;
     id: string;
     resource_id: string | null;
     role: MastraDBMessage["role"];
@@ -342,11 +437,11 @@ async function loadDurableMessages(
       id,
       content,
       role,
-      "createdAt" AS created_at,
+      "createdAtZ" AS created_at,
       "resourceId" AS resource_id
     FROM agent."mastra_messages"
     WHERE thread_id = $1
-    ORDER BY "createdAt" ASC, id ASC
+    ORDER BY "createdAtZ" ASC, id ASC
   `, [threadId]);
   const dbMessages = result.rows.map((row): MastraDBMessage => {
     if (row.resource_id !== null && row.resource_id !== researcherId) {
@@ -358,6 +453,9 @@ async function loadDurableMessages(
     } catch {
       throw new TranscriptConflictError();
     }
+    if (!(row.created_at instanceof Date) || Number.isNaN(row.created_at.getTime())) {
+      throw new TranscriptConflictError();
+    }
     return {
       content,
       createdAt: row.created_at,
@@ -367,25 +465,11 @@ async function loadDurableMessages(
       threadId,
     };
   });
-  const converted = convertMessages(dbMessages).to("AIV4.UI") as ReadonlyArray<{
-    content?: unknown;
-    id?: unknown;
-    role?: unknown;
-  }>;
-  return converted.map((message): Message => {
-    if (
-      typeof message.id !== "string"
-      || (message.role !== "user" && message.role !== "assistant")
-      || typeof message.content !== "string"
-    ) {
-      throw new TranscriptConflictError();
-    }
-    return {
-      content: message.content,
-      id: message.id,
-      role: message.role,
-    };
-  });
+  try {
+    return projectDurableUiMessages(convertMessages(dbMessages).to("AIV4.UI"));
+  } catch {
+    throw new TranscriptConflictError();
+  }
 }
 
 function assertOneNewUserMessage(
@@ -393,18 +477,14 @@ function assertOneNewUserMessage(
   durable: readonly Message[],
 ): void {
   if (submitted.length !== durable.length + 1) throw new TranscriptConflictError();
-  for (let index = 0; index < durable.length; index += 1) {
-    const submittedMessage = submitted[index];
-    const durableMessage = durable[index];
-    if (
-      submittedMessage === undefined
-      || durableMessage === undefined
-      || submittedMessage.id !== durableMessage.id
-      || submittedMessage.role !== durableMessage.role
-      || submittedMessage.content !== durableMessage.content
-    ) {
-      throw new TranscriptConflictError();
-    }
+  let safeSubmitted: readonly Message[];
+  try {
+    safeSubmitted = safeBrowserMessages(submitted.slice(0, -1));
+  } catch {
+    throw new TranscriptConflictError();
+  }
+  if (JSON.stringify(safeSubmitted) !== JSON.stringify(durable)) {
+    throw new TranscriptConflictError();
   }
   const latest = submitted.at(-1);
   if (latest?.role !== "user" || typeof latest.content !== "string") {

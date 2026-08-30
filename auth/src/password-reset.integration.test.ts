@@ -8,7 +8,7 @@ import {
 } from "./auth.js";
 import { AuthBackgroundTasks } from "./background-tasks.js";
 import { AuthEndpointRateLimiter } from "./auth-rate-limit.js";
-import type { AuthSettings } from "./config.js";
+import { authTestSettings } from "../test-fixtures/auth-settings.js";
 import {
   AuthOperationCoordinator,
   CredentialOperationCoordinator,
@@ -35,18 +35,7 @@ const authRuntimeDatabaseUrl = roleDatabaseUrl(
 const owner = new Pool({ connectionString: ownerDatabaseUrl, max: 2 });
 const runtimePool = createAuthPool(authRuntimeDatabaseUrl);
 const coordinationPool = createAuthCoordinationPool(authRuntimeDatabaseUrl);
-const settings: AuthSettings = {
-  databaseUrl: authRuntimeDatabaseUrl,
-  environment: "test",
-  host: "127.0.0.1",
-  port: 8200,
-  publicOrigin: "http://127.0.0.1:5173",
-  resendApiKey: "test-resend-key",
-  resendApiUrl: "http://127.0.0.1:8300",
-  resendFromEmail: "ThesisTrace <noreply@thesistrace.test>",
-  secret: "0123456789abcdef0123456789abcdef",
-  secureCookies: false,
-};
+const settings = authTestSettings({ databaseUrl: authRuntimeDatabaseUrl });
 const fixedNow = new Date("2026-08-28T05:00:00.000Z");
 const coordination = new AuthOperationCoordinator(coordinationPool);
 const credentialCoordinator = createCredentialCoordinator();
@@ -896,6 +885,9 @@ function resetHarness(
     getSession: (input) => auth.api.getSession(input),
     async inspectInvitation() {
       throw new InvitationRejectedError();
+    },
+    async issueMcpAccessToken() {
+      throw new Error("MCP_TOKEN_NOT_USED_IN_PASSWORD_RESET_TEST");
     },
     publicOrigin: settings.publicOrigin,
     readiness: async () => true,

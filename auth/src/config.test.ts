@@ -2,6 +2,23 @@ import { describe, expect, it } from "vitest";
 
 import { readAuthInitializerSettings, readAuthSettings } from "./config.js";
 
+const mcpPrivateJwk = {
+  alg: "EdDSA",
+  crv: "Ed25519",
+  d: "2SCCVM_DYKEJvq18KV1M4UNFhxTHLKtdXxQFXLGlEBs",
+  kid: "test-signing-key-01",
+  kty: "OKP",
+  use: "sig",
+  x: "3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8",
+};
+const mcpPublicJwk = {
+  alg: "EdDSA",
+  crv: "Ed25519",
+  kid: "test-signing-key-01",
+  kty: "OKP",
+  use: "sig",
+  x: "3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8",
+};
 const baseEnvironment = {
   BETTER_AUTH_SECRET: "0123456789abcdef0123456789abcdef",
   RESEND_API_KEY: "test-resend-key",
@@ -9,6 +26,16 @@ const baseEnvironment = {
   THESISTRACE_AUTH_DATABASE_URL:
     "postgresql://auth_runtime:auth-password@postgres:5432/thesistrace",
   THESISTRACE_ENVIRONMENT: "test",
+  THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS: "300",
+  THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS: "360",
+  THESISTRACE_MCP_AGENT_SCOPES:
+    '["research:read","research:execute","tracking:read","tracking:execute"]',
+  THESISTRACE_MCP_CLIENT_ID: "thesistrace-agent",
+  THESISTRACE_MCP_CLOCK_SKEW_SECONDS: "30",
+  THESISTRACE_MCP_ISSUER_URL: "https://issuer.test/",
+  THESISTRACE_MCP_RESOURCE_URL: "https://core.test/mcp",
+  THESISTRACE_MCP_SIGNING_PRIVATE_JWK: JSON.stringify(mcpPrivateJwk),
+  THESISTRACE_MCP_VERIFYING_PUBLIC_JWK: JSON.stringify(mcpPublicJwk),
   THESISTRACE_PUBLIC_ORIGIN: "http://127.0.0.1:5173",
   THESISTRACE_RESEND_API_URL: "http://127.0.0.1:8300",
 };
@@ -31,7 +58,81 @@ describe("readAuthSettings", () => {
       resendApiUrl: "http://127.0.0.1:8300",
       resendFromEmail: "ThesisTrace <noreply@thesistrace.test>",
       secureCookies: false,
+      mcpAgentRunMaxWallSeconds: 300,
+      mcpAudience: "https://core.test/mcp",
+      mcpClientId: "thesistrace-agent",
+      mcpClockSkewSeconds: 30,
+      mcpGrantScopes: [
+        "research:read",
+        "research:execute",
+        "tracking:read",
+        "tracking:execute",
+      ],
+      mcpIssuer: "https://issuer.test/",
+      mcpTokenLifetimeSeconds: 360,
     });
+  });
+
+  it.each([
+    "THESISTRACE_MCP_ISSUER_URL",
+    "THESISTRACE_MCP_RESOURCE_URL",
+    "THESISTRACE_MCP_CLIENT_ID",
+    "THESISTRACE_MCP_AGENT_SCOPES",
+    "THESISTRACE_MCP_SIGNING_PRIVATE_JWK",
+    "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK",
+    "THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS",
+    "THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS",
+    "THESISTRACE_MCP_CLOCK_SKEW_SECONDS",
+  ])("requires the %s MCP setting", (name) => {
+    expect(() => readAuthSettings({ ...baseEnvironment, [name]: "" })).toThrow(name);
+  });
+
+  it.each([
+    '["research:read","research:cancel"]',
+    '["tracking:stop"]',
+    '["research:read","research:read"]',
+    "[]",
+    "not-json",
+  ])("rejects a dangerous, duplicate, empty, or malformed grant: %s", (grant) => {
+    expect(() => readAuthSettings({
+      ...baseEnvironment,
+      THESISTRACE_MCP_AGENT_SCOPES: grant,
+    })).toThrow(/THESISTRACE_MCP_AGENT_SCOPES/);
+  });
+
+  it("requires one matching Ed25519 signing and verifying key pair", () => {
+    expect(() => readAuthSettings({
+      ...baseEnvironment,
+      THESISTRACE_MCP_VERIFYING_PUBLIC_JWK: JSON.stringify({
+        ...mcpPublicJwk,
+        x: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      }),
+    })).toThrow(/key pair/);
+    expect(() => readAuthSettings({
+      ...baseEnvironment,
+      THESISTRACE_MCP_SIGNING_PRIVATE_JWK: JSON.stringify({
+        ...mcpPrivateJwk,
+        alg: "HS256",
+      }),
+    })).toThrow(/THESISTRACE_MCP_SIGNING_PRIVATE_JWK/);
+    expect(() => readAuthSettings({
+      ...baseEnvironment,
+      THESISTRACE_MCP_SIGNING_PRIVATE_JWK: JSON.stringify({
+        ...mcpPrivateJwk,
+        d: `A${mcpPrivateJwk.d.slice(1)}`,
+      }),
+    })).toThrow(/key pair/);
+  });
+
+  it("requires Token lifetime to exceed Run wall time plus skew", () => {
+    expect(() => readAuthSettings({
+      ...baseEnvironment,
+      THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS: "330",
+    })).toThrow(/must exceed/);
+    expect(readAuthSettings({
+      ...baseEnvironment,
+      THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS: "331",
+    }).mcpTokenLifetimeSeconds).toBe(331);
   });
 
   it("accepts only the canonical internal Resend fake origin for Compose Test", () => {

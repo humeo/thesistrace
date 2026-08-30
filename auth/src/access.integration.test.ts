@@ -5,7 +5,7 @@ import {
   createThesisTraceAuth,
   type AuthLifecycleDependencies,
 } from "./auth.js";
-import type { AuthSettings } from "./config.js";
+import { authTestSettings } from "../test-fixtures/auth-settings.js";
 import { createAuthPool } from "./database.js";
 import { ResearcherAccessService } from "./access.js";
 import { InvitationAdmission } from "./invitation-admission.js";
@@ -23,18 +23,7 @@ const authRuntimeDatabaseUrl = roleDatabaseUrl(
 );
 const owner = new Pool({ connectionString: ownerDatabaseUrl, max: 2 });
 const runtimePool = createAuthPool(authRuntimeDatabaseUrl);
-const settings: AuthSettings = {
-  databaseUrl: authRuntimeDatabaseUrl,
-  environment: "test",
-  host: "127.0.0.1",
-  port: 8200,
-  publicOrigin: "http://127.0.0.1:5173",
-  resendApiKey: "test-resend-key",
-  resendApiUrl: "http://127.0.0.1:8300",
-  resendFromEmail: "ThesisTrace <noreply@thesistrace.test>",
-  secret: "0123456789abcdef0123456789abcdef",
-  secureCookies: false,
-};
+const settings = authTestSettings({ databaseUrl: authRuntimeDatabaseUrl });
 const fixedNow = new Date("2026-08-28T06:00:00.000Z");
 const invitationAdmission = new InvitationAdmission();
 const lifecycle: AuthLifecycleDependencies = {

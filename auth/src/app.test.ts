@@ -36,6 +36,11 @@ function dependencies(
     ),
     getSession: vi.fn(async () => activeSession),
     inspectInvitation: vi.fn(async () => ({ email: "researcher@example.com" })),
+    issueMcpAccessToken: vi.fn(async () => ({
+      access_token: "opaque-signed-token",
+      expires_in: 360,
+      token_type: "Bearer" as const,
+    })),
     consumeInvitationRateLimit: vi.fn(async () => ({
       allowed: true,
       retryAfterSeconds: 0,
@@ -52,6 +57,60 @@ function dependencies(
 }
 
 describe("Auth HTTP boundary", () => {
+  it("exchanges only a freshly database-verified Active Session", async () => {
+    const appDependencies = dependencies();
+    const response = await createAuthApp(appDependencies).request(
+      "http://auth.test/internal/session/exchange",
+      {
+        headers: { cookie: "thesistrace.session_token=session-canary" },
+        method: "POST",
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      access_token: "opaque-signed-token",
+      expires_in: 360,
+      token_type: "Bearer",
+    });
+    expect(appDependencies.getSession).toHaveBeenCalledWith({
+      headers: expect.any(Headers),
+      query: { disableCookieCache: true, disableRefresh: true },
+    });
+    expect(appDependencies.issueMcpAccessToken).toHaveBeenCalledWith(
+      activeSession.user.id,
+    );
+  });
+
+  it("does not issue an MCP token for an invalid, Inactive, or unavailable Session", async () => {
+    const scenarios = [
+      { expected: 401, getSession: vi.fn(async () => null) },
+      {
+        expected: 401,
+        getSession: vi.fn(async () => ({
+          ...activeSession,
+          user: { ...activeSession.user, active: false },
+        })),
+      },
+      {
+        expected: 503,
+        getSession: vi.fn(async () => {
+          throw new Error("database unavailable canary");
+        }),
+      },
+    ] as const;
+    for (const scenario of scenarios) {
+      const appDependencies = dependencies({ getSession: scenario.getSession });
+      const response = await createAuthApp(appDependencies).request(
+        "http://auth.test/internal/session/exchange",
+        { method: "POST" },
+      );
+      expect(response.status).toBe(scenario.expected);
+      expect(appDependencies.issueMcpAccessToken).not.toHaveBeenCalled();
+    }
+  });
+
   it("delegates the Better Auth operational endpoint", async () => {
     const appDependencies = dependencies();
     const response = await createAuthApp(appDependencies).request(

@@ -3,6 +3,7 @@ set -eu
 
 auth_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 compose_file="$auth_root/compose.test.yaml"
+CDPATH= cd -- "$auth_root"
 command=${1:-}
 
 case "$command" in
@@ -150,6 +151,7 @@ case "$command" in
     esac
     THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL="postgresql://thesistrace_owner:owner-test-password@127.0.0.1:$postgres_port/thesistrace" \
       "$auth_root/node_modules/.bin/vitest" run \
+        --root "$auth_root" \
         --config "$auth_root/vitest.integration.config.ts"
     ;;
   image-smoke)
@@ -204,6 +206,19 @@ case "$command" in
       '{"code":"AUTH_STARTUP_INVALID","event":"auth_startup_failed","reason":"CONFIGURATION_INVALID"}' \
       "$evidence_root/invalid.stderr.log"
     test ! -s "$evidence_root/invalid.stdout.log"
+
+    mismatched_private_jwk='{"alg":"EdDSA","crv":"Ed25519","d":"ASCCVM_DYKEJvq18KV1M4UNFhxTHLKtdXxQFXLGlEBs","kid":"test-signing-key-01","kty":"OKP","use":"sig","x":"3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8"}'
+    if compose run --rm --no-deps -T \
+      -e THESISTRACE_MCP_SIGNING_PRIVATE_JWK="$mismatched_private_jwk" \
+      auth >"$evidence_root/key-mismatch.stdout.log" \
+      2>"$evidence_root/key-mismatch.stderr.log"; then
+      echo "Auth image accepted a mismatched MCP signing key pair" >&2
+      exit 1
+    fi
+    grep -Fqx \
+      '{"code":"AUTH_STARTUP_INVALID","event":"auth_startup_failed","reason":"CONFIGURATION_INVALID"}' \
+      "$evidence_root/key-mismatch.stderr.log"
+    test ! -s "$evidence_root/key-mismatch.stdout.log"
 
     compose exec -T postgres psql \
       --username thesistrace_owner \

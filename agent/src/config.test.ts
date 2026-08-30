@@ -22,7 +22,10 @@ const environment = {
   THESISTRACE_AGENT_MODEL_REGISTRY: registry,
   THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "scripted-test-secret",
   THESISTRACE_AUTH_INTERNAL_ORIGIN: "http://auth:8200",
+  THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS: "300",
   THESISTRACE_ENVIRONMENT: "test",
+  THESISTRACE_MCP_CLOCK_SKEW_SECONDS: "30",
+  THESISTRACE_MCP_INTERNAL_URL: "http://api:8100/mcp",
   THESISTRACE_PUBLIC_ORIGIN: "http://127.0.0.1:5173",
 };
 
@@ -33,8 +36,11 @@ describe("Agent Host configuration", () => {
       authInternalOrigin: "http://auth:8200",
       environment: "test",
       host: "0.0.0.0",
+      mcpClockSkewSeconds: 30,
+      mcpInternalUrl: "http://api:8100/mcp",
       port: 8400,
       publicOrigin: "http://127.0.0.1:5173",
+      runMaxWallSeconds: 300,
       databaseUrl:
         "postgresql://agent_runtime:agent-password@postgres:5432/thesistrace",
     });
@@ -45,7 +51,10 @@ describe("Agent Host configuration", () => {
     "THESISTRACE_AGENT_DATABASE_URL",
     "THESISTRACE_AGENT_MODEL_REGISTRY",
     "THESISTRACE_AUTH_INTERNAL_ORIGIN",
+    "THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS",
     "THESISTRACE_ENVIRONMENT",
+    "THESISTRACE_MCP_CLOCK_SKEW_SECONDS",
+    "THESISTRACE_MCP_INTERNAL_URL",
     "THESISTRACE_PUBLIC_ORIGIN",
   ])("requires %s", (name) => {
     expect(() => readAgentSettings({ ...environment, [name]: "" })).toThrow(
@@ -90,6 +99,31 @@ describe("Agent Host configuration", () => {
       ).toThrow("Agent configuration is invalid");
     },
   );
+
+  it.each([
+    "http://api:8100/mcp/",
+    "http://api:8100/mcp?token=canary",
+    "http://user@api:8100/mcp",
+    "http://api:8100/other",
+  ])("rejects a non-canonical MCP URL: %s", (mcpUrl) => {
+    expect(() => readAgentSettings({
+      ...environment,
+      THESISTRACE_MCP_INTERNAL_URL: mcpUrl,
+    })).toThrow("Agent configuration is invalid");
+  });
+
+  it("bounds the Run wall time and MCP clock skew", () => {
+    for (const [name, value] of [
+      ["THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS", "0"],
+      ["THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS", "3601"],
+      ["THESISTRACE_MCP_CLOCK_SKEW_SECONDS", "301"],
+      ["THESISTRACE_MCP_CLOCK_SKEW_SECONDS", "-1"],
+    ] as const) {
+      expect(() => readAgentSettings({ ...environment, [name]: value })).toThrow(
+        "Agent configuration is invalid",
+      );
+    }
+  });
 
   it("requires HTTPS and a non-loopback hostname in Production", () => {
     expect(

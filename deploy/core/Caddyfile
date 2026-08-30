@@ -58,6 +58,48 @@
 		respond 404
 	}
 
+	@mcp_query {
+		path /mcp /.well-known/oauth-protected-resource/mcp
+		not query ""
+	}
+	handle @mcp_query {
+		log_append path /mcp
+		header Cache-Control "no-store"
+		respond 400
+	}
+
+	@mcp_noncanonical {
+		path /mcp/* /.well-known/oauth-protected-resource/mcp/*
+	}
+	handle @mcp_noncanonical {
+		log_append path /mcp/*
+		respond 404
+	}
+
+	handle /mcp {
+		log_append path /mcp
+		header Cache-Control "no-store"
+		reverse_proxy api:8100 {
+			header_up X-ThesisTrace-Client-IP {remote_host}
+			header_up X-Request-ID {http.request.uuid}
+			transport http {
+				keepalive 2s
+			}
+		}
+	}
+
+	handle /.well-known/oauth-protected-resource/mcp {
+		log_append path /.well-known/oauth-protected-resource/mcp
+		header Cache-Control "no-store"
+		reverse_proxy api:8100 {
+			header_up X-ThesisTrace-Client-IP {remote_host}
+			header_up X-Request-ID {http.request.uuid}
+			transport http {
+				keepalive 2s
+			}
+		}
+	}
+
 	handle /api/auth/* {
 		log_append path /api/auth/*
 		header Cache-Control "no-store"

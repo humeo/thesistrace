@@ -13,9 +13,12 @@ export type AgentSettings = Readonly<{
   databaseUrl: string;
   environment: z.infer<typeof runtimeEnvironmentSchema>;
   host: string;
+  mcpClockSkewSeconds: number;
+  mcpInternalUrl: string;
   modelRegistry: ModelRegistry;
   port: number;
   publicOrigin: string;
+  runMaxWallSeconds: number;
 }>;
 
 export type AgentInitializerSettings = Readonly<{ databaseUrl: string }>;
@@ -36,6 +39,19 @@ export function readAgentSettings(
   const authInternalOrigin = parseInternalOrigin(
     required(environment, "THESISTRACE_AUTH_INTERNAL_ORIGIN"),
   );
+  const mcpInternalUrl = parseMcpInternalUrl(
+    required(environment, "THESISTRACE_MCP_INTERNAL_URL"),
+  );
+  const runMaxWallSeconds = parseBoundedInteger(
+    required(environment, "THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS"),
+    1,
+    3_600,
+  );
+  const mcpClockSkewSeconds = parseBoundedInteger(
+    required(environment, "THESISTRACE_MCP_CLOCK_SKEW_SECONDS"),
+    0,
+    300,
+  );
   const databaseUrl = parseDatabaseUrl(
     required(environment, "THESISTRACE_AGENT_DATABASE_URL"),
     "agent_runtime",
@@ -54,9 +70,12 @@ export function readAgentSettings(
     databaseUrl,
     environment: parsedEnvironment.data,
     host: environment.THESISTRACE_AGENT_HOST ?? "0.0.0.0",
+    mcpClockSkewSeconds,
+    mcpInternalUrl,
     modelRegistry,
     port: parsePort(environment.THESISTRACE_AGENT_PORT ?? "8400"),
     publicOrigin,
+    runMaxWallSeconds,
   };
 }
 
@@ -102,6 +121,27 @@ function parseInternalOrigin(value: string): string {
   return url.origin;
 }
 
+function parseMcpInternalUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new AgentConfigurationError();
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:")
+    || url.username.length > 0
+    || url.password.length > 0
+    || url.pathname !== "/mcp"
+    || url.search.length > 0
+    || url.hash.length > 0
+    || value !== url.toString()
+  ) {
+    throw new AgentConfigurationError();
+  }
+  return value;
+}
+
 function parseExactOrigin(value: string): URL {
   let url: URL;
   try {
@@ -127,6 +167,15 @@ function parsePort(value: string): number {
     throw new AgentConfigurationError();
   }
   return port;
+}
+
+function parseBoundedInteger(value: string, minimum: number, maximum: number): number {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) throw new AgentConfigurationError();
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new AgentConfigurationError();
+  }
+  return parsed;
 }
 
 function parseDatabaseUrl(value: string, expectedUsername: string): string {

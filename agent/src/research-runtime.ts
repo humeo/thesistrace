@@ -9,7 +9,6 @@ import {
   createCopilotRuntimeHandler,
 } from "@copilotkit/runtime/v2";
 import { MastraAgent } from "@ag-ui/mastra";
-import type { Pool } from "pg";
 
 import {
   ChatRequestError,
@@ -19,7 +18,10 @@ import {
   type ValidatedChatRun,
 } from "./chat-request.js";
 import type { AgentSettings } from "./config.js";
-import { createAgentPool } from "./database.js";
+import {
+  createAgentPool,
+  createAgentReadinessPool,
+} from "./database.js";
 import {
   DurableResearchAgentRunner,
   RESEARCHER_ID_HEADER,
@@ -28,7 +30,13 @@ import {
   RegisteredModelRuntime,
   type ResolvedModelSelection,
 } from "./model-runtime.js";
+import {
+  createMcpRunFactory,
+  type DiscoveredMcpTools,
+  type McpRunFactory,
+} from "./mcp-run.js";
 import { ResearchMastraAgent } from "./research-mastra-agent.js";
+import { createAgentReadiness } from "./readiness.js";
 import {
   ResearchSessionRepository,
   SessionNotFoundError,
@@ -52,9 +60,14 @@ export type ResearchRuntime = Readonly<{
   ) => Promise<Readonly<{ model_key: string; reasoning_effort: string }> | null>;
   ready: () => Promise<boolean>;
 }>;
+export type ResearchRuntimeDependencies = Readonly<{
+  mcpRunFactory?: McpRunFactory;
+  readinessFetch?: typeof globalThis.fetch;
+}>;
 
 export async function createResearchRuntime(
   settings: AgentSettings,
+  dependencies: ResearchRuntimeDependencies = {},
 ): Promise<ResearchRuntime> {
   const pool = createAgentPool(settings.databaseUrl);
   try {
@@ -65,7 +78,12 @@ export async function createResearchRuntime(
   }
 
   const repository = new ResearchSessionRepository(pool);
+  const readinessPool = createAgentReadinessPool(settings.databaseUrl);
+  const readiness = createAgentReadiness(settings, readinessPool, {
+    fetch: dependencies.readinessFetch,
+  });
   const modelRuntime = new RegisteredModelRuntime(settings.modelRegistry);
+  const mcpRunFactory = dependencies.mcpRunFactory ?? createMcpRunFactory(settings);
   const storage = new PostgresStore({
     disableInit: true,
     id: "thesistrace-agent-memory",
@@ -86,6 +104,10 @@ export async function createResearchRuntime(
     defaultOptions: ({ requestContext }) => ({
       maxSteps: 8,
       providerOptions: selectionFrom(requestContext).providerOptions,
+      // A transport/protocol failure is converted into one safe Tool result so
+      // AG-UI can close that exact invocation. Stop before another provider
+      // step; ResearchMastraAgent will persist the failed product Run.
+      stopWhen: () => mcpRunFrom(requestContext)?.hasFatalToolFailure() === true,
     }),
     id: RESEARCH_AGENT_ID,
     instructions: RESEARCH_AGENT_INSTRUCTIONS,
@@ -93,7 +115,7 @@ export async function createResearchRuntime(
     memory,
     model: ({ requestContext }) => selectionFrom(requestContext).languageModel,
     name: "ThesisTrace Research Agent",
-    tools: {},
+    tools: ({ requestContext }) => mcpToolsFrom(requestContext),
   });
   const mastra = new Mastra({
     agents: { [RESEARCH_AGENT_ID]: agent },
@@ -156,11 +178,16 @@ export async function createResearchRuntime(
         [RESEARCH_AGENT_ID]: createRunAgent({
           agentBuildRevision: settings.agentBuildRevision,
           mastra,
+          mcpRun: () => mcpRunFactory(
+            new Headers(request.headers),
+            validated.input.runId,
+          ),
           providerModelId: selection.model.providerModelId,
           repository,
           requestContext,
           researcherId,
           run: validated,
+          runMaxWallMs: settings.runMaxWallSeconds * 1_000,
           usageCapture,
         }),
       };
@@ -182,6 +209,7 @@ export async function createResearchRuntime(
     close: async () => {
       await memory.settled();
       await storage.close();
+      await readinessPool.end();
       await pool.end();
     },
     handle: (request, researcher) => handleAuthenticatedRuntimeRequest({
@@ -202,18 +230,20 @@ export async function createResearchRuntime(
         reasoning_effort: preference.reasoningEffort,
       };
     },
-    ready: () => databaseReady(pool),
+    ready: readiness,
   };
 }
 
 function createRunAgent(options: Readonly<{
   agentBuildRevision: string;
   mastra: Mastra;
+  mcpRun: () => ReturnType<McpRunFactory>;
   providerModelId: string;
   repository: ResearchSessionRepository;
   requestContext: RequestContext;
   researcherId: string;
   run: ValidatedChatRun;
+  runMaxWallMs: number;
   usageCapture: RunUsageCapture;
 }>): ResearchMastraAgent {
   const agent = options.mastra.getAgent(RESEARCH_AGENT_ID);
@@ -228,10 +258,13 @@ function createRunAgent(options: Readonly<{
     resourceId: options.researcherId,
   }, {
     agentBuildRevision: options.agentBuildRevision,
+    mcpRun: options.mcpRun,
     providerModelId: options.providerModelId,
     repository: options.repository,
+    requestContext: options.requestContext,
     researcherId: options.researcherId,
     run: options.run,
+    runMaxWallMs: options.runMaxWallMs,
     usage: () => options.usageCapture.value(),
   });
 }
@@ -343,6 +376,7 @@ function createRequestContext(
 ): RequestContext {
   const context = new RequestContext();
   context.set("selection", selection);
+  context.set("mcpTools", {});
   return context;
 }
 
@@ -350,13 +384,12 @@ function selectionFrom(context: RequestContext): ResolvedModelSelection {
   return context.get<string, ResolvedModelSelection>("selection");
 }
 
-async function databaseReady(pool: Pool): Promise<boolean> {
-  try {
-    const result = await pool.query<{ ready: number }>("SELECT 1 AS ready");
-    return result.rows[0]?.ready === 1;
-  } catch {
-    return false;
-  }
+function mcpToolsFrom(context: RequestContext): DiscoveredMcpTools {
+  return context.get<string, DiscoveredMcpTools>("mcpTools");
+}
+
+function mcpRunFrom(context: RequestContext): import("./mcp-run.js").McpRun | undefined {
+  return context.get<string, import("./mcp-run.js").McpRun | undefined>("mcpRun");
 }
 
 function safeJsonResponse(code: string, status: number): Response {

@@ -9,6 +9,7 @@ from thesistrace.entrypoints.http import create_app
 from thesistrace.research_agent import (
     RESEARCH_AGENT_TOOL_NAMES,
     ResearchAgentHTTPConfiguration,
+    ResearchAgentScope,
 )
 from thesistrace.research_agent.http_server import (
     RESEARCH_AGENT_MAX_HTTP_BODY_FRAMES,
@@ -43,6 +44,7 @@ def _configuration(**overrides: object) -> ResearchAgentHTTPConfiguration:
         "resource_server_url": "https://core.test/mcp",
         "deployment_tool_allowlist": RESEARCH_AGENT_TOOL_NAMES,
         "allowed_hosts": ("core.test",),
+        "supported_scopes": frozenset(ResearchAgentScope),
         "allowed_origins": ("https://codex.test",),
     }
     values.update(overrides)
@@ -56,6 +58,14 @@ def test_http_mcp_requires_explicit_verifier_configuration_when_enabled() -> Non
         create_app(research_agent_http=_configuration())
     with pytest.raises(ValueError, match="requires a token verifier"):
         _configuration(token_verifier=None)
+    with pytest.raises(TypeError, match="supported_scopes"):
+        ResearchAgentHTTPConfiguration(
+            token_verifier=_RejectingVerifier(),
+            issuer_url="https://issuer.test",
+            resource_server_url="https://core.test/mcp",
+            deployment_tool_allowlist=RESEARCH_AGENT_TOOL_NAMES,
+            allowed_hosts=("core.test",),
+        )
 
 
 @pytest.mark.parametrize(
@@ -87,6 +97,7 @@ def test_http_mcp_requires_explicit_verifier_configuration_when_enabled() -> Non
         ),
         ({"allowed_hosts": ()}, "requires explicit allowed_hosts"),
         ({"allowed_origins": ("",)}, "cannot contain blanks"),
+        ({"supported_scopes": frozenset()}, "requires explicit supported_scopes"),
     ],
 )
 def test_http_mcp_configuration_fails_closed(

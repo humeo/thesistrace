@@ -21,8 +21,17 @@ from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
+from thesistrace.research_agent.registry import RESEARCH_AGENT_TOOL_NAMES
 
 ROOT = Path(__file__).resolve().parents[2]
+_TEST_MCP_PUBLIC_JWK = {
+    "alg": "EdDSA",
+    "crv": "Ed25519",
+    "kid": "test-signing-key-01",
+    "kty": "OKP",
+    "use": "sig",
+    "x": "3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8",
+}
 
 
 def _free_port() -> int:
@@ -130,14 +139,36 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
 
     for role in ("research", "tracking"):
         port = _free_port()
-        process_environment = {
-            **environment,
+        worker_environment = {
+            key: value
+            for key, value in environment.items()
+            if not key.startswith("THESISTRACE_MCP_")
+        }
+        worker_environment["THESISTRACE_INTERNAL_API_ORIGIN"] = (
+            f"http://127.0.0.1:{port}"
+        )
+        api_environment = {
+            **worker_environment,
             "THESISTRACE_INTERNAL_API_ORIGIN": f"http://127.0.0.1:{port}",
+            "THESISTRACE_MCP_ALLOWED_HOSTS": json.dumps([f"127.0.0.1:{port}"]),
+            "THESISTRACE_MCP_ALLOWED_ORIGINS": json.dumps(["https://core.test"]),
+            "THESISTRACE_MCP_CLIENT_ID": "thesistrace-agent",
+            "THESISTRACE_MCP_CLOCK_SKEW_SECONDS": "30",
+            "THESISTRACE_MCP_DEPLOYMENT_TOOLS": json.dumps(
+                sorted(RESEARCH_AGENT_TOOL_NAMES),
+                separators=(",", ":"),
+            ),
+            "THESISTRACE_MCP_ISSUER_URL": "https://core.test/api/auth",
+            "THESISTRACE_MCP_RESOURCE_URL": "https://core.test/mcp",
+            "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK": json.dumps(
+                _TEST_MCP_PUBLIC_JWK,
+                separators=(",", ":"),
+            ),
         }
         http = subprocess.Popen(
             [api_command, "--host", "127.0.0.1", "--port", str(port)],
             cwd=ROOT,
-            env=process_environment,
+            env=api_environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -149,7 +180,7 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
             worker = subprocess.run(
                 [worker_command, "--role", role, "--once"],
                 cwd=ROOT,
-                env=process_environment,
+                env=worker_environment,
                 capture_output=True,
                 text=True,
                 timeout=120,

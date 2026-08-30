@@ -53,6 +53,9 @@ from thesistrace.research_agent import (
     ResearchAgentHTTPConfiguration,
     ResearchAgentScope,
 )
+from thesistrace.research_agent.mcp_server import (
+    RESEARCH_AGENT_TOOL_OUTCOME_META_KEY,
+)
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.result import read_result_bundle
@@ -269,6 +272,7 @@ def _app(
             resource_server_url=_RESOURCE_URL,
             deployment_tool_allowlist=deployment_tool_allowlist,
             allowed_hosts=("core.test",),
+            supported_scopes=frozenset(ResearchAgentScope),
             allowed_origins=(_TRUSTED_ORIGIN,),
         ),
     )
@@ -316,6 +320,9 @@ async def _exercise_http_contract(
 
             context = await client.call_tool("get_research_context", {})
             assert context.is_error is False
+            assert context.meta is not None
+            assert context.meta[RESEARCH_AGENT_TOOL_OUTCOME_META_KEY] == "succeeded"
+            assert json.loads(context.content[0].text) == context.structured_content
             validate(
                 context.structured_content,
                 tools_by_name["get_research_context"].output_schema,
@@ -344,6 +351,14 @@ async def _exercise_http_contract(
             issuer.replace_grant(read_token, ())
             denied_after_discovery = await client.call_tool("get_research_context", {})
             assert denied_after_discovery.is_error is True
+            assert denied_after_discovery.meta is not None
+            assert (
+                denied_after_discovery.meta[RESEARCH_AGENT_TOOL_OUTCOME_META_KEY]
+                == "failed"
+            )
+            assert json.loads(denied_after_discovery.content[0].text) == (
+                denied_after_discovery.structured_content
+            )
             assert denied_after_discovery.structured_content["code"] == "FORBIDDEN"
             issuer.replace_grant(read_token, (ResearchAgentScope.RESEARCH_READ.value,))
 
@@ -1279,6 +1294,13 @@ async def _exercise_real_transport_parity_and_redaction(
         )
         raw_stdio_result = raw_stdio_call_messages[0]["result"]
         assert raw_stdio_result["isError"] is True
+        assert (
+            raw_stdio_result["_meta"][RESEARCH_AGENT_TOOL_OUTCOME_META_KEY]
+            == "failed"
+        )
+        assert json.loads(raw_stdio_result["content"][0]["text"]) == (
+            raw_stdio_result["structuredContent"]
+        )
         assert raw_stdio_result["structuredContent"]["code"] == "INVALID_INPUT"
 
         async with _raw_http_client(app) as raw_client:

@@ -41,6 +41,7 @@ class ResearchAgentHTTPConfiguration:
     resource_server_url: AnyHttpUrl | str
     deployment_tool_allowlist: frozenset[str]
     allowed_hosts: tuple[str, ...]
+    supported_scopes: frozenset[ResearchAgentScope]
     allowed_origins: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -70,6 +71,8 @@ class ResearchAgentHTTPConfiguration:
             raise ValueError("Research Agent HTTP requires explicit allowed_hosts")
         if any(not value.strip() for value in self.allowed_origins):
             raise ValueError("Research Agent HTTP allowed_origins cannot contain blanks")
+        if not self.supported_scopes:
+            raise ValueError("Research Agent HTTP requires explicit supported_scopes")
         object.__setattr__(self, "issuer_url", issuer_url)
         object.__setattr__(self, "resource_server_url", resource_server_url)
 
@@ -172,7 +175,9 @@ def create_research_agent_http_transport(
         if token is None:
             raise RuntimeError("authenticated Research Agent token is unavailable")
         granted_scopes = frozenset(
-            scope for scope in ResearchAgentScope if scope.value in token.scopes
+            scope
+            for scope in configuration.supported_scopes
+            if scope.value in token.scopes
         )
         return ResearchAgentCapabilityRegistry(
             authority=ResearchAgentAuthority(
@@ -219,7 +224,12 @@ def create_research_agent_http_transport(
     metadata_routes: Sequence[BaseRoute] = create_protected_resource_routes(
         resource_url=configuration.resource_server_url,
         authorization_servers=[configuration.issuer_url],
-        scopes_supported=[scope.value for scope in ResearchAgentScope],
+        scopes_supported=[
+            scope.value for scope in sorted(
+                configuration.supported_scopes,
+                key=lambda scope: scope.value,
+            )
+        ],
         resource_name="ThesisTrace Research Agent",
     )
     return ResearchAgentHTTPTransport(

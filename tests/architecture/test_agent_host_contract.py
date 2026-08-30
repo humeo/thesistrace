@@ -37,6 +37,7 @@ def test_agent_host_is_a_private_node_package_without_research_authority() -> No
         "@hono/node-server",
         "@mastra/core",
         "@mastra/memory",
+        "@mastra/mcp",
         "@mastra/pg",
         "ai",
         "hono",
@@ -65,6 +66,9 @@ def test_agent_compose_identity_receives_only_provider_and_process_configuration
     assert "dockerfile: deploy/core/Dockerfile.agent" in compose
     assert "THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth:8200" in agent
     assert "THESISTRACE_AGENT_MODEL_REGISTRY" in agent
+    assert "THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS" in agent
+    assert "THESISTRACE_MCP_CLOCK_SKEW_SECONDS" in agent
+    assert "THESISTRACE_MCP_INTERNAL_URL: http://api:8100/mcp" in agent
     assert 'COPILOTKIT_TELEMETRY_DISABLED: "true"' in agent
     assert "postgresql://agent_runtime:" in agent
     for provider_secret in (
@@ -84,6 +88,14 @@ def test_agent_compose_identity_receives_only_provider_and_process_configuration
         "THESISTRACE_BENCHMARK_MOUNT",
         "QUEUE",
         "WORKER",
+        "THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS",
+        "THESISTRACE_MCP_AGENT_SCOPES",
+        "THESISTRACE_MCP_CLIENT_ID",
+        "THESISTRACE_MCP_DEPLOYMENT_TOOLS",
+        "THESISTRACE_MCP_ISSUER_URL",
+        "THESISTRACE_MCP_RESOURCE_URL",
+        "THESISTRACE_MCP_SIGNING_PRIVATE_JWK",
+        "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK",
     ):
         assert forbidden_credential not in agent
     assert "    ports:\n" not in agent
@@ -91,6 +103,28 @@ def test_agent_compose_identity_receives_only_provider_and_process_configuration
     assert "THESISTRACE_AGENT_DATABASE_URL" not in initializer
     assert "THESISTRACE_AGENT_MODEL_REGISTRY" not in initializer
     assert "THESISTRACE_AUTH_INTERNAL_ORIGIN" not in initializer
+    assert "THESISTRACE_MCP_" not in initializer
+
+
+def test_agent_fault_proxies_are_test_only_compose_boundaries() -> None:
+    production = (DEPLOY / "compose.yaml").read_text()
+    test_overlay = (DEPLOY / "compose.test-run.yaml").read_text()
+
+    assert "auth-exchange-proxy" not in production
+    assert "mcp-fault-proxy" not in production
+    assert "THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth:8200" in production
+    assert "THESISTRACE_MCP_INTERNAL_URL: http://api:8100/mcp" in production
+
+    assert (
+        "THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth-exchange-proxy:8250"
+        in test_overlay
+    )
+    assert (
+        "THESISTRACE_MCP_INTERNAL_URL: http://mcp-fault-proxy:8150/mcp"
+        in test_overlay
+    )
+    assert "../../auth/test-fixtures:/test-fixtures:ro" in test_overlay
+    assert "../../agent/test-fixtures:/test-fixtures:ro" in test_overlay
 
 
 def test_browser_bundle_source_has_no_provider_or_mcp_credential_contract() -> None:
@@ -107,6 +141,7 @@ def test_browser_bundle_source_has_no_provider_or_mcp_credential_contract() -> N
         "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
         "provider-secret-value-canary",
         "OAuth access token",
+        "THESISTRACE_MCP_",
     ):
         assert forbidden not in source
 

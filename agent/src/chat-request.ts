@@ -3,10 +3,19 @@ import { createHash } from "node:crypto";
 import { RunAgentInputSchema, type RunAgentInput } from "@ag-ui/core";
 import { z } from "zod";
 
+import {
+  SAFE_TOOL_COMPLETED,
+  SAFE_TOOL_FAILED,
+} from "./browser-message-safety.js";
 import type { ModelRegistry, ReasoningEffort } from "./model-registry.js";
 
 export const MAX_CHAT_MESSAGE_BYTES = 16 * 1024;
 const MAX_TRANSCRIPT_MESSAGES = 256;
+const MAX_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+const MAX_ASSISTANT_MESSAGE_BYTES = 256 * 1024;
+const MAX_TOOL_CALLS_PER_MESSAGE = 32;
+const MAX_TOOL_CALL_ID_BYTES = 512;
+const TOOL_NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 const uuidSchema = z.uuid();
 const selectionSchema = z.object({
   modelKey: z.string(),
@@ -73,18 +82,7 @@ export async function readValidatedChatRun(
     throw invalidRequest();
   }
 
-  for (const message of input.messages) {
-    if (
-      !uuidSchema.safeParse(message.id).success
-      || (message.role !== "user" && message.role !== "assistant")
-      || typeof message.content !== "string"
-      || message.name !== undefined
-      || message.encryptedValue !== undefined
-      || (message.role === "assistant" && message.toolCalls !== undefined)
-    ) {
-      throw invalidRequest();
-    }
-  }
+  validateBrowserTranscript(input.messages);
   const latest = input.messages.at(-1);
   if (
     latest === undefined
@@ -134,11 +132,7 @@ export function chatRunFingerprint(input: RunAgentInput): Buffer {
     ? input.forwardedProps.thesistrace
     : {};
   return createHash("sha256").update(JSON.stringify({
-    messages: input.messages.map((message) => ({
-      content: message.content,
-      id: message.id,
-      role: message.role,
-    })),
+    messages: input.messages.map(fingerprintMessage),
     modelKey: typeof forwarded.modelKey === "string" ? forwarded.modelKey : null,
     reasoningEffort: typeof forwarded.reasoningEffort === "string"
       ? forwarded.reasoningEffort
@@ -146,6 +140,102 @@ export function chatRunFingerprint(input: RunAgentInput): Buffer {
     runId: input.runId,
     threadId: input.threadId,
   })).digest();
+}
+
+function validateBrowserTranscript(messages: RunAgentInput["messages"]): void {
+  const openToolCalls = new Set<string>();
+  const completedToolCalls = new Set<string>();
+  let transcriptBytes = 0;
+
+  for (const message of messages) {
+    if (
+      !uuidSchema.safeParse(message.id).success
+      || ("name" in message && message.name !== undefined)
+      || ("encryptedValue" in message && message.encryptedValue !== undefined)
+    ) {
+      throw invalidRequest();
+    }
+    if (message.role === "user") {
+      if (typeof message.content !== "string") throw invalidRequest();
+      transcriptBytes += Buffer.byteLength(message.content, "utf8");
+      continue;
+    }
+    if (message.role === "assistant") {
+      if (message.content !== undefined && typeof message.content !== "string") {
+        throw invalidRequest();
+      }
+      const content = message.content ?? "";
+      const contentBytes = Buffer.byteLength(content, "utf8");
+      if (contentBytes > MAX_ASSISTANT_MESSAGE_BYTES) throw invalidRequest();
+      transcriptBytes += contentBytes;
+      if (message.toolCalls === undefined) continue;
+      if (
+        message.toolCalls.length < 1
+        || message.toolCalls.length > MAX_TOOL_CALLS_PER_MESSAGE
+      ) {
+        throw invalidRequest();
+      }
+      for (const toolCall of message.toolCalls) {
+        if (
+          toolCall.type !== "function"
+          || toolCall.encryptedValue !== undefined
+          || toolCall.function.arguments !== "{}"
+          || !TOOL_NAME_PATTERN.test(toolCall.function.name)
+          || Buffer.byteLength(toolCall.id, "utf8") < 1
+          || Buffer.byteLength(toolCall.id, "utf8") > MAX_TOOL_CALL_ID_BYTES
+          || openToolCalls.has(toolCall.id)
+        ) {
+          throw invalidRequest();
+        }
+        openToolCalls.add(toolCall.id);
+      }
+      continue;
+    }
+    if (message.role === "tool") {
+      if (
+        (message.content !== SAFE_TOOL_COMPLETED && message.content !== SAFE_TOOL_FAILED)
+        || message.error !== undefined
+        || !openToolCalls.has(message.toolCallId)
+        || completedToolCalls.has(message.toolCallId)
+      ) {
+        throw invalidRequest();
+      }
+      completedToolCalls.add(message.toolCallId);
+      transcriptBytes += Buffer.byteLength(message.content, "utf8");
+      continue;
+    }
+    throw invalidRequest();
+  }
+
+  if (transcriptBytes > MAX_TRANSCRIPT_BYTES) throw invalidRequest();
+}
+
+function fingerprintMessage(message: RunAgentInput["messages"][number]): unknown {
+  if (message.role === "assistant") {
+    return {
+      content: message.content ?? "",
+      id: message.id,
+      role: message.role,
+      toolCalls: message.toolCalls?.map((toolCall) => ({
+        arguments: toolCall.function.arguments,
+        id: toolCall.id,
+        name: toolCall.function.name,
+      })) ?? null,
+    };
+  }
+  if (message.role === "tool") {
+    return {
+      content: message.content,
+      id: message.id,
+      role: message.role,
+      toolCallId: message.toolCallId,
+    };
+  }
+  return {
+    content: message.content,
+    id: message.id,
+    role: message.role,
+  };
 }
 
 function invalidRequest(): ChatRequestError {

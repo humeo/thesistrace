@@ -34,6 +34,18 @@ THESISTRACE_AGENT_IMAGE=ghcr.io/thesistrace/agent:2026-08-29
 THESISTRACE_AGENT_BUILD_REVISION=2026-08-29.1
 THESISTRACE_AGENT_MODEL_REGISTRY={VALID_AGENT_REGISTRY}
 THESISTRACE_AGENT_OPENAI_API_KEY=sk-production-agent-7Kp4mN9vQ2sL6xT8
+THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS=600
+THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS=660
+THESISTRACE_MCP_AGENT_SCOPES=["research:read","research:execute","tracking:read","tracking:execute"]
+THESISTRACE_MCP_ALLOWED_HOSTS=["api:8100","research.thesistrace.com"]
+THESISTRACE_MCP_ALLOWED_ORIGINS=["https://research.thesistrace.com"]
+THESISTRACE_MCP_CLIENT_ID=thesistrace-agent
+THESISTRACE_MCP_CLOCK_SKEW_SECONDS=30
+THESISTRACE_MCP_DEPLOYMENT_TOOLS=["diagnose_alpha_formula","get_alpha_catalog","get_daily_track","get_daily_track_result","get_research_batch","get_research_context","get_research_run","get_research_run_result","list_daily_tracks","list_research_batches","list_research_runs","retry_daily_track","start_daily_track","submit_research_batch","submit_research_run"]
+THESISTRACE_MCP_ISSUER_URL=https://research.thesistrace.com/api/auth
+THESISTRACE_MCP_RESOURCE_URL=https://research.thesistrace.com/mcp
+THESISTRACE_MCP_SIGNING_PRIVATE_JWK={{"alg":"EdDSA","crv":"Ed25519","d":"bL6DuMib1dGbVwuY4HVdhFmqF2DwywXfoNQvOcF9DGQ","kid":"research-agent-signing-2026-08","kty":"OKP","use":"sig","x":"ECcLaOhwYA5_r6Ub4y8ZbuuvOSEwsim7Ttg5DXXG0yc"}}
+THESISTRACE_MCP_VERIFYING_PUBLIC_JWK={{"alg":"EdDSA","crv":"Ed25519","kid":"research-agent-signing-2026-08","kty":"OKP","use":"sig","x":"ECcLaOhwYA5_r6Ub4y8ZbuuvOSEwsim7Ttg5DXXG0yc"}}
 """
 
 
@@ -81,6 +93,7 @@ def test_production_runtime_prevents_ambient_security_overrides(
             "BETTER_AUTH_SECRET": "ambient-secret-must-not-override",
             "THESISTRACE_AGENT_MODEL_REGISTRY": "ambient-registry-must-not-override",
             "THESISTRACE_AGENT_OPENAI_API_KEY": "ambient-provider-must-not-override",
+            "THESISTRACE_MCP_SIGNING_PRIVATE_JWK": "ambient-private-key-must-not-override",
             "THESISTRACE_PUBLIC_ORIGIN": "http://ambient.invalid",
         },
     )
@@ -91,6 +104,7 @@ def test_production_runtime_prevents_ambient_security_overrides(
         "auth_secret=unset",
         "agent_registry=unset",
         "agent_provider=unset",
+        "mcp_private_key=unset",
     ]
 
 
@@ -171,6 +185,30 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
             "THESISTRACE_AGENT_OPENAI_API_KEY=test-provider-key",
             "PRODUCTION_AGENT_PROVIDER_SECRET_INVALID",
         ),
+        (
+            "THESISTRACE_MCP_RESOURCE_URL=https://research.thesistrace.com/mcp/v1",
+            "PRODUCTION_MCP_IDENTITY_INVALID",
+        ),
+        (
+            "THESISTRACE_MCP_AGENT_SCOPES=[\"research:read\"]",
+            "PRODUCTION_MCP_SCOPE_INVALID",
+        ),
+        (
+            "THESISTRACE_MCP_DEPLOYMENT_TOOLS=[\"get_research_context\"]",
+            "PRODUCTION_MCP_TOOL_SET_INVALID",
+        ),
+        (
+            "THESISTRACE_MCP_ALLOWED_HOSTS=[\"api:8100\"]",
+            "PRODUCTION_MCP_TRANSPORT_SECURITY_INVALID",
+        ),
+        (
+            "THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS=630",
+            "PRODUCTION_MCP_TIME_BUDGET_INVALID",
+        ),
+        (
+            "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK={\"alg\":\"EdDSA\"}",
+            "PRODUCTION_MCP_SIGNING_KEY_INVALID",
+        ),
     ],
 )
 def test_production_runtime_rejects_test_placeholder_and_weak_values(
@@ -249,6 +287,8 @@ def _run(
         "  printf 'agent_registry=%s\\nagent_provider=%s\\n' "
         "\"${THESISTRACE_AGENT_MODEL_REGISTRY-unset}\" "
         "\"${THESISTRACE_AGENT_OPENAI_API_KEY-unset}\" >>\"$PRODUCTION_RUNTIME_ENV_LOG\"\n"
+        "  printf 'mcp_private_key=%s\\n' "
+        "\"${THESISTRACE_MCP_SIGNING_PRIVATE_JWK-unset}\" >>\"$PRODUCTION_RUNTIME_ENV_LOG\"\n"
         "fi\n"
         "if [ -n \"${PRODUCTION_RUNTIME_COMMAND_LOG-}\" ]; then\n"
         "  printf '%s\\n' \"docker $*\" >>\"$PRODUCTION_RUNTIME_COMMAND_LOG\"\n"

@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { jwt } from "better-auth/plugins";
 import type { Pool } from "pg";
 
 import {
@@ -155,6 +156,35 @@ export function createThesisTraceAuth(
       sendResetPassword: lifecycle.sendResetPassword,
     },
     logger: { disabled: true },
+    plugins: [
+      jwt({
+        adapter: {
+          async createJwk() {
+            throw new Error("STATIC_MCP_SIGNING_KEY_REQUIRED");
+          },
+          async getJwks() {
+            return [{
+              alg: "EdDSA",
+              createdAt: new Date(0),
+              crv: "Ed25519",
+              id: settings.mcpPrivateJwk.kid,
+              privateKey: JSON.stringify(settings.mcpPrivateJwk),
+              publicKey: JSON.stringify(settings.mcpPublicJwk),
+            }];
+          },
+        },
+        disableSettingJwtHeader: true,
+        jwks: {
+          disablePrivateKeyEncryption: true,
+          keyPairConfig: { alg: "EdDSA", crv: "Ed25519" },
+        },
+        jwt: {
+          audience: settings.mcpAudience,
+          expirationTime: `${settings.mcpTokenLifetimeSeconds} seconds`,
+          issuer: settings.mcpIssuer,
+        },
+      }),
+    ],
     rateLimit: {
       customRules: {
         "/sign-in/email": { max: 5, window: 60 },

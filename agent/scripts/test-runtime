@@ -3,6 +3,7 @@ set -eu
 
 agent_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 compose_file="$agent_root/compose.test.yaml"
+CDPATH= cd -- "$agent_root"
 command=${1:-}
 
 case "$command" in
@@ -124,8 +125,10 @@ case "$command" in
         ;;
     esac
     COPILOTKIT_TELEMETRY_DISABLED=true \
+      TZ=Asia/Seoul \
       THESISTRACE_AGENT_TEST_OWNER_DATABASE_URL="postgresql://thesistrace_owner:owner-test-password@127.0.0.1:$postgres_port/thesistrace" \
       "$agent_root/node_modules/.bin/vitest" run \
+        --root "$agent_root" \
         --config "$agent_root/vitest.integration.config.ts"
     ;;
   image-smoke)
@@ -143,9 +146,11 @@ case "$command" in
         ;;
     esac
 
-    curl --fail --silent --show-error "http://127.0.0.1:$agent_port/health/live" \
+    curl --fail --silent --show-error --max-time 10 \
+      "http://127.0.0.1:$agent_port/health/live" \
       >"$evidence_root/liveness.json"
-    curl --fail --silent --show-error "http://127.0.0.1:$agent_port/health/ready" \
+    curl --fail --silent --show-error --max-time 10 \
+      "http://127.0.0.1:$agent_port/health/ready" \
       >"$evidence_root/readiness.json"
     grep -Fqx '{"status":"ok"}' "$evidence_root/liveness.json"
     grep -Fqx '{"status":"ready"}' "$evidence_root/readiness.json"
@@ -153,7 +158,7 @@ case "$command" in
     test "$(compose exec -T agent node --version)" = v24.14.0
     compose exec -T agent test ! -e /app/agent/dist/stale-image-canary.js
 
-    unauthenticated_status=$(curl --silent --show-error \
+    unauthenticated_status=$(curl --silent --show-error --max-time 10 \
       --output "$evidence_root/unauthenticated.json" \
       --write-out '%{http_code}' \
       -H 'Origin: https://thesistrace.test' \
@@ -161,16 +166,24 @@ case "$command" in
     test "$unauthenticated_status" = 401
     grep -Fqx '{"code":"AUTHENTICATION_REQUIRED"}' "$evidence_root/unauthenticated.json"
 
-    curl --fail --silent --show-error \
+    curl --fail --silent --show-error --max-time 10 \
       -H 'Content-Type: application/json' \
-      -H 'Cookie: session=valid' \
+      -H 'Cookie: thesistrace.session_token=image-smoke-session' \
       -H 'Origin: https://thesistrace.test' \
-      --data '{"threadId":"00000000-0000-4000-8000-000000000201","runId":"00000000-0000-4000-8000-000000000301","messages":[{"id":"00000000-0000-4000-8000-000000000401","role":"user","content":"Image smoke Alpha."}],"state":{},"tools":[],"context":[],"forwardedProps":{"thesistrace":{"modelKey":"scripted-research","reasoningEffort":"medium"}}}' \
+      --data '{"threadId":"00000000-0000-4000-8000-000000000201","runId":"00000000-0000-4000-8000-000000000301","messages":[{"id":"00000000-0000-4000-8000-000000000401","role":"user","content":"[scripted-tool-turn] Inspect the available research context."}],"state":{},"tools":[],"context":[],"forwardedProps":{"thesistrace":{"modelKey":"scripted-research","reasoningEffort":"medium"}}}' \
       "http://127.0.0.1:$agent_port/api/agent/copilotkit/agent/research/run" \
       >"$evidence_root/run.sse"
     grep -F '"type":"RUN_STARTED"' "$evidence_root/run.sse" >/dev/null
-    grep -F '"delta":"I can help turn that idea "' "$evidence_root/run.sse" >/dev/null
+    grep -F '"type":"TOOL_CALL_START"' "$evidence_root/run.sse" >/dev/null
+    grep -F '"toolCallName":"get_research_context"' "$evidence_root/run.sse" >/dev/null
+    grep -F '"content":"Tool completed."' "$evidence_root/run.sse" >/dev/null
+    grep -F '"type":"TEXT_MESSAGE_CONTENT"' "$evidence_root/run.sse" >/dev/null
     grep -F '"type":"RUN_FINISHED"' "$evidence_root/run.sse" >/dev/null
+    test "$(grep -F -c '"delta":"{}"' "$evidence_root/run.sse")" -eq 1
+    if grep -F 'image-smoke-private-mcp-result' "$evidence_root/run.sse"; then
+      echo "Agent image smoke exposed a raw MCP result" >&2
+      exit 1
+    fi
     compose exec -T postgres psql \
       --username thesistrace_owner \
       --dbname thesistrace \
@@ -208,7 +221,7 @@ case "$command" in
     test ! -s "$evidence_root/drift.stdout.log"
 
     if grep -R -E -q \
-      'owner-test-password|agent-test-password|auth-test-password|core-test-password|session=valid|integration-secret' \
+      'owner-test-password|agent-test-password|auth-test-password|core-test-password|thesistrace.session_token=image-smoke-session|integration-secret' \
       "$evidence_root"; then
       echo "Agent image-smoke evidence exposed a credential" >&2
       exit 1

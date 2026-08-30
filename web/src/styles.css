@@ -314,7 +314,7 @@ code { font-family: var(--mono); }
   gap: 8px;
   padding: 8px 4px;
   color: var(--ink-faint);
-  font-size: 11px;
+  font-size: 12px;
 }
 .chat-session-current {
   display: flex;
@@ -486,6 +486,45 @@ code { font-family: var(--mono); }
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: 10px;
+}
+.chat-tool-activity {
+  display: grid;
+  width: min(100%, 680px);
+  min-height: 40px;
+  align-self: flex-start;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  color: var(--ink-soft);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+}
+.chat-tool-activity svg { color: var(--primary-hover); }
+.chat-tool-activity-completed svg { color: var(--success); }
+.chat-tool-activity-failed svg { color: var(--danger); }
+.chat-tool-kind {
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.chat-tool-activity code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-muted);
+  font: 12px/1.4 var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-tool-status { color: var(--ink-muted); font-weight: 500; }
+.chat-tool-duration {
+  color: var(--ink-soft);
+  font: 12px/1.4 var(--mono);
+  white-space: nowrap;
 }
 .chat-model-controls {
   display: grid;
@@ -1869,6 +1908,19 @@ select { color-scheme: dark; }
   .chat-model-context { display: none; }
   .chat-empty-state { width: calc(100% - 24px); }
   .chat-empty-state h1 { font-size: 23px; }
+  .chat-tool-activity {
+    grid-template-areas:
+      "icon kind status"
+      "icon name duration";
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 8px;
+    row-gap: 2px;
+  }
+  .chat-tool-activity > svg { grid-area: icon; }
+  .chat-tool-kind { grid-area: kind; }
+  .chat-tool-activity code { grid-area: name; }
+  .chat-tool-status { grid-area: status; }
+  .chat-tool-duration { grid-area: duration; }
   .chat-model-controls { grid-template-columns: 1fr; }
   .chat-composer-dock > p { display: none; }
   .context-breadcrumb > span:first-child,

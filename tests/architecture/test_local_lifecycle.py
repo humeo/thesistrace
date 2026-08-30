@@ -715,7 +715,7 @@ def test_container_builds_exclude_host_dependency_directories() -> None:
 def test_development_watch_assigns_service_appropriate_actions() -> None:
     development = (ROOT / "deploy" / "core" / "compose.dev.yaml").read_text()
 
-    assert "thesistrace.entrypoints.http:app" in development
+    assert "thesistrace.entrypoints.http:create_production_app" in development
     assert "--reload-dir" in development
     assert "action: sync+restart" in development
     assert "action: sync" in development
@@ -1546,6 +1546,15 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert "production_mcp_image_smoke.py stdio" in commands
     assert "production_mcp_image_smoke.py evidence" in commands
     assert "THESISTRACE_TEST_RANDOM_SEED=1401" in commands
+    mcp_smoke_commands = [
+        line
+        for line in commands.splitlines()
+        if "production_mcp_image_smoke.py" in line
+    ]
+    assert mcp_smoke_commands
+    for mcp_smoke_command in mcp_smoke_commands:
+        assert "-e THESISTRACE_MCP_ALLOWED_HOSTS=" in mcp_smoke_command
+        assert "-e THESISTRACE_MCP_ALLOWED_ORIGINS=" in mcp_smoke_command
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
         "api research-worker batch-research-worker tracking-worker\n" in commands

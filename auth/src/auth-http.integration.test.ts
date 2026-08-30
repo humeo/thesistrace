@@ -1,3 +1,5 @@
+import { createPublicKey, verify } from "node:crypto";
+
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -8,7 +10,7 @@ import {
 } from "./auth.js";
 import { AuthEventRecorder } from "./auth-events.js";
 import { AuthBackgroundTasks } from "./background-tasks.js";
-import type { AuthSettings } from "./config.js";
+import { authTestSettings } from "../test-fixtures/auth-settings.js";
 import {
   AuthOperationCoordinator,
   CredentialOperationCoordinator,
@@ -19,6 +21,7 @@ import { checkAuthReadiness } from "./readiness.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
 import { verifyAuthSchema } from "./schema-contract.js";
 import { InvitationAdmission } from "./invitation-admission.js";
+import { createMcpAccessTokenIssuer } from "./mcp-access-token.js";
 import { unknownEmailHmac } from "./security.js";
 
 const ownerDatabaseUrl = process.env.THESISTRACE_AUTH_TEST_OWNER_DATABASE_URL;
@@ -34,18 +37,7 @@ const authRuntimeDatabaseUrl = roleDatabaseUrl(
 const owner = new Pool({ connectionString: ownerDatabaseUrl, max: 2 });
 const runtimePool = createAuthPool(authRuntimeDatabaseUrl);
 const coordinationPool = createAuthCoordinationPool(authRuntimeDatabaseUrl);
-const settings: AuthSettings = {
-  databaseUrl: authRuntimeDatabaseUrl,
-  environment: "test",
-  host: "127.0.0.1",
-  port: 8200,
-  publicOrigin: "http://127.0.0.1:5173",
-  resendApiKey: "test-resend-key",
-  resendApiUrl: "http://127.0.0.1:8300",
-  resendFromEmail: "ThesisTrace <noreply@thesistrace.test>",
-  secret: "0123456789abcdef0123456789abcdef",
-  secureCookies: false,
-};
+const settings = authTestSettings({ databaseUrl: authRuntimeDatabaseUrl });
 const invitationAdmission = new InvitationAdmission();
 const credentialCoordinator = new CredentialOperationCoordinator({
   authSecret: settings.secret,
@@ -154,6 +146,65 @@ describe.sequential("Auth database-backed HTTP contract", () => {
         /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       ),
     });
+    expect(await persistedSessionTimes()).toEqual(before);
+  });
+
+  it("exchanges an active database Session for a short-lived Core-verifiable MCP token", async () => {
+    const { app, auth } = runtime();
+    const cookie = await createSessionCookie(auth, "agent@example.com");
+    const before = await persistedSessionTimes();
+
+    const response = await app.request(
+      `${settings.publicOrigin}/internal/session/exchange`,
+      { method: "POST", headers: { cookie } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.has("set-cookie")).toBe(false);
+    const body = await response.json() as {
+      access_token: string;
+      expires_in: number;
+      token_type: string;
+    };
+    expect(body).toMatchObject({
+      expires_in: settings.mcpTokenLifetimeSeconds,
+      token_type: "Bearer",
+    });
+    const [encodedHeader, encodedPayload, encodedSignature] =
+      body.access_token.split(".");
+    expect(encodedHeader).toBeDefined();
+    expect(encodedPayload).toBeDefined();
+    expect(encodedSignature).toBeDefined();
+    const header = decodeJwtSegment(encodedHeader ?? "");
+    const claims = decodeJwtSegment(encodedPayload ?? "");
+    expect(header).toEqual({ alg: "EdDSA", kid: settings.mcpPublicJwk.kid });
+    expect(claims).toMatchObject({
+      aud: settings.mcpAudience,
+      client_id: settings.mcpClientId,
+      iss: settings.mcpIssuer,
+      scope: settings.mcpGrantScopes.join(" "),
+      sub: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    });
+    expect(claims).toMatchObject({
+      exp: expect.any(Number),
+      iat: expect.any(Number),
+      jti: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+      nbf: expect.any(Number),
+    });
+    expect(claims.scope).not.toContain("refresh");
+    expect(
+      verify(
+        null,
+        Buffer.from(`${encodedHeader}.${encodedPayload}`),
+        createPublicKey({ format: "jwk", key: settings.mcpPublicJwk }),
+        Buffer.from(encodedSignature ?? "", "base64url"),
+      ),
+    ).toBe(true);
     expect(await persistedSessionTimes()).toEqual(before);
   });
 
@@ -618,9 +669,18 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     },
   );
 
-  it.each(["invalid", "expired", "revoked", "inactive"])(
-    "rejects an %s database Session",
-    async (state) => {
+  it.each([
+    ["/internal/session/verify", "invalid"],
+    ["/internal/session/verify", "expired"],
+    ["/internal/session/verify", "revoked"],
+    ["/internal/session/verify", "inactive"],
+    ["/internal/session/exchange", "invalid"],
+    ["/internal/session/exchange", "expired"],
+    ["/internal/session/exchange", "revoked"],
+    ["/internal/session/exchange", "inactive"],
+  ])(
+    "%s rejects an %s database Session",
+    async (path, state) => {
       const { app, auth } = runtime();
       let cookie = "thesistrace.session_token=invalid";
       if (state !== "invalid") {
@@ -637,7 +697,7 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       }
 
       const response = await app.request(
-        `${settings.publicOrigin}/internal/session/verify`,
+        `${settings.publicOrigin}${path}`,
         { method: "POST", headers: { cookie } },
       );
 
@@ -697,6 +757,9 @@ describe.sequential("Auth database-backed HTTP contract", () => {
 
 function runtime() {
   const auth = createThesisTraceAuth(settings, runtimePool, authLifecycle);
+  const issueMcpAccessToken = createMcpAccessTokenIssuer(settings, {
+    sign: (payload) => auth.api.signJWT({ body: { payload } }),
+  });
   const tasks = new AuthBackgroundTasks();
   runtimeTasks.add(tasks);
   const events = new AuthEventRecorder({
@@ -737,6 +800,7 @@ function runtime() {
     async inspectInvitation() {
       throw new InvitationRejectedError();
     },
+    issueMcpAccessToken,
     publicOrigin: settings.publicOrigin,
     readiness: () => checkAuthReadiness(runtimePool),
     async resetPassword() {
@@ -744,6 +808,13 @@ function runtime() {
     },
   });
   return { app, auth, tasks };
+}
+
+function decodeJwtSegment(value: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<
+    string,
+    unknown
+  >;
 }
 
 async function createSessionCookie(

@@ -16,6 +16,7 @@ import { diagnoseAuthFailure } from "./failure.js";
 import { createAuthHttpObserver } from "./http-observability.js";
 import { ResearcherInvitationService } from "./invitation.js";
 import { InvitationAdmission } from "./invitation-admission.js";
+import { createMcpAccessTokenIssuer } from "./mcp-access-token.js";
 import { PasswordResetLifecycle } from "./password-reset.js";
 import { checkAuthReadiness } from "./readiness.js";
 import { sendResendEmail } from "./resend.js";
@@ -79,6 +80,9 @@ async function main(): Promise<void> {
       isResearcherActive: passwordReset.isResearcherActive,
       sendResetPassword: passwordReset.sendResetPassword,
     });
+    const issueMcpAccessToken = createMcpAccessTokenIssuer(settings, {
+      sign: (payload) => auth.api.signJWT({ body: { payload } }),
+    });
     const invitations = new ResearcherInvitationService({
       auth,
       authSecret: settings.secret,
@@ -129,6 +133,7 @@ async function main(): Promise<void> {
       getSession: (input) => auth.api.getSession(input),
       httpObserver: createAuthHttpObserver(),
       inspectInvitation: (token) => invitations.inspect(token),
+      issueMcpAccessToken,
       publicOrigin: settings.publicOrigin,
       readiness: () => checkAuthReadiness(pool),
       resetPassword: passwordReset.completeReset,

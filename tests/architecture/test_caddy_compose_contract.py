@@ -31,22 +31,43 @@ def test_caddy_is_the_only_web_runtime_and_preserves_api_paths() -> None:
     assert not (DEPLOY / "nginx.conf.template").exists()
 
     private = caddyfile.index("handle @private_backend")
+    mcp_query = caddyfile.index("handle @mcp_query")
+    mcp_noncanonical = caddyfile.index("handle @mcp_noncanonical")
+    mcp = caddyfile.index("handle /mcp {")
+    mcp_metadata = caddyfile.index(
+        "handle /.well-known/oauth-protected-resource/mcp"
+    )
     auth = caddyfile.index("handle /api/auth/*")
     agent = caddyfile.index("handle /api/agent/*")
     core = caddyfile.index("handle /api/*")
     hashed = caddyfile.index("handle @hashed_assets")
     fallback = caddyfile.rindex("handle {")
-    assert private < auth < agent < core < hashed < fallback
+    assert (
+        private
+        < mcp_query
+        < mcp_noncanonical
+        < mcp
+        < mcp_metadata
+        < auth
+        < agent
+        < core
+        < hashed
+        < fallback
+    )
     assert "handle_path" not in caddyfile
     assert "reverse_proxy auth:8200" in caddyfile
     assert "reverse_proxy agent:8400" in caddyfile
     assert "reverse_proxy api:8100" in caddyfile
+    assert caddyfile.count("reverse_proxy api:8100") == 3
     assert caddyfile.count(
         "header_up X-ThesisTrace-Client-IP {remote_host}"
-    ) == 3
-    assert caddyfile.count("header_up X-Request-ID {http.request.uuid}") == 3
+    ) == 5
+    assert caddyfile.count("header_up X-Request-ID {http.request.uuid}") == 5
     assert ">X-Request-ID {http.request.uuid}" in caddyfile
     assert "path /health /health/* /internal /internal/*" in caddyfile
+    assert "path /mcp /.well-known/oauth-protected-resource/mcp" in caddyfile
+    assert 'not query ""' in caddyfile
+    assert "path /mcp/* /.well-known/oauth-protected-resource/mcp/*" in caddyfile
     assert 'respond 404' in caddyfile
     assert 'Cache-Control "no-store"' in caddyfile
     assert 'Cache-Control "public, max-age=31536000, immutable"' in caddyfile
@@ -63,8 +84,8 @@ def test_caddy_discards_idle_upstream_connections_before_app_servers_do() -> Non
     # Uvicorn and the Node HTTP servers close idle HTTP/1.1 connections after 5s.
     # Caddy must retire its pooled connections first or a non-idempotent request can
     # receive a 502 while writing to an upstream socket that has just been closed.
-    assert caddyfile.count("transport http {") == 3
-    assert caddyfile.count("keepalive 2s") == 3
+    assert caddyfile.count("transport http {") == 5
+    assert caddyfile.count("keepalive 2s") == 5
 
 
 def test_caddy_applies_the_exact_security_and_sanitized_logging_contract() -> None:
@@ -101,6 +122,9 @@ def test_caddy_applies_the_exact_security_and_sanitized_logging_contract() -> No
     assert "log_append path {http.request.uri.path}" not in caddyfile
     for normalized_path in (
         "/private/*",
+        "/mcp",
+        "/mcp/*",
+        "/.well-known/oauth-protected-resource/mcp",
         "/api/auth/*",
         "/api/agent/*",
         "/api/*",
@@ -183,7 +207,16 @@ def test_base_compose_has_independent_agent_auth_and_core_identities() -> None:
     assert "THESISTRACE_OWNER_DATABASE_URL" in auth_initializer
     assert "condition: service_healthy" in auth_initializer
     assert "THESISTRACE_AUTH_DATABASE_URL" in auth
+    assert "THESISTRACE_MCP_SIGNING_PRIVATE_JWK" in auth
+    assert "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK" in auth
+    assert "THESISTRACE_MCP_AGENT_SCOPES" in auth
     assert "THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth:8200" in agent
+    assert "THESISTRACE_MCP_INTERNAL_URL: http://api:8100/mcp" in agent
+    assert "THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS" in agent
+    assert "THESISTRACE_MCP_CLOCK_SKEW_SECONDS" in agent
+    assert "THESISTRACE_MCP_SIGNING_PRIVATE_JWK" not in agent
+    assert "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK" not in agent
+    assert "THESISTRACE_MCP_AGENT_SCOPES" not in agent
     assert "THESISTRACE_AGENT_MODEL_REGISTRY" in agent
     assert "image: ${THESISTRACE_AGENT_IMAGE:" in compose
     assert "postgresql://agent_runtime:" in agent
@@ -194,9 +227,16 @@ def test_base_compose_has_independent_agent_auth_and_core_identities() -> None:
     assert "THESISTRACE_OWNER_DATABASE_URL" in agent_initializer
     assert "THESISTRACE_AGENT_DATABASE_URL" not in agent_initializer
     assert "THESISTRACE_AGENT_MODEL_REGISTRY" not in agent_initializer
+    assert "THESISTRACE_MCP_" not in agent_initializer
     assert "THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth:8200" in api
+    assert "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK" in api
+    assert "THESISTRACE_MCP_DEPLOYMENT_TOOLS" in api
+    assert "THESISTRACE_MCP_ALLOWED_HOSTS" in api
+    assert "THESISTRACE_MCP_SIGNING_PRIVATE_JWK" not in api
+    assert "THESISTRACE_MCP_AGENT_SCOPES" not in api
     assert all(
         "THESISTRACE_AUTH_INTERNAL_ORIGIN" not in worker
+        and "THESISTRACE_MCP_" not in worker
         for worker in (research_worker, batch_worker, tracking_worker)
     )
     assert "condition: service_completed_successfully" in auth
@@ -259,6 +299,9 @@ def test_development_and_test_origins_are_exact_before_compose_rendering() -> No
     assert "THESISTRACE_PUBLIC_ORIGIN=http://127.0.0.1:5173" in development_env
     assert "THESISTRACE_ENVIRONMENT=development" in development_env
     assert "THESISTRACE_AGENT_IMAGE=thesistrace-agent-dev" in development_env
+    assert "THESISTRACE_MCP_SIGNING_PRIVATE_JWK=" in development_env
+    assert "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK=" in development_env
+    assert "THESISTRACE_MCP_INTERNAL_URL" not in development_env
     assert "127.0.0.1:${THESISTRACE_DEV_WEB_PORT}:5173" in development
     assert "127.0.0.1:${THESISTRACE_DEV_API_PORT}:8100" in development
 
@@ -272,6 +315,7 @@ def test_development_and_test_origins_are_exact_before_compose_rendering() -> No
     assert "THESISTRACE_TEST_CADDY_PORT=\"$caddy_port\"" in runner
     assert "THESISTRACE_PUBLIC_ORIGIN=\"$public_origin\"" in runner
     assert 'THESISTRACE_AGENT_IMAGE="$project_name-agent"' in runner
+    assert 'THESISTRACE_MCP_SIGNING_PRIVATE_JWK="$mcp_signing_private_jwk"' in runner
     assert runner.index("caddy_port=") < runner.index("compose config --quiet")
 
 
