@@ -12,10 +12,12 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Inexact, localcontext
 from pathlib import Path
 from time import monotonic
+from types import SimpleNamespace
 
 import pytest
 from benchmark_support import FixtureBenchmarkSource, benchmark_mount_for_data_mount
 from canonical_store import open_complete_refresh_basis
+from psycopg.errors import CheckViolation
 
 import thesistrace.data.refresh as refresh_module
 from thesistrace._postgres import PostgresDatabase
@@ -148,9 +150,7 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
                 assert pointer is not None
                 published_sessions.append(pointer.data_through_session)
             if event.get("phase") in {"market", "publication"}:
-                raise RuntimeError(
-                    "simulated telemetry loss with canary-secret at /private/source"
-                )
+                raise RuntimeError("simulated telemetry loss with canary-secret at /private/source")
 
         refresh = _refresh_service(
             database,
@@ -198,15 +198,11 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
             == candidate
         )
         assert head.prepared_at == FIRST_PREPARED_AT.isoformat()
-        snapshot = BenchmarkSnapshotStore(
-            benchmark_mount_for_data_mount(tmp_path)
-        ).read()
+        snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
         assert snapshot is not None
         assert snapshot.coverage_end_session == candidate["research_calendar"][-1]
         assert snapshot.published_at == "2026-09-07T09:45:00Z"
-        assert benchmark_source.requests == [
-            ("2010-01-04", candidate["research_calendar"][-1])
-        ]
+        assert benchmark_source.requests == [("2010-01-04", candidate["research_calendar"][-1])]
         assert len(source.plans) == 1
         plan = source.plans[0]
         assert plan.kind == "refresh"
@@ -272,9 +268,7 @@ def test_data_overview_reports_a_lagging_benchmark_snapshot_as_not_ready(
         current = _twenty_session_canonical()
         _establish_head(database, tmp_path, current)
         prior_session = str(current["research_calendar"][-2])
-        snapshot = BenchmarkSnapshotStore(
-            benchmark_mount_for_data_mount(tmp_path)
-        ).publish(
+        snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).publish(
             (
                 BenchmarkLevel("2010-01-04", "1"),
                 BenchmarkLevel(prior_session, "2"),
@@ -366,9 +360,7 @@ def test_refresh_reports_only_canonical_phase_timings(
         assert _process_next(refresh, RecordingRefreshSource(candidate)) is True
 
         phase_events = [
-            event
-            for event in lifecycle_events
-            if event["event"] == "data_refresh_phase_completed"
+            event for event in lifecycle_events if event["event"] == "data_refresh_phase_completed"
         ]
         assert [event["phase"] for event in phase_events] == [
             "current_head",
@@ -473,14 +465,10 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
-        snapshot = BenchmarkSnapshotStore(
-            benchmark_mount_for_data_mount(tmp_path)
-        ).read()
+        snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
         assert snapshot is not None
         assert snapshot.coverage_end_session == current["research_calendar"][-1]
-        assert benchmark_source.requests == [
-            ("2010-01-04", current["research_calendar"][-1])
-        ]
+        assert benchmark_source.requests == [("2010-01-04", current["research_calendar"][-1])]
         assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             SECOND_REFRESH_AT
         )
@@ -559,10 +547,7 @@ def test_refresh_rejects_incomplete_benchmark_before_moving_head(
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == original_manifest
-        assert (
-            BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
-            is None
-        )
+        assert BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read() is None
     finally:
         database.close()
 
@@ -595,9 +580,7 @@ def test_refresh_snapshot_can_lead_when_a_competing_head_wins(
             nonlocal winner_published
             if event.get("phase") != "benchmark" or event.get("outcome") != "completed":
                 return
-            snapshot = BenchmarkSnapshotStore(
-                benchmark_mount_for_data_mount(tmp_path)
-            ).read()
+            snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
             assert snapshot is not None
             assert snapshot.coverage_end_session == candidate["research_calendar"][-1]
             lifecycle = DatasetLifecycle(database, tmp_path)
@@ -618,9 +601,7 @@ def test_refresh_snapshot_can_lead_when_a_competing_head_wins(
             tmp_path,
             max_attempts=1,
             lifecycle_event=publish_competing_head_after_benchmark,
-            clock=iter(
-                (FIRST_PREPARED_AT, FIRST_BENCHMARK_PUBLISHED_AT)
-            ).__next__,
+            clock=iter((FIRST_PREPARED_AT, FIRST_BENCHMARK_PUBLISHED_AT)).__next__,
         )
         refresh.submit(idempotency_key="benchmark-before-head", as_of=AS_OF)
 
@@ -650,9 +631,7 @@ def test_invalid_refresh_candidate_leaves_the_current_head_and_freshness_unchang
     try:
         current = _twenty_session_canonical()
         manifest = _establish_head(database, tmp_path, current)
-        prior_refresh_at = (
-            _overview_service(database, tmp_path).overview().last_market_refresh_at
-        )
+        prior_refresh_at = _overview_service(database, tmp_path).overview().last_market_refresh_at
         invalid = copy.deepcopy(current)
         invalid["prices"] = []
         lifecycle_events: list[dict[str, object]] = []
@@ -705,9 +684,11 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
         replay.update(
             {
                 "format": "thesistrace-tushare-refresh-replay",
-                "version": 2,
+                "version": 3,
                 "request_start": current["research_calendar"][0],
                 "request_end": "2026-08-03",
+                "financial": {},
+                "financial_refresh": None,
             }
         )
         refresh_replay = tmp_path / "refresh-replay.json"
@@ -752,10 +733,7 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
-        assert (
-            _overview_service(database, tmp_path).overview().last_market_refresh_at
-            is not None
-        )
+        assert _overview_service(database, tmp_path).overview().last_market_refresh_at is not None
     finally:
         database.close()
 
@@ -970,6 +948,445 @@ def test_concurrent_distinct_submissions_both_enter_the_fifo(
         database.close()
 
 
+def test_financial_submission_shares_exact_idempotency_and_the_market_fifo(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path)
+
+        market = refresh.submit(idempotency_key="fifo-market", as_of=AS_OF)
+        financial = refresh.submit_financial(
+            idempotency_key="fifo-financial",
+            observation_through_session=current["research_calendar"][-1],
+        )
+
+        assert market.kind == "market"
+        assert market.as_of == AS_OF.isoformat()
+        assert market.observation_through_session is None
+        assert financial.kind == "financial"
+        assert financial.as_of is None
+        assert financial.observation_through_session == current["research_calendar"][-1]
+        assert financial.status == "accepted"
+        assert (
+            refresh.submit_financial(
+                idempotency_key="fifo-financial",
+                observation_through_session=current["research_calendar"][-1],
+            )
+            == financial
+        )
+        with pytest.raises(DataRefreshError) as conflict:
+            refresh.submit_financial(
+                idempotency_key="fifo-financial",
+                observation_through_session=current["research_calendar"][-2],
+            )
+        assert conflict.value.code == "IDEMPOTENCY_KEY_CONFLICT"
+
+        with database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT idempotency_key, kind, as_of, observation_through_session
+                FROM data.refresh_operations
+                WHERE idempotency_key IN ('fifo-market', 'fifo-financial')
+                ORDER BY created_at, idempotency_key
+                """
+            ).fetchall()
+        assert [row["idempotency_key"] for row in rows] == [
+            "fifo-market",
+            "fifo-financial",
+        ]
+        assert rows[0]["as_of"] == AS_OF
+        assert rows[0]["observation_through_session"] is None
+        assert rows[1]["as_of"] is None
+        assert (
+            rows[1]["observation_through_session"].isoformat() == (current["research_calendar"][-1])
+        )
+    finally:
+        _delete_refresh_operations(database, "fifo-market", "fifo-financial")
+        database.close()
+
+
+def test_refresh_receipt_schema_rejects_market_degraded_outcome(
+    core_settings: CoreSettings,
+) -> None:
+    database = _database(core_settings)
+    try:
+        with pytest.raises(CheckViolation):
+            with database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    INSERT INTO data.refresh_operations (
+                        idempotency_key, kind, fingerprint, status, attempt_count,
+                        outcome, as_of, generation_manifest_sha256,
+                        data_through_session, last_refresh_at, finished_at
+                    ) VALUES (
+                        'invalid-market-degraded', 'market', %s, 'succeeded', 1,
+                        'degraded', %s, %s, '2026-08-14', now(), now()
+                    )
+                    """,
+                    ("a" * 64, AS_OF, "b" * 64),
+                )
+    finally:
+        database.close()
+
+
+@pytest.mark.parametrize(
+    ("key", "outcome", "pending_count", "gap_count"),
+    (
+        ("invalid-financial-empty-degraded", "degraded", 0, 0),
+        ("invalid-financial-published-pending", "published", 1, 0),
+        ("invalid-financial-no-change-gap", "no_change", 0, 1),
+    ),
+)
+def test_refresh_receipt_schema_binds_financial_outcomes_to_unresolved_counts(
+    core_settings: CoreSettings,
+    *,
+    key: str,
+    outcome: str,
+    pending_count: int,
+    gap_count: int,
+) -> None:
+    database = _database(core_settings)
+    try:
+        with pytest.raises(CheckViolation):
+            with database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    INSERT INTO data.refresh_operations (
+                        idempotency_key, kind, fingerprint, status, attempt_count,
+                        outcome, observation_through_session,
+                        generation_manifest_sha256, data_through_session,
+                        last_refresh_at, financial_complete_through_session,
+                        matched_trigger_count, checked_no_structured_change_count,
+                        accepted_instrument_count, failed_instrument_count,
+                        pending_instrument_count, discovery_gap_count, finished_at
+                    ) VALUES (
+                        %s, 'financial', %s, 'succeeded', 1,
+                        %s, '2026-08-14', %s, '2026-08-14', now(), '2026-08-14',
+                        0, 0, 0, 0, %s, %s, now()
+                    )
+                    """,
+                    (key, "c" * 64, outcome, "d" * 64, pending_count, gap_count),
+                )
+    finally:
+        database.close()
+
+
+def test_shared_worker_dispatches_financial_and_persists_a_safe_degraded_receipt(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        manifest = _establish_head(database, tmp_path, current)
+        target = current["research_calendar"][-1]
+        refresh = _refresh_service(database, tmp_path)
+        refresh.submit_financial(
+            idempotency_key="financial-degraded",
+            observation_through_session=target,
+        )
+        received: dict[str, object] = {}
+
+        class FakeFinancialService:
+            def __init__(
+                self,
+                selected_database: object,
+                mount_root: object,
+                announcement_source: object,
+                financial_source: object,
+                **options: object,
+            ) -> None:
+                received.update(
+                    database=selected_database,
+                    mount_root=mount_root,
+                    announcement_source=announcement_source,
+                    financial_source=financial_source,
+                    options=options,
+                )
+
+            def publish(self, **arguments: object) -> object:
+                received.update(arguments)
+                return SimpleNamespace(
+                    status="succeeded_with_pending",
+                    generation_manifest_sha256=manifest,
+                    attempted_through_session=target,
+                    complete_through_session=target,
+                    matched_trigger_count=2,
+                    checked_no_structured_change_count=1,
+                    accepted_instrument_count=1,
+                    failed_instrument_count=1,
+                    pending_instrument_count=1,
+                    discovery_gap_count=0,
+                    canonical_changed=True,
+                )
+
+        announcement_source = object()
+        financial_source = object()
+        monkeypatch.setattr(
+            refresh_module,
+            "DailyFinancialRefreshService",
+            FakeFinancialService,
+        )
+
+        assert (
+            refresh.process_next(
+                RecordingRefreshSource(current),
+                benchmark_source=FixtureBenchmarkSource(),
+                financial_announcement_source=announcement_source,
+                financial_source=financial_source,
+            )
+            is True
+        )
+
+        receipt = refresh.inspect("financial-degraded")
+        assert received["announcement_source"] is announcement_source
+        assert received["financial_source"] is financial_source
+        assert received["idempotency_key"] == "financial-degraded"
+        assert received["observation_through_session"] == target
+        assert receipt.status == "succeeded"
+        assert receipt.outcome == "degraded"
+        assert receipt.data_through_session == current["research_calendar"][-1]
+        assert receipt.financial_complete_through_session == target
+        assert receipt.matched_trigger_count == 2
+        assert receipt.checked_no_structured_change_count == 1
+        assert receipt.accepted_instrument_count == 1
+        assert receipt.failed_instrument_count == 1
+        assert receipt.pending_instrument_count == 1
+        assert receipt.discovery_gap_count == 0
+    finally:
+        _delete_refresh_operations(database, "financial-degraded")
+        database.close()
+
+
+@pytest.mark.parametrize(
+    ("canonical_changed", "expected_outcome"),
+    ((True, "published"), (False, "no_change")),
+)
+def test_shared_worker_distinguishes_clean_financial_terminal_outcomes(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    canonical_changed: bool,
+    expected_outcome: str,
+) -> None:
+    database = _database(core_settings)
+    key = f"financial-{expected_outcome}"
+    try:
+        current = _twenty_session_canonical()
+        manifest = _establish_head(database, tmp_path, current)
+        target = current["research_calendar"][-1]
+        refresh = _refresh_service(database, tmp_path)
+        refresh.submit_financial(
+            idempotency_key=key,
+            observation_through_session=target,
+        )
+
+        class FakeFinancialService:
+            def __init__(self, *arguments: object, **options: object) -> None:
+                del arguments, options
+
+            def publish(self, **arguments: object) -> object:
+                del arguments
+                return SimpleNamespace(
+                    status="succeeded",
+                    generation_manifest_sha256=manifest,
+                    complete_through_session=target,
+                    matched_trigger_count=0,
+                    checked_no_structured_change_count=0,
+                    accepted_instrument_count=0,
+                    failed_instrument_count=0,
+                    pending_instrument_count=0,
+                    discovery_gap_count=0,
+                    canonical_changed=canonical_changed,
+                )
+
+        monkeypatch.setattr(
+            refresh_module,
+            "DailyFinancialRefreshService",
+            FakeFinancialService,
+        )
+        assert (
+            refresh.process_next(
+                RecordingRefreshSource(current),
+                benchmark_source=FixtureBenchmarkSource(),
+                financial_announcement_source=object(),
+                financial_source=object(),
+            )
+            is True
+        )
+
+        receipt = refresh.inspect(key)
+        assert receipt.status == "succeeded"
+        assert receipt.outcome == expected_outcome
+        assert receipt.pending_instrument_count == 0
+        assert receipt.discovery_gap_count == 0
+    finally:
+        _delete_refresh_operations(database, key)
+        database.close()
+
+
+def test_financial_business_rejection_is_terminal_without_retry(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path)
+        refresh.submit_financial(
+            idempotency_key="financial-business-rejected",
+            observation_through_session=current["research_calendar"][-1],
+        )
+
+        class RejectingFinancialService:
+            def __init__(self, *arguments: object, **options: object) -> None:
+                del arguments, options
+
+            def publish(self, **arguments: object) -> object:
+                del arguments
+                raise refresh_module.FinancialDailyRefreshError("FINANCIAL_TARGET_EXCEEDS_MARKET")
+
+        monkeypatch.setattr(
+            refresh_module,
+            "DailyFinancialRefreshService",
+            RejectingFinancialService,
+        )
+        with pytest.raises(DataRefreshError) as failure:
+            refresh.process_next(
+                RecordingRefreshSource(current),
+                benchmark_source=FixtureBenchmarkSource(),
+                financial_announcement_source=object(),
+                financial_source=object(),
+            )
+        assert failure.value.code == "FINANCIAL_TARGET_EXCEEDS_MARKET"
+
+        receipt = refresh.inspect("financial-business-rejected")
+        assert receipt.status == "failed"
+        assert receipt.outcome == "business_rejected"
+        assert receipt.failure_code == "FINANCIAL_TARGET_EXCEEDS_MARKET"
+        assert receipt.attempt_count == 1
+    finally:
+        _delete_refresh_operations(database, "financial-business-rejected")
+        database.close()
+
+
+@pytest.mark.parametrize(
+    "failure_code",
+    (
+        "FINANCIAL_DAILY_REFRESH_WRITE_FAILED",
+        "FINANCIAL_CANDIDATE_RECORD_CONFLICT",
+        "FINANCIAL_REFRESH_CLOCK_INVALID",
+        "FINANCIAL_DAILY_CANDIDATE_INVALID",
+    ),
+)
+def test_nonretryable_financial_internal_failure_is_not_business_rejection(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    failure_code: str,
+) -> None:
+    database = _database(core_settings)
+    key = f"financial-internal-{failure_code.lower()}"
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path)
+        refresh.submit_financial(
+            idempotency_key=key,
+            observation_through_session=current["research_calendar"][-1],
+        )
+
+        class InternallyFailingFinancialService:
+            def __init__(self, *arguments: object, **options: object) -> None:
+                del arguments, options
+
+            def publish(self, **arguments: object) -> object:
+                del arguments
+                raise refresh_module.FinancialDailyRefreshError(failure_code)
+
+        monkeypatch.setattr(
+            refresh_module,
+            "DailyFinancialRefreshService",
+            InternallyFailingFinancialService,
+        )
+        with pytest.raises(DataRefreshError) as failure:
+            refresh.process_next(
+                RecordingRefreshSource(current),
+                benchmark_source=FixtureBenchmarkSource(),
+                financial_announcement_source=object(),
+                financial_source=object(),
+            )
+        assert failure.value.code == failure_code
+
+        receipt = refresh.inspect(key)
+        assert receipt.status == "failed"
+        assert receipt.outcome == "infrastructure_failed"
+        assert receipt.failure_code == failure_code
+        assert receipt.last_failure_code == failure_code
+        assert receipt.attempt_count == 1
+    finally:
+        _delete_refresh_operations(database, key)
+        database.close()
+
+
+def test_financial_infrastructure_failure_retries_then_exhausts(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = _refresh_service(database, tmp_path, max_attempts=2)
+        refresh.submit_financial(
+            idempotency_key="financial-infrastructure-failed",
+            observation_through_session=current["research_calendar"][-1],
+        )
+
+        class FailingFinancialService:
+            def __init__(self, *arguments: object, **options: object) -> None:
+                del arguments, options
+
+            def publish(self, **arguments: object) -> object:
+                del arguments
+                raise RuntimeError("private infrastructure detail")
+
+        monkeypatch.setattr(
+            refresh_module,
+            "DailyFinancialRefreshService",
+            FailingFinancialService,
+        )
+        for expected_status in ("accepted", "failed"):
+            with pytest.raises(DataRefreshError) as failure:
+                refresh.process_next(
+                    RecordingRefreshSource(current),
+                    benchmark_source=FixtureBenchmarkSource(),
+                    financial_announcement_source=object(),
+                    financial_source=object(),
+                )
+            assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
+            assert refresh.inspect("financial-infrastructure-failed").status == expected_status
+
+        receipt = refresh.inspect("financial-infrastructure-failed")
+        assert receipt.outcome == "infrastructure_failed"
+        assert receipt.failure_code == "RETRY_EXHAUSTED"
+        assert receipt.last_failure_code == "REFRESH_INFRASTRUCTURE_FAILURE"
+        assert receipt.attempt_count == 2
+    finally:
+        _delete_refresh_operations(database, "financial-infrastructure-failed")
+        database.close()
+
+
 def test_worker_waits_for_a_nonexpired_running_refresh_before_claiming_fifo(
     core_settings: CoreSettings,
     tmp_path: Path,
@@ -1014,9 +1431,7 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
     try:
         current = _twenty_session_canonical()
         manifest = _establish_head(database, tmp_path, current)
-        prior_refresh_at = (
-            _overview_service(database, tmp_path).overview().last_market_refresh_at
-        )
+        prior_refresh_at = _overview_service(database, tmp_path).overview().last_market_refresh_at
         lifecycle_events: list[dict[str, object]] = []
         refresh = _refresh_service(
             database,
@@ -1049,9 +1464,7 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
         assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
-        failures = [
-            event for event in lifecycle_events if event["event"] == "data_refresh_failed"
-        ]
+        failures = [event for event in lifecycle_events if event["event"] == "data_refresh_failed"]
         assert [(event["level"], event["failure_code"], event["status"]) for event in failures] == [
             ("WARNING", "SOURCE_UNAVAILABLE", "accepted"),
             ("ERROR", "RETRY_EXHAUSTED", "failed"),
@@ -1139,9 +1552,7 @@ def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
         assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
             recovered_freshness
         )
-        snapshot = BenchmarkSnapshotStore(
-            benchmark_mount_for_data_mount(tmp_path)
-        ).read()
+        snapshot = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)).read()
         assert snapshot is not None
         assert snapshot.coverage_end_session == current["research_calendar"][-1]
         with database.transaction() as transaction:
@@ -1187,9 +1598,7 @@ def test_benchmark_publication_rechecks_lease_after_waiting_for_lifecycle_lock(
         manifest = _establish_head(database, tmp_path, current)
         candidate = copy.deepcopy(current)
         _append_session(candidate)
-        snapshot_store = BenchmarkSnapshotStore(
-            benchmark_mount_for_data_mount(tmp_path)
-        )
+        snapshot_store = BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path))
         assert snapshot_store.read() is None
         refresh = _refresh_service(
             database,
@@ -1387,16 +1796,16 @@ def test_candidate_receipt_and_protection_commit_atomically(
         assert terminal.status == "failed"
         assert terminal.failure_code == "RETRY_EXHAUSTED"
         with database.transaction() as transaction:
-                receipt = transaction.execute(
-                    """
+            receipt = transaction.execute(
+                """
                     SELECT generation_manifest_sha256, candidate_prepared_at
                     FROM data.refresh_operations
                     WHERE idempotency_key = 'candidate-transaction'
                     """
-                ).fetchone()
-                candidates = transaction.execute(
-                    "SELECT count(*) AS count FROM data.generation_candidates"
-                ).fetchone()
+            ).fetchone()
+            candidates = transaction.execute(
+                "SELECT count(*) AS count FROM data.generation_candidates"
+            ).fetchone()
         assert receipt == {
             "candidate_prepared_at": None,
             "generation_manifest_sha256": None,
@@ -1419,9 +1828,7 @@ def test_real_tushare_overlap_merge_failure_keeps_prior_head_and_freshness(
         _lineage, current = normalize_tushare_snapshot(snapshot)
         manifest = _establish_head(database, tmp_path, current)
         prior_canonical = open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
-        prior_refresh_at = (
-            _overview_service(database, tmp_path).overview().last_market_refresh_at
-        )
+        prior_refresh_at = _overview_service(database, tmp_path).overview().last_market_refresh_at
         malformed = copy.deepcopy(snapshot)
         malformed["daily"] = {"not": "a source table"}
         refresh = _refresh_service(database, tmp_path, max_attempts=1)
@@ -1462,9 +1869,7 @@ def test_real_tushare_derived_recomputation_failure_keeps_prior_head_and_freshne
         _lineage, current = normalize_tushare_snapshot(snapshot)
         manifest = _establish_head(database, tmp_path, current)
         prior_canonical = open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
-        prior_refresh_at = (
-            _overview_service(database, tmp_path).overview().last_market_refresh_at
-        )
+        prior_refresh_at = _overview_service(database, tmp_path).overview().last_market_refresh_at
         corrected = copy.deepcopy(snapshot)
         daily = corrected["daily"]
         assert isinstance(daily, list)
@@ -1521,9 +1926,7 @@ def test_real_generation_write_failure_keeps_the_prior_head_readable(
     try:
         current = _twenty_session_canonical()
         manifest = _establish_head(database, tmp_path, current)
-        prior_refresh_at = (
-            _overview_service(database, tmp_path).overview().last_market_refresh_at
-        )
+        prior_refresh_at = _overview_service(database, tmp_path).overview().last_market_refresh_at
         candidate = copy.deepcopy(current)
         _append_session(candidate)
         preview_root = tmp_path.with_name(f"{tmp_path.name}-candidate-preview")
@@ -1592,9 +1995,7 @@ def test_head_replacement_with_rolled_back_lifecycle_commit_is_reconciled(
     try:
         current = _twenty_session_canonical()
         original = _establish_head(database, tmp_path, current)
-        prior_refresh_at = (
-            _overview_service(database, tmp_path).overview().last_market_refresh_at
-        )
+        prior_refresh_at = _overview_service(database, tmp_path).overview().last_market_refresh_at
         candidate = copy.deepcopy(current)
         _append_session(candidate)
         refresh = _refresh_service(database, tmp_path)
@@ -1688,9 +2089,7 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
     try:
         current = _twenty_session_canonical()
         original = _establish_head(database, tmp_path, current)
-        prior_refresh_at = (
-            _overview_service(database, tmp_path).overview().last_market_refresh_at
-        )
+        prior_refresh_at = _overview_service(database, tmp_path).overview().last_market_refresh_at
         candidate = copy.deepcopy(current)
         _append_session(candidate)
         lifecycle_events: list[dict[str, object]] = []
@@ -1764,10 +2163,7 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
         assert terminal.status == "succeeded"
         assert terminal.outcome == "published"
         assert terminal.attempt_count == 1
-        assert (
-            _overview_service(database, tmp_path).overview().last_market_refresh_at
-            is not None
-        )
+        assert _overview_service(database, tmp_path).overview().last_market_refresh_at is not None
         assert tuple((tmp_path / "manifests" / "sha256").glob("*/*.json")) == manifests_before
     finally:
         database.close()
@@ -1786,14 +2182,12 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
     ],
     ids=("financial",),
 )
-def test_refresh_command_failure_before_operation_start_keeps_one_stdout_result(
+def test_financial_submission_failure_uses_the_normal_cli_error_channel(
     tmp_path: Path,
     arguments: list[str],
 ) -> None:
     environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key != "THESISTRACE_DATABASE_URL"
+        key: value for key, value in os.environ.items() if key != "THESISTRACE_DATABASE_URL"
     }
     environment["THESISTRACE_DATA_MOUNT"] = os.fspath(tmp_path)
     environment["THESISTRACE_TUSHARE_TOKEN"] = "diagnostic-canary-secret"
@@ -1807,11 +2201,11 @@ def test_refresh_command_failure_before_operation_start_keeps_one_stdout_result(
     )
 
     assert completed.returncode == 2
-    assert json.loads(completed.stdout) == {
+    assert completed.stdout == ""
+    assert json.loads(completed.stderr) == {
         "status": "failed",
         "code": "OPERATOR_FAILURE",
     }
-    assert completed.stderr == ""
     assert "diagnostic-canary-secret" not in completed.stdout + completed.stderr
 
 
@@ -1933,9 +2327,7 @@ def _wait_for_advisory_waiters(
         if last_waiting >= expected:
             return
         poll.wait(timeout=0.01)
-    raise AssertionError(
-        f"expected {expected} advisory-lock waiters, observed {last_waiting}"
-    )
+    raise AssertionError(f"expected {expected} advisory-lock waiters, observed {last_waiting}")
 
 
 def _wait_for_refresh_lease_expiry(
@@ -2047,8 +2439,5 @@ def _operator_command_with_events(
     value = json.loads(stdout_lines[0])
     assert isinstance(value, dict)
     events = [json.loads(line) for line in completed.stderr.splitlines() if line]
-    assert all(
-        {"timestamp", "level", "component", "event"} <= set(event)
-        for event in events
-    )
+    assert all({"timestamp", "level", "component", "event"} <= set(event) for event in events)
     return value, events

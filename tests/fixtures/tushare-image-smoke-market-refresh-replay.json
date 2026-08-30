@@ -1,6 +1,6 @@
 {
   "format": "thesistrace-tushare-refresh-replay",
-  "version": 2,
+  "version": 3,
   "request_start": "2026-07-09",
   "request_end": "2026-08-05",
   "snapshot": {
@@ -64,5 +64,7 @@
     "suspensions": [],
     "price_limits": [],
     "industry_membership": []
-  }
+  },
+  "financial": {},
+  "financial_refresh": null
 }

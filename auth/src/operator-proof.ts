@@ -56,7 +56,8 @@ export type OperatorInvitationProofOperation =
 export type OperatorProofOperation =
   | OperatorInvitationProofOperation
   | "researcher.sessions.revoke"
-  | "data.refresh.market.submit";
+  | "data.refresh.market.submit"
+  | "data.refresh.financial.submit";
 
 export type OperatorProofRequest =
   | Readonly<{
@@ -74,6 +75,13 @@ export type OperatorProofRequest =
       email?: never;
       idempotencyKey: string;
       operation: "data.refresh.market.submit";
+      researcherId?: never;
+    }>
+  | Readonly<{
+      email?: never;
+      idempotencyKey: string;
+      observationThroughSession: string;
+      operation: "data.refresh.financial.submit";
       researcherId?: never;
     }>;
 
@@ -521,6 +529,14 @@ function operatorRequestHash(request: OperatorProofRequest): Buffer {
       version: 1,
     }));
   }
+  if (request.operation === "data.refresh.financial.submit") {
+    return sha256(JSON.stringify({
+      idempotency_key: request.idempotencyKey,
+      observation_through_session: request.observationThroughSession,
+      operation: request.operation,
+      version: 1,
+    }));
+  }
   return sha256(JSON.stringify({
         email: request.email,
         operation: request.operation,
@@ -549,10 +565,29 @@ function normalizeProofRequest(request: OperatorProofRequest): OperatorProofRequ
       operation: request.operation,
     };
   }
+  if (request.operation === "data.refresh.financial.submit") {
+    if (
+      !isIsoResearchSession(request.observationThroughSession)
+      || !isMarketRefreshIdempotencyKey(request.idempotencyKey)
+    ) {
+      throw new OperatorProofInvalidError();
+    }
+    return {
+      idempotencyKey: request.idempotencyKey,
+      observationThroughSession: request.observationThroughSession,
+      operation: request.operation,
+    };
+  }
   return {
     email: canonicalizeEmail(request.email),
     operation: request.operation,
   };
+}
+
+export function isIsoResearchSession(value: string): boolean {
+  if (!/^(?!0000)\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 function proofMatchesClaim(

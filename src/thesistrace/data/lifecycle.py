@@ -336,6 +336,9 @@ class DatasetLifecycle:
         financial_publication_key: str | None = None,
         daily_financial_publication_key: str | None = None,
         industry_publication_key: str | None = None,
+        publication_guard: (
+            Callable[[PostgresTransaction], AbstractContextManager[None]] | None
+        ) = None,
     ) -> DatasetHeadPointer:
         # protect_candidate already decoded and validated every immutable object.
         # Re-resolve only the content-addressed descriptor at publication time.
@@ -344,89 +347,93 @@ class DatasetLifecycle:
         ) as resolved:
             with self._database.transaction() as transaction:
                 lock_data_lifecycle(transaction)
-                candidate = transaction.execute(
-                    """
-                    SELECT generation_manifest_sha256, status
-                FROM data.generation_candidates
-                WHERE operation_id = %s
-                  AND status = 'live'
-                  AND lease_expires_at > clock_timestamp()
-                    FOR UPDATE
-                    """,
-                    (operation_id,),
-                ).fetchone()
-                if candidate != {
-                    "generation_manifest_sha256": candidate_generation_manifest_sha256,
-                    "status": "live",
-                }:
-                    raise DataLifecycleError("Head candidate is not protected by live work")
-                head = self._heads.compare_and_swap_pointer_resolved(
-                    expected_generation_manifest_sha256=expected_generation_manifest_sha256,
-                    candidate=resolved,
-                    prepared_at=prepared_at,
+                guard = (
+                    nullcontext() if publication_guard is None else publication_guard(transaction)
                 )
-                if financial_publication_key is not None:
-                    receipt = transaction.execute(
+                with guard:
+                    candidate = transaction.execute(
                         """
-                        UPDATE data.financial_refresh_operations
-                        SET publication_head_moved_at = %s, updated_at = now()
-                        WHERE idempotency_key = %s AND status = 'succeeded'
-                          AND composed_generation_manifest_sha256 = %s
-                          AND publication_head_moved_at IS NULL
+                        SELECT generation_manifest_sha256, status
+                        FROM data.generation_candidates
+                        WHERE operation_id = %s
+                          AND status = 'live'
+                          AND lease_expires_at > clock_timestamp()
+                        FOR UPDATE
                         """,
-                        (
-                            prepared_at,
-                            financial_publication_key,
-                            candidate_generation_manifest_sha256,
-                        ),
+                        (operation_id,),
+                    ).fetchone()
+                    if candidate != {
+                        "generation_manifest_sha256": candidate_generation_manifest_sha256,
+                        "status": "live",
+                    }:
+                        raise DataLifecycleError("Head candidate is not protected by live work")
+                    head = self._heads.compare_and_swap_pointer_resolved(
+                        expected_generation_manifest_sha256=(expected_generation_manifest_sha256),
+                        candidate=resolved,
+                        prepared_at=prepared_at,
                     )
-                    if receipt.rowcount != 1:
-                        raise DataLifecycleError("Financial publication receipt conflicted")
-                if daily_financial_publication_key is not None:
-                    receipt = transaction.execute(
-                        """
-                        UPDATE data.financial_daily_refresh_operations
-                        SET publication_head_moved_at = %s, updated_at = now()
-                        WHERE idempotency_key = %s AND status = 'running'
-                          AND composed_generation_manifest_sha256 = %s
-                          AND publication_head_moved_at IS NULL
-                        """,
-                        (
-                            prepared_at,
-                            daily_financial_publication_key,
-                            candidate_generation_manifest_sha256,
-                        ),
-                    )
-                    if receipt.rowcount != 1:
-                        raise DataLifecycleError(
-                            "Daily Financial publication receipt conflicted"
+                    if financial_publication_key is not None:
+                        receipt = transaction.execute(
+                            """
+                            UPDATE data.financial_refresh_operations
+                            SET publication_head_moved_at = %s, updated_at = now()
+                            WHERE idempotency_key = %s AND status = 'succeeded'
+                              AND composed_generation_manifest_sha256 = %s
+                              AND publication_head_moved_at IS NULL
+                            """,
+                            (
+                                prepared_at,
+                                financial_publication_key,
+                                candidate_generation_manifest_sha256,
+                            ),
                         )
-                if industry_publication_key is not None:
-                    receipt = transaction.execute(
+                        if receipt.rowcount != 1:
+                            raise DataLifecycleError("Financial publication receipt conflicted")
+                    if daily_financial_publication_key is not None:
+                        receipt = transaction.execute(
+                            """
+                            UPDATE data.financial_daily_refresh_operations
+                            SET publication_head_moved_at = %s, updated_at = now()
+                            WHERE idempotency_key = %s AND status = 'running'
+                              AND composed_generation_manifest_sha256 = %s
+                              AND publication_head_moved_at IS NULL
+                            """,
+                            (
+                                prepared_at,
+                                daily_financial_publication_key,
+                                candidate_generation_manifest_sha256,
+                            ),
+                        )
+                        if receipt.rowcount != 1:
+                            raise DataLifecycleError(
+                                "Daily Financial publication receipt conflicted"
+                            )
+                    if industry_publication_key is not None:
+                        receipt = transaction.execute(
+                            """
+                            UPDATE data.industry_refresh_operations
+                            SET publication_head_moved_at = %s, updated_at = now()
+                            WHERE idempotency_key = %s AND status = 'succeeded'
+                              AND composed_generation_manifest_sha256 = %s
+                              AND publication_head_moved_at IS NULL
+                            """,
+                            (
+                                prepared_at,
+                                industry_publication_key,
+                                candidate_generation_manifest_sha256,
+                            ),
+                        )
+                        if receipt.rowcount != 1:
+                            raise DataLifecycleError("Industry publication receipt conflicted")
+                    transaction.execute(
                         """
-                        UPDATE data.industry_refresh_operations
-                        SET publication_head_moved_at = %s, updated_at = now()
-                        WHERE idempotency_key = %s AND status = 'succeeded'
-                          AND composed_generation_manifest_sha256 = %s
-                          AND publication_head_moved_at IS NULL
+                        UPDATE data.generation_candidates
+                        SET status = 'released', released_at = now(), updated_at = now()
+                        WHERE operation_id = %s AND status = 'live'
                         """,
-                        (
-                            prepared_at,
-                            industry_publication_key,
-                            candidate_generation_manifest_sha256,
-                        ),
+                        (operation_id,),
                     )
-                    if receipt.rowcount != 1:
-                        raise DataLifecycleError("Industry publication receipt conflicted")
-                transaction.execute(
-                    """
-                    UPDATE data.generation_candidates
-                    SET status = 'released', released_at = now(), updated_at = now()
-                    WHERE operation_id = %s AND status = 'live'
-                    """,
-                    (operation_id,),
-                )
-                return head
+                    return head
 
     def release_candidate(self, *, operation_id: str) -> None:
         with self._database.transaction() as transaction:

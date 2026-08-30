@@ -47,6 +47,7 @@ from thesistrace.data import (
     DataRefreshError,
     DatasetOverviewService,
     RefreshOutcome,
+    validate_financial_refresh_request,
     validate_market_refresh_request,
 )
 from thesistrace.entrypoints.alpha_http import install_alpha_http
@@ -146,6 +147,45 @@ class MarketRefreshOperation(BaseModel):
     status: Literal["accepted", "running", "succeeded", "failed"]
 
 
+class FinancialRefreshSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    idempotency_key: str = Field(min_length=1, max_length=512)
+    observation_through_session: str = Field(min_length=10, max_length=10)
+    proof: str = Field(min_length=80, max_length=80)
+
+
+class FinancialRefreshOperation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    accepted_instrument_count: int | None = Field(default=None, ge=0)
+    attempt_count: int = Field(ge=0)
+    checked_no_structured_change_count: int | None = Field(default=None, ge=0)
+    data_through_session: str | None
+    discovery_gap_count: int | None = Field(default=None, ge=0)
+    failed_instrument_count: int | None = Field(default=None, ge=0)
+    failure_code: str | None
+    financial_complete_through_session: str | None
+    idempotency_key: str
+    kind: Literal["financial"]
+    last_failure_code: str | None
+    last_refresh_at: datetime | None
+    matched_trigger_count: int | None = Field(default=None, ge=0)
+    observation_through_session: str
+    outcome: (
+        Literal[
+            "published",
+            "no_change",
+            "degraded",
+            "business_rejected",
+            "infrastructure_failed",
+        ]
+        | None
+    )
+    pending_instrument_count: int | None = Field(default=None, ge=0)
+    status: Literal["accepted", "running", "succeeded", "failed"]
+
+
 def create_app(
     settings: CoreSettings | None = None,
     *,
@@ -199,9 +239,7 @@ def create_app(
             with open_core_runtime(
                 selected_settings,
                 auth_readiness_origin=(
-                    None
-                    if http_settings is None
-                    else http_settings.auth_internal_origin
+                    None if http_settings is None else http_settings.auth_internal_origin
                 ),
             ) as runtime:
                 app.state.core_runtime = runtime
@@ -360,7 +398,10 @@ def create_app(
         request: Request,
         error: RequestValidationError,
     ):
-        if request.url.path == "/api/operator/data/refreshes/market":
+        if request.url.path in {
+            "/api/operator/data/refreshes/market",
+            "/api/operator/data/refreshes/financial",
+        }:
             return JSONResponse(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 content={"code": "OPERATOR_REQUEST_INVALID"},
@@ -378,8 +419,7 @@ def create_app(
     install_alpha_http(
         app,
         financial_authoring_ready=lambda request: (
-            _data_overview(request).overview().financial_research_readiness
-            != "not_ready"
+            _data_overview(request).overview().financial_research_readiness != "not_ready"
         ),
     )
 
@@ -519,6 +559,91 @@ def create_app(
         return _market_refresh_operation(outcome)
 
     @app.post(
+        "/api/operator/data/refreshes/financial",
+        response_model=FinancialRefreshOperation,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def submit_financial_refresh(
+        request: Request,
+        command: FinancialRefreshSubmission,
+    ) -> FinancialRefreshOperation | Response:
+        try:
+            idempotency_key, target = validate_financial_refresh_request(
+                idempotency_key=command.idempotency_key,
+                observation_through_session=command.observation_through_session,
+            )
+        except DataRefreshError:
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"code": "OPERATOR_REQUEST_INVALID"},
+            )
+        authorizer = _operator_authorizer(request)
+        if authorizer is None:
+            return _auth_unavailable_response()
+        try:
+            await authorizer.consume_financial_refresh_proof(
+                request.headers.get("cookie"),
+                idempotency_key=idempotency_key,
+                observation_through_session=command.observation_through_session,
+                proof=command.proof,
+            )
+        except OperatorAccessNotFound:
+            return Response(status_code=status.HTTP_404_NOT_FOUND)
+        except InvalidOperatorProof:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"code": "OPERATOR_PROOF_INVALID"},
+            )
+        except AuthSessionUnavailable:
+            return _auth_unavailable_response()
+        try:
+            outcome = await run_in_threadpool(
+                _runtime(request).data_refreshes.submit_financial,
+                idempotency_key=idempotency_key,
+                observation_through_session=target,
+            )
+        except DataRefreshError as error:
+            if error.code in {"IDEMPOTENCY_KEY_CONFLICT", "DATA_NOT_READY"}:
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content={"code": error.code},
+                )
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"code": "OPERATOR_REQUEST_INVALID"},
+            )
+        return _financial_refresh_operation(outcome)
+
+    @app.get(
+        "/api/operator/data/refreshes/financial",
+        response_model=FinancialRefreshOperation,
+    )
+    def inspect_financial_refresh(
+        request: Request,
+        idempotency_key: str = Query(min_length=1, max_length=512),
+        observation_through_session: str = Query(min_length=10, max_length=10),
+    ) -> FinancialRefreshOperation | Response:
+        try:
+            normalized_key, target = validate_financial_refresh_request(
+                idempotency_key=idempotency_key,
+                observation_through_session=observation_through_session,
+            )
+            outcome = _runtime(request).data_refreshes.inspect(normalized_key)
+        except DataRefreshError as error:
+            if error.code == "REFRESH_NOT_FOUND":
+                return Response(status_code=status.HTTP_404_NOT_FOUND)
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"code": "OPERATOR_REQUEST_INVALID"},
+            )
+        if outcome.kind != "financial" or outcome.observation_through_session != target:
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={"code": "IDEMPOTENCY_KEY_CONFLICT"},
+            )
+        return _financial_refresh_operation(outcome)
+
+    @app.post(
         "/api/researcher/bootstrap",
         response_model=ResearcherBootstrapResult,
     )
@@ -538,9 +663,7 @@ def create_app(
         request: Request,
         command: CreateResearchFolder,
     ) -> ResearchFolderSummary:
-        return _runtime(request).research_folders.create(
-            _researcher_id(request), command
-        )
+        return _runtime(request).research_folders.create(_researcher_id(request), command)
 
     @app.patch(
         "/api/research-folders/{folder_id}",
@@ -567,9 +690,7 @@ def create_app(
     )
     def delete_research_folder(request: Request, folder_id: str) -> None:
         try:
-            deleted = _runtime(request).research_folders.delete(
-                _researcher_id(request), folder_id
-            )
+            deleted = _runtime(request).research_folders.delete(_researcher_id(request), folder_id)
         except ResearchFolderConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         if not deleted:
@@ -585,9 +706,7 @@ def create_app(
         command: ResearchBatchAdmissionCommand,
     ) -> ResearchBatchDetail | JSONResponse:
         try:
-            return _runtime(request).research_batches.admit(
-                _researcher_id(request), command
-            )
+            return _runtime(request).research_batches.admit(_researcher_id(request), command)
         except ResearchBatchAdmissionConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ResearchBatchAdmissionRejected as error:
@@ -626,9 +745,7 @@ def create_app(
     )
     def get_research_batch(request: Request, batch_id: str) -> ResearchBatchDetail:
         try:
-            batch = _runtime(request).research_batches.get(
-                _researcher_id(request), batch_id
-            )
+            batch = _runtime(request).research_batches.get(_researcher_id(request), batch_id)
         except ResearchBatchTemporarilyUnavailable as error:
             raise HTTPException(
                 status_code=503,
@@ -672,9 +789,7 @@ def create_app(
         command: ResearchRunAdmissionCommand,
     ) -> ResearchRunSummary | JSONResponse:
         try:
-            return _runtime(request).research_runs.admit(
-                _researcher_id(request), command
-            )
+            return _runtime(request).research_runs.admit(_researcher_id(request), command)
         except ResearchRunAdmissionConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ResearchRunAdmissionRejected as error:
@@ -723,9 +838,7 @@ def create_app(
         command: OrganizeResearchRunCommand,
     ) -> ResearchRunSummary:
         try:
-            run = _runtime(request).research_runs.organize(
-                _researcher_id(request), run_id, command
-            )
+            run = _runtime(request).research_runs.organize(_researcher_id(request), run_id, command)
         except ResearchRunOrganizationConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         if run is None:
@@ -738,9 +851,7 @@ def create_app(
     )
     def get_research_run(request: Request, run_id: str) -> ResearchRunDetail:
         try:
-            run = _runtime(request).research_runs.get_detail(
-                _researcher_id(request), run_id
-            )
+            run = _runtime(request).research_runs.get_detail(_researcher_id(request), run_id)
         except ResearchRunResultUnavailable as error:
             raise HTTPException(
                 status_code=503,
@@ -756,9 +867,7 @@ def create_app(
     )
     def delete_research_run(request: Request, run_id: str) -> None:
         try:
-            deleted = _runtime(request).research_runs.delete(
-                _researcher_id(request), run_id
-            )
+            deleted = _runtime(request).research_runs.delete(_researcher_id(request), run_id)
         except ResearchRunDeleteConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         if not deleted:
@@ -836,9 +945,7 @@ def create_app(
     @app.get("/api/daily-tracks/{track_id}", response_model=DailyTrackDetail)
     def get_daily_track(request: Request, track_id: str) -> DailyTrackDetail:
         try:
-            track = _runtime(request).daily_tracks.get(
-                _researcher_id(request), track_id
-            )
+            track = _runtime(request).daily_tracks.get(_researcher_id(request), track_id)
         except DailyTrackDetailUnavailable as error:
             raise HTTPException(
                 status_code=503,
@@ -854,9 +961,7 @@ def create_app(
     )
     def delete_daily_track(request: Request, track_id: str) -> None:
         try:
-            deleted = _runtime(request).daily_tracks.delete(
-                _researcher_id(request), track_id
-            )
+            deleted = _runtime(request).daily_tracks.delete(_researcher_id(request), track_id)
         except DailyTrackDeleteConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         if not deleted:
@@ -873,9 +978,7 @@ def create_app(
         command: RetryDailyTrackCommand,
     ) -> DailyTrackSummary:
         try:
-            track = _runtime(request).daily_tracks.retry(
-                _researcher_id(request), track_id, command
-            )
+            track = _runtime(request).daily_tracks.retry(_researcher_id(request), track_id, command)
         except DailyTrackRetryConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DailyTrackRetryUnavailable as error:
@@ -899,9 +1002,7 @@ def create_app(
         command: StopDailyTrackCommand,
     ) -> DailyTrackSummary:
         try:
-            track = _runtime(request).daily_tracks.stop(
-                _researcher_id(request), track_id, command
-            )
+            track = _runtime(request).daily_tracks.stop(_researcher_id(request), track_id, command)
         except DailyTrackStopConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except DailyTrackStopUnavailable as error:
@@ -997,7 +1098,42 @@ def _auth_unavailable_response() -> JSONResponse:
 
 
 def _market_refresh_operation(outcome: RefreshOutcome) -> MarketRefreshOperation:
-    return MarketRefreshOperation.model_validate(outcome.__dict__)
+    return MarketRefreshOperation(
+        as_of=outcome.as_of,
+        attempt_count=outcome.attempt_count,
+        data_through_session=outcome.data_through_session,
+        failure_code=outcome.failure_code,
+        idempotency_key=outcome.idempotency_key,
+        kind="market",
+        last_failure_code=outcome.last_failure_code,
+        last_refresh_at=outcome.last_refresh_at,
+        outcome=outcome.outcome,  # type: ignore[arg-type]
+        status=outcome.status,  # type: ignore[arg-type]
+    )
+
+
+def _financial_refresh_operation(outcome: RefreshOutcome) -> FinancialRefreshOperation:
+    if outcome.kind != "financial" or outcome.observation_through_session is None:
+        raise DataRefreshError("REFRESH_RECEIPT_INVALID")
+    return FinancialRefreshOperation(
+        accepted_instrument_count=outcome.accepted_instrument_count,
+        attempt_count=outcome.attempt_count,
+        checked_no_structured_change_count=(outcome.checked_no_structured_change_count),
+        data_through_session=outcome.data_through_session,
+        discovery_gap_count=outcome.discovery_gap_count,
+        failed_instrument_count=outcome.failed_instrument_count,
+        failure_code=outcome.failure_code,
+        financial_complete_through_session=(outcome.financial_complete_through_session),
+        idempotency_key=outcome.idempotency_key,
+        kind="financial",
+        last_failure_code=outcome.last_failure_code,
+        last_refresh_at=outcome.last_refresh_at,
+        matched_trigger_count=outcome.matched_trigger_count,
+        observation_through_session=outcome.observation_through_session,
+        outcome=outcome.outcome,  # type: ignore[arg-type]
+        pending_instrument_count=outcome.pending_instrument_count,
+        status=outcome.status,  # type: ignore[arg-type]
+    )
 
 
 def _researcher(request: Request) -> ResearcherIdentity:
@@ -1019,9 +1155,7 @@ def _request_has_body(request: Request) -> bool:
 
 
 def _request_is_json(request: Request) -> bool:
-    return _JSON_CONTENT_TYPE.fullmatch(
-        request.headers.get("content-type", "")
-    ) is not None
+    return _JSON_CONTENT_TYPE.fullmatch(request.headers.get("content-type", "")) is not None
 
 
 def _data_overview(request: Request) -> DatasetOverviewService:
@@ -1051,11 +1185,7 @@ def _trusted_http_request_id(
             parsed = UUID(normalized)
         except ValueError:
             parsed = None
-        if (
-            parsed is not None
-            and parsed.version is not None
-            and str(parsed) == normalized
-        ):
+        if parsed is not None and parsed.version is not None and str(parsed) == normalized:
             return normalized
     return fallback()
 

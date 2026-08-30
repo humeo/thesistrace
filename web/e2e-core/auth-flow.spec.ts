@@ -330,15 +330,11 @@ test("Two Researchers isolate Drafts, receipts, cursors, and system Folder ident
     const response = await page.request.get(`/api/research-runs/${strategyRunB}`);
     return ((await response.json()) as { status: string }).status;
   }, { timeout: 90_000 }).toBe("succeeded");
-  const trackBResponse = await page.request.post(
-    `/api/research-runs/${strategyRunB}/daily-tracks`,
-    {
-      data: { request_id: "browser-owner-track-b" },
-      headers: sameOriginHeaders(),
-    },
+  const trackB = await startTracking(
+    page,
+    strategyRunB,
+    "browser-owner-track-b",
   );
-  expect(trackBResponse.status()).toBe(201);
-  const trackB = (await trackBResponse.json()) as { id: string };
 
   const sharedRequestId = "browser-shared-owner-receipt";
   const runB = await admitRun(page, sharedRequestId, "Researcher B shared receipt");
@@ -505,6 +501,45 @@ async function admitStrategyRun(page: Page, requestId: string): Promise<string> 
   const body = (await response.json()) as { id?: unknown };
   if (typeof body.id !== "string") throw new Error("Strategy Run returned no id");
   return body.id;
+}
+
+async function startTracking(
+  page: Page,
+  runId: string,
+  requestId: string,
+): Promise<{ id: string }> {
+  let accepted: { id: string } | undefined;
+  await expect.poll(async () => {
+    const response = await page.request.post(
+      `/api/research-runs/${runId}/daily-tracks`,
+      {
+        data: { request_id: requestId },
+        headers: sameOriginHeaders(),
+      },
+    );
+    if (response.status() === 503) {
+      expect(await response.json()).toEqual({
+        detail: "Start Tracking is temporarily unavailable",
+      });
+      return "temporarily-unavailable";
+    }
+    if (response.status() !== 201) {
+      throw new Error(
+        `Start Tracking returned ${response.status()}: ${await response.text()}`,
+      );
+    }
+    const body = (await response.json()) as { id?: unknown };
+    if (typeof body.id !== "string") {
+      throw new Error("Start Tracking returned no DailyTrack id");
+    }
+    accepted = { id: body.id };
+    return "accepted";
+  }, {
+    intervals: [250, 500, 1_000],
+    timeout: 20_000,
+  }).toBe("accepted");
+  if (accepted === undefined) throw new Error("Start Tracking did not converge");
+  return accepted;
 }
 
 async function replaceFormula(page: Page, formula: string): Promise<void> {

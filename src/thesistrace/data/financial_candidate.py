@@ -974,6 +974,11 @@ class FinancialCandidateStore:
     ) -> FinancialCollectionContract:
         return self._manifest_collection_contract(self._read_family(manifest_sha256))
 
+    def canonical_projection_sha256(self, manifest_sha256: str) -> str:
+        """Identify the projected Financial tables without discovery metadata."""
+        manifest = self._read_family(manifest_sha256)
+        return _sha(manifest["tables"])
+
     def prior_candidate_manifest_sha256(self, manifest_sha256: str) -> str | None:
         manifest = self._read_family(manifest_sha256)
         source_collection = manifest.get("source_collection")

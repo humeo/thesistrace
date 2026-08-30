@@ -22,6 +22,31 @@ export type MarketRefreshOperation = Readonly<{
   status: "accepted" | "running" | "succeeded" | "failed";
 }>;
 
+export type FinancialRefreshRequest = Readonly<{
+  idempotencyKey: string;
+  observationThroughSession: string;
+}>;
+
+export type FinancialRefreshOperation = Readonly<{
+  acceptedInstrumentCount: number | null;
+  attemptCount: number;
+  checkedNoStructuredChangeCount: number | null;
+  dataThroughSession: string | null;
+  discoveryGapCount: number | null;
+  failedInstrumentCount: number | null;
+  failureCode: string | null;
+  financialCompleteThroughSession: string | null;
+  idempotencyKey: string;
+  kind: "financial";
+  lastFailureCode: string | null;
+  lastRefreshAt: string | null;
+  matchedTriggerCount: number | null;
+  observationThroughSession: string;
+  outcome: "published" | "no_change" | "degraded" | "business_rejected" | "infrastructure_failed" | null;
+  pendingInstrumentCount: number | null;
+  status: "accepted" | "running" | "succeeded" | "failed";
+}>;
+
 export type OperatorMutationErrorCode =
   | "conflict"
   | "delivery-failed"
@@ -51,6 +76,15 @@ export function isMarketRefreshIdempotencyKey(value: string): boolean {
     && !value.includes("\0")
     && !containsLoneSurrogate(value)
     && !hasPythonBoundaryWhitespace(characters);
+}
+
+export function isIsoResearchSession(value: unknown): value is string {
+  if (
+    typeof value !== "string"
+    || !/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(value)
+  ) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 export async function confirmOperatorProof(
@@ -181,6 +215,62 @@ export async function loadMarketRefresh(
   });
   return marketRefreshOperation(await operatorGet(
     `/api/operator/data/refreshes/market?${query.toString()}`,
+    signal,
+  ));
+}
+
+export async function confirmFinancialRefreshProof(
+  request: FinancialRefreshRequest,
+  password: string,
+  signal: AbortSignal,
+): Promise<Readonly<{ expiresAt: string; proof: string }>> {
+  const value = await operatorPost(
+    "/api/auth/operator/proofs",
+    {
+      idempotency_key: request.idempotencyKey,
+      observation_through_session: request.observationThroughSession,
+      operation: "data.refresh.financial.submit",
+      password,
+    },
+    signal,
+  );
+  if (
+    !hasExactKeys(value, ["expires_at", "proof"])
+    || !isIsoTimestamp(value.expires_at)
+    || typeof value.proof !== "string"
+    || !isOpaqueProof(value.proof)
+  ) {
+    throw new OperatorMutationError("unavailable");
+  }
+  return { expiresAt: value.expires_at, proof: value.proof };
+}
+
+export async function submitFinancialRefresh(
+  request: FinancialRefreshRequest,
+  proof: string,
+  signal: AbortSignal,
+): Promise<FinancialRefreshOperation> {
+  return financialRefreshOperation(await operatorPost(
+    "/api/operator/data/refreshes/financial",
+    {
+      idempotency_key: request.idempotencyKey,
+      observation_through_session: request.observationThroughSession,
+      proof,
+    },
+    signal,
+  ));
+}
+
+export async function loadFinancialRefresh(
+  request: FinancialRefreshRequest,
+  signal: AbortSignal,
+): Promise<FinancialRefreshOperation> {
+  const query = new URLSearchParams({
+    idempotency_key: request.idempotencyKey,
+    observation_through_session: request.observationThroughSession,
+  });
+  return financialRefreshOperation(await operatorGet(
+    `/api/operator/data/refreshes/financial?${query.toString()}`,
     signal,
   ));
 }
@@ -368,6 +458,97 @@ function marketRefreshOperation(value: unknown): MarketRefreshOperation {
     outcome: value.outcome,
     status: value.status,
   };
+}
+
+function financialRefreshOperation(value: unknown): FinancialRefreshOperation {
+  const keys = [
+    "accepted_instrument_count",
+    "attempt_count",
+    "checked_no_structured_change_count",
+    "data_through_session",
+    "discovery_gap_count",
+    "failed_instrument_count",
+    "failure_code",
+    "financial_complete_through_session",
+    "idempotency_key",
+    "kind",
+    "last_failure_code",
+    "last_refresh_at",
+    "matched_trigger_count",
+    "observation_through_session",
+    "outcome",
+    "pending_instrument_count",
+    "status",
+  ] as const;
+  if (
+    !hasExactKeys(value, keys)
+    || !isOptionalCount(value.accepted_instrument_count)
+    || !isCount(value.attempt_count)
+    || !isOptionalCount(value.checked_no_structured_change_count)
+    || !isOptionalSession(value.data_through_session)
+    || !isOptionalCount(value.discovery_gap_count)
+    || !isOptionalCount(value.failed_instrument_count)
+    || (value.failure_code !== null && typeof value.failure_code !== "string")
+    || !isOptionalSession(value.financial_complete_through_session)
+    || typeof value.idempotency_key !== "string"
+    || !isMarketRefreshIdempotencyKey(value.idempotency_key)
+    || value.kind !== "financial"
+    || (value.last_failure_code !== null && typeof value.last_failure_code !== "string")
+    || (value.last_refresh_at !== null && !isIsoTimestamp(value.last_refresh_at))
+    || !isOptionalCount(value.matched_trigger_count)
+    || !isIsoResearchSession(value.observation_through_session)
+    || (value.outcome !== null
+      && value.outcome !== "published"
+      && value.outcome !== "no_change"
+      && value.outcome !== "degraded"
+      && value.outcome !== "business_rejected"
+      && value.outcome !== "infrastructure_failed")
+    || !isOptionalCount(value.pending_instrument_count)
+    || (value.status !== "accepted"
+      && value.status !== "running"
+      && value.status !== "succeeded"
+      && value.status !== "failed")
+    || (value.status === "succeeded"
+      && !["published", "no_change", "degraded"].includes(String(value.outcome)))
+    || (value.status === "failed"
+      && !["business_rejected", "infrastructure_failed"].includes(String(value.outcome)))
+    || (["accepted", "running"].includes(String(value.status)) && value.outcome !== null)
+    || (value.status === "failed" && value.failure_code === null)
+    || (value.status !== "failed" && value.failure_code !== null)
+  ) {
+    throw new OperatorMutationError("unavailable");
+  }
+  return {
+    acceptedInstrumentCount: value.accepted_instrument_count,
+    attemptCount: value.attempt_count,
+    checkedNoStructuredChangeCount: value.checked_no_structured_change_count,
+    dataThroughSession: value.data_through_session,
+    discoveryGapCount: value.discovery_gap_count,
+    failedInstrumentCount: value.failed_instrument_count,
+    failureCode: value.failure_code,
+    financialCompleteThroughSession: value.financial_complete_through_session,
+    idempotencyKey: value.idempotency_key,
+    kind: value.kind,
+    lastFailureCode: value.last_failure_code,
+    lastRefreshAt: value.last_refresh_at,
+    matchedTriggerCount: value.matched_trigger_count,
+    observationThroughSession: value.observation_through_session,
+    outcome: value.outcome,
+    pendingInstrumentCount: value.pending_instrument_count,
+    status: value.status,
+  };
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isOptionalCount(value: unknown): value is number | null {
+  return value === null || isCount(value);
+}
+
+function isOptionalSession(value: unknown): value is string | null {
+  return value === null || isIsoResearchSession(value);
 }
 
 function isOpaqueProof(value: string): boolean {

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { OperatorConsoleNavigation } from "./OperatorConsoleNavigation";
+import { OperatorFinancialRefreshPanel } from "./OperatorFinancialRefreshPanel";
 import { OperatorMarketRefreshDialog } from "./OperatorMarketRefreshDialog";
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
 import {
@@ -47,11 +48,27 @@ export function OperatorDataPage() {
   const [fieldErrors, setFieldErrors] = useState(noFieldErrors);
   const asOfInput = useRef<HTMLInputElement | null>(null);
   const idempotencyKeyInput = useRef<HTMLInputElement | null>(null);
+  const pendingFieldFocus = useRef<keyof MarketRefreshFieldErrors | null>(null);
   const activeOperationGeneration = useRef(0);
   const activeSubmissionGeneration = useRef(0);
   const pendingSubmissionRef = useRef<TrackedMarketRefreshRequest | null>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
   pendingSubmissionRef.current = pendingSubmission;
+  const showNotFound = useCallback(() => setNotFound(true), []);
+
+  useEffect(() => {
+    if (
+      confirmation !== null
+      || pendingSubmission !== null
+      || pendingFieldFocus.current === null
+    ) return;
+    const target = pendingFieldFocus.current === "asOf"
+      ? asOfInput.current
+      : idempotencyKeyInput.current;
+    if (target === null) return;
+    pendingFieldFocus.current = null;
+    target.focus();
+  }, [confirmation, fieldErrors, pendingSubmission]);
 
   useEffect(() => {
     const trackedRequest = pendingSubmission !== null
@@ -180,12 +197,12 @@ export function OperatorDataPage() {
     const errors = marketRefreshFieldErrors(asOf, idempotencyKey);
     setFieldErrors(errors);
     const invalid = errors.asOf !== null
-      ? asOfInput.current
+      ? "asOf"
       : errors.idempotencyKey !== null
-        ? idempotencyKeyInput.current
+        ? "idempotencyKey"
         : null;
     if (invalid !== null) {
-      window.requestAnimationFrame(() => invalid.focus());
+      pendingFieldFocus.current = invalid;
       return;
     }
     setPollError(false);
@@ -212,20 +229,20 @@ export function OperatorDataPage() {
       code === "conflict"
       || !isMarketRefreshIdempotencyKey(tracked.request.idempotencyKey)
     ) {
+      pendingFieldFocus.current = "idempotencyKey";
       setFieldErrors({
         asOf: null,
         idempotencyKey: code === "conflict"
           ? "This key is already bound to a different Market target."
           : marketRefreshKeyError,
       });
-      window.requestAnimationFrame(() => idempotencyKeyInput.current?.focus());
       return;
     }
+    pendingFieldFocus.current = "asOf";
     setFieldErrors({
       asOf: "Enter the same explicit timezone-aware ISO timestamp accepted by the CLI.",
       idempotencyKey: null,
     });
-    window.requestAnimationFrame(() => asOfInput.current?.focus());
   }
 
   function reconcileSubmission(tracked: TrackedMarketRefreshRequest): void {
@@ -379,6 +396,8 @@ export function OperatorDataPage() {
         {operation === null ? null : (
           <MarketRefreshReceipt operation={operation.operation} pollError={pollError} />
         )}
+
+        <OperatorFinancialRefreshPanel onAccessNotFound={showNotFound} />
       </section>
       {confirmation === null ? null : (
         <OperatorMarketRefreshDialog

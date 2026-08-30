@@ -153,9 +153,7 @@ def test_core_auth_verifier_authorizes_operator_and_consumes_exact_market_proof(
         transport=httpx.MockTransport(respond),
     )
     try:
-        asyncio.run(
-            verifier.authorize_operator("thesistrace.session_token=opaque")
-        )
+        asyncio.run(verifier.authorize_operator("thesistrace.session_token=opaque"))
         asyncio.run(
             verifier.consume_market_refresh_proof(
                 "thesistrace.session_token=opaque",
@@ -164,11 +162,20 @@ def test_core_auth_verifier_authorizes_operator_and_consumes_exact_market_proof(
                 proof="opaque-proof",
             )
         )
+        asyncio.run(
+            verifier.consume_financial_refresh_proof(
+                "thesistrace.session_token=opaque",
+                idempotency_key="financial-20260814-custom",
+                observation_through_session="2026-08-14",
+                proof="opaque-financial-proof",
+            )
+        )
     finally:
         asyncio.run(verifier.aclose())
 
     assert [(request.method, request.url.path) for request in captured] == [
         ("GET", "/internal/operator/page-access"),
+        ("POST", "/internal/operator/proofs/consume"),
         ("POST", "/internal/operator/proofs/consume"),
     ]
     assert captured[0].content == b""
@@ -178,6 +185,12 @@ def test_core_auth_verifier_authorizes_operator_and_consumes_exact_market_proof(
         b'{"as_of":"2026-08-11T18:00:00+08:00",'
         b'"idempotency_key":"market-20260811T180000+0800",'
         b'"operation":"data.refresh.market.submit","proof":"opaque-proof"}'
+    )
+    assert captured[2].content == (
+        b'{"idempotency_key":"financial-20260814-custom",'
+        b'"observation_through_session":"2026-08-14",'
+        b'"operation":"data.refresh.financial.submit",'
+        b'"proof":"opaque-financial-proof"}'
     )
 
 
@@ -379,14 +392,20 @@ def test_api_write_guard_requires_exact_origin_and_json_only_when_body_exists() 
         json={"ok": True},
         headers={"origin": PUBLIC_ORIGIN},
     ).json() == {"ok": True}
-    assert client.post(
-        "/api/bodyless",
-        headers={"origin": PUBLIC_ORIGIN},
-    ).status_code == 200
-    assert "access-control-allow-origin" not in client.options(
-        "/api/write",
-        headers={"origin": PUBLIC_ORIGIN},
-    ).headers
+    assert (
+        client.post(
+            "/api/bodyless",
+            headers={"origin": PUBLIC_ORIGIN},
+        ).status_code
+        == 200
+    )
+    assert (
+        "access-control-allow-origin"
+        not in client.options(
+            "/api/write",
+            headers={"origin": PUBLIC_ORIGIN},
+        ).headers
+    )
 
 
 class StubVerifier:

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-def test_market_refresh_exposes_only_queue_control_not_live_provider_access() -> None:
+def test_data_refresh_exposes_only_queue_control_not_live_provider_access() -> None:
     root = Path(__file__).resolve().parents[2]
     project = (root / "pyproject.toml").read_text()
     http = (root / "src/thesistrace/entrypoints/http.py").read_text()
@@ -13,6 +13,7 @@ def test_market_refresh_exposes_only_queue_control_not_live_provider_access() ->
     assert "data_operator" not in http
     assert "data_operator" not in worker
     assert '"/api/operator/data/refreshes/market"' in http
+    assert '"/api/operator/data/refreshes/financial"' in http
     assert "TushareDataSource" not in runtime
     assert "TushareAdapter" not in runtime
     assert "TushareDataSource" not in http

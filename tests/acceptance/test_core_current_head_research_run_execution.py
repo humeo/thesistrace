@@ -5138,10 +5138,12 @@ def _write_refresh_replay(
     }
     replay = {
         "format": "thesistrace-tushare-refresh-replay",
-        "version": 2,
+        "version": 3,
         "request_start": request_start,
         "request_end": str(calendar[-1]),
         "snapshot": snapshot,
+        "financial": {},
+        "financial_refresh": None,
     }
     path.write_text(
         json.dumps(replay, sort_keys=True, separators=(",", ":")),

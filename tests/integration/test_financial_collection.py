@@ -5,17 +5,21 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from benchmark_support import FixtureBenchmarkSource, benchmark_mount_for_data_mount
 from psycopg.errors import CheckViolation
 
+import thesistrace.data.refresh as refresh_module
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.tushare_provider import TushareSourceError
+from thesistrace.adapters.tushare_replay import ReplayTushareRefreshBundle
 from thesistrace.data import (
     CanonicalSourceBatch,
     DataCollectionError,
     DataGarbageCollector,
+    DataRefreshError,
     DataRefreshService,
     DatasetLifecycle,
     DatasetOverviewService,
@@ -28,7 +32,10 @@ from thesistrace.data import (
     MountedDatasetHeadStore,
     MountedGenerationStore,
 )
-from thesistrace.data.daily_financial_refresh import DailyFinancialRefreshService
+from thesistrace.data.daily_financial_refresh import (
+    DailyFinancialRefreshService,
+    FinancialDailyRefreshError,
+)
 from thesistrace.data.financial_announcements import (
     FINANCIAL_ANNOUNCEMENT_CATEGORIES,
     FinancialAnnouncement,
@@ -43,7 +50,7 @@ from thesistrace.data.financial_collection import (
     FinancialDateShard,
     RawFinancialBatchStore,
 )
-from thesistrace.data.generation_files import AddressedFileStore
+from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.source import RawSourceError, RawSourceResponse
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
@@ -818,13 +825,16 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
         assert "canary-secret" not in json.dumps(lifecycle_events)
         assert "/private/financial" not in json.dumps(lifecycle_events)
         monkeypatch.undo()
-        assert service.publish(
-            idempotency_key="financial-publish",
-            generation_manifest_sha256=source_generation,
-            contract=contract,
-            prior_candidate_manifest_sha256=prior.manifest_sha256,
-            observation_through_session="2026-08-13",
-        ) == published
+        assert (
+            service.publish(
+                idempotency_key="financial-publish",
+                generation_manifest_sha256=source_generation,
+                contract=contract,
+                prior_candidate_manifest_sha256=prior.manifest_sha256,
+                observation_through_session="2026-08-13",
+            )
+            == published
+        )
     finally:
         database.close()
 
@@ -954,8 +964,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
         assert inspection["checked_no_structured_change_count"] == 0
         assert inspection["pending_trigger_count"] == 0
         assert statement_source.requests == [
-            (endpoint, "000001.SZ", "complete-history")
-            for endpoint in FINANCIAL_ENDPOINTS
+            (endpoint, "000001.SZ", "complete-history") for endpoint in FINANCIAL_ENDPOINTS
         ]
         pointer = MountedDatasetHeadStore(tmp_path).current_pointer()
         assert pointer is not None
@@ -985,10 +994,13 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             "earliest_unresolved_date": None,
             "sparse_facts": True,
         }
-        assert service.publish(
-            idempotency_key="daily-financial-publish",
-            observation_through_session="2026-08-14",
-        ) == published
+        assert (
+            service.publish(
+                idempotency_key="daily-financial-publish",
+                observation_through_session="2026-08-14",
+            )
+            == published
+        )
         assert len(statement_source.requests) == 3
     finally:
         database.close()
@@ -1107,8 +1119,7 @@ def test_daily_financial_refresh_closes_unchanged_trigger_and_reuses_tables(
         assert inspection["checked_no_structured_change_count"] == 1
         assert inspection["pending_trigger_count"] == 0
         assert statement_source.requests == [
-            (endpoint, "000001.SZ", "complete-history")
-            for endpoint in FINANCIAL_ENDPOINTS
+            (endpoint, "000001.SZ", "complete-history") for endpoint in FINANCIAL_ENDPOINTS
         ]
 
         def family_manifest(manifest_sha256: str) -> dict[str, object]:
@@ -1122,8 +1133,9 @@ def test_daily_financial_refresh_closes_unchanged_trigger_and_reuses_tables(
                 ).read_bytes()
             )
 
-        assert family_manifest(published.candidate.manifest_sha256)["tables"] == (
-            family_manifest(prior.manifest_sha256)["tables"]
+        assert (
+            family_manifest(published.candidate.manifest_sha256)["tables"]
+            == (family_manifest(prior.manifest_sha256)["tables"])
         )
     finally:
         database.close()
@@ -1242,6 +1254,1048 @@ def test_daily_financial_refresh_publishes_zero_trigger_discovery_state(
         database.close()
 
 
+@pytest.mark.parametrize(
+    (
+        "has_gap",
+        "has_pending",
+        "has_statement_change",
+        "expected_outcome",
+        "expected_complete",
+        "expected_accepted",
+        "expected_failed",
+        "expected_pending",
+    ),
+    (
+        (False, False, False, "no_change", "2026-08-14", 0, 0, 0),
+        (True, False, False, "degraded", "2026-08-13", 0, 0, 0),
+        (False, True, False, "degraded", "2026-08-14", 0, 1, 1),
+        (False, False, True, "published", "2026-08-14", 1, 0, 0),
+    ),
+)
+def test_shared_worker_runs_financial_through_a_versioned_replay(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    *,
+    has_gap: bool,
+    has_pending: bool,
+    has_statement_change: bool,
+    expected_outcome: str,
+    expected_complete: str,
+    expected_accepted: int,
+    expected_failed: int,
+    expected_pending: int,
+) -> None:
+    class UnexpectedMarketSource:
+        def collect(self, plan: object) -> object:
+            del plan
+            raise AssertionError("Financial queue work must not run Market collection")
+
+    database = _database(core_settings)
+    case = (
+        "published"
+        if has_statement_change
+        else "gap"
+        if has_gap
+        else "pending"
+        if has_pending
+        else "clean"
+    )
+    key = f"shared-replay-financial-{case}"
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
+        )
+        _establish_head(
+            database,
+            tmp_path,
+            market,
+            operation_id=f"{key}-market",
+        )
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key=f"{key}-prior",
+            contract=_executable_contract(),
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id=f"{key}-source",
+            expected=market,
+        )
+        replay_path = tmp_path / f"{key}.json"
+        replay_path.write_text(
+            json.dumps(
+                _daily_financial_replay(
+                    has_gap=has_gap,
+                    has_pending=has_pending,
+                    has_statement_change=has_statement_change,
+                )
+            ),
+            encoding="utf-8",
+        )
+        replay = ReplayTushareRefreshBundle((replay_path,))
+        service = DataRefreshService(
+            database,
+            tmp_path,
+            benchmark_mount_root=benchmark_mount_for_data_mount(tmp_path),
+            clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
+        )
+        accepted = service.submit_financial(
+            idempotency_key=key,
+            observation_through_session="2026-08-14",
+        )
+        assert accepted.status == "accepted"
+
+        assert (
+            service.process_next(
+                UnexpectedMarketSource(),  # type: ignore[arg-type]
+                benchmark_source=FixtureBenchmarkSource(),
+                financial_announcement_source=replay,
+                financial_source=replay,
+            )
+            is True
+        )
+
+        receipt = service.inspect(key)
+        assert receipt.status == "succeeded"
+        assert receipt.outcome == expected_outcome
+        assert receipt.observation_through_session == "2026-08-14"
+        assert receipt.financial_complete_through_session == expected_complete
+        assert receipt.matched_trigger_count == int(has_statement_change)
+        assert receipt.checked_no_structured_change_count == 0
+        assert receipt.accepted_instrument_count == expected_accepted
+        assert receipt.failed_instrument_count == expected_failed
+        assert receipt.pending_instrument_count == expected_pending
+        assert receipt.discovery_gap_count == int(has_gap)
+        assert (
+            service.submit_financial(
+                idempotency_key=key,
+                observation_through_session="2026-08-14",
+            )
+            == receipt
+        )
+        pointer = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert pointer is not None
+        assert pointer.data_through_session == receipt.data_through_session
+        if has_statement_change:
+            assert pointer.generation_manifest_sha256 != source_generation
+            published_generation = MountedGenerationStore(tmp_path).inspect_root(
+                pointer.generation_manifest_sha256
+            )
+            assert published_generation.financial_candidate_manifest_sha256 != prior.manifest_sha256
+            published_rows = FinancialCandidateStore(tmp_path).read_financial_rows(
+                str(published_generation.financial_candidate_manifest_sha256),
+                "income",
+                ("instrument_id", "source_report_period", "total_revenue"),
+                ("2026-08-14",),
+                frozenset({"equity:000001.SZ"}),
+            )
+            assert any(
+                row["source_report_period"] == "20260630"
+                and row["total_revenue"] == "11"
+                for row in published_rows
+            )
+    finally:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.refresh_operations WHERE idempotency_key = %s",
+                (key,),
+            )
+        database.close()
+
+
+def test_shared_financial_worker_reselects_replay_after_durable_discovery(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    class UnexpectedMarketSource:
+        def collect(self, plan: object) -> object:
+            del plan
+            raise AssertionError("Financial queue work must not run Market collection")
+
+    class InterruptedFinancialSource:
+        def query_raw(self, *args: object, **kwargs: object) -> RawSourceResponse:
+            del args, kwargs
+            raise KeyboardInterrupt
+
+    database = _database(core_settings)
+    key = "shared-financial-replay-resume"
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
+        )
+        _establish_head(database, tmp_path, market, operation_id=f"{key}-market")
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key=f"{key}-prior",
+            contract=_executable_contract(),
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id=f"{key}-source",
+            expected=market,
+        )
+        replay_path = tmp_path / f"{key}.json"
+        replay_path.write_text(
+            json.dumps(
+                _daily_financial_replay(
+                    has_gap=False,
+                    has_statement_change=True,
+                )
+            ),
+            encoding="utf-8",
+        )
+        first_replay = ReplayTushareRefreshBundle((replay_path,))
+        service = DataRefreshService(
+            database,
+            tmp_path,
+            benchmark_mount_root=benchmark_mount_for_data_mount(tmp_path),
+            clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
+        )
+        service.submit_financial(
+            idempotency_key=key,
+            observation_through_session="2026-08-14",
+        )
+
+        with pytest.raises(KeyboardInterrupt):
+            service.process_next(
+                UnexpectedMarketSource(),  # type: ignore[arg-type]
+                benchmark_source=FixtureBenchmarkSource(),
+                financial_announcement_source=first_replay,
+                financial_source=InterruptedFinancialSource(),
+                financial_source_window_selector=first_replay.select_financial_window,
+            )
+        with database.transaction() as transaction:
+            durable = transaction.execute(
+                """
+                SELECT discovery_evidence
+                FROM data.financial_daily_refresh_operations
+                WHERE idempotency_key = %s
+                """,
+                (key,),
+            ).fetchone()
+            transaction.execute(
+                """
+                UPDATE data.refresh_operations
+                SET lease_expires_at = clock_timestamp() - interval '1 second'
+                WHERE idempotency_key = %s AND status = 'running'
+                """,
+                (key,),
+            )
+        assert durable is not None
+        assert durable["discovery_evidence"] is not None
+
+        resumed_replay = ReplayTushareRefreshBundle((replay_path,))
+        assert (
+            service.process_next(
+                UnexpectedMarketSource(),  # type: ignore[arg-type]
+                benchmark_source=FixtureBenchmarkSource(),
+                financial_announcement_source=resumed_replay,
+                financial_source=resumed_replay,
+                financial_source_window_selector=resumed_replay.select_financial_window,
+            )
+            is True
+        )
+
+        receipt = service.inspect(key)
+        assert receipt.status == "succeeded"
+        assert receipt.outcome == "published"
+        assert receipt.attempt_count == 2
+        assert receipt.accepted_instrument_count == 1
+        assert receipt.pending_instrument_count == 0
+    finally:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.refresh_operations WHERE idempotency_key = %s",
+                (key,),
+            )
+        database.close()
+
+
+def test_shared_worker_reconciles_financial_completion_after_a_successor_head(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnexpectedMarketSource:
+        def collect(self, plan: object) -> object:
+            del plan
+            raise AssertionError("Financial recovery must not run Market collection")
+
+    database = _database(core_settings)
+    key = "shared-financial-completion-recovery"
+    published_manifest: str | None = None
+    successor_manifest: str | None = None
+
+    class PublishThenLoseCompletion(DailyFinancialRefreshService):
+        def publish(
+            self,
+            *,
+            idempotency_key: str,
+            observation_through_session: str,
+        ) -> object:
+            nonlocal published_manifest, successor_manifest
+            completion_error: FinancialDailyRefreshError | None = None
+            try:
+                return super().publish(
+                    idempotency_key=idempotency_key,
+                    observation_through_session=observation_through_session,
+                )
+            except FinancialDailyRefreshError as error:
+                assert error.code == "FINANCIAL_PUBLICATION_COMPLETION_PENDING"
+                completion_error = error
+                with database.transaction() as transaction:
+                    transaction.execute(
+                        "DROP TRIGGER reject_shared_financial_head_marker "
+                        "ON data.financial_daily_refresh_operations"
+                    )
+                    transaction.execute(
+                        "DROP FUNCTION data.reject_shared_financial_head_marker()"
+                    )
+            published = MountedDatasetHeadStore(tmp_path).current_pointer()
+            assert published is not None
+            published_manifest = published.generation_manifest_sha256
+            store = MountedGenerationStore(tmp_path)
+            successor_base = store.open_refresh_base(published_manifest)
+            successor = store.materialize_refresh(
+                predecessor_manifest_sha256=published_manifest,
+                replacement_canonical=successor_base.canonical,
+                replace_from_session="2026-08-07",
+                prepared_at=datetime(2026, 8, 14, 11, tzinfo=UTC),
+                source_name="market-after-shared-financial-receipt-loss",
+                source_lineage={"fixture": "market-after-shared-financial-receipt-loss"},
+            )
+            successor_manifest = successor.manifest_sha256
+            _establish_head(
+                database,
+                tmp_path,
+                successor_manifest,
+                operation_id=f"{key}-successor",
+                expected=published_manifest,
+            )
+            with database.transaction() as transaction:
+                persisted = transaction.execute(
+                    """
+                    SELECT fingerprint
+                    FROM data.financial_daily_refresh_operations
+                    WHERE idempotency_key = %s
+                    """,
+                    (key,),
+                ).fetchone()
+            assert persisted is not None
+            successor_descriptor = store.inspect_root(successor_manifest)
+            assert successor_descriptor.financial_publication_coordinate == str(
+                persisted["fingerprint"]
+            )
+            assert completion_error is not None
+            raise completion_error
+
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
+        )
+        _establish_head(database, tmp_path, market, operation_id=f"{key}-market")
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key=f"{key}-prior",
+            contract=_executable_contract(),
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id=f"{key}-source",
+            expected=market,
+        )
+        replay_path = tmp_path / f"{key}.json"
+        replay_path.write_text(
+            json.dumps(_daily_financial_replay(has_gap=False)),
+            encoding="utf-8",
+        )
+        replay = ReplayTushareRefreshBundle((replay_path,))
+        service = DataRefreshService(
+            database,
+            tmp_path,
+            benchmark_mount_root=benchmark_mount_for_data_mount(tmp_path),
+            clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
+        )
+        service.submit_financial(
+            idempotency_key=key,
+            observation_through_session="2026-08-14",
+        )
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION data.reject_shared_financial_head_marker() RETURNS trigger
+                LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'head marker failed'; END $$
+                """
+            )
+            transaction.execute(
+                """
+                CREATE TRIGGER reject_shared_financial_head_marker
+                BEFORE UPDATE OF publication_head_moved_at
+                ON data.financial_daily_refresh_operations
+                FOR EACH ROW
+                WHEN (
+                    NEW.idempotency_key = 'shared-financial-completion-recovery'
+                    AND OLD.publication_head_moved_at IS NULL
+                    AND NEW.publication_head_moved_at IS NOT NULL
+                )
+                EXECUTE FUNCTION data.reject_shared_financial_head_marker()
+                """
+            )
+        monkeypatch.setattr(
+            refresh_module,
+            "DailyFinancialRefreshService",
+            PublishThenLoseCompletion,
+        )
+        with pytest.raises(DataRefreshError) as failure:
+            service.process_next(
+                UnexpectedMarketSource(),  # type: ignore[arg-type]
+                benchmark_source=FixtureBenchmarkSource(),
+                financial_announcement_source=replay,
+                financial_source=replay,
+            )
+        assert isinstance(failure.value.__cause__, FinancialDailyRefreshError)
+        assert failure.value.__cause__.code == (
+            "FINANCIAL_PUBLICATION_COMPLETION_PENDING"
+        )
+        assert failure.value.code == "REFRESH_COMPLETION_PENDING"
+        monkeypatch.setattr(
+            refresh_module,
+            "DailyFinancialRefreshService",
+            DailyFinancialRefreshService,
+        )
+
+        pending = service.inspect(key)
+        assert pending.status == "running"
+        assert pending.attempt_count == 1
+        assert published_manifest is not None
+        assert published_manifest != source_generation
+        assert successor_manifest is not None
+        manifests_before = tuple((tmp_path / "manifests" / "sha256").glob("*/*.json"))
+        assert (
+            service.process_next(
+                UnexpectedMarketSource(),  # type: ignore[arg-type]
+                benchmark_source=FixtureBenchmarkSource(),
+            )
+            is True
+        )
+
+        terminal = service.inspect(key)
+        assert terminal.status == "succeeded"
+        assert terminal.outcome == "no_change"
+        assert terminal.attempt_count == 1
+        assert terminal.data_through_session == "2026-08-14"
+        assert terminal.financial_complete_through_session == "2026-08-14"
+        assert terminal.discovery_gap_count == 0
+        with database.transaction() as transaction:
+            persisted = transaction.execute(
+                """
+                SELECT generation_manifest_sha256
+                FROM data.refresh_operations
+                WHERE idempotency_key = %s
+                """,
+                (key,),
+            ).fetchone()
+        assert persisted == {
+            "generation_manifest_sha256": published_manifest
+        }
+        assert tuple((tmp_path / "manifests" / "sha256").glob("*/*.json")) == (manifests_before)
+        current = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert current is not None
+        assert current.generation_manifest_sha256 == successor_manifest
+    finally:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DROP TRIGGER IF EXISTS reject_shared_financial_head_marker "
+                "ON data.financial_daily_refresh_operations"
+            )
+            transaction.execute(
+                "DROP FUNCTION IF EXISTS data.reject_shared_financial_head_marker()"
+            )
+            transaction.execute(
+                "DELETE FROM data.refresh_operations WHERE idempotency_key = %s",
+                (key,),
+            )
+        database.close()
+
+
+def test_expired_financial_claim_releases_attempt_scoped_publication_candidates(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnexpectedMarketSource:
+        def collect(self, plan: object) -> object:
+            del plan
+            raise AssertionError("Financial queue work must not run Market collection")
+
+    database = _database(core_settings)
+    key = "shared-financial-pre-cas-crash"
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
+        )
+        _establish_head(database, tmp_path, market, operation_id=f"{key}-market")
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key=f"{key}-prior",
+            contract=_executable_contract(),
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id=f"{key}-source",
+            expected=market,
+        )
+        with database.transaction() as transaction:
+            live_candidate_baseline = {
+                str(row["operation_id"])
+                for row in transaction.execute(
+                    """
+                    SELECT operation_id
+                    FROM data.generation_candidates
+                    WHERE status = 'live'
+                    """
+                ).fetchall()
+            }
+        replay_path = tmp_path / f"{key}.json"
+        replay_path.write_text(
+            json.dumps(
+                _daily_financial_replay(
+                    has_gap=False,
+                    has_statement_change=True,
+                )
+            ),
+            encoding="utf-8",
+        )
+        replay = ReplayTushareRefreshBundle((replay_path,))
+        service = DataRefreshService(
+            database,
+            tmp_path,
+            benchmark_mount_root=benchmark_mount_for_data_mount(tmp_path),
+            clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
+            max_attempts=1,
+        )
+        service.submit_financial(
+            idempotency_key=key,
+            observation_through_session="2026-08-14",
+        )
+        original_compare_and_swap = DatasetLifecycle.compare_and_swap_head
+
+        def crash_before_compare_and_swap(
+            selected: DatasetLifecycle,
+            **arguments: object,
+        ) -> object:
+            if arguments.get("daily_financial_publication_key") == key:
+                raise KeyboardInterrupt
+            return original_compare_and_swap(selected, **arguments)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(
+            DatasetLifecycle,
+            "compare_and_swap_head",
+            crash_before_compare_and_swap,
+        )
+        with pytest.raises(KeyboardInterrupt):
+            service.process_next(
+                UnexpectedMarketSource(),  # type: ignore[arg-type]
+                benchmark_source=FixtureBenchmarkSource(),
+                financial_announcement_source=replay,
+                financial_source=replay,
+                financial_source_window_selector=replay.select_financial_window,
+            )
+        monkeypatch.setattr(
+            DatasetLifecycle,
+            "compare_and_swap_head",
+            original_compare_and_swap,
+        )
+
+        with database.transaction() as transaction:
+            running = transaction.execute(
+                """
+                SELECT status FROM data.refresh_operations
+                WHERE idempotency_key = %s AND status = 'running'
+                """,
+                (key,),
+            ).fetchone()
+            assert running is not None
+            live_candidates = transaction.execute(
+                """
+                SELECT operation_id, status
+                FROM data.generation_candidates
+                WHERE status = 'live'
+                """
+            ).fetchall()
+            transaction.execute(
+                """
+                UPDATE data.refresh_operations
+                SET lease_expires_at = clock_timestamp() - interval '1 second'
+                WHERE idempotency_key = %s AND status = 'running'
+                """,
+                (key,),
+            )
+        candidates = [
+            row
+            for row in live_candidates
+            if str(row["operation_id"]) not in live_candidate_baseline
+        ]
+        assert candidates
+        assert {row["status"] for row in candidates} == {"live"}
+        candidate_operation_ids = [str(row["operation_id"]) for row in candidates]
+
+        assert (
+            service.process_next(
+                UnexpectedMarketSource(),  # type: ignore[arg-type]
+                benchmark_source=FixtureBenchmarkSource(),
+            )
+            is True
+        )
+        receipt = service.inspect(key)
+        assert receipt.status == "failed"
+        assert receipt.outcome == "infrastructure_failed"
+        assert receipt.failure_code == "RETRY_EXHAUSTED"
+        assert receipt.accepted_instrument_count == 1
+        assert receipt.failed_instrument_count == 0
+        assert receipt.pending_instrument_count == 0
+        assert receipt.discovery_gap_count == 0
+        with database.transaction() as transaction:
+            statuses = transaction.execute(
+                """
+                SELECT status FROM data.generation_candidates
+                WHERE operation_id = ANY(%s)
+                """,
+                (candidate_operation_ids,),
+            ).fetchall()
+        assert statuses
+        assert {row["status"] for row in statuses} == {"released"}
+    finally:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.refresh_operations WHERE idempotency_key = %s",
+                (key,),
+            )
+        database.close()
+
+
+def test_financial_heartbeat_renews_attempt_scoped_publication_candidates(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    key = "shared-financial-candidate-heartbeat"
+    candidate_ready = threading.Event()
+    allow_completion = threading.Event()
+    candidate_operation_ids: list[str] = []
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
+        )
+        _establish_head(database, tmp_path, market, operation_id=f"{key}-market")
+        service = DataRefreshService(
+            database,
+            tmp_path,
+            benchmark_mount_root=benchmark_mount_for_data_mount(tmp_path),
+            heartbeat_seconds=0.05,
+            lease_seconds=120,
+        )
+        service.submit_financial(
+            idempotency_key=key,
+            observation_through_session="2026-08-14",
+        )
+
+        class BlockingFinancialService:
+            def __init__(self, *arguments: object, **options: object) -> None:
+                del arguments
+                self._operation_id = str(options["publication_operation_id"])
+
+            def publish(self, **arguments: object) -> object:
+                del arguments
+                candidate_operation_id = f"{self._operation_id}:0"
+                candidate_operation_ids.append(candidate_operation_id)
+                lifecycle = DatasetLifecycle(database, tmp_path)
+                lifecycle.protect_candidate(
+                    operation_id=candidate_operation_id,
+                    generation_manifest_sha256=market,
+                    lease_seconds=60,
+                )
+                candidate_ready.set()
+                if not allow_completion.wait(timeout=10):
+                    raise AssertionError("Financial heartbeat observation timed out")
+                lifecycle.release_candidate(operation_id=candidate_operation_id)
+                return SimpleNamespace(
+                    status="succeeded",
+                    generation_manifest_sha256=market,
+                    complete_through_session="2026-08-14",
+                    matched_trigger_count=0,
+                    checked_no_structured_change_count=0,
+                    accepted_instrument_count=0,
+                    failed_instrument_count=0,
+                    pending_instrument_count=0,
+                    discovery_gap_count=0,
+                    canonical_changed=False,
+                )
+
+        monkeypatch.setattr(
+            refresh_module,
+            "DailyFinancialRefreshService",
+            BlockingFinancialService,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                service.process_next,
+                object(),
+                benchmark_source=FixtureBenchmarkSource(),
+                financial_announcement_source=object(),
+                financial_source=object(),
+            )
+            assert candidate_ready.wait(timeout=5)
+            candidate_operation_id = candidate_operation_ids[0]
+            with database.transaction() as transaction:
+                initial = transaction.execute(
+                    """
+                    SELECT lease_expires_at FROM data.generation_candidates
+                    WHERE operation_id = %s
+                    """,
+                    (candidate_operation_id,),
+                ).fetchone()
+            assert initial is not None
+            poll = threading.Event()
+            for _ in range(500):
+                with database.transaction() as transaction:
+                    renewed = transaction.execute(
+                        """
+                        SELECT lease_expires_at FROM data.generation_candidates
+                        WHERE operation_id = %s
+                        """,
+                        (candidate_operation_id,),
+                    ).fetchone()
+                if (
+                    renewed is not None
+                    and renewed["lease_expires_at"] > initial["lease_expires_at"]
+                ):
+                    break
+                poll.wait(0.02)
+            else:
+                raise AssertionError("Financial publication candidate lease was not renewed")
+            allow_completion.set()
+            assert future.result(timeout=5) is True
+
+        receipt = service.inspect(key)
+        assert receipt.status == "succeeded"
+        assert receipt.outcome == "no_change"
+        assert receipt.attempt_count == 1
+    finally:
+        allow_completion.set()
+        with database.transaction() as transaction:
+            if candidate_operation_ids:
+                transaction.execute(
+                    """
+                    UPDATE data.generation_candidates
+                    SET status = 'released', released_at = now(), updated_at = now()
+                    WHERE operation_id = ANY(%s) AND status = 'live'
+                    """,
+                    (candidate_operation_ids,),
+                )
+            transaction.execute(
+                "DELETE FROM data.refresh_operations WHERE idempotency_key = %s",
+                (key,),
+            )
+        database.close()
+
+
+@pytest.mark.parametrize(
+    (
+        "target",
+        "replay_window_is_wrong",
+        "expected_worker_code",
+        "expected_outcome",
+        "expected_failure_code",
+    ),
+    (
+        (
+            "2026-08-15",
+            False,
+            "FINANCIAL_TARGET_EXCEEDS_MARKET",
+            "business_rejected",
+            "FINANCIAL_TARGET_EXCEEDS_MARKET",
+        ),
+        (
+            "2026-08-14",
+            True,
+            "REFRESH_INFRASTRUCTURE_FAILURE",
+            "infrastructure_failed",
+            "RETRY_EXHAUSTED",
+        ),
+    ),
+)
+def test_shared_worker_classifies_real_financial_replay_failures(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    *,
+    target: str,
+    replay_window_is_wrong: bool,
+    expected_worker_code: str,
+    expected_outcome: str,
+    expected_failure_code: str,
+) -> None:
+    class UnexpectedMarketSource:
+        def collect(self, plan: object) -> object:
+            del plan
+            raise AssertionError("Financial queue work must not run Market collection")
+
+    database = _database(core_settings)
+    key = f"shared-financial-{expected_outcome}"
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
+        )
+        _establish_head(database, tmp_path, market, operation_id=f"{key}-market")
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key=f"{key}-prior",
+            contract=_executable_contract(),
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id=f"{key}-source",
+            expected=market,
+        )
+        replay_value = _daily_financial_replay(has_gap=False)
+        if replay_window_is_wrong:
+            financial_refresh = replay_value["financial_refresh"]
+            assert isinstance(financial_refresh, dict)
+            financial_refresh["request_start"] = "2026-08-08"
+        replay_path = tmp_path / f"{key}.json"
+        replay_path.write_text(json.dumps(replay_value), encoding="utf-8")
+        replay = ReplayTushareRefreshBundle((replay_path,))
+        service = DataRefreshService(
+            database,
+            tmp_path,
+            benchmark_mount_root=benchmark_mount_for_data_mount(tmp_path),
+            clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
+            max_attempts=1,
+        )
+        service.submit_financial(
+            idempotency_key=key,
+            observation_through_session=target,
+        )
+
+        with pytest.raises(DataRefreshError) as failure:
+            service.process_next(
+                UnexpectedMarketSource(),  # type: ignore[arg-type]
+                benchmark_source=FixtureBenchmarkSource(),
+                financial_announcement_source=replay,
+                financial_source=replay,
+            )
+        assert failure.value.code == expected_worker_code
+
+        receipt = service.inspect(key)
+        assert receipt.status == "failed"
+        assert receipt.outcome == expected_outcome
+        assert receipt.failure_code == expected_failure_code
+        assert receipt.attempt_count == 1
+        assert MountedDatasetHeadStore(tmp_path).current_pointer() is not None
+        assert (
+            MountedDatasetHeadStore(tmp_path).current_pointer().generation_manifest_sha256
+            == source_generation
+        )
+        with database.transaction() as transaction:
+            detailed = transaction.execute(
+                """
+                SELECT status, failure_code
+                FROM data.financial_daily_refresh_operations
+                WHERE idempotency_key = %s
+                """,
+                (key,),
+            ).fetchone()
+        if replay_window_is_wrong:
+            assert detailed == {
+                "failure_code": "RETRY_EXHAUSTED",
+                "status": "failed",
+            }
+        else:
+            assert detailed is None
+    finally:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.refresh_operations WHERE idempotency_key = %s",
+                (key,),
+            )
+        database.close()
+
+
+@pytest.mark.parametrize("fail_head_pointer_during_classification", (False, True))
+def test_financial_filesystem_failure_retries_and_keeps_discovery_diagnostics(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_head_pointer_during_classification: bool,
+) -> None:
+    class UnexpectedMarketSource:
+        def collect(self, plan: object) -> object:
+            del plan
+            raise AssertionError("Financial queue work must not run Market collection")
+
+    database = _database(core_settings)
+    key = (
+        "shared-financial-head-pointer-failure"
+        if fail_head_pointer_during_classification
+        else "shared-financial-filesystem-failure"
+    )
+    discovery_recorded = False
+    fail_next_head_pointer = False
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
+        )
+        _establish_head(database, tmp_path, market, operation_id=f"{key}-market")
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key=f"{key}-prior",
+            contract=_executable_contract(),
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id=f"{key}-source",
+            expected=market,
+        )
+        replay_path = tmp_path / f"{key}.json"
+        replay_path.write_text(
+            json.dumps(
+                _daily_financial_replay(
+                    has_gap=False,
+                    has_statement_change=True,
+                )
+            ),
+            encoding="utf-8",
+        )
+        replay = ReplayTushareRefreshBundle((replay_path,))
+        original_discover = replay.discover
+
+        def discover(**arguments: object) -> FinancialAnnouncementDiscovery:
+            nonlocal discovery_recorded
+            result = original_discover(**arguments)  # type: ignore[arg-type]
+            discovery_recorded = True
+            return result
+
+        monkeypatch.setattr(replay, "discover", discover)
+        original_read = AddressedFileStore.read
+
+        def fail_after_discovery(
+            selected: AddressedFileStore,
+            *arguments: object,
+            **options: object,
+        ) -> bytes:
+            nonlocal fail_next_head_pointer
+            if discovery_recorded:
+                fail_next_head_pointer = fail_head_pointer_during_classification
+                raise AddressedFileError("injected addressed filesystem failure")
+            return original_read(selected, *arguments, **options)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(AddressedFileStore, "read", fail_after_discovery)
+        if fail_head_pointer_during_classification:
+            original_current_pointer = MountedDatasetHeadStore.current_pointer
+
+            def fail_head_pointer_after_discovery(
+                selected: MountedDatasetHeadStore,
+            ) -> object:
+                nonlocal fail_next_head_pointer
+                if fail_next_head_pointer:
+                    fail_next_head_pointer = False
+                    raise OSError("injected Dataset Head pointer failure")
+                return original_current_pointer(selected)
+
+            monkeypatch.setattr(
+                MountedDatasetHeadStore,
+                "current_pointer",
+                fail_head_pointer_after_discovery,
+            )
+        service = DataRefreshService(
+            database,
+            tmp_path,
+            benchmark_mount_root=benchmark_mount_for_data_mount(tmp_path),
+            clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
+            max_attempts=2,
+        )
+        service.submit_financial(
+            idempotency_key=key,
+            observation_through_session="2026-08-14",
+        )
+
+        for expected_status in ("accepted", "failed"):
+            with pytest.raises(DataRefreshError) as failure:
+                service.process_next(
+                    UnexpectedMarketSource(),  # type: ignore[arg-type]
+                    benchmark_source=FixtureBenchmarkSource(),
+                    financial_announcement_source=replay,
+                    financial_source=replay,
+                    financial_source_window_selector=replay.select_financial_window,
+                )
+            assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
+            assert service.inspect(key).status == expected_status
+            fail_next_head_pointer = False
+
+        receipt = service.inspect(key)
+        assert receipt.outcome == "infrastructure_failed"
+        assert receipt.failure_code == "RETRY_EXHAUSTED"
+        assert receipt.last_failure_code == "REFRESH_INFRASTRUCTURE_FAILURE"
+        assert receipt.attempt_count == 2
+        assert receipt.matched_trigger_count == 0
+        assert receipt.checked_no_structured_change_count == 0
+        assert receipt.accepted_instrument_count == 0
+        assert receipt.failed_instrument_count == 0
+        assert receipt.pending_instrument_count == 1
+        assert receipt.discovery_gap_count == 0
+    finally:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.refresh_operations WHERE idempotency_key = %s",
+                (key,),
+            )
+        database.close()
+
+
 @pytest.mark.parametrize("failure_mode", ("source", "undated_source_row"))
 def test_daily_financial_refresh_publishes_other_stocks_when_one_stock_fails(
     core_settings: CoreSettings,
@@ -1291,11 +2345,7 @@ def test_daily_financial_refresh_publishes_other_stocks_when_one_stock_fails(
         ) -> RawSourceResponse:
             ts_code = str(params["ts_code"])
             self.requests.append((endpoint, ts_code, "complete-history"))
-            if (
-                failure_mode == "source"
-                and ts_code == "000002.SZ"
-                and endpoint == "balancesheet"
-            ):
+            if failure_mode == "source" and ts_code == "000002.SZ" and endpoint == "balancesheet":
                 raise RawSourceError("upstream unavailable")
             values = {
                 "income": ("11", "5"),
@@ -1309,8 +2359,7 @@ def test_daily_financial_refresh_publishes_other_stocks_when_one_stock_fails(
                         ts_code,
                         (
                             ""
-                            if failure_mode == "undated_source_row"
-                            and ts_code == "000002.SZ"
+                            if failure_mode == "undated_source_row" and ts_code == "000002.SZ"
                             else "20260814"
                         ),
                         "",
@@ -1383,12 +2432,13 @@ def test_daily_financial_refresh_publishes_other_stocks_when_one_stock_fails(
         assert source.requests == [
             *((endpoint, "000001.SZ", "complete-history") for endpoint in FINANCIAL_ENDPOINTS),
             *(
-                (("income", "000002.SZ", "complete-history"),
-                 ("balancesheet", "000002.SZ", "complete-history"))
+                (
+                    ("income", "000002.SZ", "complete-history"),
+                    ("balancesheet", "000002.SZ", "complete-history"),
+                )
                 if failure_mode == "source"
                 else tuple(
-                    (endpoint, "000002.SZ", "complete-history")
-                    for endpoint in FINANCIAL_ENDPOINTS
+                    (endpoint, "000002.SZ", "complete-history") for endpoint in FINANCIAL_ENDPOINTS
                 )
             ),
         ]
@@ -1532,8 +2582,7 @@ def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
                 observation_through_session="2026-08-14",
             )
         assert statement_source.requests == [
-            (endpoint, "000001.SZ", "complete-history")
-            for endpoint in FINANCIAL_ENDPOINTS
+            (endpoint, "000001.SZ", "complete-history") for endpoint in FINANCIAL_ENDPOINTS
         ]
 
         outcome = DailyFinancialRefreshService(
@@ -1600,22 +2649,20 @@ def test_financial_refresh_rejects_prior_identity_mismatch_before_collection(
                 )
 
         assert source.requests == []
-        failures = [
-            event for event in lifecycle_events if event["event"] == "data_refresh_failed"
-        ]
+        failures = [event for event in lifecycle_events if event["event"] == "data_refresh_failed"]
         assert len(failures) == 3
         assert all(event["level"] == "ERROR" for event in failures)
         assert all(
-            event["failure_code"] == "FINANCIAL_PRIOR_CANDIDATE_MISMATCH"
-            for event in failures
+            event["failure_code"] == "FINANCIAL_PRIOR_CANDIDATE_MISMATCH" for event in failures
         )
         assert not [
             event for event in lifecycle_events if event["event"] == "data_refresh_succeeded"
         ]
         with database.transaction() as transaction:
-            assert transaction.execute(
-                "SELECT 1 FROM data.financial_refresh_operations"
-            ).fetchone() is None
+            assert (
+                transaction.execute("SELECT 1 FROM data.financial_refresh_operations").fetchone()
+                is None
+            )
     finally:
         database.close()
 
@@ -1699,9 +2746,12 @@ def test_financial_publication_recomposes_against_a_newer_market_head(
         assert tuple(family.manifest_sha256 for family in final.families[:-1]) == tuple(
             family.manifest_sha256 for family in newest_market.families[:-1]
         )
-        assert FinancialCandidateStore(tmp_path).source_generation_manifest_sha256(
-            final.financial_candidate_manifest_sha256 or ""
-        ) == first_market
+        assert (
+            FinancialCandidateStore(tmp_path).source_generation_manifest_sha256(
+                final.financial_candidate_manifest_sha256 or ""
+            )
+            == first_market
+        )
 
         with database.transaction() as transaction:
             operation = transaction.execute(
@@ -1724,11 +2774,7 @@ def test_financial_publication_recomposes_against_a_newer_market_head(
         assert original_path.exists()
         published_root = str(published.generation_manifest_sha256)
         published_root_path = (
-            tmp_path
-            / "manifests"
-            / "sha256"
-            / published_root[:2]
-            / f"{published_root}.json"
+            tmp_path / "manifests" / "sha256" / published_root[:2] / f"{published_root}.json"
         )
         assert published_root_path.exists()
 
@@ -1756,11 +2802,7 @@ def test_financial_publication_recomposes_against_a_newer_market_head(
         assert original_path.exists()
         assert not published_root_path.exists()
         source_root_path = (
-            tmp_path
-            / "manifests"
-            / "sha256"
-            / source_generation[:2]
-            / f"{source_generation}.json"
+            tmp_path / "manifests" / "sha256" / source_generation[:2] / f"{source_generation}.json"
         )
         assert not source_root_path.exists()
 
@@ -1820,9 +2862,9 @@ def test_market_refresh_completes_while_financial_collection_is_blocked(
     database = _database(core_settings)
     try:
         initial_market = _market_generation(tmp_path)
-        initial_canonical = MountedGenerationStore(tmp_path).open_refresh_base(
-            initial_market
-        ).canonical
+        initial_canonical = (
+            MountedGenerationStore(tmp_path).open_refresh_base(initial_market).canonical
+        )
         instruments = initial_canonical["instruments"]
         assert isinstance(instruments, list)
         initial_canonical["instruments"] = [
@@ -1865,15 +2907,13 @@ def test_market_refresh_completes_while_financial_collection_is_blocked(
             clock=lambda: COLLECTED_AT + timedelta(days=1),
         )
 
-        market_canonical = MountedGenerationStore(tmp_path).open_refresh_base(
-            source_generation
-        ).canonical
+        market_canonical = (
+            MountedGenerationStore(tmp_path).open_refresh_base(source_generation).canonical
+        )
         prices = market_canonical["prices"]
         assert isinstance(prices, list)
         corrected = next(
-            row
-            for row in prices
-            if isinstance(row, dict) and row["session"] == "2026-08-13"
+            row for row in prices if isinstance(row, dict) and row["session"] == "2026-08-13"
         )
         corrected["turnover_cny"] = "100001.00"
         market_refresh = DataRefreshService(
@@ -1898,10 +2938,13 @@ def test_market_refresh_completes_while_financial_collection_is_blocked(
                 observation_through_session="2026-08-13",
             )
             assert started.wait(timeout=20)
-            assert market_refresh.process_next(
-                MarketSource(market_canonical),
-                benchmark_source=FixtureBenchmarkSource(),
-            ) is True
+            assert (
+                market_refresh.process_next(
+                    MarketSource(market_canonical),
+                    benchmark_source=FixtureBenchmarkSource(),
+                )
+                is True
+            )
             market_outcome = market_refresh.inspect("market-during-financial")
             assert market_outcome.status == "succeeded"
             release.set()
@@ -2065,9 +3108,7 @@ def test_financial_publication_recovers_head_move_before_receipt_commit(
             event for event in lifecycle_events if event["event"] == "data_refresh_failed"
         )
         assert failure_event["level"] == "ERROR"
-        assert failure_event["failure_code"] == (
-            "FINANCIAL_PUBLICATION_COMPLETION_PENDING"
-        )
+        assert failure_event["failure_code"] == ("FINANCIAL_PUBLICATION_COMPLETION_PENDING")
 
         moved = MountedDatasetHeadStore(tmp_path).current_pointer()
         assert moved is not None and moved.generation_manifest_sha256 != source_generation
@@ -2131,9 +3172,7 @@ def test_financial_publication_recovers_head_move_before_receipt_commit(
         assert later_financial.generation_manifest_sha256 is not None
         later_head = MountedDatasetHeadStore(tmp_path).current_pointer()
         assert later_head is not None
-        assert later_head.generation_manifest_sha256 == (
-            later_financial.generation_manifest_sha256
-        )
+        assert later_head.generation_manifest_sha256 == (later_financial.generation_manifest_sha256)
 
         replayed = FinancialRefreshService(
             database,
@@ -2156,13 +3195,10 @@ def test_financial_publication_recovers_head_move_before_receipt_commit(
                 WHERE idempotency_key = 'financial-receipt-crash'
                 """
             ).fetchone()
-        assert recovered_operation == {
-            "published_at": COLLECTED_AT + timedelta(days=1)
-        }
-        assert (
-            _overview_service(database, tmp_path).overview().last_financial_refresh_at
-            == COLLECTED_AT + timedelta(days=1, hours=2)
-        )
+        assert recovered_operation == {"published_at": COLLECTED_AT + timedelta(days=1)}
+        assert _overview_service(
+            database, tmp_path
+        ).overview().last_financial_refresh_at == COLLECTED_AT + timedelta(days=1, hours=2)
         with database.transaction() as transaction:
             active_candidate = transaction.execute(
                 """
@@ -2256,9 +3292,7 @@ def test_stale_financial_target_cannot_overwrite_a_newer_financial_family(
 
         head = MountedDatasetHeadStore(tmp_path).current_pointer()
         assert moved is True and head is not None
-        published = MountedGenerationStore(tmp_path).inspect_root(
-            head.generation_manifest_sha256
-        )
+        published = MountedGenerationStore(tmp_path).inspect_root(head.generation_manifest_sha256)
         assert published.financial_candidate_manifest_sha256 is not None
         assert published.financial_candidate_manifest_sha256 != prior.manifest_sha256
     finally:
@@ -2929,15 +3963,97 @@ def _contract(
     )
 
 
+def _daily_financial_replay(
+    *,
+    has_gap: bool,
+    has_pending: bool = False,
+    has_statement_change: bool = False,
+) -> dict[str, object]:
+    failed_category = FINANCIAL_ANNOUNCEMENT_CATEGORIES[-1]
+    financial = (
+        {
+            endpoint: {
+                "000001.SZ": {
+                    "fields": list(EXECUTABLE_FIELDS[endpoint]),
+                    "items": [
+                        [
+                            "000001.SZ",
+                            "20260814",
+                            "",
+                            "20260630",
+                            "1",
+                            "1",
+                            "2",
+                            *{
+                                "income": ("11", "5"),
+                                "balancesheet": ("21", "8", "13"),
+                                "cashflow": ("7",),
+                            }[endpoint],
+                            "0",
+                        ]
+                    ],
+                }
+            }
+            for endpoint in FINANCIAL_ENDPOINTS
+        }
+        if has_statement_change
+        else {}
+    )
+    return {
+        "format": "thesistrace-tushare-refresh-replay",
+        "version": 3,
+        "request_start": "2026-08-07",
+        "request_end": "2026-08-14",
+        "snapshot": {},
+        "financial": financial,
+        "financial_refresh": {
+            "request_start": "2026-08-07",
+            "request_end": "2026-08-14",
+            "completed_categories": list(
+                FINANCIAL_ANNOUNCEMENT_CATEGORIES[:-1]
+                if has_gap
+                else FINANCIAL_ANNOUNCEMENT_CATEGORIES
+            ),
+            "announcements": (
+                [
+                    {
+                        "announcement_id": "a" * 64,
+                        "category": "半年报",
+                        "ts_code": "000001.SZ",
+                        "name": "平安银行",
+                        "title": "平安银行2026年半年度报告",
+                        "source_published_date": "2026-08-14",
+                        "report_period": "2026-06-30",
+                        "url": "https://example.test/announcement/pending",
+                    }
+                ]
+                if has_pending or has_statement_change
+                else []
+            ),
+            "gaps": (
+                [
+                    {
+                        "category": failed_category,
+                        "start_date": "2026-08-07",
+                        "end_date": "2026-08-14",
+                        "failure_code": "CNINFO_DISCOVERY_UNAVAILABLE",
+                    }
+                ]
+                if has_gap
+                else []
+            ),
+            "source_lineage_sha256": "f" * 64,
+        },
+    }
+
+
 def _executable_contract() -> FinancialCollectionContract:
     return FinancialCollectionContract(
         capability_sha256="e" * 64,
         endpoint_fields=tuple(
             (endpoint, EXECUTABLE_FIELDS[endpoint]) for endpoint in FINANCIAL_ENDPOINTS
         ),
-        suspected_truncation_row_counts=tuple(
-            (endpoint, None) for endpoint in FINANCIAL_ENDPOINTS
-        ),
+        suspected_truncation_row_counts=tuple((endpoint, None) for endpoint in FINANCIAL_ENDPOINTS),
         shards=(FinancialDateShard("complete-history"),),
     )
 

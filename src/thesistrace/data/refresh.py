@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from threading import Event, Thread
 
@@ -17,6 +17,14 @@ from thesistrace.benchmark import (
     BenchmarkSnapshotStore,
     BenchmarkSnapshotUpdater,
 )
+from thesistrace.data.daily_financial_refresh import (
+    DailyFinancialRefreshService,
+    FinancialDailyRefreshError,
+    FinancialDailyRefreshOutcome,
+    reconcile_daily_financial_publication,
+)
+from thesistrace.data.financial_announcements import FinancialAnnouncementSource
+from thesistrace.data.financial_collection import FinancialRawSource
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
 from thesistrace.data.head_store import (
     DatasetHeadConflict,
@@ -55,7 +63,7 @@ class _RefreshFenced(RuntimeError):
 class RefreshOutcome:
     idempotency_key: str
     kind: str
-    as_of: str
+    as_of: str | None
     status: str
     outcome: str | None
     data_through_session: str | None
@@ -63,11 +71,20 @@ class RefreshOutcome:
     failure_code: str | None
     last_failure_code: str | None
     attempt_count: int
+    observation_through_session: str | None = None
+    financial_complete_through_session: str | None = None
+    matched_trigger_count: int | None = None
+    checked_no_structured_change_count: int | None = None
+    accepted_instrument_count: int | None = None
+    failed_instrument_count: int | None = None
+    pending_instrument_count: int | None = None
+    discovery_gap_count: int | None = None
 
 
 @dataclass(frozen=True)
 class _RefreshClaim:
     key: str
+    kind: str
     owner_token: str
     attempt_count: int
 
@@ -85,6 +102,13 @@ class _RefreshHeartbeat:
 class _RefreshFailure:
     code: str
     retry: bool
+
+
+@dataclass(frozen=True)
+class _FinancialFailurePolicy:
+    code: str
+    retryable: bool
+    category: str
 
 
 class DataRefreshService:
@@ -196,26 +220,96 @@ class DataRefreshService:
             raise DataRefreshError("REFRESH_NOT_FOUND")
         return _outcome(row)
 
+    def submit_financial(
+        self,
+        *,
+        idempotency_key: str,
+        observation_through_session: str,
+    ) -> RefreshOutcome:
+        key, target = validate_financial_refresh_request(
+            idempotency_key=idempotency_key,
+            observation_through_session=observation_through_session,
+        )
+        fingerprint = hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "command": "data-operator/financial-refresh",
+                    "observation_through_session": target,
+                }
+            )
+        ).hexdigest()
+        with self._database.transaction() as transaction:
+            existing = transaction.execute(
+                "SELECT * FROM data.refresh_operations WHERE idempotency_key = %s",
+                (key,),
+            ).fetchone()
+        if existing is not None:
+            if existing["fingerprint"] != fingerprint:
+                raise DataRefreshError("IDEMPOTENCY_KEY_CONFLICT")
+            return _outcome(existing)
+        if self._lifecycle.current_pointer() is None:
+            raise DataRefreshError("DATA_NOT_READY")
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                INSERT INTO data.refresh_operations (
+                    idempotency_key, kind, fingerprint, status,
+                    observation_through_session
+                ) VALUES (%s, 'financial', %s, 'accepted', %s)
+                ON CONFLICT (idempotency_key) DO NOTHING
+                RETURNING *
+                """,
+                (key, fingerprint, target),
+            ).fetchone()
+            if row is None:
+                row = transaction.execute(
+                    "SELECT * FROM data.refresh_operations WHERE idempotency_key = %s",
+                    (key,),
+                ).fetchone()
+        assert row is not None
+        if row["fingerprint"] != fingerprint:
+            raise DataRefreshError("IDEMPOTENCY_KEY_CONFLICT")
+        return _outcome(row)
+
     def process_next(
         self,
         source: DataSource,
         *,
         benchmark_source: BenchmarkLevelSource,
+        financial_announcement_source: FinancialAnnouncementSource | None = None,
+        financial_source: FinancialRawSource | None = None,
+        financial_source_window_selector: Callable[[str, str], None] | None = None,
     ) -> bool:
         with mounted_data_mutation_lock(self._database):
-            return self._process_next(source, benchmark_source=benchmark_source)
+            return self._process_next(
+                source,
+                benchmark_source=benchmark_source,
+                financial_announcement_source=financial_announcement_source,
+                financial_source=financial_source,
+                financial_source_window_selector=financial_source_window_selector,
+            )
 
     def _process_next(
         self,
         source: DataSource,
         *,
         benchmark_source: BenchmarkLevelSource,
+        financial_announcement_source: FinancialAnnouncementSource | None,
+        financial_source: FinancialRawSource | None,
+        financial_source_window_selector: Callable[[str, str], None] | None,
     ) -> bool:
         reconciled = self._reconcile_pending_completion()
         recovered = self._recover_expired_claims()
         claim = self._claim()
         if claim is None:
             return reconciled or recovered
+        if claim.kind == "financial":
+            return self._process_financial_claim(
+                claim,
+                announcement_source=financial_announcement_source,
+                financial_source=financial_source,
+                financial_source_window_selector=financial_source_window_selector,
+            )
         head_moved = False
         operation_id = _operation_id(claim.key, claim.owner_token)
         operation_started = self._monotonic()
@@ -238,9 +332,7 @@ class DataRefreshService:
                     refresh_base = (
                         None
                         if head is None
-                        else self._generations.open_refresh_base(
-                            head.generation_manifest_sha256
-                        )
+                        else self._generations.open_refresh_base(head.generation_manifest_sha256)
                     )
                 if head is None or refresh_base is None:
                     raise DataRefreshError("DATA_NOT_READY")
@@ -260,9 +352,7 @@ class DataRefreshService:
                 if unchanged:
                     phase = "benchmark"
                     with self._timed_phase(operation_id, phase):
-                        current_admission = self._generations.open_admission(
-                            expected_manifest
-                        )
+                        current_admission = self._generations.open_admission(expected_manifest)
                         self._update_benchmark(
                             current_admission.research_calendar,
                             benchmark_source,
@@ -377,7 +467,12 @@ class DataRefreshService:
                 raise DataRefreshError("REFRESH_COMPLETION_PENDING") from error
             code, retryable = _failure_policy(error)
             try:
-                failure = self._record_failure(claim, code=code, retryable=retryable)
+                failure = self._record_failure(
+                    claim,
+                    code=code,
+                    retryable=retryable,
+                    terminal_outcome=None,
+                )
             except _RefreshFenced:
                 self._lifecycle_event(
                     _data_refresh_event(
@@ -414,6 +509,140 @@ class DataRefreshService:
                     "data_refresh_succeeded",
                     operation_id=operation_id,
                     attempt_number=claim.attempt_count,
+                    status="succeeded",
+                    outcome=successful_outcome,
+                    duration_ms=_duration_ms(self._monotonic() - operation_started),
+                )
+            )
+        return True
+
+    def _process_financial_claim(
+        self,
+        claim: _RefreshClaim,
+        *,
+        announcement_source: FinancialAnnouncementSource | None,
+        financial_source: FinancialRawSource | None,
+        financial_source_window_selector: Callable[[str, str], None] | None,
+    ) -> bool:
+        operation_id = _operation_id(claim.key, claim.owner_token)
+        operation_started = self._monotonic()
+        phase = "financial"
+        head_moved = False
+        successful_outcome: str | None = None
+        self._lifecycle_event(
+            _data_refresh_event(
+                "data_refresh_started",
+                operation_id=operation_id,
+                attempt_number=claim.attempt_count,
+                kind="financial",
+                status="running",
+            )
+        )
+        try:
+            if announcement_source is None or financial_source is None:
+                raise DataRefreshError("FINANCIAL_WORKER_SOURCE_MISSING")
+            with self._maintain_claim(claim) as heartbeat:
+                target = self._financial_target(claim)
+                with self._timed_phase(operation_id, phase):
+                    outcome = DailyFinancialRefreshService(
+                        self._database,
+                        self._generations.root,
+                        announcement_source,
+                        financial_source,
+                        clock=self._clock,
+                        progress=self._lifecycle_event,
+                        ownership_guard=heartbeat.assert_owned,
+                        publication_guard=lambda transaction, expected, candidate, prepared: (
+                            self._owned_financial_publication_transaction(
+                                transaction,
+                                claim,
+                                expected_manifest=expected,
+                                candidate_manifest=candidate,
+                                prepared_at=prepared,
+                            )
+                        ),
+                        publication_operation_id=operation_id,
+                        publication_lease_seconds=self._lease_seconds,
+                        financial_source_window_selector=financial_source_window_selector,
+                    ).publish(
+                        idempotency_key=claim.key,
+                        observation_through_session=target,
+                    )
+                head_moved = True
+                heartbeat.assert_owned()
+                successful_outcome = self._complete_financial(claim, outcome)
+        except _RefreshFenced:
+            self._lifecycle_event(
+                _data_refresh_event(
+                    "data_refresh_fenced",
+                    level="WARNING",
+                    operation_id=operation_id,
+                    attempt_number=claim.attempt_count,
+                    kind="financial",
+                    phase=phase,
+                    outcome="fenced",
+                    duration_ms=_duration_ms(self._monotonic() - operation_started),
+                )
+            )
+            return True
+        except Exception as error:
+            if (
+                isinstance(error, FinancialDailyRefreshError)
+                and error.code == "FINANCIAL_PUBLICATION_COMPLETION_PENDING"
+            ):
+                head_moved = True
+            elif not head_moved:
+                head_moved = self._financial_post_cas_head_state(claim) is not False
+            if head_moved:
+                self._lifecycle_event(
+                    _data_refresh_event(
+                        "data_refresh_failed",
+                        level="ERROR",
+                        operation_id=operation_id,
+                        attempt_number=claim.attempt_count,
+                        kind="financial",
+                        phase=phase,
+                        status="running",
+                        outcome="completion_pending",
+                        duration_ms=_duration_ms(self._monotonic() - operation_started),
+                        failure_code="REFRESH_COMPLETION_PENDING",
+                        exception_type=type(error).__name__,
+                    )
+                )
+                raise DataRefreshError("REFRESH_COMPLETION_PENDING") from error
+            policy = _financial_failure_policy(error)
+            try:
+                failure = self._record_failure(
+                    claim,
+                    code=policy.code,
+                    retryable=policy.retryable,
+                    terminal_outcome=policy.category,
+                )
+            except _RefreshFenced:
+                return True
+            self._lifecycle_event(
+                _data_refresh_event(
+                    "data_refresh_failed",
+                    level="WARNING" if failure.retry else "ERROR",
+                    operation_id=operation_id,
+                    attempt_number=claim.attempt_count,
+                    kind="financial",
+                    phase=phase,
+                    status="accepted" if failure.retry else "failed",
+                    outcome="retry_scheduled" if failure.retry else "failed",
+                    duration_ms=_duration_ms(self._monotonic() - operation_started),
+                    failure_code=failure.code,
+                    exception_type=type(error).__name__,
+                )
+            )
+            raise DataRefreshError(policy.code) from error
+        if successful_outcome is not None:
+            self._lifecycle_event(
+                _data_refresh_event(
+                    "data_refresh_succeeded",
+                    operation_id=operation_id,
+                    attempt_number=claim.attempt_count,
+                    kind="financial",
                     status="succeeded",
                     outcome=successful_outcome,
                     duration_ms=_duration_ms(self._monotonic() - operation_started),
@@ -560,6 +789,7 @@ class DataRefreshService:
                 return None
             return _RefreshClaim(
                 key=str(row["idempotency_key"]),
+                kind=str(row["kind"]),
                 owner_token=owner_token,
                 attempt_count=int(claimed["attempt_count"]),
             )
@@ -601,17 +831,24 @@ class DataRefreshService:
                     )
                     if renewed.rowcount != 1:
                         raise _RefreshFenced("Refresh operation lease expired")
+                    operation_id = _operation_id(claim.key, claim.owner_token)
                     transaction.execute(
                         """
                         UPDATE data.generation_candidates
                         SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
                             updated_at = clock_timestamp()
-                        WHERE operation_id = %s AND status = 'live'
+                        WHERE status = 'live'
                           AND lease_expires_at > clock_timestamp()
+                          AND (
+                              operation_id = %s
+                              OR (%s = 'financial' AND operation_id LIKE %s)
+                          )
                         """,
                         (
                             self._lease_seconds,
-                            _operation_id(claim.key, claim.owner_token),
+                            operation_id,
+                            claim.kind,
+                            f"{operation_id}:%",
                         ),
                     )
             except Exception as error:
@@ -642,6 +879,132 @@ class DataRefreshService:
         if row is None:
             raise _RefreshFenced("Refresh operation no longer owns work")
         return row["as_of"]
+
+    def _financial_target(self, claim: _RefreshClaim) -> str:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT observation_through_session
+                FROM data.refresh_operations
+                WHERE idempotency_key = %s AND kind = 'financial'
+                  AND status = 'running' AND owner_token = %s
+                  AND lease_expires_at > clock_timestamp()
+                """,
+                (claim.key, claim.owner_token),
+            ).fetchone()
+        if row is None or row["observation_through_session"] is None:
+            raise _RefreshFenced("Financial Refresh no longer owns work")
+        return row["observation_through_session"].isoformat()
+
+    @contextmanager
+    def _owned_financial_publication_transaction(
+        self,
+        transaction: PostgresTransaction,
+        claim: _RefreshClaim,
+        *,
+        expected_manifest: str,
+        candidate_manifest: str,
+        prepared_at: datetime,
+    ) -> Iterator[None]:
+        updated = transaction.execute(
+            """
+            UPDATE data.refresh_operations
+            SET expected_generation_manifest_sha256 = %s,
+                generation_manifest_sha256 = %s,
+                candidate_prepared_at = %s,
+                lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                updated_at = clock_timestamp()
+            WHERE idempotency_key = %s AND kind = 'financial'
+              AND status = 'running' AND owner_token = %s
+              AND lease_expires_at > clock_timestamp()
+            """,
+            (
+                expected_manifest,
+                candidate_manifest,
+                prepared_at,
+                self._lease_seconds,
+                claim.key,
+                claim.owner_token,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise _RefreshFenced("Financial publication belongs to a stale owner")
+        yield
+        renewed = transaction.execute(
+            """
+            UPDATE data.refresh_operations
+            SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                updated_at = clock_timestamp()
+            WHERE idempotency_key = %s AND kind = 'financial'
+              AND status = 'running' AND owner_token = %s
+            """,
+            (self._lease_seconds, claim.key, claim.owner_token),
+        )
+        if renewed.rowcount != 1:
+            raise _RefreshFenced("Financial publication lost ownership before commit")
+
+    def _complete_financial(
+        self,
+        claim: _RefreshClaim,
+        outcome: FinancialDailyRefreshOutcome,
+    ) -> str:
+        completed_at = self._operator_time()
+        publication_outcome = (
+            "degraded"
+            if outcome.status in {"succeeded_with_pending", "succeeded_with_gaps"}
+            else "published"
+            if outcome.canonical_changed
+            else "no_change"
+        )
+        with self._database.transaction() as transaction:
+            lock_data_lifecycle(transaction)
+            pointer = self._heads.current_pointer()
+            if (
+                pointer is None
+                or pointer.generation_manifest_sha256 != outcome.generation_manifest_sha256
+            ):
+                raise DatasetHeadConflict(
+                    "Financial Refresh Head changed before receipt completion"
+                )
+            updated = transaction.execute(
+                """
+                UPDATE data.refresh_operations
+                SET status = 'succeeded', outcome = %s,
+                    generation_manifest_sha256 = %s,
+                    data_through_session = %s,
+                    last_refresh_at = %s,
+                    financial_complete_through_session = %s,
+                    matched_trigger_count = %s,
+                    checked_no_structured_change_count = %s,
+                    accepted_instrument_count = %s,
+                    failed_instrument_count = %s,
+                    pending_instrument_count = %s,
+                    discovery_gap_count = %s,
+                    failure_code = NULL, last_failure_code = NULL,
+                    finished_at = clock_timestamp(), updated_at = clock_timestamp()
+                WHERE idempotency_key = %s AND kind = 'financial'
+                  AND status = 'running' AND owner_token = %s
+                  AND lease_expires_at > clock_timestamp()
+                """,
+                (
+                    publication_outcome,
+                    outcome.generation_manifest_sha256,
+                    pointer.data_through_session,
+                    completed_at,
+                    outcome.complete_through_session,
+                    outcome.matched_trigger_count,
+                    outcome.checked_no_structured_change_count,
+                    outcome.accepted_instrument_count,
+                    outcome.failed_instrument_count,
+                    outcome.pending_instrument_count,
+                    outcome.discovery_gap_count,
+                    claim.key,
+                    claim.owner_token,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise _RefreshFenced("Financial Refresh completion belongs to a stale owner")
+        return publication_outcome
 
     def _record_expected_head(self, claim: _RefreshClaim, expected_manifest: str) -> None:
         with self._database.transaction() as transaction:
@@ -729,6 +1092,40 @@ class DataRefreshService:
             pointer is not None and pointer.generation_manifest_sha256 == generation_manifest_sha256
         )
 
+    def _financial_post_cas_head_state(self, claim: _RefreshClaim) -> bool | None:
+        try:
+            with self._database.transaction() as transaction:
+                lock_data_lifecycle(transaction)
+                row = transaction.execute(
+                    """
+                    SELECT f.composed_generation_manifest_sha256,
+                           f.fingerprint,
+                           f.publication_head_moved_at
+                    FROM data.refresh_operations AS r
+                    JOIN data.financial_daily_refresh_operations AS f
+                      ON f.idempotency_key = r.idempotency_key
+                    WHERE r.idempotency_key = %s AND r.kind = 'financial'
+                      AND r.status = 'running' AND r.owner_token = %s
+                    """,
+                    (claim.key, claim.owner_token),
+                ).fetchone()
+                if row is None:
+                    return False
+                if row["publication_head_moved_at"] is not None:
+                    return True
+                if row["composed_generation_manifest_sha256"] is None:
+                    return False
+                pointer = self._heads.current_pointer()
+        except Exception:
+            return None
+        if pointer is None:
+            return False
+        try:
+            current = self._generations.inspect_root(pointer.generation_manifest_sha256)
+        except Exception:
+            return None
+        return current.financial_publication_coordinate == str(row["fingerprint"])
+
     def _complete_published(
         self,
         claim: _RefreshClaim,
@@ -758,13 +1155,18 @@ class DataRefreshService:
         *,
         code: str,
         retryable: bool,
+        terminal_outcome: str | None,
     ) -> _RefreshFailure:
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
-            release_generation_candidate(
-                transaction,
-                operation_id=_operation_id(claim.key, claim.owner_token),
-            )
+            operation_id = _operation_id(claim.key, claim.owner_token)
+            if claim.kind == "financial":
+                _release_financial_generation_candidates(
+                    transaction,
+                    operation_id=operation_id,
+                )
+            else:
+                release_generation_candidate(transaction, operation_id=operation_id)
             retry = retryable and claim.attempt_count < self._max_attempts
             if retry:
                 updated = transaction.execute(
@@ -781,15 +1183,49 @@ class DataRefreshService:
                 )
             else:
                 terminal_code = "RETRY_EXHAUSTED" if retryable else code
+                financial_diagnostics = (
+                    _financial_failure_diagnostics(transaction, claim.key)
+                    if claim.kind == "financial"
+                    else None
+                )
+                if claim.kind == "financial":
+                    transaction.execute(
+                        """
+                        UPDATE data.financial_daily_refresh_operations
+                        SET status = 'failed', failure_code = %s,
+                            finished_at = now(), updated_at = now()
+                        WHERE idempotency_key = %s AND status = 'running'
+                          AND published_generation_manifest_sha256 IS NULL
+                        """,
+                        (terminal_code, claim.key),
+                    )
                 updated = transaction.execute(
                     """
                     UPDATE data.refresh_operations
-                    SET status = 'failed', failure_code = %s, last_failure_code = %s,
+                    SET status = 'failed', outcome = %s,
+                        failure_code = %s, last_failure_code = %s,
+                        matched_trigger_count = %s,
+                        checked_no_structured_change_count = %s,
+                        accepted_instrument_count = %s,
+                        failed_instrument_count = %s,
+                        pending_instrument_count = %s,
+                        discovery_gap_count = %s,
                         finished_at = now(), updated_at = now()
                     WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
                       AND lease_expires_at > clock_timestamp()
                     """,
-                    (terminal_code, code, claim.key, claim.owner_token),
+                    (
+                        terminal_outcome,
+                        terminal_code,
+                        code,
+                        *(
+                            (None, None, None, None, None, None)
+                            if financial_diagnostics is None
+                            else financial_diagnostics
+                        ),
+                        claim.key,
+                        claim.owner_token,
+                    ),
                 )
             if updated.rowcount != 1:
                 raise _RefreshFenced("Refresh failure belongs to a stale owner")
@@ -799,36 +1235,121 @@ class DataRefreshService:
         )
 
     def _reconcile_pending_completion(self) -> bool:
+        pointer = self._heads.current_pointer()
+        current_manifest = None if pointer is None else pointer.generation_manifest_sha256
+        with self._database.transaction() as transaction:
+            candidates = transaction.execute(
+                """
+                SELECT r.*,
+                       f.fingerprint AS financial_fingerprint,
+                       f.publication_head_moved_at AS financial_publication_head_moved_at,
+                       CASE
+                           WHEN r.kind = 'financial' THEN COALESCE(
+                               f.published_generation_manifest_sha256,
+                               f.composed_generation_manifest_sha256
+                           )
+                           ELSE r.generation_manifest_sha256
+                       END AS reconciliation_generation_manifest_sha256
+                FROM data.refresh_operations AS r
+                LEFT JOIN data.financial_daily_refresh_operations AS f
+                  ON f.idempotency_key = r.idempotency_key
+                WHERE r.status = 'running' AND (
+                    (r.kind = 'market' AND r.generation_manifest_sha256 = %s)
+                    OR (
+                        r.kind = 'financial'
+                        AND f.composed_generation_manifest_sha256 IS NOT NULL
+                    )
+                )
+                ORDER BY r.created_at, r.idempotency_key
+                """,
+                (current_manifest,),
+            ).fetchall()
+        if any(
+            str(row["kind"]) == "financial"
+            and row["financial_publication_head_moved_at"] is None
+            for row in candidates
+        ):
+            current_financial_coordinate = (
+                None
+                if current_manifest is None
+                else self._generations.inspect_root(
+                    current_manifest
+                ).financial_publication_coordinate
+            )
+            candidates = [
+                row
+                for row in candidates
+                if str(row["kind"]) != "financial"
+                or row["financial_publication_head_moved_at"] is not None
+                or row["financial_fingerprint"] == current_financial_coordinate
+            ]
+        recovery: dict[str, tuple[str, str, FinancialDailyRefreshOutcome | None]] = {}
+        for row in candidates:
+            key = str(row["idempotency_key"])
+            manifest = str(row["reconciliation_generation_manifest_sha256"])
+            generation = self._generations.inspect_root(manifest)
+            outcome = (
+                reconcile_daily_financial_publication(
+                    self._database,
+                    self._generations.root,
+                    idempotency_key=key,
+                    generation_manifest_sha256=manifest,
+                    completed_at=self._operator_time(),
+                )
+                if str(row["kind"]) == "financial"
+                else None
+            )
+            recovery[key] = (manifest, generation.data_through_session, outcome)
         reconciled = False
         lifecycle_events: list[dict[str, object]] = []
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
-            pointer = self._heads.current_pointer()
-            if pointer is None:
+            current = self._heads.current_pointer()
+            keys = [str(row["idempotency_key"]) for row in candidates]
+            if not keys:
                 return False
             rows = transaction.execute(
                 """
                 SELECT * FROM data.refresh_operations
-                WHERE status = 'running' AND generation_manifest_sha256 = %s
+                WHERE status = 'running' AND idempotency_key = ANY(%s)
                 FOR UPDATE
                 """,
-                (pointer.generation_manifest_sha256,),
+                (keys,),
             ).fetchall()
             for row in rows:
-                operation_id = _operation_id(
-                    str(row["idempotency_key"]), str(row["owner_token"])
-                )
-                release_generation_candidate(
-                    transaction,
-                    operation_id=operation_id,
-                )
+                key = str(row["idempotency_key"])
+                manifest, data_through_session, financial_outcome = recovery[key]
+                if str(row["kind"]) == "market" and (
+                    current is None or current.generation_manifest_sha256 != manifest
+                ):
+                    continue
+                operation_id = _operation_id(str(row["idempotency_key"]), str(row["owner_token"]))
                 completed_at = self._operator_time()
-                _complete_reconciled_operation(
-                    transaction,
-                    row,
-                    data_through_session=pointer.data_through_session,
-                    completed_at=completed_at,
-                )
+                if str(row["kind"]) == "financial":
+                    assert financial_outcome is not None
+                    _release_financial_generation_candidates(
+                        transaction,
+                        operation_id=operation_id,
+                    )
+                    publication_outcome = _complete_reconciled_financial_operation(
+                        transaction,
+                        row,
+                        outcome=financial_outcome,
+                        data_through_session=data_through_session,
+                        completed_at=completed_at,
+                    )
+                else:
+                    release_generation_candidate(
+                        transaction,
+                        operation_id=operation_id,
+                    )
+                    _complete_reconciled_operation(
+                        transaction,
+                        row,
+                        data_through_session=data_through_session,
+                        completed_at=completed_at,
+                    )
+                    publication_outcome = "published"
                 duration_ms = _persisted_duration_ms(row.get("started_at"), completed_at)
                 lifecycle_events.extend(
                     (
@@ -836,6 +1357,7 @@ class DataRefreshService:
                             "data_refresh_phase_completed",
                             operation_id=operation_id,
                             attempt_number=int(row["attempt_count"]),
+                            kind=str(row["kind"]),
                             phase="publication",
                             outcome="recovered",
                             duration_ms=duration_ms,
@@ -844,8 +1366,9 @@ class DataRefreshService:
                             "data_refresh_succeeded",
                             operation_id=operation_id,
                             attempt_number=int(row["attempt_count"]),
+                            kind=str(row["kind"]),
                             status="succeeded",
-                            outcome="published",
+                            outcome=publication_outcome,
                             duration_ms=duration_ms,
                         ),
                     )
@@ -869,21 +1392,62 @@ class DataRefreshService:
             for row in rows:
                 recovered = True
                 owner_token = str(row["owner_token"])
-                release_generation_candidate(
-                    transaction,
-                    operation_id=_operation_id(str(row["idempotency_key"]), owner_token),
-                )
+                operation_id = _operation_id(str(row["idempotency_key"]), owner_token)
+                if str(row["kind"]) == "financial":
+                    _release_financial_generation_candidates(
+                        transaction,
+                        operation_id=operation_id,
+                    )
+                else:
+                    release_generation_candidate(transaction, operation_id=operation_id)
                 if int(row["attempt_count"]) >= self._max_attempts:
+                    financial_diagnostics = (
+                        _financial_failure_diagnostics(
+                            transaction,
+                            str(row["idempotency_key"]),
+                        )
+                        if str(row["kind"]) == "financial"
+                        else None
+                    )
+                    if str(row["kind"]) == "financial":
+                        transaction.execute(
+                            """
+                            UPDATE data.financial_daily_refresh_operations
+                            SET status = 'failed', failure_code = 'RETRY_EXHAUSTED',
+                                finished_at = now(), updated_at = now()
+                            WHERE idempotency_key = %s AND status = 'running'
+                              AND published_generation_manifest_sha256 IS NULL
+                            """,
+                            (row["idempotency_key"],),
+                        )
                     transaction.execute(
                         """
                         UPDATE data.refresh_operations
-                        SET status = 'failed', failure_code = 'RETRY_EXHAUSTED',
+                        SET status = 'failed', outcome = CASE
+                                WHEN kind = 'financial' THEN 'infrastructure_failed'
+                                ELSE NULL
+                            END,
+                            failure_code = 'RETRY_EXHAUSTED',
                             last_failure_code = 'WORKER_LEASE_EXPIRED',
+                            matched_trigger_count = %s,
+                            checked_no_structured_change_count = %s,
+                            accepted_instrument_count = %s,
+                            failed_instrument_count = %s,
+                            pending_instrument_count = %s,
+                            discovery_gap_count = %s,
                             finished_at = now(), updated_at = now()
                         WHERE idempotency_key = %s AND status = 'running'
                           AND owner_token = %s
                         """,
-                        (row["idempotency_key"], owner_token),
+                        (
+                            *(
+                                (None, None, None, None, None, None)
+                                if financial_diagnostics is None
+                                else financial_diagnostics
+                            ),
+                            row["idempotency_key"],
+                            owner_token,
+                        ),
                     )
                 else:
                     transaction.execute(
@@ -969,6 +1533,136 @@ def _complete_reconciled_operation(
         _update_last_refresh(transaction, completed_at)
 
 
+def _complete_reconciled_financial_operation(
+    transaction: PostgresTransaction,
+    row: dict[str, object],
+    *,
+    outcome: FinancialDailyRefreshOutcome,
+    data_through_session: str,
+    completed_at: datetime,
+) -> str:
+    publication_outcome = (
+        "degraded"
+        if outcome.status in {"succeeded_with_pending", "succeeded_with_gaps"}
+        else "published"
+        if outcome.canonical_changed
+        else "no_change"
+    )
+    updated = transaction.execute(
+        """
+        UPDATE data.refresh_operations
+        SET status = 'succeeded', outcome = %s,
+            generation_manifest_sha256 = %s, data_through_session = %s,
+            last_refresh_at = %s, financial_complete_through_session = %s,
+            matched_trigger_count = %s,
+            checked_no_structured_change_count = %s,
+            accepted_instrument_count = %s, failed_instrument_count = %s,
+            pending_instrument_count = %s, discovery_gap_count = %s,
+            failure_code = NULL, last_failure_code = NULL,
+            finished_at = now(), updated_at = now()
+        WHERE idempotency_key = %s AND kind = 'financial'
+          AND status = 'running'
+        """,
+        (
+            publication_outcome,
+            outcome.generation_manifest_sha256,
+            data_through_session,
+            completed_at,
+            outcome.complete_through_session,
+            outcome.matched_trigger_count,
+            outcome.checked_no_structured_change_count,
+            outcome.accepted_instrument_count,
+            outcome.failed_instrument_count,
+            outcome.pending_instrument_count,
+            outcome.discovery_gap_count,
+            row["idempotency_key"],
+        ),
+    )
+    if updated.rowcount != 1:
+        raise _RefreshFenced("Financial Refresh reconciliation lost its operation")
+    return publication_outcome
+
+
+def _release_financial_generation_candidates(
+    transaction: PostgresTransaction,
+    *,
+    operation_id: str,
+) -> None:
+    transaction.execute(
+        """
+        UPDATE data.generation_candidates
+        SET status = 'released', released_at = now(), updated_at = now()
+        WHERE status = 'live'
+          AND (operation_id = %s OR operation_id LIKE %s)
+        """,
+        (operation_id, f"{operation_id}:%"),
+    )
+
+
+def _financial_failure_diagnostics(
+    transaction: PostgresTransaction,
+    idempotency_key: str,
+) -> tuple[int, int, int, int, int, int] | None:
+    operation = transaction.execute(
+        """
+        SELECT target_session, discovery_evidence
+        FROM data.financial_daily_refresh_operations
+        WHERE idempotency_key = %s
+        """,
+        (idempotency_key,),
+    ).fetchone()
+    if operation is None or operation["discovery_evidence"] is None:
+        return None
+    counts = transaction.execute(
+        """
+        SELECT
+            count(*) FILTER (
+                WHERE status = 'matched' AND last_attempt_operation_key = %s
+            ) AS matched_count,
+            count(*) FILTER (
+                WHERE status = 'checked_no_structured_change'
+                  AND last_attempt_operation_key = %s
+            ) AS checked_count,
+            (
+                SELECT count(*)
+                FROM data.financial_refresh_instrument_attempts
+                WHERE idempotency_key = %s AND status = 'accepted'
+            ) AS accepted_count,
+            (
+                SELECT count(*)
+                FROM data.financial_refresh_instrument_attempts
+                WHERE idempotency_key = %s AND status = 'failed'
+            ) AS failed_count,
+            count(DISTINCT instrument_id) FILTER (
+                WHERE status = 'pending' AND source_published_date <= %s
+            ) AS pending_count,
+            (
+                SELECT count(*)
+                FROM data.financial_discovery_gaps
+                WHERE status = 'open' AND unresolved_from_date <= %s
+            ) AS gap_count
+        FROM data.financial_announcement_triggers
+        """,
+        (
+            idempotency_key,
+            idempotency_key,
+            idempotency_key,
+            idempotency_key,
+            operation["target_session"],
+            operation["target_session"],
+        ),
+    ).fetchone()
+    assert counts is not None
+    return (
+        int(counts["matched_count"]),
+        int(counts["checked_count"]),
+        int(counts["accepted_count"]),
+        int(counts["failed_count"]),
+        int(counts["pending_count"]),
+        int(counts["gap_count"]),
+    )
+
+
 def _update_last_refresh(transaction: PostgresTransaction, completed_at: datetime) -> None:
     transaction.execute(
         """
@@ -995,6 +1689,47 @@ def _failure_policy(error: Exception) -> tuple[str, bool]:
     if isinstance(error, (GenerationStoreError, DataLifecycleError, OSError, RuntimeError)):
         return "REFRESH_INFRASTRUCTURE_FAILURE", True
     return "REFRESH_INFRASTRUCTURE_FAILURE", True
+
+
+def _financial_failure_policy(error: Exception) -> _FinancialFailurePolicy:
+    if isinstance(error, FinancialDailyRefreshError):
+        return _FinancialFailurePolicy(
+            code=error.code,
+            retryable=error.retryable
+            or error.code
+            in {
+                "FINANCIAL_HEAD_CHANGED_REPEATEDLY",
+                "FINANCIAL_PUBLICATION_COMPLETION_PENDING",
+            },
+            category=(
+                "business_rejected"
+                if error.code == "FINANCIAL_TARGET_EXCEEDS_MARKET"
+                else "infrastructure_failed"
+            ),
+        )
+    if isinstance(error, DataRefreshError):
+        return _FinancialFailurePolicy(
+            code=error.code,
+            retryable=error.code
+            in {
+                "DATA_NOT_READY",
+                "FINANCIAL_WORKER_SOURCE_MISSING",
+            },
+            category="infrastructure_failed",
+        )
+    if isinstance(error, DatasetHeadConflict):
+        return _FinancialFailurePolicy("HEAD_CHANGED", True, "infrastructure_failed")
+    if isinstance(error, (GenerationStoreError, DataLifecycleError, OSError, RuntimeError)):
+        return _FinancialFailurePolicy(
+            "REFRESH_INFRASTRUCTURE_FAILURE",
+            True,
+            "infrastructure_failed",
+        )
+    return _FinancialFailurePolicy(
+        "REFRESH_INFRASTRUCTURE_FAILURE",
+        True,
+        "infrastructure_failed",
+    )
 
 
 def _data_refresh_event(
@@ -1051,14 +1786,43 @@ def validate_market_refresh_request(
     return key, parsed_as_of.astimezone(UTC)
 
 
+def validate_financial_refresh_request(
+    *,
+    idempotency_key: str,
+    observation_through_session: str,
+) -> tuple[str, str]:
+    key = _identity(idempotency_key)
+    if (
+        len(observation_through_session) != 10
+        or observation_through_session != observation_through_session.strip()
+    ):
+        raise DataRefreshError("INVALID_OBSERVATION_THROUGH_SESSION")
+    try:
+        target = date.fromisoformat(observation_through_session)
+    except (TypeError, ValueError) as error:
+        raise DataRefreshError("INVALID_OBSERVATION_THROUGH_SESSION") from error
+    normalized = target.isoformat()
+    if normalized != observation_through_session:
+        raise DataRefreshError("INVALID_OBSERVATION_THROUGH_SESSION")
+    return key, normalized
+
+
 def _outcome(row: dict[str, object]) -> RefreshOutcome:
     as_of = row["as_of"]
-    if not isinstance(as_of, datetime):
+    if as_of is not None and not isinstance(as_of, datetime):
+        raise DataRefreshError("REFRESH_RECEIPT_INVALID")
+    observation_through_session = row["observation_through_session"]
+    if observation_through_session is not None and not isinstance(
+        observation_through_session, date
+    ):
         raise DataRefreshError("REFRESH_RECEIPT_INVALID")
     return RefreshOutcome(
         idempotency_key=str(row["idempotency_key"]),
         kind=str(row["kind"]),
-        as_of=as_of.astimezone(UTC).isoformat(),
+        as_of=None if as_of is None else as_of.astimezone(UTC).isoformat(),
+        observation_through_session=(
+            None if observation_through_session is None else observation_through_session.isoformat()
+        ),
         status=str(row["status"]),
         outcome=None if row["outcome"] is None else str(row["outcome"]),
         data_through_session=(
@@ -1072,7 +1836,30 @@ def _outcome(row: dict[str, object]) -> RefreshOutcome:
             None if row["last_failure_code"] is None else str(row["last_failure_code"])
         ),
         attempt_count=int(row["attempt_count"]),
+        financial_complete_through_session=(
+            None
+            if row["financial_complete_through_session"] is None
+            else row["financial_complete_through_session"].isoformat()
+        ),
+        matched_trigger_count=_optional_count(row["matched_trigger_count"]),
+        checked_no_structured_change_count=_optional_count(
+            row["checked_no_structured_change_count"]
+        ),
+        accepted_instrument_count=_optional_count(row["accepted_instrument_count"]),
+        failed_instrument_count=_optional_count(row["failed_instrument_count"]),
+        pending_instrument_count=_optional_count(row["pending_instrument_count"]),
+        discovery_gap_count=_optional_count(row["discovery_gap_count"]),
     )
 
 
-__all__ = ("DataRefreshError", "DataRefreshService", "RefreshOutcome")
+def _optional_count(value: object) -> int | None:
+    return None if value is None else int(value)
+
+
+__all__ = (
+    "DataRefreshError",
+    "DataRefreshService",
+    "RefreshOutcome",
+    "validate_financial_refresh_request",
+    "validate_market_refresh_request",
+)

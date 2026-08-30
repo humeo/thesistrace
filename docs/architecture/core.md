@@ -421,20 +421,30 @@ legacy Draft read, compatibility role, or fallback identity.
 
 ## Data
 
-The product interface is read-only:
+The Researcher product interface is read-only. The singleton Operator Console
+adds password-confirmed private Refresh submission and safe receipt inspection:
 
 ```text
 GET /api/data -> Dataset coverage and readiness plus Benchmark Snapshot readiness,
                  coverage, SHA-256, and publication time
+POST /api/operator/data/refreshes/market    -> durable accepted Market operation
+GET  /api/operator/data/refreshes/market    -> exact safe Market receipt
+POST /api/operator/data/refreshes/financial -> durable accepted Financial operation
+GET  /api/operator/data/refreshes/financial -> exact safe Financial receipt
 ```
 
-Bootstrap, Refresh, inspection, work execution, and garbage collection belong
-to the deployment-private `thesistrace-data-operator` command. They are not HTTP
-routes or Web actions.
+Bootstrap and work execution remain private `thesistrace-data-operator` actions.
+Garbage collection does too. The private CLI and Operator Console submit
+to and inspect the same durable records; neither HTTP request executes a source
+call or publication.
 
 Bootstrap creates the first Core Market Data Generation and Dataset Head.
 Market, Financial, and Industry publish independent immutable Family manifests
 which are composed into one Generation behind the one mutable Dataset Head.
+Market and Financial submissions enter one global FIFO. One single-slot Data
+Operator Worker holds the live source capability, renews each claim, dispatches
+the established per-kind pipeline, and reconciles a Head publication whose
+terminal receipt was interrupted before commit.
 Market Refresh collects a bounded overlap plus new completed sessions without
 calling Industry endpoints. Financial and Industry Refresh each build and
 validate their own candidate, recompose it with the latest unaffected Families,

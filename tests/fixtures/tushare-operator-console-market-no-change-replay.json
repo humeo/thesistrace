@@ -1,0 +1,19 @@
+{
+  "format": "thesistrace-tushare-refresh-replay",
+  "version": 3,
+  "request_start": "2026-07-20",
+  "request_end": "2026-08-14",
+  "snapshot": {
+    "benchmark_index_daily": [],
+    "calendar_sse": [],
+    "calendar_szse": [],
+    "stock_basic": [],
+    "daily": [],
+    "adjustments": [],
+    "suspensions": [],
+    "price_limits": [],
+    "industry_membership": []
+  },
+  "financial": {},
+  "financial_refresh": null
+}

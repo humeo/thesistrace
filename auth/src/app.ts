@@ -31,6 +31,7 @@ import {
   OperatorPasswordInvalidError,
   OperatorProofInvalidError,
   OperatorProofNotFoundError,
+  isIsoResearchSession,
   isMarketRefreshIdempotencyKey,
   type OperatorProofRequest,
 } from "./operator-proof.js";
@@ -84,15 +85,33 @@ const operatorProofSchema = z.union([
       password: z.string().min(12).max(128),
     })
     .strict(),
+  z
+    .object({
+      idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+      observation_through_session: z.string().refine(isIsoResearchSession),
+      operation: z.literal("data.refresh.financial.submit"),
+      password: z.string().min(12).max(128),
+    })
+    .strict(),
 ]);
-const internalOperatorProofConsumptionSchema = z
-  .object({
-    as_of: z.string().min(1).max(128).refine((value) => value === value.trim()),
-    idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
-    operation: z.literal("data.refresh.market.submit"),
-    proof: z.string().length(80),
-  })
-  .strict();
+const internalOperatorProofConsumptionSchema = z.union([
+  z
+    .object({
+      as_of: z.string().min(1).max(128).refine((value) => value === value.trim()),
+      idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+      operation: z.literal("data.refresh.market.submit"),
+      proof: z.string().length(80),
+    })
+    .strict(),
+  z
+    .object({
+      idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
+      observation_through_session: z.string().refine(isIsoResearchSession),
+      operation: z.literal("data.refresh.financial.submit"),
+      proof: z.string().length(80),
+    })
+    .strict(),
+]);
 const operatorInvitationMutationSchema = z
   .object({
     email: z.string().min(1).max(512),
@@ -282,12 +301,22 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
       return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
     }
     try {
-      await dependencies.consumeOperatorProof(principal, {
-        asOf: body.as_of,
-        idempotencyKey: body.idempotency_key,
-        operation: body.operation,
-        proof: body.proof,
-      });
+      await dependencies.consumeOperatorProof(
+        principal,
+        body.operation === "data.refresh.market.submit"
+          ? {
+              asOf: body.as_of,
+              idempotencyKey: body.idempotency_key,
+              operation: body.operation,
+              proof: body.proof,
+            }
+          : {
+              idempotencyKey: body.idempotency_key,
+              observationThroughSession: body.observation_through_session,
+              operation: body.operation,
+              proof: body.proof,
+            },
+      );
       return context.body(null, 204);
     } catch (error) {
       if (error instanceof OperatorProofInvalidError) {
@@ -390,6 +419,13 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
                 operation: body.operation,
                 password: body.password,
               }
+            : body.operation === "data.refresh.financial.submit"
+              ? {
+                  idempotencyKey: body.idempotency_key,
+                  observationThroughSession: body.observation_through_session,
+                  operation: body.operation,
+                  password: body.password,
+                }
           : {
               email: canonicalizeEmail(body.email),
               operation: body.operation,

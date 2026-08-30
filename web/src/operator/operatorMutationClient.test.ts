@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  confirmFinancialRefreshProof,
   confirmOperatorProof,
   confirmMarketRefreshProof,
   confirmSessionRevocationProof,
+  isIsoResearchSession,
   isMarketRefreshIdempotencyKey,
+  loadFinancialRefresh,
   loadMarketRefresh,
   OperatorMutationError,
   submitInvitationMutation,
+  submitFinancialRefresh,
   submitMarketRefresh,
   submitSessionRevocation,
 } from "./operatorMutationClient";
@@ -19,6 +23,13 @@ afterEach(() => {
 });
 
 describe("Operator mutation client", () => {
+  it("matches the Python ISO Research Session year boundary", () => {
+    expect(isIsoResearchSession("0001-01-01")).toBe(true);
+    expect(isIsoResearchSession("9999-12-31")).toBe(true);
+    expect(isIsoResearchSession("0000-01-01")).toBe(false);
+    expect(isIsoResearchSession("2026-02-30")).toBe(false);
+  });
+
   it("sends the password only to confirmation and forwards only the opaque proof", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -234,6 +245,86 @@ describe("Operator mutation client", () => {
         body: JSON.stringify({
           as_of: request.asOf,
           idempotency_key: request.idempotencyKey,
+          proof,
+        }),
+      }),
+    );
+    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(password);
+  });
+
+  it("binds a Financial proof and parses the safe degraded receipt", async () => {
+    const password = "correct-horse-battery-staple";
+    const request = {
+      idempotencyKey: "financial-20260814-custom",
+      observationThroughSession: "2026-08-14",
+    };
+    const degradedReceipt = {
+      accepted_instrument_count: 1,
+      attempt_count: 1,
+      checked_no_structured_change_count: 2,
+      data_through_session: "2026-08-14",
+      discovery_gap_count: 1,
+      failed_instrument_count: 1,
+      failure_code: null,
+      financial_complete_through_session: "2026-08-13",
+      idempotency_key: request.idempotencyKey,
+      kind: "financial",
+      last_failure_code: null,
+      last_refresh_at: "2026-08-14T10:00:00Z",
+      matched_trigger_count: 3,
+      observation_through_session: request.observationThroughSession,
+      outcome: "degraded",
+      pending_instrument_count: 1,
+      status: "succeeded",
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({
+        expires_at: "2026-08-29T06:01:00.000Z",
+        proof,
+      }))
+      .mockResolvedValueOnce(Response.json(degradedReceipt, { status: 202 }))
+      .mockResolvedValueOnce(Response.json(degradedReceipt));
+    vi.stubGlobal("fetch", fetchMock);
+    const signal = new AbortController().signal;
+
+    const confirmation = await confirmFinancialRefreshProof(
+      request,
+      password,
+      signal,
+    );
+    const submitted = await submitFinancialRefresh(
+      request,
+      confirmation.proof,
+      signal,
+    );
+    const loaded = await loadFinancialRefresh(request, signal);
+
+    expect(submitted).toMatchObject({
+      discoveryGapCount: 1,
+      financialCompleteThroughSession: "2026-08-13",
+      outcome: "degraded",
+    });
+    expect(loaded).toEqual(submitted);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/auth/operator/proofs",
+      expect.objectContaining({
+        body: JSON.stringify({
+          idempotency_key: request.idempotencyKey,
+          observation_through_session: request.observationThroughSession,
+          operation: "data.refresh.financial.submit",
+          password,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/operator/data/refreshes/financial",
+      expect.objectContaining({
+        body: JSON.stringify({
+          idempotency_key: request.idempotencyKey,
+          observation_through_session: request.observationThroughSession,
           proof,
         }),
       }),

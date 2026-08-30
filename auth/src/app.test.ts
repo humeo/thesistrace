@@ -926,6 +926,111 @@ describe("Auth HTTP boundary", () => {
     );
   });
 
+  it("confirms and privately consumes one exact Financial submission proof", async () => {
+    const appDependencies = dependencies();
+    const app = createAuthApp(appDependencies);
+    const request = {
+      idempotency_key: "financial-20260814-custom",
+      observation_through_session: "2026-08-14",
+      operation: "data.refresh.financial.submit",
+    } as const;
+    const confirmation = await app.request(
+      "http://auth.test/api/auth/operator/proofs",
+      {
+        body: JSON.stringify({
+          ...request,
+          password: "correct-horse-battery-staple",
+        }),
+        headers: {
+          "content-type": "application/json",
+          cookie: "operator=fake",
+          origin: "http://auth.test",
+        },
+        method: "POST",
+      },
+    );
+
+    expect(confirmation.status).toBe(200);
+    expect(appDependencies.confirmOperatorProof).toHaveBeenCalledWith(
+      {
+        researcherId: "00000000-0000-4000-8000-000000000001",
+        sessionId: "00000000-0000-4000-8000-000000000010",
+      },
+      {
+        idempotencyKey: request.idempotency_key,
+        observationThroughSession: request.observation_through_session,
+        operation: request.operation,
+        password: "correct-horse-battery-staple",
+      },
+    );
+
+    const consumed = await app.request(
+      "http://auth.test/internal/operator/proofs/consume",
+      {
+        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        headers: {
+          "content-type": "application/json",
+          cookie: "operator=fake",
+        },
+        method: "POST",
+      },
+    );
+
+    expect(consumed.status).toBe(204);
+    expect(appDependencies.consumeOperatorProof).toHaveBeenCalledWith(
+      {
+        researcherId: "00000000-0000-4000-8000-000000000001",
+        sessionId: "00000000-0000-4000-8000-000000000010",
+      },
+      {
+        idempotencyKey: request.idempotency_key,
+        observationThroughSession: request.observation_through_session,
+        operation: request.operation,
+        proof: opaqueInvitationToken,
+      },
+    );
+  });
+
+  it("rejects year zero at both Financial proof HTTP boundaries", async () => {
+    const appDependencies = dependencies();
+    const app = createAuthApp(appDependencies);
+    const request = {
+      idempotency_key: "financial-year-zero",
+      observation_through_session: "0000-01-01",
+      operation: "data.refresh.financial.submit",
+    } as const;
+    const headers = {
+      "content-type": "application/json",
+      cookie: "operator=fake",
+      origin: "http://auth.test",
+    };
+
+    const confirmation = await app.request(
+      "http://auth.test/api/auth/operator/proofs",
+      {
+        body: JSON.stringify({
+          ...request,
+          password: "correct-horse-battery-staple",
+        }),
+        headers,
+        method: "POST",
+      },
+    );
+    const consumption = await app.request(
+      "http://auth.test/internal/operator/proofs/consume",
+      {
+        body: JSON.stringify({ ...request, proof: opaqueInvitationToken }),
+        headers,
+        method: "POST",
+      },
+    );
+
+    expect(confirmation.status).toBe(400);
+    expect(consumption.status).toBe(400);
+    expect(appDependencies.confirmOperatorProof).not.toHaveBeenCalled();
+    expect(appDependencies.consumeOperatorProof).not.toHaveBeenCalled();
+  });
+
   it("counts Unicode Market keys by characters at both Auth proof boundaries", async () => {
     const appDependencies = dependencies();
     const app = createAuthApp(appDependencies);

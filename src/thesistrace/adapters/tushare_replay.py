@@ -14,6 +14,12 @@ from thesistrace.benchmark import (
     BENCHMARK_START_SESSION,
     BENCHMARK_TS_CODE,
 )
+from thesistrace.data.financial_announcements import (
+    FINANCIAL_ANNOUNCEMENT_CATEGORIES,
+    FinancialAnnouncement,
+    FinancialAnnouncementDiscovery,
+    FinancialDiscoveryGap,
+)
 from thesistrace.data.source import RawSourceResponse
 
 _REPLAY_MAX_BYTES = 128 * 1024 * 1024
@@ -48,16 +54,12 @@ class ReplayTushareProvider:
             raise ValueError("Tushare replay contract is invalid")
         replay_format = value.get("format")
         product_replay = replay_format == "thesistrace-tushare-product-replay"
+        bootstrap_replay = replay_format == "thesistrace-tushare-bootstrap-replay"
+        refresh_replay = replay_format == "thesistrace-tushare-refresh-replay"
         if not (
             (product_replay and value.get("version") == 1)
-            or (
-                replay_format
-                in {
-                    "thesistrace-tushare-bootstrap-replay",
-                    "thesistrace-tushare-refresh-replay",
-                }
-                and value.get("version") == 2
-            )
+            or (bootstrap_replay and value.get("version") == 2)
+            or (refresh_replay and value.get("version") == 3)
         ):
             raise ValueError("Tushare replay contract is incompatible")
         expected_fields = {
@@ -67,8 +69,10 @@ class ReplayTushareProvider:
             "request_end",
             "snapshot",
         }
-        if product_replay:
+        if product_replay or refresh_replay:
             expected_fields.add("financial")
+        if refresh_replay:
+            expected_fields.add("financial_refresh")
         if set(value) != expected_fields:
             raise ValueError("Tushare replay contract is invalid")
         snapshot = value["snapshot"]
@@ -80,6 +84,7 @@ class ReplayTushareProvider:
         self._request_end = date.fromisoformat(str(value["request_end"]))
         self._snapshot = snapshot
         self._financial = _financial_responses(value.get("financial", {}))
+        self._financial_refresh = _financial_refresh(value.get("financial_refresh"))
         self._kind = (
             "bootstrap"
             if replay_format
@@ -138,6 +143,23 @@ class ReplayTushareProvider:
             raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
         return response
 
+    def discover(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        allowed_ts_codes: set[str] | frozenset[str],
+    ) -> FinancialAnnouncementDiscovery:
+        replay = self._financial_refresh
+        if (
+            replay is None
+            or replay.start_date != start_date
+            or replay.end_date != end_date
+            or any(item.ts_code not in allowed_ts_codes for item in replay.announcements)
+        ):
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
+        return replay
+
     def _query_benchmark(
         self,
         *,
@@ -193,10 +215,7 @@ class ReplayTushareProvider:
             rows = self._snapshot.get("industry_membership", [])
         else:
             raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
-        if any(
-            not isinstance(row, dict) or not set(fields) <= set(row)
-            for row in rows
-        ):
+        if any(not isinstance(row, dict) or not set(fields) <= set(row) for row in rows):
             raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
         return [{field: row[field] for field in fields} for row in rows]
 
@@ -208,6 +227,7 @@ class ReplayTushareRefreshBundle:
         if not paths:
             raise ValueError("Tushare refresh replay bundle is empty")
         self._providers: dict[tuple[date, date], ReplayTushareProvider] = {}
+        self._financial_providers: dict[tuple[date, date], ReplayTushareProvider] = {}
         self._active: ReplayTushareProvider | None = None
         for path in paths:
             provider = ReplayTushareProvider(path)
@@ -217,6 +237,17 @@ class ReplayTushareRefreshBundle:
             if window in self._providers:
                 raise ValueError("Tushare refresh replay bundle contains a duplicate window")
             self._providers[window] = provider
+            financial_refresh = provider._financial_refresh
+            if financial_refresh is not None:
+                financial_window = (
+                    date.fromisoformat(financial_refresh.start_date),
+                    date.fromisoformat(financial_refresh.end_date),
+                )
+                if financial_window in self._financial_providers:
+                    raise ValueError(
+                        "Tushare refresh replay bundle contains a duplicate Financial window"
+                    )
+                self._financial_providers[financial_window] = provider
 
     def collect_bootstrap_snapshot(
         self,
@@ -255,6 +286,40 @@ class ReplayTushareRefreshBundle:
         fields: Sequence[str],
     ) -> RawSourceResponse:
         return self._selected().query_raw(api_name, params=params, fields=fields)
+
+    def discover(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        allowed_ts_codes: set[str] | frozenset[str],
+    ) -> FinancialAnnouncementDiscovery:
+        provider = self._select_financial_provider(start_date, end_date)
+        replay = provider.discover(
+            start_date=start_date,
+            end_date=end_date,
+            allowed_ts_codes=allowed_ts_codes,
+        )
+        self._active = provider
+        return replay
+
+    def select_financial_window(self, start_date: str, end_date: str) -> None:
+        """Select the exact persisted Financial discovery window before resuming."""
+        self._active = self._select_financial_provider(start_date, end_date)
+
+    def _select_financial_provider(
+        self,
+        start_date: str,
+        end_date: str,
+    ) -> ReplayTushareProvider:
+        try:
+            window = (date.fromisoformat(start_date), date.fromisoformat(end_date))
+        except ValueError as error:
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0) from error
+        provider = self._financial_providers.get(window)
+        if provider is None:
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
+        return provider
 
     def query_paginated(
         self,
@@ -309,6 +374,119 @@ def _financial_responses(value: object) -> dict[tuple[str, str], RawSourceRespon
     return responses
 
 
+def _financial_refresh(value: object) -> FinancialAnnouncementDiscovery | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "request_start",
+        "request_end",
+        "completed_categories",
+        "announcements",
+        "gaps",
+        "source_lineage_sha256",
+    }:
+        raise ValueError("Tushare replay Financial Refresh contract is invalid")
+    start = date.fromisoformat(str(value["request_start"])).isoformat()
+    end = date.fromisoformat(str(value["request_end"])).isoformat()
+    completed = value["completed_categories"]
+    announcements = value["announcements"]
+    gaps = value["gaps"]
+    lineage = value["source_lineage_sha256"]
+    if (
+        start > end
+        or not isinstance(completed, list)
+        or any(item not in FINANCIAL_ANNOUNCEMENT_CATEGORIES for item in completed)
+        or len(set(completed)) != len(completed)
+        or not isinstance(announcements, list)
+        or not isinstance(gaps, list)
+        or not isinstance(lineage, str)
+        or len(lineage) != 64
+        or any(character not in "0123456789abcdef" for character in lineage)
+    ):
+        raise ValueError("Tushare replay Financial Refresh contract is invalid")
+    parsed_announcements = tuple(_replay_announcement(item) for item in announcements)
+    parsed_gaps = tuple(_replay_gap(item) for item in gaps)
+    if (
+        tuple(category for category in FINANCIAL_ANNOUNCEMENT_CATEGORIES if category in completed)
+        != tuple(completed)
+        or set(completed).intersection(item.category for item in parsed_gaps)
+        or set(completed).union(item.category for item in parsed_gaps)
+        != set(FINANCIAL_ANNOUNCEMENT_CATEGORIES)
+        or any(item.start_date != start or item.end_date != end for item in parsed_gaps)
+    ):
+        raise ValueError("Tushare replay Financial Refresh contract is invalid")
+    return FinancialAnnouncementDiscovery(
+        start_date=start,
+        end_date=end,
+        completed_categories=tuple(completed),
+        announcements=parsed_announcements,
+        gaps=parsed_gaps,
+        source_lineage_sha256=lineage,
+    )
+
+
+def _replay_announcement(value: object) -> FinancialAnnouncement:
+    if not isinstance(value, dict) or set(value) != {
+        "announcement_id",
+        "category",
+        "ts_code",
+        "name",
+        "title",
+        "source_published_date",
+        "report_period",
+        "url",
+    }:
+        raise ValueError("Tushare replay Financial announcement is invalid")
+    announcement = FinancialAnnouncement(
+        announcement_id=str(value["announcement_id"]),
+        category=str(value["category"]),
+        ts_code=str(value["ts_code"]),
+        name=str(value["name"]),
+        title=str(value["title"]),
+        source_published_date=date.fromisoformat(str(value["source_published_date"])).isoformat(),
+        report_period=(
+            None
+            if value["report_period"] is None
+            else date.fromisoformat(str(value["report_period"])).isoformat()
+        ),
+        url=str(value["url"]),
+    )
+    if (
+        len(announcement.announcement_id) != 64
+        or any(character not in "0123456789abcdef" for character in announcement.announcement_id)
+        or announcement.category not in FINANCIAL_ANNOUNCEMENT_CATEGORIES
+        or not announcement.ts_code
+        or not announcement.name
+        or not announcement.title
+        or not announcement.url
+    ):
+        raise ValueError("Tushare replay Financial announcement is invalid")
+    return announcement
+
+
+def _replay_gap(value: object) -> FinancialDiscoveryGap:
+    if not isinstance(value, dict) or set(value) != {
+        "category",
+        "start_date",
+        "end_date",
+        "failure_code",
+    }:
+        raise ValueError("Tushare replay Financial discovery gap is invalid")
+    gap = FinancialDiscoveryGap(
+        category=str(value["category"]),
+        start_date=date.fromisoformat(str(value["start_date"])).isoformat(),
+        end_date=date.fromisoformat(str(value["end_date"])).isoformat(),
+        failure_code=str(value["failure_code"]),
+    )
+    if (
+        gap.category not in FINANCIAL_ANNOUNCEMENT_CATEGORIES
+        or gap.start_date > gap.end_date
+        or not gap.failure_code
+    ):
+        raise ValueError("Tushare replay Financial discovery gap is invalid")
+    return gap
+
+
 def _compact_date(value: str) -> str:
     if len(value) != 8 or not value.isdigit():
         raise ValueError("compact date is invalid")
@@ -318,11 +496,7 @@ def _compact_date(value: str) -> str:
 def _market_snapshot(
     snapshot: Mapping[str, list[dict[str, object]]],
 ) -> dict[str, list[dict[str, object]]]:
-    return {
-        name: rows
-        for name, rows in snapshot.items()
-        if name != "benchmark_index_daily"
-    }
+    return {name: rows for name, rows in snapshot.items() if name != "benchmark_index_daily"}
 
 
-__all__ = ("ReplayTushareProvider",)
+__all__ = ("ReplayTushareProvider", "ReplayTushareRefreshBundle")

@@ -67,9 +67,10 @@ the manifest and its session content.
 
 ## Refresh and collection
 
-Refresh submission records the frozen request and returns after PostgreSQL has
-durably accepted it. The always-running single-slot Data Operator Worker later
-claims accepted requests in FIFO order and collects from Tushare:
+Market and Financial Refresh submission record the frozen request and return
+after PostgreSQL has durably accepted it. The always-running single-slot Data
+Operator Worker later claims both kinds from one FIFO and executes the selected
+source and publication path:
 
 ```sh
 docker compose -f deploy/core/compose.yaml run --rm api \
@@ -234,12 +235,14 @@ market-only Head. It cannot update an already published Financial Family.
 Replay is an explicit test/incident-reproduction input, never an automatic
 fallback from a failed live provider.
 
-After bootstrap, each trading-day Financial Refresh discovers affected current
+After bootstrap, each explicit Financial Refresh is accepted into the shared
+FIFO. When claimed, the Data Operator Worker discovers affected current
 instruments from CNINFO through the pinned AKShare adapter, then requests the
 complete `income`, `balancesheet`, and `cashflow` histories once for each of
 those instruments. Multiple pending announcements for one instrument share the
-same atomic three-statement pull. The command reads the current Dataset Head and
-Financial contract automatically:
+same atomic three-statement pull. Submission reads no provider and returns an
+`accepted` receipt; the Worker reads the current Dataset Head and Financial
+contract automatically.
 
 Each underlying AKShare CNINFO request has a 30-second timeout. A timed-out or
 invalid category is recorded as a discovery gap; it does not hide the gap or
@@ -267,7 +270,6 @@ are exhausted.
 
 ```sh
 "${tt_compose[@]}" run --rm -T \
-  -e THESISTRACE_TUSHARE_TOKEN \
   api thesistrace-data-operator refresh-financial \
   --idempotency-key financial-daily-20260702-v1 \
   --observation-through-session 2026-07-02
@@ -278,16 +280,21 @@ are exhausted.
 ```
 
 The daily command has no replay, capability-report, prior-candidate, or
-Generation argument. A failed instrument retains its prior or missing facts and
-remains pending for the next trading-day refresh; a discovery gap is published
-as degraded readiness rather than hidden. A three-statement response that
-introduces an unprojectable PIT row is handled as an instrument failure. With no
-failed instrument or discovery gap the outcome is `succeeded`; failed
-instruments produce `succeeded_with_pending`, while an open CNINFO discovery gap
-produces `succeeded_with_gaps`. `accepted_instrument_count` includes both changed
-and unchanged successful instruments, while
+Generation argument, and it never executes collection synchronously. A failed
+instrument retains its prior or missing facts and remains pending for the next
+explicit refresh; a discovery gap is published as degraded readiness rather
+than hidden. A three-statement response that introduces an unprojectable PIT row
+is handled as an instrument failure. The shared receipt reports `published` when
+Canonical Financial tables changed, `no_change` when they did not, and
+`degraded` when pending instruments or discovery gaps remain. Business rejection
+is terminal; infrastructure loss retries the same durable operation up to its
+bounded attempt policy and then reports `infrastructure_failed`.
+`accepted_instrument_count` includes both changed and unchanged successful
+instruments, while
 `checked_no_structured_change_count` counts announcements closed by a successful
-no-delta refresh.
+no-delta refresh. `inspect-financial-refresh` reads this same receipt as the
+Operator Console; Worker-only detailed states such as `succeeded_with_pending`
+remain internal execution evidence.
 
 The ordinary-interface contract has one complete-history logical shard per
 `endpoint × instrument`. `balancesheet` is transparently collected with fixed

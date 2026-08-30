@@ -1,8 +1,8 @@
 {
   "format": "thesistrace-tushare-refresh-replay",
-  "version": 2,
+  "version": 3,
   "request_start": "2026-07-15",
-  "request_end": "2026-08-11",
+  "request_end": "2026-08-14",
   "snapshot": {
     "benchmark_index_daily": [
       {
@@ -24,6 +24,21 @@
         "ts_code": "399300.SZ",
         "trade_date": "20260811",
         "open": "4424.11"
+      },
+      {
+        "ts_code": "399300.SZ",
+        "trade_date": "20260812",
+        "open": "4425.12"
+      },
+      {
+        "ts_code": "399300.SZ",
+        "trade_date": "20260813",
+        "open": "4426.13"
+      },
+      {
+        "ts_code": "399300.SZ",
+        "trade_date": "20260814",
+        "open": "4427.14"
       }
     ],
     "calendar_sse": [
@@ -196,6 +211,21 @@
         "exchange": "SSE",
         "cal_date": "20260811",
         "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260812",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260813",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SSE",
+        "cal_date": "20260814",
+        "is_open": "1"
       }
     ],
     "calendar_szse": [
@@ -367,6 +397,21 @@
       {
         "exchange": "SZSE",
         "cal_date": "20260811",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260812",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260813",
+        "is_open": "1"
+      },
+      {
+        "exchange": "SZSE",
+        "cal_date": "20260814",
         "is_open": "1"
       }
     ],
@@ -692,6 +737,45 @@
         "pct_chg": "2",
         "vol": "100",
         "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260812",
+        "open": "44",
+        "high": "45",
+        "low": "43",
+        "close": "44.5",
+        "pre_close": "44",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260813",
+        "open": "45",
+        "high": "46",
+        "low": "44",
+        "close": "45.5",
+        "pre_close": "45",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260814",
+        "open": "46",
+        "high": "47",
+        "low": "45",
+        "close": "46.5",
+        "pre_close": "46",
+        "change": "0.5",
+        "pct_chg": "2",
+        "vol": "100",
+        "amount": "1000"
       }
     ],
     "adjustments": [
@@ -813,6 +897,21 @@
       {
         "ts_code": "000001.SZ",
         "trade_date": "20260811",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260812",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260813",
+        "adj_factor": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260814",
         "adj_factor": "1"
       }
     ],
@@ -961,6 +1060,24 @@
         "trade_date": "20260811",
         "up_limit": "99",
         "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260812",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260813",
+        "up_limit": "99",
+        "down_limit": "1"
+      },
+      {
+        "ts_code": "000001.SZ",
+        "trade_date": "20260814",
+        "up_limit": "99",
+        "down_limit": "1"
       }
     ],
     "industry_membership": [
@@ -974,5 +1091,21 @@
         "is_new": "Y"
       }
     ]
+  },
+  "financial": {},
+  "financial_refresh": {
+    "request_start": "2026-08-05",
+    "request_end": "2026-08-14",
+    "completed_categories": ["年报", "半年报", "一季报", "三季报"],
+    "announcements": [],
+    "gaps": [
+      {
+        "category": "补充更正",
+        "start_date": "2026-08-05",
+        "end_date": "2026-08-14",
+        "failure_code": "CNINFO_DISCOVERY_UNAVAILABLE"
+      }
+    ],
+    "source_lineage_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   }
 }

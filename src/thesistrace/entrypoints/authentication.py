@@ -45,6 +45,15 @@ class OperatorAuthorizer(Protocol):
         proof: str,
     ) -> None: ...
 
+    async def consume_financial_refresh_proof(
+        self,
+        cookie: str | None,
+        *,
+        idempotency_key: str,
+        observation_through_session: str,
+        proof: str,
+    ) -> None: ...
+
 
 class _VerifiedSession(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -64,21 +73,13 @@ class CoreHttpSettings:
     def from_environment(cls) -> CoreHttpSettings:
         environment = os.environ.get("THESISTRACE_ENVIRONMENT", "")
         if environment not in {"development", "test", "production"}:
-            raise RuntimeError(
-                "THESISTRACE_ENVIRONMENT must be development, test, or production"
-            )
-        auth_internal_origin = os.environ.get(
-            "THESISTRACE_AUTH_INTERNAL_ORIGIN", ""
-        )
+            raise RuntimeError("THESISTRACE_ENVIRONMENT must be development, test, or production")
+        auth_internal_origin = os.environ.get("THESISTRACE_AUTH_INTERNAL_ORIGIN", "")
         public_origin = os.environ.get("THESISTRACE_PUBLIC_ORIGIN", "")
         if not auth_internal_origin:
-            raise RuntimeError(
-                "missing Core HTTP configuration: THESISTRACE_AUTH_INTERNAL_ORIGIN"
-            )
+            raise RuntimeError("missing Core HTTP configuration: THESISTRACE_AUTH_INTERNAL_ORIGIN")
         if not public_origin:
-            raise RuntimeError(
-                "missing Core HTTP configuration: THESISTRACE_PUBLIC_ORIGIN"
-            )
+            raise RuntimeError("missing Core HTTP configuration: THESISTRACE_PUBLIC_ORIGIN")
         return cls(
             auth_internal_origin=_exact_origin(
                 auth_internal_origin,
@@ -182,6 +183,40 @@ class CoreAuthVerifier:
         if response.status_code != 204:
             raise AuthSessionUnavailable()
 
+    async def consume_financial_refresh_proof(
+        self,
+        cookie: str | None,
+        *,
+        idempotency_key: str,
+        observation_through_session: str,
+        proof: str,
+    ) -> None:
+        try:
+            response = await self._client.post(
+                "/internal/operator/proofs/consume",
+                headers=_cookie_headers(cookie),
+                json={
+                    "idempotency_key": idempotency_key,
+                    "observation_through_session": observation_through_session,
+                    "operation": "data.refresh.financial.submit",
+                    "proof": proof,
+                },
+            )
+        except (httpx.HTTPError, OSError) as error:
+            raise AuthSessionUnavailable() from error
+        if response.status_code == 404:
+            raise OperatorAccessNotFound()
+        if response.status_code == 400:
+            try:
+                invalid_proof = response.json() == {"code": "OPERATOR_PROOF_INVALID"}
+            except ValueError:
+                invalid_proof = False
+            if invalid_proof:
+                raise InvalidOperatorProof()
+            raise AuthSessionUnavailable()
+        if response.status_code != 204:
+            raise AuthSessionUnavailable()
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -226,9 +261,7 @@ def _exact_public_origin(
                 f"{variable_name} must use HTTPS and a non-loopback hostname in Production"
             )
     elif parsed.scheme != "http" or not loopback:
-        raise RuntimeError(
-            f"{variable_name} must use an HTTP loopback origin outside Production"
-        )
+        raise RuntimeError(f"{variable_name} must use an HTTP loopback origin outside Production")
     return origin
 
 

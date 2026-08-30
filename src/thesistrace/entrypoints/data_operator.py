@@ -6,7 +6,7 @@ import logging
 import os
 import stat
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from datetime import date, datetime
 from pathlib import Path
 from threading import Event
@@ -36,7 +36,6 @@ from thesistrace.benchmark import validate_independent_benchmark_mount
 from thesistrace.data import (
     BootstrapOutcome,
     CollectionOutcome,
-    DailyFinancialRefreshService,
     DataCollectionError,
     DataGarbageCollector,
     DataOperator,
@@ -58,10 +57,9 @@ from thesistrace.data import (
     IndustryRefreshService,
     RefreshOutcome,
     probe_financial_capability,
+    validate_financial_refresh_request,
     validate_market_refresh_request,
 )
-from thesistrace.data.financial_announcements import FinancialAnnouncementDiscovery
-from thesistrace.data.source import RawSourceResponse
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.operational_events import (
     emit_operational_event_data,
@@ -78,30 +76,6 @@ class _UnavailableIndustrySource:
     def collect(self, *, allowed_codes: set[str]) -> NoReturn:
         del allowed_codes
         raise IndustrySourceError("INDUSTRY_SOURCE_UNAVAILABLE")
-
-
-class _UnavailableFinancialAnnouncementSource:
-    def discover(
-        self,
-        *,
-        start_date: str,
-        end_date: str,
-        allowed_ts_codes: set[str] | frozenset[str],
-    ) -> FinancialAnnouncementDiscovery:
-        del start_date, end_date, allowed_ts_codes
-        raise FinancialDailyRefreshError("FINANCIAL_ANNOUNCEMENT_SOURCE_UNAVAILABLE")
-
-
-class _UnavailableFinancialSource:
-    def query_raw(
-        self,
-        api_name: str,
-        *,
-        params: Mapping[str, object],
-        fields: Sequence[str],
-    ) -> RawSourceResponse:
-        del api_name, params, fields
-        raise FinancialDailyRefreshError("FINANCIAL_SOURCE_UNAVAILABLE")
 
 
 def main(arguments: list[str] | None = None) -> None:
@@ -197,10 +171,16 @@ def _run(
         raise DataRefreshError("WORKER_REPLAY_REQUIRED")
 
     market_request: tuple[str, datetime] | None = None
+    financial_request: tuple[str, str] | None = None
     if parsed.command == "refresh":
         market_request = validate_market_refresh_request(
             idempotency_key=parsed.idempotency_key,
             as_of=parsed.as_of,
+        )
+    elif parsed.command == "refresh-financial":
+        financial_request = validate_financial_refresh_request(
+            idempotency_key=parsed.idempotency_key,
+            observation_through_session=parsed.observation_through_session,
         )
 
     transport: HttpTushareTransport | None = None
@@ -251,6 +231,17 @@ def _run(
                 mount_root,
                 benchmark_mount_root=benchmark_mount,
             ).inspect(parsed.idempotency_key)
+        if parsed.command == "refresh-financial":
+            assert financial_request is not None
+            idempotency_key, observation_through_session = financial_request
+            return DataRefreshService(
+                database,
+                mount_root,
+                benchmark_mount_root=benchmark_mount,
+            ).submit_financial(
+                idempotency_key=idempotency_key,
+                observation_through_session=observation_through_session,
+            )
         if parsed.command == "inspect-industry-refresh":
             return IndustryRefreshService(
                 database,
@@ -258,11 +249,10 @@ def _run(
                 _UnavailableIndustrySource(),
             ).inspect(parsed.idempotency_key)
         if parsed.command == "inspect-financial-refresh":
-            return DailyFinancialRefreshService(
+            return DataRefreshService(
                 database,
                 mount_root,
-                _UnavailableFinancialAnnouncementSource(),
-                _UnavailableFinancialSource(),
+                benchmark_mount_root=benchmark_mount,
             ).inspect(parsed.idempotency_key)
         if parsed.command == "collect":
             return DataGarbageCollector(database, mount_root).collect(
@@ -271,6 +261,7 @@ def _run(
         replay = getattr(parsed, "replay", None)
         rate_limit_events: dict[str, list[float]] = {}
         live_provider: TushareAdapter | None = None
+        financial_source_window_selector: Callable[[str, str], None] | None = None
         if replay is not None:
             provider = (
                 ReplayTushareRefreshBundle(replay)
@@ -278,6 +269,9 @@ def _run(
                 else ReplayTushareProvider(replay)
             )
             financial_source = provider
+            financial_announcement_source = provider
+            if isinstance(provider, ReplayTushareRefreshBundle):
+                financial_source_window_selector = provider.select_financial_window
         else:
             transport, live_provider = _create_live_tushare_provider(
                 rate_limit_events=rate_limit_events,
@@ -286,14 +280,15 @@ def _run(
                     if parsed.command == "bootstrap"
                     else None
                 ),
-                operational_progress=(
-                    None
-                    if parsed.command in {"worker", "refresh-financial"}
-                    else _progress
-                ),
+                operational_progress=(None if parsed.command == "worker" else _progress),
             )
             provider = live_provider
             financial_source = TushareFinancialSource(live_provider)
+            financial_announcement_source = (
+                AkshareCninfoFinancialAnnouncementSource()
+                if parsed.command == "worker"
+                else None
+            )
         if parsed.command in {"collect-financial", "bootstrap-financial"}:
             if live_provider is None and replay is None:
                 raise FinancialCollectionError("LIVE_FINANCIAL_COLLECTION_REQUIRED")
@@ -330,31 +325,6 @@ def _run(
                 "expected_shard_count": outcome.expected_shard_count,
                 "completed_shard_count": outcome.completed_shard_count,
                 "resumed_shard_count": outcome.resumed_shard_count,
-            }
-        if parsed.command == "refresh-financial":
-            if live_provider is None:
-                raise FinancialDailyRefreshError("LIVE_FINANCIAL_COLLECTION_REQUIRED")
-            outcome = DailyFinancialRefreshService(
-                database,
-                mount_root,
-                AkshareCninfoFinancialAnnouncementSource(),
-                TushareFinancialSource(live_provider),
-                progress=_progress,
-            ).publish(
-                idempotency_key=parsed.idempotency_key,
-                observation_through_session=parsed.observation_through_session,
-            )
-            return {
-                "idempotency_key": outcome.idempotency_key,
-                "status": outcome.status,
-                "candidate_manifest_sha256": outcome.candidate.manifest_sha256,
-                "generation_manifest_sha256": outcome.generation_manifest_sha256,
-                "attempted_through_session": outcome.attempted_through_session,
-                "complete_through_session": outcome.complete_through_session,
-                "accepted_instrument_count": outcome.accepted_instrument_count,
-                "failed_instrument_count": outcome.failed_instrument_count,
-                "pending_instrument_count": outcome.pending_instrument_count,
-                "discovery_gap_count": outcome.discovery_gap_count,
             }
         if parsed.command == "refresh-industry":
             outcome = IndustryRefreshService(
@@ -423,6 +393,9 @@ def _run(
                 processed = refresh_service.process_next(
                     source,
                     benchmark_source=benchmark_source,
+                    financial_announcement_source=financial_announcement_source,
+                    financial_source=financial_source,
+                    financial_source_window_selector=financial_source_window_selector,
                 )
             except DataRefreshError:
                 if parsed.once:
@@ -447,7 +420,7 @@ def _failure(
     command: str | None = None,
 ) -> NoReturn:
     payload: dict[str, object] = {"status": "failed", "code": code}
-    refresh_command = command in {"worker", "refresh-financial"}
+    refresh_command = command == "worker"
     if diagnostic is not None and not refresh_command:
         payload["error"] = diagnostic
     print(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Literal, cast
 
 from psycopg.types.json import Jsonb
 
-from thesistrace._postgres import PostgresDatabase
+from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data.financial_announcements import (
     FINANCIAL_ANNOUNCEMENT_CATEGORIES,
     FinancialAnnouncement,
@@ -33,6 +34,7 @@ from thesistrace.data.financial_collection import (
     _raw_batch_content,
     _source_failure_code,
 )
+from thesistrace.data.generation_files import AddressedFileError
 from thesistrace.data.generation_store import (
     GenerationStoreError,
     HistoricalInstrumentIdentity,
@@ -48,9 +50,10 @@ from thesistrace.publication.serialization import canonical_json_bytes
 
 
 class FinancialDailyRefreshError(RuntimeError):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, retryable: bool = False) -> None:
         super().__init__(code)
         self.code = code
+        self.retryable = retryable
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,9 @@ class FinancialDailyRefreshOutcome:
     failed_instrument_count: int
     pending_instrument_count: int
     discovery_gap_count: int
+    matched_trigger_count: int
+    checked_no_structured_change_count: int
+    canonical_changed: bool
 
 
 class FinancialDailyRefreshStore:
@@ -177,15 +183,12 @@ class FinancialDailyRefreshStore:
         gap_categories = tuple(item.category for item in gaps)
         if (
             tuple(
-                category
-                for category in FINANCIAL_ANNOUNCEMENT_CATEGORIES
-                if category in completed
+                category for category in FINANCIAL_ANNOUNCEMENT_CATEGORIES if category in completed
             )
             != completed
             or len(set(completed)) != len(completed)
             or set(completed).intersection(gap_categories)
-            or set(completed).union(gap_categories)
-            != set(FINANCIAL_ANNOUNCEMENT_CATEGORIES)
+            or set(completed).union(gap_categories) != set(FINANCIAL_ANNOUNCEMENT_CATEGORIES)
         ):
             raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_CATEGORY_SET_INVALID")
         _require_sha256(discovery.source_lineage_sha256)
@@ -337,9 +340,7 @@ class FinancialDailyRefreshStore:
                 (idempotency_key,),
             ).fetchall()
         checkpoints = tuple(
-            _checkpoint_from_payload(item)
-            for row in rows
-            for item in row["checkpoints"]
+            _checkpoint_from_payload(item) for row in rows for item in row["checkpoints"]
         )
         return tuple(
             FinancialShardCheckpoint(
@@ -541,13 +542,9 @@ class FinancialDailyRefreshStore:
         unresolved_dates.extend(row["source_published_date"] for row in trigger_rows)
         source_lineage = _sha(
             {
-                "discovery_source_lineage_sha256": str(
-                    operation["source_lineage_sha256"]
-                ),
+                "discovery_source_lineage_sha256": str(operation["source_lineage_sha256"]),
                 "open_gap_ids": [str(row["gap_id"]) for row in gap_rows],
-                "pending_announcement_ids": [
-                    str(row["announcement_id"]) for row in trigger_rows
-                ],
+                "pending_announcement_ids": [str(row["announcement_id"]) for row in trigger_rows],
             }
         )
         return FinancialDiscoveryPublication(
@@ -805,10 +802,7 @@ class FinancialDailyRefreshStore:
                 )
         if changed == 0:
             operation = self.operation(idempotency_key)
-            if (
-                operation["published_generation_manifest_sha256"]
-                == generation_manifest_sha256
-            ):
+            if operation["published_generation_manifest_sha256"] == generation_manifest_sha256:
                 return str(operation["status"])
         if changed != 1:
             raise FinancialDailyRefreshError("FINANCIAL_PUBLICATION_COMPLETION_CONFLICT")
@@ -879,13 +873,31 @@ class DailyFinancialRefreshService:
         *,
         clock: Callable[[], datetime] | None = None,
         progress: Callable[[dict[str, object]], None] | None = None,
+        ownership_guard: Callable[[], None] | None = None,
+        publication_guard: (
+            Callable[
+                [PostgresTransaction, str, str, datetime],
+                AbstractContextManager[None],
+            ]
+            | None
+        ) = None,
+        publication_operation_id: str | None = None,
+        publication_lease_seconds: float = 900,
+        financial_source_window_selector: Callable[[str, str], None] | None = None,
     ) -> None:
+        if publication_lease_seconds <= 0:
+            raise ValueError("Financial publication lease must be positive")
         self._database = database
         self._root = Path(mount_root).resolve()
         self._announcement_source = announcement_source
         self._financial_source = financial_source
         self._clock = clock or (lambda: datetime.now(UTC))
         self._progress = progress or (lambda _event: None)
+        self._ownership_guard = ownership_guard or (lambda: None)
+        self._publication_guard = publication_guard
+        self._publication_operation_id = publication_operation_id
+        self._publication_lease_seconds = publication_lease_seconds
+        self._financial_source_window_selector = financial_source_window_selector
         self._store = FinancialDailyRefreshStore(database)
         self._candidates = FinancialCandidateStore(self._root)
         self._generations = MountedGenerationStore(self._root)
@@ -899,6 +911,7 @@ class DailyFinancialRefreshService:
     ) -> FinancialDailyRefreshOutcome:
         target = _iso_date(observation_through_session)
         with self._database.session_advisory_lock("financial-daily-refresh"):
+            self._ownership_guard()
             existing = self._existing_outcome(idempotency_key, target)
             if existing is not None:
                 return existing
@@ -907,17 +920,29 @@ class DailyFinancialRefreshService:
                 candidate = self._build_candidate(idempotency_key, operation)
                 return self._publish_candidate(idempotency_key, candidate)
             except FinancialDailyRefreshError as error:
-                if error.code != "FINANCIAL_PUBLICATION_COMPLETION_PENDING":
+                if not error.retryable and not _daily_failure_is_retryable(error.code):
                     self._store.fail(idempotency_key, error.code, self._validated_clock())
                 raise
             except FinancialCandidateError as error:
-                code = "FINANCIAL_CANDIDATE_INVALID"
-                self._store.fail(idempotency_key, code, self._validated_clock())
-                raise FinancialDailyRefreshError(code) from error
+                retryable = _has_filesystem_failure(error)
+                code = (
+                    "REFRESH_INFRASTRUCTURE_FAILURE"
+                    if retryable
+                    else "FINANCIAL_CANDIDATE_INVALID"
+                )
+                if not retryable:
+                    self._store.fail(idempotency_key, code, self._validated_clock())
+                raise FinancialDailyRefreshError(code, retryable=retryable) from error
             except GenerationStoreError as error:
-                code = "FINANCIAL_GENERATION_INVALID"
-                self._store.fail(idempotency_key, code, self._validated_clock())
-                raise FinancialDailyRefreshError(code) from error
+                retryable = _has_filesystem_failure(error)
+                code = (
+                    "REFRESH_INFRASTRUCTURE_FAILURE"
+                    if retryable
+                    else "FINANCIAL_GENERATION_INVALID"
+                )
+                if not retryable:
+                    self._store.fail(idempotency_key, code, self._validated_clock())
+                raise FinancialDailyRefreshError(code, retryable=retryable) from error
 
     def inspect(self, idempotency_key: str) -> dict[str, object]:
         operation = self._store.operation(idempotency_key)
@@ -928,9 +953,7 @@ class DailyFinancialRefreshService:
         } | {
             "matched_trigger_count": inspection.matched_trigger_count,
             "pending_trigger_count": inspection.pending_trigger_count,
-            "checked_no_structured_change_count": (
-                inspection.checked_no_structured_change_count
-            ),
+            "checked_no_structured_change_count": (inspection.checked_no_structured_change_count),
             "accepted_instrument_count": inspection.accepted_instrument_count,
             "failed_instrument_count": inspection.failed_instrument_count,
         }
@@ -965,8 +988,7 @@ class DailyFinancialRefreshService:
         if target not in generation.research_sessions:
             raise FinancialDailyRefreshError("FINANCIAL_TARGET_EXCEEDS_MARKET")
         prior_complete = (
-            prior.discovery_complete_through_session
-            or prior.observation_through_session
+            prior.discovery_complete_through_session or prior.observation_through_session
         )
         baseline = prior.discovery_baseline_session or prior.observation_through_session
         self._store.begin(
@@ -999,9 +1021,7 @@ class DailyFinancialRefreshService:
         )
         if operation["discovery_evidence"] is None:
             start, end = financial_discovery_window(
-                complete_through_session=(
-                    operation["prior_complete_through_session"].isoformat()
-                ),
+                complete_through_session=(operation["prior_complete_through_session"].isoformat()),
                 target_session=target,
                 earliest_unresolved_date=self._store.earliest_open_gap_date(),
             )
@@ -1015,6 +1035,7 @@ class DailyFinancialRefreshService:
                     "end_date": end,
                 }
             )
+            self._ownership_guard()
             discovery = self._announcement_source.discover(
                 start_date=start,
                 end_date=end,
@@ -1026,10 +1047,23 @@ class DailyFinancialRefreshService:
                 identities=current_identities,
                 recorded_at=self._validated_clock(),
             )
+            self._ownership_guard()
             operation = self._store.operation(idempotency_key)
         candidate_sha = operation["candidate_manifest_sha256"]
         if candidate_sha is not None:
             return self._candidates.reopen(str(candidate_sha))
+        if self._financial_source_window_selector is not None:
+            evidence = operation["discovery_evidence"]
+            if not isinstance(evidence, Mapping):
+                raise FinancialDailyRefreshError("FINANCIAL_DISCOVERY_NOT_RECORDED")
+            try:
+                discovery_start = _iso_date(str(evidence["start_date"]))
+                discovery_end = _iso_date(str(evidence["end_date"]))
+            except (KeyError, ValueError) as error:
+                raise FinancialDailyRefreshError(
+                    "FINANCIAL_DISCOVERY_REPLAY_MISMATCH"
+                ) from error
+            self._financial_source_window_selector(discovery_start, discovery_end)
         attempted = self._store.attempted_instrument_ids(idempotency_key)
         remaining = tuple(
             identity
@@ -1044,6 +1078,7 @@ class DailyFinancialRefreshService:
             clock=self._clock,
         )
         for identity in remaining:
+            self._ownership_guard()
             collection = collector.collect(
                 idempotency_key=idempotency_key,
                 generation_manifest_sha256=source_generation,
@@ -1091,9 +1126,7 @@ class DailyFinancialRefreshService:
                     status = "accepted"
             else:
                 if len(collection.pending) != 1:
-                    raise FinancialDailyRefreshError(
-                        "FINANCIAL_INSTRUMENT_COLLECTION_INVALID"
-                    )
+                    raise FinancialDailyRefreshError("FINANCIAL_INSTRUMENT_COLLECTION_INVALID")
                 pending = collection.pending[0]
                 self._store.record_instrument_attempt(
                     idempotency_key=idempotency_key,
@@ -1116,6 +1149,7 @@ class DailyFinancialRefreshService:
                     "ts_code": identity.ts_code,
                 }
             )
+            self._ownership_guard()
         checkpoints = self._store.accepted_checkpoints(idempotency_key)
         inspection = self._store.inspect(idempotency_key)
         finished_at = self._validated_clock()
@@ -1128,6 +1162,7 @@ class DailyFinancialRefreshService:
             shards=checkpoints,
         )
         publication = self._store.publication_state(idempotency_key)
+        self._ownership_guard()
         candidate = self._candidates.rebuild_daily(
             snapshot,
             prior_candidate_manifest_sha256=prior_manifest,
@@ -1138,6 +1173,7 @@ class DailyFinancialRefreshService:
             candidate.manifest_sha256,
             finished_at,
         )
+        self._ownership_guard()
         self._progress(
             {
                 "event": "financial_refresh",
@@ -1161,12 +1197,11 @@ class DailyFinancialRefreshService:
         prior = str(operation["prior_financial_manifest_sha256"])
         publication = self._store.publication_state(idempotency_key)
         for attempt in range(4):
+            self._ownership_guard()
             current = self._lifecycle.current_pointer()
             if current is None:
                 raise FinancialDailyRefreshError("FINANCIAL_DATASET_NOT_READY")
-            descriptor = self._generations.inspect_root(
-                current.generation_manifest_sha256
-            )
+            descriptor = self._generations.inspect_root(current.generation_manifest_sha256)
             if descriptor.financial_publication_coordinate == fingerprint:
                 completed_at = self._validated_clock()
                 self._store.record_head_moved(
@@ -1192,7 +1227,11 @@ class DailyFinancialRefreshService:
             if current_financial not in {prior, candidate.manifest_sha256}:
                 raise FinancialDailyRefreshError("FINANCIAL_TARGET_CHANGED")
             prepared_at = self._validated_clock()
-            operation_id = _publication_operation_id(idempotency_key, attempt)
+            operation_id = (
+                _publication_operation_id(idempotency_key, attempt)
+                if self._publication_operation_id is None
+                else f"{self._publication_operation_id}:{attempt}"
+            )
             with mounted_data_mutation_lock(self._database):
                 composed = self._generations._compose_prevalidated_financial_candidate(
                     current.generation_manifest_sha256,
@@ -1208,17 +1247,21 @@ class DailyFinancialRefreshService:
                 self._lifecycle.protect_prevalidated_candidate(
                     operation_id=operation_id,
                     generation_manifest_sha256=composed.manifest_sha256,
-                    lease_seconds=900,
+                    lease_seconds=self._publication_lease_seconds,
                 )
+                self._ownership_guard()
                 try:
                     moved = self._lifecycle.compare_and_swap_head(
-                        expected_generation_manifest_sha256=(
-                            current.generation_manifest_sha256
-                        ),
+                        expected_generation_manifest_sha256=(current.generation_manifest_sha256),
                         candidate_generation_manifest_sha256=composed.manifest_sha256,
                         operation_id=operation_id,
                         prepared_at=prepared_at,
                         daily_financial_publication_key=idempotency_key,
+                        publication_guard=self._selected_publication_guard(
+                            current.generation_manifest_sha256,
+                            composed.manifest_sha256,
+                            prepared_at,
+                        ),
                     )
                 except DatasetHeadConflict:
                     self._lifecycle.release_candidate(operation_id=operation_id)
@@ -1227,26 +1270,37 @@ class DailyFinancialRefreshService:
                     pointer = self._lifecycle.current_pointer()
                     if (
                         pointer is None
-                        or pointer.generation_manifest_sha256
-                        != composed.manifest_sha256
+                        or pointer.generation_manifest_sha256 != composed.manifest_sha256
                     ):
                         self._lifecycle.release_candidate(operation_id=operation_id)
                         raise
                     raise FinancialDailyRefreshError(
                         "FINANCIAL_PUBLICATION_COMPLETION_PENDING"
                     ) from error
-            self._store.record_head_moved(
-                idempotency_key,
-                moved.generation_manifest_sha256,
-                prepared_at,
-            )
-            status = self._store.complete_publication(
-                idempotency_key=idempotency_key,
-                candidate_manifest_sha256=candidate.manifest_sha256,
-                generation_manifest_sha256=moved.generation_manifest_sha256,
-                publication=publication,
-                completed_at=prepared_at,
-            )
+            try:
+                self._store.record_head_moved(
+                    idempotency_key,
+                    moved.generation_manifest_sha256,
+                    prepared_at,
+                )
+                self._ownership_guard()
+                status = self._store.complete_publication(
+                    idempotency_key=idempotency_key,
+                    candidate_manifest_sha256=candidate.manifest_sha256,
+                    generation_manifest_sha256=moved.generation_manifest_sha256,
+                    publication=publication,
+                    completed_at=prepared_at,
+                )
+            except Exception as error:
+                pointer = self._lifecycle.current_pointer()
+                if (
+                    pointer is not None
+                    and pointer.generation_manifest_sha256 == moved.generation_manifest_sha256
+                ):
+                    raise FinancialDailyRefreshError(
+                        "FINANCIAL_PUBLICATION_COMPLETION_PENDING"
+                    ) from error
+                raise
             return self._outcome(
                 idempotency_key,
                 status,
@@ -1255,6 +1309,26 @@ class DailyFinancialRefreshService:
                 publication,
             )
         raise FinancialDailyRefreshError("FINANCIAL_HEAD_CHANGED_REPEATEDLY")
+
+    def _selected_publication_guard(
+        self,
+        expected_manifest: str,
+        candidate_manifest: str,
+        prepared_at: datetime,
+    ) -> Callable[[PostgresTransaction], AbstractContextManager[None]] | None:
+        selected = self._publication_guard
+        if selected is None:
+            return None
+
+        def guard(transaction: PostgresTransaction) -> AbstractContextManager[None]:
+            return selected(
+                transaction,
+                expected_manifest,
+                candidate_manifest,
+                prepared_at,
+            )
+
+        return guard
 
     def _existing_outcome(
         self,
@@ -1294,18 +1368,14 @@ class DailyFinancialRefreshService:
         generation_manifest_sha256: str,
         publication: FinancialDiscoveryPublication,
     ) -> FinancialDailyRefreshOutcome:
-        inspection = self._store.inspect(idempotency_key)
-        return FinancialDailyRefreshOutcome(
+        return _daily_financial_outcome(
+            self._store,
+            self._candidates,
             idempotency_key=idempotency_key,
             status=status,
             candidate=candidate,
             generation_manifest_sha256=generation_manifest_sha256,
-            attempted_through_session=publication.attempted_through_session,
-            complete_through_session=publication.complete_through_session,
-            accepted_instrument_count=inspection.accepted_instrument_count,
-            failed_instrument_count=inspection.failed_instrument_count,
-            pending_instrument_count=publication.pending_instrument_count,
-            discovery_gap_count=publication.discovery_gap_count,
+            publication=publication,
         )
 
     def _validated_clock(self) -> datetime:
@@ -1313,6 +1383,90 @@ class DailyFinancialRefreshService:
             return _aware_clock(self._clock())
         except FinancialCollectionError as error:
             raise FinancialDailyRefreshError("FINANCIAL_REFRESH_CLOCK_INVALID") from error
+
+
+def reconcile_daily_financial_publication(
+    database: PostgresDatabase,
+    mount_root: Path | str,
+    *,
+    idempotency_key: str,
+    generation_manifest_sha256: str,
+    completed_at: datetime,
+) -> FinancialDailyRefreshOutcome:
+    """Finish the durable Financial receipt after its Generation became Head."""
+    store = FinancialDailyRefreshStore(database)
+    candidates = FinancialCandidateStore(Path(mount_root).resolve())
+    operation = store.operation(idempotency_key)
+    status = str(operation["status"])
+    if status == "failed":
+        raise FinancialDailyRefreshError(str(operation["failure_code"]))
+    candidate_sha = operation["candidate_manifest_sha256"]
+    composed_sha = operation["composed_generation_manifest_sha256"]
+    published_sha = operation["published_generation_manifest_sha256"]
+    if candidate_sha is None or (
+        composed_sha != generation_manifest_sha256 and published_sha != generation_manifest_sha256
+    ):
+        raise FinancialDailyRefreshError("FINANCIAL_PUBLICATION_RECONCILIATION_INVALID")
+    candidate = candidates.reopen(str(candidate_sha))
+    publication = _candidate_publication(candidate)
+    if status == "running":
+        if operation["publication_head_moved_at"] is None:
+            store.record_head_moved(
+                idempotency_key,
+                generation_manifest_sha256,
+                completed_at,
+            )
+        status = store.complete_publication(
+            idempotency_key=idempotency_key,
+            candidate_manifest_sha256=candidate.manifest_sha256,
+            generation_manifest_sha256=generation_manifest_sha256,
+            publication=publication,
+            completed_at=completed_at,
+        )
+    elif published_sha != generation_manifest_sha256:
+        raise FinancialDailyRefreshError("FINANCIAL_PUBLICATION_RECONCILIATION_INVALID")
+    return _daily_financial_outcome(
+        store,
+        candidates,
+        idempotency_key=idempotency_key,
+        status=status,
+        candidate=candidate,
+        generation_manifest_sha256=generation_manifest_sha256,
+        publication=publication,
+    )
+
+
+def _daily_financial_outcome(
+    store: FinancialDailyRefreshStore,
+    candidates: FinancialCandidateStore,
+    *,
+    idempotency_key: str,
+    status: str,
+    candidate: FinancialFamilyCandidate,
+    generation_manifest_sha256: str,
+    publication: FinancialDiscoveryPublication,
+) -> FinancialDailyRefreshOutcome:
+    inspection = store.inspect(idempotency_key)
+    operation = store.operation(idempotency_key)
+    prior_manifest = str(operation["prior_financial_manifest_sha256"])
+    return FinancialDailyRefreshOutcome(
+        idempotency_key=idempotency_key,
+        status=status,
+        candidate=candidate,
+        generation_manifest_sha256=generation_manifest_sha256,
+        attempted_through_session=publication.attempted_through_session,
+        complete_through_session=publication.complete_through_session,
+        accepted_instrument_count=inspection.accepted_instrument_count,
+        failed_instrument_count=inspection.failed_instrument_count,
+        pending_instrument_count=publication.pending_instrument_count,
+        discovery_gap_count=publication.discovery_gap_count,
+        matched_trigger_count=inspection.matched_trigger_count,
+        checked_no_structured_change_count=inspection.checked_no_structured_change_count,
+        canonical_changed=(
+            candidates.canonical_projection_sha256(prior_manifest)
+            != candidates.canonical_projection_sha256(candidate.manifest_sha256)
+        ),
+    )
 
 
 def _identity_by_code(
@@ -1525,16 +1679,10 @@ def _checkpoint_from_payload(value: object) -> FinancialShardCheckpoint:
         ts_code=str(value["ts_code"]),
         shard=str(value["shard"]),
         status=str(value["status"]),
-        batch_sha256=(
-            None if value["batch_sha256"] is None else str(value["batch_sha256"])
-        ),
-        collected_at=(
-            None if value["collected_at"] is None else str(value["collected_at"])
-        ),
+        batch_sha256=(None if value["batch_sha256"] is None else str(value["batch_sha256"])),
+        collected_at=(None if value["collected_at"] is None else str(value["collected_at"])),
         first_observed_at=(
-            None
-            if value["first_observed_at"] is None
-            else str(value["first_observed_at"])
+            None if value["first_observed_at"] is None else str(value["first_observed_at"])
         ),
     )
     if (
@@ -1572,8 +1720,7 @@ def _candidate_publication(
         candidate.discovery_baseline_session is None
         or candidate.discovery_complete_through_session is None
         or candidate.source_lineage_sha256 is None
-        or candidate.readiness_status
-        not in {"ready", "ready_with_pending", "ready_with_gaps"}
+        or candidate.readiness_status not in {"ready", "ready_with_pending", "ready_with_gaps"}
     ):
         raise FinancialDailyRefreshError("FINANCIAL_DAILY_CANDIDATE_INVALID")
     return FinancialDiscoveryPublication(
@@ -1594,6 +1741,24 @@ def _candidate_publication(
 def _publication_operation_id(idempotency_key: str, attempt: int) -> str:
     identity = hashlib.sha256(f"{idempotency_key}:{attempt}".encode()).hexdigest()[:32]
     return f"daily-financial-refresh:{identity}"
+
+
+def _daily_failure_is_retryable(code: str) -> bool:
+    return code in {
+        "FINANCIAL_HEAD_CHANGED_REPEATEDLY",
+        "FINANCIAL_PUBLICATION_COMPLETION_PENDING",
+    }
+
+
+def _has_filesystem_failure(error: BaseException) -> bool:
+    current: BaseException | None = error
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, (AddressedFileError, OSError)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _date(value: str) -> date:

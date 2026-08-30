@@ -87,7 +87,8 @@ CREATE TABLE auth.operator_proof (
             'invitation.issue'::text,
             'invitation.reissue'::text,
             'researcher.sessions.revoke'::text,
-            'data.refresh.market.submit'::text
+            'data.refresh.market.submit'::text,
+            'data.refresh.financial.submit'::text
         ])
     ),
     CONSTRAINT operator_proof_state_check CHECK (

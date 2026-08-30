@@ -206,6 +206,20 @@ def test_base_compose_has_one_worker_only_market_refresh_runtime() -> None:
         "data-operator-worker web" in runner
 
 
+def test_financial_submission_runbook_keeps_live_source_secret_worker_only() -> None:
+    runbook = (ROOT / "docs" / "runbook" / "data-operator.md").read_text()
+
+    assert (
+        '"${tt_compose[@]}" run --rm -T \\\n'
+        "  api thesistrace-data-operator refresh-financial \\\n"
+    ) in runbook
+    assert (
+        '"${tt_compose[@]}" run --rm -T \\\n'
+        "  -e THESISTRACE_TUSHARE_TOKEN \\\n"
+        "  api thesistrace-data-operator refresh-financial \\\n"
+    ) not in runbook
+
+
 def test_production_overlay_publishes_only_caddy_and_persists_certificates() -> None:
     production = (DEPLOY / "compose.production.yaml").read_text()
 

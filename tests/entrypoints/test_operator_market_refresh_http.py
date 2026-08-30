@@ -8,6 +8,7 @@ from uuid import UUID
 
 import anyio
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from thesistrace.data import DataRefreshError, RefreshOutcome
@@ -59,12 +60,33 @@ class OperatorAuthorizer:
         idempotency_key: str,
         proof: str,
     ) -> None:
-        self.consumed.append({
-            "as_of": as_of,
-            "cookie": cookie,
-            "idempotency_key": idempotency_key,
-            "proof": proof,
-        })
+        self.consumed.append(
+            {
+                "as_of": as_of,
+                "cookie": cookie,
+                "idempotency_key": idempotency_key,
+                "proof": proof,
+            }
+        )
+        if self.consume_error is not None:
+            raise self.consume_error
+
+    async def consume_financial_refresh_proof(
+        self,
+        cookie: str | None,
+        *,
+        idempotency_key: str,
+        observation_through_session: str,
+        proof: str,
+    ) -> None:
+        self.consumed.append(
+            {
+                "cookie": cookie,
+                "idempotency_key": idempotency_key,
+                "observation_through_session": observation_through_session,
+                "proof": proof,
+            }
+        )
         if self.consume_error is not None:
             raise self.consume_error
 
@@ -98,6 +120,30 @@ class Refreshes:
         return self.receipt
 
 
+class FinancialRefreshes(Refreshes):
+    def __init__(self) -> None:
+        super().__init__()
+        self.receipt = RefreshOutcome(
+            idempotency_key="financial-20260814-custom",
+            kind="financial",
+            as_of=None,
+            observation_through_session="2026-08-14",
+            status="accepted",
+            outcome=None,
+            data_through_session=None,
+            last_refresh_at=None,
+            failure_code=None,
+            last_failure_code=None,
+            attempt_count=0,
+        )
+
+    def submit_financial(self, **request: object) -> RefreshOutcome:
+        self.submissions.append(request)
+        if self.submit_error is not None:
+            raise self.submit_error
+        return self.receipt
+
+
 def test_operator_market_submission_consumes_proof_then_returns_safe_receipt() -> None:
     authorizer = OperatorAuthorizer()
     refreshes = Refreshes()
@@ -127,16 +173,152 @@ def test_operator_market_submission_consumes_proof_then_returns_safe_receipt() -
         "status": "accepted",
     }
     assert authorizer.authorized_cookies == [COOKIE]
-    assert authorizer.consumed == [{
-        "as_of": "2026-08-11T18:00:00+08:00",
-        "cookie": COOKIE,
-        "idempotency_key": "market-20260811T180000+0800",
-        "proof": PROOF,
-    }]
-    assert refreshes.submissions == [{
-        "as_of": datetime(2026, 8, 11, 10, tzinfo=UTC),
-        "idempotency_key": "market-20260811T180000+0800",
-    }]
+    assert authorizer.consumed == [
+        {
+            "as_of": "2026-08-11T18:00:00+08:00",
+            "cookie": COOKIE,
+            "idempotency_key": "market-20260811T180000+0800",
+            "proof": PROOF,
+        }
+    ]
+    assert refreshes.submissions == [
+        {
+            "as_of": datetime(2026, 8, 11, 10, tzinfo=UTC),
+            "idempotency_key": "market-20260811T180000+0800",
+        }
+    ]
+
+
+def test_operator_financial_submission_consumes_exact_proof_and_returns_safe_receipt() -> None:
+    authorizer = OperatorAuthorizer()
+    refreshes = FinancialRefreshes()
+    client = _client(authorizer, refreshes)
+
+    response = client.post(
+        "/api/operator/data/refreshes/financial",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "idempotency_key": "financial-20260814-custom",
+            "observation_through_session": "2026-08-14",
+            "proof": PROOF,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "accepted_instrument_count": None,
+        "attempt_count": 0,
+        "checked_no_structured_change_count": None,
+        "data_through_session": None,
+        "discovery_gap_count": None,
+        "failed_instrument_count": None,
+        "failure_code": None,
+        "financial_complete_through_session": None,
+        "idempotency_key": "financial-20260814-custom",
+        "kind": "financial",
+        "last_failure_code": None,
+        "last_refresh_at": None,
+        "matched_trigger_count": None,
+        "observation_through_session": "2026-08-14",
+        "outcome": None,
+        "pending_instrument_count": None,
+        "status": "accepted",
+    }
+    assert authorizer.consumed == [
+        {
+            "cookie": COOKIE,
+            "idempotency_key": "financial-20260814-custom",
+            "observation_through_session": "2026-08-14",
+            "proof": PROOF,
+        }
+    ]
+    assert refreshes.submissions == [
+        {
+            "idempotency_key": "financial-20260814-custom",
+            "observation_through_session": "2026-08-14",
+        }
+    ]
+
+
+@pytest.mark.parametrize("invalid_target", ("2026-8-14", "0000-01-01"))
+def test_operator_financial_validation_and_proof_failure_have_no_side_effect(
+    invalid_target: str,
+) -> None:
+    authorizer = OperatorAuthorizer()
+    refreshes = FinancialRefreshes()
+    client = _client(authorizer, refreshes)
+
+    invalid = client.post(
+        "/api/operator/data/refreshes/financial",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "idempotency_key": "financial-key",
+            "observation_through_session": invalid_target,
+            "proof": PROOF,
+        },
+    )
+    assert invalid.status_code == 422
+    assert authorizer.consumed == []
+    assert refreshes.submissions == []
+
+    authorizer.consume_error = InvalidOperatorProof()
+    rejected = client.post(
+        "/api/operator/data/refreshes/financial",
+        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+        json={
+            "idempotency_key": "financial-key",
+            "observation_through_session": "2026-08-14",
+            "proof": PROOF,
+        },
+    )
+    assert rejected.status_code == 400
+    assert rejected.json() == {"code": "OPERATOR_PROOF_INVALID"}
+    assert refreshes.submissions == []
+
+
+def test_operator_financial_inspection_is_bound_to_the_exact_target() -> None:
+    authorizer = OperatorAuthorizer()
+    refreshes = FinancialRefreshes()
+    refreshes.receipt = RefreshOutcome(
+        **{
+            **refreshes.receipt.__dict__,
+            "status": "succeeded",
+            "outcome": "degraded",
+            "data_through_session": "2026-08-14",
+            "last_refresh_at": "2026-08-14T10:00:00+00:00",
+            "financial_complete_through_session": "2026-08-13",
+            "matched_trigger_count": 0,
+            "checked_no_structured_change_count": 0,
+            "accepted_instrument_count": 0,
+            "failed_instrument_count": 0,
+            "pending_instrument_count": 0,
+            "discovery_gap_count": 1,
+        }
+    )
+    client = _client(authorizer, refreshes)
+
+    matching = client.get(
+        "/api/operator/data/refreshes/financial",
+        headers={"cookie": COOKIE},
+        params={
+            "idempotency_key": refreshes.receipt.idempotency_key,
+            "observation_through_session": "2026-08-14",
+        },
+    )
+    assert matching.status_code == 200
+    assert matching.json()["outcome"] == "degraded"
+    assert matching.json()["discovery_gap_count"] == 1
+    assert "generation_manifest_sha256" not in matching.json()
+
+    conflict = client.get(
+        "/api/operator/data/refreshes/financial",
+        headers={"cookie": COOKIE},
+        params={
+            "idempotency_key": refreshes.receipt.idempotency_key,
+            "observation_through_session": "2026-08-13",
+        },
+    )
+    assert conflict.status_code == 409
 
 
 def test_operator_market_validation_and_proof_failure_have_no_operation_side_effect() -> None:
@@ -307,16 +489,19 @@ async def _exercise_operator_market_persistence_event_loop_liveness() -> None:
         base_url=PUBLIC_ORIGIN,
     ) as client:
         async with anyio.create_task_group() as tasks:
+
             async def submit() -> None:
-                submitted.append(await client.post(
-                    "/api/operator/data/refreshes/market",
-                    headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
-                    json={
-                        "as_of": "2026-08-11T18:00:00+08:00",
-                        "idempotency_key": "market-async-persistence",
-                        "proof": PROOF,
-                    },
-                ))
+                submitted.append(
+                    await client.post(
+                        "/api/operator/data/refreshes/market",
+                        headers={"cookie": COOKIE, "origin": PUBLIC_ORIGIN},
+                        json={
+                            "as_of": "2026-08-11T18:00:00+08:00",
+                            "idempotency_key": "market-async-persistence",
+                            "proof": PROOF,
+                        },
+                    )
+                )
 
             try:
                 tasks.start_soon(submit)

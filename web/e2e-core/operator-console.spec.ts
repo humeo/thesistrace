@@ -16,11 +16,15 @@ import {
 } from "./auth-fixture";
 
 test("only the singleton Operator can open and read the Operator Console", async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const operatorMutationRequests: Array<Readonly<{ path: string; body: string }>> = [];
   const marketStatusRequests: Array<Readonly<{
     asOf: string | null;
     idempotencyKey: string | null;
+  }>> = [];
+  const financialStatusRequests: Array<Readonly<{
+    idempotencyKey: string | null;
+    observationThroughSession: string | null;
   }>> = [];
   page.on("request", (request) => {
     const url = new URL(request.url());
@@ -31,6 +35,12 @@ test("only the singleton Operator can open and read the Operator Console", async
         idempotencyKey: url.searchParams.get("idempotency_key"),
       });
     }
+    if (request.method() === "GET" && path === "/api/operator/data/refreshes/financial") {
+      financialStatusRequests.push({
+        idempotencyKey: url.searchParams.get("idempotency_key"),
+        observationThroughSession: url.searchParams.get("observation_through_session"),
+      });
+    }
     if (
       request.method() === "POST"
       && (
@@ -38,6 +48,7 @@ test("only the singleton Operator can open and read the Operator Console", async
         || path.startsWith("/api/auth/operator/invitations/")
         || path === "/api/auth/operator/researchers/sessions/revoke"
         || path === "/api/operator/data/refreshes/market"
+        || path === "/api/operator/data/refreshes/financial"
       )
     ) {
       operatorMutationRequests.push({ body: request.postData() ?? "", path });
@@ -229,13 +240,21 @@ test("only the singleton Operator can open and read the Operator Console", async
   });
   await operatorSections.getByRole("link", { name: "Data", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
-  await expect(page.getByText("Accepted is queued, not published.", { exact: true }))
-    .toBeVisible();
-  const marketAsOf = "2026-08-11T18:00:00+08:00";
-  const marketAsOfInput = page.getByLabel("As-of");
-  const marketKeyInput = page.getByLabel("Idempotency key");
+  const marketRefreshSection = page.locator(
+    'section[aria-labelledby="operator-market-refresh-heading"]',
+  );
+  await expect(
+    marketRefreshSection.getByText("Accepted is queued, not published.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  const marketAsOf = "2026-08-14T18:00:00+08:00";
+  const marketAsOfInput = marketRefreshSection.getByLabel("As-of");
+  const marketKeyInput = marketRefreshSection.getByLabel("Idempotency key");
   await expect(marketKeyInput).toHaveValue(/^market-\d{8}T\d{6}Z$/);
-  const reviewRefresh = page.getByRole("button", { name: "Review Refresh" });
+  const reviewRefresh = marketRefreshSection.getByRole("button", {
+    name: "Review Refresh",
+  });
 
   await marketAsOfInput.fill("2026-08-11");
   await marketKeyInput.fill("browser-invalid-market-refresh");
@@ -311,7 +330,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await pendingProofAborted;
   await page.unroute("**/api/auth/operator/proofs", pendingProofHandler);
 
-  const marketKey = "\uFEFFbrowser-market-refresh-20260811";
+  const marketKey = "\uFEFFbrowser-market-refresh-20260814";
   let releaseCoreResponse = (): void => {};
   let markCoreAccepted = (): void => {};
   let markCoreResponseDropped = (): void => {};
@@ -372,15 +391,15 @@ test("only the singleton Operator can open and read the Operator Console", async
     "**/api/operator/data/refreshes/market**",
     delayedCoreResponseHandler,
   );
-  await expect(page.getByRole("heading", { name: "Refresh completed" }))
+  await expect(page.getByRole("heading", { name: "Dataset published" }))
     .toBeVisible({ timeout: 30_000 });
   expect(marketStatusRequests).toContainEqual({
     asOf: marketAsOf,
     idempotencyKey: marketKey,
   });
   await expect(page.getByText(marketKey, { exact: true })).toBeVisible();
-  await expect(page.getByText("No change", { exact: true })).toBeVisible();
-  await expect(page.getByText("2026-08-11", { exact: true })).toBeVisible();
+  await expect(page.getByText("Published", { exact: true })).toBeVisible();
+  await expect(page.getByText("2026-08-14", { exact: true })).toBeVisible();
   await expect(reviewRefresh).toBeFocused();
 
   const conflictingMarketAsOf = "2026-08-12T18:00:00+08:00";
@@ -849,6 +868,379 @@ test("only the singleton Operator can open and read the Operator Console", async
   );
   resetAuthRateLimits();
 
+  const financialRefreshSection = page.locator(
+    'section[aria-labelledby="operator-financial-refresh-heading"]',
+  );
+  const financialTarget = financialRefreshSection.getByLabel(
+    "Observation-through Research Session",
+  );
+  const financialKeyInput = financialRefreshSection.getByLabel("Idempotency key");
+  const financialReview = financialRefreshSection.getByRole("button", {
+    name: "Review Refresh",
+  });
+  await expect(financialTarget).toHaveAttribute("type", "text");
+  await expect(financialKeyInput).toHaveValue(/^financial-\d{8}T\d{6}Z$/);
+  const financialTargetSession = "2026-08-14";
+  const financialKey = "browser-financial-refresh-20260814";
+  await financialTarget.fill("0000-01-01");
+  await financialReview.click();
+  await expect(financialRefreshSection.getByRole("alert")).toContainText(
+    "exactly as accepted by the CLI",
+  );
+  await expect(page.getByRole("dialog", { name: "Submit Financial Refresh?" }))
+    .toHaveCount(0);
+  await financialTarget.fill(financialTargetSession);
+  await financialKeyInput.fill(financialKey);
+  await financialReview.click();
+  const financialConfirmation = page.getByRole("dialog", {
+    name: "Submit Financial Refresh?",
+  });
+  await expect(financialConfirmation).toContainText("Financial");
+  await expect(financialConfirmation).toContainText(financialTargetSession);
+  await expect(financialConfirmation).toContainText(financialKey);
+  await expect(financialConfirmation).toContainText("shared durable FIFO");
+  await financialConfirmation.getByLabel("Current password").fill(browserPassword);
+  await financialConfirmation.getByLabel("Current password").press("Enter");
+  await expect(financialConfirmation).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Financial Refresh accepted" }))
+    .toBeVisible({ timeout: 10_000 });
+  const financialReceipt = page.locator("section.operator-refresh-receipt").filter({
+    hasText: financialKey,
+  });
+  await expect(financialReceipt.getByText(financialTargetSession, { exact: true }))
+    .toBeVisible();
+  await expect(page.getByRole("heading", {
+    name: "Financial data published with unresolved coverage",
+  })).toBeVisible({ timeout: 30_000 });
+  await expect(financialReceipt.getByText("Degraded success", { exact: true }))
+    .toBeVisible();
+  await expect(financialReceipt).toContainText(
+    "A usable Dataset was published, but discovery gaps remain",
+  );
+  await expect(financialReceipt.locator("dl div").filter({ hasText: "Discovery gaps" }))
+    .toHaveText("Discovery gaps1");
+  expect(financialStatusRequests).toContainEqual({
+    idempotencyKey: financialKey,
+    observationThroughSession: financialTargetSession,
+  });
+  const financialProof = operatorMutationRequests.find((request) => {
+    if (request.path !== "/api/auth/operator/proofs") return false;
+    const body = JSON.parse(request.body) as { operation?: unknown };
+    return body.operation === "data.refresh.financial.submit";
+  });
+  expect(JSON.parse(financialProof?.body ?? "{}")).toEqual({
+    idempotency_key: financialKey,
+    observation_through_session: financialTargetSession,
+    operation: "data.refresh.financial.submit",
+    password: browserPassword,
+  });
+  const financialMutation = operatorMutationRequests.find(
+    (request) => request.path === "/api/operator/data/refreshes/financial",
+  );
+  expect(JSON.parse(financialMutation?.body ?? "{}")).toEqual({
+    idempotency_key: financialKey,
+    observation_through_session: financialTargetSession,
+    proof: expect.any(String),
+  });
+  expect(financialMutation?.body).not.toContain(browserPassword);
+  resetAuthRateLimits();
+
+  const droppedFinancialKey = "browser-financial-dropped-after-acceptance";
+  let markFinancialResponseDropped = (): void => {};
+  const financialResponseDropped = new Promise<void>((resolve) => {
+    markFinancialResponseDropped = resolve;
+  });
+  const droppedFinancialResponseHandler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    if (body.idempotency_key !== droppedFinancialKey) {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    expect(response.status()).toBe(202);
+    await route.abort("aborted");
+    markFinancialResponseDropped();
+  };
+  await page.route(
+    "**/api/operator/data/refreshes/financial**",
+    droppedFinancialResponseHandler,
+  );
+  await financialTarget.fill(financialTargetSession);
+  await financialKeyInput.fill(droppedFinancialKey);
+  await financialReview.click();
+  let recoverableFinancialConfirmation = page.getByRole("dialog", {
+    name: "Submit Financial Refresh?",
+  });
+  await recoverableFinancialConfirmation.getByLabel("Current password")
+    .fill(browserPassword);
+  await recoverableFinancialConfirmation.getByLabel("Current password").press("Enter");
+  await financialResponseDropped;
+  await expect(recoverableFinancialConfirmation).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
+  await page.unroute(
+    "**/api/operator/data/refreshes/financial**",
+    droppedFinancialResponseHandler,
+  );
+  const recoveredFinancialReceipt = page.locator("section.operator-refresh-receipt").filter({
+    hasText: droppedFinancialKey,
+  });
+  await expect(page.getByRole("heading", {
+    name: "Financial data published with unresolved coverage",
+  })).toBeVisible({ timeout: 30_000 });
+  await expect(recoveredFinancialReceipt.getByText(
+    financialTargetSession,
+    { exact: true },
+  )).toBeVisible();
+  await expect(recoveredFinancialReceipt.getByText("Degraded success", { exact: true }))
+    .toBeVisible();
+  expect(financialStatusRequests).toContainEqual({
+    idempotencyKey: droppedFinancialKey,
+    observationThroughSession: financialTargetSession,
+  });
+  resetAuthRateLimits();
+
+  const knownFailureKey = "browser-financial-known-failure";
+  let releaseKnownFailure = (): void => {};
+  let markKnownFailureStarted = (): void => {};
+  const knownFailureGate = new Promise<void>((resolve) => {
+    releaseKnownFailure = resolve;
+  });
+  const knownFailureStarted = new Promise<void>((resolve) => {
+    markKnownFailureStarted = resolve;
+  });
+  const knownFailureHandler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    if (body.idempotency_key !== knownFailureKey) {
+      await route.continue();
+      return;
+    }
+    markKnownFailureStarted();
+    await knownFailureGate;
+    await route.fulfill({
+      body: JSON.stringify({ code: "DATA_NOT_READY" }),
+      contentType: "application/json",
+      status: 409,
+    });
+  };
+  await page.route(
+    "**/api/operator/data/refreshes/financial",
+    knownFailureHandler,
+  );
+  await financialTarget.fill(financialTargetSession);
+  await financialKeyInput.fill(knownFailureKey);
+  await financialReview.click();
+  recoverableFinancialConfirmation = page.getByRole("dialog", {
+    name: "Submit Financial Refresh?",
+  });
+  await recoverableFinancialConfirmation.getByLabel("Current password").fill(browserPassword);
+  await recoverableFinancialConfirmation.getByLabel("Current password").press("Enter");
+  await knownFailureStarted;
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
+  releaseKnownFailure();
+  await expect(page.getByRole("alert").filter({
+    hasText: "The current Dataset is not ready for a Financial Refresh.",
+  })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Confirming submission" })).toHaveCount(0);
+  await expect(financialReview).toBeFocused();
+  await page.unroute(
+    "**/api/operator/data/refreshes/financial",
+    knownFailureHandler,
+  );
+  resetAuthRateLimits();
+
+  const retryKey = "browser-financial-retry-exact";
+  let releaseUncertainSubmission = (): void => {};
+  let markUncertainSubmissionStarted = (): void => {};
+  let markMissingReceiptObserved = (): void => {};
+  const uncertainSubmissionGate = new Promise<void>((resolve) => {
+    releaseUncertainSubmission = resolve;
+  });
+  const uncertainSubmissionStarted = new Promise<void>((resolve) => {
+    markUncertainSubmissionStarted = resolve;
+  });
+  const missingReceiptObserved = new Promise<void>((resolve) => {
+    markMissingReceiptObserved = resolve;
+  });
+  const retryHandler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (
+      request.method() === "GET"
+      && url.searchParams.get("idempotency_key") === retryKey
+    ) {
+      markMissingReceiptObserved();
+      await route.fulfill({
+        body: JSON.stringify({ code: "REFRESH_NOT_FOUND" }),
+        contentType: "application/json",
+        status: 404,
+      });
+      return;
+    }
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    if (body.idempotency_key !== retryKey) {
+      await route.continue();
+      return;
+    }
+    markUncertainSubmissionStarted();
+    await uncertainSubmissionGate;
+    await route.fulfill({
+      body: JSON.stringify({ code: "DATA_REFRESH_UNAVAILABLE" }),
+      contentType: "application/json",
+      status: 503,
+    });
+  };
+  await page.route("**/api/operator/data/refreshes/financial**", retryHandler);
+  await financialKeyInput.fill(retryKey);
+  await financialReview.click();
+  recoverableFinancialConfirmation = page.getByRole("dialog", {
+    name: "Submit Financial Refresh?",
+  });
+  await recoverableFinancialConfirmation.getByLabel("Current password").fill(browserPassword);
+  await recoverableFinancialConfirmation.getByLabel("Current password").press("Enter");
+  await uncertainSubmissionStarted;
+  await page.keyboard.press("Escape");
+  releaseUncertainSubmission();
+  await missingReceiptObserved;
+  const retryExactRequest = page.getByRole("button", { name: "Retry exact request" });
+  await expect(page.getByRole("alert").filter({
+    hasText: "Receipt unavailable; retrying while visible.",
+  })).toBeVisible();
+  await retryExactRequest.click();
+  recoverableFinancialConfirmation = page.getByRole("dialog", {
+    name: "Submit Financial Refresh?",
+  });
+  await expect(recoverableFinancialConfirmation).toContainText(retryKey);
+  await expect(recoverableFinancialConfirmation).toContainText(financialTargetSession);
+  await recoverableFinancialConfirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(financialReview).toBeFocused();
+  await page.unroute("**/api/operator/data/refreshes/financial**", retryHandler);
+  resetAuthRateLimits();
+
+  const stopKey = "browser-financial-stop-checking";
+  let markStopSubmissionStarted = (): void => {};
+  let releaseStopSubmission = (): void => {};
+  const stopSubmissionStarted = new Promise<void>((resolve) => {
+    markStopSubmissionStarted = resolve;
+  });
+  const stopSubmissionGate = new Promise<void>((resolve) => {
+    releaseStopSubmission = resolve;
+  });
+  const stopHandler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    if (body.idempotency_key !== stopKey) {
+      await route.continue();
+      return;
+    }
+    markStopSubmissionStarted();
+    await stopSubmissionGate;
+    await route.fulfill({
+      body: JSON.stringify({ code: "DATA_REFRESH_UNAVAILABLE" }),
+      contentType: "application/json",
+      status: 503,
+    });
+  };
+  await page.route("**/api/operator/data/refreshes/financial", stopHandler);
+  await financialKeyInput.fill(stopKey);
+  await financialReview.click();
+  recoverableFinancialConfirmation = page.getByRole("dialog", {
+    name: "Submit Financial Refresh?",
+  });
+  await recoverableFinancialConfirmation.getByLabel("Current password").fill(browserPassword);
+  await recoverableFinancialConfirmation.getByLabel("Current password").press("Enter");
+  await stopSubmissionStarted;
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Stop checking" }).click();
+  await expect(page.getByRole("alert").filter({
+    hasText: "Automatic receipt checks stopped.",
+  })).toBeVisible();
+  await expect(financialReview).toBeFocused();
+  releaseStopSubmission();
+  await settleReactUpdates(page);
+  await expect(page.getByRole("heading", { name: "Confirming submission" })).toHaveCount(0);
+  await page.unroute("**/api/operator/data/refreshes/financial", stopHandler);
+  resetAuthRateLimits();
+
+  const capabilityLossKey = "browser-financial-capability-loss";
+  const capabilityLossHandler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    const body = request.postDataJSON() as { idempotency_key?: unknown };
+    if (body.idempotency_key !== capabilityLossKey) {
+      await route.continue();
+      return;
+    }
+    await route.fulfill({
+      body: JSON.stringify({
+        accepted_instrument_count: null,
+        attempt_count: 0,
+        checked_no_structured_change_count: null,
+        data_through_session: null,
+        discovery_gap_count: null,
+        failed_instrument_count: null,
+        failure_code: null,
+        financial_complete_through_session: null,
+        idempotency_key: capabilityLossKey,
+        kind: "financial",
+        last_failure_code: null,
+        last_refresh_at: null,
+        matched_trigger_count: null,
+        observation_through_session: financialTargetSession,
+        outcome: null,
+        pending_instrument_count: null,
+        status: "accepted",
+      }),
+      contentType: "application/json",
+      status: 202,
+    });
+  };
+  await page.route(
+    "**/api/operator/data/refreshes/financial",
+    capabilityLossHandler,
+  );
+  await financialKeyInput.fill(capabilityLossKey);
+  await financialReview.click();
+  const capabilityLossConfirmation = page.getByRole("dialog", {
+    name: "Submit Financial Refresh?",
+  });
+  await capabilityLossConfirmation.getByLabel("Current password").fill(browserPassword);
+  await capabilityLossConfirmation.getByLabel("Current password").press("Enter");
+  await expect(page.getByRole("heading", { name: "Financial Refresh accepted" }))
+    .toBeVisible();
+  await restoreResearcherSession(page, ordinary);
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect(page.getByRole("heading", { name: "Not found" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Data operations" })).toHaveCount(0);
+  await page.unroute(
+    "**/api/operator/data/refreshes/financial",
+    capabilityLossHandler,
+  );
+  await restoreResearcherSession(page, operator);
+  await page.goto("/operator/data");
+  await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
+
   await page.getByRole("navigation", { name: "Operator Console sections" })
     .getByRole("link", { name: "Researchers", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
@@ -1100,6 +1492,15 @@ test("only the singleton Operator can open and read the Operator Console", async
       },
     ],
     [
+      "/api/auth/operator/proofs",
+      {
+        idempotency_key: "ordinary-denied-financial-refresh",
+        observation_through_session: "2026-08-11",
+        operation: "data.refresh.financial.submit",
+        password: browserPassword,
+      },
+    ],
+    [
       "/api/auth/operator/researchers/sessions/revoke",
       { proof: oldConsoleToken, researcher_id: deniedResearcher.id },
     ],
@@ -1140,6 +1541,26 @@ test("only the singleton Operator can open and read the Operator Console", async
   );
   expect(deniedMalformedMutation.status()).toBe(404);
   expect(await deniedMalformedMutation.text()).toBe("");
+  const deniedFinancialInspection = await page.request.get(
+    "/api/operator/data/refreshes/financial?"
+    + "idempotency_key=ordinary-denied-financial-refresh&"
+    + "observation_through_session=2026-08-11",
+  );
+  expect(deniedFinancialInspection.status()).toBe(404);
+  expect(await deniedFinancialInspection.text()).toBe("");
+  const deniedFinancialMutation = await page.request.post(
+    "/api/operator/data/refreshes/financial",
+    {
+      data: {
+        idempotency_key: "ordinary-denied-financial-refresh",
+        observation_through_session: "2026-08-11",
+        proof: oldConsoleToken,
+      },
+      headers: sameOriginHeaders(),
+    },
+  );
+  expect(deniedFinancialMutation.status()).toBe(404);
+  expect(await deniedFinancialMutation.text()).toBe("");
   const deniedDocument = await page.goto("/operator/researchers");
   expect(deniedDocument?.status()).toBe(404);
   expect(await deniedDocument?.text()).toBe("");

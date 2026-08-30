@@ -525,6 +525,8 @@ def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None
         ("get", "/api/alpha/catalog"),
         ("post", "/api/alpha/diagnostics"),
         ("get", "/api/data"),
+        ("get", "/api/operator/data/refreshes/financial"),
+        ("post", "/api/operator/data/refreshes/financial"),
         ("get", "/api/operator/data/refreshes/market"),
         ("post", "/api/operator/data/refreshes/market"),
         ("post", "/api/researcher/bootstrap"),

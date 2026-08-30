@@ -13,6 +13,7 @@ from thesistrace.data import (
     DataRefreshError,
     DataSourceError,
     FinancialCollectionError,
+    validate_financial_refresh_request,
     validate_market_refresh_request,
 )
 from thesistrace.entrypoints import data_operator
@@ -133,6 +134,59 @@ def test_market_refresh_rejects_a_key_over_the_shared_character_limit(
     }
 
 
+@pytest.mark.parametrize(
+    "value",
+    (
+        "2026-08-14T00:00:00Z",
+        "20260814",
+        "2026-8-14",
+        "2026-08-14 ",
+        "0000-01-01",
+        "not-a-session",
+    ),
+)
+def test_financial_refresh_rejects_non_iso_research_session_before_opening_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    value: str,
+) -> None:
+    monkeypatch.setattr(
+        data_operator,
+        "PostgresDatabase",
+        lambda _url: (_ for _ in ()).throw(AssertionError("database opened")),
+    )
+    monkeypatch.setenv("THESISTRACE_DATABASE_URL", "postgresql://unused")
+    monkeypatch.setenv("THESISTRACE_DATA_MOUNT", "/unused")
+    monkeypatch.setenv("THESISTRACE_BENCHMARK_MOUNT", "/unused-benchmark")
+
+    with pytest.raises(SystemExit) as failure:
+        data_operator.main(
+            [
+                "refresh-financial",
+                "--idempotency-key",
+                "financial-20260814",
+                "--observation-through-session",
+                value,
+            ]
+        )
+
+    assert failure.value.code == 2
+    assert json.loads(capsys.readouterr().err) == {
+        "code": "INVALID_OBSERVATION_THROUGH_SESSION",
+        "status": "failed",
+    }
+
+
+def test_financial_refresh_request_preserves_the_exact_key_and_canonical_session() -> None:
+    key, target = validate_financial_refresh_request(
+        idempotency_key="financial-20260814-custom",
+        observation_through_session="2026-08-14",
+    )
+
+    assert key == "financial-20260814-custom"
+    assert target == "2026-08-14"
+
+
 def test_market_key_uses_the_explicit_python_boundary_whitespace_contract() -> None:
     as_of = "2026-08-11T18:00:00+08:00"
 
@@ -218,7 +272,7 @@ def test_private_daily_financial_operator_has_only_current_head_inputs(
     assert "--observation-through-session" not in inspect_help
 
 
-def test_daily_financial_operator_wires_live_discovery_and_current_head_service(
+def test_daily_financial_operator_submits_and_returns_without_opening_sources(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
@@ -235,46 +289,43 @@ def test_daily_financial_operator_wires_live_discovery_and_current_head_service(
         def close(self) -> None:
             pass
 
-    class FakeTransport:
-        def close(self) -> None:
-            pass
-
     class FakeService:
         def __init__(
             self,
             database: object,
             mount_root: Path,
-            announcement_source: object,
-            financial_source: object,
             *,
-            progress: object,
+            benchmark_mount_root: Path,
         ) -> None:
             received.update(
                 database=database,
                 mount_root=mount_root,
-                announcement_source=announcement_source,
-                financial_source=financial_source,
-                progress=progress,
+                benchmark_mount_root=benchmark_mount_root,
             )
 
-        def publish(self, **arguments: object) -> object:
+        def submit_financial(self, **arguments: object) -> object:
             received.update(arguments)
             return SimpleNamespace(
                 idempotency_key="daily-live",
-                status="succeeded_with_pending",
-                candidate=SimpleNamespace(manifest_sha256="c" * 64),
-                generation_manifest_sha256="g" * 64,
-                attempted_through_session="2026-08-14",
-                complete_through_session="2026-08-14",
-                accepted_instrument_count=1,
-                failed_instrument_count=1,
-                pending_instrument_count=1,
-                discovery_gap_count=0,
+                kind="financial",
+                as_of=None,
+                observation_through_session="2026-08-14",
+                status="accepted",
+                outcome=None,
+                data_through_session=None,
+                last_refresh_at=None,
+                failure_code=None,
+                last_failure_code=None,
+                attempt_count=0,
+                financial_complete_through_session=None,
+                matched_trigger_count=None,
+                checked_no_structured_change_count=None,
+                accepted_instrument_count=None,
+                failed_instrument_count=None,
+                pending_instrument_count=None,
+                discovery_gap_count=None,
             )
 
-    provider = object()
-    announcement_source = object()
-    financial_source = object()
     monkeypatch.setenv("THESISTRACE_DATABASE_URL", "postgresql://unused")
     monkeypatch.setenv("THESISTRACE_DATA_MOUNT", str(tmp_path))
     monkeypatch.setenv(
@@ -286,19 +337,9 @@ def test_daily_financial_operator_wires_live_discovery_and_current_head_service(
     monkeypatch.setattr(
         data_operator,
         "_create_live_tushare_provider",
-        lambda **_kwargs: (FakeTransport(), provider),
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("source opened")),
     )
-    monkeypatch.setattr(
-        data_operator,
-        "AkshareCninfoFinancialAnnouncementSource",
-        lambda: announcement_source,
-    )
-    monkeypatch.setattr(
-        data_operator,
-        "TushareFinancialSource",
-        lambda selected: financial_source if selected is provider else None,
-    )
-    monkeypatch.setattr(data_operator, "DailyFinancialRefreshService", FakeService)
+    monkeypatch.setattr(data_operator, "DataRefreshService", FakeService)
 
     data_operator.main(
         [
@@ -311,21 +352,27 @@ def test_daily_financial_operator_wires_live_discovery_and_current_head_service(
     )
 
     assert received["mount_root"] == tmp_path
-    assert received["announcement_source"] is announcement_source
-    assert received["financial_source"] is financial_source
     assert received["idempotency_key"] == "daily-live"
     assert received["observation_through_session"] == "2026-08-14"
     assert json.loads(capsys.readouterr().out) == {
-        "accepted_instrument_count": 1,
-        "attempted_through_session": "2026-08-14",
-        "candidate_manifest_sha256": "c" * 64,
-        "complete_through_session": "2026-08-14",
-        "discovery_gap_count": 0,
-        "failed_instrument_count": 1,
-        "generation_manifest_sha256": "g" * 64,
+        "accepted_instrument_count": None,
+        "as_of": None,
+        "attempt_count": 0,
+        "checked_no_structured_change_count": None,
+        "data_through_session": None,
+        "discovery_gap_count": None,
+        "failed_instrument_count": None,
+        "failure_code": None,
+        "financial_complete_through_session": None,
         "idempotency_key": "daily-live",
-        "pending_instrument_count": 1,
-        "status": "succeeded_with_pending",
+        "kind": "financial",
+        "last_failure_code": None,
+        "last_refresh_at": None,
+        "matched_trigger_count": None,
+        "observation_through_session": "2026-08-14",
+        "outcome": None,
+        "pending_instrument_count": None,
+        "status": "accepted",
     }
 
 
