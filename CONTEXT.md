@@ -575,9 +575,9 @@ The official CSI 300 Price Index Open point for one Research Session.
 _Avoid_: Benchmark NAV, benchmark return, constituent average
 
 **Benchmark Snapshot**:
-The one current atomically published, append-only sequence of Benchmark Levels
-stored outside Canonical Data and Product State.
-_Avoid_: Dataset Family, Data Generation, per-ResearchRun copy, snapshot history
+The one current append-only sequence of Benchmark Levels used by every Strategy
+Comparison.
+_Avoid_: Dataset Family, Data Generation, per-ResearchRun copy, Benchmark history
 
 **Benchmark Relative Return**:
 The Benchmark Level divided by its level at the first investable Entry Open,
@@ -585,7 +585,7 @@ minus one.
 _Avoid_: Benchmark NAV, daily pct_chg, return since 2010
 
 **Strategy Comparison**:
-The read model that aligns immutable Strategy facts with the current Benchmark
+The comparison that aligns immutable Strategy facts with the current Benchmark
 Snapshot over one Entry-to-Terminal Open interval.
 _Avoid_: Strategy Result, benchmark execution state, browser calculation
 
@@ -638,8 +638,8 @@ Research Session.
 _Avoid_: Financial Coverage, Research Period
 
 **Benchmark Coverage**:
-The independent Benchmark Snapshot extent from 2010-01-04 through a terminal
-Research Session. A new Market Head cannot lead it.
+The Research Session extent for which the current Benchmark Snapshot can support
+Strategy Comparison.
 _Avoid_: Dataset Coverage, Data Generation, lagging benchmark, carried level
 
 **Financial Coverage**:
