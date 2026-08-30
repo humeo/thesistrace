@@ -4,7 +4,7 @@ import { testProjectName } from "./auth-fixture";
 
 export function controlWorker(
   action: "pause" | "unpause",
-  service: "research-worker" | "batch-research-worker" = "research-worker",
+  service: "research-worker" | "batch-research-worker" | "tracking-worker" = "research-worker",
 ): void {
   execFileSync("docker", [action, `${testProjectName()}-${service}-1`], {
     stdio: "pipe",

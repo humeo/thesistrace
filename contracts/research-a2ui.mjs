@@ -220,7 +220,8 @@ export function parseResearchA2UINavigationHref(value) {
     return value;
   }
   const match = /^\/research-runs\/(run_[a-f0-9]{20})$/.exec(value);
-  return match !== null && RESEARCH_RUN_ID.test(match[1]) ? value : null;
+  if (match !== null && RESEARCH_RUN_ID.test(match[1])) return value;
+  return /^\/daily-tracks\/track_[a-f0-9]{20}$/.test(value) ? value : null;
 }
 
 export function projectResearchA2UIContent(value) {

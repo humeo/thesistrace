@@ -9,8 +9,18 @@ import type {
 import {
   scriptedResearchDecision,
 } from "./scripted-research-model.js";
-import type { ScriptedResearchDecision } from "./scripted-research-support.js";
+import { latestUserText, type ScriptedResearchDecision } from "./scripted-research-support.js";
 import { scriptedBatchDecision } from "./scripted-batch-model.js";
+import { scriptedDailyTrackDecision } from "./scripted-daily-track-model.js";
+
+export {
+  SCRIPTED_START_DAILY_TRACK_PROMPT,
+  SCRIPTED_RELOAD_DAILY_TRACK_PROMPT,
+  SCRIPTED_RETRY_DAILY_TRACK_PROMPT,
+  SCRIPTED_RESUME_DAILY_TRACK_PROMPT,
+  SCRIPTED_LIST_DAILY_TRACKS_PROMPT,
+  SCRIPTED_STOP_DAILY_TRACK_PROMPT,
+} from "./scripted-daily-track-model.js";
 
 export {
   SCRIPTED_FACTOR_BATCH_PROMPT,
@@ -35,6 +45,7 @@ export {
 export type ScriptedLanguageModelMode = "reply" | "throw-before-stream";
 export const SCRIPTED_FAILURE_MODEL_ID = "scripted-failure-v1";
 export const SCRIPTED_TOOL_PROMPT = "[scripted-tool-turn] Inspect the available research context.";
+export const SCRIPTED_DISCOVERY_PROMPT = "List the authenticated capabilities available in this Chat.";
 export const SCRIPTED_INVALID_A2UI_PROMPT =
   "[scripted-invalid-a2ui] Attempt one unsafe research surface.";
 export const SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT =
@@ -205,6 +216,14 @@ function scriptedResponse(options: LanguageModelV3CallOptions): ScriptedResponse
   if (research !== null) return responseFromResearchDecision(research);
   const batch = scriptedBatchDecision(options);
   if (batch !== null) return responseFromResearchDecision(batch);
+  const track = scriptedDailyTrackDecision(options);
+  if (track !== null) return responseFromResearchDecision(track);
+  if (latestUserText(options)?.text === SCRIPTED_DISCOVERY_PROMPT) {
+    return responseFromResearchDecision({
+      kind: "text",
+      text: `Available capabilities: ${(options.tools ?? []).map((tool) => tool.name).sort().join(", ")}`,
+    });
+  }
   const invalidA2UI = scriptedInvalidA2UI(options);
   if (invalidA2UI !== null) return invalidA2UI;
   const tableA2UI = scriptedLargeA2UITable(options);

@@ -101,6 +101,16 @@ describe("Research A2UI renderer", () => {
     await act(async () => root.unmount());
   });
 
+  it("renders canonical DailyTrack navigation without enabling Track mutations", async () => {
+    const href = "/daily-tracks/track_0123456789abcdef0123";
+    const root = await mount(activityMessage(readyContent([{
+      component: "Navigation", id: "root", label: "Open DailyTrack", href,
+    }])));
+    await vi.waitFor(() => expect(document.querySelector(`a[href="${href}"]`)?.textContent).toBe("Open DailyTrack"));
+    expect(document.querySelector("button, form, input")).toBeNull();
+    await act(async () => root.unmount());
+  });
+
   it("preserves explicit column associations for a large bounded table", async () => {
     const columns = Array.from({ length: 12 }, (_, index) => `Field ${index + 1}`);
     const rows = Array.from({ length: 100 }, (_, row) => (

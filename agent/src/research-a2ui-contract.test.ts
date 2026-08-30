@@ -69,6 +69,8 @@ describe("Research A2UI contract", () => {
     expect(parseResearchA2UINavigationHref(`/research-runs/${RUN_ID}`)).toBe(
       `/research-runs/${RUN_ID}`,
     );
+    expect(parseResearchA2UINavigationHref("/daily-tracks/track_0123456789abcdef0123"))
+      .toBe("/daily-tracks/track_0123456789abcdef0123");
     for (const value of [
       "https://example.com/research",
       "//example.com/research",
@@ -76,6 +78,12 @@ describe("Research A2UI contract", () => {
       "/research-runs/00000000-0000-4000-8000-000000000001",
       "/research-runs/run_0123456789abcdef0123?delete=true",
       "/api/research-runs/run_0123456789abcdef0123",
+      "/daily-tracks/track_0123456789abcdef0123/stop",
+      "/daily-tracks/track_0123456789abcdef0123?stop=true",
+      "/daily-tracks/track_0123456789abcdef0123#retry",
+      "/daily-tracks/../api/daily-tracks/track_0123456789abcdef0123",
+      "/api/daily-tracks/track_0123456789abcdef0123",
+      "/daily-tracks/track_%30%31",
     ]) {
       expect(parseResearchA2UINavigationHref(value)).toBeNull();
     }

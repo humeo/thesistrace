@@ -12,6 +12,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { z } from "zod";
 
 import { BATCH_ID, BATCH_TOOL_NAMES, CHILD_IDS, batchFixtureOutput } from "../test-fixtures/batch-research.js";
+import { DAILY_TRACK_TOOL_NAMES, ORIGIN_RUN_ID, TRACK_ID, dailyTrackFixtureOutput } from "../test-fixtures/daily-track.js";
 
 import {
   RESEARCH_A2UI_ACTIVITY_TYPE,
@@ -33,6 +34,8 @@ import { createResearchRuntime, type ResearchRuntime } from "./research-runtime.
 import { initializeAgentSchema } from "./schema-initialize.js";
 import {
   SCRIPTED_FACTOR_IDEA_PROMPT,
+  SCRIPTED_DISCOVERY_PROMPT,
+  SCRIPTED_RELOAD_DAILY_TRACK_PROMPT,
   SCRIPTED_FACTOR_BATCH_PROMPT,
   SCRIPTED_STRATEGY_SWEEP_PROMPT,
   SCRIPTED_INVALID_A2UI_PROMPT,
@@ -1293,6 +1296,105 @@ describe.sequential("durable Research Agent runtime", () => {
       const restarted = await connect(runtime, threadId, primaryResearcher);
       expect(a2uiMessages(snapshotMessages(restarted)).map((surface) => surface.content)).toEqual(stored.rows.map((row) => row.content));
       expect(calls).toEqual(beforeReplay);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("persists successive current DailyTrack views while replay and restart leave the original view and Start unchanged", async () => {
+    const calls: Array<{ input: Record<string, unknown>; name: string }> = [];
+    let session = "2024-01-31";
+    const makeRuntime = () => createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
+        tools: Object.fromEntries(DAILY_TRACK_TOOL_NAMES.map((name) => [name, createTool({
+          id: name, description: `Discovered DailyTrack capability: ${name}`,
+          inputSchema: z.record(z.string(), z.unknown()),
+          execute: async (input) => {
+            const call = { name, input };
+            calls.push(call);
+            return dailyTrackFixtureOutput(call, session);
+          },
+        })])),
+      }),
+    });
+    let runtime = await makeRuntime();
+    const threadId = randomUUID();
+    const agentRunId = randomUUID();
+    const input = runInput({ content: `Start daily tracking for ${ORIGIN_RUN_ID}.`, messageId: randomUUID(), runId: agentRunId, threadId });
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      expect(JSON.stringify(events)).toContain(`/daily-tracks/${TRACK_ID}`);
+      expect(JSON.stringify(events)).not.toContain("private-daily-track-provenance");
+      const initial = a2uiMessages(events);
+      expect(initial).toHaveLength(1);
+      expect(JSON.stringify(initial)).toContain("2024-01-31");
+      const submitted = calls.filter((call) => call.name === "start_daily_track");
+      expect(submitted.map((call) => call.input)).toEqual([{
+        run_id: ORIGIN_RUN_ID, request_id: `agent_${agentRunId.replaceAll("-", "")}_track_start_v1`,
+      }]);
+      const beforeReplay = [...calls];
+      await run(runtime, input, primaryResearcher);
+      await runtime.close();
+      runtime = await makeRuntime();
+      expect(a2uiMessages(snapshotMessages(await connect(runtime, threadId, primaryResearcher)))).toEqual(initial);
+      expect(calls).toEqual(beforeReplay);
+      session = "2024-02-01";
+      const refreshMessageId = randomUUID();
+      const refresh = runInput({
+        messageId: refreshMessageId, runId: randomUUID(), threadId,
+        messages: [...snapshotMessages(await connect(runtime, threadId, primaryResearcher)).filter((message) => message.role !== "activity"), {
+          id: refreshMessageId, role: "user", content: SCRIPTED_RELOAD_DAILY_TRACK_PROMPT,
+        }],
+      });
+      expect((await run(runtime, refresh, primaryResearcher)).at(-1)?.type).toBe("RUN_FINISHED");
+      const history = a2uiMessages(snapshotMessages(await connect(runtime, threadId, primaryResearcher)));
+      expect(history).toHaveLength(2);
+      expect(history[0]).toEqual(initial[0]);
+      expect(JSON.stringify(history[1])).toContain("2024-02-01");
+      expect(calls.filter((call) => call.name === "start_daily_track")).toEqual(submitted);
+      expect(calls.some((call) => call.name === "retry_daily_track" || call.name === "stop_daily_track")).toBe(false);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("passes every four-scope capability and subsequent discovery changes through to the native Mastra model", async () => {
+    const completeDiscovery = [
+      "get_research_context", "get_alpha_catalog", "diagnose_alpha_formula",
+      "list_research_runs", "get_research_run", "get_research_run_result", "submit_research_run",
+      "list_research_batches", "get_research_batch", "submit_research_batch",
+      "list_daily_tracks", "get_daily_track", "get_daily_track_result", "start_daily_track", "retry_daily_track",
+    ];
+    let discovered = completeDiscovery;
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
+        tools: Object.fromEntries(discovered.map((name) => [name, createTool({
+          id: name, description: `Current discovered capability ${name}`,
+          inputSchema: z.record(z.string(), z.unknown()),
+          execute: async () => { throw new Error("Discovery inspection must not execute a business Tool"); },
+        })])),
+      }),
+    });
+    const threadId = randomUUID();
+    try {
+      let history: Message[] | undefined;
+      for (const names of [completeDiscovery, [...completeDiscovery.filter((name) => name !== "retry_daily_track"), "newly_discovered_tracking_capability"]]) {
+        discovered = names;
+        const messageId = randomUUID();
+        const events = await run(runtime, runInput({
+          content: SCRIPTED_DISCOVERY_PROMPT, messageId, runId: randomUUID(), threadId,
+          ...(history === undefined ? {} : { messages: [...history, { id: messageId, role: "user" as const, content: SCRIPTED_DISCOVERY_PROMPT }] }),
+        }), primaryResearcher);
+        expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+        const reply = events.filter((event) => event.type === "TEXT_MESSAGE_CONTENT").map((event) => event.delta).join("");
+        expect(reply).toBe(`Available capabilities: ${[...names, "render_a2ui"].sort().join(", ")}`);
+        expect(reply).not.toContain("stop_daily_track");
+        expect(reply).not.toContain("cancel_research_run");
+        history = snapshotMessages(await connect(runtime, threadId, primaryResearcher));
+      }
     } finally {
       await runtime.close();
     }
