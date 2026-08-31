@@ -42,13 +42,32 @@ export const test = securityTest.extend<{ researcher: AuthenticatedResearcher }>
     });
     expect(bootstrap.status()).toBe(200);
     expect(await bootstrap.json()).toMatchObject({ researcher_id: researcher.id });
-    await page.goto("/data");
-    await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+    await openDataOverview(page);
     await use(researcher);
   }, { auto: true }],
 });
 
 export { expect };
+
+export async function openDataOverview(page: Page): Promise<void> {
+  // Cold navigation includes Auth, capability, and Researcher bootstrap before
+  // these requests start. Wait for network readiness before the short UI check.
+  const [overview, catalog] = await Promise.all([
+    page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/data"
+      && response.request().method() === "GET"
+    )),
+    page.waitForResponse((response) => (
+      new URL(response.url()).pathname === "/api/alpha/catalog"
+      && response.request().method() === "GET"
+    )),
+    page.goto("/data"),
+  ]);
+  expect(overview.status(), "Data overview request").toBe(200);
+  expect(catalog.status(), "Alpha catalog request").toBe(200);
+  await Promise.all([overview.finished(), catalog.finished()]);
+  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+}
 
 export async function issueInvitation(email: string): Promise<string> {
   const cleared = requestResendFixture("DELETE");

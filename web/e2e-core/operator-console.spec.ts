@@ -1292,12 +1292,18 @@ test("only the singleton Operator can open and read the Operator Console", async
   await knownFailureStarted;
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
-  releaseKnownFailure();
-  await expect(page.getByRole("alert").filter({
-    hasText: "The current Dataset is not ready for a Financial Refresh.",
-  })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Confirming submission" })).toHaveCount(0);
-  await expect(financialReview).toBeFocused();
+  // Restoring focus belongs to the committed UI, not the next animation frame.
+  await page.clock.pauseAt(new Date());
+  try {
+    releaseKnownFailure();
+    await expect(page.getByRole("alert").filter({
+      hasText: "The current Dataset is not ready for a Financial Refresh.",
+    })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Confirming submission" })).toHaveCount(0);
+    await expect(financialReview).toBeFocused();
+  } finally {
+    await page.clock.resume();
+  }
   await page.unroute(
     "**/api/operator/data/refreshes/financial",
     knownFailureHandler,

@@ -41,6 +41,14 @@ export function OperatorFinancialRefreshPanel({
   const trigger = useRef<HTMLButtonElement | null>(null);
   const submissionGeneration = useRef(0);
   const operationGeneration = useRef(0);
+  const focusAfterCommit = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (confirmation !== null || pending !== null) return;
+    // A frame may run before React removes disabled or closes the dialog.
+    focusAfterCommit.current?.focus();
+    focusAfterCommit.current = null;
+  }, [confirmation, pending]);
 
   useEffect(() => {
     const tracked = pending !== null
@@ -87,7 +95,7 @@ export function OperatorFinancialRefreshPanel({
           setPending(null);
           replaceOperation(next);
           onOperationAccepted();
-          window.requestAnimationFrame(() => trigger.current?.focus());
+          focusAfterCommit.current = trigger.current;
         } else {
           setOperation({ generation: tracked.generation, operation: next });
         }
@@ -181,12 +189,12 @@ export function OperatorFinancialRefreshPanel({
       setKeyError(code === "conflict"
         ? "This key is already bound to a different Data Refresh target."
         : "Use 1–512 characters with no boundary whitespace, NUL, or unpaired surrogate.");
-      window.requestAnimationFrame(() => keyInput.current?.focus());
+      focusAfterCommit.current = keyInput.current;
     } else {
       setTargetError(
         "Enter an explicit Research Session as YYYY-MM-DD, exactly as accepted by the CLI.",
       );
-      window.requestAnimationFrame(() => targetInput.current?.focus());
+      focusAfterCommit.current = targetInput.current;
     }
   }
 
@@ -198,7 +206,7 @@ export function OperatorFinancialRefreshPanel({
     setPollError(false);
     setSubmissionError(null);
     setPending(tracked);
-    window.requestAnimationFrame(() => trigger.current?.focus());
+    focusAfterCommit.current = trigger.current;
   }
 
   function failKnownSubmission(tracked: TrackedRequest, reason: unknown): void {
@@ -208,7 +216,7 @@ export function OperatorFinancialRefreshPanel({
     setPending(null);
     setPollError(false);
     setSubmissionError(financialMutationMessage(reason));
-    window.requestAnimationFrame(() => trigger.current?.focus());
+    focusAfterCommit.current = trigger.current;
   }
 
   return (
@@ -322,7 +330,7 @@ export function OperatorFinancialRefreshPanel({
             setSubmissionError(
               "Automatic receipt checks stopped. Retry with the same idempotency key to reconcile any accepted work.",
             );
-            window.requestAnimationFrame(() => trigger.current?.focus());
+            focusAfterCommit.current = trigger.current;
           }}
           pollError={pollError}
           request={pending.request}
@@ -337,7 +345,7 @@ export function OperatorFinancialRefreshPanel({
             if (confirmation.generation !== submissionGeneration.current) return;
             submissionGeneration.current += 1;
             setConfirmation(null);
-            window.requestAnimationFrame(() => trigger.current?.focus());
+            focusAfterCommit.current = trigger.current;
           }}
           onRejected={(code) => rejectRequest(confirmation, code)}
           onSubmissionFailed={(reason) => failKnownSubmission(confirmation, reason)}
@@ -351,7 +359,7 @@ export function OperatorFinancialRefreshPanel({
             setPending(null);
             setPollError(false);
             setSubmissionError(null);
-            window.requestAnimationFrame(() => trigger.current?.focus());
+            focusAfterCommit.current = trigger.current;
           }}
           request={confirmation.request}
         />
