@@ -1338,7 +1338,15 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByRole("button", { name: "Delete DailyTrack" })).toHaveCount(0);
     const refreshTrack = page.getByRole("button", { name: "Refresh to latest data" });
     await expect(refreshTrack).toBeEnabled();
+    // Clicking only dispatches the request; navigation must wait for admission.
+    const refreshAccepted = page.waitForResponse((response) => (
+      new URL(response.url()).pathname === `/api/daily-tracks/${trackId}/refresh`
+      && response.request().method() === "POST"
+    ));
     await refreshTrack.click();
+    const refreshResponse = await refreshAccepted;
+    expect(refreshResponse.status()).toBe(202);
+    expect(await refreshResponse.finished()).toBeNull();
 
     await page.goto(`/research-runs/${reusedRunId}`);
     const deleteDialog = await openResearchDeleteDialog(page);
