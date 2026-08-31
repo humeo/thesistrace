@@ -83,6 +83,10 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0221 — Authenticate remote Research Agent access with OAuth](0221-authenticate-remote-research-agent-access-with-oauth.md)
 - [ADR-0222 — Keep Research Agent execution stateless and resource-addressed](0222-keep-research-agent-execution-stateless-and-resource-addressed.md)
 - [ADR-0223 — Separate dangerous Research Agent authority from human confirmation](0223-separate-dangerous-research-agent-authority-from-human-confirmation.md)
+- [ADR-0235 — Run the built-in Research Agent in a separate Host](0235-run-the-built-in-research-agent-in-a-separate-host.md)
+- [ADR-0236 — Keep Agent Chat separate from Research truth](0236-keep-agent-chat-separate-from-research-truth.md)
+- [ADR-0237 — Exchange Login Sessions for short-lived MCP tokens in Auth](0237-exchange-login-sessions-for-short-lived-mcp-tokens-in-auth.md)
+- [ADR-0238 — Keep Agent content out of operational telemetry](0238-keep-agent-content-out-of-operational-telemetry.md)
 
 ## Alpha language and authoring
 
