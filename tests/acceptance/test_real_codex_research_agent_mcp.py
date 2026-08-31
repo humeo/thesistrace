@@ -43,6 +43,7 @@ SAFE_TOOL_NAMES = {
     "list_daily_tracks",
     "list_research_batches",
     "list_research_runs",
+    "refresh_daily_track",
     "retry_daily_track",
     "start_daily_track",
     "submit_research_batch",

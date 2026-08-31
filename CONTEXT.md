@@ -340,6 +340,11 @@ One idempotent unit of work that extends a DailyTrack through a frozen Tracking
 Advance Target and publishes at most one Tracking Checkpoint.
 _Avoid_: ResearchRun, Data Refresh, partial result
 
+**DailyTrack Refresh**:
+The explicit Researcher command that queues one new Tracking Advance for an
+active, lagging, idle DailyTrack.
+_Avoid_: Data Refresh, page Reload, Dataset Head trigger, automatic Advance
+
 **Tracking Advance Target**:
 The fixed contiguous set of oldest unpublished Research Sessions assigned to one
 Tracking Advance.

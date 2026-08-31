@@ -359,8 +359,14 @@ def batch_polling_payload(*, status: str) -> dict[str, object]:
     return research_batch_polling_detail(detail).model_dump(mode="json")
 
 
-def daily_track_payload(*, blocked: bool = False) -> dict[str, object]:
+def daily_track_payload(
+    *,
+    blocked: bool = False,
+    lagging: bool = False,
+) -> dict[str, object]:
     status = "blocked" if blocked else "active"
+    lag_sessions = 1 if blocked or lagging else 0
+    phase = "blocked" if blocked else "waiting" if lagging else "up_to_date"
     return {
         "id": "track_test",
         "status": status,
@@ -372,8 +378,8 @@ def daily_track_payload(*, blocked: bool = False) -> dict[str, object]:
         "progress": {
             "head_session": "2024-01-31",
             "data_through_session": "2024-01-31",
-            "lag_sessions": 1 if blocked else 0,
-            "phase": "blocked" if blocked else "up_to_date",
+            "lag_sessions": lag_sessions,
+            "phase": phase,
             "target_start_session": None,
             "target_end_session": None,
             "target_session_count": 0,
@@ -389,7 +395,11 @@ def daily_track_payload(*, blocked: bool = False) -> dict[str, object]:
             "observed_at": "2024-02-01T00:00:00Z",
         },
         "blocked_reason": "market data refresh is required" if blocked else None,
-        "action_eligibility": {"retry": blocked, "stop": True},
+        "action_eligibility": {
+            "refresh": lagging and not blocked,
+            "retry": blocked,
+            "stop": True,
+        },
         "available_result_sections": [
             "factor",
             "strategy_summary",

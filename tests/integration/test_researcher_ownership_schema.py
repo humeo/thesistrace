@@ -218,6 +218,7 @@ def test_schema_constraints_reject_every_cross_researcher_relationship(
             )
 
     assert _receipt_primary_keys(ownership_database) == {
+        ("daily_tracks", "refresh_receipts"): ["researcher_id", "request_id"],
         ("daily_tracks", "retry_receipts"): ["researcher_id", "request_id"],
         ("daily_tracks", "stop_receipts"): ["researcher_id", "request_id"],
         ("research_batches", "admission_receipts"): [
@@ -289,6 +290,28 @@ def test_schema_rejects_cross_parent_receipts_checkpoints_and_blocked_links(
                         _track_outcome(
                             track_id="track-parent-b",
                             seed_run_id="run-parent-a",
+                            status="active",
+                        )
+                    ),
+                ),
+            )
+
+    with pytest.raises(ForeignKeyViolation):
+        with ownership_database.transaction() as transaction:
+            transaction.execute(
+                """
+                INSERT INTO daily_tracks.refresh_receipts (
+                    researcher_id, request_id, request_fingerprint,
+                    track_id, outcome
+                ) VALUES (%s, 'cross-refresh', 'fingerprint',
+                          'track-parent-b', %s)
+                """,
+                (
+                    RESEARCHER_A.researcher_id,
+                    Jsonb(
+                        _track_outcome(
+                            track_id="track-parent-b",
+                            seed_run_id="run-parent-b",
                             status="active",
                         )
                     ),
@@ -621,6 +644,7 @@ def _receipt_primary_keys(
              AND attribute.attnum = key_column.attribute_number
             WHERE constraint_record.contype = 'p'
               AND (namespace.nspname, relation.relname) IN (
+                  ('daily_tracks', 'refresh_receipts'),
                   ('daily_tracks', 'retry_receipts'),
                   ('daily_tracks', 'stop_receipts'),
                   ('research_batches', 'admission_receipts'),

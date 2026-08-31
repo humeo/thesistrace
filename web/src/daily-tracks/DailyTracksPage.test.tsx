@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  dailyTrackCanRefresh,
   dailyTrackNeedsPolling,
   TrackingOriginView,
   TrackingProgressView,
@@ -13,9 +14,23 @@ import {
 } from "./DailyTrackAnalysisView";
 
 describe("DailyTrack detail polling", () => {
-  it("keeps loading while Stop is waiting for child-exit confirmation", () => {
-    expect(dailyTrackNeedsPolling("stopping")).toBe(true);
-    expect(dailyTrackNeedsPolling("stopped")).toBe(false);
+  const progress = (phase: DailyTrackDetail["progress"]["phase"]) => ({
+    phase,
+  }) as DailyTrackDetail["progress"];
+
+  it("polls only while an explicit action is unresolved", () => {
+    expect(dailyTrackNeedsPolling({ status: "stopping", progress: progress("stopping") })).toBe(true);
+    expect(dailyTrackNeedsPolling({ status: "active", progress: progress("queued") })).toBe(true);
+    expect(dailyTrackNeedsPolling({ status: "active", progress: progress("calculating") })).toBe(true);
+    expect(dailyTrackNeedsPolling({ status: "active", progress: progress("waiting") })).toBe(false);
+    expect(dailyTrackNeedsPolling({ status: "stopped", progress: progress("stopped") })).toBe(false);
+  });
+
+  it("offers Refresh only for an active, lagging, idle track", () => {
+    expect(dailyTrackCanRefresh({ status: "active", lag_sessions: 2, progress: progress("waiting") })).toBe(true);
+    expect(dailyTrackCanRefresh({ status: "active", lag_sessions: 0, progress: progress("up_to_date") })).toBe(false);
+    expect(dailyTrackCanRefresh({ status: "active", lag_sessions: 2, progress: progress("queued") })).toBe(false);
+    expect(dailyTrackCanRefresh({ status: "blocked", lag_sessions: 2, progress: progress("blocked") })).toBe(false);
   });
 });
 

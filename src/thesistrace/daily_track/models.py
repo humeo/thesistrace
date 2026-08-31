@@ -80,6 +80,12 @@ class RetryDailyTrackCommand(BaseModel):
     request_id: RequestId
 
 
+class RefreshDailyTrackCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    request_id: RequestId
+
+
 class StopDailyTrackCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -156,6 +162,26 @@ class DailyTrackRetryOutcome(BaseModel):
         )
         if self.retry_after_seconds != expected:
             raise ValueError("DailyTrack Retry polling guidance does not match its outcome")
+        return self
+
+
+class DailyTrackRefreshOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    track: DailyTrackSummary
+    replayed: bool
+    retry_after_seconds: Literal[2]
+
+    @model_validator(mode="after")
+    def validate_polling_guidance(self) -> DailyTrackRefreshOutcome:
+        if self.track.status != "active":
+            raise ValueError("DailyTrack Refresh outcome has an illegal status")
+        expected = daily_track_polling_retry_after_seconds(
+            status=self.track.status,
+            phase="queued",
+        )
+        if self.retry_after_seconds != expected:
+            raise ValueError("DailyTrack Refresh polling guidance does not match its outcome")
         return self
 
 
@@ -251,6 +277,7 @@ class DailyTrackPollingTiming(BaseModel):
 class DailyTrackActionEligibility(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    refresh: bool
     retry: bool
     stop: bool
 

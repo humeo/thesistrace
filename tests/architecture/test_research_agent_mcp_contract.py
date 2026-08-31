@@ -26,6 +26,9 @@ from thesistrace.daily_track import (
     DailyTrackInvalidCursor,
     DailyTrackList,
     DailyTrackPollingDetail,
+    DailyTrackRefreshConflict,
+    DailyTrackRefreshOutcome,
+    DailyTrackRefreshUnavailable,
     DailyTrackResultSectionInput,
     DailyTrackResultSectionResponse,
     DailyTrackResultUnavailable,
@@ -37,6 +40,7 @@ from thesistrace.daily_track import (
     DailyTrackStopUnavailable,
     DailyTrackSummary,
     DailyTrackTemporarilyUnavailable,
+    RefreshDailyTrackCommand,
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
 )
@@ -338,6 +342,11 @@ class _DailyTrackReader:
             replayed=False,
             retry_after_seconds=2,
         )
+        self.refresh_outcome: DailyTrackRefreshOutcome | None = DailyTrackRefreshOutcome(
+            track=_daily_track_summary(),
+            replayed=False,
+            retry_after_seconds=2,
+        )
         self.stop_outcome: DailyTrackStopOutcome | None = DailyTrackStopOutcome(
             track=DailyTrackSummary.model_validate(
                 {**_daily_track_summary().model_dump(mode="python"), "status": "stopped"}
@@ -346,6 +355,7 @@ class _DailyTrackReader:
             retry_after_seconds=None,
         )
         self.retry_commands: list[tuple[str, RetryDailyTrackCommand]] = []
+        self.refresh_commands: list[tuple[str, RefreshDailyTrackCommand]] = []
         self.stop_commands: list[tuple[str, StopDailyTrackCommand]] = []
         self.failure: Exception | None = None
 
@@ -394,6 +404,18 @@ class _DailyTrackReader:
             raise self.failure
         self.retry_commands.append((track_id, command))
         return self.retry_outcome
+
+    def refresh_with_outcome(
+        self,
+        researcher_id: UUID,
+        track_id: str,
+        command: RefreshDailyTrackCommand,
+    ) -> DailyTrackRefreshOutcome | None:
+        assert researcher_id == TEST_RESEARCHER_ID
+        if self.failure is not None:
+            raise self.failure
+        self.refresh_commands.append((track_id, command))
+        return self.refresh_outcome
 
     def stop_with_outcome(
         self,
@@ -569,7 +591,7 @@ def _daily_track_polling_detail() -> DailyTrackPollingDetail:
                 "observed_at": datetime(2024, 2, 1, tzinfo=UTC),
             },
             "blocked_reason": None,
-            "action_eligibility": {"retry": False, "stop": True},
+            "action_eligibility": {"refresh": False, "retry": False, "stop": True},
             "available_result_sections": list(DAILY_TRACK_RESULT_SECTIONS),
             "retry_after_seconds": 30,
         }
@@ -1365,7 +1387,7 @@ def test_registry_projects_daily_track_history_detail_start_and_expected_errors(
     assert missing.error.code == "NOT_FOUND"
 
 
-def test_registry_maps_daily_track_retry_stop_outcomes_authority_and_errors() -> None:
+def test_registry_maps_daily_track_refresh_retry_stop_outcomes_authority_and_errors() -> None:
     reader = _DailyTrackReader()
     default = _registry(daily_tracks=reader)
 
@@ -1405,6 +1427,23 @@ def test_registry_maps_daily_track_retry_stop_outcomes_authority_and_errors() ->
     assert missing_result.error is not None
     assert missing_result.error.code == "NOT_FOUND"
     reader.result_section = _daily_track_factor_result_section()
+
+    refreshed = default.invoke(
+        "refresh_daily_track",
+        {"track_id": "track_test", "request_id": " refresh_request "},
+        trace_id="trace_track_refresh",
+    )
+    assert refreshed.result is not None
+    assert refreshed.result.model_dump(mode="json") == {
+        "outcome": "accepted",
+        "track_id": "track_test",
+        "status": "active",
+        "replayed": False,
+        "retry_after_seconds": 2,
+    }
+    assert reader.refresh_commands == [
+        ("track_test", RefreshDailyTrackCommand(request_id="refresh_request"))
+    ]
 
     retried = default.invoke(
         "retry_daily_track",
@@ -1469,10 +1508,25 @@ def test_registry_maps_daily_track_retry_stop_outcomes_authority_and_errors() ->
     assert confirmation.error.code == "INVALID_INPUT"
 
     for action, failure, code in (
+        (
+            "refresh_daily_track",
+            DailyTrackRefreshConflict("conflict"),
+            "IDEMPOTENCY_CONFLICT",
+        ),
+        (
+            "refresh_daily_track",
+            DailyTrackRefreshUnavailable("state"),
+            "STATE_CONFLICT",
+        ),
         ("retry_daily_track", DailyTrackRetryConflict("conflict"), "IDEMPOTENCY_CONFLICT"),
         ("retry_daily_track", DailyTrackRetryUnavailable("state"), "STATE_CONFLICT"),
         ("stop_daily_track", DailyTrackStopConflict("conflict"), "IDEMPOTENCY_CONFLICT"),
         ("stop_daily_track", DailyTrackStopUnavailable("state"), "STATE_CONFLICT"),
+        (
+            "refresh_daily_track",
+            DailyTrackTemporarilyUnavailable("database"),
+            "TEMPORARILY_UNAVAILABLE",
+        ),
         (
             "retry_daily_track",
             DailyTrackTemporarilyUnavailable("database"),
@@ -1485,7 +1539,7 @@ def test_registry_maps_daily_track_retry_stop_outcomes_authority_and_errors() ->
         ),
     ):
         reader.failure = failure
-        selected = default if action == "retry_daily_track" else stopper
+        selected = stopper if action == "stop_daily_track" else default
         failed = selected.invoke(
             action,
             {"track_id": "track_test", "request_id": f"{action}_failure"},
@@ -1503,6 +1557,14 @@ def test_registry_maps_daily_track_retry_stop_outcomes_authority_and_errors() ->
     )
     assert retry_missing.error is not None
     assert retry_missing.error.code == "NOT_FOUND"
+    reader.refresh_outcome = None
+    refresh_missing = default.invoke(
+        "refresh_daily_track",
+        {"track_id": "track_missing", "request_id": "refresh_missing"},
+        trace_id="trace_refresh_missing",
+    )
+    assert refresh_missing.error is not None
+    assert refresh_missing.error.code == "NOT_FOUND"
     reader.stop_outcome = None
     stop_missing = stopper.invoke(
         "stop_daily_track",
@@ -1525,12 +1587,16 @@ def test_daily_track_action_outcomes_enforce_authoritative_polling_guidance() ->
         {**active.model_dump(mode="python"), "status": "stopped"}
     )
 
+    DailyTrackRefreshOutcome(track=active, replayed=False, retry_after_seconds=2)
     DailyTrackRetryOutcome(track=active, replayed=False, retry_after_seconds=2)
     DailyTrackRetryOutcome(track=blocked, replayed=False, retry_after_seconds=None)
     DailyTrackStopOutcome(track=stopping, replayed=False, retry_after_seconds=2)
     DailyTrackStopOutcome(track=stopped, replayed=False, retry_after_seconds=None)
 
     for model, track, retry_after_seconds in (
+        (DailyTrackRefreshOutcome, active, 1),
+        (DailyTrackRefreshOutcome, blocked, 2),
+        (DailyTrackRefreshOutcome, stopped, 2),
         (DailyTrackRetryOutcome, active, None),
         (DailyTrackRetryOutcome, blocked, 2),
         (DailyTrackRetryOutcome, stopped, None),
@@ -1600,7 +1666,11 @@ def test_registry_separates_read_execute_and_destructive_tracking_discovery() ->
         "get_daily_track_result",
         "list_daily_tracks",
     }
-    assert tracking_executor_tools == {"retry_daily_track", "start_daily_track"}
+    assert tracking_executor_tools == {
+        "refresh_daily_track",
+        "retry_daily_track",
+        "start_daily_track",
+    }
     assert tracking_stopper_tools == {"stop_daily_track"}
     assert all("retry" not in name and "delete" not in name for name in reader_tools)
     assert all("retry" not in name and "delete" not in name for name in executor_tools)
@@ -1633,15 +1703,16 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
         "get_daily_track",
         "get_daily_track_result",
         "start_daily_track",
+        "refresh_daily_track",
         "retry_daily_track",
         "stop_daily_track",
     }
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "e8b89ba3c72a653bc4a706ff89f9f0fb58ce3b8386f8c65201941734e95af8e7"
+        "b011d1801f2dc5040f15519cfbef609c6dfdaaca3827732bb33f43d1e18ee32e"
     )
-    assert len(canonical) == 148486
+    assert len(canonical) == 151707
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -1912,6 +1983,7 @@ async def _exercise_in_memory_protocol() -> None:
             "get_daily_track",
             "get_daily_track_result",
             "start_daily_track",
+            "refresh_daily_track",
             "retry_daily_track",
             "list_research_batches",
             "get_research_batch",
@@ -1935,19 +2007,27 @@ async def _exercise_in_memory_protocol() -> None:
             assert tool.annotations.open_world_hint is False
             if tool.name in {
                 "start_daily_track",
+                "refresh_daily_track",
                 "retry_daily_track",
                 "submit_research_batch",
                 "submit_research_run",
             }:
                 assert tool.annotations.read_only_hint is False
-                if tool.name in {"start_daily_track", "retry_daily_track"}:
+                if tool.name in {
+                    "start_daily_track",
+                    "refresh_daily_track",
+                    "retry_daily_track",
+                }:
                     assert tool.input_schema["additionalProperties"] is False
                     if tool.name == "start_daily_track":
                         assert "non-succeeded" in tool.description
                         assert "duplicate origins" in tool.description
                         assert "active capacity" in tool.description
-                    else:
+                    elif tool.name == "retry_daily_track":
                         assert "blocked" in tool.description
+                    else:
+                        assert "latest available Dataset Head" in tool.description
+                        assert "another Refresh" in tool.description
                     assert "get_daily_track" in tool.description
                     assert "retry_after_seconds" in tool.description
                     continue

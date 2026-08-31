@@ -28,12 +28,15 @@ from thesistrace.daily_track import (
     DailyTrackDetailUnavailable,
     DailyTrackInvalidCursor,
     DailyTrackList,
+    DailyTrackRefreshConflict,
+    DailyTrackRefreshUnavailable,
     DailyTrackRetryConflict,
     DailyTrackRetryUnavailable,
     DailyTrackStopConflict,
     DailyTrackStopUnavailable,
     DailyTrackSummary,
     DailyTrackTemporarilyUnavailable,
+    RefreshDailyTrackCommand,
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
 )
@@ -703,6 +706,32 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
         if not deleted:
             raise HTTPException(status_code=404, detail="DailyTrack not found")
+
+    @app.post(
+        "/api/daily-tracks/{track_id}/refresh",
+        response_model=DailyTrackSummary,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def refresh_daily_track(
+        request: Request,
+        track_id: str,
+        command: RefreshDailyTrackCommand,
+    ) -> DailyTrackSummary:
+        try:
+            track = _runtime(request).daily_tracks.refresh(
+                _researcher_id(request), track_id, command
+            )
+        except DailyTrackRefreshConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except DailyTrackRefreshUnavailable as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except DailyTrackTemporarilyUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if track is None:
+            raise HTTPException(status_code=404, detail="DailyTrack not found")
+        return track
 
     @app.post(
         "/api/daily-tracks/{track_id}/retry",

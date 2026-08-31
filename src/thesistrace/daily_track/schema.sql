@@ -22,6 +22,41 @@ CREATE TABLE daily_tracks.cursor_secrets (
 INSERT INTO daily_tracks.cursor_secrets (singleton) VALUES (1);
 
 --
+-- Name: refresh_receipts; Type: TABLE; Schema: daily_tracks; Owner: -
+--
+
+CREATE TABLE daily_tracks.refresh_receipts (
+    researcher_id uuid NOT NULL,
+    request_id text NOT NULL,
+    request_fingerprint text NOT NULL,
+    track_id text NOT NULL,
+    outcome jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT refresh_receipts_outcome_check CHECK (
+        jsonb_typeof(outcome) = 'object'::text
+        AND outcome ?& ARRAY[
+            'id', 'status', 'seed_run_id', 'result_checksum_sha256',
+            'origin_session', 'strategy_session'
+        ]
+        AND outcome - ARRAY[
+            'id', 'status', 'seed_run_id', 'result_checksum_sha256',
+            'origin_session', 'strategy_session'
+        ] = '{}'::jsonb
+        AND jsonb_typeof(outcome -> 'id') = 'string'
+        AND outcome ->> 'id' = track_id
+        AND jsonb_typeof(outcome -> 'status') = 'string'
+        AND outcome ->> 'status' = 'active'
+        AND jsonb_typeof(outcome -> 'seed_run_id') = 'string'
+        AND jsonb_typeof(outcome -> 'result_checksum_sha256') = 'string'
+        AND outcome ->> 'result_checksum_sha256' ~ '^[0-9a-f]{64}$'
+        AND jsonb_typeof(outcome -> 'origin_session') = 'string'
+        AND outcome ->> 'origin_session' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+        AND jsonb_typeof(outcome -> 'strategy_session') = 'string'
+        AND outcome ->> 'strategy_session' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+    )
+);
+
+--
 -- Name: retry_receipts; Type: TABLE; Schema: daily_tracks; Owner: -
 --
 
@@ -201,13 +236,21 @@ CREATE TABLE daily_tracks.tracks (
     origin jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     execution_fence bigint DEFAULT 0 NOT NULL,
-    queue_position bigint DEFAULT nextval('daily_tracks.work_queue_sequence') NOT NULL,
+    queue_position bigint,
     blocked_reason text,
     blocked_progression_id text,
     CONSTRAINT tracks_lifecycle_state_check CHECK ((((status = ANY (ARRAY['active'::text, 'stopping'::text, 'stopped'::text])) AND (blocked_progression_id IS NULL) AND (blocked_reason IS NULL)) OR ((status = 'blocked'::text) AND (blocked_progression_id IS NOT NULL) AND (blocked_reason IS NOT NULL)))),
     CONSTRAINT tracks_origin_check CHECK ((jsonb_typeof(origin) = 'object'::text)),
     CONSTRAINT tracks_status_check CHECK ((status = ANY (ARRAY['active'::text, 'blocked'::text, 'stopping'::text, 'stopped'::text])))
 );
+
+
+--
+-- Name: refresh_receipts refresh_receipts_pkey; Type: CONSTRAINT; Schema: daily_tracks; Owner: -
+--
+
+ALTER TABLE ONLY daily_tracks.refresh_receipts
+    ADD CONSTRAINT refresh_receipts_pkey PRIMARY KEY (researcher_id, request_id);
 
 
 --
@@ -376,6 +419,16 @@ CREATE UNIQUE INDEX daily_tracks_one_live_session_attempt_idx ON daily_tracks.se
 --
 
 CREATE UNIQUE INDEX daily_tracks_one_unresolved_session_progression_idx ON daily_tracks.session_progressions USING btree (track_id) WHERE (status = ANY (ARRAY['running'::text, 'blocked'::text]));
+
+
+--
+-- Name: refresh_receipts refresh_receipts_track_fkey; Type: FK CONSTRAINT; Schema: daily_tracks; Owner: -
+--
+
+ALTER TABLE ONLY daily_tracks.refresh_receipts
+    ADD CONSTRAINT refresh_receipts_track_fkey
+    FOREIGN KEY (researcher_id, track_id)
+    REFERENCES daily_tracks.tracks(researcher_id, id) ON DELETE CASCADE;
 
 
 --

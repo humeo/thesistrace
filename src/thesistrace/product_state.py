@@ -26,6 +26,7 @@ PRODUCT_STATE_COUNT_NAMES = (
     "tracking_progressions",
     "tracking_attempts",
     "tracking_states",
+    "tracking_refresh_receipts",
     "tracking_retry_receipts",
     "tracking_stop_receipts",
     "publication_manifests",
@@ -85,6 +86,8 @@ def product_state_counts(
                     AS tracking_attempts,
                 (SELECT count(*) FROM daily_tracks.session_tracking_states)
                     AS tracking_states,
+                (SELECT count(*) FROM daily_tracks.refresh_receipts)
+                    AS tracking_refresh_receipts,
                 (SELECT count(*) FROM daily_tracks.retry_receipts)
                     AS tracking_retry_receipts,
                 (SELECT count(*) FROM daily_tracks.stop_receipts)

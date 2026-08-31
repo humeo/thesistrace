@@ -15,7 +15,7 @@ Data Operator prepares the current Dataset Head and CSI 300 Benchmark Snapshot
     -> a ResearchRun Attempt pins the Generation frozen at admission
     -> immutable Factor and Strategy Result
     -> optionally start a DailyTrack
-    -> later market sessions advance that Track
+    -> explicitly Refresh that Track after later market sessions publish
 ```
 
 The browser-visible resources are Data Overview, Research Folders, Research
@@ -544,14 +544,16 @@ blocks Tracking.
 active | blocked | stopping | stopped
 ```
 
-An active Track compares its latest successful session coordinate with the
-current Dataset Head and advances later Research Sessions in order. Each
-Tracking Advance freezes an exact capacity-planned Target containing the oldest
-1 through 64 unpublished sessions. Every Attempt retains that Target and pins
-one current Data Generation for its complete calculation. Only a complete
-immutable Checkpoint moves the Tracking Head to the Target boundary. Longer
-catch-up and Dataset Head growth use later Advances rather than changing work
-already accepted by an existing Advance.
+An active Track reports the lag between its latest successful session coordinate
+and the current Dataset Head but does not advance merely because Head moved. One
+explicit, idempotent DailyTrack Refresh queues one Tracking Advance for an
+active, lagging, idle Track. Each Advance freezes an exact capacity-planned
+Target containing the oldest 1 through 64 unpublished sessions. Every Attempt
+retains that Target and pins one current Data Generation for its complete
+calculation. Only a complete immutable Checkpoint moves the Tracking Head to the
+Target boundary. Longer catch-up and later Dataset Head growth require another
+explicit Refresh rather than changing or automatically following work already
+accepted by an existing Advance.
 
 A Tracking Attempt Cycle contains one initial Attempt plus at most two automatic
 Attempts for transient infrastructure failure. Retry delays of 5 then 30 seconds
@@ -688,13 +690,14 @@ Advance, Pin, Working Cache, Tracking Checkpoint, and publication, while its
 single child has only read access to the frozen Canonical Data Generation and
 returns bounded calculation data.
 
-Eligible DailyTracks rotate fairly. A Track receives at most one Advance
-Attempt before returning behind other eligible Tracks, including after a
-successful bounded Advance that leaves more lag. Transient retries use their
-durable next-eligible time and rejoin the same rotation; multiple Tracking
-Workers may claim different Tracks but never the same Track concurrently.
-Waiting and backoff belong to the Advance and Cycle. An Attempt is created in
-`running` only when a Tracking Worker claims one eligible execution.
+Explicitly refreshed DailyTracks rotate fairly. A Track receives at most one
+Advance Attempt for each accepted Refresh. A successful bounded Advance that
+leaves more lag returns to idle rather than requeueing itself. Transient retries
+use their durable next-eligible time and rejoin the same rotation; multiple
+Tracking Workers may claim different Tracks but never the same Track
+concurrently. Waiting and backoff belong to the Advance and Cycle. An Attempt
+is created in `running` only when a Tracking Worker claims one explicitly
+queued execution.
 
 One Attempt creates exactly one child. A Research child handles Chunks
 sequentially and waits after each result until the supervisor durably commits and

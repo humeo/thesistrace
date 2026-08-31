@@ -13,6 +13,8 @@ from thesistrace.daily_track import (
     DailyTrackInvalidCursor,
     DailyTrackList,
     DailyTrackPollingDetail,
+    DailyTrackRefreshConflict,
+    DailyTrackRefreshUnavailable,
     DailyTrackResultSectionInput,
     DailyTrackResultSectionResponse,
     DailyTrackResultUnavailable,
@@ -21,8 +23,12 @@ from thesistrace.daily_track import (
     DailyTrackStopConflict,
     DailyTrackStopUnavailable,
     DailyTrackTemporarilyUnavailable,
+    RefreshDailyTrackCommand,
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
+)
+from thesistrace.daily_track import (
+    DailyTrackRefreshOutcome as DomainDailyTrackRefreshOutcome,
 )
 from thesistrace.daily_track import (
     DailyTrackRetryOutcome as DomainDailyTrackRetryOutcome,
@@ -47,6 +53,8 @@ from thesistrace.research_agent.models import (
     ListDailyTracksInput,
     ListResearchBatchesInput,
     ListResearchRunsInput,
+    RefreshDailyTrackInput,
+    RefreshDailyTrackOutcome,
     ResearchAgentAuthority,
     ResearchAgentErrorCode,
     ResearchAgentScope,
@@ -230,6 +238,13 @@ class DailyTrackReader(Protocol):
         command: RetryDailyTrackCommand,
     ) -> DomainDailyTrackRetryOutcome | None: ...
 
+    def refresh_with_outcome(
+        self,
+        researcher_id: UUID,
+        track_id: str,
+        command: RefreshDailyTrackCommand,
+    ) -> DomainDailyTrackRefreshOutcome | None: ...
+
     def stop_with_outcome(
         self,
         researcher_id: UUID,
@@ -338,6 +353,7 @@ RESEARCH_AGENT_TOOL_NAMES = frozenset(
         "get_daily_track",
         "get_daily_track_result",
         "start_daily_track",
+        "refresh_daily_track",
         "retry_daily_track",
         "stop_daily_track",
     }
@@ -482,6 +498,21 @@ class ResearchAgentCapabilityRegistry:
                 output_model=StartDailyTrackOutcome,
                 annotations=EFFECTFUL_TOOL_ANNOTATIONS,
                 handler=self.start_daily_track,
+            ),
+            ResearchAgentCapability(
+                name="refresh_daily_track",
+                description=(
+                    "Queue one explicit advance of an active, lagging, idle DailyTrack "
+                    "to the latest available Dataset Head; requires tracking:execute, "
+                    "is non-destructive and idempotent by request_id, and continues after "
+                    "the MCP connection closes. A later Dataset Head requires another "
+                    "Refresh. Poll get_daily_track after retry_after_seconds."
+                ),
+                required_scope=ResearchAgentScope.TRACKING_EXECUTE,
+                input_model=RefreshDailyTrackInput,
+                output_model=RefreshDailyTrackOutcome,
+                annotations=EFFECTFUL_TOOL_ANNOTATIONS,
+                handler=self.refresh_daily_track,
             ),
             ResearchAgentCapability(
                 name="retry_daily_track",
@@ -935,6 +966,35 @@ class ResearchAgentCapabilityRegistry:
         if outcome is None:
             raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
         return RetryDailyTrackOutcome(
+            track_id=outcome.track.id,
+            status=outcome.track.status,
+            replayed=outcome.replayed,
+            retry_after_seconds=outcome.retry_after_seconds,
+        )
+
+    def refresh_daily_track(
+        self,
+        track_id: str,
+        request_id: str,
+    ) -> RefreshDailyTrackOutcome:
+        self._require(ResearchAgentScope.TRACKING_EXECUTE)
+        try:
+            outcome = self._modules.daily_tracks.refresh_with_outcome(
+                self._authority.researcher_id,
+                track_id,
+                RefreshDailyTrackCommand(request_id=request_id),
+            )
+        except DailyTrackRefreshConflict as error:
+            raise ResearchAgentExpectedFailure(
+                ResearchAgentErrorCode.IDEMPOTENCY_CONFLICT
+            ) from error
+        except DailyTrackRefreshUnavailable as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.STATE_CONFLICT) from error
+        except DailyTrackTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
+        if outcome is None:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
+        return RefreshDailyTrackOutcome(
             track_id=outcome.track.id,
             status=outcome.track.status,
             replayed=outcome.replayed,

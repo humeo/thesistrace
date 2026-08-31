@@ -149,7 +149,7 @@ def main() -> None:
         elif phase == "persisted":
             result = _verify_persisted_state(api_origin, settings, expected)
         elif phase == "transient-failed":
-            result = _verify_transient_retry_wait(settings, expected)
+            result = _verify_transient_retry_wait(api_origin, settings, expected)
         elif phase == "after":
             result = _after_restart(api_origin, settings, expected)
         elif phase == "reset-ready":
@@ -1370,6 +1370,15 @@ def _after_restart(
         {"request_id": "production-image-smoke-financial-retry"},
     )
     assert retried["status"] in {"active", "catching_up"}
+    first_advanced = _wait_for_track(api_origin, track_id, "2026-08-06")
+    assert first_advanced["status"] == "active"
+    refreshed = _request_json(
+        api_origin,
+        "POST",
+        f"/api/daily-tracks/{track_id}/refresh",
+        {"request_id": "production-image-smoke-financial-catch-up-refresh"},
+    )
+    assert refreshed["status"] == "active"
     advanced = _wait_for_track(api_origin, track_id, "2026-08-11")
     assert advanced["status"] == "active"
     assert advanced["blocked_reason"] is None
@@ -1588,11 +1597,25 @@ def _verify_persisted_state(
 
 
 def _verify_transient_retry_wait(
+    api_origin: str,
     settings: CoreSettings,
     expected: dict[str, object],
 ) -> dict[str, object]:
     track_id = str(expected["track_id"])
     market_track_id = str(expected["market_track_id"])
+    stop_track_id = str(expected["stop_track_id"])
+    for queued_track_id, request_id in (
+        (track_id, "production-image-smoke-financial-refresh"),
+        (market_track_id, "production-image-smoke-market-refresh"),
+        (stop_track_id, "production-image-smoke-stop-track-refresh"),
+    ):
+        refreshed = _request_json(
+            api_origin,
+            "POST",
+            f"/api/daily-tracks/{queued_track_id}/refresh",
+            {"request_id": request_id},
+        )
+        assert refreshed["status"] == "active"
     database = PostgresDatabase(settings.database_url)
     database.open()
     deadline = time.monotonic() + 20

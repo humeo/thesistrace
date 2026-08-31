@@ -49,14 +49,30 @@ export type DailyTrackDetail = {
 };
 
 type DailyTrackList = { items: DailyTrackSummary[]; next_cursor: string | null };
-type LoadState = "loading" | "refreshing" | null;
+type LoadState = "loading" | "reloading" | null;
+type RefreshState = "submitting" | "accepted" | null;
 type RetryState = "submitting" | "accepted" | null;
 type StopState = "submitting" | "accepted" | null;
 
 export function dailyTrackNeedsPolling(
-  status: DailyTrackDetail["status"],
+  track: Pick<DailyTrackDetail, "status" | "progress">,
 ): boolean {
-  return status === "stopping";
+  return track.status === "stopping" || [
+    "queued",
+    "retry_wait",
+    "starting",
+    "calculating",
+    "result_ready",
+    "staging",
+  ].includes(track.progress.phase);
+}
+
+export function dailyTrackCanRefresh(
+  track: Pick<DailyTrackDetail, "status" | "lag_sessions" | "progress">,
+): boolean {
+  return track.status === "active"
+    && track.lag_sessions > 0
+    && track.progress.phase === "waiting";
 }
 
 export function DailyTracksPage({ trackId }: { trackId?: string }) {
@@ -65,6 +81,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const [error, setError] = useState(false);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const [advanceState, setAdvanceState] = useState<RefreshState>(null);
   const [retryState, setRetryState] = useState<RetryState>(null);
   const [stopState, setStopState] = useState<StopState>(null);
   const [deleting, setDeleting] = useState(false);
@@ -74,6 +91,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const deleteController = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    setAdvanceState(null);
     setRetryState(null);
     setStopState(null);
     setDeleteError(null);
@@ -99,8 +117,10 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
           const nextTrack = (await response.json()) as DailyTrackDetail;
           if (generation !== loadGeneration.current) return;
           setTrack(nextTrack);
-          if (dailyTrackNeedsPolling(nextTrack.status)) {
+          if (dailyTrackNeedsPolling(nextTrack)) {
             timeout = window.setTimeout(() => void load(true), 500);
+          } else {
+            setAdvanceState(null);
           }
         } else {
           const nextItems = ((await response.json()) as DailyTrackList).items;
@@ -125,10 +145,29 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     };
   }, [refreshGeneration, trackId]);
 
-  function refresh() {
+  function reloadStatus() {
     setRetryState(null);
-    setLoadState("refreshing");
+    setLoadState("reloading");
     setRefreshGeneration((value) => value + 1);
+  }
+
+  async function refreshToLatestData() {
+    if (!trackId || !track || !dailyTrackCanRefresh(track)) return;
+    setAdvanceState("submitting");
+    try {
+      const response = await coreFetch(`/api/daily-tracks/${trackId}/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: `refresh_${crypto.randomUUID()}` }),
+      });
+      if (!response.ok) throw new Error("DailyTrack Refresh was not accepted");
+      await response.json();
+      setAdvanceState("accepted");
+      setRefreshGeneration((value) => value + 1);
+    } catch {
+      setAdvanceState(null);
+      setError(true);
+    }
   }
 
   async function retryBlockedTrack() {
@@ -205,7 +244,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       <section aria-label="Daily Tracks" className="state-section">
         <h1>DailyTrack</h1>
         <p role="alert">DailyTrack unavailable</p>
-        <button onClick={refresh}>Retry</button>
+        <button onClick={reloadStatus}>Retry</button>
       </section>
     );
   }
@@ -228,7 +267,17 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
             <h1>DailyTrack</h1>
           </div>
           <div className="page-header-actions">
-            <button disabled={loadState !== null || deleting} onClick={refresh}>Reload</button>
+            {track.status === "active" ? (
+              <button
+                disabled={!dailyTrackCanRefresh(track) || advanceState !== null}
+                onClick={() => void refreshToLatestData()}
+              >
+                Refresh to latest data
+              </button>
+            ) : null}
+            <button disabled={loadState !== null || deleting} onClick={reloadStatus}>
+              Reload status
+            </button>
             {track.status === "blocked" ? (
               <button
                 disabled={retryState === "submitting"}
@@ -255,8 +304,14 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
         {track.status === "active" || track.status === "blocked" ? (
           <p>Stopping this DailyTrack is irreversible.</p>
         ) : null}
-        {loadState === "refreshing" ? (
-          <p role="status">Refreshing DailyTrack…</p>
+        {loadState === "reloading" ? (
+          <p role="status">Reloading DailyTrack status…</p>
+        ) : null}
+        {advanceState === "submitting" ? (
+          <p role="status">Queuing DailyTrack Refresh…</p>
+        ) : null}
+        {advanceState === "accepted" ? (
+          <p role="status">DailyTrack Refresh accepted.</p>
         ) : null}
         {retryState === "submitting" ? (
           <p role="status">Retrying blocked DailyTrack…</p>

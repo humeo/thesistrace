@@ -65,6 +65,7 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0109 — Pin one canonical numeric execution and serialization contract](0109-pin-one-canonical-numeric-execution-and-serialization-contract.md)
 - [ADR-0214 — Select Factor Evaluation or Strategy Backtest within ResearchRun](0214-select-factor-evaluation-or-strategy-backtest-within-researchrun.md)
 - [ADR-0216 — Make Research Batch a durable orchestration resource](0216-make-research-batch-a-durable-orchestration-resource.md)
+- [ADR-0234 — Require explicit DailyTrack Refresh](0234-require-explicit-dailytrack-refresh.md)
 
 ## Core runtime, storage, and data lifecycle
 
