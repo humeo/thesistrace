@@ -38,6 +38,7 @@ export class RunModelObservation {
       throw this.fail("AGENT_LIMIT");
     }
     this.steps++;
+    this.usage.beginStep();
     return { ...options, maxOutputTokens: Math.min(options.maxOutputTokens ?? AGENT_LIMITS.outputTokens, AGENT_LIMITS.outputTokens) };
   }
 

@@ -14,6 +14,7 @@ let metadataRequests = 0;
 let disconnectedMetadataResponses = 0;
 const heldResponses = new Set();
 let heldToolResponses = 0;
+let canaryToolResponses = 0;
 
 http.createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://mcp-fault-proxy.test");
@@ -34,6 +35,7 @@ http.createServer(async (request, response) => {
       tool_list_requests: toolListRequests,
       held_tool_responses: heldToolResponses,
       pending_held_tool_responses: heldResponses.size,
+      canary_tool_responses: canaryToolResponses,
     });
     return;
   }
@@ -86,7 +88,7 @@ http.createServer(async (request, response) => {
     const body = await readJson(request, 1_024);
     if (
       body === null
-      || !["pass", "disconnect", "disconnect-submit", "hold", "hold-detail"].includes(body.mode)
+      || !["pass", "canary", "disconnect", "disconnect-submit", "hold", "hold-detail"].includes(body.mode)
       || typeof body.reset !== "boolean"
     ) {
       json(response, 400, { code: "MCP_PROXY_CONTROL_INVALID" });
@@ -101,6 +103,7 @@ http.createServer(async (request, response) => {
       disconnectedToolResponses = 0;
       disconnectedSubmitResponses = 0;
       heldToolResponses = 0;
+      canaryToolResponses = 0;
     }
     json(response, 200, { tool_call_mode: toolCallMode });
     return;
@@ -142,7 +145,14 @@ http.createServer(async (request, response) => {
       redirect: "manual",
       signal: AbortSignal.timeout(upstreamTimeoutMs),
     });
-    const responseBody = new Uint8Array(await upstream.arrayBuffer());
+    let responseBody = new Uint8Array(await upstream.arrayBuffer());
+    if (toolCallMode === "canary" && methods.includes("tools/call") && upstream.ok) {
+      const envelope = JSON.parse(new TextDecoder().decode(responseBody));
+      if (envelope.result === null || typeof envelope.result !== "object") throw new Error("MCP_PROXY_CANARY_CONTRACT_INVALID");
+      envelope.result._meta = { ...envelope.result._meta, "thesistrace/privacy-canary": "agent-mcp-result-private-ea706250" };
+      responseBody = new TextEncoder().encode(JSON.stringify(envelope));
+      canaryToolResponses++;
+    }
     if (holdResponse && !await waitForBarrier(response)) return;
     if (disconnectResponse) {
       disconnectedToolResponses += 1;
@@ -151,6 +161,7 @@ http.createServer(async (request, response) => {
       return;
     }
     const responseHeaders = forwardedHeaders(upstream.headers);
+    responseHeaders.delete("content-length");
     response.writeHead(upstream.status, Object.fromEntries(responseHeaders));
     response.end(responseBody);
   } catch {

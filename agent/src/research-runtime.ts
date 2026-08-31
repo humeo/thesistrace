@@ -60,6 +60,8 @@ import { verifyAgentSchema } from "./schema-contract.js";
 import { RunUsageCapture } from "./usage-capture.js";
 import { AGENT_LIMITS, RunModelObservation } from "./guarded-language-model.js";
 import { providerFailureCode } from "./run-failure.js";
+import { agentTraceId, createRunTelemetry, type AgentTelemetryWriter } from "./run-telemetry.js";
+import { PRIVACY_CANARIES } from "./scripted-privacy-model.js";
 
 const RESEARCH_AGENT_ID = "research";
 const RESEARCH_AGENT_INSTRUCTIONS = `You are the ThesisTrace Research Agent.
@@ -101,6 +103,7 @@ export type ResearchRuntime = Readonly<{
 export type ResearchRuntimeDependencies = Readonly<{
   mcpRunFactory?: McpRunFactory;
   readinessFetch?: typeof globalThis.fetch;
+  telemetry?: AgentTelemetryWriter;
 }>;
 
 export async function createResearchRuntime(
@@ -267,6 +270,8 @@ export async function createResearchRuntime(
           researcherId,
           run: validated,
           runMaxWallMs: settings.runMaxWallSeconds * 1_000,
+          telemetry: dependencies.telemetry,
+          traceId: agentTraceId(request.headers),
           titleGenerator,
           titleSelection,
           usageCapture,
@@ -358,6 +363,8 @@ function createRunAgent(options: Readonly<{
   researcherId: string;
   run: ValidatedChatRun;
   runMaxWallMs: number;
+  telemetry: AgentTelemetryWriter | undefined;
+  traceId: string;
   titleGenerator: SessionTitleGenerator;
   titleSelection: ResolvedModelSelection;
   usageCapture: RunUsageCapture;
@@ -384,6 +391,18 @@ function createRunAgent(options: Readonly<{
     researcherId: options.researcherId,
     run: options.run,
     runMaxWallMs: options.runMaxWallMs,
+    telemetry: createRunTelemetry({
+      modelKey: options.run.modelKey,
+      providerModelId: options.providerModelId,
+      reasoningEffort: options.run.reasoningEffort,
+      researcherId: options.researcherId,
+      runId: options.run.input.runId,
+      threadId: options.run.input.threadId,
+      traceId: options.traceId,
+    }, {
+      metrics: () => ({ steps: options.modelObservation.steps, usage: options.usageCapture.value() }),
+      write: options.telemetry,
+    }),
     scheduleTitle: () => options.titleGenerator.schedule({
       languageModel: options.titleSelection.languageModel,
       message: options.run.latestUserMessage.content,
@@ -544,9 +563,12 @@ function mcpRunFrom(context: RequestContext): import("./mcp-run.js").McpRun | un
 
 function researchAgentInstructions(context: RequestContext): string {
   const agentRunId = context.get<string, string | undefined>("agentRunId");
+  const instructions = selectionFrom(context).model.providerAdapter === "scripted"
+    ? `${RESEARCH_AGENT_INSTRUCTIONS}\nDeterministic privacy fixture: ${PRIVACY_CANARIES.system}.`
+    : RESEARCH_AGENT_INSTRUCTIONS;
   return agentRunId === undefined
-    ? RESEARCH_AGENT_INSTRUCTIONS
-    : `${RESEARCH_AGENT_INSTRUCTIONS}\nAgent Run identity: ${agentRunId}.`;
+    ? instructions
+    : `${instructions}\nAgent Run identity: ${agentRunId}.`;
 }
 
 function safeJsonResponse(code: string, status: number): Response {

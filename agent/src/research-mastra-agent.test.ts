@@ -7,6 +7,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { ValidatedChatRun } from "./chat-request.js";
 import type { McpRun } from "./mcp-run.js";
 import { ResearchMastraAgent } from "./research-mastra-agent.js";
+import { createRunTelemetry, type AgentTelemetryEvent } from "./run-telemetry.js";
 import {
   SAFE_TOOL_COMPLETED,
   SAFE_TOOL_FAILED,
@@ -439,6 +440,22 @@ test("a slow title never delays the terminal event or Runner release", async () 
   expect(titleCompleted).toBe(true);
 });
 
+test("a rejected A2UI without a native Tool Result is counted once, not a failed Run", async () => {
+  const { agent, input, telemetryEvents } = testAgent({
+    agentStream: async () => ({ processDataStream: async ({ onChunk }: { onChunk: (chunk: unknown) => Promise<void> }) => {
+      await onChunk({ type: "tool-call", payload: { toolCallId: "rejected-render", toolName: "render_a2ui", args: {} } });
+      await onChunk({ type: "tool-error", payload: { toolCallId: "rejected-render", error: new Error("private-invalid-a2ui") } });
+    } }),
+    mcpRun: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }),
+    runMaxWallMs: 1_000,
+  });
+  const events = await lastValueFrom(agent.run(input).pipe(toArray()));
+  expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+  expect(telemetryEvents.map((event) => [event.event, event.error_category])).toEqual([
+    ["agent_run_accepted", null], ["agent_tool_finished", "TOOL_REJECTION"], ["agent_run_finished", null],
+  ]);
+});
+
 function testAgent(options: Readonly<{
   agentStream?: () => Promise<unknown>;
   mcpRun: () => Promise<McpRun>;
@@ -492,6 +509,7 @@ function testAgent(options: Readonly<{
   } as unknown as MastraAgentConfig;
   const scheduleTitle = vi.fn(async () => undefined);
   const pendingBridges = new Set<Promise<void>>();
+  const telemetryEvents: AgentTelemetryEvent[] = [];
   const agent = new ResearchMastraAgent(bridgeConfig, {
     agentBuildRevision: "test-build",
     failure: () => undefined,
@@ -504,9 +522,14 @@ function testAgent(options: Readonly<{
     run,
     runMaxWallMs: options.runMaxWallMs,
     scheduleTitle,
+    telemetry: createRunTelemetry({
+      modelKey: run.modelKey, providerModelId: "scripted-v1", reasoningEffort: run.reasoningEffort,
+      researcherId: "00000000-0000-4000-8000-000000000010",
+      threadId: input.threadId, runId: input.runId, traceId: input.runId,
+    }, { metrics: () => ({ steps: 0, usage: undefined }), write: (event) => { telemetryEvents.push(event); } }),
     usage: () => undefined,
   });
-  return { agent, input, pendingBridges, repository, requestContext, scheduleTitle };
+  return { agent, input, pendingBridges, repository, requestContext, scheduleTitle, telemetryEvents };
 }
 
 function deferred<T>() {

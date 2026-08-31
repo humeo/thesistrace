@@ -5,6 +5,9 @@ settings:
   excludeLinksFromLockfile: false
   injectWorkspacePackages: true
 
+patchedDependencies:
+  '@ag-ui/mastra@1.1.1': 73d6dc738481caa7ef2764bcffc2bb0b76b2ae62d617b1909ffa2f6a7f8ce18b
+
 importers:
 
   .: {}
@@ -22,7 +25,7 @@ importers:
         version: 0.0.57
       '@ag-ui/mastra':
         specifier: 1.1.1
-        version: 1.1.1(@ag-ui/client@0.0.57)(@ag-ui/core@0.0.57)(@copilotkit/runtime@1.69.3(@cfworker/json-schema@4.1.1)(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(ws@8.21.3))(@langchain/langgraph-sdk@1.10.0(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@opentelemetry/api@1.9.1)(debug@4.4.3(supports-color@7.2.0))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(ws@8.21.3))(@opentelemetry/api@1.9.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@7.2.0)(vitest@3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(happy-dom@20.12.0)(supports-color@7.2.0)))(@mastra/client-js@1.42.3(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))
+        version: 1.1.1(patch_hash=73d6dc738481caa7ef2764bcffc2bb0b76b2ae62d617b1909ffa2f6a7f8ce18b)(@ag-ui/client@0.0.57)(@ag-ui/core@0.0.57)(@copilotkit/runtime@1.69.3(@cfworker/json-schema@4.1.1)(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(ws@8.21.3))(@langchain/langgraph-sdk@1.10.0(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@opentelemetry/api@1.9.1)(debug@4.4.3(supports-color@7.2.0))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(ws@8.21.3))(@opentelemetry/api@1.9.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@7.2.0)(vitest@3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(happy-dom@20.12.0)(supports-color@7.2.0)))(@mastra/client-js@1.42.3(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))
       '@ai-sdk/anthropic':
         specifier: 3.0.114
         version: 3.0.114(zod@4.4.3)
@@ -81,6 +84,9 @@ importers:
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
+      esbuild:
+        specifier: 0.25.12
+        version: 0.25.12
       typescript:
         specifier: 5.7.3
         version: 5.7.3
@@ -4861,8 +4867,8 @@ snapshots:
       - react-dom
       - ws
 
-  '@ag-ui/mastra@1.1.1(@ag-ui/client@0.0.57)(@ag-ui/core@0.0.57)(@copilotkit/runtime@1.69.3(@cfworker/json-schema@4.1.1)(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(ws@8.21.3))(@langchain/langgraph-sdk@1.10.0(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@opentelemetry/api@1.9.1)(debug@4.4.3(supports-color@7.2.0))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(ws@8.21.3))(@opentelemetry/api@1.9.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@7.2.0)(vitest@3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(happy-dom@20.12.0)(supports-color@7.2.0)))(@mastra/client-js@1.42.3(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))':
-    dependencies:
+  ? '@ag-ui/mastra@1.1.1(patch_hash=73d6dc738481caa7ef2764bcffc2bb0b76b2ae62d617b1909ffa2f6a7f8ce18b)(@ag-ui/client@0.0.57)(@ag-ui/core@0.0.57)(@copilotkit/runtime@1.69.3(@cfworker/json-schema@4.1.1)(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(ws@8.21.3))(@langchain/langgraph-sdk@1.10.0(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(@opentelemetry/api@1.9.1)(debug@4.4.3(supports-color@7.2.0))(langchain@1.5.10(@langchain/core@1.2.9(@opentelemetry/api@1.9.1)(ws@8.21.3))(@opentelemetry/api@1.9.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(ws@8.21.3))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(supports-color@7.2.0)(vitest@3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(happy-dom@20.12.0)(supports-color@7.2.0)))(@mastra/client-js@1.42.3(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))'
+  : dependencies:
       '@ag-ui/a2ui-toolkit': 0.0.4
       '@ag-ui/client': 0.0.57
       '@ag-ui/core': 0.0.57

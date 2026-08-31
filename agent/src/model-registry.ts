@@ -32,7 +32,7 @@ const registryModelSchema = z
     enabled: z.boolean(),
     key: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
     provider_adapter: z.enum(providerAdapters),
-    provider_model_id: z.string().min(1).max(200).refine(isCanonicalText),
+    provider_model_id: z.string().refine(isProviderModelId),
     reasoning_efforts: z.array(reasoningEffortSchema).min(1).max(reasoningEfforts.length),
     secret_env: z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/),
   })
@@ -156,6 +156,11 @@ function isCanonicalText(value: string): boolean {
   return value.trim() === value
     && value.length > 0
     && !/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(value);
+}
+
+export function isProviderModelId(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 200
+    && /^[A-Za-z0-9][A-Za-z0-9._:-]*(?:\/[A-Za-z0-9][A-Za-z0-9._:-]*)*$/.test(value);
 }
 
 function invalidConfiguration(): AgentConfigurationError {

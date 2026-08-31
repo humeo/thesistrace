@@ -30,7 +30,7 @@ import type { AgentSettings } from "./config.js";
 import { chatRunFingerprint, readValidatedChatRun } from "./chat-request.js";
 import { createMcpRunFactory, type McpRun } from "./mcp-run.js";
 import { readModelRegistry } from "./model-registry.js";
-import { createResearchRuntime, type ResearchRuntime } from "./research-runtime.js";
+import { createResearchRuntime as createRuntime, type ResearchRuntime, type ResearchRuntimeDependencies } from "./research-runtime.js";
 import { initializeAgentSchema } from "./schema-initialize.js";
 import {
   SCRIPTED_FACTOR_IDEA_PROMPT,
@@ -123,6 +123,12 @@ const createIntegrationRuntime = () => createResearchRuntime(settings, {
     tools: {},
   }),
 });
+
+// Production stdout/stderr is checked by the final-image Canary test. Other
+// real-PG cases do not need hundreds of repeated, content-free metric lines.
+function createResearchRuntime(configuration: AgentSettings, dependencies: ResearchRuntimeDependencies = {}) {
+  return createRuntime(configuration, { telemetry: () => undefined, ...dependencies });
+}
 
 describe.sequential("durable Research Agent runtime", () => {
   beforeAll(async () => {
@@ -525,10 +531,15 @@ describe.sequential("durable Research Agent runtime", () => {
     try {
       await vi.waitFor(() => expect(detailWaiting).toBe(true), { timeout: 3_000 });
       const repository = new ResearchSessionRepository(agentStore);
-      const before = await repository.connectionSnapshot(threadId, primaryResearcher.researcher_id);
-      expect(before.latestRun).toMatchObject({ id: runId, status: "running" });
-      expect(before.messages.some((message) => message.role === "tool"
-        && parseSafeToolResult(message.content)?.resource?.id === coreRunId)).toBe(true);
+      // Entering a later Tool is not a commit barrier: native savePerStep can
+      // still be flushing the preceding Assistant message. Wait for the actual
+      // durable condition before testing shutdown, not for scheduling luck.
+      await vi.waitFor(async () => {
+        const before = await repository.connectionSnapshot(threadId, primaryResearcher.researcher_id);
+        expect(before.latestRun).toMatchObject({ id: runId, status: "running" });
+        expect(before.messages.some((message) => message.role === "tool"
+          && parseSafeToolResult(message.content)?.resource?.id === coreRunId)).toBe(true);
+      }, { timeout: 3_000 });
 
       let closed = false;
       const closing = runtime.close().then(() => { closed = true; });

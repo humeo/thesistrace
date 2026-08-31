@@ -144,6 +144,23 @@ describe.sequential("Agent physical schema", () => {
     });
   });
 
+  it.each(["auth_runtime", "core_runtime"])("denies %s access to existing Agent chat content", async (role) => {
+    await initializeAgentSchema(owner);
+    await runtime.query(`INSERT INTO agent.mastra_messages
+      (id, thread_id, content, role, type, "createdAt", "resourceId")
+      VALUES ('permission-message', 'permission-thread', 'private-chat-permission-canary', 'user', 'text', '2026-08-31T00:00:00', 'permission-researcher')`);
+    const exists = await runtime.query("SELECT count(*)::integer AS count FROM agent.mastra_messages");
+    expect(exists.rows).toEqual([{ count: 1 }]);
+    const other = new Pool({ connectionString: roleDatabaseUrl(
+      ownerDatabaseUrl, role, role === "auth_runtime" ? "auth-test-password" : "core-test-password",
+    ), max: 1 });
+    try {
+      await expect(other.query("SELECT content FROM agent.mastra_messages")).rejects.toMatchObject({ code: "42501" });
+      await expect(other.query("SELECT * FROM agent.chat_session")).rejects.toMatchObject({ code: "42501" });
+      await expect(other.query("SELECT * FROM agent.agent_run")).rejects.toMatchObject({ code: "42501" });
+    } finally { await other.end(); }
+  });
+
   it("fails startup verification on foreign or broadened Agent grants", async () => {
     await initializeAgentSchema(owner);
     await owner.query("GRANT USAGE ON SCHEMA data TO agent_runtime");

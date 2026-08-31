@@ -1,0 +1,15 @@
+{
+  "user": "agent-user-private-719e6e46",
+  "assistant": "agent-assistant-private-a65279dc",
+  "system": "agent-system-private-524e188b",
+  "formula": "rank(-abs(pct_change(close, 1))) + 0.719264873",
+  "hypothesis": "agent-hypothesis-private-23474fe0",
+  "a2ui": "agent-a2ui-private-f316f507",
+  "mcp_argument": "agent-mcp-argument-private-6a1fea62",
+  "mcp_result": "agent-mcp-result-private-ea706250",
+  "cookie": "agent-cookie-private-62c688bc",
+  "access_token": "agent-access-token-private-d3432fd9",
+  "provider_key": "agent-provider-key-private-2529dabd",
+  "provider_error": "agent-provider-error-private-6c19b77e",
+  "path": "/private/agent-path-canary-6e5c1f92/research.sql"
+}

@@ -2,19 +2,34 @@ import type { LanguageModelV3Usage } from "@ai-sdk/provider";
 
 export class RunUsageCapture {
   private usage: PersistedTokenUsage | undefined;
+  private startedSteps = 0;
+  private reportedSteps = 0;
+  private unreported = false;
+
+  beginStep(): void {
+    this.startedSteps++;
+  }
 
   capture(usage: LanguageModelV3Usage): void {
     try {
-      this.usage = normalizeTokenUsage(usage);
+      const next = normalizeTokenUsage(usage);
+      this.usage = this.usage === undefined ? next : {
+        reported: true,
+        inputTokens: addCounters(this.usage.inputTokens, next.inputTokens),
+        outputTokens: addCounters(this.usage.outputTokens, next.outputTokens),
+      };
+      this.reportedSteps++;
     } catch {
       // Accounting is non-critical. A malformed usage object is unreported,
       // never invented zero usage and never a failed primary Agent run.
       this.usage = undefined;
+      this.unreported = true;
     }
   }
 
   value(): PersistedTokenUsage | undefined {
-    return this.usage === undefined ? undefined : structuredClone(this.usage);
+    return this.unreported || this.startedSteps > this.reportedSteps || this.usage === undefined
+      ? undefined : structuredClone(this.usage);
   }
 }
 
@@ -46,7 +61,7 @@ export type PersistedTokenUsage = Readonly<{
   }>;
 }>;
 
-function normalizeTokenUsage(usage: LanguageModelV3Usage): PersistedTokenUsage {
+export function normalizeTokenUsage(usage: LanguageModelV3Usage): PersistedTokenUsage {
   return {
     reported: true,
     inputTokens: {
@@ -61,6 +76,15 @@ function normalizeTokenUsage(usage: LanguageModelV3Usage): PersistedTokenUsage {
       total: tokenCount(usage.outputTokens.total),
     },
   };
+}
+
+function addCounters<T extends Record<string, number | null>>(left: T, right: T): T {
+  return Object.fromEntries(Object.keys(left).map((key) => {
+    const a = left[key];
+    const b = right[key];
+    const sum = a === null || b === null ? null : a! + b!;
+    return [key, sum !== null && Number.isSafeInteger(sum) ? sum : null];
+  })) as T;
 }
 
 function tokenCount(value: number | undefined): number | null {

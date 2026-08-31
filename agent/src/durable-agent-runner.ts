@@ -9,6 +9,7 @@ import {
 import { EventType, type BaseEvent } from "@ag-ui/core";
 import {
   Observable,
+  catchError,
   concat,
   concatMap,
   defer,
@@ -77,8 +78,10 @@ export class DurableResearchAgentRunner extends AgentRunner {
         : safeRunError());
     }
     const a2ui = new ResearchA2UIEventProjector();
+    let presentationFailed = false;
     const source = accepted.pipe(
       concatMap((event) => defer(async () => {
+        if (presentationFailed) return [];
         const batch = a2ui.project(event);
         for (const activity of batch.activities) {
           await this.repository.persistA2UIActivity({
@@ -101,7 +104,17 @@ export class DurableResearchAgentRunner extends AgentRunner {
           });
         }
         return events;
-      }).pipe(mergeMap((events) => from(events)))),
+      }).pipe(
+        catchError(() => {
+          // A storage/projection exception must not reach CopilotKit's raw
+          // SSE error logger. Keep consuming the native Run until terminal so
+          // Session deletion/concurrency cannot race still-running work.
+          presentationFailed = true;
+          return of([safeConnectionError()]);
+        }),
+        mergeMap((events) => from(events)),
+      )),
+      catchError(() => of(safeConnectionError())),
     );
     const events = source.pipe(
       tap({
@@ -181,6 +194,7 @@ export class DurableResearchAgentRunner extends AgentRunner {
           live,
         );
       }),
+      catchError(() => of(safeConnectionError())),
     );
   }
 

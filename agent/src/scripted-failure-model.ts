@@ -1,6 +1,7 @@
 import { APICallError, type LanguageModelV3CallOptions, type LanguageModelV3StreamPart } from "@ai-sdk/provider";
 import { latestUserText, toolObservations } from "./scripted-research-support.js";
 import { SCRIPTED_FAILURE_AFTER_ADMISSION_PROMPT } from "./scripted-research-model.js";
+import { PRIVACY_CANARIES } from "./scripted-privacy-model.js";
 
 export const SCRIPTED_FAILURE_PROMPTS = Object.freeze({
   PROVIDER_TIMEOUT: "[scripted-provider-timeout] Test a bounded provider timeout.",
@@ -39,7 +40,7 @@ export function scriptedFailureStream(options: LanguageModelV3CallOptions) {
   if (code === "PROVIDER_AUTHENTICATION" || code === "PROVIDER_RATE_LIMIT") {
     throw new APICallError({ message: "private-provider-canary", url: "https://private.invalid", requestBodyValues: "private-prompt-canary", statusCode: code === "PROVIDER_AUTHENTICATION" ? 401 : 429 });
   }
-  if (code === "INTERNAL_FAILURE") throw new Error("private-unexpected-canary");
+  if (code === "INTERNAL_FAILURE") throw new Error(`${PRIVACY_CANARIES.provider_error} ${PRIVACY_CANARIES.path}`);
   if (code === "PROVIDER_MALFORMED_STREAM") return parts([{ type: "malformed", private: "private-stream-canary" } as unknown as LanguageModelV3StreamPart]);
   return parts([textStart, textDelta, textEnd, {
     ...finish, finishReason: { unified: code === "AGENT_LIMIT" ? "length" : "content-filter", raw: "scripted" },

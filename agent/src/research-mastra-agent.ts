@@ -29,6 +29,8 @@ import type { AgentFailureCode } from "../../contracts/agent-failure.mjs";
 import type { RunSelection } from "../../contracts/agent-run-selection.mjs";
 import { runFailureEvent } from "./run-failure.js";
 import { AgentRunFailure, providerFailureCode } from "./run-failure.js";
+import type { RunTelemetry } from "./run-telemetry.js";
+import { projectResearchA2UIContent } from "../../contracts/research-a2ui.mjs";
 
 type ResearchExecutionContext = Readonly<{
   agentBuildRevision: string;
@@ -42,6 +44,7 @@ type ResearchExecutionContext = Readonly<{
   run: ValidatedChatRun;
   runMaxWallMs: number;
   scheduleTitle: () => Promise<void>;
+  telemetry: RunTelemetry;
   usage: () => PersistedTokenUsage | undefined;
 }>;
 
@@ -90,6 +93,13 @@ export class ResearchMastraAgent extends MastraAgent {
       let activeMcpRun: McpRun | undefined;
       let mcpRunPromise: Promise<McpRun> | undefined;
       let mcpClosePromise: Promise<void> | undefined;
+      const observedTools = new Map<string, "mcp" | "a2ui">();
+      const finishPendingTools = (failure: AgentFailureCode | null) => {
+        for (const kind of observedTools.values()) {
+          this.execution.telemetry.toolFinished(failure ?? (kind === "a2ui" ? "TOOL_REJECTION" : "TOOL_ERROR"));
+        }
+        observedTools.clear();
+      };
       // CopilotKit's outer A2UI middleware must see the framework render Tool
       // stream. The Durable Runner is the final boundary that removes those
       // raw payloads after it has produced a validated Activity snapshot.
@@ -124,6 +134,7 @@ export class ResearchMastraAgent extends MastraAgent {
           researcherId: this.execution.researcherId,
           run: this.execution.run,
         });
+        if (prepared.kind === "new") this.execution.telemetry.accepted();
         shouldScheduleTitle = prepared.kind === "new" && prepared.generateTitle;
         // The first accepted message owns title generation, but the title is
         // not part of the Agent Run lifecycle. Start it once admission is
@@ -178,6 +189,11 @@ export class ResearchMastraAgent extends MastraAgent {
               // The durable acceptance event above is the sole RUN_STARTED.
               concatMap((event) => {
                 if (event.type === EventType.RUN_STARTED) return from([]);
+                if (event.type === EventType.TOOL_CALL_START
+                  && typeof event.toolCallId === "string" && typeof event.toolCallName === "string") {
+                  if (activeMcpRun !== undefined && Object.hasOwn(activeMcpRun.tools, event.toolCallName)) observedTools.set(event.toolCallId, "mcp");
+                  else if (A2UI_FRAMEWORK_TOOL_NAMES.has(event.toolCallName)) observedTools.set(event.toolCallId, "a2ui");
+                }
                 const toolCallId = event.type === EventType.TOOL_CALL_RESULT
                   && typeof event.toolCallId === "string"
                   ? event.toolCallId
@@ -185,8 +201,15 @@ export class ResearchMastraAgent extends MastraAgent {
                 const toolFailure = toolCallId === undefined
                   ? undefined
                   : activeMcpRun?.toolFailure(toolCallId);
+                if (toolCallId !== undefined && observedTools.has(toolCallId)) {
+                  const failure = observedTools.get(toolCallId) === "a2ui"
+                    ? a2uiFailure(event.content) : toolFailure?.code ?? null;
+                  observedTools.delete(toolCallId);
+                  this.execution.telemetry.toolFinished(failure);
+                }
                 if (toolFailure?.fatal === true) {
                   this.terminalStarted = true;
+                  finishPendingTools(toolFailure.code);
                   // Emit the safe failed Tool result, persist the terminal Run
                   // failure, then unsubscribe from any already-buffered model
                   // output. This prevents a later RUN_FINISHED from racing the
@@ -202,6 +225,9 @@ export class ResearchMastraAgent extends MastraAgent {
                   || event.type === EventType.RUN_FINISHED
                 ) {
                   this.terminalStarted = true;
+                  // Native validation may emit tool-error with no AG-UI Tool
+                  // Result. Its pending invocation still needs one observation.
+                  finishPendingTools(this.execution.failure() ?? (event.type === EventType.RUN_ERROR ? "INTERNAL_FAILURE" : null));
                 }
                 return this.persistTerminalEvent(
                   event,
@@ -229,7 +255,9 @@ export class ResearchMastraAgent extends MastraAgent {
             return from(closeMcp()).pipe(map(() => runFailureEvent(providerFailureCode(error))));
           }
           this.terminalStarted = true;
-          return this.persistFailure(input.runId, closeMcp, this.execution.failure() ?? providerFailureCode(error));
+          const code = this.execution.failure() ?? providerFailureCode(error);
+          finishPendingTools(code);
+          return this.persistFailure(input.runId, closeMcp, code);
         }),
       );
 
@@ -238,6 +266,7 @@ export class ResearchMastraAgent extends MastraAgent {
           disposed = true;
           if (ownsRun && !this.terminalStarted) {
             this.terminalStarted = true;
+            finishPendingTools("AGENT_RUN_INTERRUPTED");
             this.abortController.abort(new AgentRunFailure("AGENT_RUN_INTERRUPTED"));
             void this.failRun(input.runId, closeMcp, "AGENT_RUN_INTERRUPTED");
           } else {
@@ -288,6 +317,7 @@ export class ResearchMastraAgent extends MastraAgent {
     return from(
       this.execution.repository
         .markCompleted(runId, this.execution.usage())
+        .then(() => this.execution.telemetry.finished(null))
         .then(closeMcp),
     ).pipe(
       map(() => event),
@@ -327,6 +357,8 @@ export class ResearchMastraAgent extends MastraAgent {
       await this.execution.repository.awaitFrameworkRunSettled(runId);
     } catch {
       await closePromise;
+    } finally {
+      this.execution.telemetry.finished(code);
     }
   }
 }
@@ -364,6 +396,13 @@ function replayDuplicate(
 
 function safeRunError(): BaseEvent {
   return runFailureEvent("INTERNAL_FAILURE");
+}
+
+function a2uiFailure(content: unknown): AgentFailureCode | null {
+  try {
+    const projected = projectResearchA2UIContent(typeof content === "string" ? JSON.parse(content) : undefined);
+    return projected.valid && projected.kind === "ready" ? null : "TOOL_REJECTION";
+  } catch { return "TOOL_REJECTION"; }
 }
 
 function withTotalTimeout(

@@ -13,6 +13,7 @@ import { latestUserText, type ScriptedResearchDecision } from "./scripted-resear
 import { scriptedBatchDecision } from "./scripted-batch-model.js";
 import { scriptedDailyTrackDecision } from "./scripted-daily-track-model.js";
 import { scriptedFailureStream } from "./scripted-failure-model.js";
+import { scriptedPrivacyDecision } from "./scripted-privacy-model.js";
 
 export {
   SCRIPTED_START_DAILY_TRACK_PROMPT,
@@ -215,7 +216,7 @@ function scriptedResponse(options: LanguageModelV3CallOptions): ScriptedResponse
       tool: null,
     };
   }
-  const research = scriptedResearchDecision(options);
+  const research = scriptedPrivacyDecision(options) ?? scriptedResearchDecision(options);
   if (research !== null) return responseFromResearchDecision(research);
   const batch = scriptedBatchDecision(options);
   if (batch !== null) return responseFromResearchDecision(batch);

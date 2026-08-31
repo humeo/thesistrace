@@ -25,6 +25,37 @@ class HoldingAgent extends AbstractAgent {
 }
 
 describe("DurableResearchAgentRunner", () => {
+  it("keeps raw storage failures out of the framework SSE logger", async () => {
+    const runner = new DurableResearchAgentRunner({
+      connectionSnapshot: async () => { throw new Error("runner-private-storage-canary"); },
+    } as unknown as ResearchSessionRepository);
+    const result = await firstValueFrom(runner.connect({
+      threadId: randomUUID(), headers: { "x-thesistrace-agent-researcher-id": randomUUID() },
+    }).pipe(toArray())).then((events) => ({ failed: false, events }), () => ({ failed: true, events: [] }));
+    expect(result.failed, "raw storage exception escaped the public Runner stream").toBe(false);
+    expect(result.events).toMatchObject([{ type: "RUN_ERROR", code: "AGENT_UNAVAILABLE" }]);
+  });
+
+  it("a failed projection stays attached until native execution terminates", async () => {
+    const threadId = randomUUID(), runId = randomUUID();
+    const runner = new DurableResearchAgentRunner({
+      durableBrowserMessagesForThread: async () => { throw new Error("private-projection-canary"); },
+    } as unknown as ResearchSessionRepository);
+    const agent = new HoldingAgent();
+    const events: BaseEvent[] = [];
+    const done = new Promise<void>((resolve, reject) => runner.run({ agent, input: input(threadId, runId), threadId }).subscribe({ next: (event) => events.push(event), complete: resolve, error: reject }));
+    await vi.waitFor(() => expect(agent.events.observed).toBe(true));
+    agent.events.next({ type: EventType.RUN_STARTED, threadId, runId });
+    agent.events.next({ type: EventType.MESSAGES_SNAPSHOT, messages: [] });
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe("RUN_ERROR"));
+    await expect(runner.mutateSessionWhenIdle(threadId, async () => undefined)).rejects.toBeInstanceOf(SessionActiveRunError);
+    agent.events.next({ type: EventType.RUN_FINISHED, threadId, runId });
+    agent.events.complete();
+    await done;
+    expect(events.map((event) => event.type)).toEqual(["RUN_STARTED", "RUN_ERROR"]);
+    await expect(runner.mutateSessionWhenIdle(threadId, async () => true)).resolves.toBe(true);
+  });
+
   it("memoizes the same run and rejects a second active run on the Thread", async () => {
     const runner = new DurableResearchAgentRunner({} as ResearchSessionRepository);
     const agent = new HoldingAgent();

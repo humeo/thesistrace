@@ -172,4 +172,12 @@ describe("model Registry", () => {
       "Agent configuration is invalid",
     );
   });
+
+  it.each(["/private/model", "https://provider.test/model?key=private", "model private"])(
+    "rejects non-identifier Provider metadata",
+    (providerModelId) => {
+      expect(() => readModelRegistry(encoded({ models: [{ ...validRegistry.models[0], provider_model_id: providerModelId }] }), environment))
+        .toThrow("Agent configuration is invalid");
+    },
+  );
 });

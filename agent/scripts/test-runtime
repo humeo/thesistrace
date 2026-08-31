@@ -198,7 +198,7 @@ case "$command" in
       --no-align \
       --command "SELECT status || '|' || (token_usage->'outputTokens'->>'total') FROM agent.agent_run WHERE id='00000000-0000-4000-8000-000000000301'" \
       >"$evidence_root/run-row.txt"
-    grep -Fqx 'completed|12' "$evidence_root/run-row.txt"
+    grep -Fqx 'completed|24' "$evidence_root/run-row.txt"
 
     if compose run --rm --no-deps -T \
       -e THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET= \

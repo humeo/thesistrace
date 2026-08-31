@@ -19,7 +19,7 @@ resend_api_key=resend-test-key
 resend_from_email='ThesisTrace <noreply@thesistrace.test>'
 resend_api_url=http://resend-fake:8300
 agent_model_registry='{"default_model_key":"scripted-research","models":[{"default_reasoning_effort":"medium","display_name":"Scripted Research","enabled":true,"key":"scripted-research","provider_adapter":"scripted","provider_model_id":"scripted-v1","reasoning_efforts":["low","medium","high"],"secret_env":"THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"},{"default_reasoning_effort":"high","display_name":"Scripted Deep Research","enabled":true,"key":"scripted-deep-research","provider_adapter":"scripted","provider_model_id":"scripted-v2","reasoning_efforts":["high"],"secret_env":"THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"}]}'
-agent_scripted_model_secret=scripted-test-provider-secret
+agent_scripted_model_secret=agent-provider-key-private-2529dabd
 agent_build_revision=test-build-revision
 agent_run_max_wall_seconds=600
 mcp_access_token_ttl_seconds=660
@@ -322,7 +322,7 @@ capture_evidence() {
   compose ps --all --quiet | while IFS= read -r container_id; do
     test -n "$container_id" || continue
     docker inspect --format \
-      'id={{.Id}} name={{.Name}} image={{.Image}} status={{.State.Status}} running={{.State.Running}} exit_code={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} log_driver={{.HostConfig.LogConfig.Type}} log_max_size={{index .HostConfig.LogConfig.Config "max-size"}} log_max_file={{index .HostConfig.LogConfig.Config "max-file"}}' \
+      'id={{.Id}} name={{.Name}} image={{.Image}} status={{.State.Status}} running={{.State.Running}} exit_code={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} health={{with index .State "Health"}}{{.Status}}{{else}}none{{end}} log_driver={{.HostConfig.LogConfig.Type}} log_max_size={{index .HostConfig.LogConfig.Config "max-size"}} log_max_file={{index .HostConfig.LogConfig.Config "max-file"}}' \
       "$container_id" || true
   done >"$evidence_dir/container-inspect.txt" 2>&1
 }
@@ -856,8 +856,23 @@ finish() {
       status=$secret_cleanup_status
     fi
   fi
+  # Scan original logs and diagnostics on success as well as failure. A later
+  # redaction protects evidence but must never turn a leak into a passing run.
+  capture_evidence
+  compose logs --no-color agent >"$evidence_dir/agent-events.jsonl" 2>&1 || true
+  capture_worker_log_evidence
+  capture_api_log_evidence
+  capture_gateway_auth_log_evidence
+  if uv run python "$repo_root/tests/sanitize_production_mcp_evidence.py" \
+    scan "$evidence_dir" >"$evidence_dir/raw-canary-scan.json"; then
+    raw_canary_scan_status=0
+  else
+    raw_canary_scan_status=1
+    echo "content canary detected in original diagnostics; see sanitized categories" >&2
+    if [ "$status" -eq 0 ]; then status=1; fi
+  fi
+  printf 'raw_canary_scan_status=%s\n' "$raw_canary_scan_status" >>"$run_metadata"
   if [ "$status" -ne 0 ]; then
-    capture_evidence
     if sanitize_mcp_failure_evidence; then
       failure_evidence_sanitization_status=0
     else

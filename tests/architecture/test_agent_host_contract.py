@@ -59,6 +59,33 @@ def test_agent_host_is_a_private_node_package_without_research_authority() -> No
         assert forbidden_import not in source
 
 
+def test_agent_telemetry_has_no_content_store_or_framework_trace_exporter() -> None:
+    telemetry = (AGENT / "src" / "run-telemetry.ts").read_text()
+    runtime = (AGENT / "src" / "research-runtime.ts").read_text()
+    mcp = (AGENT / "src" / "mcp-run.ts").read_text()
+    assert "logger: noopLogger" in runtime
+    assert "client.__setLogger(noopLogger)" in mcp
+    assert "enableServerLogs: false" in mcp
+    assert 'import { write } from "node:fs"' in telemetry
+    for forbidden in (
+        "console.",
+        "query(",
+        "INSERT ",
+        "UPDATE ",
+        "saveMessages",
+        "span.set",
+        "JSON.stringify(error",
+    ):
+        assert forbidden not in telemetry
+    workspace = (ROOT / "pnpm-workspace.yaml").read_text()
+    assert "'@ag-ui/mastra@1.1.1': patches/@ag-ui__mastra@1.1.1.patch" in workspace
+    for image in ("agent", "auth", "web"):
+        dockerfile = (DEPLOY / f"Dockerfile.{image}").read_text()
+        assert dockerfile.index("COPY patches ./patches") < dockerfile.index(
+            "pnpm install --frozen-lockfile"
+        )
+
+
 def test_agent_compose_identity_receives_only_provider_and_process_configuration() -> None:
     compose = (DEPLOY / "compose.yaml").read_text()
     agent = _service(compose, "agent", "agent-initialize")

@@ -1896,7 +1896,7 @@ def test_failed_integration_captures_evidence_before_default_cleanup(
     assert commands.index("ps --all") < commands.index("down --volumes")
 
 
-def test_failed_runtime_sanitizes_then_scans_new_failure_evidence(
+def test_failed_runtime_detects_original_leak_before_sanitizing_evidence(
     tmp_path: Path,
 ) -> None:
     _, environment = _fake_test_runtime_commands(tmp_path)
@@ -1921,6 +1921,33 @@ def test_failed_runtime_sanitizes_then_scans_new_failure_evidence(
     metadata = (run_root / "run.txt").read_text()
     assert "failure_evidence_sanitization_status=0\n" in metadata
     assert "failure_canary_scan_status=0\n" in metadata
+    assert "raw_canary_scan_status=1\n" in metadata
+    assert json.loads((evidence / "raw-canary-scan.json").read_text())["status"] == "failed"
+
+
+def test_successful_runtime_is_failed_by_a_raw_log_canary(tmp_path: Path) -> None:
+    _, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_COMPOSE_LOGS"] = "agent-provider-error-private-6c19b77e"
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "integration"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert completed.returncode == 1
+    assert "agent-provider-error-private" not in completed.stdout + completed.stderr
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    run_root = tmp_path / "runs" / run_id
+    metadata = (run_root / "run.txt").read_text()
+    assert "raw_canary_scan_status=1\n" in metadata
+    assert "cleanup_status=0\n" in metadata
+    evidence = run_root / "evidence"
+    assert (evidence / "compose-logs.txt").read_text().strip() == "<redacted>"
+    report = json.loads((evidence / "raw-canary-scan.json").read_text())
+    assert report["status"] == "failed"
+    assert all(item["categories"] == ["provider_error"] for item in report["findings"])
 
 
 def test_cleanup_failure_is_reported_without_masking_the_test_failure(
