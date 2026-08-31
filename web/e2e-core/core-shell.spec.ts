@@ -160,6 +160,19 @@ test("Notes keeps multiline research context visible", async ({ page }) => {
   expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight);
 });
 
+test("Alpha formula editor keeps line numbers on the dark workbench surface", async ({ page }) => {
+  await page.goto("/research");
+
+  await expect(page.locator(".cm-gutters")).toHaveCSS(
+    "background-color",
+    "rgb(15, 16, 17)",
+  );
+  await expect(page.locator(".cm-activeLineGutter")).toHaveCSS(
+    "background-color",
+    "rgb(20, 21, 22)",
+  );
+});
+
 test("date inputs retain a browser-populated value when focus leaves the field", async ({ page }) => {
   await page.route("**/api/**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;

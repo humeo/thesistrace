@@ -17,7 +17,47 @@ import { alphaLanguageExtensions } from "./alpha-language";
 import type { FormulaDiagnostic } from "./diagnostics";
 import type { EditorState as StoredEditorState } from "./draft";
 
-const editorStylesheetUrl = new URL("./alpha-formula-editor.css?no-inline", import.meta.url).href;
+const alphaEditorTheme = EditorView.theme({
+  "&": {
+    height: "100%",
+    minHeight: "0",
+    color: "var(--ink)",
+    backgroundColor: "var(--canvas)",
+    font: "14px/1.65 var(--mono)",
+  },
+  "&.cm-focused": { outline: "0" },
+  ".cm-scroller": { height: "100%", overflow: "auto" },
+  ".cm-content": { padding: "14px 10px", caretColor: "var(--ink)" },
+  ".cm-gutters": {
+    minWidth: "36px",
+    color: "var(--ink-faint)",
+    backgroundColor: "var(--surface-1)",
+    borderRightColor: "var(--line)",
+  },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px 0 6px" },
+  ".cm-activeLine": { backgroundColor: "rgb(94 106 210 / .06)" },
+  ".cm-activeLineGutter": {
+    color: "var(--ink-soft)",
+    backgroundColor: "var(--surface-2)",
+  },
+  ".cm-placeholder": { color: "var(--ink-faint)", fontStyle: "normal" },
+  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
+    backgroundColor: "rgb(94 106 210 / .28) !important",
+  },
+  ".cm-alpha-function": { color: "#aab3ff", fontWeight: "500" },
+  ".cm-alpha-field": { color: "#8bd5ca", fontWeight: "500" },
+  ".cm-alpha-number": { color: "#7cc4ff" },
+  ".cm-alpha-operator": { color: "var(--ink-soft)" },
+  ".cm-tooltip": {
+    color: "var(--ink-muted)",
+    backgroundColor: "var(--surface-3)",
+    borderColor: "var(--line-strong)",
+  },
+  ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
+    color: "var(--ink)",
+    backgroundColor: "var(--primary)",
+  },
+}, { dark: true });
 
 export function AlphaFormulaEditor({
   catalog,
@@ -41,13 +81,6 @@ export function AlphaFormulaEditor({
   useEffect(() => {
     if (host.current === null) return;
     const root = host.current.shadowRoot ?? host.current.attachShadow({ mode: "open" });
-    if (root.querySelector("link[data-alpha-editor-styles]") === null) {
-      const stylesheet = document.createElement("link");
-      stylesheet.dataset.alphaEditorStyles = "";
-      stylesheet.href = editorStylesheetUrl;
-      stylesheet.rel = "stylesheet";
-      root.append(stylesheet);
-    }
     const options: Completion[] = [
       ...catalog.fields.map((field) => ({
         label: field.identifier,
@@ -73,6 +106,7 @@ export function AlphaFormulaEditor({
         highlightActiveLineGutter(),
         bracketMatching(),
         alphaLanguageExtensions,
+        alphaEditorTheme,
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({ "aria-labelledby": "alpha-formula-title", spellcheck: "false" }),
         placeholder("Start with a field or function"),
