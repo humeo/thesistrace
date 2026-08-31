@@ -208,7 +208,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   setAgentSessionTitle(durableSession, "Untitled");
   await page.reload();
   await expect(page.locator(".chat-session-title strong")).toHaveText("Untitled");
-  await expect(agentRunStatus(page)).toHaveText("Ready");
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
   const failedDelete = async (route: Route) => {
     if (route.request().method() !== "DELETE") {
       await route.continue();
@@ -393,7 +393,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
 
   await page.reload();
   await expect(page).toHaveURL(durableUrl);
-  await expect(agentRunStatus(page)).toHaveText("Ready");
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
   await expect(page.getByLabel("Model", { exact: true })).toHaveValue(
     "scripted-deep-research",
   );
@@ -734,7 +734,7 @@ test("a large A2UI table preserves column meaning and layout on a narrow screen"
   await expect(table.getByRole("cell").last()).toContainText("Sample 100:12");
   await testInfo.attach("a2ui-large-table-mobile.png", { body: await page.screenshot(), contentType: "image/png" });
   await page.reload();
-  await expect(agentRunStatus(page)).toHaveText("Ready");
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
   await disclosure.click();
   await expect(table.getByRole("cell")).toHaveCount(1200);
   await expectAccessibleNarrowTable(table, 12);
@@ -977,7 +977,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
     .toHaveCount(surfaceFactsBeforeReplay.a2ui);
   await page.reload();
   await expect(page).toHaveURL(durableUrl);
-  await expect(agentRunStatus(page)).toHaveText("Ready");
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
   await expect(page.getByRole("article", { name: "Research surface" }))
     .toHaveCount(surfaceFactsBeforeReplay.a2ui);
   await expect(page.getByRole("region", {
@@ -1239,9 +1239,7 @@ test("Chat fails closed on a real Auth exchange timeout and recovers", async ({ 
     await page.getByRole("button", { name: "Send message" }).click();
     expect((await runResponse).status()).toBe(200);
     await expect(agentRunStatus(page)).toHaveText("Run failed");
-    await expect(page.getByRole("alert")).toHaveText(
-      "The Research Agent could not complete this run.",
-    );
+    await expect(page.getByRole("alert")).toHaveAttribute("data-failure-code", "MCP_TRANSIENT");
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
@@ -1284,9 +1282,7 @@ test("a connected MCP Tool response disconnect becomes a durable failed Run and 
     await page.getByRole("button", { name: "Send message" }).click();
     expect((await runResponse).status()).toBe(200);
     await expect(agentRunStatus(page)).toHaveText("Run failed");
-    await expect(page.getByRole("alert")).toHaveText(
-      "The Research Agent could not complete this run.",
-    );
+    await expect(page.getByRole("alert")).toHaveAttribute("data-failure-code", "MCP_TRANSIENT");
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );

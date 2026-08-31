@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AgentSettings } from "./config.js";
 import { createMcpRunFactory } from "./mcp-run.js";
+import { AGENT_LIMITS } from "./guarded-language-model.js";
 import {
   DURABLE_TOOL_FAILURE,
   DURABLE_TOOL_OUTCOME_FIELD,
@@ -62,6 +63,40 @@ const discoveredTools = {
 };
 
 describe("per-Run MCP lifecycle", () => {
+  it("preserves MCP HTTP authentication without exposing the raw transport exception", async () => {
+    const run = await fixtureRun(async () => { throw new Error("private transport", { cause: Object.assign(new Error("private cause"), { status: 403 }) }); });
+    const result = await run.tools.fixture.execute?.({}, toolOptions("auth"));
+    expect(run.toolFailure("auth")).toEqual({ code: "MCP_AUTHENTICATION", fatal: true });
+    expect(JSON.stringify(result)).not.toContain("private");
+  });
+
+  it.each([
+    ["INVALID_INPUT", "TOOL_REJECTION", false],
+    ["FORBIDDEN", "MCP_AUTHENTICATION", true],
+    ["TEMPORARILY_UNAVAILABLE", "MCP_TRANSIENT", false],
+    ["INTERNAL", "TOOL_ERROR", false],
+  ])("classifies %s without a Host retry or losing Core guidance", async (code, category, fatal) => {
+    const result = adaptedCoreResult({ _meta: { [TOOL_OUTCOME_META_KEY]: "failed" },
+      content: [], isError: true, structuredContent: { code, retry_after_seconds: 3 } });
+    const execute = vi.fn(async () => result);
+    const run = await fixtureRun(execute);
+    await expect(run.tools.fixture.execute?.({}, toolOptions("call"))).resolves.toMatchObject({ code, retry_after_seconds: 3 });
+    expect(run.toolFailure("call")).toEqual({ code: category, fatal });
+    expect(run.hasFatalToolFailure()).toBe(fatal);
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an oversized Tool result before the model or Memory receives it", async () => {
+    const run = await fixtureRun(async () => adaptedCoreResult({
+      _meta: { [TOOL_OUTCOME_META_KEY]: "succeeded" }, content: [], isError: false,
+      structuredContent: { private: "x".repeat(AGENT_LIMITS.toolResultBytes + 1) },
+    }));
+    const result = await run.tools.fixture.execute?.({}, toolOptions("large"));
+    expect(run.toolFailure("large")).toEqual({ code: "AGENT_LIMIT", fatal: true });
+    expect(JSON.stringify(result).length).toBeLessThan(512);
+    expect(JSON.stringify(result)).not.toContain("private");
+  });
+
   it("pins the modern protocol and tracks failures for every discovered Core Tool", async () => {
     let clientOptions: Record<string, unknown> | undefined;
     const disconnect = vi.fn(async () => undefined);
@@ -109,7 +144,7 @@ describe("per-Run MCP lifecycle", () => {
       retry_after_seconds: 3,
       retryable: true,
     });
-    expect(run.toolFailure("business-call")).toBe("business");
+    expect(run.toolFailure("business-call")).toEqual({ code: "MCP_TRANSIENT", fatal: false });
     expect(run.hasFatalToolFailure()).toBe(false);
     await expect(
       run.tools.second_discovered_tool.execute?.(
@@ -118,13 +153,14 @@ describe("per-Run MCP lifecycle", () => {
       ),
     ).resolves.toEqual({
       [DURABLE_TOOL_OUTCOME_FIELD]: DURABLE_TOOL_FAILURE,
+      code: "MCP_TRANSIENT",
       content: [{
-        text: JSON.stringify({ code: "MCP_TRANSPORT_UNAVAILABLE" }),
+        text: JSON.stringify({ code: "MCP_TRANSIENT" }),
         type: "text",
       }],
       isError: true,
     });
-    expect(run.toolFailure("transport-call")).toBe("transport");
+    expect(run.toolFailure("transport-call")).toEqual({ code: "MCP_TRANSIENT", fatal: true });
     expect(run.hasFatalToolFailure()).toBe(true);
     expect(setLogger).toHaveBeenCalledOnce();
     const servers = clientOptions?.servers as Record<string, Record<string, unknown>>;
@@ -201,12 +237,12 @@ describe("per-Run MCP lifecycle", () => {
     releaseFailure.resolve();
     await expect(unavailable).resolves.toMatchObject({ isError: true });
     expect(run.toolFailure("successful-call")).toBeUndefined();
-    expect(run.toolFailure("failed-call")).toBe("transport");
+    expect(run.toolFailure("failed-call")).toEqual({ code: "MCP_TRANSIENT", fatal: true });
     releaseSuccess.resolve();
     await expect(successful).resolves.toEqual({ status: "ok" });
 
     expect(run.toolFailure("successful-call")).toBeUndefined();
-    expect(run.toolFailure("failed-call")).toBe("transport");
+    expect(run.toolFailure("failed-call")).toEqual({ code: "MCP_TRANSIENT", fatal: true });
   });
 
   it("rejects partial or empty discovery and disconnects the client", async () => {
@@ -236,12 +272,23 @@ describe("per-Run MCP lifecycle", () => {
         }),
       });
       await expect(create(new Headers(), "run-id")).rejects.toThrow(
-        "MCP Run preparation failed",
+        "MCP_TRANSIENT",
       );
       expect(disconnect).toHaveBeenCalledOnce();
     }
   });
 });
+
+async function fixtureRun(execute: () => Promise<unknown>) {
+  return createMcpRunFactory(settings, {
+    fetch: async () => Response.json({ access_token: "fixture-token", expires_in: 360, token_type: "Bearer" }),
+    mcpClient: () => ({ __setLogger: vi.fn(), disconnect: async () => undefined,
+      listToolsetsWithErrors: async () => ({ errors: {}, errorDetails: {}, toolsets: {
+        thesistrace: { fixture: { id: "fixture", description: "Fixture Tool", execute } as Tool<any, any, any, any> },
+      } }),
+    }),
+  })(new Headers(), "fixture-run");
+}
 
 type RawCoreResult = Readonly<{
   _meta: Record<string, unknown>;

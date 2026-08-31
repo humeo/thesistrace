@@ -22,7 +22,7 @@ const MAX_TOOL_CALL_ID_BYTES = 512;
 const TOOL_NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 const selectionSchema = z.object({
   modelKey: z.string(),
-  reasoningEffort: z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]),
+  reasoningEffort: z.string(),
   sessionMode: z.enum(["new", "existing"]),
 }).strict();
 
@@ -36,7 +36,7 @@ export type ValidatedChatRun = Readonly<{
 
 export class ChatRequestError extends Error {
   constructor(
-    readonly code: "CHAT_MESSAGE_TOO_LARGE" | "INVALID_CHAT_REQUEST",
+    readonly code: "AGENT_LIMIT" | "INVALID_CHAT_REQUEST" | "INVALID_MODEL" | "UNSUPPORTED_REASONING",
     readonly status: 400 | 413,
   ) {
     super(code);
@@ -80,12 +80,9 @@ export async function readValidatedChatRun(
   const model = registry.models.find(
     (candidate) => candidate.enabled && candidate.key === selection.data.modelKey,
   );
-  if (
-    model === undefined
-    || !model.reasoningEfforts.includes(selection.data.reasoningEffort)
-  ) {
-    throw invalidRequest();
-  }
+  if (model === undefined) throw new ChatRequestError("INVALID_MODEL", 400);
+  const reasoningEffort = model.reasoningEfforts.find((effort) => effort === selection.data.reasoningEffort);
+  if (reasoningEffort === undefined) throw new ChatRequestError("UNSUPPORTED_REASONING", 400);
 
   validateBrowserTranscript(input.messages);
   const latest = input.messages.at(-1);
@@ -98,7 +95,7 @@ export async function readValidatedChatRun(
     throw invalidRequest();
   }
   if (Buffer.byteLength(latest.content, "utf8") > MAX_CHAT_MESSAGE_BYTES) {
-    throw new ChatRequestError("CHAT_MESSAGE_TOO_LARGE", 413);
+    throw new ChatRequestError("AGENT_LIMIT", 413);
   }
 
   return {
@@ -109,7 +106,7 @@ export async function readValidatedChatRun(
       role: "user",
     },
     modelKey: model.key,
-    reasoningEffort: selection.data.reasoningEffort,
+    reasoningEffort,
     sessionMode: selection.data.sessionMode,
   };
 }

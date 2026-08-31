@@ -1,5 +1,8 @@
+// @vitest-environment happy-dom
+
 import type { AgentSubscriber } from "@ag-ui/client";
 import type { Message } from "@ag-ui/core";
+import { CopilotKitCoreReact } from "@copilotkit/react-core/v2/context";
 import { expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -7,6 +10,7 @@ import { AuthProvider } from "../auth/AuthProvider";
 import {
   AssistantMarkdown,
   ChatShell,
+  ChatFailureNotice,
   ToolActivityRow,
   chatMessageBytes,
   chatTimelineItems,
@@ -15,6 +19,8 @@ import {
   type ConversationStatus,
 } from "./ChatPage";
 import { chatSessionHref } from "./chatNavigation";
+import { createAgentFetch } from "./agentTransport";
+import { AGENT_FAILURE_CODES, agentFailure } from "../../../contracts/agent-failure.mjs";
 import {
   SessionHistoryList,
   sessionDialogErrorMessage,
@@ -217,6 +223,82 @@ test("counts the UTF-8 payload rather than JavaScript code units", () => {
   expect(chatMessageBytes("α")).toBe(2);
 });
 
+test.each(AGENT_FAILURE_CODES)("renders only safe copy and legal controls for %s", (code) => {
+  const markup = renderToStaticMarkup(<ChatFailureNotice code={code} onReconnect={vi.fn()} onRetry={vi.fn()} onRevise={vi.fn()} onSelectModel={vi.fn()} retryDisabled={false} />);
+  expect(markup).toContain(`data-failure-code="${code}"`);
+  expect(markup).toContain(agentFailure(code).label);
+  expect(markup).toContain('role="alert"');
+  expect(markup).not.toMatch(/confirm|approval|automatic retry|stack trace/i);
+  if (agentFailure(code).action === "reconnect") expect(markup).not.toContain("Retry with selected model");
+});
+
+test("replayed error remains one failed terminal state even if the client later reports an exception", async () => {
+  const setError = vi.fn();
+  const setStatus = vi.fn();
+  const onRunIdentity = vi.fn();
+  const attached = startExistingSessionConnection({
+    connect: async (subscriber) => {
+      await subscriber.onRunStartedEvent?.({ event: { runId: "stored-run", selection: { modelKey: "removed-model", providerModelId: "historical-id", reasoningEffort: "high" } } } as never);
+      await subscriber.onRunErrorEvent?.({ event: { code: "PROVIDER_RATE_LIMIT", message: "private-response-canary" } } as never);
+      await subscriber.onRunFailed?.({ error: new Error("private-sdk-canary") } as never);
+      await subscriber.onRunFinishedEvent?.({} as never);
+    },
+    failRunningTools: vi.fn(), finishTool: vi.fn(), onSessionChanged: vi.fn(), onRunIdentity,
+    onTitleMaySettle: vi.fn(), setError, setStatus, shouldWatchTitle: () => false, startTool: vi.fn(), threadId: "thread",
+  });
+  await attached.settled;
+  expect(setStatus.mock.calls.map(([value]) => value)).toEqual(["loading-history", "running", "failed"]);
+  expect(setError.mock.calls.map(([value]) => value)).toEqual([null, "PROVIDER_RATE_LIMIT"]);
+  expect(onRunIdentity).toHaveBeenCalledWith("stored-run", { modelKey: "removed-model", providerModelId: "historical-id", reasoningEffort: "high" });
+  attached.dispose();
+});
+
+test.each(["failed", "complete"] as const)("a real AG-UI reconnect preserves its received %s terminal after a later protocol failure", async (terminal) => {
+  const runtime = new CopilotKitCoreReact({ runtimeUrl: "http://runtime.test/api/agent/copilotkit", runtimeTransport: "rest", deferInitialConnection: true });
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ version: "1.69.3", agents: { research: {} }, mode: "sse" })));
+  const logging = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    runtime.connect();
+    await vi.waitFor(() => expect(runtime.runtimeConnectionStatus).toBe("connected"));
+    const { agent, unregister } = runtime.registerProxiedAgent({ agentId: "reconnect-fixture", runtimeAgentId: "research" });
+    try {
+      const threadId = "00000000-0000-4000-8000-000000000111";
+      agent.threadId = threadId;
+      let stream!: ReadableStreamDefaultController<Uint8Array>;
+      agent.fetch = createAgentFetch(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) {
+        stream = controller;
+        for (const event of [
+          { type: "RUN_STARTED", threadId, runId: "00000000-0000-4000-8000-000000000112" },
+          terminal === "failed"
+            ? { type: "RUN_ERROR", code: "PROVIDER_RATE_LIMIT", message: "Safe provider failure" }
+            : { type: "RUN_FINISHED", threadId, runId: "00000000-0000-4000-8000-000000000112" },
+        ]) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+      } }), { headers: { "content-type": "text/event-stream" } }));
+      const errors: Array<string | null> = [];
+      const statuses: ConversationStatus[] = [];
+      const attached = startExistingSessionConnection({
+        connect: async (subscriber) => { await agent.connectAgent(undefined, subscriber); },
+        failRunningTools: vi.fn(), finishTool: vi.fn(), onSessionChanged: vi.fn(), onRunIdentity: vi.fn(),
+        onTitleMaySettle: vi.fn(), shouldWatchTitle: () => false, startTool: vi.fn(), threadId,
+        setStatus: (status) => {
+          statuses.push(status);
+          if (status === terminal) {
+            // A trailing frame after the terminal makes the real AG-UI verifier
+            // reject connectAgent after it has already delivered the terminal.
+            stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: "TEXT_MESSAGE_CONTENT", messageId: "invalid-after-terminal", delta: "late" })}\n\n`));
+            stream.close();
+          }
+        },
+        setError: (code) => { errors.push(code); },
+      });
+      await attached.settled;
+      expect(errors).toEqual(terminal === "failed" ? [null, "PROVIDER_RATE_LIMIT"] : [null]);
+      expect(statuses).toEqual(["loading-history", "running", terminal]);
+      attached.dispose();
+    } finally { unregister(); }
+  } finally { logging.mockRestore(); vi.unstubAllGlobals(); }
+});
+
 test("keeps an active reconnect subscribed when its title settles before the terminal event", async () => {
   const connectionState: {
     resolve?: () => void;
@@ -256,8 +338,8 @@ test("keeps an active reconnect subscribed when its title settles before the ter
   expect(onTitleMaySettle).not.toHaveBeenCalled();
 
   connectionState.resolve?.();
-  await connection;
-  await vi.waitFor(() => expect(statuses.at(-1)).toBe("idle"));
+  await attached.settled;
+  expect(statuses.at(-1)).toBe("complete");
   attached.dispose();
 });
 

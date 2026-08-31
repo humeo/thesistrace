@@ -41,6 +41,7 @@ def test_agent_host_is_a_private_node_package_without_research_authority() -> No
         "@mastra/pg",
         "ai",
         "exit-hook",
+        "tokenx",
         "hono",
         "pg",
         "rxjs",

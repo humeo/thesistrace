@@ -148,7 +148,7 @@ export function latestUnresolvedTransportFailure(
 ): ToolObservation | undefined {
   for (let index = observations.length - 1; index >= 0; index -= 1) {
     const observation = observations[index];
-    if (observation?.output.code !== "MCP_TRANSPORT_UNAVAILABLE") continue;
+    if (observation?.output.code !== "MCP_TRANSIENT") continue;
     const laterReplay = observations.slice(index + 1).some((candidate) => (
       candidate.name === observation.name
       && canonicalJson(candidate.input) === canonicalJson(observation.input)

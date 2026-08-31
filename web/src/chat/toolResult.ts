@@ -20,6 +20,7 @@ export type SafeResearchRunResource = Readonly<{
 export type SafeToolResult = Readonly<{
   outcome: "completed" | "failed";
   resource?: SafeResearchRunResource;
+  failureCode?: ToolFailureCode;
 }>;
 
 export function parseSafeToolResult(value: unknown): SafeToolResult | null {
@@ -37,17 +38,21 @@ export function parseSafeToolResult(value: unknown): SafeToolResult | null {
   }
   if (
     !isRecord(parsed)
-    || !hasExactKeys(parsed, ["outcome", "type", "version"], ["resource"])
+    || !hasExactKeys(parsed, ["outcome", "type", "version"], ["resource", "failureCode"])
     || parsed.type !== SAFE_TOOL_RESULT_TYPE
     || parsed.version !== SAFE_TOOL_RESULT_VERSION
     || (parsed.outcome !== "completed" && parsed.outcome !== "failed")
   ) {
     return null;
   }
+  if (parsed.outcome === "failed") {
+    return parsed.resource === undefined && isToolFailureCode(parsed.failureCode)
+      ? { outcome: "failed", failureCode: parsed.failureCode } : null;
+  }
+  if (parsed.failureCode !== undefined) return null;
   if (parsed.resource === undefined) {
     return { outcome: parsed.outcome };
   }
-  if (parsed.outcome === "failed") return null;
   const resource = readResearchRunResource(parsed.resource);
   return resource === null
     ? null
@@ -92,3 +97,4 @@ function hasExactKeys(
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+import { isToolFailureCode, type ToolFailureCode } from "../../../contracts/agent-failure.mjs";

@@ -20,16 +20,22 @@ export type SafeResearchRunResource = Readonly<{
 export type SafeToolResult = Readonly<{
   outcome: "completed" | "failed";
   resource?: SafeResearchRunResource;
+  failureCode?: ToolFailureCode;
 }>;
 
 export const SAFE_TOOL_COMPLETED = encodeMarker({ outcome: "completed" });
-export const SAFE_TOOL_FAILED = encodeMarker({ outcome: "failed" });
+export const SAFE_TOOL_FAILED = encodeMarker({ outcome: "failed", failureCode: "TOOL_ERROR" });
 
 export function projectSafeToolResult(
   rawResult: unknown,
   failed: boolean,
 ): string {
-  if (failed) return SAFE_TOOL_FAILED;
+  if (failed) {
+    const payload = unwrapToolResult(rawResult);
+    const marker = parseSafeToolResult(rawResult);
+    return encodeMarker({ outcome: "failed", failureCode: marker?.outcome === "failed"
+      ? marker.failureCode : toolFailureCode(isRecord(payload) ? payload.code : undefined) });
+  }
   const resource = readResearchRunResource(rawResult);
   return resource === undefined
     ? SAFE_TOOL_COMPLETED
@@ -48,17 +54,21 @@ export function parseSafeToolResult(value: unknown): SafeToolResult | null {
   }
   if (
     !isRecord(parsed)
-    || !hasExactKeys(parsed, ["outcome", "type", "version"], ["resource"])
+    || !hasExactKeys(parsed, ["outcome", "type", "version"], ["resource", "failureCode"])
     || parsed.type !== SAFE_TOOL_RESULT_TYPE
     || parsed.version !== SAFE_TOOL_RESULT_VERSION
     || (parsed.outcome !== "completed" && parsed.outcome !== "failed")
   ) {
     return null;
   }
+  if (parsed.outcome === "failed") {
+    return parsed.resource === undefined && isToolFailureCode(parsed.failureCode)
+      ? { outcome: "failed", failureCode: parsed.failureCode } : null;
+  }
+  if (parsed.failureCode !== undefined) return null;
   if (parsed.resource === undefined) {
     return { outcome: parsed.outcome };
   }
-  if (parsed.outcome === "failed") return null;
   const resource = readExactResearchRunResource(parsed.resource);
   return resource === undefined
     ? null
@@ -124,6 +134,7 @@ function readExactResearchRunResource(
 function encodeMarker(marker: SafeToolResult): string {
   return JSON.stringify({
     outcome: marker.outcome,
+    ...(marker.failureCode === undefined ? {} : { failureCode: marker.failureCode }),
     ...(marker.resource === undefined ? {} : { resource: marker.resource }),
     type: SAFE_TOOL_RESULT_TYPE,
     version: SAFE_TOOL_RESULT_VERSION,
@@ -143,3 +154,4 @@ function hasExactKeys(
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
+import { isToolFailureCode, toolFailureCode, type ToolFailureCode } from "../../contracts/agent-failure.mjs";

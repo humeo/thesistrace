@@ -16,10 +16,7 @@ import {
   SCRIPTED_FAILURE_MODEL_ID,
   ScriptedLanguageModel,
 } from "./scripted-language-model.js";
-import {
-  RunUsageCapture,
-  UsageCapturingLanguageModel,
-} from "./usage-capture.js";
+import { GuardedLanguageModel, type RunModelObservation } from "./guarded-language-model.js";
 
 export type ResolvedModelSelection = Readonly<{
   effort: ReasoningEffort;
@@ -42,7 +39,7 @@ export class RegisteredModelRuntime {
   resolve(
     modelKey: string,
     effort: ReasoningEffort,
-    usageCapture?: RunUsageCapture,
+    observation?: RunModelObservation,
   ): ResolvedModelSelection {
     const model = this.registry.models.find(
       (candidate) => candidate.enabled && candidate.key === modelKey,
@@ -57,9 +54,9 @@ export class RegisteredModelRuntime {
     }
     return {
       effort,
-      languageModel: usageCapture === undefined
+      languageModel: observation === undefined
         ? languageModel
-        : new UsageCapturingLanguageModel(languageModel, usageCapture),
+        : new GuardedLanguageModel(languageModel, observation),
       model,
       providerOptions: providerOptionsFor(model, effort),
     };

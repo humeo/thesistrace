@@ -10,13 +10,27 @@ import {
   SAFE_TOOL_FAILED,
   safeToolResultMessageId,
 } from "./browser-message-safety.js";
-import { parseSafeToolResult } from "./safe-tool-result.js";
+import { parseSafeToolResult, projectSafeToolResult } from "./safe-tool-result.js";
 import {
   DURABLE_TOOL_FAILURE,
   DURABLE_TOOL_OUTCOME_FIELD,
 } from "./tool-outcome.js";
 
 describe("browser message safety", () => {
+  it.each(["MCP_TRANSIENT", "MCP_AUTHENTICATION", "AGENT_LIMIT", "TOOL_REJECTION", "TOOL_ERROR"])("retains %s through durable projection and repeated browser snapshots", (code) => {
+    const durable = projectDurableUiMessages([{
+      id: "00000000-0000-4000-8000-000000000901", role: "assistant", content: "",
+      parts: [{ type: "tool-invocation", toolInvocation: {
+        args: {}, state: "result", toolCallId: "safe-call", toolName: "get_research_context",
+        result: { code, [DURABLE_TOOL_OUTCOME_FIELD]: DURABLE_TOOL_FAILURE },
+      } }],
+    }]);
+    const first = new BrowserEventProjector().project({ type: EventType.MESSAGES_SNAPSHOT, messages: durable });
+    const second = new BrowserEventProjector().project(first[0]!);
+    expect(durable.at(-1)).toMatchObject({ content: projectSafeToolResult({ code }, true) });
+    expect(second).toEqual(first);
+    expect(second[0]?.messages).toEqual(durable);
+  });
   it("canonicalizes only CopilotKit's exact split Assistant text shape", () => {
     const assistantId = "00000000-0000-4000-8000-000000000001";
     expect(canonicalSubmittedBrowserMessages([{

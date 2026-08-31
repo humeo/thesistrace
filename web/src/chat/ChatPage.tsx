@@ -1,6 +1,7 @@
-import type { AgentSubscriber } from "@ag-ui/client";
+import { HttpAgent, type AgentSubscriber } from "@ag-ui/client";
 import type { ActivityMessage, Message } from "@ag-ui/core";
 import { UseAgentUpdate, useAgent } from "@copilotkit/react-core/v2/headless";
+import { useCopilotKit } from "@copilotkit/react-core/v2/context";
 import {
   ArrowUp,
   ChartLineUp,
@@ -21,11 +22,16 @@ import {
   useReducer,
   useRef,
   useState,
+  useSyncExternalStore,
+  type ComponentProps,
   type FormEvent,
   type KeyboardEvent,
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { agentFailure, type AgentFailureCode, type ToolFailureCode } from "../../../contracts/agent-failure.mjs";
+import { createAgentFetch } from "./agentTransport";
+import { readRunSelection, type RunSelection } from "../../../contracts/agent-run-selection.mjs";
 
 import { AccountMenu } from "../auth/AccountMenu";
 import { isUuid } from "../uuid";
@@ -110,8 +116,8 @@ type ConversationSubscriberOptions = Readonly<{
   onRunFailed: () => void;
   onRunFinished: () => void;
   onRunInitialized?: () => void;
-  onRunError: () => void;
-  onRunStarted: (runId: string) => void;
+  onRunError: (code: AgentFailureCode) => void;
+  onRunStarted: (runId: string, selection: RunSelection | null) => void;
   startTool: (id: string, name: string) => void;
 }>;
 
@@ -120,9 +126,9 @@ type ExistingSessionConnectionOptions = Readonly<{
   failRunningTools: () => void;
   finishTool: (id: string, result: SafeToolResult | null) => void;
   onSessionChanged: () => void;
-  onRunIdentity: (runId: string) => void;
+  onRunIdentity: (runId: string, selection: RunSelection | null) => void;
   onTitleMaySettle: (threadId: string) => void;
-  setError: (error: string | null) => void;
+  setError: (error: AgentFailureCode | null) => void;
   setStatus: (status: ConversationStatus) => void;
   shouldWatchTitle: () => boolean;
   startTool: (id: string, name: string) => void;
@@ -131,6 +137,7 @@ type ExistingSessionConnectionOptions = Readonly<{
 
 export type ChatToolActivity = Readonly<{
   durationMs?: number;
+  failureCode?: ToolFailureCode;
   id: string;
   name: string;
   resource?: SafeResearchRunResource;
@@ -490,7 +497,28 @@ export function ChatShell({
   );
 }
 
-function AgentConversation({
+function AgentConversation(props: ComponentProps<typeof ConnectedAgentConversation>) {
+  const { copilotkit } = useCopilotKit();
+  const subscribe = useCallback((notify: () => void) => copilotkit.subscribe({
+    onRuntimeConnectionStatusChanged: notify,
+  }).unsubscribe, [copilotkit]);
+  const snapshot = useCallback(() => copilotkit.runtimeConnectionStatus, [copilotkit]);
+  const runtimeStatus = useSyncExternalStore(subscribe, snapshot, snapshot);
+  // A private proxy registered before discovery retains a pending runtime
+  // configuration and performs a separate, unbounded /info preflight. Mount
+  // it only after CopilotKit has resolved the real transport through its API.
+  if (runtimeStatus === "connected") return <ConnectedAgentConversation {...props} />;
+  const failure = agentFailure("AGENT_UNAVAILABLE");
+  return <StaticChatMain status={runtimeStatus === "error" ? "disconnected" : "loading-history"} modelControls={<>
+    {props.modelControls}
+    {runtimeStatus === "error" ? <div className="chat-run-error" data-failure-code={failure.code} role="alert">
+      <p><strong>{failure.label}</strong> · {failure.message}</p>
+      <button className="button button-quiet" onClick={() => window.location.reload()} type="button">Reconnect</button>
+    </div> : null}
+  </>} />;
+}
+
+function ConnectedAgentConversation({
   existingSession,
   modelControls,
   onAccepted,
@@ -520,8 +548,11 @@ function AgentConversation({
     ],
   });
   const [draft, setDraft] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AgentFailureCode | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const restoreComposerFocus = useRef(false);
   const [observedRunId, setObservedRunId] = useState<string | null>(null);
+  const [observedSelection, setObservedSelection] = useState<RunSelection | null>(null);
   const [status, setStatus] = useState<ConversationStatus>(
     existingSession ? "loading-history" : "idle",
   );
@@ -535,15 +566,36 @@ function AgentConversation({
   const messageTooLarge = messageBytes > MAX_CHAT_MESSAGE_BYTES;
   const timeline = chatTimelineItems(agent.messages, [...toolActivities.values()]);
   const busy = agent.isRunning
+    || (error !== null && agentFailure(error).action === "sign-in")
     || status === "loading-history"
     || status === "starting"
     || status === "running"
     || status === "disconnected";
   const canSubmit = isReady
+    && agent instanceof HttpAgent
     && selection !== null
     && !busy
     && draft.trim().length > 0
     && !messageTooLarge;
+
+  useEffect(() => {
+    if (!isReady) return;
+    if (!(agent instanceof HttpAgent)) {
+      setError("AGENT_UNAVAILABLE");
+      setStatus("disconnected");
+      return;
+    }
+    const original = agent.fetch;
+    agent.fetch = createAgentFetch(original);
+    return () => { agent.fetch = original; };
+  }, [agent, isReady]);
+
+  useEffect(() => {
+    if (restoreComposerFocus.current && !busy && isReady && selection !== null) {
+      restoreComposerFocus.current = false;
+      composerRef.current?.focus();
+    }
+  }, [busy, isReady, selection]);
 
   const startTool = useCallback((id: string, name: string) => {
     const startedAtMs = monotonicNow();
@@ -565,6 +617,7 @@ function AgentConversation({
           ? undefined
           : Math.max(0, finishedAtMs - existing.startedAtMs),
         ...(result?.resource === undefined ? {} : { resource: result.resource }),
+        ...(result?.failureCode === undefined ? {} : { failureCode: result.failureCode }),
         status: result?.outcome ?? "failed",
       });
       return next;
@@ -604,7 +657,7 @@ function AgentConversation({
           connect: async (subscriber) => { await agent.connectAgent(undefined, subscriber); },
           failRunningTools,
           finishTool,
-          onRunIdentity: setObservedRunId,
+          onRunIdentity: (runId, runSelection) => { setObservedRunId(runId); setObservedSelection(runSelection); },
           onSessionChanged,
           onTitleMaySettle,
           setError,
@@ -618,7 +671,7 @@ function AgentConversation({
       threadId,
     }).catch(() => {
       if (controller.signal.aborted) return;
-      setError("The Research Agent session could not be loaded. Reopen this Chat to reconnect.");
+      setError("AGENT_UNAVAILABLE");
       setStatus("disconnected");
       onSessionChanged();
     });
@@ -640,11 +693,12 @@ function AgentConversation({
     threadId,
   ]);
 
-  async function submit(event?: FormEvent): Promise<void> {
+  async function submit(event?: FormEvent, explicitMessage?: string): Promise<void> {
     event?.preventDefault();
-    if (!canSubmit || selection === null) return;
+    const content = explicitMessage ?? draft;
+    if (!isReady || !(agent instanceof HttpAgent) || selection === null || busy
+      || content.trim().length === 0 || chatMessageBytes(content) > MAX_CHAT_MESSAGE_BYTES) return;
 
-    const content = draft;
     const messageId = crypto.randomUUID();
     let accepted = false;
     let titleWatchStarted = false;
@@ -661,8 +715,9 @@ function AgentConversation({
         setError(null);
         setStatus("starting");
       },
-      onRunStarted: (runId) => {
+      onRunStarted: (runId, runSelection) => {
         setObservedRunId(runId);
+        setObservedSelection(runSelection);
         accepted = true;
         sessionEstablished.current = true;
         onAccepted();
@@ -675,16 +730,16 @@ function AgentConversation({
         onSessionChanged();
         startTitleWatch();
       },
-      onRunError: () => {
+      onRunError: (code) => {
         terminal = "failed";
-        setError("The Research Agent could not complete this run.");
-        setStatus("failed");
+        setError(code);
+        setStatus(agentFailure(code).action === "reconnect" ? "disconnected" : "failed");
         onSessionChanged();
         startTitleWatch();
       },
       onRunFailed: () => {
         terminal = "failed";
-        setError("The Research Agent connection was interrupted.");
+        setError("AGENT_UNAVAILABLE");
         setStatus("disconnected");
         onSessionChanged();
         startTitleWatch();
@@ -707,13 +762,14 @@ function AgentConversation({
         },
       }, subscriber);
       if (terminal === "none") {
-        setStatus("complete");
-        startTitleWatch();
+        terminal = "failed";
+        setError("AGENT_UNAVAILABLE");
+        setStatus("disconnected");
       }
     } catch {
       if (terminal === "none") {
         terminal = "failed";
-        setError("The Research Agent connection was interrupted.");
+        setError("AGENT_UNAVAILABLE");
         setStatus("disconnected");
         onSessionChanged();
         startTitleWatch();
@@ -752,7 +808,7 @@ function AgentConversation({
               </p>
               <div className="chat-message-content">
                 {item.content.length === 0
-                  ? "Responding…"
+                  ? status === "running" || status === "starting" ? "Responding…" : "No response was completed."
                   : item.role === "assistant"
                     ? <AssistantMarkdown content={item.content} />
                     : item.content}
@@ -763,6 +819,9 @@ function AgentConversation({
       )}
 
       <form className="chat-composer-dock" onSubmit={(event) => void submit(event)}>
+        {observedSelection === null ? null : <p className="chat-run-selection" data-run-model={observedSelection.modelKey}>
+          Latest run: {observedSelection.modelKey} / {observedSelection.providerModelId} · {reasoningEffortLabel(observedSelection.reasoningEffort)}
+        </p>}
         {modelControls}
         <div className="chat-composer-status-row">
           <span role="status">{conversationStatusLabel(status, isReady)}</span>
@@ -775,7 +834,25 @@ function AgentConversation({
             Message exceeds the 16 KiB limit.
           </p>
         ) : null}
-        {error !== null ? <p className="chat-run-error" role="alert">{error}</p> : null}
+        {error !== null ? (
+          <ChatFailureNotice
+            code={error}
+            onReconnect={() => window.location.assign(chatSessionHref(threadId))}
+            onRetry={() => {
+              restoreComposerFocus.current = true;
+              void submit(undefined, "Retry the previous request. Inspect retained research before starting new work.");
+            }}
+            onRevise={() => {
+              if (draft.length === 0) {
+                const previous = [...agent.messages].reverse().find((message) => message.role === "user");
+                if (previous?.role === "user" && typeof previous.content === "string") setDraft(previous.content);
+              }
+              composerRef.current?.focus();
+            }}
+            onSelectModel={() => document.getElementById("chat-model")?.focus()}
+            retryDisabled={busy || selection === null || !isReady}
+          />
+        ) : null}
         <div className="chat-composer-preview">
           <textarea
             aria-describedby={messageTooLarge
@@ -787,6 +864,7 @@ function AgentConversation({
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={handleComposerKeyDown}
             placeholder="Ask ThesisTrace about an investment idea…"
+            ref={composerRef}
             rows={2}
             value={draft}
           />
@@ -803,21 +881,28 @@ function AgentConversation({
 function createConversationSubscriber(
   options: ConversationSubscriberOptions,
 ): AgentSubscriber {
+  let terminal = false;
   return {
     onRunFailed: () => {
+      if (terminal) return;
+      terminal = true;
       options.failRunningTools();
       options.onRunFailed();
     },
     onRunFinishedEvent: () => {
+      if (terminal) return;
+      terminal = true;
       options.failRunningTools();
       options.onRunFinished();
     },
     onRunInitialized: options.onRunInitialized,
-    onRunErrorEvent: () => {
+    onRunErrorEvent: ({ event }) => {
+      if (terminal) return;
+      terminal = true;
       options.failRunningTools();
-      options.onRunError();
+      options.onRunError(agentFailure(event.code).code);
     },
-    onRunStartedEvent: ({ event }) => options.onRunStarted(event.runId),
+    onRunStartedEvent: ({ event }) => options.onRunStarted(event.runId, readRunSelection(event.selection)),
     onToolCallResultEvent: ({ event }) => {
       options.finishTool(event.toolCallId, parseSafeToolResult(event.content));
     },
@@ -831,7 +916,7 @@ export function startExistingSessionConnection(
   options: ExistingSessionConnectionOptions,
 ): Readonly<{ dispose: () => void; settled: Promise<void> }> {
   let disposed = false;
-  let failed = false;
+  let terminal = false;
   const watchUnsettledTitle = () => {
     if (!disposed && options.shouldWatchTitle()) {
       options.onTitleMaySettle(options.threadId);
@@ -839,34 +924,35 @@ export function startExistingSessionConnection(
   };
   const subscriber = createConversationSubscriber({
     failRunningTools: options.failRunningTools,
-    onRunStarted: (runId) => {
+    onRunStarted: (runId, selection) => {
       if (!disposed) {
-        options.onRunIdentity(runId);
+        options.onRunIdentity(runId, selection);
         options.setError(null);
         options.setStatus("running");
         options.onSessionChanged();
       }
     },
     onRunFinished: () => {
+      terminal = true;
       if (!disposed) {
         options.setStatus("complete");
         options.onSessionChanged();
         watchUnsettledTitle();
       }
     },
-    onRunError: () => {
-      failed = true;
+    onRunError: (code) => {
+      terminal = true;
       if (!disposed) {
-        options.setError("The previous Research Agent run did not complete.");
-        options.setStatus("failed");
+        options.setError(code);
+        options.setStatus(agentFailure(code).action === "reconnect" ? "disconnected" : "failed");
         options.onSessionChanged();
         watchUnsettledTitle();
       }
     },
     onRunFailed: () => {
-      failed = true;
+      terminal = true;
       if (!disposed) {
-        options.setError("The Research Agent session could not be loaded.");
+        options.setError("AGENT_UNAVAILABLE");
         options.setStatus("disconnected");
         options.onSessionChanged();
       }
@@ -881,11 +967,11 @@ export function startExistingSessionConnection(
   options.setStatus("loading-history");
   const settled = options.connect(subscriber)
     .then(() => {
-      if (!disposed && !failed) options.setStatus("idle");
+      if (!disposed && !terminal) options.setStatus("idle");
     })
     .catch(() => {
-      if (!disposed) {
-        options.setError("The Research Agent session could not be loaded.");
+      if (!disposed && !terminal) {
+        options.setError("AGENT_UNAVAILABLE");
         options.setStatus("disconnected");
       }
     });
@@ -893,6 +979,31 @@ export function startExistingSessionConnection(
     dispose: () => { disposed = true; },
     settled,
   };
+}
+
+export function ChatFailureNotice({ code, onReconnect, onRetry, onRevise, onSelectModel, retryDisabled }: {
+  code: AgentFailureCode;
+  onReconnect: () => void;
+  onRetry: () => void;
+  onRevise: () => void;
+  onSelectModel: () => void;
+  retryDisabled: boolean;
+}) {
+  const failure = agentFailure(code);
+  return (
+    <div className="chat-run-error" data-failure-code={failure.code} role="alert">
+      <p><strong>{failure.label}</strong> · {failure.message}</p>
+      {failure.action === "sign-in" ? <a className="button button-quiet" href="/login">Sign in</a>
+        : failure.action === "new-chat" ? <a className="button button-quiet" href="/chat">New Chat</a>
+        : failure.action === "reconnect" ? <button className="button button-quiet" onClick={onReconnect} type="button">Reconnect</button>
+        : failure.action === "select-model" ? <button className="button button-quiet" onClick={onSelectModel} type="button">Choose model</button>
+        : failure.action === "revise" ? <button className="button button-quiet" onClick={onRevise} type="button">Revise message</button>
+        : <>
+            <button className="button button-quiet" disabled={retryDisabled} onClick={onRetry} type="button">Retry with selected model</button>
+            <button className="button button-quiet" onClick={onSelectModel} type="button">Choose model</button>
+          </>}
+    </div>
+  );
 }
 
 function StaticChatMain({
@@ -1256,6 +1367,7 @@ export function chatTimelineItems(
           ...(live?.durationMs === undefined ? {} : { durationMs: live.durationMs }),
           id: toolCall.id,
           name: toolCall.function.name,
+          ...((persistedResult?.failureCode ?? live?.failureCode) === undefined ? {} : { failureCode: persistedResult?.failureCode ?? live?.failureCode }),
           ...(persistedResult?.resource === undefined && live?.resource === undefined
             ? {}
             : { resource: persistedResult?.resource ?? live?.resource }),
@@ -1302,11 +1414,14 @@ export function ToolActivityRow({ activity }: { activity: ChatToolActivity }) {
     <article
       aria-label={`Tool ${activity.name}: ${statusLabel}`}
       className={`chat-tool-activity chat-tool-activity-${activity.status}`}
+      data-failure-code={activity.status === "failed" ? activity.failureCode : undefined}
     >
       <Icon aria-hidden="true" size={15} weight="regular" />
       <span className="chat-tool-kind">MCP Tool</span>
       <code>{activity.name}</code>
       <span className="chat-tool-status">{statusLabel}</span>
+      {activity.status === "failed" && activity.failureCode !== undefined
+        ? <span title={agentFailure(activity.failureCode).message}>{agentFailure(activity.failureCode).label}</span> : null}
       <span className="chat-tool-duration">
         {activity.durationMs === undefined
           ? activity.status === "running" ? "In progress" : "Duration unavailable"

@@ -1,21 +1,34 @@
-import type {
-  LanguageModelV3,
-  LanguageModelV3CallOptions,
-  LanguageModelV3GenerateResult,
-  LanguageModelV3StreamPart,
-  LanguageModelV3Usage,
-} from "@ai-sdk/provider";
+import type { LanguageModelV3Usage } from "@ai-sdk/provider";
 
 export class RunUsageCapture {
   private usage: PersistedTokenUsage | undefined;
 
   capture(usage: LanguageModelV3Usage): void {
-    this.usage = normalizeTokenUsage(usage);
+    try {
+      this.usage = normalizeTokenUsage(usage);
+    } catch {
+      // Accounting is non-critical. A malformed usage object is unreported,
+      // never invented zero usage and never a failed primary Agent run.
+      this.usage = undefined;
+    }
   }
 
   value(): PersistedTokenUsage | undefined {
     return this.usage === undefined ? undefined : structuredClone(this.usage);
   }
+}
+
+/** Unknown accounting fields stay undefined at the framework boundary. */
+export function frameworkTokenUsage(value: unknown): LanguageModelV3Usage {
+  const record = (part: unknown): Record<string, unknown> => part !== null && typeof part === "object" ? part as Record<string, unknown> : {};
+  const usage = record(value);
+  const input = record(usage.inputTokens);
+  const output = record(usage.outputTokens);
+  const count = (part: unknown) => typeof part === "number" && Number.isSafeInteger(part) && part >= 0 ? part : undefined;
+  return {
+    inputTokens: { total: count(input.total), noCache: count(input.noCache), cacheRead: count(input.cacheRead), cacheWrite: count(input.cacheWrite) },
+    outputTokens: { total: count(output.total), text: count(output.text), reasoning: count(output.reasoning) },
+  };
 }
 
 export type PersistedTokenUsage = Readonly<{
@@ -32,51 +45,6 @@ export type PersistedTokenUsage = Readonly<{
     total: number | null;
   }>;
 }>;
-
-export class UsageCapturingLanguageModel implements LanguageModelV3 {
-  readonly specificationVersion = "v3" as const;
-
-  constructor(
-    private readonly delegate: LanguageModelV3,
-    private readonly capture: RunUsageCapture,
-  ) {}
-
-  get modelId(): string {
-    return this.delegate.modelId;
-  }
-
-  get provider(): string {
-    return this.delegate.provider;
-  }
-
-  get supportedUrls(): LanguageModelV3["supportedUrls"] {
-    return this.delegate.supportedUrls;
-  }
-
-  async doGenerate(
-    options: LanguageModelV3CallOptions,
-  ): Promise<LanguageModelV3GenerateResult> {
-    const result = await this.delegate.doGenerate(options);
-    this.capture.capture(result.usage);
-    return result;
-  }
-
-  async doStream(
-    options: LanguageModelV3CallOptions,
-  ): Promise<{ stream: ReadableStream<LanguageModelV3StreamPart> }> {
-    const result = await this.delegate.doStream(options);
-    const capture = this.capture;
-    return {
-      ...result,
-      stream: result.stream.pipeThrough(new TransformStream({
-        transform(part, controller) {
-          if (part.type === "finish") capture.capture(part.usage);
-          controller.enqueue(part);
-        },
-      })),
-    };
-  }
-}
 
 function normalizeTokenUsage(usage: LanguageModelV3Usage): PersistedTokenUsage {
   return {

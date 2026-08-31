@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 import { loginSessionCookieHeader } from "./login-session-cookie.js";
+import { AgentRunFailure } from "./run-failure.js";
+import type { AgentFailureCode } from "../../contracts/agent-failure.mjs";
 
 const MAX_ACCESS_TOKEN_BYTES = 16 * 1024;
 const exchangedTokenSchema = z.object({
@@ -12,9 +14,9 @@ const exchangedTokenSchema = z.object({
 export type ExchangedMcpToken = Readonly<z.infer<typeof exchangedTokenSchema>>;
 type FetchImplementation = typeof globalThis.fetch;
 
-export class McpRunPreparationError extends Error {
-  constructor() {
-    super("MCP Run preparation failed");
+export class McpRunPreparationError extends AgentRunFailure {
+  constructor(code: AgentFailureCode = "MCP_TRANSIENT") {
+    super(code);
     this.name = "McpRunPreparationError";
   }
 }
@@ -50,6 +52,8 @@ export function createMcpTokenExchanger(dependencies: Readonly<{
     } catch {
       throw new McpRunPreparationError();
     }
+    if (response.status === 401) throw new McpRunPreparationError("AUTHENTICATION_REQUIRED");
+    if (response.status === 403) throw new McpRunPreparationError("MCP_AUTHENTICATION");
     if (response.status !== 200) throw new McpRunPreparationError();
 
     try {

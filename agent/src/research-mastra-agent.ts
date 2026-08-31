@@ -25,9 +25,14 @@ import type { ValidatedChatRun } from "./chat-request.js";
 import type { McpRun } from "./mcp-run.js";
 import type { ResearchSessionRepository } from "./session-repository.js";
 import type { PersistedTokenUsage } from "./usage-capture.js";
+import type { AgentFailureCode } from "../../contracts/agent-failure.mjs";
+import type { RunSelection } from "../../contracts/agent-run-selection.mjs";
+import { runFailureEvent } from "./run-failure.js";
+import { AgentRunFailure, providerFailureCode } from "./run-failure.js";
 
 type ResearchExecutionContext = Readonly<{
   agentBuildRevision: string;
+  failure: () => AgentFailureCode | undefined;
   providerModelId: string;
   mcpRun: () => Promise<McpRun>;
   pendingBridges: Set<Promise<void>>;
@@ -62,7 +67,7 @@ export class ResearchMastraAgent extends MastraAgent {
 
   override abortRun(): void {
     if (!this.terminalStarted) {
-      this.abortController.abort(new Error("AGENT_RUN_INTERRUPTED"));
+      this.abortController.abort(new AgentRunFailure("AGENT_RUN_INTERRUPTED"));
     }
   }
 
@@ -128,14 +133,14 @@ export class ResearchMastraAgent extends MastraAgent {
         if (disposed && prepared.kind === "new") {
           ownsRun = true;
           this.terminalStarted = true;
-          await this.failRun(input.runId, closeMcp);
+          await this.failRun(input.runId, closeMcp, "AGENT_RUN_INTERRUPTED");
           throw new Error("AGENT_RUN_DISPOSED");
         }
         return prepared;
       }).pipe(
         concatMap((prepared) => {
           if (prepared.kind === "duplicate") {
-            return replayDuplicate(input, prepared.durableMessages, prepared.status);
+            return replayDuplicate(input, prepared.durableMessages, prepared.status, prepared.terminalErrorCode, prepared.selection);
           }
           ownsRun = true;
           return concat(
@@ -143,6 +148,11 @@ export class ResearchMastraAgent extends MastraAgent {
               runId: input.runId,
               threadId: input.threadId,
               type: EventType.RUN_STARTED,
+              selection: {
+                modelKey: this.execution.run.modelKey,
+                providerModelId: this.execution.providerModelId,
+                reasoningEffort: this.execution.run.reasoningEffort,
+              },
             }),
             defer(async () => {
               mcpRunPromise = this.execution.mcpRun();
@@ -175,7 +185,7 @@ export class ResearchMastraAgent extends MastraAgent {
                 const toolFailure = toolCallId === undefined
                   ? undefined
                   : activeMcpRun?.toolFailure(toolCallId);
-                if (toolFailure === "transport") {
+                if (toolFailure?.fatal === true) {
                   this.terminalStarted = true;
                   // Emit the safe failed Tool result, persist the terminal Run
                   // failure, then unsubscribe from any already-buffered model
@@ -183,7 +193,7 @@ export class ResearchMastraAgent extends MastraAgent {
                   // transport failure and overwriting it as completed.
                   return concat(
                     of(event),
-                    this.persistFailure(input.runId, closeMcp, toolCallId),
+                    this.persistFailure(input.runId, closeMcp, toolFailure.code, toolCallId),
                     throwError(() => new PersistedFatalToolFailure()),
                   );
                 }
@@ -216,10 +226,10 @@ export class ResearchMastraAgent extends MastraAgent {
         catchError((error) => {
           if (error instanceof PersistedFatalToolFailure) return from([]);
           if (!ownsRun) {
-            return from(closeMcp()).pipe(map(() => safeRunError()));
+            return from(closeMcp()).pipe(map(() => runFailureEvent(providerFailureCode(error))));
           }
           this.terminalStarted = true;
-          return this.persistFailure(input.runId, closeMcp);
+          return this.persistFailure(input.runId, closeMcp, this.execution.failure() ?? providerFailureCode(error));
         }),
       );
 
@@ -228,8 +238,8 @@ export class ResearchMastraAgent extends MastraAgent {
           disposed = true;
           if (ownsRun && !this.terminalStarted) {
             this.terminalStarted = true;
-            this.abortController.abort(new Error("AGENT_RUN_INTERRUPTED"));
-            void this.failRun(input.runId, closeMcp);
+            this.abortController.abort(new AgentRunFailure("AGENT_RUN_INTERRUPTED"));
+            void this.failRun(input.runId, closeMcp, "AGENT_RUN_INTERRUPTED");
           } else {
             void closeMcp();
           }
@@ -260,7 +270,7 @@ export class ResearchMastraAgent extends MastraAgent {
         next: (event) => subscriber.next(event),
       });
       return () => {
-        if (!completed) this.abortController.abort(new Error("AGENT_RUN_INTERRUPTED"));
+        if (!completed) this.abortController.abort(new AgentRunFailure("AGENT_RUN_INTERRUPTED"));
       };
     });
   }
@@ -270,8 +280,9 @@ export class ResearchMastraAgent extends MastraAgent {
     runId: string,
     closeMcp: () => Promise<void>,
   ): Observable<BaseEvent> {
-    if (event.type === EventType.RUN_ERROR) {
-      return this.persistFailure(runId, closeMcp);
+    const failure = this.execution.failure();
+    if (event.type === EventType.RUN_ERROR || (event.type === EventType.RUN_FINISHED && failure !== undefined)) {
+      return this.persistFailure(runId, closeMcp, failure ?? "INTERNAL_FAILURE");
     }
     if (event.type !== EventType.RUN_FINISHED) return of(event);
     return from(
@@ -286,22 +297,24 @@ export class ResearchMastraAgent extends MastraAgent {
   private persistFailure(
     runId: string,
     closeMcp: () => Promise<void>,
+    code: AgentFailureCode,
     toolCallId?: string,
   ): Observable<BaseEvent> {
-    return from(this.failRun(runId, closeMcp, toolCallId)).pipe(
-      map(() => safeRunError()),
+    return from(this.failRun(runId, closeMcp, code, toolCallId)).pipe(
+      map(() => runFailureEvent(code)),
     );
   }
 
   private async failRun(
     runId: string,
     closeMcp: () => Promise<void>,
+    code: AgentFailureCode,
     toolCallId?: string,
   ): Promise<void> {
     const closePromise = closeMcp();
     try {
       await Promise.all([
-        this.execution.repository.markFailed(runId, this.execution.usage()),
+        this.execution.repository.markFailed(runId, this.execution.usage(), code),
         closePromise,
       ]);
       if (toolCallId !== undefined) {
@@ -322,12 +335,15 @@ function replayDuplicate(
   input: RunAgentInput,
   messages: readonly import("@ag-ui/core").Message[],
   status: "completed" | "failed" | "running",
+  terminalErrorCode: string | null,
+  selection: RunSelection,
 ): Observable<BaseEvent> {
   const events: BaseEvent[] = [
     {
       type: EventType.RUN_STARTED,
       threadId: input.threadId,
       runId: input.runId,
+      selection,
     },
     {
       type: EventType.MESSAGES_SNAPSHOT,
@@ -341,17 +357,13 @@ function replayDuplicate(
       runId: input.runId,
     });
   } else {
-    events.push(safeRunError());
+    events.push(runFailureEvent(terminalErrorCode));
   }
   return from(events);
 }
 
 function safeRunError(): BaseEvent {
-  return {
-    type: EventType.RUN_ERROR,
-    code: "AGENT_RUN_FAILED",
-    message: "The Research Agent could not complete this run.",
-  };
+  return runFailureEvent("INTERNAL_FAILURE");
 }
 
 function withTotalTimeout(
@@ -376,7 +388,7 @@ function withTotalTimeout(
     };
     signal.addEventListener("abort", onAbort, { once: true });
     const timer = setTimeout(() => {
-      abortController.abort(new Error("AGENT_RUN_TIMEOUT"));
+      abortController.abort(new AgentRunFailure("AGENT_LIMIT"));
     }, timeoutMs);
     return () => {
       clearTimeout(timer);

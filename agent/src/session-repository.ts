@@ -28,18 +28,20 @@ import {
   type SessionCursor,
 } from "./session-management.js";
 import type { PersistedTokenUsage } from "./usage-capture.js";
+import type { AgentFailureCode } from "../../contracts/agent-failure.mjs";
+import type { RunSelection } from "../../contracts/agent-run-selection.mjs";
 
 export type SessionOwnership = "absent" | "foreign" | "owned";
 export type PreparedRun = Readonly<{
   durableMessages: readonly Message[];
   generateTitle: boolean;
-  kind: "duplicate" | "new";
-  status: "completed" | "failed" | "running";
-}>;
+}> & (Readonly<{ kind: "new"; status: "running" }>
+  | Readonly<{ kind: "duplicate"; status: "completed" | "failed" | "running"; terminalErrorCode: string | null; selection: RunSelection }>);
 export type TerminalRun = Readonly<{
   id: string;
   status: "completed" | "failed" | "running";
   terminalErrorCode: string | null;
+  selection: RunSelection;
 }>;
 export type ThreadPreference = Readonly<{
   modelKey: string;
@@ -430,12 +432,20 @@ export class ResearchSessionRepository {
         researcher_id: string;
         status: "completed" | "failed" | "running";
         thread_id: string;
+        terminal_error_code: string | null;
+        model_key: string;
+        provider_model_id: string;
+        reasoning_effort: RunSelection["reasoningEffort"];
       }>(`
         SELECT
           run.request_fingerprint,
           session.researcher_id::text,
           run.status,
-          run.thread_id::text
+          run.thread_id::text,
+          run.terminal_error_code,
+          run.model_key,
+          run.provider_model_id,
+          run.reasoning_effort
         FROM agent.agent_run AS run
         JOIN agent.chat_session AS session ON session.id = run.thread_id
         WHERE run.id = $1::uuid
@@ -463,6 +473,8 @@ export class ResearchSessionRepository {
           generateTitle: false,
           kind: "duplicate",
           status: duplicate.status,
+          terminalErrorCode: duplicate.terminal_error_code,
+          selection: { modelKey: duplicate.model_key, providerModelId: duplicate.provider_model_id, reasoningEffort: duplicate.reasoning_effort },
         };
       }
 
@@ -654,15 +666,16 @@ export class ResearchSessionRepository {
   async markFailed(
     runId: string,
     usage: PersistedTokenUsage | undefined,
+    code: AgentFailureCode = "INTERNAL_FAILURE",
   ): Promise<void> {
     await this.pool.query(`
       UPDATE agent.agent_run
       SET status = 'failed',
           token_usage = $2::jsonb,
-          terminal_error_code = 'AGENT_RUN_FAILED',
+          terminal_error_code = $3,
           completed_at = pg_catalog.now()
       WHERE id = $1::uuid AND status = 'running'
-    `, [runId, persistedUsage(usage)]);
+    `, [runId, persistedUsage(usage), code]);
   }
 
   async awaitFrameworkRunSettled(runId: string): Promise<void> {
@@ -871,8 +884,11 @@ async function loadLatestRun(client: Pool | PoolClient, threadId: string): Promi
     id: string;
     status: TerminalRun["status"];
     terminal_error_code: string | null;
+    model_key: string;
+    provider_model_id: string;
+    reasoning_effort: RunSelection["reasoningEffort"];
   }>(`
-    SELECT id::text, status, terminal_error_code
+    SELECT id::text, status, terminal_error_code, model_key, provider_model_id, reasoning_effort
     FROM agent.agent_run
     WHERE thread_id = $1::uuid
     ORDER BY started_at DESC, id DESC
@@ -883,6 +899,7 @@ async function loadLatestRun(client: Pool | PoolClient, threadId: string): Promi
     id: row.id,
     status: row.status,
     terminalErrorCode: row.terminal_error_code,
+    selection: { modelKey: row.model_key, providerModelId: row.provider_model_id, reasoningEffort: row.reasoning_effort },
   };
 }
 

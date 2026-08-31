@@ -12,6 +12,7 @@ import {
 import { latestUserText, type ScriptedResearchDecision } from "./scripted-research-support.js";
 import { scriptedBatchDecision } from "./scripted-batch-model.js";
 import { scriptedDailyTrackDecision } from "./scripted-daily-track-model.js";
+import { scriptedFailureStream } from "./scripted-failure-model.js";
 
 export {
   SCRIPTED_START_DAILY_TRACK_PROMPT,
@@ -134,6 +135,8 @@ export class ScriptedLanguageModel implements LanguageModelV3 {
     options: LanguageModelV3CallOptions,
   ): Promise<{ stream: ReadableStream<LanguageModelV3StreamPart> }> {
     this.assertAvailable();
+    const failure = scriptedFailureStream(options);
+    if (failure !== undefined) return failure;
     const modelId = this.modelId;
     const response = scriptedResponse(options);
     if (response.waitSeconds !== undefined) {

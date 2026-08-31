@@ -97,7 +97,7 @@ test("transient submission repeats exactly the same request and ordered item key
 test("an explicitly resumed disconnected admission replays its original command even under a new Agent Run", async () => {
   const request = options(SCRIPTED_FACTOR_BATCH_PROMPT);
   const interrupted = await runScriptedTrajectory(request, (call) => call.name === "submit_research_batch"
-    ? { code: "MCP_TRANSPORT_UNAVAILABLE" } : batchFixtureOutput("factor_evaluation", call));
+    ? { code: "MCP_TRANSIENT" } : batchFixtureOutput("factor_evaluation", call));
   const original = interrupted.calls.find((call) => call.name === "submit_research_batch");
   expect(original).toBeDefined();
   request.prompt[0] = { role: "system", content: "Agent Run identity: 00000000-0000-4000-8000-000000000099." };

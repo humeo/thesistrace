@@ -86,7 +86,7 @@ test.each(["start_daily_track", "retry_daily_track"])("explicit recovery replays
   const request = options(action === "start_daily_track" ? startPrompt : retryPrompt);
   const resolve = (call: RecordedToolCall) => call.name === "get_daily_track" && action === "retry_daily_track"
     ? dailyTrackDetail("blocked", "blocked") : dailyTrackFixtureOutput(call);
-  const interrupted = await runScriptedTrajectory(request, (call) => call.name === action ? { code: "MCP_TRANSPORT_UNAVAILABLE" } : resolve(call));
+  const interrupted = await runScriptedTrajectory(request, (call) => call.name === action ? { code: "MCP_TRANSIENT" } : resolve(call));
   const original = interrupted.calls.find((call) => call.name === action);
   expect(original).toBeDefined();
   request.prompt[0] = { role: "system", content: "Agent Run identity: 00000000-0000-4000-8000-000000000099." };

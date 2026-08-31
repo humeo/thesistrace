@@ -30,6 +30,8 @@ import {
   type ResearchSessionRepository,
 } from "./session-repository.js";
 import { ResearchA2UIEventProjector } from "./research-a2ui-events.js";
+import { runFailureEvent } from "./run-failure.js";
+import type { RunSelection } from "../../contracts/agent-run-selection.mjs";
 
 export const RESEARCHER_ID_HEADER = "x-thesistrace-agent-researcher-id";
 
@@ -147,14 +149,14 @@ export class DurableResearchAgentRunner extends AgentRunner {
         };
         if (active === undefined) {
           if (latestRun === null) return from([]);
-          const started = replayRunStarted(request.threadId, latestRun.id);
+          const started = replayRunStarted(request.threadId, latestRun.id, latestRun.selection);
           return latestRun.status === "completed"
             ? from([
                 started,
                 snapshot,
                 replayRunFinished(request.threadId, latestRun.id),
               ])
-            : from([started, snapshot, safeRunError()]);
+            : from([started, snapshot, runFailureEvent(latestRun.terminalErrorCode)]);
         }
 
         const persistedIds = new Set(messages.map((message) => message.id));
@@ -175,7 +177,7 @@ export class DurableResearchAgentRunner extends AgentRunner {
           }),
         );
         return concat(
-          from([replayRunStarted(request.threadId, active.runId), snapshot]),
+          from([replayRunStarted(request.threadId, active.runId, latestRun?.selection), snapshot]),
           live,
         );
       }),
@@ -224,8 +226,8 @@ export class DurableResearchAgentRunner extends AgentRunner {
   }
 }
 
-function replayRunStarted(threadId: string, runId: string): BaseEvent {
-  return { type: EventType.RUN_STARTED, threadId, runId };
+function replayRunStarted(threadId: string, runId: string, selection: RunSelection | undefined): BaseEvent {
+  return { type: EventType.RUN_STARTED, threadId, runId, selection };
 }
 
 function replayRunFinished(threadId: string, runId: string): BaseEvent {
@@ -233,25 +235,13 @@ function replayRunFinished(threadId: string, runId: string): BaseEvent {
 }
 
 function safeRunError(): BaseEvent {
-  return {
-    type: EventType.RUN_ERROR,
-    code: "AGENT_RUN_FAILED",
-    message: "The Research Agent could not complete this run.",
-  };
+  return runFailureEvent("INTERNAL_FAILURE");
 }
 
 function safeConnectionError(): BaseEvent {
-  return {
-    type: EventType.RUN_ERROR,
-    code: "AGENT_CONNECTION_FAILED",
-    message: "The Research Agent session could not be loaded.",
-  };
+  return runFailureEvent("AGENT_UNAVAILABLE");
 }
 
 function safeRunConflict(): BaseEvent {
-  return {
-    type: EventType.RUN_ERROR,
-    code: "AGENT_RUN_CONFLICT",
-    message: "This Chat is already running. Reopen it to follow the current run.",
-  };
+  return runFailureEvent("AGENT_RUN_CONFLICT");
 }

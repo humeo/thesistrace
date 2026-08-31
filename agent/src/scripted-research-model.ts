@@ -28,6 +28,8 @@ import {
 
 export const SCRIPTED_FACTOR_IDEA_PROMPT =
   "Evaluate a low-volatility Alpha idea as a Factor Evaluation using reliable ThesisTrace defaults.";
+export const SCRIPTED_FAILURE_AFTER_ADMISSION_PROMPT =
+  "[scripted-failure-after-admission] Submit a low-volatility Factor Evaluation, then test provider failure.";
 export const SCRIPTED_STRATEGY_IDEA_PROMPT =
   "Backtest a low-volatility Alpha strategy using reliable ThesisTrace defaults.";
 export const SCRIPTED_FORMULA_REPAIR_IDEA_PROMPT =
@@ -103,7 +105,7 @@ export function scriptedResearchDecision(
   if (
     latest !== undefined
     && typeof latest.output.code === "string"
-    && latest.output.code !== "MCP_TRANSPORT_UNAVAILABLE"
+    && latest.output.code !== "MCP_TRANSIENT"
   ) {
     return permanentToolFailure(latest.output);
   }
@@ -538,6 +540,7 @@ function hasFunctionTool(options: LanguageModelV3CallOptions, name: string): boo
 function ideaMode(text: string): "factor" | "strategy" | "formula-repair" | "admission-repair" | "submit-only" | null {
   switch (text) {
     case SCRIPTED_FACTOR_IDEA_PROMPT: return "factor";
+    case SCRIPTED_FAILURE_AFTER_ADMISSION_PROMPT: return "factor";
     case SCRIPTED_STRATEGY_IDEA_PROMPT: return "strategy";
     case SCRIPTED_FORMULA_REPAIR_IDEA_PROMPT: return "formula-repair";
     case SCRIPTED_ADMISSION_REPAIR_IDEA_PROMPT: return "admission-repair";

@@ -2,6 +2,7 @@ import { Agent } from "@mastra/core/agent";
 import { noopLogger } from "@mastra/core/logger";
 import { Mastra } from "@mastra/core/mastra";
 import { RequestContext } from "@mastra/core/request-context";
+import { TokenLimiterProcessor, type Processor } from "@mastra/core/processors";
 import { Memory } from "@mastra/memory";
 import { PostgresStore } from "@mastra/pg";
 import {
@@ -57,6 +58,8 @@ import { SessionTitleGenerator } from "./session-title.js";
 import type { VerifiedResearcher } from "./session-verifier.js";
 import { verifyAgentSchema } from "./schema-contract.js";
 import { RunUsageCapture } from "./usage-capture.js";
+import { AGENT_LIMITS, RunModelObservation } from "./guarded-language-model.js";
+import { providerFailureCode } from "./run-failure.js";
 
 const RESEARCH_AGENT_ID = "research";
 const RESEARCH_AGENT_INSTRUCTIONS = `You are the ThesisTrace Research Agent.
@@ -143,18 +146,29 @@ export async function createResearchRuntime(
     vector: false,
   });
   const agent = new Agent({
-    defaultOptions: ({ requestContext }) => ({
-      abortSignal: requestContext.get<string, AbortSignal | undefined>("agentAbortSignal"),
-      maxSteps: 16,
-      providerOptions: selectionFrom(requestContext).providerOptions,
-      // Completed tool steps must be durable while a later MCP call is still
-      // running so their validated surfaces can reference persisted messages.
-      savePerStep: true,
-      // A transport/protocol failure is converted into one safe Tool result so
-      // AG-UI can close that exact invocation. Stop before another provider
-      // step; ResearchMastraAgent will persist the failed product Run.
-      stopWhen: () => mcpRunFrom(requestContext)?.hasFatalToolFailure() === true,
-    }),
+    defaultOptions: ({ requestContext }) => {
+      const observation = requestContext.get<string, RunModelObservation | undefined>("modelObservation");
+      const outputLimit = Object.assign(
+        new TokenLimiterProcessor({ limit: AGENT_LIMITS.outputTokens, strategy: "abort" }),
+        { onViolation: () => { observation?.fail("AGENT_LIMIT"); } } satisfies Pick<Processor, "onViolation">,
+      );
+      return {
+        abortSignal: requestContext.get<string, AbortSignal | undefined>("agentAbortSignal"),
+        maxSteps: AGENT_LIMITS.steps,
+        modelSettings: { maxOutputTokens: AGENT_LIMITS.outputTokens, timeout: { stepMs: AGENT_LIMITS.providerCallMs } },
+        outputProcessors: [outputLimit],
+        maxProcessorRetries: 0,
+        onError: ({ error }: { error: unknown }) => { observation?.fail(providerFailureCode(error)); },
+        providerOptions: selectionFrom(requestContext).providerOptions,
+        // Completed tool steps must be durable while a later MCP call is still
+        // running so their validated surfaces can reference persisted messages.
+        savePerStep: true,
+        // A transport/protocol failure is converted into one safe Tool result so
+        // AG-UI can close that exact invocation. Stop before another provider
+        // step; ResearchMastraAgent will persist the failed product Run.
+        stopWhen: () => mcpRunFrom(requestContext)?.hasFatalToolFailure() === true,
+      };
+    },
     id: RESEARCH_AGENT_ID,
     instructions: ({ requestContext }) => researchAgentInstructions(requestContext),
     maxRetries: 0,
@@ -198,6 +212,7 @@ export async function createResearchRuntime(
         ? await readValidatedChatRun(request, settings.modelRegistry)
         : undefined;
       const usageCapture = validated === undefined ? undefined : new RunUsageCapture();
+      const modelObservation = usageCapture === undefined ? undefined : new RunModelObservation(usageCapture);
       const selection = validated === undefined
         ? modelRuntime.resolve(
             settings.modelRegistry.defaultModelKey,
@@ -208,12 +223,13 @@ export async function createResearchRuntime(
         : modelRuntime.resolve(
             validated.modelKey,
             validated.reasoningEffort,
-            usageCapture,
+            modelObservation,
           );
       const titleSelection = validated === undefined
         ? undefined
         : modelRuntime.resolve(validated.modelKey, validated.reasoningEffort);
       const requestContext = createRequestContext(selection);
+      requestContext.set("modelObservation", modelObservation);
 
       if (validated === undefined) {
         return {
@@ -228,7 +244,7 @@ export async function createResearchRuntime(
           }),
         };
       }
-      if (usageCapture === undefined) {
+      if (usageCapture === undefined || modelObservation === undefined) {
         throw new Error("RUN_USAGE_CAPTURE_NOT_CREATED");
       }
       if (titleSelection === undefined) {
@@ -239,6 +255,7 @@ export async function createResearchRuntime(
         [RESEARCH_AGENT_ID]: createRunAgent({
           agentBuildRevision: settings.agentBuildRevision,
           mastra,
+          modelObservation,
           pendingBridges,
           mcpRun: () => mcpRunFactory(
             new Headers(request.headers),
@@ -332,6 +349,7 @@ export async function createResearchRuntime(
 function createRunAgent(options: Readonly<{
   agentBuildRevision: string;
   mastra: Mastra;
+  modelObservation: RunModelObservation;
   pendingBridges: Set<Promise<void>>;
   mcpRun: () => ReturnType<McpRunFactory>;
   providerModelId: string;
@@ -357,6 +375,7 @@ function createRunAgent(options: Readonly<{
     resourceId: options.researcherId,
   }, {
     agentBuildRevision: options.agentBuildRevision,
+    failure: () => options.modelObservation.terminalFailure(),
     mcpRun: options.mcpRun,
     pendingBridges: options.pendingBridges,
     providerModelId: options.providerModelId,

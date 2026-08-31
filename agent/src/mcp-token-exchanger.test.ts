@@ -6,6 +6,12 @@ import {
 } from "./mcp-token-exchanger.js";
 
 describe("private MCP token exchange", () => {
+  it.each([[401, "AUTHENTICATION_REQUIRED"], [403, "MCP_AUTHENTICATION"]])("preserves the safe category for exchange HTTP %s", async (status, code) => {
+    const exchange = createMcpTokenExchanger({ authInternalOrigin: "http://auth:8200", clockSkewSeconds: 30, runMaxWallSeconds: 300,
+      fetch: async () => new Response("private-auth-response", { status: Number(status) }),
+    });
+    await expect(exchange(new Headers())).rejects.toMatchObject({ code });
+  });
   it("forwards only the Login Session Cookie and accepts sufficient lifetime", async () => {
     const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       expect(new Headers(init?.headers)).toEqual(

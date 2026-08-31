@@ -24,10 +24,8 @@ import {
   SCRIPTED_TOOL_PROMPT,
   ScriptedLanguageModel,
 } from "./scripted-language-model.js";
-import {
-  RunUsageCapture,
-  UsageCapturingLanguageModel,
-} from "./usage-capture.js";
+import { RunUsageCapture } from "./usage-capture.js";
+import { GuardedLanguageModel, RunModelObservation } from "./guarded-language-model.js";
 
 const callOptions = {
   prompt: [{ role: "user" as const, content: [{ type: "text" as const, text: "idea" }] }],
@@ -35,9 +33,9 @@ const callOptions = {
 
 test("streams deterministic chunks and captures the provider-reported usage", async () => {
   const capture = new RunUsageCapture();
-  const model = new UsageCapturingLanguageModel(
+  const model = new GuardedLanguageModel(
     new ScriptedLanguageModel("scripted-v1"),
-    capture,
+    new RunModelObservation(capture),
   );
   const result = await model.doStream(callOptions);
   const parts = [];
@@ -636,7 +634,7 @@ test("reconstructs an uncertain effect replay for retry and resume turns", async
       source: "rank(-abs(pct_change(close, 1)))",
     }, { diagnostics: [], valid: true });
     appendExchange(options, "submit-call", "submit_research_run", request, {
-      content: [{ text: JSON.stringify({ code: "MCP_TRANSPORT_UNAVAILABLE" }), type: "text" }],
+      content: [{ text: JSON.stringify({ code: "MCP_TRANSIENT" }), type: "text" }],
       isError: true,
     });
     options.prompt.push({

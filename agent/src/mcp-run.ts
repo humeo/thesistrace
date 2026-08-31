@@ -3,6 +3,8 @@ import type { Tool } from "@mastra/core/tools";
 import { getMcpCallToolMeta, MCPClient } from "@mastra/mcp";
 
 import type { AgentSettings } from "./config.js";
+import { toolFailureCode, type AgentFailureCode } from "../../contracts/agent-failure.mjs";
+import { AGENT_LIMITS } from "./guarded-language-model.js";
 import {
   createMcpTokenExchanger,
   McpRunPreparationError,
@@ -16,17 +18,9 @@ const MCP_CONNECT_TIMEOUT_MS = 2_000;
 const MCP_DISCOVERY_TIMEOUT_MS = 5_000;
 const MCP_SERVER_ID = "thesistrace";
 const MCP_TOOL_OUTCOME_META_KEY = "thesistrace/tool-outcome";
-const SAFE_TRANSPORT_FAILURE = Object.freeze({
-  [DURABLE_TOOL_OUTCOME_FIELD]: DURABLE_TOOL_FAILURE,
-  content: [{
-    text: JSON.stringify({ code: "MCP_TRANSPORT_UNAVAILABLE" }),
-    type: "text" as const,
-  }],
-  isError: true,
-});
 
 export type DiscoveredMcpTools = Record<string, Tool<any, any, any, any>>;
-export type McpToolFailure = "business" | "transport";
+export type McpToolFailure = Readonly<{ code: AgentFailureCode; fatal: boolean }>;
 export type McpRun = Readonly<{
   close: () => Promise<void>;
   hasFatalToolFailure: () => boolean;
@@ -105,7 +99,8 @@ export function createMcpRunFactory(
         || toolsets[0]?.[0] !== MCP_SERVER_ID
         || Object.keys(toolsets[0][1]).length === 0
       ) {
-        throw new McpRunPreparationError();
+        const status = discovery.errorDetails[MCP_SERVER_ID]?.httpStatus;
+        throw new McpRunPreparationError(status === 401 || status === 403 ? "MCP_AUTHENTICATION" : "MCP_TRANSIENT");
       }
       const tracked = trackToolFailures(toolsets[0][1]);
       return {
@@ -114,9 +109,9 @@ export function createMcpRunFactory(
         toolFailure: tracked.toolFailure,
         tools: tracked.tools,
       };
-    } catch {
+    } catch (error) {
       await close().catch(() => undefined);
-      throw new McpRunPreparationError();
+      throw error instanceof McpRunPreparationError ? error : new McpRunPreparationError(mcpTransportFailureCode(error));
     }
   };
 }
@@ -137,25 +132,31 @@ function trackToolFailures(tools: DiscoveredMcpTools): Readonly<{
           const toolCallId = requiredToolCallId(args[1]);
           try {
             const result = await Reflect.apply(execute, target, args);
+            if (Buffer.byteLength(JSON.stringify(result), "utf8") > AGENT_LIMITS.toolResultBytes) {
+              failures.set(toolCallId, { code: "AGENT_LIMIT", fatal: true });
+              return safeFatalToolResult("AGENT_LIMIT");
+            }
             const outcome = readMcpToolOutcome(result);
             if (outcome === "failed") {
-              failures.set(toolCallId, "business");
+              const code = coreToolFailureCode(result);
+              failures.set(toolCallId, { code, fatal: code === "MCP_AUTHENTICATION" });
               return markDurableToolFailure(result);
             }
             if (outcome === "succeeded") return result;
             // ThesisTrace Core is the sole MCP server and marks every Tool
             // result. A missing or malformed marker is a protocol failure, not
             // a successful business result that may continue the model loop.
-            failures.set(toolCallId, "transport");
-            return SAFE_TRANSPORT_FAILURE;
-          } catch {
-            failures.set(toolCallId, "transport");
+            failures.set(toolCallId, { code: "MCP_TRANSIENT", fatal: true });
+            return safeFatalToolResult("MCP_TRANSIENT");
+          } catch (error) {
+            const code = mcpTransportFailureCode(error);
+            failures.set(toolCallId, { code, fatal: true });
             // AI SDK emits a tool-error chunk for a rejected execute call, but
             // the AG-UI adapter does not emit a corresponding TOOL_CALL_RESULT.
             // Resolve one safe internal MCP-shaped error so the adapter emits
             // the terminal Tool result that ResearchMastraAgent can durably
             // fail on. Raw transport/protocol details never reach the model.
-            return SAFE_TRANSPORT_FAILURE;
+            return safeFatalToolResult(code);
           }
         };
       },
@@ -164,11 +165,37 @@ function trackToolFailures(tools: DiscoveredMcpTools): Readonly<{
   })) as DiscoveredMcpTools;
   return {
     hasFatalToolFailure: () => (
-      [...failures.values()].some((failure) => failure === "transport")
+      [...failures.values()].some((failure) => failure.fatal)
     ),
     toolFailure: (toolCallId) => failures.get(toolCallId),
     tools: tracked,
   };
+}
+
+function safeFatalToolResult(code: AgentFailureCode) {
+  return {
+    [DURABLE_TOOL_OUTCOME_FIELD]: DURABLE_TOOL_FAILURE,
+    code,
+    content: [{ text: JSON.stringify({ code }), type: "text" as const }],
+    isError: true,
+  };
+}
+
+function coreToolFailureCode(result: unknown): AgentFailureCode {
+  const code = result !== null && typeof result === "object" && "code" in result ? result.code : undefined;
+  return toolFailureCode(code);
+}
+
+/** The MCP SDK may wrap HTTP errors; inspect bounded typed status fields only. */
+function mcpTransportFailureCode(error: unknown): AgentFailureCode {
+  const seen = new Set<unknown>();
+  for (let depth = 0; depth < 8 && error !== null && typeof error === "object" && !seen.has(error); depth++) {
+    seen.add(error);
+    const status = "status" in error ? error.status : "statusCode" in error ? error.statusCode : undefined;
+    if (status === 401 || status === 403) return "MCP_AUTHENTICATION";
+    error = "cause" in error ? error.cause : undefined;
+  }
+  return "MCP_TRANSIENT";
 }
 
 function markDurableToolFailure<T>(result: T): T {

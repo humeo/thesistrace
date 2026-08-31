@@ -124,8 +124,7 @@ test("the total Run timeout persists failure and awaits MCP disconnect", async (
 
   expect(events.map((event) => event.type)).toEqual(["RUN_STARTED", "RUN_ERROR"]);
   expect(events.at(-1)).toMatchObject({
-    code: "AGENT_RUN_FAILED",
-    message: "The Research Agent could not complete this run.",
+    code: "AGENT_LIMIT",
   });
   expect(repository.markFailed).toHaveBeenCalledOnce();
   expect(repository.awaitFrameworkRunSettled).toHaveBeenCalledOnce();
@@ -166,7 +165,7 @@ test("one MCP Tool failure terminates the Run before later model output", async 
       close,
       hasFatalToolFailure: () => true,
       toolFailure: (toolCallId) => (
-        toolCallId === "provider-tool-call-1" ? "transport" : undefined
+        toolCallId === "provider-tool-call-1" ? { code: "MCP_TRANSIENT", fatal: true } : undefined
       ),
       tools: {},
     }),
@@ -265,7 +264,7 @@ test("a Core business rejection is a failed Tool but the Agent Run may continue"
       close,
       hasFatalToolFailure: () => false,
       toolFailure: (toolCallId) => (
-        toolCallId === "business-call" ? "business" : undefined
+        toolCallId === "business-call" ? { code: "TOOL_REJECTION", fatal: false } : undefined
       ),
       tools: {},
     }),
@@ -284,9 +283,9 @@ test("a Core business rejection is a failed Tool but the Agent Run may continue"
     "RUN_FINISHED",
   ]);
   expect(events.find((event) => event.type === "TOOL_CALL_RESULT")).toMatchObject({
-    content: SAFE_TOOL_FAILED,
     toolCallId: "business-call",
   });
+  expect(JSON.parse(String(events.find((event) => event.type === "TOOL_CALL_RESULT")?.content))).toMatchObject({ outcome: "failed", failureCode: "MCP_TRANSIENT" });
   expect(repository.markFailed).not.toHaveBeenCalled();
   expect(repository.awaitDurableToolResult).not.toHaveBeenCalled();
   expect(repository.markCompleted).toHaveBeenCalledOnce();
@@ -330,7 +329,7 @@ test("parallel Tool results cannot transfer one call's transport failure to anot
       close,
       hasFatalToolFailure: () => true,
       toolFailure: (toolCallId) => (
-        toolCallId === "failed-call" ? "transport" : undefined
+        toolCallId === "failed-call" ? { code: "MCP_TRANSIENT", fatal: true } : undefined
       ),
       tools: {},
     }),
@@ -495,6 +494,7 @@ function testAgent(options: Readonly<{
   const pendingBridges = new Set<Promise<void>>();
   const agent = new ResearchMastraAgent(bridgeConfig, {
     agentBuildRevision: "test-build",
+    failure: () => undefined,
     mcpRun: options.mcpRun,
     pendingBridges,
     providerModelId: "scripted-v1",

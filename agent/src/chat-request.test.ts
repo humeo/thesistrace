@@ -41,6 +41,16 @@ test("accepts the one strict text-only AG-UI run shape", async () => {
 });
 
 test.each([
+  ["missing", "medium", "INVALID_MODEL"],
+  ["scripted", "high", "UNSUPPORTED_REASONING"],
+  ["scripted", "not-a-reasoning-level", "UNSUPPORTED_REASONING"],
+])("distinguishes rejected model selection %s / %s", async (modelKey, reasoningEffort, code) => {
+  await expect(readValidatedChatRun(runRequest({
+    forwardedProps: { thesistrace: { modelKey, reasoningEffort, sessionMode: "new" } },
+  }), registry)).rejects.toMatchObject({ code, status: 400 });
+});
+
+test.each([
   { threadId: "00000000-0000-0000-0000-000000000000" },
   { runId: "ffffffff-ffff-ffff-ffff-ffffffffffff" },
   { threadId: "00000000-0000-4000-8000-00000000000A" },
@@ -155,7 +165,7 @@ test("rejects an oversized UTF-8 message before execution", async () => {
     role: "user",
     content,
   }] }), registry)).rejects.toMatchObject({
-    code: "CHAT_MESSAGE_TOO_LARGE",
+    code: "AGENT_LIMIT",
     status: 413,
   } satisfies Partial<ChatRequestError>);
 });

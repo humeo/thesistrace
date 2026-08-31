@@ -23,9 +23,9 @@ import {
 import {
   canonicalSubmittedBrowserMessages,
   SAFE_TOOL_COMPLETED,
-  SAFE_TOOL_FAILED,
 } from "./browser-message-safety.js";
-import { parseSafeToolResult } from "./safe-tool-result.js";
+import { parseSafeToolResult, projectSafeToolResult } from "./safe-tool-result.js";
+import { McpRunPreparationError } from "./mcp-token-exchanger.js";
 import type { AgentSettings } from "./config.js";
 import { chatRunFingerprint, readValidatedChatRun } from "./chat-request.js";
 import { createMcpRunFactory, type McpRun } from "./mcp-run.js";
@@ -59,6 +59,8 @@ import {
 } from "./session-management.js";
 import { parseGeneratedSessionTitle } from "./session-title.js";
 import type { VerifiedResearcher } from "./session-verifier.js";
+import { SCRIPTED_FAILURE_PROMPTS, SCRIPTED_FAILURE_AFTER_TOOL_PROMPT, SCRIPTED_INVALID_USAGE_PROMPT, SCRIPTED_STEP_LIMIT_PROMPT } from "./scripted-failure-model.js";
+import { AGENT_LIMITS } from "./guarded-language-model.js";
 
 const ownerDatabaseUrl = process.env.THESISTRACE_AGENT_TEST_OWNER_DATABASE_URL;
 if (ownerDatabaseUrl === undefined) {
@@ -151,6 +153,103 @@ describe.sequential("durable Research Agent runtime", () => {
     await owner.query("DROP SCHEMA IF EXISTS agent CASCADE");
     await owner.query("DROP SCHEMA IF EXISTS core CASCADE");
     await owner.end();
+  });
+
+  it.each(Object.entries(SCRIPTED_FAILURE_PROMPTS))("persists one %s terminal event and retries only on a new explicit message", async (code, content) => {
+    const runtime = await createIntegrationRuntime();
+    const input = runInput({ content, messageId: fixedUuid(702), runId: fixedUuid(701), threadId: fixedUuid(700) });
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+      expect(events.filter((event) => event.type === "RUN_ERROR")).toHaveLength(1);
+      expect(events.filter((event) => event.type === "RUN_FINISHED")).toHaveLength(0);
+      expect(events.find((event) => event.type === "RUN_ERROR")).toMatchObject({ code });
+      expect(JSON.stringify(events)).not.toContain("private-");
+      const row = await owner.query(`SELECT model_key, provider_model_id, reasoning_effort, status, terminal_error_code FROM agent.agent_run WHERE thread_id = $1::uuid`, [input.threadId]);
+      expect(row.rows).toEqual([{ model_key: "scripted-research", provider_model_id: "scripted-v1", reasoning_effort: "medium", status: "failed", terminal_error_code: code }]);
+      const replay = await connect(runtime, input.threadId, primaryResearcher);
+      expect(replay.at(-1)).toMatchObject({ type: "RUN_ERROR", code });
+      expect(replay[0]).toMatchObject({ selection: { modelKey: "scripted-research", providerModelId: "scripted-v1", reasoningEffort: "medium" } });
+      const duplicate = await run(runtime, input, primaryResearcher);
+      expect(duplicate.at(-1)).toMatchObject({ type: "RUN_ERROR", code });
+      const retryMessage = { id: fixedUuid(704), role: "user" as const, content: "Retry the previous request. Inspect retained research before starting new work." };
+      const retried = await run(runtime, runInput({
+        content: retryMessage.content, messageId: retryMessage.id, runId: fixedUuid(703), threadId: input.threadId,
+        messages: [...snapshotMessages(replay), retryMessage],
+      }), primaryResearcher);
+      expect(retried.at(-1)?.type).toBe("RUN_FINISHED");
+      const counts = await owner.query(`SELECT (SELECT count(*) FROM agent.agent_run) AS runs, (SELECT count(*) FROM agent.mastra_messages WHERE role = 'user') AS users`);
+      expect(counts.rows).toEqual([{ runs: "2", users: "2" }]);
+    } finally { await runtime.close(); }
+  });
+
+  it.each([
+    [SCRIPTED_FAILURE_AFTER_TOOL_PROMPT, "PROVIDER_TIMEOUT", 1],
+    [SCRIPTED_STEP_LIMIT_PROMPT, "AGENT_LIMIT", AGENT_LIMITS.steps],
+  ] as const)("retains completed Tools when bounded model execution ends: %s", async (content, code, expectedCalls) => {
+    let calls = 0;
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
+        tools: { get_research_context: createTool({ id: "get_research_context", description: "Research context", inputSchema: z.object({}).strict(), execute: async () => { calls++; return { run_id: "run_0123456789abcdef0123", status: "queued" }; } }) },
+      }),
+    });
+    const input = runInput({ content, messageId: fixedUuid(712), runId: fixedUuid(711), threadId: fixedUuid(710) });
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+      expect(events.filter((event) => event.type === "RUN_ERROR")).toHaveLength(1);
+      expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR", code });
+      expect(calls).toBe(expectedCalls);
+      const replay = await connect(runtime, input.threadId, primaryResearcher);
+      const tools = snapshotMessages(replay).filter((message) => message.role === "tool");
+      expect(tools).toHaveLength(expectedCalls);
+      expect(tools.every((message) => parseSafeToolResult(message.content)?.outcome === "completed")).toBe(true);
+      expect(JSON.stringify(replay)).toContain("run_0123456789abcdef0123");
+      expect(calls).toBe(expectedCalls);
+    } finally { await runtime.close(); }
+  });
+
+  it("invalid usage cannot roll back a successful answer", async () => {
+    const runtime = await createIntegrationRuntime();
+    try {
+      const events = await run(runtime, runInput({ content: SCRIPTED_INVALID_USAGE_PROMPT, messageId: fixedUuid(722), runId: fixedUuid(721), threadId: fixedUuid(720) }), primaryResearcher);
+      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      const result = await owner.query("SELECT status, token_usage FROM agent.agent_run");
+      expect(result.rows).toEqual([{ status: "completed", token_usage: { reported: false } }]);
+    } finally { await runtime.close(); }
+  });
+
+  it("keeps historical model identity when startup configuration removes it, then requires an explicit new selection", async () => {
+    const runtime = await createIntegrationRuntime();
+    const input = runInput({ content: "A research idea", messageId: fixedUuid(732), runId: fixedUuid(731), threadId: fixedUuid(730) });
+    try { await run(runtime, input, primaryResearcher); } finally { await runtime.close(); }
+    const nextRegistry = readModelRegistry(JSON.stringify({ default_model_key: "scripted-next", models: [{
+      default_reasoning_effort: "high", display_name: "Scripted Next", enabled: true, key: "scripted-next", provider_adapter: "scripted",
+      provider_model_id: "scripted-next-id", reasoning_efforts: ["high"], secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+    }] }), { THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "fixture-secret" });
+    const discover = vi.fn(async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }));
+    const restarted = await createResearchRuntime({ ...settings, modelRegistry: nextRegistry }, { mcpRunFactory: discover });
+    try {
+      const replay = await connect(restarted, input.threadId, primaryResearcher);
+      expect(replay[0]).toMatchObject({ selection: { modelKey: "scripted-research", providerModelId: "scripted-v1", reasoningEffort: "medium" } });
+      const message = { content: "Refine the idea", role: "user" as const, id: fixedUuid(734) };
+      const next = runInput({ content: message.content, messageId: message.id, runId: fixedUuid(733), threadId: input.threadId, messages: [...snapshotMessages(replay), message] });
+      const invalid = await restarted.handle(runRequest(next), primaryResearcher);
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toEqual({ code: "INVALID_MODEL" });
+      expect(discover).not.toHaveBeenCalled();
+      const unsupported = { ...next, forwardedProps: { thesistrace: { modelKey: "scripted-next", reasoningEffort: "medium", sessionMode: "existing" } } };
+      const badEffort = await restarted.handle(runRequest(unsupported), primaryResearcher);
+      expect(badEffort.status).toBe(400);
+      expect(await badEffort.json()).toEqual({ code: "UNSUPPORTED_REASONING" });
+      expect(discover).not.toHaveBeenCalled();
+      const accepted = await run(restarted, { ...next, forwardedProps: { thesistrace: { modelKey: "scripted-next", reasoningEffort: "high", sessionMode: "existing" } } }, primaryResearcher);
+      expect(accepted.at(-1)?.type).toBe("RUN_FINISHED");
+      const identities = await owner.query("SELECT model_key, provider_model_id, reasoning_effort FROM agent.agent_run ORDER BY started_at");
+      expect(identities.rows).toEqual([
+        { model_key: "scripted-research", provider_model_id: "scripted-v1", reasoning_effort: "medium" },
+        { model_key: "scripted-next", provider_model_id: "scripted-next-id", reasoning_effort: "high" },
+      ]);
+      expect(discover).toHaveBeenCalledOnce();
+    } finally { await restarted.close(); }
   });
 
   it("creates once, captures metadata, replays duplicates, and survives a host restart", async () => {
@@ -1830,7 +1929,7 @@ describe.sequential("durable Research Agent runtime", () => {
       mcpRunFactory: async () => {
         if (failNextPreparation) {
           failNextPreparation = false;
-          throw new Error("private-pre-model-mcp-failure");
+          throw new McpRunPreparationError();
         }
         return {
           close: async () => undefined,
@@ -1916,7 +2015,7 @@ describe.sequential("durable Research Agent runtime", () => {
       `, [threadId]);
       expect(outcomes.rows).toEqual([
         { status: "completed", terminal_error_code: null },
-        { status: "failed", terminal_error_code: "AGENT_RUN_FAILED" },
+        { status: "failed", terminal_error_code: "MCP_TRANSIENT" },
       ]);
     } finally {
       await runtime.close();
@@ -1971,7 +2070,7 @@ describe.sequential("durable Research Agent runtime", () => {
     try {
       const events = await run(runtime, input, primaryResearcher);
 
-      expect(observedMcpRun?.toolFailure("scripted-tool-call-1")).toBe("transport");
+      expect(observedMcpRun?.toolFailure("scripted-tool-call-1")).toEqual({ code: "MCP_TRANSIENT", fatal: true });
       expect(events.map((event) => event.type)).toEqual([
         "RUN_STARTED",
         "TOOL_CALL_START",
@@ -1981,7 +2080,7 @@ describe.sequential("durable Research Agent runtime", () => {
         "RUN_ERROR",
       ]);
       expect(events.find((event) => event.type === "TOOL_CALL_RESULT")).toMatchObject({
-        content: SAFE_TOOL_FAILED,
+        content: projectSafeToolResult({ code: "MCP_TRANSIENT" }, true),
       });
       expect(JSON.stringify(events)).not.toContain("private-disconnect-canary");
       expect(disconnect).toHaveBeenCalledOnce();
@@ -1995,7 +2094,7 @@ describe.sequential("durable Research Agent runtime", () => {
       `, [runId]);
       expect(persisted.rows).toEqual([{
         status: "failed",
-        terminal_error_code: "AGENT_RUN_FAILED",
+        terminal_error_code: "MCP_TRANSIENT",
       }]);
       const persistedMessages = await owner.query<{ content: string }>(`
         SELECT content
@@ -2014,7 +2113,7 @@ describe.sequential("durable Research Agent runtime", () => {
         "RUN_ERROR",
       ]);
       expect(snapshotMessages(replay)).toContainEqual(expect.objectContaining({
-        content: SAFE_TOOL_FAILED,
+        content: projectSafeToolResult({ code: "MCP_TRANSIENT" }, true),
         role: "tool",
       }));
       expect(JSON.stringify(replay)).not.toContain(
@@ -2095,7 +2194,7 @@ describe.sequential("durable Research Agent runtime", () => {
     try {
       const events = await run(runtime, input, primaryResearcher);
 
-      expect(observedMcpRun?.toolFailure("scripted-tool-call-1")).toBe("business");
+      expect(observedMcpRun?.toolFailure("scripted-tool-call-1")).toEqual({ code: "MCP_TRANSIENT", fatal: false });
       expect(events.map((event) => event.type)).toEqual([
         "RUN_STARTED",
         "TOOL_CALL_START",
@@ -2109,7 +2208,7 @@ describe.sequential("durable Research Agent runtime", () => {
         "RUN_FINISHED",
       ]);
       expect(events.find((event) => event.type === "TOOL_CALL_RESULT")).toMatchObject({
-        content: SAFE_TOOL_FAILED,
+        content: projectSafeToolResult({ code: "MCP_TRANSIENT" }, true),
       });
       expect(JSON.stringify(events)).not.toContain(businessError.code);
       expect(JSON.stringify(events)).not.toContain(businessError.trace_id);
@@ -2139,7 +2238,7 @@ describe.sequential("durable Research Agent runtime", () => {
         "RUN_FINISHED",
       ]);
       expect(snapshotMessages(replay)).toContainEqual(expect.objectContaining({
-        content: SAFE_TOOL_FAILED,
+        content: projectSafeToolResult({ code: "MCP_TRANSIENT" }, true),
         role: "tool",
       }));
       expect(JSON.stringify(replay)).not.toContain(businessError.code);
@@ -2290,7 +2389,7 @@ describe.sequential("durable Research Agent runtime", () => {
         threadId: oversizedThread,
       })), primaryResearcher);
       expect(oversized.status).toBe(413);
-      await expect(oversized.json()).resolves.toEqual({ code: "CHAT_MESSAGE_TOO_LARGE" });
+      await expect(oversized.json()).resolves.toEqual({ code: "AGENT_LIMIT" });
       const absent = await owner.query<{ count: string }>(
         "SELECT count(*)::text FROM agent.chat_session WHERE id = $1",
         [oversizedThread],
@@ -2315,8 +2414,7 @@ describe.sequential("durable Research Agent runtime", () => {
         "SCRIPTED_MODEL_FAILURE_INTERNAL_DETAIL",
       );
       expect(events.at(-1)).toMatchObject({
-        code: "AGENT_RUN_FAILED",
-        message: "The Research Agent could not complete this run.",
+        code: "INTERNAL_FAILURE",
       });
       const failed = await owner.query<{
         status: string;
@@ -2329,7 +2427,7 @@ describe.sequential("durable Research Agent runtime", () => {
       `, [failureRunId]);
       expect(failed.rows).toEqual([{
         status: "failed",
-        terminal_error_code: "AGENT_RUN_FAILED",
+        terminal_error_code: "INTERNAL_FAILURE",
         token_usage: { reported: false },
       }]);
       expect(closes).toBe(1);

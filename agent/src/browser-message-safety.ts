@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { runFailureEvent } from "./run-failure.js";
+import { readRunSelection } from "../../contracts/agent-run-selection.mjs";
 
 import {
   EventType,
@@ -20,7 +22,6 @@ import {
   parseSafeToolResult,
   projectSafeToolResult,
   SAFE_TOOL_COMPLETED,
-  SAFE_TOOL_FAILED,
 } from "./safe-tool-result.js";
 import { isCanonicalUuid } from "./uuid.js";
 
@@ -248,6 +249,7 @@ export class BrowserEventProjector {
           runId: requiredString(event.runId),
           threadId: requiredString(event.threadId),
           type: EventType.RUN_STARTED,
+          ...(readRunSelection(event.selection) === null ? {} : { selection: readRunSelection(event.selection) }),
         }];
       case EventType.RUN_FINISHED:
         return [{
@@ -256,7 +258,7 @@ export class BrowserEventProjector {
           type: EventType.RUN_FINISHED,
         }];
       case EventType.RUN_ERROR:
-        return [safeBrowserRunError()];
+        return [runFailureEvent(event.code)];
       case EventType.MESSAGES_SNAPSHOT:
         if (!Array.isArray(event.messages)) throw new BrowserTranscriptError();
         return [{
@@ -453,7 +455,7 @@ function terminalMarker(invocation: DurableToolInvocation): string | null {
     || invocation.state === "output-denied"
     || nestedToolResultFailed(invocation.result)
   ) {
-    return SAFE_TOOL_FAILED;
+    return projectSafeToolResult(invocation.result, true);
   }
   return invocation.state === "result"
     ? projectSafeToolResult(invocation.result, false)
@@ -472,14 +474,6 @@ function nestedToolResultFailed(result: unknown): boolean {
       result.value.isError === true
       || result.value[DURABLE_TOOL_OUTCOME_FIELD] === DURABLE_TOOL_FAILURE
     );
-}
-
-function safeBrowserRunError(): BaseEvent {
-  return {
-    code: "AGENT_RUN_FAILED",
-    message: "The Research Agent could not complete this run.",
-    type: EventType.RUN_ERROR,
-  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
