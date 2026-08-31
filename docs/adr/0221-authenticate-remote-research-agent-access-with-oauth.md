@@ -1,8 +1,3 @@
 # Authenticate remote Research Agent access with OAuth
 
-Each remote MCP deployment is an OAuth 2.1 protected resource serving one
-controlled ThesisTrace installation. It accepts only request-context access
-tokens whose subject is allowed for that installation, never tool-supplied
-credentials, and does not add User, Workspace, Tenancy, or Data Operator
-authority to Core; local stdio remains a development adapter rather than an
-authentication alternative for remote access.
+Each remote MCP deployment is one OAuth-protected resource for one controlled ThesisTrace installation and accepts only request-context access tokens whose subject is an authorized Researcher. The visible Tool inventory is the intersection of the deployment allowlist and six Research or Tracking scopes; credentials never travel in Tool inputs, and remote access adds no Workspace, quota, billing, or Data Operator authority.

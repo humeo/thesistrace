@@ -14,6 +14,7 @@ EFFECTFUL_TOOLS = frozenset(
     {
         "cancel_research_batch",
         "cancel_research_run",
+        "refresh_daily_track",
         "retry_daily_track",
         "start_daily_track",
         "stop_daily_track",
@@ -28,6 +29,7 @@ POLL_TARGET = {
     "get_daily_track": "get_daily_track",
     "get_research_batch": "get_research_batch",
     "get_research_run": "get_research_run",
+    "refresh_daily_track": "get_daily_track",
     "retry_daily_track": "get_daily_track",
     "start_daily_track": "get_daily_track",
     "stop_daily_track": "get_daily_track",
@@ -266,6 +268,7 @@ class DeterministicTrajectoryHarness:
         self._batch_statuses: dict[str, str] = {}
         self._track_statuses: dict[str, str] = {}
         self._track_phases: dict[str, str] = {}
+        self._track_refresh_eligibility: dict[str, bool] = {}
         self._track_retry_eligibility: dict[str, bool] = {}
         self._available_sections: dict[str, tuple[str, ...]] = {}
         self._observed_result_sections: set[tuple[str, str]] = set()
@@ -485,6 +488,14 @@ class DeterministicTrajectoryHarness:
                 raise AssertionError("Agent selected DailyTrack Retry outside blocked state")
             if self._track_retry_eligibility.get(track_id) is not True:
                 raise AssertionError("Agent ignored DailyTrack Retry action eligibility")
+        if tool_name == "refresh_daily_track":
+            track_id = arguments.get("track_id")
+            if not isinstance(track_id, str):
+                return
+            if self._track_statuses.get(track_id) != "active":
+                raise AssertionError("Agent selected DailyTrack Refresh outside active state")
+            if self._track_refresh_eligibility.get(track_id) is not True:
+                raise AssertionError("Agent ignored DailyTrack Refresh action eligibility")
         if tool_name not in {"get_research_run_result", "get_daily_track_result"}:
             return
         resource_key = "run_id" if tool_name == "get_research_run_result" else "track_id"
@@ -552,8 +563,13 @@ class DeterministicTrajectoryHarness:
             if isinstance(progress, Mapping) and isinstance(progress.get("phase"), str):
                 self._track_phases[resource_id] = str(progress["phase"])
             eligibility = outcome.get("action_eligibility")
-            if isinstance(eligibility, Mapping) and isinstance(eligibility.get("retry"), bool):
-                self._track_retry_eligibility[resource_id] = bool(eligibility["retry"])
+            if isinstance(eligibility, Mapping):
+                if isinstance(eligibility.get("refresh"), bool):
+                    self._track_refresh_eligibility[resource_id] = bool(
+                        eligibility["refresh"]
+                    )
+                if isinstance(eligibility.get("retry"), bool):
+                    self._track_retry_eligibility[resource_id] = bool(eligibility["retry"])
         batch = outcome.get("batch")
         if isinstance(batch, Mapping) and isinstance(batch.get("id"), str):
             batch_id = str(batch["id"])

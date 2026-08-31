@@ -384,6 +384,7 @@ def test_authorized_batch_cancel_is_selected_through_public_contract() -> None:
 def test_daily_track_trajectory_retries_only_blocked_state_and_pages_results() -> None:
     tools = _discovered_tools(SAFE_SCOPES)
     start = {"run_id": "run_strategy", "request_id": "start_track_001"}
+    refresh = {"track_id": "track_test", "request_id": "refresh_track_001"}
     retry = {"track_id": "track_test", "request_id": "retry_track_001"}
     observation_page_1 = {
         "section": "strategy_observations",
@@ -408,6 +409,20 @@ def test_daily_track_trajectory_retries_only_blocked_state_and_pages_results() -
                 },
             ),
             ScriptedExchange("list_daily_tracks", {"limit": 20}, history),
+            ScriptedExchange(
+                "get_daily_track", {"track_id": "track_test"}, daily_track_payload(lagging=True)
+            ),
+            ScriptedExchange(
+                "refresh_daily_track",
+                refresh,
+                {
+                    "outcome": "accepted",
+                    "track_id": "track_test",
+                    "status": "active",
+                    "replayed": False,
+                    "retry_after_seconds": 2,
+                },
+            ),
             ScriptedExchange(
                 "get_daily_track", {"track_id": "track_test"}, daily_track_payload(blocked=True)
             ),
@@ -451,6 +466,9 @@ def test_daily_track_trajectory_retries_only_blocked_state_and_pages_results() -
                 CallTool("list_daily_tracks", {"limit": 20}),
                 WaitForRetry(30),
                 CallTool("get_daily_track", {"track_id": "track_test"}),
+                CallTool("refresh_daily_track", refresh),
+                WaitForRetry(2),
+                CallTool("get_daily_track", {"track_id": "track_test"}),
                 CallTool("retry_daily_track", retry),
                 WaitForRetry(2),
                 CallTool("get_daily_track", {"track_id": "track_test"}),
@@ -480,14 +498,14 @@ def test_daily_track_trajectory_retries_only_blocked_state_and_pages_results() -
         transport=transport,
         seed=44,
         fixed_uuid="00000000-0000-4000-8000-000000000044",
-        max_steps=16,
-        max_public_calls=9,
-        max_poll_calls=2,
+        max_steps=19,
+        max_public_calls=11,
+        max_poll_calls=3,
     ).run()
 
     assert result.product_state == "daily_track_up_to_date"
-    assert result.virtual_time_seconds == 32
-    assert result.poll_counts == {"get_daily_track": 2}
+    assert result.virtual_time_seconds == 34
+    assert result.poll_counts == {"get_daily_track": 3}
     assert any(
         item.get("action") == "local_rejection" and item.get("tool") == "stop_daily_track"
         for item in result.trajectory
@@ -843,7 +861,7 @@ def test_schema_failures_and_model_strings_cannot_leak_or_bloat_diagnostics() ->
 def test_tool_discovery_uses_official_mcp_envelopes() -> None:
     tools = _discovered_tools(SAFE_SCOPES)
 
-    assert len(tools) == 15
+    assert len(tools) == 16
     assert {
         "cancel_research_batch",
         "cancel_research_run",

@@ -310,6 +310,7 @@ async def _exercise_http_contract(
                 "get_daily_track",
                 "get_daily_track_result",
                 "start_daily_track",
+                "refresh_daily_track",
                 "retry_daily_track",
                 "stop_daily_track",
             }
@@ -743,6 +744,39 @@ async def _exercise_http_contract(
             assert duplicate_origin.structured_content["code"] == "STATE_CONFLICT"
 
             _advance_current_data(settings)
+            waiting_track = await client.call_tool(
+                "get_daily_track",
+                {"track_id": daily_track.structured_content["track_id"]},
+            )
+            assert waiting_track.structured_content["progress"]["phase"] == "waiting"
+            assert waiting_track.structured_content["action_eligibility"]["refresh"] is True
+            concurrent_refreshes = await _concurrent_track_refreshes(
+                app,
+                action_token,
+                track_id=str(daily_track.structured_content["track_id"]),
+                request_id="http-track-refresh",
+            )
+            assert all(not result.is_error for result in concurrent_refreshes)
+            assert all(
+                result.structured_content["retry_after_seconds"] == 2
+                for result in concurrent_refreshes
+            )
+            assert (
+                sum(
+                    result.structured_content["replayed"] is False
+                    for result in concurrent_refreshes
+                )
+                == 1
+            )
+            refresh_state_conflict = await client.call_tool(
+                "refresh_daily_track",
+                {
+                    "track_id": daily_track.structured_content["track_id"],
+                    "request_id": "http-track-refresh-duplicate",
+                },
+            )
+            assert refresh_state_conflict.is_error is True
+            assert refresh_state_conflict.structured_content["code"] == "STATE_CONFLICT"
             blocked_worker = await anyio.to_thread.run_sync(
                 _run_tracking_worker_once,
                 settings,
@@ -839,6 +873,17 @@ async def _exercise_http_contract(
                 },
             )
             assert unchanged_after_conflict.is_error is False
+            refresh_fingerprint_conflict = await client.call_tool(
+                "refresh_daily_track",
+                {
+                    "track_id": unchanged_after_conflict.structured_content["track_id"],
+                    "request_id": "http-track-refresh",
+                },
+            )
+            assert refresh_fingerprint_conflict.is_error is True
+            assert refresh_fingerprint_conflict.structured_content["code"] == (
+                "IDEMPOTENCY_CONFLICT"
+            )
             retry_fingerprint_conflict = await client.call_tool(
                 "retry_daily_track",
                 {
@@ -975,6 +1020,15 @@ async def _exercise_http_contract(
             )
             assert retry_replay_after_restart.is_error is False
             assert retry_replay_after_restart.structured_content["replayed"] is True
+            refresh_replay_after_restart = await restarted.call_tool(
+                "refresh_daily_track",
+                {
+                    "track_id": daily_track.structured_content["track_id"],
+                    "request_id": "http-track-refresh",
+                },
+            )
+            assert refresh_replay_after_restart.is_error is False
+            assert refresh_replay_after_restart.structured_content["replayed"] is True
             reopened_track = await restarted.call_tool(
                 "get_daily_track",
                 {"track_id": daily_track.structured_content["track_id"]},
@@ -1669,6 +1723,30 @@ async def _concurrent_track_retries(
     async with anyio.create_task_group() as task_group:
         for _index in range(2):
             task_group.start_soon(retry)
+    return results
+
+
+async def _concurrent_track_refreshes(
+    app,
+    token: str,
+    *,
+    track_id: str,
+    request_id: str,
+) -> list[object]:
+    results: list[object] = []
+
+    async def refresh() -> None:
+        async with _mcp_client(app, token) as client:
+            results.append(
+                await client.call_tool(
+                    "refresh_daily_track",
+                    {"track_id": track_id, "request_id": request_id},
+                )
+            )
+
+    async with anyio.create_task_group() as task_group:
+        for _index in range(2):
+            task_group.start_soon(refresh)
     return results
 
 

@@ -237,6 +237,7 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "daily_tracks.session_progressions",
             "daily_tracks.session_progression_attempts",
             "daily_tracks.session_checkpoints",
+            "daily_tracks.refresh_receipts",
             "daily_tracks.retry_receipts",
             "daily_tracks.stop_receipts",
         ),
@@ -562,6 +563,7 @@ def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None
         ("get", "/api/daily-tracks"),
         ("get", "/api/daily-tracks/{track_id}"),
         ("delete", "/api/daily-tracks/{track_id}"),
+        ("post", "/api/daily-tracks/{track_id}/refresh"),
         ("post", "/api/daily-tracks/{track_id}/retry"),
         ("post", "/api/daily-tracks/{track_id}/stop"),
     }
@@ -981,6 +983,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "CREATE TABLE daily_tracks.session_progressions" in track_schema
     assert "CREATE TABLE daily_tracks.session_checkpoints" in track_schema
     assert "blocked_progression_id" in track_schema
+    assert "CREATE TABLE daily_tracks.refresh_receipts" in track_schema
     assert "CREATE TABLE daily_tracks.retry_receipts" in track_schema
     assert "CREATE TABLE daily_tracks.stop_receipts" in track_schema
     assert "ACTIVE_DAILY_TRACK_LIMIT = 10" in track_source
@@ -1013,6 +1016,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert 'component="tracking_worker"' in worker_source
     assert 'worker_role="tracking"' in worker_source
     assert '"/api/research-runs/{run_id}/daily-tracks"' in http_source
+    assert '"/api/daily-tracks/{track_id}/refresh"' in http_source
     assert '"/api/daily-tracks/{track_id}/retry"' in http_source
     assert '"/api/daily-tracks/{track_id}/stop"' in http_source
     assert '@app.post("/api/daily-tracks"' not in http_source

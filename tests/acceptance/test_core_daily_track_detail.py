@@ -90,6 +90,7 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
             expected_manifest=head_a,
             operation_id="daily-track-504-head-b",
         )
+        _refresh_daily_track(client, track_id, "daily-track-504-first-refresh")
         first_advance = _run_worker_once(settings, "tracking")
         assert first_advance.returncode == 0, first_advance.stdout + first_advance.stderr
         tracking_events = _worker_events(first_advance)
@@ -99,7 +100,12 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         first_detail = client.get(f"/api/daily-tracks/{track_id}").json()
         assert first_detail["strategy_session"] == sessions[66]
         assert first_detail["lag_sessions"] == 236
-        for _ in range(4):
+        for index in range(4):
+            _refresh_daily_track(
+                client,
+                track_id,
+                f"daily-track-504-first-catch-up-{index}",
+            )
             catch_up = _run_worker_once(settings, "tracking")
             assert catch_up.returncode == 0, catch_up.stdout + catch_up.stderr
         assert client.get(f"/api/daily-tracks/{track_id}").json()[
@@ -112,7 +118,12 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
             expected_manifest=head_b,
             operation_id="daily-track-504-head-c",
         )
-        for _ in range(4):
+        for index in range(4):
+            _refresh_daily_track(
+                client,
+                track_id,
+                f"daily-track-504-second-catch-up-{index}",
+            )
             second_advance = _run_worker_once(settings, "tracking")
             assert second_advance.returncode == 0, (
                 second_advance.stdout + second_advance.stderr
@@ -163,6 +174,14 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         -math.sqrt(252 / return_intervals),
         rel=1e-12,
     )
+
+
+def _refresh_daily_track(client: TestClient, track_id: str, request_id: str) -> None:
+    response = client.post(
+        f"/api/daily-tracks/{track_id}/refresh",
+        json={"request_id": request_id},
+    )
+    assert response.status_code == 202, response.text
 
 
 def _publish_head(

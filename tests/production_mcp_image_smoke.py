@@ -56,6 +56,7 @@ SAFE_STDIO_TOOL_ORDER = (
     "get_daily_track",
     "get_daily_track_result",
     "start_daily_track",
+    "refresh_daily_track",
     "retry_daily_track",
     "list_research_batches",
     "get_research_batch",
@@ -500,7 +501,7 @@ def _raw_stdio_probe() -> dict[str, object]:
         _require(isinstance(raw_tools, list), "stdio_contract")
         names = [tool.get("name") for tool in raw_tools if isinstance(tool, dict)]
         _require(tuple(names) == SAFE_STDIO_TOOL_ORDER, "stdio_contract")
-        _require(len(names) == 15 and len(set(names)) == 15, "stdio_contract")
+        _require(len(names) == 16 and len(set(names)) == 16, "stdio_contract")
         _assert_no_generic_tools(set(names))
         _record_protocol_envelope(
             transport="stdio",

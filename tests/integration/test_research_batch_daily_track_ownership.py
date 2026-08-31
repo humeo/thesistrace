@@ -11,6 +11,7 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.daily_track import (
     DailyTrackAccessInspector,
     DailyTrackService,
+    RefreshDailyTrackCommand,
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
 )
@@ -213,6 +214,14 @@ def test_daily_track_browse_mutations_and_active_count_are_researcher_scoped(
     assert inspector.count_active(RESEARCHER_A.researcher_id) == 2
     assert inspector.count_active(RESEARCHER_B.researcher_id) == 1
     assert service.get(RESEARCHER_A.researcher_id, "track-beta-active") is None
+    assert (
+        service.refresh(
+            RESEARCHER_A.researcher_id,
+            "track-beta-active",
+            RefreshDailyTrackCommand(request_id="foreign-refresh"),
+        )
+        is None
+    )
     assert (
         service.retry(
             RESEARCHER_A.researcher_id,

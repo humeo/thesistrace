@@ -88,6 +88,7 @@ async def _exercise_stdio(settings: CoreSettings, stderr_path: Path) -> None:
                 "get_daily_track",
                 "get_daily_track_result",
                 "start_daily_track",
+                "refresh_daily_track",
                 "retry_daily_track",
                 "list_research_batches",
                 "get_research_batch",
@@ -224,6 +225,7 @@ def _assert_raw_stdio_process_exits_cleanly(settings: CoreSettings) -> None:
             "get_daily_track",
             "get_daily_track_result",
             "start_daily_track",
+            "refresh_daily_track",
             "retry_daily_track",
             "list_research_batches",
             "get_research_batch",
@@ -288,7 +290,7 @@ async def _exercise_official_client_oversize_disconnect_and_reconnect(
     with reconnected_stderr.open("w+") as errlog:
         async with Client(stdio_client(parameters, errlog=errlog)) as client:
             tools = await client.list_tools()
-    assert len(tools.tools) == 15
+    assert len(tools.tools) == 16
     assert reconnected_stderr.read_text() == ""
 
 

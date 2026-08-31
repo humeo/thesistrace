@@ -214,6 +214,19 @@ test("Notes keeps multiline research context visible", async ({ page }) => {
   expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight);
 });
 
+test("Alpha formula editor keeps line numbers on the dark workbench surface", async ({ page }) => {
+  await page.goto("/research");
+
+  await expect(page.locator(".cm-gutters")).toHaveCSS(
+    "background-color",
+    "rgb(15, 16, 17)",
+  );
+  await expect(page.locator(".cm-activeLineGutter")).toHaveCSS(
+    "background-color",
+    "rgb(20, 21, 22)",
+  );
+});
+
 test("date inputs retain a browser-populated value when focus leaves the field", async ({ page }) => {
   await page.route("**/api/**", async (route) => {
     const pathname = new URL(route.request().url()).pathname;
@@ -725,10 +738,14 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     await expect(page.getByLabel(comparisonChartLabel, { exact: true })).toBeVisible();
 
     publishFinancialTrackHead("lagged");
+    await page.getByRole("button", { name: "Reload status" }).click();
+    const refreshTrack = page.getByRole("button", { name: "Refresh to latest data" });
+    await expect(refreshTrack).toBeEnabled();
+    await refreshTrack.click();
     await expect.poll(async () => (
       (await (await page.request.get(`/api/daily-tracks/${trackId}`)).json() as { status: string }).status
     ), { timeout: 90_000 }).toBe("blocked");
-    await page.getByRole("button", { name: "Reload" }).click();
+    await page.getByRole("button", { name: "Reload status" }).click();
     await expect(page.locator(".research-run-facts").first()).toContainText("Status blocked");
     await expect(page.locator(".research-run-facts").first()).toContainText(
       "Advance phase blocked",
@@ -744,8 +761,14 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
       const response = await page.request.get(`/api/daily-tracks/${trackId}`);
       const track = await response.json() as { status: string; strategy_session: string };
       return `${track.status}:${track.strategy_session}`;
-    }, { timeout: 90_000 }).toBe("active:2026-08-11");
-    await page.getByRole("button", { name: "Reload" }).click();
+    }, { timeout: 90_000 }).toBe("active:2026-08-06");
+    await expect(refreshTrack).toBeEnabled();
+    await refreshTrack.click();
+    await expect.poll(async () => {
+      const response = await page.request.get(`/api/daily-tracks/${trackId}`);
+      return ((await response.json()) as { strategy_session: string }).strategy_session;
+    }, { timeout: 90_000 }).toBe("2026-08-11");
+    await page.getByRole("button", { name: "Reload status" }).click();
     await expect(page.locator(".research-run-facts").first()).toContainText("Status active");
     await expect(page.locator(".research-run-facts").first()).toContainText("Strategy session 2026-08-11");
   } finally {
@@ -1313,6 +1336,9 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     if (trackId === undefined) throw new Error("DailyTrack route is missing track id");
     await expect(page.getByRole("link", { name: reusedRunId, exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Delete DailyTrack" })).toHaveCount(0);
+    const refreshTrack = page.getByRole("button", { name: "Refresh to latest data" });
+    await expect(refreshTrack).toBeEnabled();
+    await refreshTrack.click();
 
     await page.goto(`/research-runs/${reusedRunId}`);
     const deleteDialog = await openResearchDeleteDialog(page);

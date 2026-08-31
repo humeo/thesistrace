@@ -54,6 +54,7 @@ from thesistrace.daily_track.models import (
     DailyTrackPollingDetail,
     DailyTrackProvenanceResultSection,
     DailyTrackProvenanceResultSectionInput,
+    DailyTrackRefreshOutcome,
     DailyTrackResultSectionInput,
     DailyTrackResultSectionResponse,
     DailyTrackRetryOutcome,
@@ -64,6 +65,7 @@ from thesistrace.daily_track.models import (
     DailyTrackStrategySummaryResultSectionInput,
     DailyTrackSummary,
     KernelStateCheckpoint,
+    RefreshDailyTrackCommand,
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
     TrackingOrigin,
@@ -183,7 +185,7 @@ _TRACKING_ELIGIBILITY_SELECT = """
             AND attempt.status = 'running'
       )
       AND (
-          pending.id IS NULL
+          (pending.id IS NULL AND track.queue_position IS NOT NULL)
           OR (
               pending.next_attempt_eligible_at <= now()
               AND pending.queue_position IS NOT NULL
@@ -249,6 +251,14 @@ class DailyTrackRetryConflict(RuntimeError):
 
 
 class DailyTrackRetryUnavailable(RuntimeError):
+    pass
+
+
+class DailyTrackRefreshConflict(RuntimeError):
+    pass
+
+
+class DailyTrackRefreshUnavailable(RuntimeError):
     pass
 
 
@@ -866,6 +876,152 @@ class DailyTrackService:
                 "DailyTrack Retry is temporarily unavailable"
             ) from error
 
+    def refresh(
+        self,
+        researcher_id: UUID,
+        track_id: str,
+        command: RefreshDailyTrackCommand,
+    ) -> DailyTrackSummary | None:
+        outcome = self.refresh_with_outcome(researcher_id, track_id, command)
+        return None if outcome is None else outcome.track
+
+    def refresh_with_outcome(
+        self,
+        researcher_id: UUID,
+        track_id: str,
+        command: RefreshDailyTrackCommand,
+    ) -> DailyTrackRefreshOutcome | None:
+        try:
+            return self._refresh_with_outcome(researcher_id, track_id, command)
+        except (OperationalError, PoolTimeout) as error:
+            raise DailyTrackTemporarilyUnavailable(
+                "DailyTrack Refresh is temporarily unavailable"
+            ) from error
+
+    def _refresh_with_outcome(
+        self,
+        researcher_id: UUID,
+        track_id: str,
+        command: RefreshDailyTrackCommand,
+    ) -> DailyTrackRefreshOutcome | None:
+        if self._dataset_lifecycle is None:
+            raise RuntimeError("current-data DailyTrack Refresh is not configured")
+        request_id = command.request_id.strip()
+        if not request_id:
+            raise ValueError("DailyTrack Refresh request_id is required")
+        fingerprint = _refresh_fingerprint(track_id)
+        with self._database.transaction() as transaction:
+            owned = transaction.execute(
+                """
+                SELECT 1
+                FROM daily_tracks.tracks
+                WHERE researcher_id = %s AND id = %s
+                """,
+                (researcher_id, track_id),
+            ).fetchone()
+            if owned is None:
+                return None
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"daily_tracks.refresh:{researcher_id}:{request_id}",),
+            ).fetchone()
+            receipt = transaction.execute(
+                """
+                SELECT request_fingerprint, outcome
+                FROM daily_tracks.refresh_receipts
+                WHERE researcher_id = %s AND request_id = %s
+                """,
+                (researcher_id, request_id),
+            ).fetchone()
+            if receipt is not None:
+                if receipt["request_fingerprint"] != fingerprint:
+                    raise DailyTrackRefreshConflict(
+                        "DailyTrack Refresh request_id conflicts"
+                    )
+                track = DailyTrackSummary.model_validate(receipt["outcome"])
+                return DailyTrackRefreshOutcome(
+                    track=track,
+                    replayed=True,
+                    retry_after_seconds=2,
+                )
+
+            track = transaction.execute(
+                f"""
+                {_TRACK_SELECT}
+                WHERE track.researcher_id = %s AND track.id = %s
+                FOR UPDATE OF track
+                """,
+                (researcher_id, track_id),
+            ).fetchone()
+            if track is None:
+                return None
+            if track["status"] != "active":
+                raise DailyTrackRefreshUnavailable(
+                    "DailyTrack Refresh requires active status"
+                )
+            if track["queue_position"] is not None:
+                raise DailyTrackRefreshUnavailable(
+                    "DailyTrack Refresh is already queued"
+                )
+            unresolved = transaction.execute(
+                """
+                SELECT 1
+                FROM daily_tracks.session_progressions
+                WHERE track_id = %s
+                  AND status IN ('running', 'stopping', 'blocked')
+                """,
+                (track_id,),
+            ).fetchone()
+            if unresolved is not None:
+                raise DailyTrackRefreshUnavailable(
+                    "DailyTrack Refresh requires an idle track"
+                )
+            current_head = self._dataset_lifecycle.current_pointer()
+            if current_head is None:
+                raise DailyTrackRefreshUnavailable("Dataset Head is not ready")
+            if _session_date(str(track["current_strategy_session"])) >= _session_date(
+                current_head.data_through_session
+            ):
+                raise DailyTrackRefreshUnavailable("DailyTrack is already up to date")
+            queued = transaction.execute(
+                """
+                UPDATE daily_tracks.tracks
+                SET queue_position = nextval('daily_tracks.work_queue_sequence')
+                WHERE researcher_id = %s AND id = %s
+                  AND status = 'active' AND queue_position IS NULL
+                """,
+                (researcher_id, track_id),
+            )
+            if queued.rowcount != 1:
+                raise DailyTrackFenced
+            outcome = _summary(track)
+            transaction.execute(
+                """
+                INSERT INTO daily_tracks.refresh_receipts (
+                    researcher_id, request_id, request_fingerprint, track_id, outcome
+                ) VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    researcher_id,
+                    request_id,
+                    fingerprint,
+                    track_id,
+                    Jsonb(outcome.model_dump(mode="json")),
+                ),
+            )
+        self._lifecycle_event(
+            {
+                "event": "tracking_refresh_queued",
+                "track_id": track_id,
+                "status": "active",
+            }
+        )
+        return DailyTrackRefreshOutcome(
+            track=outcome,
+            replayed=False,
+            retry_after_seconds=2,
+        )
+
     def _retry_with_outcome(
         self,
         researcher_id: UUID,
@@ -970,7 +1126,7 @@ class DailyTrackService:
                     UPDATE daily_tracks.tracks
                     SET status = 'active', blocked_progression_id = NULL,
                         blocked_reason = NULL,
-                        queue_position = nextval('daily_tracks.work_queue_sequence')
+                        queue_position = NULL
                     WHERE id = %s AND status = 'blocked'
                       AND blocked_progression_id = %s
                     """,
@@ -1149,7 +1305,8 @@ class DailyTrackService:
                         """
                         UPDATE daily_tracks.tracks
                         SET status = 'stopped', execution_fence = execution_fence + 1,
-                            blocked_progression_id = NULL, blocked_reason = NULL
+                            blocked_progression_id = NULL, blocked_reason = NULL,
+                            queue_position = NULL
                         WHERE id = %s AND status IN ('active', 'blocked')
                         """,
                         (track_id,),
@@ -1180,7 +1337,8 @@ class DailyTrackService:
                         """
                         UPDATE daily_tracks.tracks
                         SET status = 'stopping', execution_fence = execution_fence + 1,
-                            blocked_progression_id = NULL, blocked_reason = NULL
+                            blocked_progression_id = NULL, blocked_reason = NULL,
+                            queue_position = NULL
                         WHERE id = %s AND status = 'active'
                         """,
                         (track_id,),
@@ -1399,6 +1557,7 @@ class DailyTrackService:
                 status=str(row["status"]),
                 unresolved=unresolved,
                 lag_sessions=lag_sessions,
+                refresh_queued=row["queue_position"] is not None,
             )
             origin = TrackingOrigin.model_validate(row["origin"])
             return DailyTrackPollingDetail.model_validate(
@@ -1451,6 +1610,12 @@ class DailyTrackService:
                     },
                     "blocked_reason": row["blocked_reason"],
                     "action_eligibility": {
+                        "refresh": (
+                            row["status"] == "active"
+                            and lag_sessions > 0
+                            and unresolved is None
+                            and row["queue_position"] is None
+                        ),
                         "retry": row["status"] == "blocked",
                         "stop": row["status"] in {"active", "blocked"},
                     },
@@ -1976,7 +2141,10 @@ class DailyTrackService:
             elif row["status"] == "stopped":
                 progress_phase = "stopped"
             elif unresolved is None:
-                progress_phase = "up_to_date" if lag_sessions == 0 else "waiting"
+                if row["queue_position"] is not None:
+                    progress_phase = "queued"
+                else:
+                    progress_phase = "up_to_date" if lag_sessions == 0 else "waiting"
             elif unresolved["status"] == "blocked":
                 progress_phase = "blocked"
             elif unresolved["attempt_status"] == "running":
@@ -2491,7 +2659,7 @@ class DailyTrackService:
                         """
                         UPDATE daily_tracks.tracks
                         SET status = 'blocked', blocked_progression_id = %s,
-                            blocked_reason = %s
+                            blocked_reason = %s, queue_position = NULL
                         WHERE id = %s AND status = 'active'
                           AND execution_fence = %s
                         """,
@@ -2535,7 +2703,7 @@ class DailyTrackService:
                     """
                     UPDATE daily_tracks.tracks
                     SET execution_fence = %s,
-                        queue_position = nextval('daily_tracks.work_queue_sequence')
+                        queue_position = NULL
                     WHERE id = %s AND execution_fence = %s
                     """,
                     (fence, row["id"], fence - 1),
@@ -3491,6 +3659,7 @@ def _origin_planning_facts(origin: TrackingOrigin) -> dict[str, int]:
 
 _TRACK_SELECT = """
 SELECT track.id, track.status, track.origin, track.blocked_reason,
+       track.queue_position,
        track.created_at, state.updated_at AS state_updated_at,
        checkpoint.boundary_session::text AS current_strategy_session
 FROM daily_tracks.tracks AS track
@@ -3656,12 +3825,15 @@ def _polling_phase(
     status: str,
     unresolved: Mapping[str, object] | None,
     lag_sessions: int,
+    refresh_queued: bool,
 ) -> str:
     if status == "stopping":
         return "stopping"
     if status == "stopped":
         return "stopped"
     if unresolved is None:
+        if refresh_queued:
+            return "queued"
         return "up_to_date" if lag_sessions == 0 else "waiting"
     if unresolved["status"] == "blocked":
         return "blocked"
@@ -3675,6 +3847,15 @@ def _polling_phase(
 def _retry_fingerprint(track_id: str) -> str:
     value = {
         "action": "daily-tracks.retry/v1",
+        "track_id": track_id,
+    }
+    serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _refresh_fingerprint(track_id: str) -> str:
+    value = {
+        "action": "daily-tracks.refresh/v1",
         "track_id": track_id,
     }
     serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()

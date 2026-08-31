@@ -67,6 +67,7 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0109 — Pin one canonical numeric execution and serialization contract](0109-pin-one-canonical-numeric-execution-and-serialization-contract.md)
 - [ADR-0214 — Select Factor Evaluation or Strategy Backtest within ResearchRun](0214-select-factor-evaluation-or-strategy-backtest-within-researchrun.md)
 - [ADR-0216 — Make Research Batch a durable orchestration resource](0216-make-research-batch-a-durable-orchestration-resource.md)
+- [ADR-0234 — Require explicit DailyTrack Refresh](0234-require-explicit-dailytrack-refresh.md)
 
 ## Core runtime, storage, and data lifecycle
 
@@ -86,13 +87,10 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0221 — Authenticate remote Research Agent access with OAuth](0221-authenticate-remote-research-agent-access-with-oauth.md)
 - [ADR-0222 — Keep Research Agent execution stateless and resource-addressed](0222-keep-research-agent-execution-stateless-and-resource-addressed.md)
 - [ADR-0223 — Separate dangerous Research Agent authority from human confirmation](0223-separate-dangerous-research-agent-authority-from-human-confirmation.md)
-- [ADR-0224 — Hard-cut the MCP tool contract](0224-hard-cut-the-mcp-tool-contract.md)
-- [ADR-0225 — Publish one OAuth-scope-filtered MCP endpoint](0225-publish-one-oauth-scope-filtered-mcp-endpoint.md)
-- [ADR-0226 — Expose semantic Research results through bounded MCP views](0226-expose-semantic-research-results-through-bounded-mcp-views.md)
-- [ADR-0227 — Return correctable Research rejection as a structured MCP outcome](0227-return-correctable-research-rejection-as-a-structured-mcp-outcome.md)
-- [ADR-0228 — Separate local, test, and production Research Agent authentication adapters](0228-separate-local-test-and-production-research-agent-authentication-adapters.md)
-- [ADR-0229 — Mount HTTP MCP in the Core API process](0229-mount-http-mcp-in-the-core-api-process.md)
-- [ADR-0230 — Keep MCP ingress protection outside Product quotas](0230-keep-mcp-ingress-protection-outside-product-quotas.md)
+- [ADR-0235 — Run the built-in Research Agent in a separate Host](0235-run-the-built-in-research-agent-in-a-separate-host.md)
+- [ADR-0236 — Keep Agent Chat separate from Research truth](0236-keep-agent-chat-separate-from-research-truth.md)
+- [ADR-0237 — Exchange Login Sessions for short-lived MCP tokens in Auth](0237-exchange-login-sessions-for-short-lived-mcp-tokens-in-auth.md)
+- [ADR-0238 — Keep Agent content out of operational telemetry](0238-keep-agent-content-out-of-operational-telemetry.md)
 
 ## Alpha language and authoring
 

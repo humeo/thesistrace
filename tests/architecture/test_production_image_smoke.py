@@ -312,10 +312,10 @@ def test_mcp_image_stdio_probe_requires_unique_order_and_clean_process_exit() ->
     smoke = _load_mcp_smoke_module()
     source = (Path(__file__).parents[1] / "production_mcp_image_smoke.py").read_text()
 
-    assert len(smoke.SAFE_STDIO_TOOL_ORDER) == 15
-    assert len(set(smoke.SAFE_STDIO_TOOL_ORDER)) == 15
+    assert len(smoke.SAFE_STDIO_TOOL_ORDER) == 16
+    assert len(set(smoke.SAFE_STDIO_TOOL_ORDER)) == 16
     assert "tuple(names) == SAFE_STDIO_TOOL_ORDER" in source
-    assert "len(names) == 15 and len(set(names)) == 15" in source
+    assert "len(names) == 16 and len(set(names)) == 16" in source
     assert 'returncode == 0 and stdout_tail == b""' in source
     assert "process.stdin.close()" in source
 

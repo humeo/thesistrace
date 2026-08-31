@@ -103,6 +103,7 @@ def test_daily_track_action_receipts_reject_malformed_durable_outcomes(tmp_path:
                         ),
                     )
         for table, allowed_status in (
+            ("refresh_receipts", "active"),
             ("retry_receipts", "active"),
             ("stop_receipts", "stopped"),
         ):
@@ -134,15 +135,15 @@ def test_daily_track_action_receipts_reject_malformed_durable_outcomes(tmp_path:
                             )
                         else:
                             transaction.execute(
-                                """
-                                INSERT INTO daily_tracks.stop_receipts (
+                                f"""
+                                INSERT INTO daily_tracks.{table} (
                                     researcher_id, request_id, request_fingerprint,
                                     track_id, outcome
                                 ) VALUES (%s, %s, %s, %s, %s)
                                 """,
                                 (
                                     TEST_RESEARCHER.researcher_id,
-                                    f"malformed_stop_{index}",
+                                    f"malformed_{table}_{index}",
                                     "f" * 64,
                                     "track_missing",
                                     Jsonb(outcome),
@@ -199,6 +200,7 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
         assert {"list_daily_tracks", "get_daily_track", "start_daily_track"} <= set(tools)
         assert "delete_daily_track" not in tools
+        assert "refresh_daily_track" in tools
         assert "retry_daily_track" in tools
         assert "stop_daily_track" not in tools
         assert tools["start_daily_track"].annotations.read_only_hint is False
@@ -260,6 +262,7 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         initial = await client.call_tool("get_daily_track", {"track_id": track_id})
         assert initial.is_error is False
         assert initial.structured_content["progress"]["lag_sessions"] > 0
+        assert initial.structured_content["progress"]["phase"] == "waiting"
         _assert_compact_track(initial.structured_content)
 
     async with _mcp_client(settings, tmp_path / "track-replay.stderr.log") as client:
@@ -357,6 +360,30 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         assert invalid_result_section.is_error is True
         assert invalid_result_section.structured_content["code"] == "INVALID_INPUT"
 
+        refreshed = await _concurrent_refresh(
+            settings,
+            tmp_path,
+            track_id=concurrent_track_id,
+            request_id="track-concurrent-refresh",
+        )
+        assert all(not result.is_error for result in refreshed)
+        assert all(result.structured_content["status"] == "active" for result in refreshed)
+        assert all(
+            result.structured_content["retry_after_seconds"] == 2 for result in refreshed
+        )
+        assert sum(result.structured_content["replayed"] is False for result in refreshed) == 1
+        second_refresh = await client.call_tool(
+            "refresh_daily_track",
+            {"track_id": track_id, "request_id": "track-second-refresh"},
+        )
+        assert second_refresh.is_error is False
+        refresh_conflict = await client.call_tool(
+            "refresh_daily_track",
+            {"track_id": track_id, "request_id": "track-concurrent-refresh"},
+        )
+        assert refresh_conflict.is_error is True
+        assert refresh_conflict.structured_content["code"] == "IDEMPOTENCY_CONFLICT"
+
     blocked_worker = await anyio.to_thread.run_sync(
         _run_tracking_worker_once,
         settings,
@@ -380,11 +407,12 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
             "DailyTrack target exceeds Tracking Worker capacity."
         )
         assert blocked.structured_content["action_eligibility"] == {
+            "refresh": False,
             "retry": True,
             "stop": True,
         }
         assert blocked.structured_content["retry_after_seconds"] is None
-        _assert_compact_track(blocked.structured_content, retry=True)
+        _assert_compact_track(blocked.structured_content, refresh=False, retry=True)
         blocked_factor = await client.call_tool(
             "get_daily_track_result",
             {"track_id": concurrent_track_id, "section": "factor"},
@@ -561,9 +589,26 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         == 1
     )
 
-    for _ in range(6):
-        completed = await anyio.to_thread.run_sync(_run_tracking_worker_once, settings)
-        assert_worker_succeeded(completed)
+    async with _mcp_client(settings, tmp_path / "track-manual-catch-up.stderr.log") as client:
+        for index in range(6):
+            current = await client.call_tool(
+                "get_daily_track",
+                {"track_id": transient_track_id},
+            )
+            if current.structured_content["progress"]["lag_sessions"] == 0:
+                break
+            refreshed = await client.call_tool(
+                "refresh_daily_track",
+                {
+                    "track_id": transient_track_id,
+                    "request_id": f"track-manual-catch-up-{index}",
+                },
+            )
+            assert refreshed.is_error is False
+            completed = await anyio.to_thread.run_sync(_run_tracking_worker_once, settings)
+            assert_worker_succeeded(completed)
+        else:
+            raise AssertionError("DailyTrack did not catch up after six explicit Refreshes")
 
     async with _mcp_client(settings, tmp_path / "track-reconnect.stderr.log") as client:
         advanced = await client.call_tool("get_daily_track", {"track_id": track_id})
@@ -584,6 +629,7 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         assert transient_advanced.structured_content["progress"]["phase"] == "up_to_date"
         assert advanced.structured_content["origin"]["research_run_id"] == strategy_runs[0]
         assert advanced.structured_content["action_eligibility"] == {
+            "refresh": False,
             "retry": False,
             "stop": False,
         }
@@ -773,6 +819,15 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         )
         assert retry_replay_after_restart.is_error is False
         assert retry_replay_after_restart.structured_content["replayed"] is True
+        refresh_replay_after_restart = await client.call_tool(
+            "refresh_daily_track",
+            {
+                "track_id": concurrent_track_id,
+                "request_id": "track-concurrent-refresh",
+            },
+        )
+        assert refresh_replay_after_restart.is_error is False
+        assert refresh_replay_after_restart.structured_content["replayed"] is True
 
     async with _mcp_client(
         settings,
@@ -916,6 +971,33 @@ async def _concurrent_retry(
     async with anyio.create_task_group() as task_group:
         for index in range(4):
             task_group.start_soon(retry, index)
+    return results
+
+
+async def _concurrent_refresh(
+    settings: CoreSettings,
+    tmp_path: Path,
+    *,
+    track_id: str,
+    request_id: str,
+) -> list[object]:
+    results: list[object] = []
+
+    async def refresh(index: int) -> None:
+        async with _mcp_client(
+            settings,
+            tmp_path / f"track-concurrent-refresh-{index}.stderr.log",
+        ) as client:
+            results.append(
+                await client.call_tool(
+                    "refresh_daily_track",
+                    {"track_id": track_id, "request_id": request_id},
+                )
+            )
+
+    async with anyio.create_task_group() as task_group:
+        for index in range(4):
+            task_group.start_soon(refresh, index)
     return results
 
 
@@ -1074,14 +1156,6 @@ def _prioritize_daily_track(settings: CoreSettings, track_id: str) -> None:
     database.open()
     try:
         with database.transaction() as transaction:
-            track = transaction.execute(
-                """
-                UPDATE daily_tracks.tracks
-                SET queue_position = 0
-                WHERE id = %s AND status = 'active'
-                """,
-                (track_id,),
-            )
             progression = transaction.execute(
                 """
                 UPDATE daily_tracks.session_progressions
@@ -1090,7 +1164,6 @@ def _prioritize_daily_track(settings: CoreSettings, track_id: str) -> None:
                 """,
                 (track_id,),
             )
-        assert track.rowcount == 1
         assert progression.rowcount == 1
     finally:
         database.close()
@@ -1607,7 +1680,12 @@ def _clone_tracks(
         database.close()
 
 
-def _assert_compact_track(payload: dict[str, object], *, retry: bool = False) -> None:
+def _assert_compact_track(
+    payload: dict[str, object],
+    *,
+    refresh: bool = True,
+    retry: bool = False,
+) -> None:
     serialized = str(payload).lower()
     assert payload["available_result_sections"] == [
         "factor",
@@ -1616,7 +1694,11 @@ def _assert_compact_track(payload: dict[str, object], *, retry: bool = False) ->
         "origin",
         "provenance",
     ]
-    assert payload["action_eligibility"] == {"retry": retry, "stop": True}
+    assert payload["action_eligibility"] == {
+        "refresh": refresh,
+        "retry": retry,
+        "stop": True,
+    }
     for private_name in (
         "positions",
         "checkpoint",

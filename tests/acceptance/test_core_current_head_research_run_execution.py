@@ -987,6 +987,14 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
             f"/api/research-runs/{run_id}/daily-tracks",
             json={"request_id": "financial-track-activation"},
         ).json()["id"]
+        up_to_date_refresh = client.post(
+            f"/api/daily-tracks/{track_id}/refresh",
+            json={"request_id": "financial-track-up-to-date-refresh"},
+        )
+        assert up_to_date_refresh.status_code == 409
+        assert up_to_date_refresh.json() == {
+            "detail": "DailyTrack is already up to date"
+        }
 
         lagged_sessions = (*seed_sessions, "2026-08-06", "2026-08-07")
         lagged_head = _publish_composite_head(
@@ -996,11 +1004,36 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
             expected_manifest=seed_head,
             operation_id="financial-track-lagged",
         )
+        assert client.app.state.core_runtime.daily_tracks.process_next() is False
+        idle = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert idle["progress"]["phase"] == "waiting"
+        assert idle["lag_sessions"] == 2
+        refreshed = _refresh_daily_track(
+            client,
+            track_id,
+            "financial-track-covered-refresh",
+        )
+        replay = client.post(
+            f"/api/daily-tracks/{track_id}/refresh",
+            json={"request_id": "financial-track-covered-refresh"},
+        )
+        assert replay.status_code == 202
+        assert replay.json() == refreshed
+        duplicate = client.post(
+            f"/api/daily-tracks/{track_id}/refresh",
+            json={"request_id": "financial-track-covered-duplicate"},
+        )
+        assert duplicate.status_code == 409
+        assert duplicate.json() == {"detail": "DailyTrack Refresh is already queued"}
+        assert client.get(f"/api/daily-tracks/{track_id}").json()["progress"][
+            "phase"
+        ] == "queued"
         assert client.app.state.core_runtime.daily_tracks.process_next() is True
         covered = client.get(f"/api/daily-tracks/{track_id}").json()
         assert covered["status"] == "active"
         assert covered["strategy_session"] == "2026-08-06"
 
+        _refresh_daily_track(client, track_id, "financial-track-blocked-refresh")
         assert client.app.state.core_runtime.daily_tracks.process_next() is True
         blocked = client.get(f"/api/daily-tracks/{track_id}").json()
         assert blocked["status"] == "blocked"
@@ -1026,6 +1059,7 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
         assert client.app.state.core_runtime.daily_tracks.process_next() is True
         first_recovery = client.get(f"/api/daily-tracks/{track_id}").json()
         assert first_recovery["strategy_session"] == "2026-08-07"
+        _refresh_daily_track(client, track_id, "financial-track-catch-up-refresh")
         assert client.app.state.core_runtime.daily_tracks.process_next() is True
         recovered = client.get(f"/api/daily-tracks/{track_id}").json()
         assert recovered["status"] == "active"
@@ -1079,6 +1113,7 @@ def test_industry_track_blocks_at_cutoff_then_requires_retry(tmp_path: Path) -> 
             expected_manifest=seed_head,
             operation_id="industry-track-lagged",
         )
+        _refresh_daily_track(client, track_id, "industry-track-blocked-refresh")
         assert client.app.state.core_runtime.daily_tracks.process_next() is True
         blocked = client.get(f"/api/daily-tracks/{track_id}").json()
         assert blocked["status"] == "blocked"
@@ -1144,6 +1179,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_64_sessions(
             price_offset=1,
             expected_manifest=head,
         )
+        _refresh_daily_track(client, track_id, "tracking-target-64-refresh")
 
         execution_events: list[dict[str, object]] = []
         head_at_publication: list[str] = []
@@ -1246,6 +1282,7 @@ def test_tracking_working_cache_failure_is_safe_and_non_authoritative(
             price_offset=1,
             expected_manifest=head,
         )
+        _refresh_daily_track(client, track_id, "tracking-cache-failure-refresh")
         cache_root = tmp_path / "canary-secret-working-cache"
         processor = DailyTrackService(
             runtime.database,
@@ -1326,6 +1363,7 @@ def test_tracking_advance_blocks_one_session_before_creating_an_attempt(
             price_offset=1,
             expected_manifest=head,
         )
+        _refresh_daily_track(client, track_id, "tracking-capacity-block-refresh")
 
         blocked_events: list[dict[str, object]] = []
         assert (
@@ -1380,14 +1418,20 @@ def test_tracking_advance_blocks_one_session_before_creating_an_attempt(
                      WHERE track_id = %s) AS attempts,
                     (SELECT count(*) FROM data.generation_pins
                      WHERE owner_kind = 'tracking_advance_attempt'
-                       AND status = 'active') AS active_pins
+                       AND status = 'active') AS active_pins,
+                    (SELECT queue_position FROM daily_tracks.tracks
+                     WHERE id = %s) AS track_queue_position
                 """,
-                (track_id,),
+                (track_id, track_id),
             ).fetchone()
         assert progression is not None
         assert progression["target_sessions"] == [date(2026, 8, 6)]
         assert progression["status"] == "blocked"
-        assert counts == {"attempts": 0, "active_pins": 0}
+        assert counts == {
+            "attempts": 0,
+            "active_pins": 0,
+            "track_queue_position": None,
+        }
 
         unchanged_retry_events: list[dict[str, object]] = []
         unchanged_retrier = DailyTrackService(
@@ -1544,6 +1588,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
             read_result_bundle=read_result_bundle,
         )
         failure_events: list[dict[str, object]] = []
+        _refresh_daily_track(client, retry_track, "tracking-retry-cycle-first-refresh")
         try:
             with pytest.raises(DailyTrackProgressionFailed):
                 failing.process_next(on_execution_event=failure_events.append)
@@ -1561,6 +1606,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
             assert progress["completed_target_sessions"] == 0
 
             claimed: list[str] = []
+            _refresh_daily_track(client, control_track, "tracking-control-first-refresh")
             assert (
                 runtime.daily_tracks.process_next(
                     on_claim=lambda track_id, _attempt_id: claimed.append(track_id)
@@ -1572,6 +1618,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
 
             _make_tracking_retry_eligible(settings, retry_track)
             claimed.clear()
+            _refresh_daily_track(client, control_track, "tracking-control-second-refresh")
             assert (
                 runtime.daily_tracks.process_next(
                     on_claim=lambda track_id, _attempt_id: claimed.append(track_id)
@@ -1714,8 +1761,9 @@ def test_blocked_and_retry_wait_tracks_stop_without_future_attempts(
             read_result_bundle=read_result_bundle,
             execution_memory_bytes=1,
         )
-        assert capacity_blocker.process_next() is True
         blocked_track, retry_wait_track = track_ids
+        _refresh_daily_track(client, blocked_track, "stop-blocked-track-refresh")
+        assert capacity_blocker.process_next() is True
         assert client.get(f"/api/daily-tracks/{blocked_track}").json()["status"] == "blocked"
         stop_events: list[dict[str, object]] = []
 
@@ -1780,6 +1828,7 @@ def test_blocked_and_retry_wait_tracks_stop_without_future_attempts(
                 generation_store=MountedGenerationStore(settings.data_mount),
                 read_result_bundle=read_result_bundle,
             )
+            _refresh_daily_track(client, retry_wait_track, "stop-retry-wait-track-refresh")
             with pytest.raises(DailyTrackProgressionFailed):
                 failing.process_next()
         finally:
@@ -1874,6 +1923,7 @@ def test_tracking_pool_timeout_enters_the_transient_cycle(
             lease_seconds=1,
             heartbeat_seconds=0.05,
         )
+        _refresh_daily_track(client, track_id, "tracking-pool-timeout-refresh")
         try:
             with pytest.raises(DailyTrackProgressionFailed):
                 processor.process_next(on_execution_event=exhaust_pool_during_calculation)
@@ -1952,6 +2002,7 @@ def test_tracking_retry_blocks_when_current_generation_breaks_the_frozen_target(
             price_offset=1,
             expected_manifest=seed_head,
         )
+        _refresh_daily_track(client, track_id, "tracking-generation-mismatch-refresh")
 
         def kill_first_attempt(event: dict[str, object]) -> None:
             if event["event"] == "tracking_execution_child_started":
@@ -2267,6 +2318,7 @@ def test_fixed_role_worker_replicas_claim_distinct_runs_and_tracks(
             price_offset=1,
             expected_manifest=head,
         )
+        _refresh_daily_track(client, guarded_track_id, "single-tracking-owner-refresh")
         tracking_owner = _start_claim_barrier_worker(settings, "tracking")
         assert _wait_for_barrier_claim(tracking_owner)["track_id"] == guarded_track_id
         rejected_tracking_owner = _run_worker_once(settings, "tracking")
@@ -2290,6 +2342,12 @@ def test_fixed_role_worker_replicas_claim_distinct_runs_and_tracks(
             ).json()["id"]
             for index, run_id in enumerate(run_ids)
         ]
+        for index, track_id in enumerate(track_ids):
+            _refresh_daily_track(
+                client,
+                str(track_id),
+                f"replicated-tracking-worker-refresh-{index}",
+            )
         tracking_workers = _run_worker_replicas(settings, "tracking", 2)
         assert all(worker.returncode == 0 for worker in tracking_workers), "\n\n".join(
             f"tracking worker {index} exited {worker.returncode}\n"
@@ -2379,6 +2437,7 @@ def test_tracking_execution_refuses_obsolete_numeric_contract(tmp_path: Path) ->
             price_offset=1,
             expected_manifest=head,
         )
+        _refresh_daily_track(client, track_id, "obsolete-tracking-contract-refresh")
 
         with pytest.raises(DailyTrackProgressionFailed):
             client.app.state.core_runtime.daily_tracks.process_next()
@@ -2623,6 +2682,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             read_result_bundle=read_result_bundle,
             progress=tracking_barrier,
         )
+        _refresh_daily_track(client, str(track["id"]), "attempt-start-head-first-refresh")
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(processor.process_next)
             assert claimed.wait(timeout=10)
@@ -2641,6 +2701,13 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         assert pinned_detail["data_through_session"] == latest_sessions[-1]
         assert pinned_detail["lag_sessions"] == 1
 
+        idle = _run_worker_once(settings, "tracking")
+        assert idle.returncode == 0, idle.stdout + idle.stderr
+        assert (
+            client.get(f"/api/daily-tracks/{track['id']}").json()["strategy_session"]
+            == extended_sessions[-1]
+        )
+        _refresh_daily_track(client, str(track["id"]), "attempt-start-head-second-refresh")
         completed = _run_worker_once(settings, "tracking")
         assert completed.returncode == 0, completed.stdout + completed.stderr
 
@@ -2751,6 +2818,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             read_result_bundle=read_result_bundle,
             progress=stop_barrier,
         )
+        _refresh_daily_track(client, str(track["id"]), "attempt-start-head-stop-refresh")
 
         def capture_stop_event(event: dict[str, object]) -> None:
             stop_events.append(event)
@@ -2857,6 +2925,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             read_result_bundle=read_result_bundle,
             progress=forced_stop_barrier,
         )
+        _refresh_daily_track(client, forced_track_id, "forced-tracking-stop-refresh")
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(
                 forced_processor.process_next,
@@ -2994,6 +3063,7 @@ def test_research_delete_preserves_track_until_explicit_stop_and_delete(
             read_result_bundle=read_result_bundle,
             working_cache_root=worker_cache_root,
         )
+        _refresh_daily_track(client, track_id, "delete-preserves-track-refresh")
         assert worker_tracks.process_next() is True
         worker_cache_paths = list(worker_cache_root.glob("*.json"))
         assert len(worker_cache_paths) == 1
@@ -3063,6 +3133,8 @@ def test_research_delete_preserves_track_until_explicit_stop_and_delete(
                      WHERE track_id = %s) AS attempts,
                     (SELECT count(*) FROM daily_tracks.stop_receipts
                      WHERE track_id = %s) AS stop_receipts,
+                    (SELECT count(*) FROM daily_tracks.refresh_receipts
+                     WHERE track_id = %s) AS refresh_receipts,
                     (SELECT count(*) FROM daily_tracks.retry_receipts
                      WHERE track_id = %s) AS retry_receipts,
                     (SELECT count(*) FROM publication.manifests
@@ -3072,6 +3144,7 @@ def test_research_delete_preserves_track_until_explicit_stop_and_delete(
                     (SELECT count(*) FROM publication.object_deletions) AS pending_deletions
                 """,
                 (
+                    track_id,
                     track_id,
                     track_id,
                     track_id,
@@ -3090,6 +3163,7 @@ def test_research_delete_preserves_track_until_explicit_stop_and_delete(
             "progressions": 0,
             "attempts": 0,
             "stop_receipts": 0,
+            "refresh_receipts": 0,
             "retry_receipts": 0,
             "owned_manifests": 0,
             "owned_objects": 0,
@@ -3350,6 +3424,11 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             read_result_bundle=read_result_bundle,
             progress=hold_stopping_track,
         )
+        _refresh_daily_track(
+            client,
+            str(tracks[0]["id"]),
+            "current-track-capacity-refresh",
+        )
 
         def hold_stopping_child(event: dict[str, object]) -> None:
             if event.get("event") == "tracking_execution_child_stop_requested":
@@ -3440,6 +3519,7 @@ def test_live_tracking_owner_renews_lease_and_blocks_duplicate_claim(
             expected_manifest=seed_head,
         )
         runtime = client.app.state.core_runtime
+        _refresh_daily_track(client, track_id, "tracking-live-owner-refresh")
 
         def block_started_child(event: dict[str, object]) -> None:
             owner_events.append(event)
@@ -3565,6 +3645,16 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             generation_store=MountedGenerationStore(settings.data_mount),
             read_result_bundle=read_result_bundle,
         )
+        _refresh_daily_track(
+            client,
+            str(first_track["id"]),
+            "track-recovery-first-refresh",
+        )
+        _refresh_daily_track(
+            client,
+            str(control_track["id"]),
+            "track-recovery-control-catch-up-refresh",
+        )
 
         def kill_tracking_child(event: dict[str, object]) -> None:
             if event["event"] == "tracking_execution_child_started":
@@ -3603,6 +3693,11 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         expected_manifest=catch_up_head,
     )
     with TestClient(create_app(settings)) as restarted:
+        _refresh_daily_track(
+            restarted,
+            str(control_track["id"]),
+            "track-recovery-control-latest-refresh",
+        )
         retry = restarted.post(
             f"/api/daily-tracks/{first_track['id']}/retry",
             json={"request_id": "track-recovery-retry"},
@@ -3636,6 +3731,11 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
 
         frozen_target = restarted.get(f"/api/daily-tracks/{first_track['id']}").json()
         assert frozen_target["strategy_session"] == catch_up_sessions[-1]
+        _refresh_daily_track(
+            restarted,
+            str(first_track["id"]),
+            "track-recovery-latest-refresh",
+        )
         completed = _run_worker_once(settings, "tracking")
         assert completed.returncode == 0, completed.stdout + completed.stderr
 
@@ -3720,6 +3820,11 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             generation_store=MountedGenerationStore(settings.data_mount),
             read_result_bundle=read_result_bundle,
         )
+        _refresh_daily_track(
+            restarted,
+            str(first_track["id"]),
+            "track-recovery-stale-refresh",
+        )
         with ThreadPoolExecutor(max_workers=1) as executor:
             stale_future = executor.submit(
                 stale_processor.process_next,
@@ -3800,6 +3905,16 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             read_result_bundle=read_result_bundle,
             working_cache_root=cache_root,
         )
+        _refresh_daily_track(
+            restarted,
+            str(first_track["id"]),
+            "track-recovery-cache-intact-first-refresh",
+        )
+        _refresh_daily_track(
+            restarted,
+            str(control_track["id"]),
+            "track-recovery-cache-damaged-first-refresh",
+        )
         assert intact_processor.process_next() is True
         assert cache_processor.process_next() is True
         cache_path = next(cache_root.glob("*.json"))
@@ -3810,6 +3925,16 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             sessions=cache_sessions,
             price_offset=4,
             expected_manifest=cache_head,
+        )
+        _refresh_daily_track(
+            restarted,
+            str(first_track["id"]),
+            "track-recovery-cache-intact-second-refresh",
+        )
+        _refresh_daily_track(
+            restarted,
+            str(control_track["id"]),
+            "track-recovery-cache-damaged-second-refresh",
         )
         assert intact_processor.process_next() is True
         assert cache_processor.process_next() is True
@@ -3848,6 +3973,16 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             sessions=unavailable_sessions,
             price_offset=4,
             expected_manifest=cache_head,
+        )
+        _refresh_daily_track(
+            restarted,
+            str(first_track["id"]),
+            "track-recovery-cache-unavailable-refresh",
+        )
+        _refresh_daily_track(
+            restarted,
+            str(control_track["id"]),
+            "track-recovery-cache-control-final-refresh",
         )
         completed = _run_worker_once(settings, "tracking")
         assert completed.returncode == 0, completed.stdout + completed.stderr
@@ -3995,6 +4130,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         )
         assert impact_outcome["status"] == "succeeded"
         assert impact_outcome["outcome"] == "published"
+        _refresh_daily_track(client, track_id, "forward-only-impact-refresh")
         assert runtime.daily_tracks.process_next() is True
 
         impact_detail = client.get(f"/api/daily-tracks/{track_id}")
@@ -4277,6 +4413,7 @@ def test_orphaned_tracking_child_exits_before_recovery_releases_its_pin(
             expected_manifest=seed_head,
         )
         publication_count = _publication_manifest_count(settings)
+        _refresh_daily_track(client, str(track_id), "orphaned-tracking-child-refresh")
         owner = _start_claim_barrier_worker(
             settings,
             "tracking",
@@ -4390,6 +4527,7 @@ def test_tracking_stop_survives_owner_loss_until_child_and_lease_are_dead(
             expected_manifest=seed_head,
         )
         publication_count = _publication_manifest_count(settings)
+        _refresh_daily_track(client, str(track_id), "lost-owner-tracking-stop-refresh")
         owner = _start_claim_barrier_worker(
             settings,
             "tracking",
@@ -5435,6 +5573,22 @@ def _publish_composite_head(
     finally:
         database.close()
     return composite.manifest_sha256
+
+
+def _refresh_daily_track(
+    client: TestClient,
+    track_id: str,
+    request_id: str,
+) -> dict[str, object]:
+    response = client.post(
+        f"/api/daily-tracks/{track_id}/refresh",
+        json={"request_id": request_id},
+    )
+    assert response.status_code == 202, response.text
+    outcome = response.json()
+    assert outcome["id"] == track_id
+    assert outcome["status"] == "active"
+    return outcome
 
 
 def _publish_head(

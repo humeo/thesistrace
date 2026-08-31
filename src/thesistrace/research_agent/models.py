@@ -235,6 +235,23 @@ class RetryDailyTrackInput(BaseModel):
     request_id: RequestId
 
 
+class RefreshDailyTrackInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    track_id: DailyTrackId
+    request_id: RequestId
+
+
+class RefreshDailyTrackOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    track_id: DailyTrackId
+    status: Literal["active"]
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)]
+
+
 class RetryDailyTrackOutcome(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
