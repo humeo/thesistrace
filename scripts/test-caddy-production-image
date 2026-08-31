@@ -287,3 +287,19 @@ if grep -E '"(request|headers|uri|query|body|token|formula|object_key|manifest|r
   echo "Caddy runtime log retained an unapproved field" >&2
   exit 1
 fi
+
+# Exercise the actual gateway image against a deterministic idle-close race.
+# Reuse the already-stopped, test-owned Auth fixture name for bounded cleanup.
+docker logs "$auth_container_name" >"$evidence_root/auth-header-echo.log" 2>&1
+docker rm --force "$auth_container_name" >/dev/null
+docker run --detach \
+  --name "$auth_container_name" \
+  --network "$network_name" \
+  --network-alias auth \
+  --network-alias api \
+  --volume "$repo_root/tests/fixtures/caddy-keepalive-upstream.mjs:/keepalive-probe.mjs:ro" \
+  node:24.14.0-bookworm-slim@sha256:d3d197c99e937af98e07c7830622c243d836a7485e6131495418232e787308fe \
+  node /keepalive-probe.mjs serve >"$evidence_root/keepalive-container-id.txt"
+docker exec "$auth_container_name" node /keepalive-probe.mjs probe \
+  >"$evidence_root/keepalive.json" 2>"$evidence_root/keepalive.stderr.log"
+cat "$evidence_root/keepalive.json"

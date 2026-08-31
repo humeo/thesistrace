@@ -120,6 +120,14 @@ def test_caddy_applies_the_exact_security_and_sanitized_logging_contract() -> No
         assert f"{runtime_field} delete" in caddyfile
 
 
+def test_caddy_bounds_idle_upstream_connections_without_retrying_mutations() -> None:
+    caddyfile = (DEPLOY / "Caddyfile").read_text()
+    assert caddyfile.count("transport http {") == 3
+    assert caddyfile.count("keepalive 4s") == 3
+    assert "lb_retry_match" not in caddyfile
+    assert "lb_retries" not in caddyfile
+
+
 def test_auth_image_reuses_the_package_store_for_production_deploy() -> None:
     dockerfile = (DEPLOY / "Dockerfile.auth").read_text()
 

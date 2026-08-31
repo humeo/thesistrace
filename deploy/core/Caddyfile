@@ -64,6 +64,10 @@
 		reverse_proxy auth:8200 {
 			header_up X-ThesisTrace-Client-IP {remote_host}
 			header_up X-Request-ID {http.request.uuid}
+			# Release idle sockets before Node's five-second keep-alive timeout.
+			transport http {
+				keepalive 4s
+			}
 		}
 	}
 
@@ -73,6 +77,9 @@
 		reverse_proxy api:8100 {
 			header_up X-ThesisTrace-Client-IP {remote_host}
 			header_up X-Request-ID {http.request.uuid}
+			transport http {
+				keepalive 4s
+			}
 		}
 	}
 
@@ -91,6 +98,9 @@
 			uri /internal/operator/page-access
 			header_up X-ThesisTrace-Client-IP {remote_host}
 			header_up X-Request-ID {http.request.uuid}
+			transport http {
+				keepalive 4s
+			}
 		}
 		try_files {path} /index.html
 		file_server
