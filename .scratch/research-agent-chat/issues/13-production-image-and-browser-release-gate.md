@@ -4,7 +4,7 @@
 
 **Blocked by:** 09 — Same-session concurrency and restart recovery; 12 — Real-model Eval and execution bounds
 
-**Status:** complete
+**Status:** ready-for-agent
 
 ## Implementation plan
 
@@ -111,3 +111,26 @@ and is never represented as passed evidence.
   waiver, the 33-attempt qualification is not executed by this ticket or its
   Release command, and neither the Luna/high baseline nor Scripted image
   evidence is represented as qualification-passed.
+
+### 2026-09-02 — Committed-HEAD release gate caught a stale integration oracle
+
+- Commit `b3e3899ac5f21bc81bc403274153684bccf62035` entered the clean-HEAD
+  Release command with `real_model_eval=not_run` and
+  `model_qualification=pending`. Source checks passed: Python 964, Agent 486,
+  offline Eval preflight 11, Auth 163 and Web 208, with all typechecks.
+- Core integration passed 370 tests plus its database, dependency, RustFS and
+  PostgreSQL restart gates. Auth integration then passed 89/89. Agent
+  integration failed deterministically at 55/57 before Browser or image-smoke
+  execution; both failing comparison modes expected two A2UI messages but
+  received one. The isolated Agent project cleaned its PostgreSQL container,
+  network and volume and retained sanitized evidence under the runner's
+  temporary evidence directory.
+- Diagnosis tied both failures to the same obsolete assertion. The fixed
+  Batch model intentionally renders progress only for an active Batch; the
+  integration fixture returns `succeeded` on its first read, so the correct
+  state is one terminal `batch-results-*` surface and no stale
+  `batch-progress-*` surface. The unit trajectory already enforced that
+  invariant. The PostgreSQL oracle is now aligned and explicitly rejects a
+  progress surface. This is a deterministic test-contract correction, not an
+  accepted flaky rerun; the issue remains open until focused verification,
+  re-review and a fresh committed-HEAD Release command pass.

@@ -1703,12 +1703,17 @@ describe.sequential("durable Research Agent runtime", () => {
       });
       expect(admission?.input).not.toHaveProperty("folder_id");
       const surfaces = a2uiMessages(events);
-      expect(surfaces).toHaveLength(2);
+      // The fixture's first Batch read is already terminal. Persist only the
+      // authoritative Result surface; a stale progress surface would make a
+      // fast Batch render differently from the same terminal Batch on Resume.
+      expect(surfaces).toHaveLength(1);
+      expect(JSON.stringify(surfaces)).toContain("batch-results-");
+      expect(JSON.stringify(surfaces)).not.toContain("batch-progress-");
       const stored = await owner.query<{ content: unknown; lifecycle_status: string }>(`
         SELECT content, lifecycle_status FROM agent.a2ui_message
         WHERE thread_id = $1::uuid ORDER BY sequence
       `, [threadId]);
-      expect(stored.rows.map((row) => row.lifecycle_status)).toEqual(["ready", "ready"]);
+      expect(stored.rows.map((row) => row.lifecycle_status)).toEqual(["ready"]);
       expect(stored.rows.map((row) => row.content)).toEqual(surfaces.map((surface) => surface.content));
       const outcomes = await owner.query<{ content: string }>(`
         SELECT content FROM agent.mastra_messages WHERE thread_id = $1
