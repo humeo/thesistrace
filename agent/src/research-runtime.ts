@@ -2,7 +2,6 @@ import { Agent } from "@mastra/core/agent";
 import { noopLogger } from "@mastra/core/logger";
 import { Mastra } from "@mastra/core/mastra";
 import { RequestContext } from "@mastra/core/request-context";
-import { TokenLimiterProcessor, type Processor } from "@mastra/core/processors";
 import { Memory } from "@mastra/memory";
 import { PostgresStore } from "@mastra/pg";
 import {
@@ -151,15 +150,12 @@ export async function createResearchRuntime(
   const agent = new Agent({
     defaultOptions: ({ requestContext }) => {
       const observation = requestContext.get<string, RunModelObservation | undefined>("modelObservation");
-      const outputLimit = Object.assign(
-        new TokenLimiterProcessor({ limit: AGENT_LIMITS.outputTokens, strategy: "abort" }),
-        { onViolation: () => { observation?.fail("AGENT_LIMIT"); } } satisfies Pick<Processor, "onViolation">,
-      );
       return {
         abortSignal: requestContext.get<string, AbortSignal | undefined>("agentAbortSignal"),
         maxSteps: AGENT_LIMITS.steps,
+        // Output tokens are bounded per model call. The guarded model also
+        // enforces the generated-byte budget across the complete Run.
         modelSettings: { maxOutputTokens: AGENT_LIMITS.outputTokens, timeout: { stepMs: AGENT_LIMITS.providerCallMs } },
-        outputProcessors: [outputLimit],
         maxProcessorRetries: 0,
         onError: ({ error }: { error: unknown }) => { observation?.fail(providerFailureCode(error)); },
         providerOptions: selectionFrom(requestContext).providerOptions,

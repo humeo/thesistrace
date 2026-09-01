@@ -89,6 +89,7 @@ services:
 
   agent:
     environment:
+      OPENAI_BASE_URL: ${THESISTRACE_AGENT_OPENAI_BASE_URL:?THESISTRACE_AGENT_OPENAI_BASE_URL is required}
       THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth-exchange-proxy:8250
       THESISTRACE_MCP_INTERNAL_URL: http://mcp-fault-proxy:8150/mcp
     depends_on:

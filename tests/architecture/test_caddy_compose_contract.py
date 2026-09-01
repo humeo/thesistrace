@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -317,6 +318,52 @@ def test_development_and_test_origins_are_exact_before_compose_rendering() -> No
     assert 'THESISTRACE_AGENT_IMAGE="$project_name-agent"' in runner
     assert 'THESISTRACE_MCP_SIGNING_PRIVATE_JWK="$mcp_signing_private_jwk"' in runner
     assert runner.index("caddy_port=") < runner.index("compose config --quiet")
+
+
+def test_development_agent_uses_the_configured_local_luna_provider() -> None:
+    development = (DEPLOY / "compose.dev.yaml").read_text()
+    agent = _service(development, "agent", "research-worker")
+    environment = dict(
+        line.split("=", maxsplit=1)
+        for line in (DEPLOY / "dev.env").read_text().splitlines()
+        if line and not line.startswith("#")
+    )
+
+    assert "THESISTRACE_AGENT_OPENAI_API_KEY: ${CLI_API_KEY:?" in agent
+    assert "OPENAI_BASE_URL: ${THESISTRACE_AGENT_OPENAI_BASE_URL:?" in agent
+    assert "CLI_API_KEY" not in development.replace(agent, "")
+    assert "OPENAI_BASE_URL" not in development.replace(agent, "")
+    assert "CLI_API_KEY" not in environment
+    assert "THESISTRACE_AGENT_OPENAI_API_KEY" not in environment
+    assert environment["THESISTRACE_AGENT_OPENAI_BASE_URL"] == (
+        "http://host.docker.internal:8317/v1"
+    )
+    registry = json.loads(environment["THESISTRACE_AGENT_MODEL_REGISTRY"])
+    assert registry == {
+        "default_model_key": "gpt-5.6-luna",
+        "models": [{
+            "default_reasoning_effort": "high",
+            "display_name": "GPT-5.6 Luna",
+            "enabled": True,
+            "key": "gpt-5.6-luna",
+            "provider_adapter": "openai",
+            "provider_model_id": "gpt-5.6-luna",
+            "reasoning_efforts": ["high"],
+            "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
+        }],
+    }
+    assert "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET" not in environment
+
+
+def test_eval_endpoint_is_explicit_and_deterministic_test_endpoint_is_inert() -> None:
+    overlay = (DEPLOY / "compose.test-run.yaml").read_text()
+    agent = _service(overlay, "agent", "postgres")
+    runner = (ROOT / "scripts" / "test-runtime").read_text()
+
+    assert "OPENAI_BASE_URL: ${THESISTRACE_AGENT_OPENAI_BASE_URL:?" in agent
+    assert "OPENAI_BASE_URL" not in overlay.replace(agent, "")
+    assert "agent_openai_base_url=http://provider.invalid/v1" in runner
+    assert 'THESISTRACE_AGENT_OPENAI_BASE_URL="$agent_openai_base_url"' in runner
 
 
 def test_active_deployment_contains_no_nginx_contract() -> None:

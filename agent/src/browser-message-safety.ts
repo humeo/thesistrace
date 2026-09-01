@@ -79,13 +79,16 @@ export function projectDurableUiMessages(
       throw new BrowserTranscriptError();
     }
 
+    // Mastra's content convenience field can hold only the final step's text.
+    // Ordered text parts preserve the complete streamed Assistant response.
+    const content = readDurableAssistantText(message.parts);
     const invocations = readDurableToolInvocations(message.parts).filter(
       ({ invocation }) => !A2UI_FRAMEWORK_TOOL_NAMES.has(invocation.toolName),
     );
     const assistant: Message = invocations.length === 0
-      ? { content: message.content, id: message.id, role: "assistant" }
+      ? { content, id: message.id, role: "assistant" }
       : {
-          content: message.content,
+          content,
           id: message.id,
           role: "assistant",
           toolCalls: invocations.map(({ invocation }) => ({
@@ -414,6 +417,15 @@ export function safeToolResultMessageId(toolCallId: string): string {
   bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
   const hex = bytes.toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function readDurableAssistantText(parts: unknown): string {
+  if (!Array.isArray(parts)) throw new BrowserTranscriptError();
+  return parts.map((part: unknown) => {
+    if (!isRecord(part) || part.type !== "text") return "";
+    if (typeof part.text !== "string") throw new BrowserTranscriptError();
+    return part.text;
+  }).join("");
 }
 
 function readDurableToolInvocations(parts: unknown): ReadonlyArray<{

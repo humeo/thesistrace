@@ -9,6 +9,7 @@
     "schema:generate": "./scripts/test-runtime schema-generate",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
+    "test:eval-preflight": "pnpm build && node --test scripts/eval-research.test.mjs",
     "test:integration": "./scripts/test-runtime integration",
     "test:image-smoke": "./scripts/test-runtime image-smoke",
     "start": "node dist/server.js"

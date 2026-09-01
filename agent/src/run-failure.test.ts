@@ -28,6 +28,23 @@ test("handles typed malformed, credential and internal errors without message he
   expect(safe.cause).toBeUndefined();
 });
 
+test.each([
+  new TypeError("UND_ERR_SOCKET private-message-canary"),
+  new TypeError("private-message-canary", { cause: Object.assign(new Error("private-cause-canary"), { code: "UNKNOWN" }) }),
+  new TypeError("private-message-canary", { cause: { code: "UND_ERR_SOCKET" } }),
+  { type: "unknown", sequence_number: 1, code: "server_error", message: "private-message-canary" },
+  { type: "error", sequence_number: -1, code: "server_error", message: "private-message-canary" },
+  { type: "error", sequence_number: "1", code: "server_error", message: "private-message-canary" },
+])("unproven transport or frame metadata stays an internal failure %#", (error) => {
+  expect(providerFailureCode(error)).toBe("INTERNAL_FAILURE");
+});
+
+test("private stream-error wording cannot change the public failure category", () => {
+  const error = { type: "error", sequence_number: 1, code: "server_error", message: "401 429 timeout private-message-canary" };
+  expect(providerFailureCode(error)).toBe("PROVIDER_UNAVAILABLE");
+  expect(JSON.stringify(runFailureEvent(providerFailureCode(error)))).not.toMatch(/401|429|timeout|canary/);
+});
+
 test("every closed failure has safe copy and an explicit legal next action", () => {
   expect(new Set(AGENT_FAILURE_CODES).size).toBe(AGENT_FAILURE_CODES.length);
   for (const code of AGENT_FAILURE_CODES) {

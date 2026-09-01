@@ -379,6 +379,11 @@ function SessionDecisionDialog({
     };
   }, []);
 
+  function dismissDialog(): void {
+    panelRef.current?.close();
+    onClose();
+  }
+
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
     if (submitting) return;
@@ -387,9 +392,11 @@ function SessionDecisionDialog({
     try {
       if (dialog.kind === "rename") {
         await controller.renameSession(dialog.session, title);
-        onClose();
+        dismissDialog();
       } else {
         await controller.deleteSession(dialog.session);
+        // Release native modality before the parent navigates and restores focus.
+        panelRef.current?.close();
         onDeleted(dialog.session.id);
       }
     } catch (caught) {
@@ -420,7 +427,7 @@ function SessionDecisionDialog({
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      if (!submitting) onClose();
+      if (!submitting) dismissDialog();
       return;
     }
     if (event.key !== "Tab") return;
@@ -450,7 +457,7 @@ function SessionDecisionDialog({
       onCancel={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        if (!submitting) onClose();
+        if (!submitting) dismissDialog();
       }}
       onKeyDown={handleKeyDown}
       ref={panelRef}
@@ -460,7 +467,7 @@ function SessionDecisionDialog({
           <p className="eyebrow">Chat Session</p>
           <h2 id={titleId}>{dialog.kind === "rename" ? "Rename Chat" : "Delete Chat?"}</h2>
         </div>
-        <button aria-label="Close dialog" disabled={submitting} onClick={onClose} type="button">
+        <button aria-label="Close dialog" disabled={submitting} onClick={dismissDialog} type="button">
           <X aria-hidden="true" size={18} />
         </button>
       </header>
@@ -490,7 +497,7 @@ function SessionDecisionDialog({
           <button
             className="button-quiet"
             disabled={submitting}
-            onClick={onClose}
+            onClick={dismissDialog}
             ref={dialog.kind === "delete"
               ? initialFocusRef as React.RefObject<HTMLButtonElement>
               : undefined}

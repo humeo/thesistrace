@@ -101,7 +101,9 @@ function providerOptionsFor(
         ? { google: { thinkingConfig: { thinkingBudget: 0 } } }
         : { google: { thinkingConfig: { thinkingLevel: effort } } };
     case "openai":
-      return { openai: { reasoningEffort: effort } };
+      // Mastra owns conversation history. Replay native encrypted reasoning
+      // instead of depending on provider-side item retention between steps.
+      return { openai: { reasoningEffort: effort, serviceTier: "default", store: false } };
     case "scripted":
       return {};
   }

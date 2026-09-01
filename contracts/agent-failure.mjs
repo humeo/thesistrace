@@ -18,6 +18,7 @@ const definitions = {
   INTERNAL_FAILURE: ["Agent run failed", "The Agent could not complete this run. Completed research is retained. You can explicitly retry.", "retry"],
   AGENT_RUN_INTERRUPTED: ["Agent run interrupted", "This run was interrupted. Completed research continues independently. You can ask the Agent to inspect it.", "revise"],
   AGENT_RUN_CONFLICT: ["Chat already running", "This Chat is already running. Reconnect to follow the current run.", "reconnect"],
+  AGENT_CAPACITY: ["Agent at capacity", "All Agent execution slots are occupied. No new run was accepted. Wait before explicitly retrying.", "retry"],
   INVALID_CHAT_REQUEST: ["Invalid message", "The message could not be accepted. Revise it before sending again.", "revise"],
   CHAT_SESSION_NOT_FOUND: ["Chat not found", "This Chat is unavailable. Start a new Chat to continue.", "new-chat"],
 };

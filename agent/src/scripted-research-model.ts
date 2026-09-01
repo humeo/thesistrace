@@ -611,7 +611,9 @@ function researchCommand(options: Readonly<{
   // already-published prefix available as warmup; Core remains authoritative
   // and revalidates the revised command. A one-session coverage cannot change.
   if (options.repairCalculationWarmup && boundedStart === endDate) return null;
-  const startDate = options.repairCalculationWarmup ? endDate : boundedStart;
+  // This explicit scripted case exercises Core's real Dataset-boundary rejection.
+  const startDate = options.repairCalculationWarmup ? endDate
+    : options.mode === "admission-repair" ? coverage.start : boundedStart;
   return {
     request_id: options.requestId,
     folder_id: folder.id,

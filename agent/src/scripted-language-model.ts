@@ -311,10 +311,11 @@ function scriptedLargeA2UITable(options: LanguageModelV3CallOptions): ScriptedRe
   const available = options.tools?.some((tool) => (
     tool.type === "function" && tool.name === "render_a2ui"
   )) === true;
-  if (rendered || !available) {
-    const text = rendered
-      ? "This is a renderer acceptance sample, not a Research Result."
-      : "The registered Agent tools do not include the required research renderer.";
+  // The rendered table is the complete answer; exercise the native empty-stop
+  // continuation instead of requiring an additional prose message.
+  if (rendered) return { chunks: [], text: "", tool: null };
+  if (!available) {
+    const text = "The registered Agent tools do not include the required research renderer.";
     return { chunks: [text], text, tool: null };
   }
   return {

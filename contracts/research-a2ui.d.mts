@@ -7,7 +7,13 @@ export const RESEARCH_A2UI_MAX_DEPTH: number;
 
 export const RESEARCH_A2UI_INLINE_CATALOG: Readonly<{
   catalogId: typeof RESEARCH_A2UI_CATALOG_ID;
-  components: Readonly<Record<string, Record<string, unknown>>>;
+  components: Readonly<Record<string, Readonly<{
+    additionalProperties: false;
+    description: string;
+    properties: Readonly<Record<string, Record<string, unknown>>>;
+    required?: readonly string[];
+    type: "object";
+  }>>>;
 }>;
 
 export type ResearchA2UIProjection = Readonly<{

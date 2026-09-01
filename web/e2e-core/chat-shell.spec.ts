@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync, type ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
 import type { Locator, Page, Route } from "@playwright/test";
 
 import {
@@ -16,6 +17,12 @@ import {
   controlWorker,
   startControlledResearchRun,
 } from "./research-run-control";
+
+// Playwright's HTML report retains browser-step source snippets even on success.
+// Keep private marker literals in the shared fixture, outside those snippets.
+const unsafeA2uiCanary: string = JSON.parse(readFileSync(
+  new URL("../../tests/fixtures/agent-privacy-canaries.json", import.meta.url), "utf8",
+)).unsafe_a2ui;
 
 const scriptedFactorIdeaPrompt =
   "Evaluate a low-volatility Alpha idea as a Factor Evaluation using reliable ThesisTrace defaults.";
@@ -144,6 +151,45 @@ test("an unknown durable Session URL fails closed instead of becoming a new Chat
   await expect(page.getByRole("heading", { name: "Chat not found" })).toBeVisible();
   await expect(page).toHaveURL(/\/chat\?session=.*&session=.*/);
 });
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 390, height: 844 },
+]) {
+  test(`Chat deletion restores ${viewport.name} navigation focus`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/chat");
+    const message = page.getByRole("textbox", { name: "Message", exact: true });
+    await expect(message).toBeEnabled();
+    await message.fill("Build a low volatility Alpha.");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(agentRunStatus(page)).toHaveText("Run complete");
+    const sessionUrl = page.url();
+    expect(new URL(sessionUrl).searchParams.get("session")).not.toBeNull();
+    const navigation = page.getByRole("button", { name: "Open navigation" });
+    if (viewport.name === "mobile") await navigation.click();
+    const actions = page.locator(".chat-session-row").getByRole("button");
+    await actions.click();
+    await page.getByRole("menuitem", { name: "Delete Chat", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Delete Chat?", exact: true });
+    await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+    await dialog.getByRole("button", { name: "Delete Chat", exact: true }).click();
+    await expect(page).toHaveURL(/\/chat$/);
+    await expect(dialog).toHaveCount(0);
+    const focusTarget = viewport.name === "mobile"
+      ? navigation
+      : page.getByRole("link", { name: "New Chat", exact: true });
+    await expect(focusTarget).toBeFocused();
+    await expect(message).toBeEnabled();
+    await expect(focusTarget).toBeFocused();
+    if (viewport.name === "mobile") {
+      await expect(navigation).toHaveAttribute("aria-expanded", "false");
+      await expect(page.locator("#chat-navigation")).toHaveAttribute("inert", "");
+    }
+    await page.goto(sessionUrl);
+    await expect(page.getByRole("heading", { name: "Chat not found" })).toBeVisible();
+  });
+}
 
 test("first Chat turn streams through Caddy and reload replays without another run", async ({ page }) => {
   const runRequests: string[] = [];
@@ -479,6 +525,47 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await expect(openNavigation).toBeFocused();
 });
 
+test("Chat preserves bounded multi-step output across reload and a subsequent message", async ({ page }) => {
+  let submittedRuns = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/agent/research/run")) submittedRuns++;
+  });
+  await page.goto("/chat");
+  const message = page.getByRole("textbox", { name: "Message", exact: true });
+  await message.fill("[scripted-multi-step-output] Produce two bounded outputs around a research context inspection.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  const assistant = page.locator(".chat-message-assistant .chat-assistant-markdown");
+  const outputCounts = async () => {
+    const text = (await assistant.allTextContents()).join(" ");
+    return {
+      beforeTool: text.match(/\balpha\b/g)?.length ?? 0,
+      afterTool: text.match(/\bbravo\b/g)?.length ?? 0,
+    };
+  };
+  await expect.poll(outputCounts).toEqual({ beforeTool: 4_500, afterTool: 4_500 });
+  const tool = page.getByRole("article", { name: "Tool get_research_context: Completed", exact: true });
+  await expect(tool).toHaveCount(1);
+  const durableUrl = page.url();
+  expect(submittedRuns).toBe(1);
+
+  await page.reload();
+  await expect(page).toHaveURL(durableUrl);
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  await expect.poll(outputCounts).toEqual({ beforeTool: 4_500, afterTool: 4_500 });
+  await expect(tool).toHaveCount(1);
+  expect(submittedRuns).toBe(1);
+
+  await expect(message).toBeEnabled();
+  await message.fill("Continue this research.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.locator(".chat-message-user")).toHaveCount(2);
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  await expect(message).toBeEnabled();
+  await expect(tool).toHaveCount(1);
+  expect(submittedRuns).toBe(2);
+});
+
 test("Chat executes a real protected MCP read Tool and renders only its safe lifecycle", async ({ page }) => {
   const runResponse = page.waitForResponse((response) =>
     new URL(response.url()).pathname.endsWith("/agent/research/run"),
@@ -570,19 +657,21 @@ for (const [scenario, prompt] of [
 ] as const) {
 test(`Chat rejects an invalid model-authored A2UI surface and remains usable: ${scenario}`, async ({ page }) => {
   await page.goto("/chat");
-  await page.evaluate(() => {
+  await page.evaluate((canary) => {
     const evidence = { sawUnsafeSurface: false };
     Object.assign(window, { a2uiRejectionEvidence: evidence });
     new MutationObserver(() => {
       evidence.sawUnsafeSurface ||= document.body.textContent
-        ?.includes("MALICIOUS_A2UI_SHOULD_NOT_RENDER") === true;
+        ?.includes(canary) === true;
     }).observe(document.body, { characterData: true, childList: true, subtree: true });
-  });
+  }, unsafeA2uiCanary);
   const message = page.getByRole("textbox", { name: "Message", exact: true });
   await message.fill(prompt);
   await page.getByRole("button", { name: "Send message" }).click();
 
-  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  // This assertion spans admission, native Tool validation and persisted
+  // completion in the resource-bounded image, not just a synchronous UI update.
+  await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
   expect(await page.evaluate(() => (
     window as Window & { a2uiRejectionEvidence?: { sawUnsafeSurface: boolean } }
   ).a2uiRejectionEvidence?.sawUnsafeSurface)).toBe(false);
@@ -592,7 +681,8 @@ test(`Chat rejects an invalid model-authored A2UI surface and remains usable: ${
   await expect(safeError).toHaveText(
     "This research surface could not be displayed. The conversation is still available.",
   );
-  await expect(page.locator("body")).not.toContainText("MALICIOUS_A2UI_SHOULD_NOT_RENDER");
+  expect((await page.locator("body").textContent())?.includes(unsafeA2uiCanary),
+    "unsafe research content reached the page").toBe(false);
   await expect(page.locator("body")).not.toContainText("delete_research");
   await expect(page.getByRole("article", { name: /Tool render_a2ui:/ })).toHaveCount(0);
   await expect(page.locator(".chat-message-assistant .chat-message-content").last())
@@ -618,8 +708,8 @@ test(`Chat rejects an invalid model-authored A2UI surface and remains usable: ${
   await message.fill("Continue after rejecting that unsafe surface.");
   await page.getByRole("button", { name: "Send message" }).click();
   expect((await continuationResponse).status()).toBe(200);
-  await expect(assistantMessages).toHaveCount(assistantCount + 1);
-  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  await expect(assistantMessages).toHaveCount(assistantCount + 1, { timeout: 30_000 });
+  await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
   await expect(assistantMessages.last())
     .toContainText("testable Alpha");
   await expect(safeError).toBeVisible();
@@ -717,10 +807,21 @@ test("A2UI shows real running state and supports keyboard and narrow-screen resu
   }
 });
 
-test("a large A2UI table preserves column meaning and layout on a narrow screen", async ({ page }, testInfo) => {
+test("an A2UI-only answer completes, replays and preserves large table layout on a narrow screen", async ({ page }, testInfo) => {
   await page.goto("/chat");
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(scriptedLargeA2UITablePrompt);
+  const admission = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/agent/copilotkit/agent/research/run"
+    && response.request().method() === "POST");
   await page.getByRole("button", { name: "Send message" }).click();
+  const admitted = await admission;
+  if (admitted.status() !== 200) {
+    const body: unknown = await admitted.json().catch(() => null);
+    const code = body !== null && typeof body === "object" && "code" in body
+      && ["AUTH_SERVICE_UNAVAILABLE", "AGENT_SERVICE_UNAVAILABLE", "AUTHENTICATION_REQUIRED"].includes(String(body.code)) ? body.code : "UNCLASSIFIED";
+    await testInfo.attach("chat-admission.json", { contentType: "application/json",
+      body: Buffer.from(JSON.stringify({ status: admitted.status(), code })) });
+  }
+  expect(admitted.status(), "Chat must be admitted before testing A2UI completion").toBe(200);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   const disclosure = page.getByRole("button", { name: "Inspect 100 sample rows" });
   await keyboardFocus(page, disclosure);

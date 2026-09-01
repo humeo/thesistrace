@@ -35,6 +35,9 @@ import { runFailureEvent } from "./run-failure.js";
 import type { RunSelection } from "../../contracts/agent-run-selection.mjs";
 
 export const RESEARCHER_ID_HEADER = "x-thesistrace-agent-researcher-id";
+// One Host replica. Reject excess work; never create a hidden queue. Changes
+// require deterministic saturation and real-model envelope qualification.
+export const MAX_ACTIVE_AGENT_RUNS = 4;
 
 type ActiveRun = Readonly<{
   events: Observable<BaseEvent>;
@@ -64,6 +67,10 @@ export class DurableResearchAgentRunner extends AgentRunner {
         return of(safeRunConflict());
       }
       return current.events;
+    }
+    if (current !== undefined) return of(safeRunConflict());
+    if (this.active.size >= MAX_ACTIVE_AGENT_RUNS) {
+      return of(runFailureEvent("AGENT_CAPACITY"));
     }
 
     let accepted: Observable<BaseEvent>;

@@ -71,6 +71,14 @@ describe("Session title real-model Eval contract", () => {
       success_rate: 0.5,
       success_variance: 0.25,
       title_length_stddev: 2,
+      usage_complete: true,
     });
+  });
+
+  it("does not turn an unreported paid invocation into zero cost", () => {
+    expect(summarizeSessionTitleEval([{
+      caseId: "quality-alpha", durationMs: 10, estimatedCostUsd: null,
+      inputTokens: null, outputTokens: null, succeeded: false, titleCharacters: 0,
+    }])).toMatchObject({ usage_complete: false, estimated_cost_usd: null, input_tokens: null, output_tokens: null });
   });
 });

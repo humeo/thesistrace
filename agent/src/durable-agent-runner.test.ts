@@ -10,7 +10,7 @@ import {
   RESEARCH_A2UI_CATALOG_ID,
   RESEARCH_A2UI_PROTOCOL_VERSION,
 } from "../../contracts/research-a2ui.mjs";
-import { DurableResearchAgentRunner } from "./durable-agent-runner.js";
+import { DurableResearchAgentRunner, MAX_ACTIVE_AGENT_RUNS } from "./durable-agent-runner.js";
 import {
   SessionActiveRunError,
   type ResearchSessionRepository,
@@ -25,6 +25,37 @@ class HoldingAgent extends AbstractAgent {
 }
 
 describe("DurableResearchAgentRunner", () => {
+  it("rejects excess Threads without queuing, preserves replay, and releases a terminal slot", async () => {
+    const runner = new DurableResearchAgentRunner({} as ResearchSessionRepository);
+    const accepted = Array.from({ length: MAX_ACTIVE_AGENT_RUNS }, () => {
+      const agent = new HoldingAgent();
+      const threadId = randomUUID(), runId = randomUUID();
+      const request = { agent, input: input(threadId, runId), threadId };
+      const stream = runner.run(request);
+      const done = firstValueFrom(stream.pipe(toArray()));
+      return { agent, request, stream, done };
+    });
+    await vi.waitFor(() => expect(accepted.every(({ agent }) => agent.events.observed)).toBe(true));
+    const excess = new HoldingAgent(), threadId = randomUUID();
+    const request = { agent: excess, threadId, input: input(threadId, randomUUID()) };
+    await expect(firstValueFrom(runner.run(request).pipe(toArray()))).resolves.toMatchObject([
+      { type: "RUN_ERROR", code: "AGENT_CAPACITY" },
+    ]);
+    expect(excess.events.observed).toBe(false);
+    expect(runner.run(accepted[0]!.request)).toBe(accepted[0]!.stream);
+    await expect(firstValueFrom(runner.run({
+      ...accepted[0]!.request, input: input(accepted[0]!.request.threadId, randomUUID()),
+    }).pipe(toArray()))).resolves.toMatchObject([{ code: "AGENT_RUN_CONFLICT" }]);
+    accepted[0]!.agent.events.complete();
+    await accepted[0]!.done;
+    const next = firstValueFrom(runner.run(request).pipe(toArray()));
+    await vi.waitFor(() => expect(excess.events.observed).toBe(true));
+    excess.events.complete();
+    for (const item of accepted.slice(1)) item.agent.events.complete();
+    await Promise.all([next, ...accepted.map((item) => item.done)]);
+    await expect(runner.isRunning({ threadId })).resolves.toBe(false);
+  });
+
   it("keeps raw storage failures out of the framework SSE logger", async () => {
     const runner = new DurableResearchAgentRunner({
       connectionSnapshot: async () => { throw new Error("runner-private-storage-canary"); },

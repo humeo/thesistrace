@@ -27,6 +27,13 @@ export function providerFailureCode(error: unknown): AgentFailureCode {
     if (error.statusCode === 408 || error.statusCode === 504) return "PROVIDER_TIMEOUT";
     return "PROVIDER_UNAVAILABLE";
   }
+  // Node fetch rejects an interrupted SSE body with its native TypeError,
+  // outside the SDK's HTTP-status wrapper. Inspect only the transport code;
+  // private exception messages and socket details never cross this boundary.
+  if (error instanceof TypeError && error.cause instanceof Error
+    && "code" in error.cause && error.cause.code === "UND_ERR_SOCKET") {
+    return "PROVIDER_UNAVAILABLE";
+  }
   if (error instanceof DOMException && error.name === "TimeoutError") return "PROVIDER_TIMEOUT";
   // Mastra does not export this class; its public timeout contract carries
   // this name and bounded scope, never a provider-specific message pattern.
@@ -39,5 +46,22 @@ export function providerFailureCode(error: unknown): AgentFailureCode {
     || NoContentGeneratedError.isInstance(error) || TypeValidationError.isInstance(error)
     || JSONParseError.isInstance(error)
   ) return "PROVIDER_MALFORMED_STREAM";
+  // After output starts, the native SDK emits validated Responses error
+  // frames as objects instead of APICallError. Read only their code metadata.
+  if (isRecord(error) && !(error instanceof Error)
+    && typeof error.sequence_number === "number" && Number.isSafeInteger(error.sequence_number)
+    && error.sequence_number >= 0) {
+    const detail = error.type === "error" ? (isRecord(error.error) ? error.error : error)
+      : error.type === "response.failed" && isRecord(error.response) ? error.response.error : undefined;
+    if (isRecord(detail) && typeof detail.message === "string"
+      && (typeof detail.code === "string" || detail.code === null || detail.code === undefined)) {
+      if (detail.code === "rate_limit_exceeded" || detail.code === "insufficient_quota") return "PROVIDER_RATE_LIMIT";
+      return "PROVIDER_UNAVAILABLE";
+    }
+  }
   return "INTERNAL_FAILURE";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

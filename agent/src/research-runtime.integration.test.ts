@@ -34,6 +34,8 @@ import { createResearchRuntime as createRuntime, type ResearchRuntime, type Rese
 import { initializeAgentSchema } from "./schema-initialize.js";
 import {
   SCRIPTED_FACTOR_IDEA_PROMPT,
+  SCRIPTED_FORMULA_REPAIR_IDEA_PROMPT,
+  SCRIPTED_ADMISSION_REPAIR_IDEA_PROMPT,
   SCRIPTED_RESUME_RESEARCH_PROMPT,
   SCRIPTED_DISCOVERY_PROMPT,
   SCRIPTED_RELOAD_DAILY_TRACK_PROMPT,
@@ -42,6 +44,7 @@ import {
   SCRIPTED_INVALID_A2UI_PROMPT,
   SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT,
   SCRIPTED_INVALID_A2UI_DATA_PROMPT,
+  SCRIPTED_LARGE_A2UI_TABLE_PROMPT,
   SCRIPTED_TOOL_PROMPT,
 } from "./scripted-language-model.js";
 import {
@@ -59,8 +62,10 @@ import {
 } from "./session-management.js";
 import { parseGeneratedSessionTitle } from "./session-title.js";
 import type { VerifiedResearcher } from "./session-verifier.js";
-import { SCRIPTED_FAILURE_PROMPTS, SCRIPTED_FAILURE_AFTER_TOOL_PROMPT, SCRIPTED_INVALID_USAGE_PROMPT, SCRIPTED_STEP_LIMIT_PROMPT } from "./scripted-failure-model.js";
+import { SCRIPTED_FAILURE_PROMPTS, SCRIPTED_FAILURE_AFTER_TOOL_PROMPT, SCRIPTED_INVALID_USAGE_PROMPT, SCRIPTED_MULTI_STEP_OUTPUT_PROMPT, SCRIPTED_STEP_LIMIT_PROMPT } from "./scripted-failure-model.js";
 import { AGENT_LIMITS } from "./guarded-language-model.js";
+import { MAX_ACTIVE_AGENT_RUNS } from "./durable-agent-runner.js";
+import { readResearchEvalMemoryFacts } from "./research-eval-memory.js";
 
 const ownerDatabaseUrl = process.env.THESISTRACE_AGENT_TEST_OWNER_DATABASE_URL;
 if (ownerDatabaseUrl === undefined) {
@@ -210,6 +215,39 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(tools.every((message) => parseSafeToolResult(message.content)?.outcome === "completed")).toBe(true);
       expect(JSON.stringify(replay)).toContain("run_0123456789abcdef0123");
       expect(calls).toBe(expectedCalls);
+    } finally { await runtime.close(); }
+  });
+
+  it("streams and replays complete output when each model call is within its token limit", async () => {
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => undefined,
+        hasFatalToolFailure: () => false,
+        toolFailure: () => undefined,
+        tools: {
+          get_research_context: createTool({
+            id: "get_research_context",
+            description: "Research context",
+            inputSchema: z.object({}).strict(),
+            execute: async () => ({ ready: true }),
+          }),
+        },
+      }),
+    });
+    const input = runInput({ content: SCRIPTED_MULTI_STEP_OUTPUT_PROMPT, messageId: fixedUuid(742), runId: fixedUuid(741), threadId: fixedUuid(740) });
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+      const streamedText = events.filter((event) => event.type === "TEXT_MESSAGE_CONTENT").map((event) => event.delta).join("");
+      expect(Buffer.byteLength(streamedText, "utf8")).toBe(54_000);
+      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      const replay = await connect(runtime, input.threadId, primaryResearcher);
+      expect(replay.at(-1)?.type).toBe("RUN_FINISHED");
+      const messages = snapshotMessages(replay);
+      const replayedText = messages.filter((message) => message.role === "assistant").map((message) => message.content ?? "").join("");
+      expect(Buffer.byteLength(replayedText, "utf8")).toBe(54_000);
+      const tools = messages.filter((message) => message.role === "tool");
+      expect(tools).toHaveLength(1);
+      expect(parseSafeToolResult(tools[0]?.content)?.outcome).toBe("completed");
     } finally { await runtime.close(); }
   });
 
@@ -472,6 +510,54 @@ describe.sequential("durable Research Agent runtime", () => {
     } finally {
       barrier.resolve();
       await first;
+      await runtime.close();
+    }
+  });
+
+  it("rejects global saturation before persistence and accepts an explicit retry after capacity returns", async () => {
+    const barrier = toolBarrier();
+    const acceptedTools = new Set<string>();
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async (_headers, acceptedRunId) => ({
+        close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
+        tools: { get_research_context: createTool({
+          id: "get_research_context", description: "Read context at the deterministic saturation barrier.",
+          inputSchema: z.object({}).strict(),
+          execute: async () => { acceptedTools.add(acceptedRunId); await barrier.promise; return { available: true }; },
+        }) },
+      }),
+    });
+    const inputs = Array.from({ length: MAX_ACTIVE_AGENT_RUNS + 1 }, (_, index) => runInput({
+      threadId: fixedUuid(9300 + index * 3), runId: fixedUuid(9301 + index * 3),
+      messageId: fixedUuid(9302 + index * 3), content: SCRIPTED_TOOL_PROMPT,
+    }));
+    const pending = inputs.slice(0, MAX_ACTIVE_AGENT_RUNS).map((input) => run(runtime, input, primaryResearcher));
+    try {
+      await vi.waitFor(() => expect(acceptedTools.size).toBe(MAX_ACTIVE_AGENT_RUNS), { timeout: 10000 });
+      const overflow = inputs[MAX_ACTIVE_AGENT_RUNS]!;
+      const denied = await run(runtime, overflow, primaryResearcher);
+      expect(denied).toMatchObject([{ type: "RUN_ERROR", code: "AGENT_CAPACITY" }]);
+      expect(denied).toHaveLength(1);
+      const rejectedState = await agentStore.query(`
+        SELECT
+          (SELECT count(*) FROM agent.agent_run WHERE id = $1::uuid)::int AS runs,
+          (SELECT count(*) FROM agent.chat_session WHERE id = $2::uuid)::int AS sessions,
+          (SELECT count(*) FROM agent.mastra_messages WHERE "thread_id" = $3)::int AS messages
+      `, [overflow.runId, overflow.threadId, overflow.threadId]);
+      expect(rejectedState.rows).toEqual([{ runs: 0, sessions: 0, messages: 0 }]);
+      expect(acceptedTools.has(overflow.runId)).toBe(false);
+      const replay = connect(runtime, inputs[0]!.threadId, primaryResearcher);
+      const current = await runtime.session(inputs[0]!.threadId, primaryResearcher);
+      expect(current.activeRun).toBe(true);
+      barrier.resolve();
+      const completed = await Promise.all([...pending, replay]);
+      for (const events of completed) expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      const retried = await run(runtime, overflow, primaryResearcher);
+      expect(retried.at(-1)).toMatchObject({ type: "RUN_FINISHED", runId: overflow.runId });
+      expect(acceptedTools.size).toBe(MAX_ACTIVE_AGENT_RUNS + 1);
+    } finally {
+      barrier.resolve();
+      await Promise.allSettled(pending);
       await runtime.close();
     }
   });
@@ -1504,6 +1590,28 @@ describe.sequential("durable Research Agent runtime", () => {
     }
   });
 
+  it("completes and replays an A2UI-only answer after an empty final model step", async () => {
+    let runtime = await createIntegrationRuntime();
+    const input = runInput({ content: SCRIPTED_LARGE_A2UI_TABLE_PROMPT,
+      threadId: fixedUuid(8011), runId: fixedUuid(8012), messageId: fixedUuid(8013) });
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      expect(events.some((event) => event.type === "TEXT_MESSAGE_CONTENT")).toBe(false);
+      const surfaces = a2uiMessages(events);
+      expect(surfaces).toHaveLength(1);
+      expect(JSON.stringify(surfaces)).toContain("Renderer acceptance sample — not research evidence");
+      const duplicate = await run(runtime, input, primaryResearcher);
+      expect(duplicate.at(-1)?.type).toBe("RUN_FINISHED");
+      expect(a2uiMessages(snapshotMessages(duplicate))).toEqual(surfaces);
+      await runtime.close();
+      runtime = await createIntegrationRuntime();
+      const replay = await connect(runtime, input.threadId, primaryResearcher);
+      expect(replay.at(-1)?.type).toBe("RUN_FINISHED");
+      expect(a2uiMessages(snapshotMessages(replay))).toEqual(surfaces);
+    } finally { await runtime.close(); }
+  });
+
   it("persists completed A2UI steps while a later MCP call is still running", async () => {
     const threadId = fixedUuid(491);
     const runId = fixedUuid(492);
@@ -1606,6 +1714,18 @@ describe.sequential("durable Research Agent runtime", () => {
         SELECT content FROM agent.mastra_messages WHERE thread_id = $1
       `, [threadId]);
       expect(JSON.stringify(outcomes.rows)).toContain("private-batch-core-provenance");
+      if (mode === "factor_evaluation") {
+        const request = { thread_id: threadId, researcher_id: primaryResearcher.researcher_id,
+          expectation: { kind: "batch-results", run_ids: [...CHILD_IDS] } };
+        expect(await readResearchEvalMemoryFacts(agentStore, request)).toEqual({
+          formula_corrected: false, admission_corrected: false, unresolved_admission_rejection: false, batch_results_inspected: true,
+        });
+        expect(await readResearchEvalMemoryFacts(agentStore, { ...request,
+          expectation: { kind: "batch-results", run_ids: [CHILD_IDS[0], "run_00000000000000000001"] },
+        })).toMatchObject({ batch_results_inspected: false });
+        await expect(readResearchEvalMemoryFacts(agentStore, { ...request, researcher_id: foreignResearcher.researcher_id }))
+          .rejects.toThrow("RESEARCH_EVAL_REPORT_INVALID");
+      }
       const beforeReplay = [...calls];
       const replay = await run(runtime, input, primaryResearcher);
       expect(a2uiMessages(snapshotMessages(replay)).map((surface) => surface.content)).toEqual(stored.rows.map((row) => row.content));
@@ -1718,6 +1838,61 @@ describe.sequential("durable Research Agent runtime", () => {
       await runtime.close();
     }
   });
+
+  it.each(["formula", "admission"] as const)("reads %s correction facts from real native Memory with an owner-scoped read", async (kind) => {
+    const coreRunId = "run_0123456789abcdef0123";
+    const calls: Array<Readonly<{ input: Record<string, unknown>; name: string }>> = [];
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
+        tools: {
+          ...researchLoopTools(coreRunId, calls),
+          diagnose_alpha_formula: createTool({
+            id: "diagnose_alpha_formula", description: "Native correction Memory contract fixture.",
+            inputSchema: z.object({ source: z.string() }),
+            execute: async ({ source }) => source.includes("clsoe")
+              ? { valid: false, diagnostics: [{ code: "UNKNOWN_IDENTIFIER" }] }
+              : { valid: true, diagnostics: [] },
+          }),
+          submit_research_run: createTool({
+            id: "submit_research_run", description: "Native correction Memory contract fixture.",
+            inputSchema: z.record(z.string(), z.unknown()),
+            execute: async (input) => {
+              calls.push({ name: "submit_research_run", input });
+              return kind === "admission" && input.start_date === "2024-01-02"
+                ? { outcome: "rejected", issues: [{ code: "INSUFFICIENT_CALCULATION_WARMUP", field: "start_date" }], replayed: false }
+                : { outcome: "accepted", run_id: coreRunId, status: "queued", replayed: false, retry_after_seconds: 1 };
+            },
+          }),
+        },
+      }),
+    });
+    const threadId = randomUUID();
+    try {
+      const events = await run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+        content: kind === "formula" ? SCRIPTED_FORMULA_REPAIR_IDEA_PROMPT : SCRIPTED_ADMISSION_REPAIR_IDEA_PROMPT,
+      }), primaryResearcher);
+      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      const expectedRun = {
+        id: coreRunId, formula: "rank(-abs(pct_change(close, 1)))", end_date: "2024-01-31",
+        start_date: kind === "formula" ? "2024-01-02" : "2024-01-31",
+        universe: "top1000", neutralization: "none", research_kind: "factor_evaluation",
+      };
+      const input = { thread_id: threadId, researcher_id: primaryResearcher.researcher_id,
+        expectation: kind === "formula"
+          ? { kind, original_formula: "rank(-abs(pct_change(clsoe, 1)))", run: expectedRun }
+          : { kind, requested_start: "2024-01-02", run: expectedRun },
+      };
+      expect(await readResearchEvalMemoryFacts(agentStore, input)).toEqual({
+        formula_corrected: kind === "formula", admission_corrected: kind === "admission", unresolved_admission_rejection: false,
+        batch_results_inspected: false,
+      });
+      await expect(readResearchEvalMemoryFacts(agentStore, { ...input, researcher_id: foreignResearcher.researcher_id }))
+        .rejects.toThrow("RESEARCH_EVAL_REPORT_INVALID");
+    } finally { await runtime.close(); }
+  // This exercises a complete multi-step trajectory with real PostgreSQL, not
+  // the default five-second unit-test latency envelope (or a model Eval limit).
+  }, 15_000);
 
   it("persists a complete model-owned Factor trajectory and replays only safe Run resources", async () => {
     const coreRunId = "run_0123456789abcdef0123";

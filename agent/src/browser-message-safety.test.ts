@@ -17,6 +17,38 @@ import {
 } from "./tool-outcome.js";
 
 describe("browser message safety", () => {
+  it("replays every text part across native Mastra model steps while hiding Tool payloads", () => {
+    const persisted: MastraDBMessage[] = [{
+      id: "00000000-0000-4000-8000-000000000911",
+      role: "assistant",
+      createdAt: new Date("2026-08-31T00:00:00.000Z"),
+      content: {
+        format: 2,
+        content: "The context is available.",
+        parts: [
+          { type: "step-start" },
+          { type: "text", text: "I will inspect the context. " },
+          { type: "tool-invocation", toolInvocation: {
+            args: { private: "private-tool-argument" },
+            result: { private: "private-tool-result" },
+            state: "result",
+            toolCallId: "context-between-texts",
+            toolName: "get_research_context",
+          } },
+          { type: "step-start" },
+          { type: "text", text: "The context is available." },
+        ],
+      },
+    }];
+    const messages = projectDurableUiMessages(convertMessages(persisted).to("AIV4.UI"));
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      content: "I will inspect the context. The context is available.",
+    });
+    expect(messages[1]).toMatchObject({ role: "tool", content: SAFE_TOOL_COMPLETED });
+    expect(JSON.stringify(messages)).not.toContain("private-tool-");
+  });
+
   it.each(["MCP_TRANSIENT", "MCP_AUTHENTICATION", "AGENT_LIMIT", "TOOL_REJECTION", "TOOL_ERROR"])("retains %s through durable projection and repeated browser snapshots", (code) => {
     const durable = projectDurableUiMessages([{
       id: "00000000-0000-4000-8000-000000000901", role: "assistant", content: "",

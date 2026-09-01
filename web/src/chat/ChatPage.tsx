@@ -551,6 +551,7 @@ function ConnectedAgentConversation({
   const [error, setError] = useState<AgentFailureCode | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const restoreComposerFocus = useRef(false);
+  const unacceptedRetryMessage = useRef<string | null>(null);
   const [observedRunId, setObservedRunId] = useState<string | null>(null);
   const [observedSelection, setObservedSelection] = useState<RunSelection | null>(null);
   const [status, setStatus] = useState<ConversationStatus>(
@@ -657,7 +658,11 @@ function ConnectedAgentConversation({
           connect: async (subscriber) => { await agent.connectAgent(undefined, subscriber); },
           failRunningTools,
           finishTool,
-          onRunIdentity: (runId, runSelection) => { setObservedRunId(runId); setObservedSelection(runSelection); },
+          onRunIdentity: (runId, runSelection) => {
+            unacceptedRetryMessage.current = null;
+            setObservedRunId(runId);
+            setObservedSelection(runSelection);
+          },
           onSessionChanged,
           onTitleMaySettle,
           setError,
@@ -719,6 +724,7 @@ function ConnectedAgentConversation({
         setObservedRunId(runId);
         setObservedSelection(runSelection);
         accepted = true;
+        unacceptedRetryMessage.current = null;
         sessionEstablished.current = true;
         onAccepted();
         onSessionChanged();
@@ -747,6 +753,9 @@ function ConnectedAgentConversation({
       startTool,
     });
 
+    // Pre-admission failures have no durable user message to retry from.
+    // Keep this attempt separate from both earlier history and unsent edits.
+    unacceptedRetryMessage.current = content;
     agent.addMessage({ content, id: messageId, role: "user" });
     setDraft("");
     setError(null);
@@ -840,7 +849,8 @@ function ConnectedAgentConversation({
             onReconnect={() => window.location.assign(chatSessionHref(threadId))}
             onRetry={() => {
               restoreComposerFocus.current = true;
-              void submit(undefined, "Retry the previous request. Inspect retained research before starting new work.");
+              void submit(undefined, unacceptedRetryMessage.current
+                ?? "Retry the previous request. Inspect retained research before starting new work.");
             }}
             onRevise={() => {
               if (draft.length === 0) {

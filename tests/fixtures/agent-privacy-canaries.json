@@ -5,6 +5,7 @@
   "formula": "rank(-abs(pct_change(close, 1))) + 0.719264873",
   "hypothesis": "agent-hypothesis-private-23474fe0",
   "a2ui": "agent-a2ui-private-f316f507",
+  "unsafe_a2ui": "MALICIOUS_A2UI_SHOULD_NOT_RENDER",
   "mcp_argument": "agent-mcp-argument-private-6a1fea62",
   "mcp_result": "agent-mcp-result-private-ea706250",
   "cookie": "agent-cookie-private-62c688bc",

@@ -127,6 +127,13 @@ if arguments[:2] == ["volume", "rm"]:
 if arguments[0] == "run" and "--project-name" not in arguments:
     print('{"classified":true,"child_returncode":-9}')
     raise SystemExit(0)
+if "config" in arguments and os.environ.get("TEST_AGENT_ENV_LOG"):
+    Path(os.environ["TEST_AGENT_ENV_LOG"]).write_text(json.dumps({
+        name: os.environ.get(name) for name in (
+            "THESISTRACE_AGENT_MODEL_REGISTRY", "THESISTRACE_AGENT_OPENAI_API_KEY",
+            "THESISTRACE_AGENT_OPENAI_BASE_URL", "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+        )
+    }))
 if "config" in arguments and os.environ.get("FAKE_CONFIG_STATUS"):
     raise SystemExit(int(os.environ["FAKE_CONFIG_STATUS"]))
 
@@ -1234,6 +1241,55 @@ def test_compose_preflight_failure_releases_the_caddy_port_lock(
     assert metadata.endswith("status=11\n")
     assert list((tmp_path / "port-locks").iterdir()) == []
     assert "down --volumes --remove-orphans" not in command_log.read_text()
+
+
+@pytest.mark.parametrize("command", ["agent-eval", "integration"])
+def test_only_explicit_eval_injects_the_cli_credential_and_selected_endpoint(
+    tmp_path: Path, command: str,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    observed_path = tmp_path / "agent-environment.json"
+    environment.update({
+        "CLI_API_KEY": "cli-provider-offline-canary",
+        "THESISTRACE_AGENT_OPENAI_API_KEY": "ambient-canonical-key-canary",
+        "THESISTRACE_AGENT_OPENAI_BASE_URL": "http://host.docker.internal:8317/v1",
+        "OPENAI_BASE_URL": "https://unapproved.example/v1",
+        "THESISTRACE_AGENT_EVAL_MODEL_KEY": "gpt-5.6-luna",
+        "THESISTRACE_AGENT_EVAL_REASONING_EFFORT": "high",
+        "THESISTRACE_AGENT_EVAL_PHASE": "baseline",
+        "THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD": "20",
+        "THESISTRACE_TEST_EVIDENCE_DIR": str(tmp_path / "prepare-evidence"),
+        "FAKE_CONFIG_STATUS": "11",
+        "TEST_AGENT_ENV_LOG": str(observed_path),
+        "NODE_OPTIONS": (
+            "--import=data:text/javascript,globalThis.fetch=()=>{throw%20"
+            "Error(%22OFFLINE_NETWORK_FORBIDDEN%22)}"
+        ),
+    })
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", command],
+        cwd=ROOT, env=environment, capture_output=True, check=False, text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 11, completed.stderr
+    observed = json.loads(observed_path.read_text())
+    registry = json.loads(observed["THESISTRACE_AGENT_MODEL_REGISTRY"])
+    if command == "agent-eval":
+        assert registry["default_model_key"] == "gpt-5.6-luna"
+        assert registry["models"][0]["reasoning_efforts"] == ["high"]
+        assert observed["THESISTRACE_AGENT_OPENAI_API_KEY"] == "cli-provider-offline-canary"
+        assert observed["THESISTRACE_AGENT_OPENAI_BASE_URL"] == "http://host.docker.internal:8317/v1"
+        assert observed["THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"] == ""
+    else:
+        assert registry["default_model_key"] == "scripted-research"
+        assert observed["THESISTRACE_AGENT_OPENAI_API_KEY"] == ""
+        assert observed["THESISTRACE_AGENT_OPENAI_BASE_URL"] == "http://provider.invalid/v1"
+        assert observed["THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"]
+    for credential in ("cli-provider-offline-canary", "ambient-canonical-key-canary"):
+        assert credential not in completed.stdout + completed.stderr + command_log.read_text()
+    assert "up --detach" not in command_log.read_text()
 
 
 def test_integration_runtime_validates_starts_host_tests_and_cleans(

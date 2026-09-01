@@ -285,7 +285,7 @@ test("emits one explicitly non-research large table for renderer acceptance", as
   expect(table.rows).toHaveLength(100);
   expect(table.columns).toHaveLength(12);
   expect(table.rows.every((row) => row.length === 12)).toBe(true);
-  expect(trajectory.text).toContain("not a Research Result");
+  expect(trajectory.text).toBe("");
 });
 
 test.each([

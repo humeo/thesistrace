@@ -9,7 +9,9 @@ import {
 } from "../dist/session-title-eval.js";
 import { generateSessionTitle } from "../dist/session-title.js";
 import { RunUsageCapture } from "../dist/usage-capture.js";
+import { RunModelObservation } from "../dist/guarded-language-model.js";
 
+try {
 const registry = readModelRegistry(required("THESISTRACE_AGENT_MODEL_REGISTRY"), process.env);
 const modelKey = required("THESISTRACE_AGENT_TITLE_EVAL_MODEL_KEY");
 const reasoningEffort = required("THESISTRACE_AGENT_TITLE_EVAL_REASONING_EFFORT");
@@ -29,12 +31,14 @@ const corpus = parseSessionTitleEvalCorpus(JSON.parse(await readFile(
   "utf8",
 )));
 const modelRuntime = new RegisteredModelRuntime(registry);
+const selected = registry.models.find((model) => model.key === modelKey && model.enabled);
+if (selected === undefined || selected.providerAdapter === "scripted") throw new Error("SESSION_TITLE_EVAL_CONFIG_INVALID");
 const observations = [];
 
 for (let repetition = 0; repetition < repetitions; repetition += 1) {
   for (const testCase of corpus.cases) {
     const usageCapture = new RunUsageCapture();
-    const selection = modelRuntime.resolve(modelKey, reasoningEffort, usageCapture);
+    const selection = modelRuntime.resolve(modelKey, reasoningEffort, new RunModelObservation(usageCapture));
     const startedAt = performance.now();
     let title = "";
     let generated = false;
@@ -61,17 +65,15 @@ for (let repetition = 0; repetition < repetitions; repetition += 1) {
       durationMs,
       estimatedCostUsd: usageReported
         ? (inputTokens * inputUsdPerMillion + outputTokens * outputUsdPerMillion) / 1_000_000
-        : 0,
-      inputTokens: usageReported ? inputTokens : 0,
-      outputTokens: usageReported ? outputTokens : 0,
+        : null,
+      inputTokens: usageReported ? inputTokens : null,
+      outputTokens: usageReported ? outputTokens : null,
       succeeded: generated && usageReported && sessionTitleMeetsEvalOutcome(title, testCase),
       titleCharacters: generated ? [...title].length : 0,
     });
   }
 }
 
-const selected = registry.models.find((model) => model.key === modelKey && model.enabled);
-if (selected === undefined) throw new Error("SESSION_TITLE_EVAL_MODEL_NOT_ENABLED");
 process.stdout.write(`${JSON.stringify({
   case_summaries: corpus.cases.map((testCase) => ({
     case_id: testCase.id,
@@ -86,6 +88,10 @@ process.stdout.write(`${JSON.stringify({
   repetitions,
   summary: summarizeSessionTitleEval(observations),
 }, null, 2)}\n`);
+} catch {
+  process.stderr.write("SESSION_TITLE_EVAL_FAILED\n");
+  process.exitCode = 2;
+}
 
 function required(name) {
   const value = process.env[name];

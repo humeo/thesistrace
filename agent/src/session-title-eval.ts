@@ -18,9 +18,9 @@ export type SessionTitleEvalCorpus = z.infer<typeof corpusSchema>;
 export type SessionTitleEvalObservation = Readonly<{
   caseId: string;
   durationMs: number;
-  estimatedCostUsd: number;
-  inputTokens: number;
-  outputTokens: number;
+  estimatedCostUsd: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
   succeeded: boolean;
   titleCharacters: number;
 }>;
@@ -57,10 +57,11 @@ export function summarizeSessionTitleEval(
   duration_p50_ms: number;
   duration_p95_ms: number;
   duration_stddev_ms: number;
-  estimated_cost_usd: number;
-  input_tokens: number;
+  estimated_cost_usd: number | null;
+  input_tokens: number | null;
   invocation_count: number;
-  output_tokens: number;
+  output_tokens: number | null;
+  usage_complete: boolean;
   success_rate: number;
   success_variance: number;
   title_length_stddev: number;
@@ -70,12 +71,9 @@ export function summarizeSessionTitleEval(
     if (
       !Number.isFinite(observation.durationMs)
       || observation.durationMs < 0
-      || !Number.isFinite(observation.estimatedCostUsd)
-      || observation.estimatedCostUsd < 0
-      || !Number.isSafeInteger(observation.inputTokens)
-      || observation.inputTokens < 0
-      || !Number.isSafeInteger(observation.outputTokens)
-      || observation.outputTokens < 0
+      || (observation.estimatedCostUsd !== null && (!Number.isFinite(observation.estimatedCostUsd) || observation.estimatedCostUsd < 0))
+      || (observation.inputTokens !== null && (!Number.isSafeInteger(observation.inputTokens) || observation.inputTokens < 0))
+      || (observation.outputTokens !== null && (!Number.isSafeInteger(observation.outputTokens) || observation.outputTokens < 0))
       || !Number.isSafeInteger(observation.titleCharacters)
       || observation.titleCharacters < 0
     ) {
@@ -85,14 +83,16 @@ export function summarizeSessionTitleEval(
   const durations = observations.map((item) => item.durationMs).sort((left, right) => left - right);
   const successes = observations.filter((item) => item.succeeded).length;
   const successRate = successes / observations.length;
+  const usageComplete = observations.every((item) => item.estimatedCostUsd !== null && item.inputTokens !== null && item.outputTokens !== null);
   return {
     duration_p50_ms: percentile(durations, 0.5),
     duration_p95_ms: percentile(durations, 0.95),
     duration_stddev_ms: standardDeviation(durations),
-    estimated_cost_usd: sum(observations.map((item) => item.estimatedCostUsd)),
-    input_tokens: sum(observations.map((item) => item.inputTokens)),
+    estimated_cost_usd: usageComplete ? sum(observations.map((item) => item.estimatedCostUsd!)) : null,
+    input_tokens: usageComplete ? sum(observations.map((item) => item.inputTokens!)) : null,
     invocation_count: observations.length,
-    output_tokens: sum(observations.map((item) => item.outputTokens)),
+    output_tokens: usageComplete ? sum(observations.map((item) => item.outputTokens!)) : null,
+    usage_complete: usageComplete,
     success_rate: successRate,
     success_variance: successRate * (1 - successRate),
     title_length_stddev: standardDeviation(

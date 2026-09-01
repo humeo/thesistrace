@@ -1,4 +1,4 @@
-import type { LanguageModelV3, LanguageModelV3CallOptions, LanguageModelV3GenerateResult, LanguageModelV3StreamPart } from "@ai-sdk/provider";
+import type { LanguageModelV3, LanguageModelV3CallOptions, LanguageModelV3GenerateResult, LanguageModelV3StreamPart, SharedV3ProviderOptions } from "@ai-sdk/provider";
 import { estimateTokenCount } from "tokenx";
 
 import type { AgentFailureCode } from "../../contracts/agent-failure.mjs";
@@ -11,7 +11,7 @@ export const AGENT_LIMITS = Object.freeze({
   outputBytes: 256 * 1024,
   toolResultBytes: 512 * 1024,
   steps: 16,
-  providerCallMs: 60_000,
+  providerCallMs: 180_000,
 });
 
 /** Safe, request-local observations; not a planner or a second run lifecycle. */
@@ -20,6 +20,7 @@ export class RunModelObservation {
   steps = 0;
   lastFinishReason: string | undefined;
   private generatedBytes = 0;
+  private hasRunAnswer = false;
 
   constructor(readonly usage: RunUsageCapture) {}
 
@@ -33,7 +34,20 @@ export class RunModelObservation {
     // Use Mastra's own tokenizer dependency against the complete provider
     // context, including system instructions and the discovered Tool schemas.
     // Memory selection remains Mastra-owned; we never silently trim it here.
-    const context = JSON.stringify({ prompt: options.prompt, tools: options.tools });
+    // Mastra retains toModelOutput in internal provider options on both the
+    // call and result. Provider adapters ignore that namespace; counting it
+    // would charge the same result three times. Exclude only protocol-level
+    // metadata, never identically named fields inside Tool input or output.
+    const context = JSON.stringify({
+      prompt: options.prompt.map((message) => ({
+        ...message,
+        providerOptions: countableProviderOptions(message.providerOptions),
+        content: typeof message.content === "string" ? message.content : message.content.map((part) => ({
+          ...part, providerOptions: countableProviderOptions(part.providerOptions),
+        })),
+      })),
+      tools: options.tools,
+    });
     if (estimateTokenCount(context) > AGENT_LIMITS.contextTokens || this.steps >= AGENT_LIMITS.steps) {
       throw this.fail("AGENT_LIMIT");
     }
@@ -47,7 +61,7 @@ export class RunModelObservation {
     if (this.generatedBytes > AGENT_LIMITS.outputBytes) throw this.fail("AGENT_LIMIT");
   }
 
-  finish(part: Extract<LanguageModelV3StreamPart, { type: "finish" }>): void {
+  finish(part: Extract<LanguageModelV3StreamPart, { type: "finish" }>, hasStepAnswer: boolean): void {
     this.usage.capture(part.usage);
     const reason = part.finishReason?.unified;
     this.lastFinishReason = reason;
@@ -57,12 +71,26 @@ export class RunModelObservation {
     }
     if (reason === "content-filter") throw this.fail("PROVIDER_REFUSAL");
     if (reason !== "stop" && reason !== "tool-calls") throw this.fail("PROVIDER_MALFORMED_STREAM");
+    // A tool (including render_a2ui) can already be the answer. Mastra may
+    // then receive an empty stop; requiring new prose on every model step
+    // incorrectly turns a valid multi-step completion into a protocol error.
+    // A wholly empty Run or an empty tool-calls step still fails closed.
+    if (!hasStepAnswer && !(reason === "stop" && this.hasRunAnswer)) {
+      throw this.fail("PROVIDER_MALFORMED_STREAM");
+    }
+    this.hasRunAnswer ||= hasStepAnswer;
   }
 
   terminalFailure(): AgentFailureCode | undefined {
     return this.failure ?? (this.steps >= AGENT_LIMITS.steps && this.lastFinishReason === "tool-calls"
       ? "AGENT_LIMIT" : undefined);
   }
+}
+
+function countableProviderOptions(options: SharedV3ProviderOptions | undefined): SharedV3ProviderOptions | undefined {
+  if (options === undefined) return undefined;
+  const { mastra: _internal, ...modelOptions } = options;
+  return modelOptions;
 }
 
 /** Single provider boundary: bound input/output, capture usage, erase raw errors. */
@@ -77,10 +105,8 @@ export class GuardedLanguageModel implements LanguageModelV3 {
     try {
       const result = await this.delegate.doGenerate(this.observation.begin(options));
       this.observation.output(JSON.stringify(result.content));
-      this.observation.finish({ type: "finish", finishReason: result.finishReason, usage: result.usage });
-      if (!result.content.some((part) => part.type === "tool-call" || (part.type === "text" && part.text.trim().length > 0))) {
-        throw this.observation.fail("PROVIDER_MALFORMED_STREAM");
-      }
+      this.observation.finish({ type: "finish", finishReason: result.finishReason, usage: result.usage },
+        result.content.some((part) => part.type === "tool-call" || (part.type === "text" && part.text.trim().length > 0)));
       return { ...result, usage: frameworkTokenUsage(result.usage) };
     } catch (error) { throw this.failure(error, options.abortSignal); }
   }
@@ -100,22 +126,22 @@ export class GuardedLanguageModel implements LanguageModelV3 {
         try {
           const next = await reader.read();
           if (next.done) {
-            if (!finished) throw observation.fail("PROVIDER_MALFORMED_STREAM");
+            if (!finished) throw new AgentRunFailure("PROVIDER_MALFORMED_STREAM");
             controller.close();
             return;
           }
           const part = next.value;
           if (finished || part === null || typeof part !== "object" || !PROVIDER_PART_TYPES.has(part.type)) {
-            throw observation.fail("PROVIDER_MALFORMED_STREAM");
+            throw new AgentRunFailure("PROVIDER_MALFORMED_STREAM");
           }
           if (part.type === "error") throw failure(part.error);
           if (part.type === "text-delta" || part.type === "reasoning-delta" || part.type === "tool-input-delta") {
-            if (typeof part.delta !== "string") throw observation.fail("PROVIDER_MALFORMED_STREAM");
+            if (typeof part.delta !== "string") throw new AgentRunFailure("PROVIDER_MALFORMED_STREAM");
             observation.output(part.delta);
             if (part.type === "text-delta" && part.delta.trim().length > 0) hasAnswer = true;
           }
           if (part.type === "tool-call") {
-            if (typeof part.input !== "string") throw observation.fail("PROVIDER_MALFORMED_STREAM");
+            if (typeof part.input !== "string") throw new AgentRunFailure("PROVIDER_MALFORMED_STREAM");
             observation.output(part.input);
             hasAnswer = true;
           }
@@ -123,8 +149,7 @@ export class GuardedLanguageModel implements LanguageModelV3 {
             observation.output(JSON.stringify(part));
           }
           if (part.type === "finish") {
-            observation.finish(part);
-            if (!hasAnswer) throw observation.fail("PROVIDER_MALFORMED_STREAM");
+            observation.finish(part, hasAnswer);
             finished = true;
           }
           controller.enqueue(part.type === "finish" ? { ...part, usage: frameworkTokenUsage(part.usage) } : part);
