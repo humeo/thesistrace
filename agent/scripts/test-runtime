@@ -1,0 +1,241 @@
+#!/bin/sh
+set -eu
+
+agent_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+compose_file="$agent_root/compose.test.yaml"
+CDPATH= cd -- "$agent_root"
+command=${1:-}
+
+case "$command" in
+  integration | image-smoke | schema-generate) ;;
+  *)
+    echo "usage: $0 {integration|image-smoke|schema-generate}" >&2
+    exit 2
+    ;;
+esac
+
+timestamp=$(date -u +%Y%m%dt%H%M%Sz)
+random_suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
+run_id="$timestamp-$$-$random_suffix"
+project_name="thesistrace-agent-test-$run_id"
+image_name="thesistrace-agent-test:$run_id"
+evidence_root=$(mktemp -d "${TMPDIR:-/tmp}/thesistrace-agent-test.XXXXXX")
+openai_secret=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
+model_registry='{"default_model_key":"gpt-5.6-luna","models":[{"default_reasoning_effort":"high","display_name":"GPT-5.6 Luna","enabled":true,"key":"gpt-5.6-luna","provider_adapter":"openai","provider_model_id":"gpt-5.6-luna","reasoning_efforts":["high"],"secret_env":"THESISTRACE_AGENT_OPENAI_API_KEY"}]}'
+stale_image_canary="$agent_root/dist/stale-image-canary.js"
+
+compose() {
+  COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
+    THESISTRACE_AGENT_TEST_IMAGE="$image_name" \
+    THESISTRACE_AGENT_TEST_MODEL_REGISTRY="$model_registry" \
+    THESISTRACE_AGENT_TEST_OPENAI_SECRET="$openai_secret" \
+    docker compose \
+      --project-name "$project_name" \
+      --file "$compose_file" \
+      "$@"
+}
+
+cleanup() {
+  run_status=$?
+  trap - EXIT INT TERM
+  if [ "$run_status" -ne 0 ]; then
+    compose ps --all >"$evidence_root/compose-ps.txt" 2>&1 || true
+    compose logs --no-color >"$evidence_root/compose-logs.txt" 2>&1 || true
+  fi
+
+  cleanup_status=0
+  compose down --volumes --remove-orphans \
+    >"$evidence_root/cleanup.stdout.log" \
+    2>"$evidence_root/cleanup.stderr.log" \
+    || cleanup_status=$?
+  stale_cleanup_status=0
+  rm -f -- "$stale_image_canary" \
+    >>"$evidence_root/cleanup.stdout.log" \
+    2>>"$evidence_root/cleanup.stderr.log" \
+    || stale_cleanup_status=$?
+
+  if [ "$cleanup_status" -ne 0 ] || [ "$stale_cleanup_status" -ne 0 ]; then
+    if [ "$run_status" -eq 0 ]; then
+      if [ "$cleanup_status" -ne 0 ]; then
+        run_status=$cleanup_status
+      else
+        run_status=$stale_cleanup_status
+      fi
+    fi
+    echo "Agent test cleanup failed" >&2
+  fi
+
+  if [ "$run_status" -eq 0 ]; then
+    evidence_cleanup_status=0
+    rm -rf -- "$evidence_root" || evidence_cleanup_status=$?
+    if [ "$evidence_cleanup_status" -ne 0 ]; then
+      run_status=$evidence_cleanup_status
+      echo "Agent test evidence cleanup failed: $evidence_root" >&2
+    fi
+  fi
+  if [ "$run_status" -ne 0 ]; then
+    echo "Agent test evidence: $evidence_root" >&2
+  fi
+  exit "$run_status"
+}
+
+terminate() {
+  signal_status=$1
+  trap - INT TERM
+  exit "$signal_status"
+}
+
+trap cleanup EXIT
+trap 'terminate 130' INT
+trap 'terminate 143' TERM
+
+compose config --quiet
+
+start_postgres() {
+  compose up --detach postgres
+  attempt=0
+  until compose exec -T postgres \
+    test -e /tmp/thesistrace-agent-test-initialization-held >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 400 ]; then
+      echo "PostgreSQL did not enter the held Agent initialization phase" >&2
+      exit 1
+    fi
+    sleep 0.05
+  done
+
+  postgres_container=$(compose ps --quiet postgres)
+  health_status=$(docker inspect \
+    --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+    "$postgres_container")
+  test "$health_status" != healthy
+  compose exec -T postgres touch /tmp/thesistrace-agent-test-initialization-release
+  compose up --detach --wait --wait-timeout 120 postgres
+}
+
+case "$command" in
+  integration | schema-generate)
+    start_postgres
+    address=$(compose port postgres 5432)
+    postgres_port=${address##*:}
+    case "$postgres_port" in
+      '' | *[!0-9]*)
+        echo "could not resolve PostgreSQL port from: $address" >&2
+        exit 1
+        ;;
+    esac
+    if [ "$command" = schema-generate ]; then
+      pnpm build
+      THESISTRACE_AGENT_SCHEMA_GENERATION=isolated \
+        THESISTRACE_AGENT_TEST_OWNER_DATABASE_URL="postgresql://thesistrace_owner:owner-test-password@127.0.0.1:$postgres_port/thesistrace" \
+        node "$agent_root/scripts/generate-schema-contract.mjs"
+    else
+      COPILOTKIT_TELEMETRY_DISABLED=true \
+      TZ=Asia/Seoul \
+      THESISTRACE_AGENT_TEST_OWNER_DATABASE_URL="postgresql://thesistrace_owner:owner-test-password@127.0.0.1:$postgres_port/thesistrace" \
+      "$agent_root/node_modules/.bin/vitest" run \
+        --root "$agent_root" \
+        --config "$agent_root/vitest.integration.config.ts"
+    fi
+    ;;
+  image-smoke)
+    mkdir -p "$(dirname -- "$stale_image_canary")"
+    printf '%s\n' 'throw new Error("stale image canary executed")' >"$stale_image_canary"
+    compose build agent
+    start_postgres
+    compose up --detach --no-build --wait --wait-timeout 180 agent
+    address=$(compose port agent 8400)
+    agent_port=${address##*:}
+    case "$agent_port" in
+      '' | *[!0-9]*)
+        echo "could not resolve Agent port from: $address" >&2
+        exit 1
+        ;;
+    esac
+
+    curl --fail --silent --show-error --max-time 10 \
+      "http://127.0.0.1:$agent_port/health/live" \
+      >"$evidence_root/liveness.json"
+    curl --fail --silent --show-error --max-time 10 \
+      "http://127.0.0.1:$agent_port/health/ready" \
+      >"$evidence_root/readiness.json"
+    grep -Fqx '{"status":"ok"}' "$evidence_root/liveness.json"
+    grep -Fqx '{"status":"ready"}' "$evidence_root/readiness.json"
+    test "$(compose exec -T agent id -u)" -ne 0
+    test "$(compose exec -T agent node --version)" = v24.14.0
+    compose exec -T agent test ! -e /app/agent/dist/stale-image-canary.js
+
+    unauthenticated_status=$(curl --silent --show-error --max-time 10 \
+      --output "$evidence_root/unauthenticated.json" \
+      --write-out '%{http_code}' \
+      -H 'Origin: https://thesistrace.test' \
+      "http://127.0.0.1:$agent_port/api/agent/models")
+    test "$unauthenticated_status" = 401
+    grep -Fqx '{"code":"AUTHENTICATION_REQUIRED"}' "$evidence_root/unauthenticated.json"
+
+    curl --fail --silent --show-error --max-time 10 \
+      -H 'Content-Type: application/json' \
+      -H 'Cookie: thesistrace.session_token=image-smoke-session' \
+      -H 'Origin: https://thesistrace.test' \
+      --data '{"threadId":"00000000-0000-4000-8000-000000000201","runId":"00000000-0000-4000-8000-000000000301","messages":[{"id":"00000000-0000-4000-8000-000000000401","role":"user","content":"Inspect the available research context."}],"state":{},"tools":[],"context":[],"forwardedProps":{"thesistrace":{"modelKey":"gpt-5.6-luna","reasoningEffort":"high","sessionMode":"new"}}}' \
+      "http://127.0.0.1:$agent_port/api/agent/copilotkit/agent/research/run" \
+      >"$evidence_root/run.sse"
+    grep -F '"type":"RUN_STARTED"' "$evidence_root/run.sse" >/dev/null
+    grep -F '"type":"TOOL_CALL_START"' "$evidence_root/run.sse" >/dev/null
+    grep -F '"toolCallName":"get_research_context"' "$evidence_root/run.sse" >/dev/null
+    node "$agent_root/scripts/assert-safe-tool-sse.mjs" "$evidence_root/run.sse"
+    grep -F '"type":"TEXT_MESSAGE_CONTENT"' "$evidence_root/run.sse" >/dev/null
+    grep -F '"type":"RUN_FINISHED"' "$evidence_root/run.sse" >/dev/null
+    test "$(grep -F -c '"delta":"{}"' "$evidence_root/run.sse")" -eq 1
+    if grep -F 'image-smoke-private-mcp-result' "$evidence_root/run.sse"; then
+      echo "Agent image smoke exposed a raw MCP result" >&2
+      exit 1
+    fi
+    compose exec -T postgres psql \
+      --username thesistrace_owner \
+      --dbname thesistrace \
+      --tuples-only \
+      --no-align \
+      --command "SELECT status || '|' || (token_usage->'outputTokens'->>'total') FROM agent.agent_run WHERE id='00000000-0000-4000-8000-000000000301'" \
+      >"$evidence_root/run-row.txt"
+    grep -Fqx 'completed|24' "$evidence_root/run-row.txt"
+
+    if compose run --rm --no-deps -T \
+      -e THESISTRACE_AGENT_OPENAI_API_KEY= \
+      agent >"$evidence_root/invalid.stdout.log" 2>"$evidence_root/invalid.stderr.log"; then
+      echo "Agent image accepted a missing OpenAI model credential" >&2
+      exit 1
+    fi
+    grep -Fqx \
+      '{"code":"AGENT_STARTUP_INVALID","event":"agent_startup_failed"}' \
+      "$evidence_root/invalid.stderr.log"
+    test ! -s "$evidence_root/invalid.stdout.log"
+
+    compose exec -T postgres psql \
+      --username thesistrace_owner \
+      --dbname thesistrace \
+      --set ON_ERROR_STOP=1 \
+      --command 'ALTER TABLE agent.chat_session ENABLE ROW LEVEL SECURITY' \
+      >"$evidence_root/schema-drift-setup.log"
+    if compose run --rm --no-deps -T \
+      agent >"$evidence_root/drift.stdout.log" 2>"$evidence_root/drift.stderr.log"; then
+      echo "Agent image accepted Agent schema drift" >&2
+      exit 1
+    fi
+    grep -Fqx \
+      '{"code":"AGENT_STARTUP_INVALID","event":"agent_startup_failed"}' \
+      "$evidence_root/drift.stderr.log"
+    test ! -s "$evidence_root/drift.stdout.log"
+
+    if grep -R -E -q \
+      'owner-test-password|agent-test-password|auth-test-password|core-test-password|thesistrace.session_token=image-smoke-session|integration-secret' \
+      "$evidence_root"; then
+      echo "Agent image-smoke evidence exposed a credential" >&2
+      exit 1
+    fi
+    if grep -R -F -q "$openai_secret" "$evidence_root"; then
+      echo "Agent image-smoke evidence exposed the provider secret" >&2
+      exit 1
+    fi
+    ;;
+esac

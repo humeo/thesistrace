@@ -1,0 +1,254 @@
+CREATE TABLE agent."mastra_threads" (
+    "id" text NOT NULL,
+    "resourceId" text NOT NULL,
+    "title" text NOT NULL,
+    "metadata" jsonb,
+    "createdAt" timestamp without time zone NOT NULL,
+    "updatedAt" timestamp without time zone NOT NULL,
+    "createdAtZ" timestamp with time zone DEFAULT pg_catalog.now(),
+    "updatedAtZ" timestamp with time zone DEFAULT pg_catalog.now(),
+    CONSTRAINT mastra_threads_pkey PRIMARY KEY ("id")
+);
+
+CREATE TABLE agent."mastra_messages" (
+    "id" text NOT NULL,
+    "thread_id" text NOT NULL,
+    "content" text NOT NULL,
+    "role" text NOT NULL,
+    "type" text NOT NULL,
+    "createdAt" timestamp without time zone NOT NULL,
+    "resourceId" text,
+    "createdAtZ" timestamp with time zone DEFAULT pg_catalog.now(),
+    CONSTRAINT mastra_messages_pkey PRIMARY KEY ("id")
+);
+
+CREATE TABLE agent."mastra_resources" (
+    "id" text NOT NULL,
+    "workingMemory" text,
+    "metadata" jsonb,
+    "createdAt" timestamp without time zone NOT NULL,
+    "updatedAt" timestamp without time zone NOT NULL,
+    "createdAtZ" timestamp with time zone DEFAULT pg_catalog.now(),
+    "updatedAtZ" timestamp with time zone DEFAULT pg_catalog.now(),
+    CONSTRAINT mastra_resources_pkey PRIMARY KEY ("id")
+);
+
+CREATE TABLE agent."mastra_observational_memory" (
+    "id" text NOT NULL,
+    "lookupKey" text NOT NULL,
+    "scope" text NOT NULL,
+    "resourceId" text,
+    "threadId" text,
+    "activeObservations" text NOT NULL,
+    "activeObservationsPendingUpdate" text,
+    "originType" text NOT NULL,
+    "config" text NOT NULL,
+    "generationCount" integer NOT NULL,
+    "lastObservedAt" timestamp without time zone,
+    "lastReflectionAt" timestamp without time zone,
+    "pendingMessageTokens" integer NOT NULL,
+    "totalTokensObserved" integer NOT NULL,
+    "observationTokenCount" integer NOT NULL,
+    "isObserving" boolean NOT NULL,
+    "isReflecting" boolean NOT NULL,
+    "observedMessageIds" jsonb,
+    "observedTimezone" text,
+    "bufferedObservations" text,
+    "bufferedObservationTokens" integer,
+    "bufferedMessageIds" jsonb,
+    "bufferedReflection" text,
+    "bufferedReflectionTokens" integer,
+    "bufferedReflectionInputTokens" integer,
+    "reflectedObservationLineCount" integer,
+    "bufferedObservationChunks" jsonb,
+    "isBufferingObservation" boolean NOT NULL,
+    "isBufferingReflection" boolean NOT NULL,
+    "lastBufferedAtTokens" integer NOT NULL,
+    "lastBufferedAtTime" timestamp without time zone,
+    "metadata" jsonb,
+    "createdAt" timestamp without time zone NOT NULL,
+    "updatedAt" timestamp without time zone NOT NULL,
+    "lastObservedAtZ" timestamp with time zone DEFAULT pg_catalog.now(),
+    "lastReflectionAtZ" timestamp with time zone DEFAULT pg_catalog.now(),
+    "lastBufferedAtTimeZ" timestamp with time zone DEFAULT pg_catalog.now(),
+    "createdAtZ" timestamp with time zone DEFAULT pg_catalog.now(),
+    "updatedAtZ" timestamp with time zone DEFAULT pg_catalog.now(),
+    CONSTRAINT mastra_observational_memory_pkey PRIMARY KEY ("id")
+);
+
+CREATE TABLE agent."mastra_workflow_snapshot" (
+    "workflow_name" text NOT NULL,
+    "run_id" text NOT NULL,
+    "resourceId" text,
+    "snapshot" jsonb NOT NULL,
+    "createdAt" timestamp without time zone NOT NULL,
+    "updatedAt" timestamp without time zone NOT NULL,
+    "createdAtZ" timestamp with time zone DEFAULT pg_catalog.now(),
+    "updatedAtZ" timestamp with time zone DEFAULT pg_catalog.now(),
+    CONSTRAINT agent_mastra_workflow_snapshot_workflow_name_run_id_key
+        UNIQUE ("workflow_name", "run_id")
+);
+
+ALTER TABLE agent."mastra_workflow_snapshot"
+    REPLICA IDENTITY USING INDEX
+    agent_mastra_workflow_snapshot_workflow_name_run_id_key;
+
+CREATE TABLE agent.chat_session (
+    id uuid NOT NULL,
+    researcher_id uuid NOT NULL,
+    selected_model_key text NOT NULL,
+    selected_reasoning_effort text NOT NULL,
+    created_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
+    CONSTRAINT chat_session_pkey PRIMARY KEY (id),
+    CONSTRAINT chat_session_model_key_check CHECK (
+        selected_model_key ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text
+    ),
+    CONSTRAINT chat_session_reasoning_effort_check CHECK (
+        selected_reasoning_effort = ANY (
+            ARRAY['none'::text, 'minimal'::text, 'low'::text, 'medium'::text, 'high'::text, 'xhigh'::text]
+        )
+    )
+);
+
+CREATE TABLE agent.agent_run (
+    id uuid NOT NULL,
+    thread_id uuid NOT NULL,
+    request_fingerprint bytea NOT NULL,
+    model_key text NOT NULL,
+    provider_model_id text NOT NULL,
+    reasoning_effort text NOT NULL,
+    agent_build_revision text NOT NULL,
+    status text NOT NULL,
+    token_usage jsonb,
+    terminal_error_code text,
+    started_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT agent_run_pkey PRIMARY KEY (id),
+    CONSTRAINT agent_run_thread_id_fkey FOREIGN KEY (thread_id)
+        REFERENCES agent.chat_session(id) ON DELETE CASCADE,
+    CONSTRAINT agent_run_request_fingerprint_check CHECK (
+        pg_catalog.octet_length(request_fingerprint) = 32
+    ),
+    CONSTRAINT agent_run_model_key_check CHECK (
+        model_key ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text
+    ),
+    CONSTRAINT agent_run_provider_model_id_check CHECK (
+        provider_model_id = pg_catalog.btrim(provider_model_id)
+        AND pg_catalog.char_length(provider_model_id) BETWEEN 1 AND 200
+    ),
+    CONSTRAINT agent_run_reasoning_effort_check CHECK (
+        reasoning_effort = ANY (
+            ARRAY['none'::text, 'minimal'::text, 'low'::text, 'medium'::text, 'high'::text, 'xhigh'::text]
+        )
+    ),
+    CONSTRAINT agent_run_build_revision_check CHECK (
+        agent_build_revision = pg_catalog.btrim(agent_build_revision)
+        AND pg_catalog.char_length(agent_build_revision) BETWEEN 1 AND 128
+    ),
+    CONSTRAINT agent_run_status_check CHECK (
+        status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text])
+    ),
+    CONSTRAINT agent_run_terminal_check CHECK (
+        (
+            status = 'running'::text
+            AND completed_at IS NULL
+            AND token_usage IS NULL
+            AND terminal_error_code IS NULL
+        ) OR (
+            status = 'completed'::text
+            AND completed_at IS NOT NULL
+            AND token_usage IS NOT NULL
+            AND terminal_error_code IS NULL
+        ) OR (
+            status = 'failed'::text
+            AND completed_at IS NOT NULL
+            AND token_usage IS NOT NULL
+            AND terminal_error_code IS NOT NULL
+        )
+    )
+);
+
+CREATE TABLE agent.a2ui_message (
+    thread_id uuid NOT NULL,
+    id text NOT NULL,
+    run_id uuid NOT NULL,
+    owner_message_id text NOT NULL,
+    activity_type text NOT NULL,
+    protocol_version text NOT NULL,
+    catalog_id text NOT NULL,
+    lifecycle_status text NOT NULL,
+    sequence integer NOT NULL,
+    content jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
+    CONSTRAINT a2ui_message_pkey PRIMARY KEY (thread_id, id),
+    CONSTRAINT a2ui_message_thread_id_fkey FOREIGN KEY (thread_id)
+        REFERENCES agent.chat_session(id) ON DELETE CASCADE,
+    CONSTRAINT a2ui_message_run_id_fkey FOREIGN KEY (run_id)
+        REFERENCES agent.agent_run(id) ON DELETE CASCADE,
+    CONSTRAINT a2ui_message_owner_message_id_fkey FOREIGN KEY (owner_message_id)
+        REFERENCES agent."mastra_messages"(id) ON DELETE CASCADE,
+    CONSTRAINT a2ui_message_run_sequence_key UNIQUE (run_id, sequence),
+    CONSTRAINT a2ui_message_id_check CHECK (
+        id ~ '^a2ui-surface-[A-Za-z0-9._:-]{1,200}$'::text
+    ),
+    CONSTRAINT a2ui_message_owner_message_id_check CHECK (
+        pg_catalog.char_length(owner_message_id) BETWEEN 1 AND 220
+        AND owner_message_id !~ '[[:cntrl:]]'::text
+    ),
+    CONSTRAINT a2ui_message_activity_type_check CHECK (
+        activity_type = 'a2ui-surface'::text
+    ),
+    CONSTRAINT a2ui_message_protocol_version_check CHECK (
+        protocol_version = 'v0.9'::text
+    ),
+    CONSTRAINT a2ui_message_catalog_id_check CHECK (
+        catalog_id = 'urn:thesistrace:a2ui:research:v0.9'::text
+    ),
+    CONSTRAINT a2ui_message_lifecycle_status_check CHECK (
+        lifecycle_status = ANY (
+            ARRAY['loading'::text, 'ready'::text, 'error'::text]
+        )
+    ),
+    CONSTRAINT a2ui_message_sequence_check CHECK (sequence BETWEEN 1 AND 1000000),
+    CONSTRAINT a2ui_message_content_check CHECK (
+        pg_catalog.jsonb_typeof(content) = 'object'::text
+        -- The shared ingress contract is 64 KiB of compact JSON. PostgreSQL's
+        -- jsonb text adds insignificant spaces, so this storage bound must not
+        -- reject a valid ingress payload merely because of serialization.
+        AND pg_catalog.octet_length(content::text) <= 131072
+    ),
+    CONSTRAINT a2ui_message_timestamps_check CHECK (updated_at >= created_at)
+);
+
+CREATE TABLE agent.schema_contract (
+    singleton boolean NOT NULL,
+    schema_fingerprint text NOT NULL,
+    CONSTRAINT schema_contract_pkey PRIMARY KEY (singleton),
+    CONSTRAINT schema_contract_singleton_check CHECK (singleton),
+    CONSTRAINT schema_contract_schema_fingerprint_check CHECK (
+        schema_fingerprint ~ '^[0-9a-f]{64}$'::text
+    )
+);
+
+CREATE INDEX agent_idx_om_lookup_key
+    ON agent."mastra_observational_memory" USING btree ("lookupKey");
+CREATE INDEX agent_mastra_threads_resourceid_createdat_idx
+    ON agent."mastra_threads" USING btree ("resourceId", "createdAt" DESC);
+CREATE INDEX agent_mastra_messages_thread_id_createdat_idx
+    ON agent."mastra_messages" USING btree (thread_id, "createdAt" DESC);
+CREATE INDEX agent_mastra_workflow_snapshot_name_createdat_idx
+    ON agent."mastra_workflow_snapshot" USING btree ("workflow_name", "createdAt" DESC);
+CREATE INDEX agent_mastra_workflow_snapshot_name_status_createdat_idx
+    ON agent."mastra_workflow_snapshot" USING btree (
+        "workflow_name",
+        (("snapshot" ->> 'status'::text)),
+        "createdAt" DESC
+    );
+CREATE INDEX chat_session_researcher_activity_idx
+    ON agent.chat_session USING btree (researcher_id, updated_at DESC, id DESC);
+CREATE INDEX agent_run_thread_started_idx
+    ON agent.agent_run USING btree (thread_id, started_at, id);
+CREATE INDEX a2ui_message_owner_idx
+    ON agent.a2ui_message USING btree (thread_id, owner_message_id, sequence, id);

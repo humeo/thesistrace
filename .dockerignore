@@ -3,6 +3,9 @@
 .local
 .venv
 node_modules
+agent/dist
+agent/node_modules
+agent/*.tsbuildinfo
 auth/dist
 auth/node_modules
 auth/*.tsbuildinfo

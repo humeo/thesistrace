@@ -11,7 +11,8 @@ services:
   api:
     command:
       - uvicorn
-      - thesistrace.entrypoints.http:app
+      - --factory
+      - thesistrace.entrypoints.http:create_production_app
       - --host
       - 0.0.0.0
       - --port
@@ -49,6 +50,23 @@ services:
         - path: ../../pnpm-workspace.yaml
           action: rebuild
         - path: ./Dockerfile.auth
+          action: rebuild
+
+  agent:
+    environment:
+      OPENAI_BASE_URL: ${THESISTRACE_AGENT_OPENAI_BASE_URL:?THESISTRACE_AGENT_OPENAI_BASE_URL is required}
+      THESISTRACE_AGENT_OPENAI_API_KEY: ${CLI_API_KEY:?CLI_API_KEY is required for the local Agent}
+    develop:
+      watch:
+        - path: ../../agent
+          action: rebuild
+        - path: ../../package.json
+          action: rebuild
+        - path: ../../pnpm-lock.yaml
+          action: rebuild
+        - path: ../../pnpm-workspace.yaml
+          action: rebuild
+        - path: ./Dockerfile.agent
           action: rebuild
 
   research-worker:

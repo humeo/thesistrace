@@ -137,6 +137,13 @@ if arguments[:2] == ["volume", "rm"]:
 if arguments[0] == "run" and "--project-name" not in arguments:
     print('{"classified":true,"child_returncode":-9}')
     raise SystemExit(0)
+if "config" in arguments and os.environ.get("TEST_AGENT_ENV_LOG"):
+    Path(os.environ["TEST_AGENT_ENV_LOG"]).write_text(json.dumps({
+        name: os.environ.get(name) for name in (
+            "THESISTRACE_AGENT_MODEL_REGISTRY", "THESISTRACE_AGENT_OPENAI_API_KEY",
+            "THESISTRACE_AGENT_OPENAI_BASE_URL", "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+        )
+    }))
 if "config" in arguments and os.environ.get("FAKE_CONFIG_STATUS"):
     raise SystemExit(int(os.environ["FAKE_CONFIG_STATUS"]))
 
@@ -174,6 +181,8 @@ if "port" in arguments:
         "api": 4,
         "web": 5,
         "resend-fake": 6,
+        "auth-exchange-proxy": 7,
+        "mcp-fault-proxy": 8,
     }[service]
     print(f"127.0.0.1:{base_port + offset}")
 elif "ps" in arguments and "--quiet" in arguments:
@@ -583,6 +592,7 @@ def test_development_topology_declares_every_core_service_and_pinned_infrastruct
         "rustfs",
         "auth-initialize",
         "auth",
+        "agent",
         "initialize",
         "api",
         "research-worker",
@@ -638,6 +648,7 @@ def test_every_compose_service_uses_bounded_docker_json_logs() -> None:
         "rustfs",
         "auth-initialize",
         "auth",
+        "agent",
         "initialize",
         "api",
         "research-worker",
@@ -707,22 +718,29 @@ def test_development_api_disables_duplicate_uvicorn_access_logs() -> None:
 
 def test_container_builds_exclude_host_dependency_directories() -> None:
     dockerignore = (ROOT / ".dockerignore").read_text().splitlines()
+    agent = (ROOT / "deploy" / "core" / "Dockerfile.agent").read_text()
     backend = (ROOT / "deploy" / "core" / "Dockerfile.backend").read_text()
     web = (ROOT / "deploy" / "core" / "Dockerfile.web").read_text()
 
     assert ".venv" in dockerignore
     assert "node_modules" in dockerignore
+    assert "agent/dist" in dockerignore
+    assert "agent/node_modules" in dockerignore
+    assert "agent/*.tsbuildinfo" in dockerignore
     assert "web/node_modules" in dockerignore
     assert "web/.test-workspace" in dockerignore
     assert "web/test-results" in dockerignore
     assert "web/playwright-report" in dockerignore
     assert "node_modules" not in backend
+    assert "COPY agent/node_modules" not in agent
     assert "node_modules" not in web
     assert backend.index("uv sync --frozen --no-dev --no-install-project") < backend.index(
         "COPY src ./src"
     )
     assert backend.index("COPY src ./src") < backend.rindex("uv sync --frozen --no-dev")
     assert "--mount=type=cache,target=/root/.cache/uv" in backend
+    assert "pnpm --dir agent build" in agent
+    assert "pnpm --filter thesistrace-agent-host deploy --prod /agent-runtime" in agent
     assert "node:24.14.0-bookworm-slim" in web
     assert "caddy:2.11.4-alpine" in web
     assert "pnpm@11.9.0" in web
@@ -735,7 +753,7 @@ def test_container_builds_exclude_host_dependency_directories() -> None:
 def test_development_watch_assigns_service_appropriate_actions() -> None:
     development = (ROOT / "deploy" / "core" / "compose.dev.yaml").read_text()
 
-    assert "thesistrace.entrypoints.http:app" in development
+    assert "thesistrace.entrypoints.http:create_production_app" in development
     assert "--reload-dir" in development
     assert "action: sync+restart" in development
     assert "action: sync" in development
@@ -888,7 +906,8 @@ signal.pause()
 def test_integration_command_generates_unique_test_identities() -> None:
     package = json.loads((ROOT / "package.json").read_text())
     assert package["scripts"]["test:integration"] == (
-        "./scripts/test-runtime integration && pnpm --dir auth test:integration"
+        "./scripts/test-runtime integration && pnpm --dir auth test:integration "
+        "&& pnpm --dir agent test:integration"
     )
 
     projects = {
@@ -979,17 +998,50 @@ def test_parallel_worktrees_share_one_caddy_port_lock_namespace(
     assert list(shared_lock_root.iterdir()) == []
 
 
-def test_rustfs_restart_waits_for_the_authenticated_s3_api() -> None:
+def test_rustfs_startup_and_restart_wait_for_the_writable_s3_api() -> None:
     runtime = (ROOT / "scripts" / "test-runtime").read_text()
     probe = (ROOT / "scripts" / "probe-rustfs-ready").read_text()
 
     assert "uv run python \"$rustfs_readiness_probe\"" in runtime
+    assert "RustFS S3 API did not become writable" in runtime
     assert "RustFS S3 API did not become ready after restart" in runtime
-    assert runtime.index("curl -fsS http://127.0.0.1:9000/health") < runtime.index(
-        "uv run python \"$rustfs_readiness_probe\""
+    health_probe = runtime.index("curl -fsS http://127.0.0.1:9000/health")
+    assert health_probe < runtime.index(
+        "wait_for_rustfs_s3 probe_rustfs_s3_from_host rustfsadmin rustfsadmin",
+        health_probe,
     )
     assert "client.list_buckets()" in probe
+    assert "client.create_bucket(Bucket=arguments.ensure_bucket)" in probe
+    assert "client.head_bucket(Bucket=arguments.ensure_bucket)" in probe
     assert 'retries={"max_attempts": 0, "mode": "standard"}' in probe
+    assert "is_transient_s3_error" in probe
+    assert "transient_probe_exit=75" in runtime
+    assert "rustfs_readiness_deadline_seconds=180" in runtime
+    assert "date +%s" in runtime
+    assert "probe_rustfs_s3_from_host" in runtime
+    assert "probe_rustfs_s3_from_image" in runtime
+    assert "python /qualification/probe-rustfs-ready" in runtime
+
+    for mode, next_phase in (
+        ("integration", "integration-auth-initialization"),
+        ("e2e", "e2e-initializers"),
+        ("image-smoke", "image-smoke-initializers"),
+    ):
+        readiness = f"run_phase {mode}-rustfs-s3-ready"
+        assert readiness in runtime
+        assert runtime.index(readiness) < runtime.index(f"run_phase {next_phase}")
+
+    image_smoke_infrastructure = runtime.index(
+        "run_phase image-smoke-infrastructure"
+    )
+    image_smoke_initializers = runtime.index("run_phase image-smoke-initializers")
+    image_smoke_startup = runtime[
+        image_smoke_infrastructure:image_smoke_initializers
+    ]
+    assert "wait_for_rustfs_s3 probe_rustfs_s3_from_image" in " ".join(
+        image_smoke_startup.replace("\\", "").split()
+    )
+    assert "mapped_port rustfs 9000" not in image_smoke_startup
 
 
 def test_real_codex_mcp_runtime_is_explicit_isolated_and_evidence_backed(
@@ -1110,8 +1162,11 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
     overlay = (ROOT / "deploy" / "core" / "compose.test-run.yaml").read_text()
     base = (ROOT / "deploy" / "core" / "compose.yaml").read_text()
 
-    for port in (5432, 9000):
+    for port in (5432, 8150, 8250, 8260, 9000):
         assert f"127.0.0.1::{port}" in overlay
+    assert overlay.count(
+        "node:24.14.0-bookworm-slim@sha256:"
+    ) == 3
     assert (
         "127.0.0.1:${THESISTRACE_TEST_CADDY_PORT}:"
         "${THESISTRACE_TEST_CADDY_PORT}" in overlay
@@ -1129,6 +1184,42 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
     assert "batch-attempt-control:" in base
     assert "benchmark-data:" in base
     assert "name:" not in base.split("volumes:", maxsplit=1)[1]
+
+
+def test_shared_browser_control_fixtures_do_not_depend_on_docker_exec() -> None:
+    overlay = (ROOT / "deploy" / "core" / "compose.test-run.yaml").read_text()
+    runner = (ROOT / "scripts" / "test-runtime").read_text()
+    fault_proxy = (ROOT / "web" / "e2e-core" / "fault-proxy.ts").read_text()
+    auth_fixture = (ROOT / "web" / "e2e-core" / "auth-fixture.ts").read_text()
+    auth_control = (ROOT / "auth" / "test-fixtures" / "auth-control.mjs").read_text()
+
+    assert "auth-fixture-control:" in overlay
+    assert "network_mode: service:auth" in overlay
+    assert "THESISTRACE_AUTH_FIXTURE_CONTROL_PORT" in overlay
+    assert "THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN" in runner
+    assert "THESISTRACE_TEST_AUTH_PROXY_ORIGIN" in runner
+    assert "THESISTRACE_TEST_MCP_PROXY_ORIGIN" in runner
+    assert "auth_fixture_port=$(mapped_port auth 8260)" in runner
+    assert "auth_proxy_port=$(mapped_port auth-exchange-proxy 8250)" in runner
+    assert "mcp_proxy_port=$(mapped_port mcp-fault-proxy 8150)" in runner
+
+    shared_auth_fixture = auth_fixture.split(
+        "export function stopDataOperatorWorker", maxsplit=1
+    )[0]
+    assert '"docker"' not in fault_proxy
+    assert '"curl"' in fault_proxy
+    assert '"docker"' not in shared_auth_fixture
+    assert '"curl"' in auth_fixture
+    assert "THESISTRACE_ENVIRONMENT !== \"test\"" in auth_control
+    assert '"/__test/provision-session"' in auth_control
+    assert '"/__test/operator"' in auth_control
+    assert '"/__test/expire-invitation"' in auth_control
+    assert '"/__test/reset-rate-limits"' in auth_control
+    assert '"/__test/seed-operator-directory"' in auth_control
+    assert '"/__test/resend-emails"' in auth_control
+    assert 'fetch("http://resend-fake:8300/__test/emails"' in auth_control
+    assert '`${testProjectName()}-data-operator-worker-1`' in auth_fixture
+    assert '`${testProjectName()}-postgres-1`' in auth_fixture
 
 
 @pytest.mark.parametrize(
@@ -1256,6 +1347,55 @@ def test_compose_preflight_failure_releases_the_caddy_port_lock(
     assert "down --volumes --remove-orphans" not in command_log.read_text()
 
 
+@pytest.mark.parametrize("command", ["agent-eval", "integration"])
+def test_only_explicit_eval_injects_the_cli_credential_and_selected_endpoint(
+    tmp_path: Path, command: str,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    observed_path = tmp_path / "agent-environment.json"
+    environment.update({
+        "CLI_API_KEY": "cli-provider-offline-canary",
+        "THESISTRACE_AGENT_OPENAI_API_KEY": "ambient-canonical-key-canary",
+        "THESISTRACE_AGENT_OPENAI_BASE_URL": "http://host.docker.internal:8317/v1",
+        "OPENAI_BASE_URL": "https://unapproved.example/v1",
+        "THESISTRACE_AGENT_EVAL_MODEL_KEY": "gpt-5.6-luna",
+        "THESISTRACE_AGENT_EVAL_REASONING_EFFORT": "high",
+        "THESISTRACE_AGENT_EVAL_PHASE": "baseline",
+        "THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD": "20",
+        "THESISTRACE_TEST_EVIDENCE_DIR": str(tmp_path / "prepare-evidence"),
+        "FAKE_CONFIG_STATUS": "11",
+        "TEST_AGENT_ENV_LOG": str(observed_path),
+        "NODE_OPTIONS": (
+            "--import=data:text/javascript,globalThis.fetch=()=>{throw%20"
+            "Error(%22OFFLINE_NETWORK_FORBIDDEN%22)}"
+        ),
+    })
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", command],
+        cwd=ROOT, env=environment, capture_output=True, check=False, text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 11, completed.stderr
+    observed = json.loads(observed_path.read_text())
+    registry = json.loads(observed["THESISTRACE_AGENT_MODEL_REGISTRY"])
+    if command == "agent-eval":
+        assert registry["default_model_key"] == "gpt-5.6-luna"
+        assert registry["models"][0]["reasoning_efforts"] == ["high"]
+        assert observed["THESISTRACE_AGENT_OPENAI_API_KEY"] == "cli-provider-offline-canary"
+        assert observed["THESISTRACE_AGENT_OPENAI_BASE_URL"] == "http://host.docker.internal:8317/v1"
+        assert observed["THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"] == ""
+    else:
+        assert registry["default_model_key"] == "scripted-research"
+        assert observed["THESISTRACE_AGENT_OPENAI_API_KEY"] == ""
+        assert observed["THESISTRACE_AGENT_OPENAI_BASE_URL"] == "http://provider.invalid/v1"
+        assert observed["THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"]
+    for credential in ("cli-provider-offline-canary", "ambient-canonical-key-canary"):
+        assert credential not in completed.stdout + completed.stderr + command_log.read_text()
+    assert "up --detach" not in command_log.read_text()
+
+
 def test_integration_runtime_validates_starts_host_tests_and_cleans(
     tmp_path: Path,
 ) -> None:
@@ -1334,7 +1474,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     project_name = completed.stdout.splitlines()[1].removeprefix("Compose project: ")
     commands = command_log.read_text()
     assert commands.index("config --quiet") < commands.index("up --detach")
-    assert commands.count("build initialize auth-initialize web\n") == 1
+    assert commands.count("build initialize auth-initialize agent web\n") == 1
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
@@ -1356,8 +1496,8 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert "wait initialize auth-initialize\n" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 300 "
-        "auth api research-worker batch-research-worker tracking-worker "
-        "data-operator-worker web\n"
+        "auth auth-fixture-control agent api research-worker "
+        "batch-research-worker tracking-worker data-operator-worker web\n"
         in commands
     )
     assert "--build" not in commands
@@ -1380,6 +1520,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
         "tracking-worker",
         "data-operator-worker",
         "initialize",
+        "agent",
         "auth",
         "web",
     ):
@@ -1425,20 +1566,17 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
         "pnpm test:integration",
         "pnpm test:e2e",
     ]
-    assert scripts["check:release"] == "pnpm check && pnpm test:image-smoke"
-    assert scripts["check:release"].split(" && ") == [
-        "pnpm check",
-        "pnpm test:image-smoke",
-    ]
+    assert scripts["check:release"] == "./scripts/release-gate"
     assert scripts["test:integration"] == (
-        "./scripts/test-runtime integration && pnpm --dir auth test:integration"
+        "./scripts/test-runtime integration && pnpm --dir auth test:integration "
+        "&& pnpm --dir agent test:integration"
     )
     assert scripts["check:performance"] == "./scripts/test-runtime performance"
     assert scripts["test:benchmark"] == "./scripts/test-runtime benchmark"
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
     assert scripts["test:image-smoke"] == (
         "./scripts/test-runtime image-smoke && pnpm --dir auth test:image-smoke "
-        "&& pnpm test:caddy-image-smoke"
+        "&& pnpm --dir agent test:image-smoke && pnpm test:caddy-image-smoke"
     )
     assert scripts["test:caddy-image-smoke"] == "./scripts/test-caddy-production-image"
     assert scripts["test:cleanup"] == "./scripts/test-runtime cleanup"
@@ -1465,8 +1603,11 @@ def test_image_smoke_provisions_auth_inside_the_private_compose_network() -> Non
     assert "auth_port=$(mapped_port auth 8200)" not in image_smoke
     assert "resend_port=$(mapped_port resend-fake 8300)" not in image_smoke
     assert "THESISTRACE_TEST_RESEND_ORIGIN" not in image_smoke
-    assert "`${testProjectName()}-resend-fake-1`" in browser_fixture
-    assert 'fetch("http://127.0.0.1:8300/__test/emails"' in browser_fixture
+    assert 'authFixtureRequest("/__test/resend-emails"' in browser_fixture
+    assert "auth auth-fixture-control api research-worker" in " ".join(
+        image_smoke.replace("\\", "").split()
+    )
+    assert 'THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN="$auth_fixture_origin"' in runtime
     assert "create_private_compose_login_session" in provisioner
     assert "../../auth/test-fixtures:/test-fixtures:ro" in overlay
 
@@ -1573,7 +1714,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert completed.returncode == 0, completed.stderr
     project_name = completed.stdout.splitlines()[1].removeprefix("Compose project: ")
     commands = command_log.read_text()
-    assert commands.count("build initialize auth-initialize web\n") == 1
+    assert commands.count("build initialize auth-initialize agent web\n") == 1
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
@@ -1595,7 +1736,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert "wait initialize auth-initialize\n" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 300 "
-        "auth api web\n" in commands
+        "auth agent api web\n" in commands
     )
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
@@ -1609,6 +1750,15 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert "production_mcp_image_smoke.py stdio" in commands
     assert "production_mcp_image_smoke.py evidence" in commands
     assert "THESISTRACE_TEST_RANDOM_SEED=1401" in commands
+    mcp_smoke_commands = [
+        line
+        for line in commands.splitlines()
+        if "production_mcp_image_smoke.py" in line
+    ]
+    assert mcp_smoke_commands
+    for mcp_smoke_command in mcp_smoke_commands:
+        assert "-e THESISTRACE_MCP_ALLOWED_HOSTS=" in mcp_smoke_command
+        assert "-e THESISTRACE_MCP_ALLOWED_ORIGINS=" in mcp_smoke_command
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
         "api research-worker batch-research-worker tracking-worker "
@@ -1724,9 +1874,11 @@ def test_image_smoke_mounts_explicit_local_mcp_api_without_changing_production_i
 
 def test_production_image_base_tags_are_locked_to_content_digests() -> None:
     backend = (ROOT / "deploy" / "core" / "Dockerfile.backend").read_text()
+    agent = (ROOT / "deploy" / "core" / "Dockerfile.agent").read_text()
+    auth = (ROOT / "deploy" / "core" / "Dockerfile.auth").read_text()
     web = (ROOT / "deploy" / "core" / "Dockerfile.web").read_text()
 
-    for dockerfile in (backend, web):
+    for dockerfile in (backend, agent, auth, web):
         from_lines = [line for line in dockerfile.splitlines() if line.startswith("FROM ")]
         assert from_lines
         assert all("@sha256:" in line for line in from_lines)
@@ -1748,7 +1900,7 @@ def test_failed_image_build_stops_smoke_before_runtime_phases(tmp_path: Path) ->
 
     assert completed.returncode == 7
     commands = command_log.read_text()
-    assert "build initialize auth-initialize web\n" in commands
+    assert "build initialize auth-initialize agent web\n" in commands
     assert "entrypoint /bin/true batch-research-worker" not in commands
     assert "production_image_smoke.py" not in commands
 
@@ -1842,7 +1994,7 @@ def test_failed_image_build_stops_before_infrastructure_and_preserves_status(
     assert "phase=image-smoke-images " in metadata
     assert "status=12" in metadata
     commands = command_log.read_text()
-    assert "build initialize auth-initialize web" in commands
+    assert "build initialize auth-initialize agent web" in commands
     assert "image tag" not in commands
     assert "up --detach" not in commands
 
@@ -2022,7 +2174,7 @@ def test_failed_integration_captures_evidence_before_default_cleanup(
     assert commands.index("ps --all") < commands.index("down --volumes")
 
 
-def test_failed_runtime_sanitizes_then_scans_new_failure_evidence(
+def test_failed_runtime_detects_original_leak_before_sanitizing_evidence(
     tmp_path: Path,
 ) -> None:
     _, environment = _fake_test_runtime_commands(tmp_path)
@@ -2047,6 +2199,33 @@ def test_failed_runtime_sanitizes_then_scans_new_failure_evidence(
     metadata = (run_root / "run.txt").read_text()
     assert "failure_evidence_sanitization_status=0\n" in metadata
     assert "failure_canary_scan_status=0\n" in metadata
+    assert "raw_canary_scan_status=1\n" in metadata
+    assert json.loads((evidence / "raw-canary-scan.json").read_text())["status"] == "failed"
+
+
+def test_successful_runtime_is_failed_by_a_raw_log_canary(tmp_path: Path) -> None:
+    _, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_COMPOSE_LOGS"] = "agent-provider-error-private-6c19b77e"
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "integration"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert completed.returncode == 1
+    assert "agent-provider-error-private" not in completed.stdout + completed.stderr
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    run_root = tmp_path / "runs" / run_id
+    metadata = (run_root / "run.txt").read_text()
+    assert "raw_canary_scan_status=1\n" in metadata
+    assert "cleanup_status=0\n" in metadata
+    evidence = run_root / "evidence"
+    assert (evidence / "compose-logs.txt").read_text().strip() == "<redacted>"
+    report = json.loads((evidence / "raw-canary-scan.json").read_text())
+    assert report["status"] == "failed"
+    assert all(item["categories"] == ["provider_error"] for item in report["findings"])
 
 
 def test_cleanup_failure_is_reported_without_masking_the_test_failure(

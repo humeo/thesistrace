@@ -20,6 +20,7 @@ services:
       POSTGRES_PASSWORD: owner-test-password
       THESISTRACE_CORE_DATABASE_PASSWORD: core-test-password
       THESISTRACE_AUTH_DATABASE_PASSWORD: auth-test-password
+      THESISTRACE_AGENT_DATABASE_PASSWORD: agent-test-password
     healthcheck:
       test:
         - CMD-SHELL
@@ -53,7 +54,16 @@ services:
       RESEND_API_KEY: image-smoke-resend-key
       RESEND_FROM_EMAIL: ThesisTrace <noreply@thesistrace.test>
       THESISTRACE_AUTH_DATABASE_URL: postgresql://auth_runtime:auth-test-password@postgres:5432/thesistrace
+      THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS: "600"
       THESISTRACE_ENVIRONMENT: production
+      THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS: "660"
+      THESISTRACE_MCP_AGENT_SCOPES: '["research:read","research:execute","tracking:read","tracking:execute"]'
+      THESISTRACE_MCP_CLIENT_ID: thesistrace-agent
+      THESISTRACE_MCP_CLOCK_SKEW_SECONDS: "30"
+      THESISTRACE_MCP_ISSUER_URL: https://thesistrace.test/api/auth
+      THESISTRACE_MCP_RESOURCE_URL: https://thesistrace.test/mcp
+      THESISTRACE_MCP_SIGNING_PRIVATE_JWK: '{"alg":"EdDSA","crv":"Ed25519","d":"2SCCVM_DYKEJvq18KV1M4UNFhxTHLKtdXxQFXLGlEBs","kid":"test-signing-key-01","kty":"OKP","use":"sig","x":"3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8"}'
+      THESISTRACE_MCP_VERIFYING_PUBLIC_JWK: '{"alg":"EdDSA","crv":"Ed25519","kid":"test-signing-key-01","kty":"OKP","use":"sig","x":"3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8"}'
       THESISTRACE_PUBLIC_ORIGIN: https://thesistrace.test
       THESISTRACE_RESEND_API_URL: https://api.resend.com
     depends_on:

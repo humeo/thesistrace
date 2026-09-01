@@ -6,7 +6,7 @@ import {
   createThesisTraceAuth,
   type AuthLifecycleDependencies,
 } from "./auth.js";
-import type { AuthSettings } from "./config.js";
+import { authTestSettings } from "../test-fixtures/auth-settings.js";
 import {
   AuthOperationCoordinator,
   CredentialOperationCoordinator,
@@ -48,18 +48,10 @@ const replacementOperatorId = "00000000-0000-4000-8000-000000000002";
 const password = "correct-horse-battery-staple";
 let now = new Date("2026-08-29T06:00:00.000Z");
 
-const settings: AuthSettings = {
+const settings = authTestSettings({
   databaseUrl: runtimeDatabaseUrl,
-  environment: "test",
-  host: "127.0.0.1",
-  port: 8200,
-  publicOrigin: "http://127.0.0.1:5173",
-  resendApiKey: "test-resend-key",
-  resendApiUrl: "http://127.0.0.1:8300",
-  resendFromEmail: "ThesisTrace <noreply@thesistrace.test>",
   secret: authSecret,
-  secureCookies: false,
-};
+});
 const invitationAdmission = new InvitationAdmission();
 const lifecycle: AuthLifecycleDependencies = {
   backgroundTask(task) {

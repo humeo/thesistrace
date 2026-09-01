@@ -85,6 +85,68 @@ esac
 printf '%s\n' "$public_host" | grep -Eq '^[0-9]+(\.[0-9]+){3}$' \
   && fail PRODUCTION_PUBLIC_ORIGIN_INVALID
 
+mcp_issuer_url=$(required_value THESISTRACE_MCP_ISSUER_URL)
+test "$mcp_issuer_url" = "$public_origin/api/auth" \
+  || fail PRODUCTION_MCP_IDENTITY_INVALID
+mcp_resource_url=$(required_value THESISTRACE_MCP_RESOURCE_URL)
+test "$mcp_resource_url" = "$public_origin/mcp" \
+  || fail PRODUCTION_MCP_IDENTITY_INVALID
+mcp_client_id=$(required_value THESISTRACE_MCP_CLIENT_ID)
+test "$mcp_client_id" = thesistrace-agent \
+  || fail PRODUCTION_MCP_IDENTITY_INVALID
+
+mcp_agent_scopes=$(required_value THESISTRACE_MCP_AGENT_SCOPES)
+test "$mcp_agent_scopes" = \
+  '["research:read","research:execute","tracking:read","tracking:execute"]' \
+  || fail PRODUCTION_MCP_SCOPE_INVALID
+mcp_deployment_tools=$(required_value THESISTRACE_MCP_DEPLOYMENT_TOOLS)
+test "$mcp_deployment_tools" = \
+  '["diagnose_alpha_formula","get_alpha_catalog","get_daily_track","get_daily_track_result","get_research_batch","get_research_context","get_research_run","get_research_run_result","list_daily_tracks","list_research_batches","list_research_runs","retry_daily_track","start_daily_track","submit_research_batch","submit_research_run"]' \
+  || fail PRODUCTION_MCP_TOOL_SET_INVALID
+mcp_allowed_hosts=$(required_value THESISTRACE_MCP_ALLOWED_HOSTS)
+test "$mcp_allowed_hosts" = "[\"api:8100\",\"$public_host\"]" \
+  || fail PRODUCTION_MCP_TRANSPORT_SECURITY_INVALID
+mcp_allowed_origins=$(required_value THESISTRACE_MCP_ALLOWED_ORIGINS)
+test "$mcp_allowed_origins" = "[\"$public_origin\"]" \
+  || fail PRODUCTION_MCP_TRANSPORT_SECURITY_INVALID
+
+validate_bounded_integer() {
+  integer=$(required_value "$1")
+  printf '%s\n' "$integer" | grep -Eq '^(0|[1-9][0-9]*)$' \
+    || fail PRODUCTION_MCP_TIME_BUDGET_INVALID
+  test "$integer" -ge "$2" && test "$integer" -le "$3" \
+    || fail PRODUCTION_MCP_TIME_BUDGET_INVALID
+  printf '%s' "$integer"
+}
+
+agent_run_max_wall_seconds=$(validate_bounded_integer \
+  THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS 1 3600)
+mcp_clock_skew_seconds=$(validate_bounded_integer \
+  THESISTRACE_MCP_CLOCK_SKEW_SECONDS 0 300)
+mcp_access_token_ttl_seconds=$(validate_bounded_integer \
+  THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS 1 86400)
+test "$mcp_access_token_ttl_seconds" \
+  -gt "$((agent_run_max_wall_seconds + mcp_clock_skew_seconds))" \
+  || fail PRODUCTION_MCP_TIME_BUDGET_INVALID
+
+mcp_signing_private_jwk=$(required_value THESISTRACE_MCP_SIGNING_PRIVATE_JWK)
+printf '%s\n' "$mcp_signing_private_jwk" | grep -Eq \
+  '^\{"alg":"EdDSA","crv":"Ed25519","d":"[A-Za-z0-9_-]{43}","kid":"[A-Za-z0-9_-]{8,128}","kty":"OKP","use":"sig","x":"[A-Za-z0-9_-]{43}"\}$' \
+  || fail PRODUCTION_MCP_SIGNING_KEY_INVALID
+mcp_verifying_public_jwk=$(required_value THESISTRACE_MCP_VERIFYING_PUBLIC_JWK)
+printf '%s\n' "$mcp_verifying_public_jwk" | grep -Eq \
+  '^\{"alg":"EdDSA","crv":"Ed25519","kid":"[A-Za-z0-9_-]{8,128}","kty":"OKP","use":"sig","x":"[A-Za-z0-9_-]{43}"\}$' \
+  || fail PRODUCTION_MCP_SIGNING_KEY_INVALID
+mcp_private_key_identity=$(printf '%s\n' "$mcp_signing_private_jwk" | sed -E \
+  's/^.*"kid":"([A-Za-z0-9_-]+)".*"x":"([A-Za-z0-9_-]+)".*$/\1:\2/')
+mcp_public_key_identity=$(printf '%s\n' "$mcp_verifying_public_jwk" | sed -E \
+  's/^.*"kid":"([A-Za-z0-9_-]+)".*"x":"([A-Za-z0-9_-]+)".*$/\1:\2/')
+test "$mcp_private_key_identity" = "$mcp_public_key_identity" \
+  || fail PRODUCTION_MCP_SIGNING_KEY_INVALID
+case "$mcp_private_key_identity" in
+  *test* | *development* | *placeholder*) fail PRODUCTION_MCP_SIGNING_KEY_INVALID ;;
+esac
+
 resend_url=$(required_value THESISTRACE_RESEND_API_URL)
 test "$resend_url" = https://api.resend.com || fail PRODUCTION_RESEND_URL_INVALID
 
@@ -105,9 +167,13 @@ validate_database_password() {
 owner_password=$(validate_database_password THESISTRACE_OWNER_DATABASE_PASSWORD)
 core_password=$(validate_database_password THESISTRACE_CORE_DATABASE_PASSWORD)
 auth_password=$(validate_database_password THESISTRACE_AUTH_DATABASE_PASSWORD)
+agent_password=$(validate_database_password THESISTRACE_AGENT_DATABASE_PASSWORD)
 test "$owner_password" != "$core_password" \
   && test "$owner_password" != "$auth_password" \
+  && test "$owner_password" != "$agent_password" \
   && test "$core_password" != "$auth_password" \
+  && test "$core_password" != "$agent_password" \
+  && test "$auth_password" != "$agent_password" \
   || fail PRODUCTION_DATABASE_PASSWORD_INVALID
 
 auth_secret=$(required_value BETTER_AUTH_SECRET)
@@ -141,6 +207,42 @@ if printf '%s\n' "$tushare_token" | grep -Eq '^<[^<>]+>$'; then
   fail PRODUCTION_TUSHARE_TOKEN_INVALID
 fi
 
+agent_model_registry=$(required_value THESISTRACE_AGENT_MODEL_REGISTRY)
+test "${#agent_model_registry}" -le 65536 \
+  || fail PRODUCTION_AGENT_MODEL_REGISTRY_INVALID
+
+agent_build_revision=$(required_value THESISTRACE_AGENT_BUILD_REVISION)
+test "${#agent_build_revision}" -le 128 \
+  || fail PRODUCTION_AGENT_BUILD_REVISION_INVALID
+printf '%s\n' "$agent_build_revision" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$' \
+  || fail PRODUCTION_AGENT_BUILD_REVISION_INVALID
+printf '%s\n' "$agent_model_registry" | grep -Eq '^\{.*\}$' \
+  || fail PRODUCTION_AGENT_MODEL_REGISTRY_INVALID
+
+agent_provider_secret_present=false
+for agent_provider_secret_name in \
+  THESISTRACE_AGENT_ANTHROPIC_API_KEY \
+  THESISTRACE_AGENT_GOOGLE_API_KEY \
+  THESISTRACE_AGENT_OPENAI_API_KEY \
+  THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET; do
+  agent_provider_secret=$(env_value "$agent_provider_secret_name")
+  test -n "$agent_provider_secret" || continue
+  test "${#agent_provider_secret}" -ge 16 \
+    || fail PRODUCTION_AGENT_PROVIDER_SECRET_INVALID
+  test "${#agent_provider_secret}" -le 512 \
+    || fail PRODUCTION_AGENT_PROVIDER_SECRET_INVALID
+  printf '%s\n' "$agent_provider_secret" | grep -Eq '^[^[:space:]]+$' \
+    || fail PRODUCTION_AGENT_PROVIDER_SECRET_INVALID
+  case "$agent_provider_secret" in
+    test-* | development-* | placeholder*)
+      fail PRODUCTION_AGENT_PROVIDER_SECRET_INVALID
+      ;;
+  esac
+  agent_provider_secret_present=true
+done
+test "$agent_provider_secret_present" = true \
+  || fail PRODUCTION_AGENT_PROVIDER_SECRET_INVALID
+
 auth_image=$(required_value THESISTRACE_AUTH_IMAGE)
 case "$auth_image" in
   *@*)
@@ -167,21 +269,67 @@ case "$auth_image" in
     ;;
 esac
 
+agent_image=$(required_value THESISTRACE_AGENT_IMAGE)
+case "$agent_image" in
+  *@*)
+    printf '%s\n' "$agent_image" | grep -Eq \
+      '^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$' \
+      || fail PRODUCTION_AGENT_IMAGE_INVALID
+    ;;
+  *)
+    printf '%s\n' "$agent_image" | grep -Eq \
+      '^[A-Za-z0-9][A-Za-z0-9._:/-]*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$' \
+      || fail PRODUCTION_AGENT_IMAGE_INVALID
+    agent_image_tag=${agent_image##*:}
+    normalized_agent_image_tag=$(printf '%s' "$agent_image_tag" | tr '[:upper:]' '[:lower:]')
+    case "$normalized_agent_image_tag" in
+      latest | test | dev | development | placeholder)
+        fail PRODUCTION_AGENT_IMAGE_INVALID
+        ;;
+    esac
+    ;;
+esac
+case "$agent_image" in
+  *[!A-Za-z0-9._:/@-]*)
+    fail PRODUCTION_AGENT_IMAGE_INVALID
+    ;;
+esac
+
 # Docker Compose gives the ambient shell precedence over --env-file. Remove
 # every security-sensitive value that was validated above so the root-owned
 # file remains the sole source passed to Compose.
 unset \
   THESISTRACE_ENVIRONMENT \
   THESISTRACE_PUBLIC_ORIGIN \
+  THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS \
+  THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS \
+  THESISTRACE_MCP_AGENT_SCOPES \
+  THESISTRACE_MCP_ALLOWED_HOSTS \
+  THESISTRACE_MCP_ALLOWED_ORIGINS \
+  THESISTRACE_MCP_CLIENT_ID \
+  THESISTRACE_MCP_CLOCK_SKEW_SECONDS \
+  THESISTRACE_MCP_DEPLOYMENT_TOOLS \
+  THESISTRACE_MCP_ISSUER_URL \
+  THESISTRACE_MCP_RESOURCE_URL \
+  THESISTRACE_MCP_SIGNING_PRIVATE_JWK \
+  THESISTRACE_MCP_VERIFYING_PUBLIC_JWK \
   THESISTRACE_RESEND_API_URL \
   THESISTRACE_OWNER_DATABASE_PASSWORD \
   THESISTRACE_CORE_DATABASE_PASSWORD \
   THESISTRACE_AUTH_DATABASE_PASSWORD \
+  THESISTRACE_AGENT_DATABASE_PASSWORD \
   BETTER_AUTH_SECRET \
   RESEND_API_KEY \
   RESEND_FROM_EMAIL \
   THESISTRACE_TUSHARE_TOKEN \
-  THESISTRACE_AUTH_IMAGE
+  THESISTRACE_AUTH_IMAGE \
+  THESISTRACE_AGENT_IMAGE \
+  THESISTRACE_AGENT_MODEL_REGISTRY \
+  THESISTRACE_AGENT_BUILD_REVISION \
+  THESISTRACE_AGENT_ANTHROPIC_API_KEY \
+  THESISTRACE_AGENT_GOOGLE_API_KEY \
+  THESISTRACE_AGENT_OPENAI_API_KEY \
+  THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET
 
 compose() {
   docker compose \

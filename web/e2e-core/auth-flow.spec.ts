@@ -274,6 +274,7 @@ test.describe("tablet touch presentation", () => {
     await confirmation.fill(browserPassword);
     await acceptInvitation.click();
 
+    await expect(page).toHaveURL(/\/data$/, { timeout: 15_000 });
     await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
     await openAccountMenu(page);
     const accountMenu = page.getByLabel("Account menu");

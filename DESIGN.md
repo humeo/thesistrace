@@ -11,6 +11,7 @@ colors:
   primary: "#5e6ad2"
   on-primary: "#ffffff"
   primary-hover: "#828fff"
+  primary-control-hover: "#5764cb"
   primary-focus: "#5e69d1"
   ink: "#f7f8f8"
   ink-muted: "#d0d6e0"
@@ -26,7 +27,9 @@ colors:
   hairline-tertiary: "#3e3e44"
   semantic-success: "#27a644"
   semantic-warning: "#c69026"
-  semantic-danger: "#d14d41"
+  semantic-danger: "#df5a4f"
+  semantic-danger-action: "#a63d34"
+  semantic-danger-action-hover: "#b4473d"
   semantic-overlay: "#000000"
 
 typography:
@@ -179,6 +182,7 @@ This direction replaces the previous OpenAI light theme. Do not keep a legacy li
 
 - `{colors.primary}` is reserved for the primary action, focus ring, active navigation indicator, and intentional links.
 - Hover may move to `{colors.primary-hover}`; pressed or focused emphasis may use `{colors.primary-focus}`.
+- Filled primary controls use `{colors.primary-control-hover}` on hover so white button text retains AA contrast.
 - Success, warning, and danger colors are reserved for actual state. Never use them as decoration or category branding.
 - A selected navigation row primarily uses a surface lift and stronger text. Do not fill the whole sidebar with lavender.
 
@@ -205,7 +209,9 @@ This direction replaces the previous OpenAI light theme. Do not keep a legacy li
 - Primary buttons: `{colors.primary}` background, white text, 8px radius, 8px × 14px padding.
 - Secondary buttons: `{colors.surface-2}` background, `{colors.ink}` text, 1px hairline border.
 - Tertiary buttons: transparent background and muted text; hover lifts to `{colors.surface-2}`.
-- Destructive actions use danger styling only at the decision point.
+- Destructive actions use `{colors.semantic-danger-action}` and
+  `{colors.semantic-danger-action-hover}` only at the decision point; use
+  `{colors.semantic-danger}` for danger text and icons.
 - Do not use pill-shaped primary CTAs.
 
 ### Inputs and Selectors

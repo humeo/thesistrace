@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+
 from mcp.server.auth.provider import AccessToken
 from production_mcp_image_canaries import ACTION_TOKEN, READ_TOKEN, SUBJECT
 from uvicorn import run
@@ -49,8 +52,14 @@ def application():
             issuer_url=ISSUER_URL,
             resource_server_url=RESOURCE_URL,
             deployment_tool_allowlist=RESEARCH_AGENT_TOOL_NAMES,
-            allowed_hosts=("api:8100", "core.test"),
-            allowed_origins=(TRUSTED_ORIGIN,),
+            supported_scopes=frozenset(ResearchAgentScope),
+            allowed_hosts=tuple(
+                json.loads(os.environ["THESISTRACE_MCP_ALLOWED_HOSTS"])
+            ),
+            allowed_origins=(
+                *tuple(json.loads(os.environ["THESISTRACE_MCP_ALLOWED_ORIGINS"])),
+                TRUSTED_ORIGIN,
+            ),
         ),
     )
 

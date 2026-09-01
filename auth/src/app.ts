@@ -26,6 +26,7 @@ import {
   OperatorQueryInvalidError,
   type OperatorResearcherSummary,
 } from "./operator-directory.js";
+import type { McpAccessToken } from "./mcp-access-token.js";
 import { PasswordResetRejectedError } from "./password-reset.js";
 import {
   OperatorPasswordInvalidError,
@@ -264,6 +265,7 @@ export type AuthAppDependencies = Readonly<{
     principal: OperatorPrincipal,
     input: Readonly<{ cursor: string | null; search: string | null }>,
   ) => Promise<OperatorPage<OperatorResearcherSummary>>;
+  issueMcpAccessToken: (researcherId: string) => Promise<McpAccessToken>;
   publicOrigin: string;
   readiness: () => Promise<boolean>;
   reissueOperatorInvitation: (
@@ -316,30 +318,18 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
   });
 
   app.post("/internal/session/verify", async (context) => {
-    let session: unknown;
-    try {
-      session = await dependencies.getSession({
-        headers: context.req.raw.headers,
-        query: { disableCookieCache: true, disableRefresh: true },
-      });
-    } catch {
+    const result = await loadActiveSession(dependencies, context.req.raw.headers);
+    if (result.kind === "unavailable") {
       return context.json({ code: "AUTH_SERVICE_UNAVAILABLE" }, 503);
     }
-    if (session === null) {
-      return context.json({ code: "AUTHENTICATION_REQUIRED" }, 401);
-    }
-    const parsed = verifiedSessionSchema.safeParse(session);
-    if (!parsed.success) {
-      return context.json({ code: "AUTH_SERVICE_UNAVAILABLE" }, 503);
-    }
-    if (!parsed.data.user.active) {
+    if (result.kind === "invalid") {
       return context.json({ code: "AUTHENTICATION_REQUIRED" }, 401);
     }
     return context.json({
       active: true as const,
-      display_label: parsed.data.user.name,
-      email: parsed.data.user.email,
-      researcher_id: parsed.data.user.id,
+      display_label: result.user.name,
+      email: result.user.email,
+      researcher_id: result.user.id,
     });
   });
 
@@ -565,6 +555,22 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
     async (context) => operatorSessionRevocation(context, dependencies),
   );
 
+  app.post("/internal/session/exchange", async (context) => {
+    context.header("Cache-Control", "no-store");
+    const result = await loadActiveSession(dependencies, context.req.raw.headers);
+    if (result.kind === "unavailable") {
+      return context.json({ code: "AUTH_SERVICE_UNAVAILABLE" }, 503);
+    }
+    if (result.kind === "invalid") {
+      return context.json({ code: "AUTHENTICATION_REQUIRED" }, 401);
+    }
+    try {
+      return context.json(await dependencies.issueMcpAccessToken(result.user.id));
+    } catch {
+      return context.json({ code: "AUTH_SERVICE_UNAVAILABLE" }, 503);
+    }
+  });
+
   app.post("/api/auth/sign-up/email", (context) =>
     context.json({ code: "RESEARCHER_INVITATION_REQUIRED" }, 403),
   );
@@ -770,6 +776,34 @@ async function operatorInvitationMutation(
     }
     throw error;
   }
+}
+
+type ActiveSessionResult =
+  | Readonly<{
+      kind: "active";
+      user: z.infer<typeof verifiedSessionSchema>["user"];
+    }>
+  | Readonly<{ kind: "invalid" }>
+  | Readonly<{ kind: "unavailable" }>;
+
+async function loadActiveSession(
+  dependencies: Pick<AuthAppDependencies, "getSession">,
+  headers: Headers,
+): Promise<ActiveSessionResult> {
+  let session: unknown;
+  try {
+    session = await dependencies.getSession({
+      headers,
+      query: { disableCookieCache: true, disableRefresh: true },
+    });
+  } catch {
+    return { kind: "unavailable" };
+  }
+  if (session === null) return { kind: "invalid" };
+  const parsed = verifiedSessionSchema.safeParse(session);
+  if (!parsed.success) return { kind: "unavailable" };
+  if (!parsed.data.user.active) return { kind: "invalid" };
+  return { kind: "active", user: parsed.data.user };
 }
 
 async function normalizePublicAuthRequest(

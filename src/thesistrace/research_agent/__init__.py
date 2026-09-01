@@ -10,6 +10,11 @@ from thesistrace.research_agent.models import (
     ResearchAgentScope,
     ResearchAgentToolError,
 )
+from thesistrace.research_agent.oauth import (
+    PRODUCTION_RESEARCH_AGENT_SCOPES,
+    ProductionResearchAgentTokenVerifier,
+    ResearchAgentProductionSettings,
+)
 from thesistrace.research_agent.registry import (
     RESEARCH_AGENT_TOOL_NAMES,
     ResearchAgentCapabilityRegistry,
@@ -26,6 +31,9 @@ __all__ = [
     "ResearchAgentToolError",
     "ResearchAgentHTTPConfiguration",
     "ResearchAgentHTTPTransport",
+    "ResearchAgentProductionSettings",
+    "ProductionResearchAgentTokenVerifier",
+    "PRODUCTION_RESEARCH_AGENT_SCOPES",
     "RESEARCH_AGENT_TOOL_NAMES",
     "create_research_agent_mcp_server",
     "create_research_agent_http_transport",

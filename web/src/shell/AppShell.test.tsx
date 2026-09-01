@@ -18,10 +18,11 @@ function renderShell(
   );
 }
 
-test("renders four resources and composes only the active resource content", () => {
+test("renders Chat and the four Research resources with only the active content", () => {
   const markup = renderShell("/research-runs", "Selected resource");
 
-  expect(markup.match(/<a /g)).toHaveLength(5);
+  expect(markup.match(/<a /g)).toHaveLength(6);
+  expect(markup).toContain('href="/chat"');
   expect(markup).toContain('href="/data"');
   expect(markup).toContain('href="/research"');
   expect(markup).not.toContain("Definitions");
@@ -68,7 +69,7 @@ test("keeps the Research header focused on navigation and folder context", () =>
   expect(markup).toContain("Research workspace");
 });
 
-test.each(["/data", "/research", "/research-runs", "/daily-tracks"])(
+test.each(["/chat", "/data", "/research", "/research-runs", "/daily-tracks"])(
   "defaults the sidebar to expanded on %s",
   (currentPath) => {
     const markup = renderShell(currentPath);

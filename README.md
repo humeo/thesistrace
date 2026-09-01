@@ -14,7 +14,14 @@ Install [mise](https://mise.jdx.dev/), [uv](https://docs.astral.sh/uv/), and
 Docker with Compose support. Then install the pinned Node.js and pnpm versions,
 sync host dependencies, validate Compose, and build the local images:
 
+The Development Agent uses `gpt-5.6-luna` with `high` reasoning through the local
+OpenAI-compatible service at `http://localhost:8317/v1`. Export the existing
+`CLI_API_KEY` in the launching shell; Compose injects it only into Agent and
+uses `host.docker.internal:8317` inside the container. No key value is stored in
+the repository. Deterministic Test commands retain their isolated Scripted model.
+
 ```sh
+export CLI_API_KEY
 mise install
 mise exec -- pnpm bootstrap
 ```
@@ -63,6 +70,10 @@ Before a release, include the final Production Image Smoke with:
 ```sh
 mise exec -- pnpm check:release
 ```
+
+Agent model quality additionally requires the separate, authorized
+[real-model evaluation](docs/runbook/research-agent-eval.md). Deterministic
+release checks alone do not qualify a Provider/model/reasoning combination.
 
 Run the long-Research final-image performance qualification separately on a
 controlled idle host:

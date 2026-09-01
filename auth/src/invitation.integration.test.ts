@@ -7,7 +7,7 @@ import {
 } from "./auth.js";
 import { createAuthApp } from "./app.js";
 import { AuthEndpointRateLimiter } from "./auth-rate-limit.js";
-import type { AuthSettings } from "./config.js";
+import { authTestSettings } from "../test-fixtures/auth-settings.js";
 import {
   AuthOperationCoordinator,
   CredentialOperationCoordinator,
@@ -47,18 +47,10 @@ const credentialCoordinator = new CredentialOperationCoordinator({
   coordination,
   pool: runtimePool,
 });
-const settings: AuthSettings = {
+const settings = authTestSettings({
   databaseUrl: authRuntimeDatabaseUrl,
-  environment: "test",
-  host: "127.0.0.1",
-  port: 8200,
-  publicOrigin: "http://127.0.0.1:5173",
-  resendApiKey: "test-resend-key",
-  resendApiUrl: "http://127.0.0.1:8300",
-  resendFromEmail: "ThesisTrace <noreply@thesistrace.test>",
   secret: settingsSecret,
-  secureCookies: false,
-};
+});
 const fixedNow = new Date("2026-08-28T01:02:03.000Z");
 const invitationAdmission = new InvitationAdmission();
 const lifecycle: AuthLifecycleDependencies = {
@@ -296,6 +288,9 @@ describe.sequential("Researcher Invitation lifecycle", () => {
       },
       async listOperatorResearchers() {
         throw new Error("OPERATOR_DIRECTORY_UNAVAILABLE_IN_INVITATION_HARNESS");
+      },
+      async issueMcpAccessToken() {
+        throw new Error("MCP_TOKEN_NOT_USED_IN_INVITATION_TEST");
       },
       publicOrigin: settings.publicOrigin,
       readiness: async () => true,

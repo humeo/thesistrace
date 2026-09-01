@@ -79,6 +79,7 @@ from thesistrace.operational_events import (
 from thesistrace.research_agent import (
     ResearchAgentHTTPConfiguration,
     ResearchAgentModules,
+    ResearchAgentProductionSettings,
     create_research_agent_http_transport,
 )
 from thesistrace.research_batch import (
@@ -1558,7 +1559,12 @@ def _trusted_http_request_id(
     return fallback()
 
 
-app = create_app()
+def create_production_app() -> FastAPI:
+    research_agent = ResearchAgentProductionSettings.from_environment()
+    return create_app(
+        enable_research_agent_http=True,
+        research_agent_http=research_agent.http_configuration(),
+    )
 
 
 def main() -> None:
@@ -1567,7 +1573,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8100)
     arguments = parser.parse_args()
     uvicorn.run(
-        app,
+        create_production_app(),
         host=arguments.host,
         port=arguments.port,
         log_level="warning",

@@ -1,7 +1,12 @@
 import { type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 
 import { expect, sameOriginHeaders, test } from "./auth-fixture";
+import {
+  controlledWorkerExit,
+  controlWorker,
+  startControlledResearchRun,
+} from "./research-run-control";
 
 function recordDocumentRequests(page: Page): string[] {
   const documentRequests: string[] = [];
@@ -551,26 +556,16 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
       name: "Composite financial browser run",
       formula: "rank(close) + rank(revenue)",
     });
-    let captureRun: ((value: { id: string; status: number }) => void) | undefined;
-    const runCapture = new Promise<{ id: string; status: number }>((resolve) => {
-      captureRun = resolve;
-    });
-    await page.route("**/api/research-runs", async (route) => {
-      if (route.request().method() !== "POST") {
-        await route.continue();
-        return;
-      }
-      const response = await route.fetch();
-      const body = await response.json() as { id: string };
-      captureRun?.({ id: body.id, status: response.status() });
-      await route.fulfill({ response });
-    });
+    const runCapture = page.waitForResponse((response) => (
+      response.url().endsWith("/api/research-runs")
+      && response.request().method() === "POST"
+    ));
     await page.getByRole("button", { name: "Run research", exact: true }).click();
     const acceptedRun = await runCapture;
-    await page.unroute("**/api/research-runs");
-    expect(acceptedRun.status).toBe(202);
-    runId = acceptedRun.id;
+    expect(acceptedRun.status()).toBe(202);
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+    runId = new URL(page.url()).pathname.split("/").at(-1);
+    if (runId === undefined) throw new Error("ResearchRun route has no identity");
     await expect(page.locator(".research-run-facts").getByText(/Status\s+queued/)).toBeVisible();
     const barrier = startControlledResearchRun(runId);
     controlledWorker = barrier.process;
@@ -677,24 +672,20 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     )).toBeTruthy();
     controlWorker("unpause");
     workerPaused = false;
-    const startTrackingPath = `**/api/research-runs/${runId}/daily-tracks`;
-    let captureTrack: ((value: { id: string; status: number }) => void) | undefined;
-    const trackCapture = new Promise<{ id: string; status: number }>((resolve) => {
-      captureTrack = resolve;
-    });
-    await page.route(startTrackingPath, async (route) => {
-      const response = await route.fetch();
-      const body = await response.json() as { id: string };
-      captureTrack?.({ id: body.id, status: response.status() });
-      await route.fulfill({ response });
-    });
+    const trackCapture = page.waitForResponse((response) => (
+      response.url().endsWith(`/api/research-runs/${runId}/daily-tracks`)
+      && response.request().method() === "POST"
+    ));
     await page.getByRole("button", { name: "Start Tracking" }).click();
     const acceptedTrack = await trackCapture;
-    await page.unroute(startTrackingPath);
-    expect(acceptedTrack.status).toBe(201);
-    trackId = acceptedTrack.id;
+    expect(acceptedTrack.status()).toBe(201);
     await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
-    await expect(page.locator(".research-run-facts").first()).toContainText("Status active");
+    trackId = new URL(page.url()).pathname.split("/").at(-1);
+    if (trackId === undefined) throw new Error("DailyTrack route has no identity");
+    await expect(page.locator(".research-run-facts").first()).toContainText(
+      "Status active",
+      { timeout: 30_000 },
+    );
     await expect(page.locator(".research-run-facts").first()).toContainText(
       "Advance phase up_to_date",
     );
@@ -756,6 +747,12 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     await expect(page.getByText("Financial Coverage ends before the next Research Session.")).toBeVisible();
 
     publishFinancialTrackHead("recovered");
+    const recoveredData = await page.request.get("/api/data");
+    expect(recoveredData.status()).toBe(200);
+    expect(await recoveredData.json()).toMatchObject({
+      data_through_session: "2026-08-11",
+      financial_research_readiness: "ready",
+    });
     await page.getByRole("button", { name: "Retry blocked target" }).click();
     await expect.poll(async () => {
       const response = await page.request.get(`/api/daily-tracks/${trackId}`);
@@ -1020,6 +1017,12 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
   });
 
   try {
+    publishFinancialTrackHead("lagged");
+    const currentData = await page.request.get("/api/data");
+    expect(currentData.status()).toBe(200);
+    expect(await currentData.json()).toMatchObject({
+      data_through_session: "2026-08-11",
+    });
     await page.goto("/research?new");
     await expect(page).toHaveURL(/\/research$/);
     await fillCompleteDraft(page, {
@@ -1334,7 +1337,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const trackId = page.url().split("/").at(-1);
     expect(trackId).toMatch(/^track_[a-f0-9]+$/);
     if (trackId === undefined) throw new Error("DailyTrack route is missing track id");
-    await expect(page.getByRole("link", { name: reusedRunId, exact: true })).toBeVisible();
+    const sourceRunLink = page.getByRole("link", { name: reusedRunId, exact: true });
+    await expect(sourceRunLink).toBeVisible();
     await expect(page.getByRole("button", { name: "Delete DailyTrack" })).toHaveCount(0);
     const refreshTrack = page.getByRole("button", { name: "Refresh to latest data" });
     await expect(refreshTrack).toBeEnabled();
@@ -1348,7 +1352,23 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     expect(refreshResponse.status()).toBe(202);
     expect(await refreshResponse.finished()).toBeNull();
 
-    await page.goto(`/research-runs/${reusedRunId}`);
+    let injectedDetailFailures = 0;
+    const reusedRunPath = `**/api/research-runs/${reusedRunId}`;
+    await page.route(reusedRunPath, async (route) => {
+      if (route.request().method() === "GET" && injectedDetailFailures === 0) {
+        injectedDetailFailures += 1;
+        await route.fulfill({ json: { detail: "Authentication unavailable" }, status: 503 });
+        return;
+      }
+      await route.continue();
+    });
+    await sourceRunLink.click();
+    await expect(page).toHaveURL(new RegExp(`/research-runs/${reusedRunId}$`));
+    await expect(page.getByRole("alert")).toHaveText("ResearchRun unavailable");
+    expect(injectedDetailFailures).toBe(1);
+    await page.unroute(reusedRunPath);
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Delete Research", exact: true })).toBeVisible();
     const deleteDialog = await openResearchDeleteDialog(page);
     await deleteDialog.getByRole("button", { name: "Keep Research" }).click();
     await expect(page).toHaveURL(new RegExp(`/research-runs/${reusedRunId}$`));
@@ -1472,54 +1492,6 @@ function testContainer(service: "postgres" | "research-worker"): string {
     throw new Error("Browser acceptance requires an isolated ThesisTrace Test project");
   }
   return `${project}-${service}-1`;
-}
-
-function controlWorker(action: "pause" | "unpause"): void {
-  execFileSync("docker", [action, testContainer("research-worker")], { stdio: "pipe" });
-}
-
-function startControlledResearchRun(runId: string) {
-  const process = spawn(
-    "uv",
-    [
-      "run", "python", "../tests/browser/process_research_run_with_barrier.py",
-      runId,
-    ],
-    { cwd: globalThis.process.cwd(), env: globalThis.process.env, stdio: "pipe" },
-  );
-  const claimed = new Promise<void>((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
-    process.stdout?.setEncoding("utf8");
-    process.stderr?.setEncoding("utf8");
-    process.stderr?.on("data", (chunk: string) => { stderr += chunk; });
-    process.stdout?.on("data", (chunk: string) => {
-      stdout += chunk;
-      if (stdout.includes(`claimed:${runId}`)) resolve();
-    });
-    process.once("error", reject);
-    process.once("exit", (code) => {
-      if (!stdout.includes(`claimed:${runId}`)) {
-        reject(new Error(`Controlled ResearchRun worker exited ${code}: ${stderr}`));
-      }
-    });
-  });
-  return { claimed, process };
-}
-
-function controlledWorkerExit(process: ChildProcess, allowTermination = false): Promise<void> {
-  if (process.exitCode !== null) {
-    return process.exitCode === 0
-      ? Promise.resolve()
-      : Promise.reject(new Error(`Controlled ResearchRun worker exited with ${process.exitCode}`));
-  }
-  return new Promise((resolve, reject) => {
-    process.once("error", reject);
-    process.once("exit", (code, signal) => {
-      if (code === 0 || (allowTermination && (signal === "SIGTERM" || code === 143))) resolve();
-      else reject(new Error(`Controlled ResearchRun worker exited with ${code ?? signal}`));
-    });
-  });
 }
 
 function publishFinancialTrackHead(mode: "lagged" | "recovered"): void {

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
 import sys
 import urllib.error
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.util import module_from_spec, spec_from_file_location
 from io import BytesIO
@@ -97,6 +99,41 @@ def test_image_smoke_run_polling_retries_exact_auth_unavailability(
         "run_retryable_auth",
         research_kind="factor_evaluation",
     ) == terminal
+
+
+def test_image_smoke_polling_does_not_hide_a_request_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smoke = _load_smoke_module()
+
+    def timeout(*_args: object, **_kwargs: object) -> object:
+        raise TimeoutError("simulated read timeout")
+
+    monkeypatch.setattr(smoke, "_request_json_response", timeout)
+
+    with pytest.raises(TimeoutError, match="simulated read timeout"):
+        smoke._request_json_for_polling(
+            "http://api:8100",
+            "/api/research-batches/batch_timeout",
+        )
+
+
+@pytest.mark.parametrize("cycle_attempt_ordinal", [1, 2])
+def test_image_smoke_accepts_any_pre_exhaustion_transient_retry_attempt(
+    cycle_attempt_ordinal: int,
+) -> None:
+    smoke = _load_smoke_module()
+    row = {
+        "blocked_reason": "Financial Coverage ends before the next Research Session.",
+        "cycle_attempt_ordinal": cycle_attempt_ordinal,
+        "failure_reason": "InfrastructureFailure",
+    }
+
+    smoke._assert_transient_retry_state(row)
+
+    row["cycle_attempt_ordinal"] = smoke.MAX_TRACKING_CYCLE_ATTEMPTS
+    with pytest.raises(AssertionError):
+        smoke._assert_transient_retry_state(row)
 
 
 def test_image_smoke_wraps_empty_gateway_error_as_retryable_assertion(
@@ -439,6 +476,132 @@ def test_mcp_evidence_sanitizer_atomically_redacts_shared_canaries(
     sanitizer.verify_evidence(tmp_path)
 
 
+def test_agent_raw_canary_scan_detects_compressed_traces_without_echoing_content(
+    tmp_path: Path,
+) -> None:
+    sanitizer = _load_mcp_sanitizer_module()
+    canaries = sys.modules["production_mcp_image_canaries"].AGENT_CANARIES
+    (tmp_path / "agent-events.jsonl").write_text(canaries["provider_error"])
+    with zipfile.ZipFile(tmp_path / "trace.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("resources/private.network", canaries["cookie"])
+    findings = sanitizer.scan_raw_evidence(tmp_path)
+    assert len(findings) == 2
+    assert findings[0] == {
+        "file": "agent-events.jsonl",
+        "service": "agent",
+        "categories": ["provider_error"],
+    }
+    assert findings[1]["categories"] == ["cookie"]
+    assert findings[1]["file"].startswith("diagnostic-")
+    assert not any(value in json.dumps(findings) for value in canaries.values())
+    sanitizer.sanitize_evidence(tmp_path)
+    assert not (tmp_path / "trace.zip").exists()
+    assert sanitizer.scan_raw_evidence(tmp_path) == []
+
+
+def test_agent_raw_canary_scan_detects_playwright_html_embedded_diagnostics(
+    tmp_path: Path,
+) -> None:
+    sanitizer = _load_mcp_sanitizer_module()
+    canaries = sys.modules["production_mcp_image_canaries"].AGENT_CANARIES
+    zipped = BytesIO()
+    with zipfile.ZipFile(zipped, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("report.json", json.dumps({"error": canaries["provider_error"]}))
+    # Playwright's HTML reporter embeds its report ZIP in this exact envelope.
+    payload = base64.b64encode(zipped.getvalue()).decode()
+    report = tmp_path / "index.html"
+    report.write_text(
+        '<html><script id="playwrightReportBase64" type="application/zip">'
+        f'data:application/zip;base64,{payload}</script></html>'
+    )
+    findings = sanitizer.scan_raw_evidence(tmp_path)
+    assert len(findings) == 1
+    assert findings[0]["categories"] == ["provider_error"]
+    assert findings[0]["service"] == "diagnostic"
+    assert findings[0]["file"].startswith("diagnostic-")
+    assert canaries["provider_error"] not in json.dumps(findings)
+    sanitizer.sanitize_evidence(tmp_path)
+    assert not report.exists()
+    assert sanitizer.scan_raw_evidence(tmp_path) == []
+
+
+@pytest.mark.parametrize("payload", ["invalid-private-path-canary!", "bm90LWEtemlw"])
+def test_agent_report_decode_errors_fail_closed_without_private_details(
+    tmp_path: Path, payload: str
+) -> None:
+    sanitizer = _load_mcp_sanitizer_module()
+    (tmp_path / "index.html").write_text(
+        f'<script>data:application/zip;base64,{payload}</script>'
+    )
+    for check in (sanitizer.scan_raw_evidence, sanitizer.sanitize_evidence):
+        with pytest.raises(sanitizer.EvidenceSanitizationError) as failure:
+            check(tmp_path)
+        assert str(failure.value) == "evidence_scan_unavailable"
+
+
+def test_agent_report_scanning_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sanitizer = _load_mcp_sanitizer_module()
+    monkeypatch.setattr(sanitizer, "HTML_LIMIT_BYTES", 16)
+    (tmp_path / "index.html").write_text("x" * 17)
+    with pytest.raises(sanitizer.EvidenceSanitizationError, match="report_html_too_large"):
+        sanitizer.scan_raw_evidence(tmp_path)
+
+
+@pytest.mark.parametrize("envelope", ["zip", "html"])
+def test_agent_corrupt_compressed_diagnostics_have_only_safe_cli_errors(
+    tmp_path: Path, envelope: str
+) -> None:
+    sanitizer = _load_mcp_sanitizer_module()
+    zipped = BytesIO()
+    with zipfile.ZipFile(zipped, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("report.json", '{"error":"private-error-canary"}')
+    payload = bytearray(zipped.getvalue())
+    filename_length = int.from_bytes(payload[26:28], "little")
+    extra_length = int.from_bytes(payload[28:30], "little")
+    # Reserved DEFLATE block type: exercise the real codec's unknown exception,
+    # not a mocked error or a ZIP format that never reaches decompression.
+    payload[30 + filename_length + extra_length] = 0x06
+    if envelope == "zip":
+        (tmp_path / "trace.zip").write_bytes(payload)
+    else:
+        encoded = base64.b64encode(payload).decode()
+        (tmp_path / "index.html").write_text(
+            '<script id="playwrightReportBase64" type="application/zip">'
+            f'data:application/zip;base64,{encoded}</script>'
+        )
+    completed = subprocess.run(
+        [sys.executable, sanitizer.__file__, "scan", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
+    )
+    status = completed.returncode
+    no_stdout = completed.stdout == ""
+    safe_error = completed.stderr == "evidence_sanitization_failed:evidence_scan_unavailable\n"
+    assert status == 2
+    assert no_stdout
+    assert safe_error
+
+
+@pytest.mark.parametrize("boundary", [10, 150, 350])
+def test_agent_canary_scan_detects_and_redacts_signed_tokens_across_chunks(
+    tmp_path: Path, boundary: int
+) -> None:
+    sanitizer = _load_mcp_sanitizer_module()
+    token = b"eyJ" + b"a" * 100 + b".eyJ" + b"b" * 200 + b"." + b"c" * 86
+    path = tmp_path / "api-events.jsonl"
+    prefix = b"x" * (sanitizer.READ_CHUNK_BYTES - boundary)
+    path.write_bytes(prefix + token + b" ")
+    findings = sanitizer.scan_raw_evidence(tmp_path)
+    assert findings == [
+        {"file": "api-events.jsonl", "service": "core", "categories": ["access_token"]}
+    ]
+    sanitizer.sanitize_evidence(tmp_path)
+    assert path.read_bytes() == prefix + b"<redacted> "
+    assert sanitizer.scan_raw_evidence(tmp_path) == []
+
+
 @pytest.mark.parametrize("operation", ("chmod", "replace"))
 def test_mcp_evidence_sanitizer_reports_atomic_io_failure(
     tmp_path: Path,
@@ -481,7 +644,17 @@ def test_mcp_evidence_discard_reports_unlink_failure(
     assert evidence.exists()
 
 
-def test_mcp_image_api_uses_only_explicit_local_token_grants() -> None:
+def test_mcp_image_api_uses_only_explicit_local_token_grants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "THESISTRACE_MCP_ALLOWED_HOSTS",
+        '["api:8100","core.test"]',
+    )
+    monkeypatch.setenv(
+        "THESISTRACE_MCP_ALLOWED_ORIGINS",
+        '["https://agent.test"]',
+    )
     smoke = _load_mcp_smoke_module()
     routes = {route.path for route in smoke.application().routes}
     assert "/mcp" in routes

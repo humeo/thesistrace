@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const webPort = Number(process.env.THESISTRACE_WEB_PORT ?? "5173");
 const apiPort = Number(process.env.THESISTRACE_API_PORT ?? "8000");
 const apiOrigin = process.env.THESISTRACE_API_ORIGIN ?? `http://127.0.0.1:${apiPort}`;
+const agentOrigin = process.env.THESISTRACE_AGENT_ORIGIN ?? "http://127.0.0.1:8400";
 
 export default defineConfig({
   plugins: [
@@ -34,6 +35,7 @@ export default defineConfig({
   server: {
     port: webPort,
     proxy: {
+      "/api/agent": agentOrigin,
       "/api": apiOrigin,
     },
   },

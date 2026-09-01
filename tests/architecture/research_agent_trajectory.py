@@ -83,6 +83,11 @@ def tool_result(outcome: Mapping[str, object]) -> CallToolResult:
         ],
         structured_content=structured,
         is_error="code" in structured,
+        meta={
+            "thesistrace/tool-outcome": (
+                "failed" if "code" in structured else "succeeded"
+            )
+        },
     )
 
 

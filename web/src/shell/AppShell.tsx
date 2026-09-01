@@ -1,6 +1,7 @@
 import {
   ChartLineUp,
   ClockCounterClockwise,
+  ChatCircle,
   Database,
   Flask,
   List,
@@ -13,6 +14,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AccountMenu } from "../auth/AccountMenu";
 
 const resourceRoutes = [
+  { path: "/chat", label: "Chat", icon: ChatCircle },
   { path: "/data", label: "Data", icon: Database },
   { path: "/research", label: "Research", icon: Flask },
   { path: "/research-runs", label: "Research Runs", icon: ChartLineUp },

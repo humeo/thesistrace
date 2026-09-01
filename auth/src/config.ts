@@ -1,3 +1,4 @@
+import { createPrivateKey, createPublicKey } from "node:crypto";
 import { isIP } from "node:net";
 
 import { z } from "zod";
@@ -5,11 +6,42 @@ import { z } from "zod";
 import { AuthConfigurationError } from "./failure.js";
 
 const runtimeEnvironmentSchema = z.enum(["development", "test", "production"]);
+const mcpGrantScopeSchema = z.enum([
+  "research:read",
+  "research:execute",
+  "tracking:read",
+  "tracking:execute",
+]);
+const base64Url32ByteSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+const mcpPublicJwkSchema = z.object({
+  alg: z.literal("EdDSA"),
+  crv: z.literal("Ed25519"),
+  kid: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/),
+  kty: z.literal("OKP"),
+  use: z.literal("sig"),
+  x: base64Url32ByteSchema,
+}).strict();
+const mcpPrivateJwkSchema = mcpPublicJwkSchema.extend({
+  d: base64Url32ByteSchema,
+}).strict();
+
+export type McpGrantScope = z.infer<typeof mcpGrantScopeSchema>;
+export type McpPublicJwk = Readonly<z.infer<typeof mcpPublicJwkSchema>>;
+export type McpPrivateJwk = Readonly<z.infer<typeof mcpPrivateJwkSchema>>;
 
 export type AuthSettings = Readonly<{
   databaseUrl: string;
   environment: z.infer<typeof runtimeEnvironmentSchema>;
   host: string;
+  mcpAgentRunMaxWallSeconds: number;
+  mcpAudience: string;
+  mcpClientId: string;
+  mcpClockSkewSeconds: number;
+  mcpGrantScopes: readonly McpGrantScope[];
+  mcpIssuer: string;
+  mcpPrivateJwk: McpPrivateJwk;
+  mcpPublicJwk: McpPublicJwk;
+  mcpTokenLifetimeSeconds: number;
   port: number;
   publicOrigin: string;
   resendApiKey: string;
@@ -55,6 +87,49 @@ export function readAuthSettings(environment: Environment = process.env): AuthSe
     required(environment, "BETTER_AUTH_SECRET"),
     parsedEnvironment.data,
   );
+  const mcpIssuer = parseMcpIssuer(
+    required(environment, "THESISTRACE_MCP_ISSUER_URL"),
+  );
+  const mcpAudience = parseMcpAudience(
+    required(environment, "THESISTRACE_MCP_RESOURCE_URL"),
+  );
+  const mcpClientId = parseMcpClientId(
+    required(environment, "THESISTRACE_MCP_CLIENT_ID"),
+  );
+  const mcpGrantScopes = parseMcpGrantScopes(
+    required(environment, "THESISTRACE_MCP_AGENT_SCOPES"),
+  );
+  const mcpPrivateJwk = parseJson(
+    required(environment, "THESISTRACE_MCP_SIGNING_PRIVATE_JWK"),
+    mcpPrivateJwkSchema,
+    "THESISTRACE_MCP_SIGNING_PRIVATE_JWK",
+  );
+  const mcpPublicJwk = parseJson(
+    required(environment, "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK"),
+    mcpPublicJwkSchema,
+    "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK",
+  );
+  assertMatchingMcpKeys(mcpPrivateJwk, mcpPublicJwk);
+  const mcpTokenLifetimeSeconds = parsePositiveInteger(
+    required(environment, "THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS"),
+    "THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS",
+  );
+  const mcpAgentRunMaxWallSeconds = parsePositiveInteger(
+    required(environment, "THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS"),
+    "THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS",
+  );
+  const mcpClockSkewSeconds = parseNonnegativeInteger(
+    required(environment, "THESISTRACE_MCP_CLOCK_SKEW_SECONDS"),
+    "THESISTRACE_MCP_CLOCK_SKEW_SECONDS",
+  );
+  if (
+    mcpTokenLifetimeSeconds
+      <= mcpAgentRunMaxWallSeconds + mcpClockSkewSeconds
+  ) {
+    throw new AuthConfigurationError(
+      "THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS must exceed the Agent Run wall time plus MCP clock skew",
+    );
+  }
   const resendApiKey = parseResendApiKey(required(environment, "RESEND_API_KEY"));
   const resendFromEmail = parseResendFromEmail(
     required(environment, "RESEND_FROM_EMAIL"),
@@ -69,6 +144,15 @@ export function readAuthSettings(environment: Environment = process.env): AuthSe
     databaseUrl,
     environment: parsedEnvironment.data,
     host: environment.THESISTRACE_AUTH_HOST ?? "0.0.0.0",
+    mcpAgentRunMaxWallSeconds,
+    mcpAudience,
+    mcpClientId,
+    mcpClockSkewSeconds,
+    mcpGrantScopes,
+    mcpIssuer,
+    mcpPrivateJwk,
+    mcpPublicJwk,
+    mcpTokenLifetimeSeconds,
     port,
     publicOrigin,
     resendApiKey,
@@ -77,6 +161,130 @@ export function readAuthSettings(environment: Environment = process.env): AuthSe
     secret,
     secureCookies: parsedEnvironment.data === "production",
   };
+}
+
+function parseMcpIssuer(value: string): string {
+  return parseCanonicalHttpsUrl(value, "THESISTRACE_MCP_ISSUER_URL", false);
+}
+
+function parseMcpAudience(value: string): string {
+  const canonical = parseCanonicalHttpsUrl(
+    value,
+    "THESISTRACE_MCP_RESOURCE_URL",
+    true,
+  );
+  if (new URL(canonical).pathname !== "/mcp") {
+    throw new AuthConfigurationError(
+      "THESISTRACE_MCP_RESOURCE_URL must identify the canonical /mcp resource",
+    );
+  }
+  return canonical;
+}
+
+function parseCanonicalHttpsUrl(
+  value: string,
+  variableName: string,
+  rejectTrailingSlash: boolean,
+): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new AuthConfigurationError(`${variableName} must be a canonical HTTPS URL`);
+  }
+  if (
+    url.protocol !== "https:"
+    || url.username.length > 0
+    || url.password.length > 0
+    || url.search.length > 0
+    || url.hash.length > 0
+    || value !== url.toString()
+    || (rejectTrailingSlash && url.pathname.endsWith("/"))
+  ) {
+    throw new AuthConfigurationError(`${variableName} must be a canonical HTTPS URL`);
+  }
+  return value;
+}
+
+function parseMcpClientId(value: string): string {
+  if (!/^[a-z0-9][a-z0-9._-]{2,63}$/.test(value)) {
+    throw new AuthConfigurationError(
+      "THESISTRACE_MCP_CLIENT_ID must be one stable lowercase client identifier",
+    );
+  }
+  return value;
+}
+
+function parseMcpGrantScopes(value: string): readonly McpGrantScope[] {
+  const parsed = parseJson(
+    value,
+    z.array(mcpGrantScopeSchema).min(1).max(4),
+    "THESISTRACE_MCP_AGENT_SCOPES",
+  );
+  if (new Set(parsed).size !== parsed.length) {
+    throw new AuthConfigurationError(
+      "THESISTRACE_MCP_AGENT_SCOPES cannot contain duplicate scopes",
+    );
+  }
+  return parsed;
+}
+
+function parseJson<T>(
+  value: string,
+  schema: z.ZodType<T>,
+  variableName: string,
+): T {
+  try {
+    const parsed = schema.safeParse(JSON.parse(value));
+    if (parsed.success) return parsed.data;
+  } catch {
+    // The one configuration error below deliberately hides the supplied value.
+  }
+  throw new AuthConfigurationError(`${variableName} is invalid`);
+}
+
+function assertMatchingMcpKeys(
+  privateJwk: McpPrivateJwk,
+  publicJwk: McpPublicJwk,
+): void {
+  let derivedPublicJwk: JsonWebKey;
+  try {
+    const privateKey = createPrivateKey({ key: privateJwk, format: "jwk" });
+    derivedPublicJwk = createPublicKey(privateKey).export({ format: "jwk" });
+  } catch {
+    throw new AuthConfigurationError(
+      "THESISTRACE_MCP_SIGNING_PRIVATE_JWK and THESISTRACE_MCP_VERIFYING_PUBLIC_JWK must be one key pair",
+    );
+  }
+  const matches = (["alg", "crv", "kid", "kty", "use", "x"] as const)
+    .every((field) => privateJwk[field] === publicJwk[field])
+    && derivedPublicJwk.kty === "OKP"
+    && derivedPublicJwk.crv === "Ed25519"
+    && derivedPublicJwk.x === publicJwk.x;
+  if (!matches) {
+    throw new AuthConfigurationError(
+      "THESISTRACE_MCP_SIGNING_PRIVATE_JWK and THESISTRACE_MCP_VERIFYING_PUBLIC_JWK must be one key pair",
+    );
+  }
+}
+
+function parsePositiveInteger(value: string, variableName: string): number {
+  const parsed = parseNonnegativeInteger(value, variableName);
+  if (parsed === 0) {
+    throw new AuthConfigurationError(`${variableName} must be positive`);
+  }
+  return parsed;
+}
+
+function parseNonnegativeInteger(value: string, variableName: string): number {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new AuthConfigurationError(`${variableName} must be an integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new AuthConfigurationError(`${variableName} must be an integer`);
+  }
+  return parsed;
 }
 
 export function assertNoAmbientBetterAuthOverrides(environment: Environment): void {

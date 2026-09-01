@@ -1,10 +1,15 @@
 packages:
+  - agent
   - auth
   - web
 
 injectWorkspacePackages: true
 
 allowBuilds:
+  '@scarf/scarf': false
   esbuild: true
 
 minimumReleaseAge: 1440
+
+patchedDependencies:
+  '@ag-ui/mastra@1.1.1': patches/@ag-ui__mastra@1.1.1.patch

@@ -1600,13 +1600,13 @@ dependencies = [
     { name = "numpy" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pyarrow" },
+    { name = "pyjwt" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "jsonschema" },
-    { name = "pyjwt" },
     { name = "pytest" },
     { name = "pytest-xdist" },
     { name = "ruff" },
@@ -1623,13 +1623,13 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.3,<3" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2.10,<4" },
     { name = "pyarrow", specifier = "==25.0.0" },
+    { name = "pyjwt", specifier = ">=2.13,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35.0,<1" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "jsonschema", specifier = ">=4.26,<5" },
-    { name = "pyjwt", specifier = ">=2.13,<3" },
     { name = "pytest", specifier = ">=8.4.1,<9" },
     { name = "pytest-xdist", specifier = ">=3.8,<4" },
     { name = "ruff", specifier = ">=0.12.7,<1" },

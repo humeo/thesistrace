@@ -1,13 +1,48 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import os
+import sys
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import (
+    BotoCoreError,
+    ClientError,
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
+
+
+TRANSIENT_EXIT_CODE = 75
+_TRANSIENT_HTTP_STATUSES = frozenset({500, 502, 503, 504})
+_STARTUP_NOT_FOUND_OPERATIONS = frozenset({"CreateBucket", "HeadBucket"})
+_TRANSIENT_TRANSPORT_ERRORS = (
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    ReadTimeoutError,
+)
+
+
+def is_transient_s3_error(error: BotoCoreError | ClientError) -> bool:
+    if isinstance(error, _TRANSIENT_TRANSPORT_ERRORS):
+        return True
+    if not isinstance(error, ClientError):
+        return False
+    status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    if status in _TRANSIENT_HTTP_STATUSES:
+        return True
+    return status == 404 and error.operation_name in _STARTUP_NOT_FOUND_OPERATIONS
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ensure-bucket")
+    arguments = parser.parse_args()
     endpoint_url = os.environ["THESISTRACE_S3_ENDPOINT_URL"]
     client = boto3.client(
         "s3",
@@ -22,7 +57,19 @@ def main() -> None:
         ),
     )
     try:
-        client.list_buckets()
+        buckets = {
+            item["Name"] for item in client.list_buckets().get("Buckets", [])
+        }
+        if arguments.ensure_bucket is not None:
+            if arguments.ensure_bucket not in buckets:
+                client.create_bucket(Bucket=arguments.ensure_bucket)
+            client.head_bucket(Bucket=arguments.ensure_bucket)
+    except (BotoCoreError, ClientError) as error:
+        if is_transient_s3_error(error):
+            print("rustfs_s3_readiness=transient", file=sys.stderr)
+            raise SystemExit(TRANSIENT_EXIT_CODE) from None
+        print("rustfs_s3_readiness=permanent", file=sys.stderr)
+        raise SystemExit(2) from None
     finally:
         client.close()
 

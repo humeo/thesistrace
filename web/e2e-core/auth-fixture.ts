@@ -12,19 +12,59 @@ export const browserPassword = "Browser-acceptance-password-2026";
 export const securityTest = base.extend<{ cspGuard: void }>({
   cspGuard: [async ({ page }, use) => {
     resetAuthRateLimits();
-    const violations: string[] = [];
+    const violations: Array<Readonly<{
+      blockedResource: string;
+      columnNumber: number;
+      directive: string;
+      lineNumber: number;
+      sourcePath: string;
+    }>> = [];
     await page.exposeFunction(
       "__thesistraceRecordCspViolation",
-      (directive: unknown) => {
-        violations.push(typeof directive === "string" ? directive : "invalid");
+      (violation: unknown) => {
+        if (
+          typeof violation === "object"
+          && violation !== null
+          && "directive" in violation
+        ) {
+          violations.push(violation as (typeof violations)[number]);
+          return;
+        }
+        violations.push({
+          blockedResource: "invalid",
+          columnNumber: 0,
+          directive: "invalid",
+          lineNumber: 0,
+          sourcePath: "invalid",
+        });
       },
     );
     await page.addInitScript(() => {
       window.addEventListener("securitypolicyviolation", (event) => {
         const record = (window as unknown as {
-          __thesistraceRecordCspViolation: (directive: string) => Promise<void>;
+          __thesistraceRecordCspViolation: (violation: {
+            blockedResource: string;
+            columnNumber: number;
+            directive: string;
+            lineNumber: number;
+            sourcePath: string;
+          }) => Promise<void>;
         }).__thesistraceRecordCspViolation;
-        void record(event.effectiveDirective);
+        const resourcePath = (value: string): string => {
+          if (!value || !value.includes(":")) return value;
+          try {
+            return new URL(value, window.location.href).pathname;
+          } catch {
+            return "invalid";
+          }
+        };
+        void record({
+          blockedResource: resourcePath(event.blockedURI),
+          columnNumber: event.columnNumber,
+          directive: event.effectiveDirective,
+          lineNumber: event.lineNumber,
+          sourcePath: resourcePath(event.sourceFile),
+        });
       });
     });
     await use();
@@ -87,20 +127,11 @@ export async function createResearcher(
     createHash("sha256").update(email).digest("hex").slice(0, 2),
     16,
   ) || 1;
-  const output = execFileSync(
-    "docker",
-    [
-      "exec",
-      `${testProjectName()}-auth-1`,
-      "node",
-      "/test-fixtures/provision-image-smoke-session.mjs",
-      email,
-      password,
-      `198.51.100.${ipSuffix}`,
-    ],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  const provisioned = JSON.parse(output) as unknown;
+  const provisioned = authFixtureRequest("/__test/provision-session", {
+    client_ip: `198.51.100.${ipSuffix}`,
+    email,
+    password,
+  });
   if (
     !isRecord(provisioned)
     || typeof provisioned.cookie !== "string"
@@ -155,73 +186,22 @@ export async function emailToken(email: string, path: string): Promise<string> {
 }
 
 function requestResendFixture(method: "DELETE" | "GET"): unknown {
-  const program = [
-    'const response = await fetch("http://127.0.0.1:8300/__test/emails",',
-    "  { method: process.argv[1] });",
-    "if (!response.ok) process.exit(2);",
-    "process.stdout.write(await response.text());",
-  ].join("\n");
-  const output = execFileSync(
-    "docker",
-    [
-      "exec",
-      `${testProjectName()}-resend-fake-1`,
-      "node",
-      "--input-type=module",
-      "--eval",
-      program,
-      method,
-    ],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  return JSON.parse(output) as unknown;
+  return authFixtureRequest("/__test/resend-emails", { method });
 }
 
 export function runAuthOperator(...args: string[]): unknown {
-  const output = execFileSync(
-    "docker",
-    ["exec", `${testProjectName()}-auth-1`, "node", "dist/operator.js", ...args],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  return JSON.parse(output) as unknown;
+  return authFixtureRequest("/__test/operator", { args });
 }
 
 export function expireInvitation(token: string): void {
-  const output = execFileSync(
-    "docker",
-    [
-      "exec",
-      "--interactive",
-      `${testProjectName()}-auth-1`,
-      "node",
-      "/test-fixtures/mutate-auth-test-state.mjs",
-      "expire-invitation",
-    ],
-    {
-      encoding: "utf8",
-      input: token,
-      stdio: ["pipe", "pipe", "pipe"],
-    },
-  );
-  const result = JSON.parse(output) as unknown;
+  const result = authFixtureRequest("/__test/expire-invitation", { token });
   if (!isRecord(result) || result.status !== "expired") {
     throw new Error("Private Auth expiry fixture returned an invalid result");
   }
 }
 
 export function seedOperatorDirectory(): void {
-  const output = execFileSync(
-    "docker",
-    [
-      "exec",
-      `${testProjectName()}-auth-1`,
-      "node",
-      "/test-fixtures/mutate-auth-test-state.mjs",
-      "seed-operator-directory",
-    ],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  const result = JSON.parse(output) as unknown;
+  const result = authFixtureRequest("/__test/seed-operator-directory", {});
   if (
     !isRecord(result)
     || result.invitations !== 55
@@ -233,18 +213,7 @@ export function seedOperatorDirectory(): void {
 }
 
 export function resetAuthRateLimits(): void {
-  const output = execFileSync(
-    "docker",
-    [
-      "exec",
-      `${testProjectName()}-auth-1`,
-      "node",
-      "/test-fixtures/mutate-auth-test-state.mjs",
-      "reset-rate-limits",
-    ],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  const result = JSON.parse(output) as unknown;
+  const result = authFixtureRequest("/__test/reset-rate-limits", {});
   if (!isRecord(result) || result.status !== "reset") {
     throw new Error("Private Auth rate-limit fixture returned an invalid result");
   }
@@ -463,6 +432,47 @@ function publishOperatorFinancialBaseline(): void {
 function assertDataRefreshKey(idempotencyKey: string): void {
   if (!/^[a-z0-9-]+$/.test(idempotencyKey)) {
     throw new Error("Browser acceptance Data Refresh key is invalid");
+  }
+}
+
+function authFixtureRequest(path: string, body: Record<string, unknown>): unknown {
+  const origin = requiredEnvironment("THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN");
+  let output: string;
+  try {
+    output = execFileSync(
+      "curl",
+      [
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--connect-timeout",
+        "2",
+        "--max-time",
+        "30",
+        "--header",
+        "content-type: application/json",
+        "--request",
+        "POST",
+        "--data-binary",
+        "@-",
+        `${origin}${path}`,
+      ],
+      {
+        encoding: "utf8",
+        input: JSON.stringify(body),
+        killSignal: "SIGKILL",
+        maxBuffer: 8 * 1024 * 1024,
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: 35_000,
+      },
+    );
+  } catch {
+    throw new Error("Private Auth test control request failed");
+  }
+  try {
+    return JSON.parse(output) as unknown;
+  } catch {
+    throw new Error("Private Auth test control returned invalid JSON");
   }
 }
 

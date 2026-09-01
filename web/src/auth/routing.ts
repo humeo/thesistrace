@@ -17,6 +17,7 @@ const AUTH_PATHS = new Set([
 ]);
 
 const PRODUCT_ROOTS = new Set([
+  "/chat",
   "/data",
   "/research",
   "/research-runs",

@@ -17,6 +17,7 @@ import { diagnoseAuthFailure } from "./failure.js";
 import { createAuthHttpObserver } from "./http-observability.js";
 import { ResearcherInvitationService } from "./invitation.js";
 import { InvitationAdmission } from "./invitation-admission.js";
+import { createMcpAccessTokenIssuer } from "./mcp-access-token.js";
 import { OperatorDirectoryService } from "./operator-directory.js";
 import { OperatorInvitationService } from "./operator-invitation.js";
 import { OperatorProofService } from "./operator-proof.js";
@@ -86,6 +87,9 @@ async function main(): Promise<void> {
         credentialCoordinator.recordPasswordResetCredential,
       recordSession: credentialCoordinator.recordSession,
       sendResetPassword: passwordReset.sendResetPassword,
+    });
+    const issueMcpAccessToken = createMcpAccessTokenIssuer(settings, {
+      sign: (payload) => auth.api.signJWT({ body: { payload } }),
     });
     const invitations = new ResearcherInvitationService({
       auth,
@@ -175,6 +179,7 @@ async function main(): Promise<void> {
         operatorDirectory.listInvitations(principal, input),
       listOperatorResearchers: (principal, input) =>
         operatorDirectory.listResearchers(principal, input),
+      issueMcpAccessToken,
       publicOrigin: settings.publicOrigin,
       readiness: () => checkAuthReadiness(pool),
       reissueOperatorInvitation: (principal, input) =>
