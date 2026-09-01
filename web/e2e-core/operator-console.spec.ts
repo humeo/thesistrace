@@ -1995,9 +1995,12 @@ test("only the singleton Operator can open and read the Operator Console", async
   });
   await invitationPagination.getByRole("button", { name: "Next" }).click();
   await expect(invitationPagination).toContainText("Page 2");
-  const secondPageReissue = page.getByRole("button", {
-    name: /^Reissue invitation for /,
-  }).first();
+  const pagedInvitationEmail = "browser-invitation-01@example.test";
+  const secondPageReissue = await findInvitationReissue(
+    page,
+    invitationPagination,
+    pagedInvitationEmail,
+  );
   await expect(secondPageReissue).toBeVisible();
   await secondPageReissue.click();
   const secondPageConfirmation = page.getByRole("dialog", {
@@ -2009,9 +2012,14 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(invitationPagination).toContainText("Page 1");
   await expect(inviteResearcher).toBeFocused();
 
-  const failedReloadReissue = page.getByRole("button", {
-    name: /^Reissue invitation for /,
-  }).first();
+  const effectivePagedInvitation = page
+    .getByRole("table", { name: "Invitations" })
+    .getByRole("row")
+    .filter({ hasText: pagedInvitationEmail })
+    .filter({ hasText: "Effective · Delivered" });
+  const failedReloadReissue = effectivePagedInvitation.getByRole("button", {
+    name: `Reissue invitation for ${pagedInvitationEmail}`,
+  });
   await expect(failedReloadReissue).toBeVisible();
   await failedReloadReissue.click();
   const failedReloadConfirmation = page.getByRole("dialog", {
@@ -2358,4 +2366,27 @@ async function expectMinimumTouchTarget(locator: Locator): Promise<void> {
   expect(box, "touch target should have a rendered bounding box").not.toBeNull();
   expect(box?.height, "touch target height").toBeGreaterThanOrEqual(44);
   expect(box?.width, "touch target width").toBeGreaterThanOrEqual(44);
+}
+
+async function findInvitationReissue(
+  page: Page,
+  pagination: Locator,
+  email: string,
+): Promise<Locator> {
+  for (let visitedPageCount = 0; visitedPageCount < 20; visitedPageCount += 1) {
+    const action = page.getByRole("button", {
+      name: `Reissue invitation for ${email}`,
+    });
+    if (await action.count() === 1) return action;
+
+    const next = pagination.getByRole("button", { name: "Next" });
+    if (!await next.isEnabled()) break;
+    const currentPage = Number.parseInt(
+      (await pagination.textContent())?.match(/Page (\d+)/)?.[1] ?? "",
+      10,
+    );
+    await next.click();
+    await expect(pagination).toContainText(`Page ${currentPage + 1}`);
+  }
+  throw new Error(`Seeded invitation ${email} was not found in the paged directory.`);
 }
