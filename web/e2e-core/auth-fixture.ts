@@ -107,20 +107,11 @@ export async function createResearcher(
     createHash("sha256").update(email).digest("hex").slice(0, 2),
     16,
   ) || 1;
-  const output = execFileSync(
-    "docker",
-    [
-      "exec",
-      `${testProjectName()}-auth-1`,
-      "node",
-      "/test-fixtures/provision-image-smoke-session.mjs",
-      email,
-      password,
-      `198.51.100.${ipSuffix}`,
-    ],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  const provisioned = JSON.parse(output) as unknown;
+  const provisioned = authFixtureRequest("/__test/provision-session", {
+    client_ip: `198.51.100.${ipSuffix}`,
+    email,
+    password,
+  });
   if (
     !isRecord(provisioned)
     || typeof provisioned.cookie !== "string"
@@ -178,52 +169,61 @@ export async function emailToken(email: string, path: string): Promise<string> {
 }
 
 export function runAuthOperator(...args: string[]): unknown {
-  const output = execFileSync(
-    "docker",
-    ["exec", `${testProjectName()}-auth-1`, "node", "dist/operator.js", ...args],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  return JSON.parse(output) as unknown;
+  return authFixtureRequest("/__test/operator", { args });
 }
 
 export function expireInvitation(token: string): void {
-  const output = execFileSync(
-    "docker",
-    [
-      "exec",
-      "--interactive",
-      `${testProjectName()}-auth-1`,
-      "node",
-      "/test-fixtures/mutate-auth-test-state.mjs",
-      "expire-invitation",
-    ],
-    {
-      encoding: "utf8",
-      input: token,
-      stdio: ["pipe", "pipe", "pipe"],
-    },
-  );
-  const result = JSON.parse(output) as unknown;
+  const result = authFixtureRequest("/__test/expire-invitation", { token });
   if (!isRecord(result) || result.status !== "expired") {
     throw new Error("Private Auth expiry fixture returned an invalid result");
   }
 }
 
 function resetAuthRateLimits(): void {
-  const output = execFileSync(
-    "docker",
-    [
-      "exec",
-      `${testProjectName()}-auth-1`,
-      "node",
-      "/test-fixtures/mutate-auth-test-state.mjs",
-      "reset-rate-limits",
-    ],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  );
-  const result = JSON.parse(output) as unknown;
+  const result = authFixtureRequest("/__test/reset-rate-limits", {});
   if (!isRecord(result) || result.status !== "reset") {
     throw new Error("Private Auth rate-limit fixture returned an invalid result");
+  }
+}
+
+function authFixtureRequest(path: string, body: Record<string, unknown>): unknown {
+  const origin = requiredEnvironment("THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN");
+  let output: string;
+  try {
+    output = execFileSync(
+      "curl",
+      [
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--connect-timeout",
+        "2",
+        "--max-time",
+        "30",
+        "--header",
+        "content-type: application/json",
+        "--request",
+        "POST",
+        "--data-binary",
+        "@-",
+        `${origin}${path}`,
+      ],
+      {
+        encoding: "utf8",
+        input: JSON.stringify(body),
+        killSignal: "SIGKILL",
+        maxBuffer: 8 * 1024 * 1024,
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: 35_000,
+      },
+    );
+  } catch {
+    throw new Error("Private Auth test control request failed");
+  }
+  try {
+    return JSON.parse(output) as unknown;
+  } catch {
+    throw new Error("Private Auth test control returned invalid JSON");
   }
 }
 

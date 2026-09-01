@@ -101,6 +101,41 @@ def test_image_smoke_run_polling_retries_exact_auth_unavailability(
     ) == terminal
 
 
+def test_image_smoke_polling_does_not_hide_a_request_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smoke = _load_smoke_module()
+
+    def timeout(*_args: object, **_kwargs: object) -> object:
+        raise TimeoutError("simulated read timeout")
+
+    monkeypatch.setattr(smoke, "_request_json_response", timeout)
+
+    with pytest.raises(TimeoutError, match="simulated read timeout"):
+        smoke._request_json_for_polling(
+            "http://api:8100",
+            "/api/research-batches/batch_timeout",
+        )
+
+
+@pytest.mark.parametrize("cycle_attempt_ordinal", [1, 2])
+def test_image_smoke_accepts_any_pre_exhaustion_transient_retry_attempt(
+    cycle_attempt_ordinal: int,
+) -> None:
+    smoke = _load_smoke_module()
+    row = {
+        "blocked_reason": "Financial Coverage ends before the next Research Session.",
+        "cycle_attempt_ordinal": cycle_attempt_ordinal,
+        "failure_reason": "InfrastructureFailure",
+    }
+
+    smoke._assert_transient_retry_state(row)
+
+    row["cycle_attempt_ordinal"] = smoke.MAX_TRACKING_CYCLE_ATTEMPTS
+    with pytest.raises(AssertionError):
+        smoke._assert_transient_retry_state(row)
+
+
 def test_image_smoke_wraps_empty_gateway_error_as_retryable_assertion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -549,8 +549,10 @@ function ConnectedAgentConversation({
   });
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<AgentFailureCode | null>(null);
+  const [composerFocusRestore, setComposerFocusRestore] = useState<
+    "idle" | "waiting" | "settled"
+  >("idle");
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const restoreComposerFocus = useRef(false);
   const unacceptedRetryMessage = useRef<string | null>(null);
   const [observedRunId, setObservedRunId] = useState<string | null>(null);
   const [observedSelection, setObservedSelection] = useState<RunSelection | null>(null);
@@ -592,11 +594,11 @@ function ConnectedAgentConversation({
   }, [agent, isReady]);
 
   useEffect(() => {
-    if (restoreComposerFocus.current && !busy && isReady && selection !== null) {
-      restoreComposerFocus.current = false;
+    if (composerFocusRestore === "settled" && !busy && isReady && selection !== null) {
       composerRef.current?.focus();
+      setComposerFocusRestore("idle");
     }
-  }, [busy, isReady, selection]);
+  }, [busy, composerFocusRestore, isReady, selection]);
 
   const startTool = useCallback((id: string, name: string) => {
     const startedAtMs = monotonicNow();
@@ -848,9 +850,10 @@ function ConnectedAgentConversation({
             code={error}
             onReconnect={() => window.location.assign(chatSessionHref(threadId))}
             onRetry={() => {
-              restoreComposerFocus.current = true;
+              setComposerFocusRestore("waiting");
               void submit(undefined, unacceptedRetryMessage.current
-                ?? "Retry the previous request. Inspect retained research before starting new work.");
+                ?? "Retry the previous request. Inspect retained research before starting new work.")
+                .finally(() => setComposerFocusRestore("settled"));
             }}
             onRevise={() => {
               if (draft.length === 0) {

@@ -168,8 +168,13 @@ async function send(page: Page, prompt: string, status = "Run complete"): Promis
 async function deleteChat(page: Page): Promise<void> {
   const id = new URL(page.url()).searchParams.get("session");
   if (id === null) throw new Error("Chat deletion requires a durable Session");
-  const title = (await page.locator(".chat-session-title strong").innerText()).trim();
-  await page.getByRole("button", { name: `Actions for ${title}` }).click();
+  const currentSession = page.locator(
+    `a[href="/chat?session=${id}"][aria-current="page"]`,
+  );
+  await expect(currentSession).toBeVisible();
+  await currentSession.locator("..").getByRole("button", {
+    name: /^Actions for /,
+  }).click();
   await page.getByRole("menuitem", { name: "Delete Chat" }).click();
   await page.getByRole("dialog", { name: "Delete Chat?" }).getByRole("button", { name: "Delete Chat" }).click();
   await expect(page).toHaveURL(/\/chat$/);

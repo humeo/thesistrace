@@ -318,6 +318,9 @@ run_playwright() {
   THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
   THESISTRACE_TEST_PROJECT_NAME="$project_name" \
   THESISTRACE_TEST_RESEND_ORIGIN="$resend_test_origin" \
+  THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN="$auth_fixture_origin" \
+  THESISTRACE_TEST_AUTH_PROXY_ORIGIN="$auth_proxy_origin" \
+  THESISTRACE_TEST_MCP_PROXY_ORIGIN="$mcp_proxy_origin" \
   THESISTRACE_DATABASE_URL="postgresql://thesistrace_owner:$owner_database_password@127.0.0.1:$postgres_port/thesistrace" \
   THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
   THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
@@ -340,6 +343,46 @@ run_agent_eval() {
   THESISTRACE_AGENT_OPENAI_BASE_URL="$agent_openai_base_url" \
   THESISTRACE_MCP_DEPLOYMENT_TOOLS="$mcp_deployment_tools" \
     node "$repo_root/agent/scripts/eval-research.mjs" run
+}
+
+probe_rustfs_s3_from_host() {
+  access_key_id=$1
+  secret_access_key=$2
+  THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
+    THESISTRACE_S3_ACCESS_KEY_ID="$access_key_id" \
+    THESISTRACE_S3_SECRET_ACCESS_KEY="$secret_access_key" \
+    uv run python "$rustfs_readiness_probe" --ensure-bucket "$bucket_name"
+}
+
+probe_rustfs_s3_from_image() {
+  compose_run initialize python /qualification/probe-rustfs-ready \
+    --ensure-bucket "$bucket_name"
+}
+
+wait_for_rustfs_s3() {
+  probe_function=$1
+  shift
+  transient_probe_exit=75
+  rustfs_readiness_deadline_seconds=180
+  rustfs_readiness_started_at=$(date +%s)
+  while :; do
+    probe_status=0
+    "$probe_function" "$@" >/dev/null 2>&1 || probe_status=$?
+    if [ "$probe_status" -eq 0 ]; then
+      return 0
+    fi
+    if [ "$probe_status" -ne "$transient_probe_exit" ]; then
+      echo "RustFS S3 readiness probe rejected configuration" >&2
+      return "$probe_status"
+    fi
+    rustfs_readiness_now=$(date +%s)
+    if [ $((rustfs_readiness_now - rustfs_readiness_started_at)) \
+      -ge "$rustfs_readiness_deadline_seconds" ]; then
+      echo "RustFS S3 API did not become writable" >&2
+      return 1
+    fi
+    sleep 0.25
+  done
 }
 
 capture_evidence() {
@@ -1000,18 +1043,13 @@ case "$command" in
       mapped_port postgres 5432
     else
       s3_port=$(mapped_port rustfs 9000)
-      s3_readiness_attempt=0
-      until THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
-        THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
-        THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
-        uv run python "$rustfs_readiness_probe" >/dev/null 2>&1; do
-        s3_readiness_attempt=$((s3_readiness_attempt + 1))
-        if [ "$s3_readiness_attempt" -ge 60 ]; then
-          echo "RustFS S3 API did not become ready after restart" >&2
-          exit 1
-        fi
-        sleep 0.25
-      done
+      s3_readiness_status=0
+      wait_for_rustfs_s3 probe_rustfs_s3_from_host rustfsadmin rustfsadmin \
+        || s3_readiness_status=$?
+      if [ "$s3_readiness_status" -ne 0 ]; then
+        echo "RustFS S3 API did not become ready after restart" >&2
+        exit "$s3_readiness_status"
+      fi
       printf '%s\n' "$s3_port"
     fi
     exit 0
@@ -1227,6 +1265,9 @@ case "$command" in
   integration)
     run_phase integration-infrastructure compose up --detach \
       --wait --wait-timeout 300 postgres rustfs resend-fake
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-rustfs-s3-ready \
+      wait_for_rustfs_s3 probe_rustfs_s3_from_host rustfsadmin rustfsadmin
     run_phase integration-auth-initialization compose up --detach auth-initialize
     run_phase integration-auth-initializer-exit compose wait auth-initialize
     run_phase integration-auth compose up --detach --wait --wait-timeout 120 auth
@@ -1283,6 +1324,9 @@ case "$command" in
     run_phase e2e-images build_runtime_images
     run_phase e2e-infrastructure compose up --detach --no-build \
       --wait --wait-timeout 300 postgres rustfs
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase e2e-rustfs-s3-ready \
+      wait_for_rustfs_s3 probe_rustfs_s3_from_host rustfsadmin rustfsadmin
     run_phase e2e-initializers compose up --detach --no-build \
       initialize auth-initialize
     run_phase e2e-initialization compose wait initialize auth-initialize
@@ -1298,11 +1342,19 @@ case "$command" in
       tests/browser/prepare_current_data.py
     run_phase e2e-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
-      auth agent api research-worker batch-research-worker tracking-worker web
+      auth auth-fixture-control agent api research-worker batch-research-worker \
+      tracking-worker web
     resend_port=$(mapped_port resend-fake 8300)
+    auth_fixture_port=$(mapped_port auth 8260)
+    auth_proxy_port=$(mapped_port auth-exchange-proxy 8250)
+    mcp_proxy_port=$(mapped_port mcp-fault-proxy 8150)
     resend_test_origin="http://127.0.0.1:$resend_port"
-    printf 'postgres_port=%s\ns3_port=%s\nresend_port=%s\n' \
-      "$postgres_port" "$s3_port" "$resend_port" >>"$run_metadata"
+    auth_fixture_origin="http://127.0.0.1:$auth_fixture_port"
+    auth_proxy_origin="http://127.0.0.1:$auth_proxy_port"
+    mcp_proxy_origin="http://127.0.0.1:$mcp_proxy_port"
+    printf 'postgres_port=%s\ns3_port=%s\nresend_port=%s\nauth_fixture_port=%s\nauth_proxy_port=%s\nmcp_proxy_port=%s\n' \
+      "$postgres_port" "$s3_port" "$resend_port" "$auth_fixture_port" \
+      "$auth_proxy_port" "$mcp_proxy_port" >>"$run_metadata"
     run_phase e2e-caddy-single-origin verify_caddy_single_origin
     if [ "$command" = agent-eval ]; then
       run_phase agent-eval-real-provider run_agent_eval
@@ -1327,6 +1379,8 @@ case "$command" in
       verify_research_child_cgroup_oom_detection
     run_phase image-smoke-infrastructure compose up --detach --no-build \
       --wait --wait-timeout 300 postgres rustfs
+    run_phase image-smoke-rustfs-s3-ready wait_for_rustfs_s3 \
+      probe_rustfs_s3_from_image
     run_phase image-smoke-initializers compose up --detach --no-build \
       initialize auth-initialize
     run_phase image-smoke-initialization compose wait initialize auth-initialize

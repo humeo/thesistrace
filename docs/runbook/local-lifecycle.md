@@ -257,8 +257,12 @@ Before a release, run every local seam, including the final image qualification:
 mise exec -- pnpm check:release
 ```
 
-`pnpm check:release` runs `pnpm check` once and then `pnpm test:image-smoke`. It
-does not repeat the standard gate or run the long performance qualification.
+`pnpm check:release` refuses tracked or untracked changes, records the exact
+committed revision, runs `pnpm check` once and then `pnpm test:image-smoke`, and
+removes all real-provider credentials from both commands. It does not repeat
+the standard gate, run real-model Eval, or run either model or long-performance
+qualification. Those gates remain separate and must never be inferred from a
+deterministic release result.
 
 Run the dual-kind long-Research performance qualification separately, only on
 a controlled and otherwise idle host:

@@ -118,11 +118,11 @@ export function scriptedBatchDecision(
   const detail = readBatchDetail(poll.output, batchId, original.mode);
   if (detail === null) return incomplete();
   if (inspectPages) return inspectObservations(options, detail, observations, latest.index);
-  const progressId = `batch-progress-${currentPolls[0]?.toolCallId ?? poll.toolCallId}`;
-  if (!hasSurface(observations, progressId)) {
-    return renderBatch(options, detail, [], progressId, false);
-  }
   if (ACTIVE_STATUSES.has(detail.status)) {
+    const progressId = `batch-progress-${currentPolls[0]?.toolCallId ?? poll.toolCallId}`;
+    if (!hasSurface(observations, progressId)) {
+      return renderBatch(options, detail, [], progressId, false);
+    }
     const wait = readRetryAfter(detail);
     return currentPolls.length < MAX_POLLS && wait !== undefined
       ? requiredTool(options, "get_research_batch", { batch_id: batchId }, wait)

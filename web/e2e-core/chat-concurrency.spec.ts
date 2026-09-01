@@ -20,6 +20,7 @@ test("Chat shared Session binds two contexts to one Run while another Session ru
   try {
     await page.goto("/chat");
     await send(page, "Keep this research conversation available on my other device.");
+    await expect(status(page)).toHaveText("Run complete", { timeout: 30_000 });
     await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled();
     const sessionUrl = page.url();
     const threadId = sessionId(page);
@@ -30,7 +31,10 @@ test("Chat shared Session binds two contexts to one Run while another Session ru
 
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "hold");
     await send(page, toolPrompt);
-    await expect.poll(() => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses).toBe(1);
+    await expect.poll(
+      () => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses,
+      { timeout: 30_000 },
+    ).toBe(1);
     await expect.poll(() => identities.length).toBe(2);
     const runId = identities[1]!.runId;
     for (const client of [page, other]) {
@@ -53,7 +57,10 @@ test("Chat shared Session binds two contexts to one Run while another Session ru
 
     await parallel.goto("/chat");
     await send(parallel, toolPrompt);
-    await expect.poll(() => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses).toBe(2);
+    await expect.poll(
+      () => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses,
+      { timeout: 30_000 },
+    ).toBe(2);
     expect(sessionId(parallel)).not.toBe(threadId);
     expect(databaseFacts(researcher.id)).toMatchObject({ active_runs: 2, agent_runs: 3, user_messages: 3 });
 

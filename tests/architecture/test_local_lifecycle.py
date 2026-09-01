@@ -171,6 +171,8 @@ if "port" in arguments:
         "api": 4,
         "web": 5,
         "resend-fake": 6,
+        "auth-exchange-proxy": 7,
+        "mcp-fault-proxy": 8,
     }[service]
     print(f"127.0.0.1:{base_port + offset}")
 elif "ps" in arguments and "--quiet" in arguments:
@@ -966,17 +968,50 @@ def test_parallel_worktrees_share_one_caddy_port_lock_namespace(
     assert list(shared_lock_root.iterdir()) == []
 
 
-def test_rustfs_restart_waits_for_the_authenticated_s3_api() -> None:
+def test_rustfs_startup_and_restart_wait_for_the_writable_s3_api() -> None:
     runtime = (ROOT / "scripts" / "test-runtime").read_text()
     probe = (ROOT / "scripts" / "probe-rustfs-ready").read_text()
 
     assert "uv run python \"$rustfs_readiness_probe\"" in runtime
+    assert "RustFS S3 API did not become writable" in runtime
     assert "RustFS S3 API did not become ready after restart" in runtime
-    assert runtime.index("curl -fsS http://127.0.0.1:9000/health") < runtime.index(
-        "uv run python \"$rustfs_readiness_probe\""
+    health_probe = runtime.index("curl -fsS http://127.0.0.1:9000/health")
+    assert health_probe < runtime.index(
+        "wait_for_rustfs_s3 probe_rustfs_s3_from_host rustfsadmin rustfsadmin",
+        health_probe,
     )
     assert "client.list_buckets()" in probe
+    assert "client.create_bucket(Bucket=arguments.ensure_bucket)" in probe
+    assert "client.head_bucket(Bucket=arguments.ensure_bucket)" in probe
     assert 'retries={"max_attempts": 0, "mode": "standard"}' in probe
+    assert "is_transient_s3_error" in probe
+    assert "transient_probe_exit=75" in runtime
+    assert "rustfs_readiness_deadline_seconds=180" in runtime
+    assert "date +%s" in runtime
+    assert "probe_rustfs_s3_from_host" in runtime
+    assert "probe_rustfs_s3_from_image" in runtime
+    assert "python /qualification/probe-rustfs-ready" in runtime
+
+    for mode, next_phase in (
+        ("integration", "integration-auth-initialization"),
+        ("e2e", "e2e-initializers"),
+        ("image-smoke", "image-smoke-initializers"),
+    ):
+        readiness = f"run_phase {mode}-rustfs-s3-ready"
+        assert readiness in runtime
+        assert runtime.index(readiness) < runtime.index(f"run_phase {next_phase}")
+
+    image_smoke_infrastructure = runtime.index(
+        "run_phase image-smoke-infrastructure"
+    )
+    image_smoke_initializers = runtime.index("run_phase image-smoke-initializers")
+    image_smoke_startup = runtime[
+        image_smoke_infrastructure:image_smoke_initializers
+    ]
+    assert "wait_for_rustfs_s3 probe_rustfs_s3_from_image" in " ".join(
+        image_smoke_startup.replace("\\", "").split()
+    )
+    assert "mapped_port rustfs 9000" not in image_smoke_startup
 
 
 def test_real_codex_mcp_runtime_is_explicit_isolated_and_evidence_backed(
@@ -1097,8 +1132,11 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
     overlay = (ROOT / "deploy" / "core" / "compose.test-run.yaml").read_text()
     base = (ROOT / "deploy" / "core" / "compose.yaml").read_text()
 
-    for port in (5432, 9000):
+    for port in (5432, 8150, 8250, 8260, 9000):
         assert f"127.0.0.1::{port}" in overlay
+    assert overlay.count(
+        "node:24.14.0-bookworm-slim@sha256:"
+    ) == 3
     assert (
         "127.0.0.1:${THESISTRACE_TEST_CADDY_PORT}:"
         "${THESISTRACE_TEST_CADDY_PORT}" in overlay
@@ -1116,6 +1154,33 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
     assert "batch-attempt-control:" in base
     assert "benchmark-data:" in base
     assert "name:" not in base.split("volumes:", maxsplit=1)[1]
+
+
+def test_browser_control_fixtures_do_not_depend_on_docker_exec() -> None:
+    overlay = (ROOT / "deploy" / "core" / "compose.test-run.yaml").read_text()
+    runner = (ROOT / "scripts" / "test-runtime").read_text()
+    fault_proxy = (ROOT / "web" / "e2e-core" / "fault-proxy.ts").read_text()
+    auth_fixture = (ROOT / "web" / "e2e-core" / "auth-fixture.ts").read_text()
+    auth_control = (ROOT / "auth" / "test-fixtures" / "auth-control.mjs").read_text()
+
+    assert "auth-fixture-control:" in overlay
+    assert "network_mode: service:auth" in overlay
+    assert "THESISTRACE_AUTH_FIXTURE_CONTROL_PORT" in overlay
+    assert "THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN" in runner
+    assert "THESISTRACE_TEST_AUTH_PROXY_ORIGIN" in runner
+    assert "THESISTRACE_TEST_MCP_PROXY_ORIGIN" in runner
+    assert "auth_fixture_port=$(mapped_port auth 8260)" in runner
+    assert "auth_proxy_port=$(mapped_port auth-exchange-proxy 8250)" in runner
+    assert "mcp_proxy_port=$(mapped_port mcp-fault-proxy 8150)" in runner
+
+    for browser_fixture in (fault_proxy, auth_fixture):
+        assert '"docker"' not in browser_fixture
+        assert '"curl"' in browser_fixture
+    assert "THESISTRACE_ENVIRONMENT !== \"test\"" in auth_control
+    assert '"/__test/provision-session"' in auth_control
+    assert '"/__test/operator"' in auth_control
+    assert '"/__test/expire-invitation"' in auth_control
+    assert '"/__test/reset-rate-limits"' in auth_control
 
 
 @pytest.mark.parametrize(
@@ -1387,7 +1452,8 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert "wait initialize auth-initialize\n" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 300 "
-        "auth agent api research-worker batch-research-worker tracking-worker web\n"
+        "auth auth-fixture-control agent api research-worker "
+        "batch-research-worker tracking-worker web\n"
         in commands
     )
     assert "--build" not in commands
@@ -1427,11 +1493,7 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
         "pnpm test:integration",
         "pnpm test:e2e",
     ]
-    assert scripts["check:release"] == "pnpm check && pnpm test:image-smoke"
-    assert scripts["check:release"].split(" && ") == [
-        "pnpm check",
-        "pnpm test:image-smoke",
-    ]
+    assert scripts["check:release"] == "./scripts/release-gate"
     assert scripts["test:integration"] == (
         "./scripts/test-runtime integration && pnpm --dir auth test:integration "
         "&& pnpm --dir agent test:integration"
@@ -1660,9 +1722,10 @@ def test_image_smoke_mounts_explicit_local_mcp_api_without_changing_production_i
 def test_production_image_base_tags_are_locked_to_content_digests() -> None:
     backend = (ROOT / "deploy" / "core" / "Dockerfile.backend").read_text()
     agent = (ROOT / "deploy" / "core" / "Dockerfile.agent").read_text()
+    auth = (ROOT / "deploy" / "core" / "Dockerfile.auth").read_text()
     web = (ROOT / "deploy" / "core" / "Dockerfile.web").read_text()
 
-    for dockerfile in (backend, agent, web):
+    for dockerfile in (backend, agent, auth, web):
         from_lines = [line for line in dockerfile.splitlines() if line.startswith("FROM ")]
         assert from_lines
         assert all("@sha256:" in line for line in from_lines)

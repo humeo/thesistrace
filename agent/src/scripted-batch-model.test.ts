@@ -34,9 +34,9 @@ test.each([
   } else expect(items.map((item) => item.formula)).toEqual(["rank(close)", "-rank(close)"]);
   expect(output.calls.filter((call) => call.name === "get_research_run_result").map((call) => call.input.run_id)).toEqual(CHILD_IDS);
   const surfaces = output.calls.filter((call) => call.name === "render_a2ui");
-  expect(surfaces).toHaveLength(2);
+  expect(surfaces).toHaveLength(1);
   for (const surface of surfaces) expect(validSurface(surface.input)).toMatchObject({ kind: "ready", valid: true });
-  const table = (surfaces[1]?.input.components as Record<string, unknown>[]).find((component) => component.component === "Table");
+  const table = (surfaces[0]?.input.components as Record<string, unknown>[]).find((component) => component.component === "Table");
   expect((table?.rows as string[][]).map((row) => row[2])).toEqual(CHILD_IDS);
   expect(JSON.stringify(table)).toContain(mode === "factor_evaluation" ? "-0.1200" : "1.2300");
   expect(output.text).toContain(BATCH_ID);
@@ -61,9 +61,31 @@ test.each(["queued", "running"])("the model follows retry guidance for %s then e
     ? batchDetail("factor_evaluation", status) : batchFixtureOutput("factor_evaluation", call));
   expect(output.waits).toEqual([2, 2]);
   expect(output.calls.filter((call) => call.name === "get_research_batch")).toHaveLength(3);
+  expect(output.calls.filter((call) => call.name === "render_a2ui"
+    && String(call.input.surfaceId).startsWith("batch-progress-"))).toHaveLength(1);
   expect(output.calls.some((call) => call.name === "get_research_run_result")).toBe(false);
   expect(output.text).toContain(`is ${status}`);
   expect(output.text).toContain("Core continues independently");
+});
+
+test("a terminal Resume skips stale progress and reads each authoritative Child Result", async () => {
+  const request = options(SCRIPTED_FACTOR_BATCH_PROMPT);
+  const interrupted = await runScriptedTrajectory(request, (call) => call.name === "get_research_batch"
+    ? batchDetail("factor_evaluation", "queued") : batchFixtureOutput("factor_evaluation", call));
+  expect(interrupted.text).toContain("Core continues independently");
+
+  followUp(request, SCRIPTED_RESUME_BATCH_PROMPT);
+  const resumed = await runScriptedTrajectory(request, (call) => batchFixtureOutput("factor_evaluation", call));
+
+  expect(resumed.calls[0]?.name).toBe("get_research_batch");
+  expect(resumed.calls.filter((call) => call.name === "render_a2ui"
+    && String(call.input.surfaceId).startsWith("batch-progress-"))).toEqual([]);
+  expect(resumed.calls.filter((call) => call.name === "get_research_run_result")
+    .map((call) => call.input.run_id)).toEqual(CHILD_IDS);
+  expect(resumed.calls.filter((call) => call.name === "render_a2ui"
+    && String(call.input.surfaceId).startsWith("batch-results-"))).toHaveLength(1);
+  expect(resumed.text).toContain("not a combined Batch Result");
+  expect(resumed.calls.length + 1).toBeLessThanOrEqual(9);
 });
 
 test("a failed Batch never fabricates child Results", async () => {

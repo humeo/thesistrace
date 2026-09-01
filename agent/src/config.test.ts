@@ -126,19 +126,44 @@ describe("Agent Host configuration", () => {
   });
 
   it("requires HTTPS and a non-loopback hostname in Production", () => {
+    const productionRegistry = JSON.stringify({
+      default_model_key: "openai-research",
+      models: [{
+        default_reasoning_effort: "high",
+        display_name: "OpenAI Research",
+        enabled: true,
+        key: "openai-research",
+        provider_adapter: "openai",
+        provider_model_id: "gpt-research",
+        reasoning_efforts: ["high"],
+        secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
+      }],
+    });
+    const productionEnvironment = {
+      ...environment,
+      THESISTRACE_AGENT_MODEL_REGISTRY: productionRegistry,
+      THESISTRACE_AGENT_OPENAI_API_KEY: "production-provider-secret",
+      THESISTRACE_ENVIRONMENT: "production",
+    };
     expect(
       readAgentSettings({
-        ...environment,
-        THESISTRACE_ENVIRONMENT: "production",
+        ...productionEnvironment,
         THESISTRACE_PUBLIC_ORIGIN: "https://thesistrace.test",
       }).publicOrigin,
     ).toBe("https://thesistrace.test");
     expect(() =>
       readAgentSettings({
-        ...environment,
-        THESISTRACE_ENVIRONMENT: "production",
+        ...productionEnvironment,
         THESISTRACE_PUBLIC_ORIGIN: "https://127.0.0.1",
       }),
     ).toThrow("Agent configuration is invalid");
+  });
+
+  it("rejects the Scripted test Provider in Production", () => {
+    expect(() => readAgentSettings({
+      ...environment,
+      THESISTRACE_ENVIRONMENT: "production",
+      THESISTRACE_PUBLIC_ORIGIN: "https://thesistrace.test",
+    })).toThrow("Agent configuration is invalid");
   });
 });

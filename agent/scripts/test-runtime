@@ -20,15 +20,15 @@ run_id="$timestamp-$$-$random_suffix"
 project_name="thesistrace-agent-test-$run_id"
 image_name="thesistrace-agent-test:$run_id"
 evidence_root=$(mktemp -d "${TMPDIR:-/tmp}/thesistrace-agent-test.XXXXXX")
-scripted_secret=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
-model_registry='{"default_model_key":"scripted-research","models":[{"default_reasoning_effort":"medium","display_name":"Scripted Research","enabled":true,"key":"scripted-research","provider_adapter":"scripted","provider_model_id":"scripted-v1","reasoning_efforts":["medium"],"secret_env":"THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"}]}'
+openai_secret=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
+model_registry='{"default_model_key":"gpt-5.6-luna","models":[{"default_reasoning_effort":"high","display_name":"GPT-5.6 Luna","enabled":true,"key":"gpt-5.6-luna","provider_adapter":"openai","provider_model_id":"gpt-5.6-luna","reasoning_efforts":["high"],"secret_env":"THESISTRACE_AGENT_OPENAI_API_KEY"}]}'
 stale_image_canary="$agent_root/dist/stale-image-canary.js"
 
 compose() {
   COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
     THESISTRACE_AGENT_TEST_IMAGE="$image_name" \
     THESISTRACE_AGENT_TEST_MODEL_REGISTRY="$model_registry" \
-    THESISTRACE_AGENT_TEST_SCRIPTED_SECRET="$scripted_secret" \
+    THESISTRACE_AGENT_TEST_OPENAI_SECRET="$openai_secret" \
     docker compose \
       --project-name "$project_name" \
       --file "$compose_file" \
@@ -177,7 +177,7 @@ case "$command" in
       -H 'Content-Type: application/json' \
       -H 'Cookie: thesistrace.session_token=image-smoke-session' \
       -H 'Origin: https://thesistrace.test' \
-      --data '{"threadId":"00000000-0000-4000-8000-000000000201","runId":"00000000-0000-4000-8000-000000000301","messages":[{"id":"00000000-0000-4000-8000-000000000401","role":"user","content":"[scripted-tool-turn] Inspect the available research context."}],"state":{},"tools":[],"context":[],"forwardedProps":{"thesistrace":{"modelKey":"scripted-research","reasoningEffort":"medium","sessionMode":"new"}}}' \
+      --data '{"threadId":"00000000-0000-4000-8000-000000000201","runId":"00000000-0000-4000-8000-000000000301","messages":[{"id":"00000000-0000-4000-8000-000000000401","role":"user","content":"Inspect the available research context."}],"state":{},"tools":[],"context":[],"forwardedProps":{"thesistrace":{"modelKey":"gpt-5.6-luna","reasoningEffort":"high","sessionMode":"new"}}}' \
       "http://127.0.0.1:$agent_port/api/agent/copilotkit/agent/research/run" \
       >"$evidence_root/run.sse"
     grep -F '"type":"RUN_STARTED"' "$evidence_root/run.sse" >/dev/null
@@ -201,9 +201,9 @@ case "$command" in
     grep -Fqx 'completed|24' "$evidence_root/run-row.txt"
 
     if compose run --rm --no-deps -T \
-      -e THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET= \
+      -e THESISTRACE_AGENT_OPENAI_API_KEY= \
       agent >"$evidence_root/invalid.stdout.log" 2>"$evidence_root/invalid.stderr.log"; then
-      echo "Agent image accepted a missing scripted model credential" >&2
+      echo "Agent image accepted a missing OpenAI model credential" >&2
       exit 1
     fi
     grep -Fqx \
@@ -233,8 +233,8 @@ case "$command" in
       echo "Agent image-smoke evidence exposed a credential" >&2
       exit 1
     fi
-    if grep -R -F -q "$scripted_secret" "$evidence_root"; then
-      echo "Agent image-smoke evidence exposed the scripted provider secret" >&2
+    if grep -R -F -q "$openai_secret" "$evidence_root"; then
+      echo "Agent image-smoke evidence exposed the provider secret" >&2
       exit 1
     fi
     ;;

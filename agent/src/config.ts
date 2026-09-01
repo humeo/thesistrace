@@ -63,6 +63,12 @@ export function readAgentSettings(
     required(environment, "THESISTRACE_AGENT_MODEL_REGISTRY"),
     environment,
   );
+  if (
+    parsedEnvironment.data === "production"
+    && modelRegistry.models.some((model) => model.providerAdapter === "scripted")
+  ) {
+    throw new AgentConfigurationError();
+  }
 
   return {
     agentBuildRevision,

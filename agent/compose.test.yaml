@@ -52,6 +52,25 @@ services:
     volumes:
       - ./test-fixtures:/test-fixtures:ro
 
+  provider-stub:
+    image: node:24.14.0-bookworm-slim@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8
+    logging: *bounded-logging
+    command: ["node", "/test-fixtures/openai-provider-stub.mjs"]
+    environment:
+      THESISTRACE_AGENT_TEST_OPENAI_API_KEY: ${THESISTRACE_AGENT_TEST_OPENAI_SECRET:?THESISTRACE_AGENT_TEST_OPENAI_SECRET is required}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - --input-type=module
+        - --eval
+        - fetch('http://127.0.0.1:8600/health/ready').then((response) => { if (!response.ok) process.exit(1) })
+      interval: 1s
+      timeout: 5s
+      retries: 60
+    volumes:
+      - ./test-fixtures:/test-fixtures:ro
+
   agent-initialize:
     <<: *agent-image
     logging: *bounded-logging
@@ -68,10 +87,11 @@ services:
     logging: *bounded-logging
     environment:
       COPILOTKIT_TELEMETRY_DISABLED: "true"
+      OPENAI_BASE_URL: http://provider-stub:8600/v1
       THESISTRACE_AGENT_BUILD_REVISION: image-smoke
       THESISTRACE_AGENT_DATABASE_URL: postgresql://agent_runtime:agent-test-password@postgres:5432/thesistrace
       THESISTRACE_AGENT_MODEL_REGISTRY: ${THESISTRACE_AGENT_TEST_MODEL_REGISTRY:?THESISTRACE_AGENT_TEST_MODEL_REGISTRY is required}
-      THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: ${THESISTRACE_AGENT_TEST_SCRIPTED_SECRET:?THESISTRACE_AGENT_TEST_SCRIPTED_SECRET is required}
+      THESISTRACE_AGENT_OPENAI_API_KEY: ${THESISTRACE_AGENT_TEST_OPENAI_SECRET:?THESISTRACE_AGENT_TEST_OPENAI_SECRET is required}
       THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS: "600"
       THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth-stub:8200
       THESISTRACE_ENVIRONMENT: production
@@ -82,6 +102,8 @@ services:
       agent-initialize:
         condition: service_completed_successfully
       auth-stub:
+        condition: service_healthy
+      provider-stub:
         condition: service_healthy
     healthcheck:
       test:

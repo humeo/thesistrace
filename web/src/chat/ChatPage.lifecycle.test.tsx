@@ -98,6 +98,59 @@ test("once a retried Turn is accepted, later retry inspects durable history inst
   ]);
 });
 
+test.each(["accepted success", "immediate failure"] as const)(
+  "a completed retry restores keyboard focus to the Composer after %s",
+  async (outcome) => {
+    let attempts = 0;
+    let releaseAccepted: (() => void) | undefined;
+    const pending = await mountChat({ existing: true, run: (input) => {
+      attempts += 1;
+      if (attempts === 1) {
+        return eventStream([
+          { type: "RUN_ERROR", code: "AGENT_CAPACITY", message: "Agent at capacity" },
+        ]);
+      }
+      return outcome === "immediate failure"
+        ? eventStream([
+            { type: "RUN_ERROR", code: "INTERNAL_FAILURE", message: "Internal failure" },
+          ])
+        : (() => {
+            const deferred = deferredEventStream([
+              { type: "RUN_STARTED", threadId: input.threadId, runId: input.runId },
+              { type: "RUN_FINISHED", threadId: input.threadId, runId: input.runId },
+            ]);
+            releaseAccepted = deferred.release;
+            return deferred.response;
+          })();
+    } });
+    await act(async () => { pending.resolveInfo(); });
+    await setDraft("Inspect this Alpha idea.");
+    await act(async () => {
+      document.querySelector<HTMLFormElement>("form.chat-composer-dock")!
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    expect(document.querySelector(".chat-run-error")?.getAttribute("data-failure-code"))
+      .toBe("AGENT_CAPACITY");
+
+    await act(async () => {
+      const retry = [...document.querySelectorAll<HTMLButtonElement>(".chat-run-error button")]
+        .find((button) => button.textContent === "Retry with selected model")!;
+      retry.focus();
+      retry.click();
+    });
+
+    expect(attempts).toBe(2);
+    await act(async () => {
+      releaseAccepted?.();
+    });
+    await vi.waitFor(async () => {
+      await act(async () => { await Promise.resolve(); });
+      expect(composer().disabled).toBe(false);
+      expect(document.activeElement).toBe(composer());
+    }, { interval: 1, timeout: 1_000 });
+  },
+);
+
 test.each(["succeeds", "fails"])("Chat deletion preserves modal and navigation state when it %s", async (outcome) => {
   const session = {
     id: "00000000-0000-4000-8000-000000000010", title: "Earlier research", active_run: false,
@@ -156,6 +209,23 @@ async function setDraft(content: string): Promise<void> {
 
 function eventStream(events: unknown[]): Response {
   return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+}
+
+function deferredEventStream(events: unknown[]): Readonly<{
+  release: () => void;
+  response: Response;
+}> {
+  const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+  let release = () => undefined;
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      release = () => {
+        controller.enqueue(new TextEncoder().encode(body));
+        controller.close();
+      };
+    },
+  }), { headers: { "content-type": "text/event-stream" } });
+  return { release, response };
 }
 
 async function mountChat(options: { existing?: boolean; run?: (input: RunAgentInput) => Response } = {}) {

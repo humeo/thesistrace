@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+CDPATH= cd -- "$repo_root"
+
+fail() {
+  printf '{"code":"%s","event":"release_gate_failed"}\n' "$1" >&2
+  exit 2
+}
+
+test "$#" -eq 0 || fail RELEASE_GATE_USAGE_INVALID
+
+git_revision=$(git -C "$repo_root" rev-parse --verify 'HEAD^{commit}' 2>/dev/null) \
+  || fail RELEASE_GIT_STATE_INVALID
+printf '%s\n' "$git_revision" | grep -Eq '^[0-9a-f]{40,64}$' \
+  || fail RELEASE_GIT_STATE_INVALID
+
+worktree_state=$(git -C "$repo_root" status \
+  --porcelain=v1 --untracked-files=normal 2>/dev/null) \
+  || fail RELEASE_GIT_STATE_INVALID
+test -z "$worktree_state" || fail RELEASE_WORKTREE_DIRTY
+
+run_deterministic() {
+  env \
+    -u CLI_API_KEY \
+    -u CLIPROXY_API_KEY \
+    -u OPENAI_API_KEY \
+    -u ANTHROPIC_API_KEY \
+    -u GOOGLE_GENERATIVE_AI_API_KEY \
+    -u THESISTRACE_AGENT_OPENAI_API_KEY \
+    -u THESISTRACE_AGENT_ANTHROPIC_API_KEY \
+    -u THESISTRACE_AGENT_GOOGLE_API_KEY \
+    -u THESISTRACE_AGENT_OPENAI_BASE_URL \
+    "$@"
+}
+
+printf '%s\n' \
+  "{\"event\":\"release_gate_started\",\"git_revision\":\"$git_revision\",\"real_model_eval\":\"not_run\",\"model_qualification\":\"pending\"}"
+run_deterministic pnpm check
+run_deterministic pnpm test:image-smoke
+printf '%s\n' \
+  "{\"event\":\"release_gate_completed\",\"git_revision\":\"$git_revision\",\"real_model_eval\":\"not_run\",\"model_qualification\":\"pending\"}"

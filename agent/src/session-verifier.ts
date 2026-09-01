@@ -21,7 +21,7 @@ export function createSessionVerifier(dependencies: Readonly<{
   timeoutMs?: number;
 }>): (headers: Headers) => Promise<VerifiedResearcher | null> {
   const fetchImplementation = dependencies.fetch ?? globalThis.fetch;
-  const timeoutMs = dependencies.timeoutMs ?? 2_000;
+  const timeoutMs = dependencies.timeoutMs ?? 5_000;
   return async (headers) => {
     const forwarded = new Headers();
     const cookie = loginSessionCookieHeader(headers.get("cookie"));

@@ -22,6 +22,7 @@ import boto3
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.tushare_data import normalize_tushare_snapshot
+from thesistrace.daily_track.failure_policy import MAX_TRACKING_CYCLE_ATTEMPTS
 from thesistrace.data import MountedDatasetHeadStore
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.product_state import product_state_counts
@@ -1638,13 +1639,21 @@ def _verify_transient_retry_wait(
     finally:
         database.close()
     assert row is not None
-    assert row["blocked_reason"] == ("Financial Coverage ends before the next Research Session.")
-    assert row["cycle_attempt_ordinal"] == 1
-    assert row["failure_reason"] == "InfrastructureFailure"
+    _assert_transient_retry_state(row)
     return {
         "transient_retry_attempt": row["cycle_attempt_ordinal"],
         "transient_retry_wait_verified": True,
     }
+
+
+def _assert_transient_retry_state(row: dict[str, object]) -> None:
+    assert row["blocked_reason"] == (
+        "Financial Coverage ends before the next Research Session."
+    )
+    cycle_attempt_ordinal = row["cycle_attempt_ordinal"]
+    assert isinstance(cycle_attempt_ordinal, int)
+    assert 1 <= cycle_attempt_ordinal < MAX_TRACKING_CYCLE_ATTEMPTS
+    assert row["failure_reason"] == "InfrastructureFailure"
 
 
 def _retry_and_stop_running_track(

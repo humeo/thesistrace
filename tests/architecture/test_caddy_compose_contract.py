@@ -156,6 +156,7 @@ def test_caddy_applies_the_exact_security_and_sanitized_logging_contract() -> No
 def test_auth_image_reuses_the_package_store_for_production_deploy() -> None:
     dockerfile = (DEPLOY / "Dockerfile.auth").read_text()
 
+    assert dockerfile.count("node:24.14.0-bookworm-slim@sha256:") == 2
     assert dockerfile.count(
         "--mount=type=cache,target=/root/.local/share/pnpm/store"
     ) == 2
