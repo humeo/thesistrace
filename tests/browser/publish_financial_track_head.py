@@ -28,7 +28,7 @@ def main() -> None:
             "--as-of",
             "2026-08-11T18:00:00+08:00",
         )
-        if outcome.get("status") != "accepted":
+        if outcome.get("status") not in {"accepted", "succeeded"}:
             raise RuntimeError(f"Market Refresh was not accepted: {outcome}")
         outcome = _wait_for_market_refresh("financial-release-market-refresh")
     else:

@@ -12,12 +12,13 @@ const executeFile = promisify(execFile);
 const port = requiredPort("THESISTRACE_AUTH_FIXTURE_CONTROL_PORT");
 const databaseUrl = required("THESISTRACE_AUTH_DATABASE_URL");
 const pool = new Pool({ connectionString: databaseUrl, max: 1 });
-const operatorCommands = new Set([
-  "deactivate",
-  "invite",
-  "reactivate",
-  "reissue",
-  "revoke-sessions",
+const operatorCommands = new Map([
+  ["assign-operator", "--researcher-id"],
+  ["deactivate", "--email"],
+  ["invite", "--email"],
+  ["reactivate", "--email"],
+  ["reissue", "--email"],
+  ["revoke-sessions", "--email"],
 ]);
 
 const server = http.createServer(async (request, response) => {
@@ -136,19 +137,24 @@ async function provisionSession(body) {
 
 async function runOperator(body) {
   const args = body.args;
+  const targetFlag = Array.isArray(args) && typeof args[0] === "string"
+    ? operatorCommands.get(args[0])
+    : undefined;
   if (
     !Array.isArray(args)
     || args.length !== 3
     || typeof args[0] !== "string"
-    || !operatorCommands.has(args[0])
-    || args[1] !== "--email"
+    || targetFlag === undefined
+    || args[1] !== targetFlag
   ) {
     throw new Error("AUTH_FIXTURE_INPUT_INVALID");
   }
-  const email = validEmail(args[2]);
+  const target = targetFlag === "--email"
+    ? validEmail(args[2])
+    : validResearcherId(args[2]);
   const { stdout } = await executeFile(
     process.execPath,
-    ["dist/operator.js", args[0], "--email", email],
+    ["dist/operator.js", args[0], targetFlag, target],
     commandOptions(),
   );
   return parsedObject(stdout);
@@ -198,6 +204,16 @@ function validEmail(value) {
     typeof value !== "string"
     || value.length > 320
     || !/^[^\s@]+@[^\s@]+$/.test(value)
+  ) {
+    throw new Error("AUTH_FIXTURE_INPUT_INVALID");
+  }
+  return value;
+}
+
+function validResearcherId(value) {
+  if (
+    typeof value !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)
   ) {
     throw new Error("AUTH_FIXTURE_INPUT_INVALID");
   }

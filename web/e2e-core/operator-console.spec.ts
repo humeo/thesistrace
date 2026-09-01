@@ -9,6 +9,7 @@ import {
   exhaustDataRefresh,
   expireDataRefreshClaim,
   expect,
+  fillPasswordInput,
   issueInvitation,
   markDataRefreshRunning,
   resetAuthRateLimits,
@@ -213,7 +214,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     element.contains(document.activeElement)
   )).toBe(true);
   await issueEmail.fill(consoleInvitationEmail);
-  await issuePassword.fill(browserPassword);
+  await fillPasswordInput(issuePassword);
   await page.keyboard.press("Escape");
   await expect(confirmation).toHaveCount(0);
   await expect(inviteResearcher).toBeFocused();
@@ -239,7 +240,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await confirmation.getByLabel("Target email").fill(consoleInvitationEmail);
   await confirmation.getByLabel("Target email").press("Tab");
   await expect(confirmation.getByLabel("Current password")).toBeFocused();
-  await confirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(confirmation.getByLabel("Current password"));
   await confirmation.getByLabel("Current password").press("Enter");
   await expect(confirmation).toHaveCount(0);
   await expect(page.getByRole("status").filter({
@@ -266,7 +267,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(reissueConfirmation).toContainText(
     "The old link becomes invalid only after delivery succeeds.",
   );
-  await reissueConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(reissueConfirmation.getByLabel("Current password"));
   await reissueConfirmation.getByLabel("Current password").press("Enter");
   await expect(reissueConfirmation).toHaveCount(0);
   await expect(page.getByRole("status").filter({
@@ -354,7 +355,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   let marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
   await marketConfirmation.getByLabel("Current password").press("Enter");
   await expect(marketConfirmation).toHaveCount(0);
   const asOfError = page.getByText(
@@ -406,7 +407,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
   await marketConfirmation.getByLabel("Current password").press("Enter");
   await pendingProofStarted;
   await expect(marketConfirmation.getByRole("button", { name: "Cancel" })).toBeEnabled();
@@ -469,7 +470,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(marketConfirmation).toContainText("durable FIFO");
   const marketPassword = marketConfirmation.getByLabel("Current password");
   await expect(marketPassword).toBeFocused();
-  await marketPassword.fill(browserPassword);
+  await fillPasswordInput(marketPassword);
   await marketPassword.press("Enter");
   await coreAccepted;
   await expect(marketConfirmation.getByRole("button", { name: "Cancel" })).toBeEnabled();
@@ -540,7 +541,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
   await marketConfirmation.getByLabel("Current password").press("Enter");
   await conflictRejected;
   await page.keyboard.press("Escape");
@@ -624,7 +625,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
   await marketConfirmation.getByLabel("Current password").press("Enter");
   await droppedAfterAcceptance;
   await expect(marketConfirmation).toHaveCount(0);
@@ -735,7 +736,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
   await marketConfirmation.getByLabel("Current password").press("Enter");
   await recoveredPostStarted;
   await page.keyboard.press("Escape");
@@ -804,7 +805,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
   await marketConfirmation.getByLabel("Current password").press("Enter");
   await staleSubmissionStarted;
   await page.keyboard.press("Escape");
@@ -815,7 +816,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   const currentMarketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await currentMarketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(currentMarketConfirmation.getByLabel("Current password"));
   await currentMarketConfirmation.getByLabel("Current password").press("Enter");
   await currentSubmissionStarted;
   const staleBrowserResponse = page.waitForResponse((response) => {
@@ -939,7 +940,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await marketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
   await marketConfirmation.getByLabel("Current password").press("Enter");
   await expect(page.getByRole("heading", { name: "Refresh accepted" })).toBeVisible();
   await polledRequestStarted;
@@ -950,7 +951,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     name: "Submit Market Refresh?",
   });
   await expect(marketRefreshReceipt.getByText(polledMarketKey, { exact: true })).toBeVisible();
-  await newerMarketConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(newerMarketConfirmation.getByLabel("Current password"));
   await newerMarketConfirmation.getByLabel("Current password").press("Enter");
   await expect(newerMarketConfirmation).toHaveCount(0);
   await polledRequestSettled;
@@ -995,7 +996,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(financialConfirmation).toContainText(financialTargetSession);
   await expect(financialConfirmation).toContainText(financialKey);
   await expect(financialConfirmation).toContainText("shared durable FIFO");
-  await financialConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(financialConfirmation.getByLabel("Current password"));
   await financialConfirmation.getByLabel("Current password").press("Enter");
   await expect(financialConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Financial Refresh accepted" }))
@@ -1074,7 +1075,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(industryConfirmation).toContainText("shared durable FIFO");
   const industryPassword = industryConfirmation.getByLabel("Current password");
   await expect(industryPassword).toBeFocused();
-  await industryPassword.fill(browserPassword);
+  await fillPasswordInput(industryPassword);
   await industryPassword.press("Enter");
   await expect(industryConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Industry Refresh accepted" }))
@@ -1123,7 +1124,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   industryConfirmation = page.getByRole("dialog", {
     name: "Submit Industry Refresh?",
   });
-  await industryConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(industryConfirmation.getByLabel("Current password"));
   await industryConfirmation.getByLabel("Current password").press("Enter");
   await expect(industryConfirmation).toHaveCount(0);
   const industryNoChangeReceipt = page.locator("section.operator-refresh-receipt").filter({
@@ -1173,7 +1174,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   industryConfirmation = page.getByRole("dialog", {
     name: "Submit Industry Refresh?",
   });
-  await industryConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(industryConfirmation.getByLabel("Current password"));
   await industryConfirmation.getByLabel("Current password").press("Enter");
   await expect(industryConfirmation).toHaveCount(0);
   const industryRejectedReceipt = page.locator("section.operator-refresh-receipt").filter({
@@ -1221,8 +1222,9 @@ test("only the singleton Operator can open and read the Operator Console", async
   let recoverableFinancialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
-  await recoverableFinancialConfirmation.getByLabel("Current password")
-    .fill(browserPassword);
+  await fillPasswordInput(
+    recoverableFinancialConfirmation.getByLabel("Current password"),
+  );
   await recoverableFinancialConfirmation.getByLabel("Current password").press("Enter");
   await financialResponseDropped;
   await expect(recoverableFinancialConfirmation).toHaveCount(0);
@@ -1287,7 +1289,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   recoverableFinancialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
-  await recoverableFinancialConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(recoverableFinancialConfirmation.getByLabel("Current password"));
   await recoverableFinancialConfirmation.getByLabel("Current password").press("Enter");
   await knownFailureStarted;
   await page.keyboard.press("Escape");
@@ -1361,7 +1363,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   recoverableFinancialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
-  await recoverableFinancialConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(recoverableFinancialConfirmation.getByLabel("Current password"));
   await recoverableFinancialConfirmation.getByLabel("Current password").press("Enter");
   await uncertainSubmissionStarted;
   await page.keyboard.press("Escape");
@@ -1416,7 +1418,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   recoverableFinancialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
-  await recoverableFinancialConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(recoverableFinancialConfirmation.getByLabel("Current password"));
   await recoverableFinancialConfirmation.getByLabel("Current password").press("Enter");
   await stopSubmissionStarted;
   await page.keyboard.press("Escape");
@@ -1476,7 +1478,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   const capabilityLossConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
-  await capabilityLossConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(capabilityLossConfirmation.getByLabel("Current password"));
   await capabilityLossConfirmation.getByLabel("Current password").press("Enter");
   await expect(page.getByRole("heading", { name: "Financial Refresh accepted" }))
     .toBeVisible();
@@ -1798,7 +1800,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(cancelDialog).toContainText("The Worker will never claim this queued receipt");
   const cancelPassword = cancelDialog.getByLabel("Current password");
   await expect(cancelPassword).toBeFocused();
-  await cancelPassword.fill(browserPassword);
+  await fillPasswordInput(cancelPassword);
   await cancelPassword.press("Enter");
   await expect(cancelDialog).toHaveCount(0);
   await expect(cancelSourceRow.getByText("Cancelled", { exact: true })).toBeVisible();
@@ -1828,7 +1830,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   const retryKeyInput = retryDialog.getByLabel("New idempotency key");
   await expect(retryKeyInput).toHaveValue(/^market-retry-\d{8}T\d{6}Z$/);
   await retryKeyInput.fill(actionRetryKey);
-  await retryDialog.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(retryDialog.getByLabel("Current password"));
   await retryDialog.getByLabel("Current password").press("Enter");
   await expect(retryDialog).toHaveCount(0);
   await expect(cancelledDrawer).toBeVisible();
@@ -1856,7 +1858,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   }).click();
   const rejectedCancel = page.getByRole("dialog", { name: "Cancel queued Refresh?" });
   markDataRefreshRunning(claimedSourceKey);
-  await rejectedCancel.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(rejectedCancel.getByLabel("Current password"));
   await rejectedCancel.getByLabel("Current password").press("Enter");
   await expect(rejectedCancel.getByRole("alert")).toContainText(
     "The Worker claimed this operation before Cancel won",
@@ -1922,7 +1924,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   );
   const revocationPassword = revocationDialog.getByLabel("Current password");
   await expect(revocationPassword).toBeFocused();
-  await revocationPassword.fill(browserPassword);
+  await fillPasswordInput(revocationPassword);
   await revocationPassword.press("Shift+Tab");
   expect(await revocationDialog.evaluate((element) =>
     element.contains(document.activeElement)
@@ -1936,7 +1938,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     name: "Revoke Login Sessions?",
   });
   await expect(revocationDialog.getByLabel("Current password")).toHaveValue("");
-  await revocationDialog.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(revocationDialog.getByLabel("Current password"));
   await revocationDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(revocationDialog).toHaveCount(0);
   await expect(revokeSessions).toBeFocused();
@@ -1946,7 +1948,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     name: "Revoke Login Sessions?",
   });
   await expect(revocationDialog.getByLabel("Current password")).toHaveValue("");
-  await revocationDialog.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(revocationDialog.getByLabel("Current password"));
   await revocationDialog.getByLabel("Current password").press("Enter");
   await expect(revocationDialog).toHaveCount(0);
   await expect(page.getByRole("status").filter({
@@ -2000,7 +2002,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   const secondPageConfirmation = page.getByRole("dialog", {
     name: "Reissue Invitation?",
   });
-  await secondPageConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(secondPageConfirmation.getByLabel("Current password"));
   await secondPageConfirmation.getByLabel("Current password").press("Enter");
   await expect(secondPageConfirmation).toHaveCount(0);
   await expect(invitationPagination).toContainText("Page 1");
@@ -2013,7 +2015,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   const failedReloadConfirmation = page.getByRole("dialog", {
     name: "Reissue Invitation?",
   });
-  await failedReloadConfirmation.getByLabel("Current password").fill(browserPassword);
+  await fillPasswordInput(failedReloadConfirmation.getByLabel("Current password"));
   let failInvitationReload = true;
   await page.route("**/api/auth/operator/invitations*", async (route) => {
     if (route.request().method() !== "GET" || !failInvitationReload) {

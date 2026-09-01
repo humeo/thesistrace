@@ -5,6 +5,7 @@ import type { Locator, Page, Route } from "@playwright/test";
 import {
   createResearcher,
   expect,
+  fillPasswordInput,
   restoreResearcherSession,
   sameOriginHeaders,
   securityTest,
@@ -53,7 +54,7 @@ securityTest("Chat preserves returnTo and opens after login without a document r
     if (request.resourceType() === "document") documentRequests.push(request.url());
   });
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill("Browser-acceptance-password-2026");
+  await fillPasswordInput(page.getByLabel("Password"));
   documentRequests.length = 0;
   await page.getByRole("button", { name: "Log in" }).click();
 

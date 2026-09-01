@@ -1,4 +1,4 @@
-import { expect, test as base, type Page } from "@playwright/test";
+import { expect, test as base, type Locator, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 
@@ -9,6 +9,30 @@ export type AuthenticatedResearcher = Readonly<{
 }>;
 
 export const browserPassword = "Browser-acceptance-password-2026";
+
+// Playwright renders locator.fill(value) arguments into HTML report step titles.
+// Drive the password control without putting the private value in that title.
+export async function fillPasswordInput(
+  passwordInput: Locator,
+  password = browserPassword,
+): Promise<void> {
+  await passwordInput.evaluate((element, password) => {
+    if (!(element instanceof HTMLInputElement) || element.type !== "password") {
+      throw new Error("Browser password helper requires an input[type=password]");
+    }
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    if (!valueSetter) {
+      throw new Error("Browser password input has no native value setter");
+    }
+    element.focus();
+    valueSetter.call(element, password);
+    element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+  }, password);
+}
+
 export const securityTest = base.extend<{ cspGuard: void }>({
   cspGuard: [async ({ page }, use) => {
     resetAuthRateLimits();

@@ -6,6 +6,7 @@ import {
   emailToken,
   expect,
   expireInvitation,
+  fillPasswordInput,
   issueInvitation,
   restoreResearcherSession,
   runAuthOperator,
@@ -32,8 +33,8 @@ test("Invitation, login, account password, reset, refresh, and access lifecycle 
   await invitationPassword.focus();
   await page.keyboard.press("Tab");
   await expect(invitationConfirmation).toBeFocused();
-  await invitationPassword.fill(browserPassword);
-  await invitationConfirmation.fill(browserPassword);
+  await fillPasswordInput(invitationPassword);
+  await fillPasswordInput(invitationConfirmation);
   await acceptInvitation.click();
 
   await expect(page).toHaveURL(/\/data$/);
@@ -79,9 +80,9 @@ test("Invitation, login, account password, reset, refresh, and access lifecycle 
     submitPassword,
     logOutAction,
   );
-  await currentPassword.fill(browserPassword);
-  await newPassword.fill(changedPassword);
-  await passwordConfirmation.fill(changedPassword);
+  await fillPasswordInput(currentPassword);
+  await fillPasswordInput(newPassword, changedPassword);
+  await fillPasswordInput(passwordConfirmation, changedPassword);
   await submitPassword.click();
   await expect(page.getByText("Password changed. Other sessions were logged out.")).toBeVisible();
   await page.getByRole("button", { name: "Log out" }).click();
@@ -93,7 +94,7 @@ test("Invitation, login, account password, reset, refresh, and access lifecycle 
   expect(returnTo).toBe("/research?folder=folder_default#formula");
   await loginThroughUi(page, email, browserPassword);
   await expect(page.getByRole("alert")).toContainText("Email or password is incorrect.");
-  await page.getByLabel("Password").fill(changedPassword);
+  await fillPasswordInput(page.getByLabel("Password"), changedPassword);
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page).toHaveURL(/\/research\?folder=folder_default#formula$/);
 
@@ -120,8 +121,8 @@ test("Invitation, login, account password, reset, refresh, and access lifecycle 
   const resetConfirmation = page.getByLabel("Confirm password");
   const resetPasswordAction = page.getByRole("button", { name: "Reset password" });
   await expectTouchTargets(resetPasswordInput, resetConfirmation, resetPasswordAction);
-  await resetPasswordInput.fill(resetPassword);
-  await resetConfirmation.fill(resetPassword);
+  await fillPasswordInput(resetPasswordInput, resetPassword);
+  await fillPasswordInput(resetConfirmation, resetPassword);
   await resetPasswordAction.click();
   await expect(page).toHaveURL(/\/login\?reset=complete$/);
   await expect(page.getByText("Password reset. Log in with your new password.")).toBeVisible();
@@ -169,8 +170,8 @@ test("Invitation expiry, reissue, and lost-response replay converge safely", asy
   expect(replacementToken).not.toBe(expiredToken);
   await page.goto(`/accept-invitation#token=${encodeURIComponent(replacementToken)}`);
   await expect(page.getByLabel("Email")).toHaveValue(email);
-  await page.getByLabel("Password", { exact: true }).fill(browserPassword);
-  await page.getByLabel("Confirm password").fill(browserPassword);
+  await fillPasswordInput(page.getByLabel("Password", { exact: true }));
+  await fillPasswordInput(page.getByLabel("Confirm password"));
   await page.getByRole("button", { name: "Accept invitation" }).click();
   await expect(page).toHaveURL(/\/data$/);
 
@@ -210,8 +211,8 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
   });
   await page.goto(`/accept-invitation#token=${encodeURIComponent(token)}`);
   await expect(page.getByLabel("Email")).toHaveValue(email);
-  await page.getByLabel("Password", { exact: true }).fill(browserPassword);
-  await page.getByLabel("Confirm password").fill(browserPassword);
+  await fillPasswordInput(page.getByLabel("Password", { exact: true }));
+  await fillPasswordInput(page.getByLabel("Confirm password"));
   await page.getByRole("button", { name: "Accept invitation" }).click();
   await expect(page.getByRole("heading", { name: "Workspace setup unavailable" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Data overview" })).toHaveCount(0);
@@ -270,8 +271,8 @@ test.describe("tablet touch presentation", () => {
     const confirmation = page.getByLabel("Confirm password");
     const acceptInvitation = page.getByRole("button", { name: "Accept invitation" });
     await expectTouchTargets(password, confirmation, acceptInvitation);
-    await password.fill(browserPassword);
-    await confirmation.fill(browserPassword);
+    await fillPasswordInput(password);
+    await fillPasswordInput(confirmation);
     await acceptInvitation.click();
 
     await expect(page).toHaveURL(/\/data$/, { timeout: 15_000 });
@@ -379,7 +380,7 @@ async function loginThroughUi(page: Page, email: string, password: string): Prom
   const logIn = page.getByRole("button", { name: "Log in" });
   await expectTouchTargets(emailInput, passwordInput, logIn);
   await emailInput.fill(email);
-  await passwordInput.fill(password);
+  await fillPasswordInput(passwordInput, password);
   await logIn.click();
 }
 
