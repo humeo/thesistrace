@@ -228,11 +228,11 @@ test("first Chat turn streams through Caddy and reload replays without another r
   );
   const assistant = page.locator(".chat-message-assistant .chat-message-content");
   await expect(assistant).toBeVisible();
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
   const assistantText = await assistant.textContent();
   if (assistantText === null) throw new Error("Expected one assistant response");
   expect(assistantText.trim().length).toBeGreaterThan(0);
   expect(new TextEncoder().encode(assistantText).byteLength).toBeLessThanOrEqual(512);
-  await expect(agentRunStatus(page)).toHaveText("Run complete");
   const generatedTitleElement = page.locator(".chat-session-title strong");
   await expect.poll(async () => {
     const value = (await generatedTitleElement.textContent())?.trim();

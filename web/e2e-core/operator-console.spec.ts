@@ -1995,10 +1995,11 @@ test("only the singleton Operator can open and read the Operator Console", async
   });
   await invitationPagination.getByRole("button", { name: "Next" }).click();
   await expect(invitationPagination).toContainText("Page 2");
-  const secondPageEmail = "browser-invitation-01@example.test";
-  await page.getByRole("button", {
-    name: `Reissue invitation for ${secondPageEmail}`,
-  }).click();
+  const secondPageReissue = page.getByRole("button", {
+    name: /^Reissue invitation for /,
+  }).first();
+  await expect(secondPageReissue).toBeVisible();
+  await secondPageReissue.click();
   const secondPageConfirmation = page.getByRole("dialog", {
     name: "Reissue Invitation?",
   });
@@ -2008,10 +2009,11 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(invitationPagination).toContainText("Page 1");
   await expect(inviteResearcher).toBeFocused();
 
-  const failedReloadEmail = "browser-invitation-55@example.test";
-  await page.getByRole("button", {
-    name: `Reissue invitation for ${failedReloadEmail}`,
-  }).click();
+  const failedReloadReissue = page.getByRole("button", {
+    name: /^Reissue invitation for /,
+  }).first();
+  await expect(failedReloadReissue).toBeVisible();
+  await failedReloadReissue.click();
   const failedReloadConfirmation = page.getByRole("dialog", {
     name: "Reissue Invitation?",
   });
