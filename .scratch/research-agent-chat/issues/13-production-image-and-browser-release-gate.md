@@ -4,7 +4,7 @@
 
 **Blocked by:** 09 — Same-session concurrency and restart recovery; 12 — Real-model Eval and execution bounds
 
-**Status:** ready-for-agent
+**Status:** complete
 
 ## Implementation plan
 
@@ -134,3 +134,37 @@ and is never represented as passed evidence.
   progress surface. This is a deterministic test-contract correction, not an
   accepted flaky rerun; the issue remains open until focused verification,
   re-review and a fresh committed-HEAD Release command pass.
+
+### 2026-09-02 — Fresh committed-HEAD release gate passed
+
+- Follow-up commit `8dca5c47b6a7e3b933488f0e76fdbaa2292c71cf`
+  contains the terminal Batch PostgreSQL oracle correction. Focused verification
+  passed Agent integration 57/57, the Batch model suite 23/23 and Agent
+  typecheck. Independent Standards and Spec re-reviews both reported zero
+  findings against the identical two-file staged patch.
+- `pnpm check:release` then ran once from a clean worktree at that exact commit
+  and emitted `release_gate_completed`. Deterministic source gates passed 964
+  Python tests, 486 Agent tests, 11 offline Eval preflight tests, 163 Auth tests
+  and 208 Web tests, together with Agent/Auth/Web typechecks.
+- Isolated Core integration run `20260901t153512z-14177-35967b76` passed 370
+  tests plus database, dependency, RustFS strategy, RustFS Batch-cancel,
+  PostgreSQL Batch and PostgreSQL Strategy restart checks. Auth integration
+  passed 89/89 and Agent PostgreSQL integration passed 57/57. The Core runner
+  recorded runtime-secret cleanup, raw Canary scan and Compose cleanup status
+  `0`; its Canary report contains no findings.
+- Final-image browser run `20260901t160445z-20901-94b662cb` passed all 56
+  Playwright journeys on the first execution in 748 seconds with no retry. The
+  built-image Caddy/Auth/Agent/OAuth/MCP/Research/Batch/DailyTrack paths,
+  responsive and accessibility states, failures, reconnects, deletion
+  independence and original Core workspace regressions all passed. Secret
+  cleanup, Canary scan and isolated resource cleanup each returned `0`.
+- Production image-smoke run `20260901t162119z-29381-b4b8ab80` completed every
+  recorded image build, capacity rejection, child OOM, startup, readiness,
+  worker-loss, restart, RustFS outage, product reset, MCP and bounded-evidence
+  phase with status `0`. The independent Auth, Agent with OpenAI-compatible
+  provider stub, and Caddy image smokes also passed. Runtime-secret cleanup,
+  raw Canary scan and Compose cleanup returned `0`; the Canary report is empty.
+- The release event intentionally remains `real_model_eval=not_run` and
+  `model_qualification=pending`. The user-waived 33-attempt qualification was
+  not executed and is not represented as passed. All test resources were
+  isolated by run identifier and removed without touching `thesistrace-dev`.

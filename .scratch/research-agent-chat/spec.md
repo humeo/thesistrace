@@ -1,6 +1,6 @@
 # Built-in Research Agent Chat
 
-Status: ready-for-agent
+Status: complete
 
 ## Problem Statement
 
@@ -345,4 +345,4 @@ as message content, but deletion never queries Core to find or alter those resou
 - The visual prototype is evidence for information architecture and interaction direction only. Production implementation must use the real authenticated shell, the current repository design system, durable Agent storage, CopilotKit/AG-UI/A2UI, Mastra, and Core MCP rather than copying prototype state or CSS mechanically.
 - The testing seam confirmed before publication is the complete Caddy-to-Chat-to-Agent-to-MCP-to-Worker-to-Result loop with all owned infrastructure real and only the model scripted. Thin protocol and image gates support that seam; real-model Eval remains separate.
 - Recheck and pin the current supported CopilotKit, AG-UI, A2UI, Mastra, storage, and provider versions during implementation. Use only documented stable integration points; if a required capability is absent, stop and revise the architectural decision instead of adding a temporary compatibility implementation.
-- This is a feature specification published to the local issue tracker with the canonical `ready-for-agent` status. It does not create implementation tickets, authorize a production deployment, or claim that the existing visual prototype is production-integrated.
+- All 13 implementation issues and the deterministic committed-head release gate are complete. Real-model qualification remains `pending/not_run` under the user's explicit waiver; this completion status does not authorize a production deployment or claim that qualification passed.
