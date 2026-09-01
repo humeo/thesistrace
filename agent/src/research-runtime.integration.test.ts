@@ -1809,7 +1809,7 @@ describe.sequential("durable Research Agent runtime", () => {
       "get_research_context", "get_alpha_catalog", "diagnose_alpha_formula",
       "list_research_runs", "get_research_run", "get_research_run_result", "submit_research_run",
       "list_research_batches", "get_research_batch", "submit_research_batch",
-      "list_daily_tracks", "get_daily_track", "get_daily_track_result", "start_daily_track", "retry_daily_track",
+      "list_daily_tracks", "get_daily_track", "get_daily_track_result", "start_daily_track", "refresh_daily_track", "retry_daily_track",
     ];
     let discovered = completeDiscovery;
     const runtime = await createResearchRuntime(settings, {

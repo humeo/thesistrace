@@ -20,19 +20,19 @@
 
 ## Implementation plan
 
-1. 以当前 Core MCP Discovery / DailyTrack Lifecycle 为唯一业务契约。领域中的 DailyTrack Refresh 是显式排队 Tracking Advance 的写命令，当前 Discovery 没有暴露该命令。本切片只支持重新读取 Active Track 当前视图（Detail / Result），不能把页面 Reload 描述为 DailyTrack Refresh；现有 Tracking Worker 独立推进。不添加 Refresh API、Host 调度器、Tool 白名单或 Partial/Full 模式。当前可见写工具只有 Start / Retry 需要 Request ID，Stop 仍由独立 Scope 隔离。
-2. 在 test-only Scripted Model 中增加 Start、List、当前视图 Reload、Blocked Retry、显式恢复轨迹。验证 Thread 中或自然语言指定的 succeeded Strategy Origin；优先识别已存在 Track；对未知效果复用原命令，对结构化失败保留含义并有界结束。生产 Mastra 只增加 DailyTrack 语义指导，继续直传全部 Discovery。
+1. 以当前 Core MCP Discovery / DailyTrack Lifecycle 为唯一业务契约。DailyTrack Refresh 是显式排队 Tracking Advance 的写命令；当前 Discovery 通过 `tracking:execute` 暴露该命令。页面 Reload 仍然只是读取当前视图，不能描述为 Refresh；现有 Tracking Worker 独立推进。不添加 Host 调度器、Tool 白名单或 Partial/Full 模式。Start / Refresh / Retry 都使用稳定 Request ID，Stop 仍由独立 Scope 隔离。
+2. 在 test-only Scripted Model 中增加 Start、List、当前视图 Reload、Active Refresh、Blocked Retry、显式恢复轨迹。验证 Thread 中或自然语言指定的 succeeded Strategy Origin；优先识别已存在 Track；对未知效果复用原命令，对结构化失败保留含义并有界结束。生产 Mastra 只增加 DailyTrack 语义指导，继续直传全部 Discovery。
 3. 用现有 A2UI Text / Table / ResultMetrics / Provenance / Navigation 组合 Track 状态、Origin、数据日期、Block Reason、最新已发布 Observation 与指标；不增加业务专用协议或浏览器写工具。冻结历史 Surface，重新读取当前视图时生成新 Surface。
 4. 添加确定性轨迹与真实 Agent PostgreSQL 持久化测试，覆盖合法/非法状态、重复 Origin、稳定 Start/Retry 重放、暂时错误、分页与不完整结果、缺失/新增 Discovery。复用现有真实 Core PostgreSQL/RustFS/Tracking Worker 契约测试覆盖并发、崩溃与动作收据。
 5. 最终镜像真实浏览器验收 Strategy → Track → 当前 Observation；验证只走 Agent MCP、读取刷新、独立生命周期、响应丢失恢复、导航与窄屏。按范围运行静态/单元/集成/镜像测试；相同暂存 SHA256 上独立 Standards + Spec 审查，修复后复审，更新 tracker 并单独提交。
 
 ## Verification and review
 
-- Current Core Discovery does not expose DailyTrack Refresh. The conditional
-  Refresh criteria above therefore apply only to capabilities actually
-  discovered: Start and Retry carry stable request IDs; Reload reads the current
-  view and is not an effectful Refresh command. Queued/calculating/retry-wait
-  phases are interpreted from Core, not a fabricated `refreshing` Track status.
+- Current Core Discovery exposes DailyTrack Refresh under the default
+  `tracking:execute` grant. Start, Refresh, and Retry carry stable request IDs;
+  Reload reads the current view and is not an effectful Refresh command.
+  Queued/calculating/retry-wait phases are interpreted from Core, not a
+  fabricated `refreshing` Track status.
 - Standards and Spec independently re-reviewed staged patch
   `18661a2077ecfce552437db8db7e44f56165d58bac5064f0f99165908adc90f2`
   from fixed base `1f66c5a18feb46fe742768eae3edea370008cd18`.
@@ -48,7 +48,7 @@
   `89` and Agent PostgreSQL `36` cases. Core coverage includes concurrent
   Start/Retry, duplicate Origin, illegal lifecycle, transient dependencies,
   missing Stop scope, persisted receipts and bounded Result pagination.
-  The native Mastra test also proves all 15 currently granted MCP capabilities
+  The native Mastra test also proves all 16 currently granted MCP capabilities
   reach the model, including removal/addition on the next Discovery.
 - Final Production Image browser run `20260830t211143z-71969-c62d45b1` passed
   all `3` selected scenarios: real Strategy-to-DailyTrack current results,

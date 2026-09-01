@@ -128,7 +128,7 @@ http.createServer(async (request, response) => {
   if (methods.includes("tools/list")) toolListRequests += 1;
   if (methods.includes("tools/call")) toolCallRequests += 1;
   const disconnectSubmitResponse = toolCallMode === "disconnect-submit"
-    && toolNames.some((name) => ["submit_research_run", "submit_research_batch", "start_daily_track", "retry_daily_track"].includes(name));
+    && toolNames.some((name) => ["submit_research_run", "submit_research_batch", "start_daily_track", "refresh_daily_track", "retry_daily_track"].includes(name));
   const disconnectResponse = methods.includes("tools/call")
     && (toolCallMode === "disconnect" || disconnectSubmitResponse);
   const holdResponse = methods.includes("tools/call") && (

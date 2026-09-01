@@ -7,6 +7,7 @@ import { controlWorker } from "./research-run-control";
 
 const startPrompt = "Start daily tracking for the successful Strategy in this Chat.";
 const reloadPrompt = "Reload the DailyTrack view in this Chat and explain its current observations.";
+const refreshPrompt = "Refresh the active DailyTrack in this Chat if it is eligible.";
 const resumePrompt = "Resume DailyTrack from this Chat using the same MCP command.";
 
 test("Chat DailyTrack uses the full grant and explains a real Strategy's current observations", async ({ page, researcher }, testInfo) => {
@@ -44,11 +45,11 @@ test("Chat DailyTrack uses the full grant and explains a real Strategy's current
   const capabilities = page.locator(".chat-message-assistant .chat-assistant-markdown").last();
   for (const name of [
     "get_research_context", "get_alpha_catalog", "diagnose_alpha_formula", "get_research_run", "get_research_run_result", "list_research_runs", "submit_research_run",
-    "get_research_batch", "list_research_batches", "submit_research_batch", "list_daily_tracks", "get_daily_track", "get_daily_track_result", "start_daily_track", "retry_daily_track",
+    "get_research_batch", "list_research_batches", "submit_research_batch", "list_daily_tracks", "get_daily_track", "get_daily_track_result", "start_daily_track", "refresh_daily_track", "retry_daily_track",
   ]) await expect(capabilities).toContainText(name);
   await expect(capabilities).not.toContainText(/stop_daily_track|cancel_research_run|cancel_research_batch/);
   await send(page, "Stop the DailyTrack in this Chat.");
-  expect(trackFacts(researcher.id)).toMatchObject({ tracks: 1, starts: 1, retries: 0, stops: 0 });
+  expect(trackFacts(researcher.id)).toMatchObject({ tracks: 1, starts: 1, refreshes: 0, retries: 0, stops: 0 });
   await expect(page.getByRole("button", { name: /^(Stop|Confirm|Retry)( DailyTrack)?$/ })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Conversation", exact: true })).not.toContainText(/checkpoint|lease_owner|object_key/);
   expect(browserCoreWrites).toEqual([]);
@@ -65,7 +66,7 @@ test("Chat DailyTrack uses the full grant and explains a real Strategy's current
   await page.goto(sessionUrl);
   await deleteChat(page);
   expect(await track(page, id)).toEqual(detail);
-  expect(trackFacts(researcher.id)).toMatchObject({ tracks: 1, starts: 1, retries: 0, stops: 0 });
+  expect(trackFacts(researcher.id)).toMatchObject({ tracks: 1, starts: 1, refreshes: 0, retries: 0, stops: 0 });
 });
 
 test("Chat DailyTrack replays lost Start and Retry responses while Tracking advances after Chat deletion", async ({ page, researcher }) => {
@@ -89,13 +90,17 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
     await send(page, `Start daily tracking for ${runId}.`, "Run failed");
     await expect(page.getByRole("article", { name: "Tool start_daily_track: Failed" })).toBeVisible();
     const started = trackFacts(researcher.id);
-    expect(started).toMatchObject({ starts: 1, tracks: 1, retries: 0 });
+    expect(started).toMatchObject({ starts: 1, tracks: 1, refreshes: 0, retries: 0 });
     expect(Number(proxyState("mcp-fault-proxy", 8150).disconnected_submit_responses)).toBeGreaterThanOrEqual(1);
     const id = started.track_ids[0]!;
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     await send(page, resumePrompt);
     await assertCurrentObservation(page, await track(page, id));
     expect(trackFacts(researcher.id)).toEqual(started);
+    await send(page, refreshPrompt);
+    await expect(page.getByRole("article", { name: "Tool refresh_daily_track: Completed" })).toBeVisible();
+    const refreshed = trackFacts(researcher.id);
+    expect(refreshed).toMatchObject({ tracks: 1, starts: 1, refreshes: 1, retries: 0 });
     // A real one-shot Tracking Worker rejects its frozen target at a one-byte
     // execution capacity. No SQL lifecycle fabrication or shared Data mutation.
     execFileSync("docker", [
@@ -113,7 +118,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
     await send(page, "Retry the blocked DailyTrack in this Chat if it is eligible.", "Run failed");
     await expect(page.getByRole("article", { name: "Tool retry_daily_track: Failed" })).toBeVisible();
     const retryAccepted = trackFacts(researcher.id);
-    expect(retryAccepted).toMatchObject({ tracks: 1, starts: 1, retries: 1, stops: 0 });
+    expect(retryAccepted).toMatchObject({ tracks: 1, starts: 1, refreshes: 1, retries: 1, stops: 0 });
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     await send(page, resumePrompt);
     expect(trackFacts(researcher.id)).toEqual(retryAccepted);
@@ -181,7 +186,11 @@ async function deleteChat(page: Page): Promise<void> {
   expect((await page.request.get(`/api/agent/sessions/${id}`, { headers: sameOriginHeaders() })).status()).toBe(404);
 }
 
-type TrackFacts = Readonly<{ tracks: number; starts: number; retries: number; stops: number; track_ids: string[]; start_requests: string[]; retry_requests: string[] | null }>;
+type TrackFacts = Readonly<{
+  tracks: number; starts: number; refreshes: number; retries: number; stops: number;
+  track_ids: string[]; start_requests: string[]; refresh_requests: string[] | null;
+  retry_requests: string[] | null;
+}>;
 function trackFacts(researcherId: string): TrackFacts {
   if (!/^[0-9a-f-]{36}$/.test(researcherId)) throw new Error("Track inspection requires a safe Researcher ID");
   return JSON.parse(execFileSync("docker", [
@@ -190,9 +199,11 @@ function trackFacts(researcherId: string): TrackFacts {
       SELECT json_build_object(
         'tracks', count(*), 'track_ids', json_agg(id ORDER BY id),
         'starts', (SELECT count(*) FROM research_runs.start_tracking_receipts WHERE researcher_id = '${researcherId}'::uuid),
+        'refreshes', (SELECT count(*) FROM daily_tracks.refresh_receipts WHERE researcher_id = '${researcherId}'::uuid),
         'retries', (SELECT count(*) FROM daily_tracks.retry_receipts WHERE researcher_id = '${researcherId}'::uuid),
         'stops', (SELECT count(*) FROM daily_tracks.stop_receipts WHERE researcher_id = '${researcherId}'::uuid),
         'start_requests', (SELECT json_agg(request_id ORDER BY request_id) FROM research_runs.start_tracking_receipts WHERE researcher_id = '${researcherId}'::uuid),
+        'refresh_requests', (SELECT json_agg(request_id ORDER BY request_id) FROM daily_tracks.refresh_receipts WHERE researcher_id = '${researcherId}'::uuid),
         'retry_requests', (SELECT json_agg(request_id ORDER BY request_id) FROM daily_tracks.retry_receipts WHERE researcher_id = '${researcherId}'::uuid)
       ) FROM daily_tracks.tracks WHERE researcher_id = '${researcherId}'::uuid
     `,

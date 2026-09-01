@@ -6,12 +6,14 @@ import { DAILY_TRACK_TOOL_NAMES, ORIGIN_RUN_ID, TRACK_ID, dailyTrackDetail, dail
 import { appendExchange, runScriptedTrajectory, scriptedCallOptions, type RecordedToolCall } from "../test-fixtures/scripted-trajectory.js";
 import {
   SCRIPTED_LIST_DAILY_TRACKS_PROMPT, SCRIPTED_RELOAD_DAILY_TRACK_PROMPT,
-  SCRIPTED_RESUME_DAILY_TRACK_PROMPT, SCRIPTED_START_DAILY_TRACK_PROMPT,
+  SCRIPTED_REFRESH_DAILY_TRACK_PROMPT, SCRIPTED_RESUME_DAILY_TRACK_PROMPT,
+  SCRIPTED_START_DAILY_TRACK_PROMPT,
   SCRIPTED_STOP_DAILY_TRACK_PROMPT,
 } from "./scripted-language-model.js";
 
 const startPrompt = `Start daily tracking for ${ORIGIN_RUN_ID}.`;
 const reloadPrompt = `Reload DailyTrack ${TRACK_ID}.`;
+const refreshPrompt = `Refresh DailyTrack ${TRACK_ID}.`;
 const retryPrompt = `Retry blocked DailyTrack ${TRACK_ID}.`;
 
 test.each([false, true])("the model verifies the %s Origin and presents current Track facts without private internals", async (fromThread) => {
@@ -82,10 +84,18 @@ test("repeated dependency failures end within a bounded model turn", async () =>
   expect(output.text).toContain("TEMPORARILY_UNAVAILABLE");
 });
 
-test.each(["start_daily_track", "retry_daily_track"])("explicit recovery replays an uncertain %s under the original Request ID", async (action) => {
-  const request = options(action === "start_daily_track" ? startPrompt : retryPrompt);
-  const resolve = (call: RecordedToolCall) => call.name === "get_daily_track" && action === "retry_daily_track"
-    ? dailyTrackDetail("blocked", "blocked") : dailyTrackFixtureOutput(call);
+test.each(["start_daily_track", "refresh_daily_track", "retry_daily_track"])("explicit recovery replays an uncertain %s under the original Request ID", async (action) => {
+  const request = options(action === "start_daily_track" ? startPrompt
+    : action === "refresh_daily_track" ? refreshPrompt : retryPrompt);
+  const resolve = (call: RecordedToolCall) => {
+    if (call.name === "get_daily_track" && action === "retry_daily_track") return dailyTrackDetail("blocked", "blocked");
+    if (call.name === "get_daily_track" && action === "refresh_daily_track") {
+      const detail = dailyTrackDetail("active", "waiting");
+      detail.progress = { ...(detail.progress as Record<string, unknown>), data_through_session: "2024-02-01", lag_sessions: 1 };
+      return detail;
+    }
+    return dailyTrackFixtureOutput(call);
+  };
   const interrupted = await runScriptedTrajectory(request, (call) => call.name === action ? { code: "MCP_TRANSIENT" } : resolve(call));
   const original = interrupted.calls.find((call) => call.name === action);
   expect(original).toBeDefined();
@@ -125,6 +135,42 @@ test.each(["queued", "calculating", "retry_wait"])("active %s advances are read 
   expect(output.waits).toEqual([2, 2]);
   expect(output.calls.some((call) => call.name === "refresh_daily_track" || call.name === "retry_daily_track")).toBe(false);
   expect(output.text).toContain("Core Tracking Worker continues independently");
+});
+
+test("an eligible active waiting Track queues one explicit Refresh with a stable request identity", async () => {
+  const output = await runScriptedTrajectory(options(refreshPrompt), (call) => {
+    if (call.name === "get_daily_track") {
+      const detail = dailyTrackDetail("active", call.occurrence === 1 ? "waiting" : "queued");
+      detail.action_eligibility = { refresh: call.occurrence === 1, retry: false, stop: true };
+      detail.progress = {
+        ...(detail.progress as Record<string, unknown>),
+        data_through_session: "2024-02-01",
+        lag_sessions: 1,
+      };
+      return detail;
+    }
+    return dailyTrackFixtureOutput(call);
+  });
+  expect(output.calls.find((call) => call.name === "refresh_daily_track")?.input).toEqual({
+    track_id: TRACK_ID,
+    request_id: "agent_00000000000040008000000000000041_track_refresh_v1",
+  });
+  expect(output.calls.filter((call) => call.name === "refresh_daily_track")).toHaveLength(1);
+});
+
+test("the current-Chat Refresh prompt resolves the latest Track without a Host-owned state machine", async () => {
+  const request = options(startPrompt);
+  await runScriptedTrajectory(request, dailyTrackFixtureOutput);
+  followUp(request, SCRIPTED_REFRESH_DAILY_TRACK_PROMPT);
+  const output = await runScriptedTrajectory(request, (call) => {
+    if (call.name === "get_daily_track") {
+      const detail = dailyTrackDetail("active", call.occurrence === 1 ? "waiting" : "queued");
+      detail.progress = { ...(detail.progress as Record<string, unknown>), data_through_session: "2024-02-01", lag_sessions: 1 };
+      return detail;
+    }
+    return dailyTrackFixtureOutput(call);
+  });
+  expect(output.calls.some((call) => call.name === "refresh_daily_track" && call.input.track_id === TRACK_ID)).toBe(true);
 });
 
 test("reloading creates a new read-only current surface without rewriting prior observations", async () => {

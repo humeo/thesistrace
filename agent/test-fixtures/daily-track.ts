@@ -4,7 +4,8 @@ export const TRACK_ID = "track_0123456789abcdef0123";
 export const ORIGIN_RUN_ID = "run_0123456789abcdef0123";
 export const DAILY_TRACK_TOOL_NAMES = [
   "get_research_run", "list_daily_tracks", "start_daily_track",
-  "get_daily_track", "get_daily_track_result", "retry_daily_track",
+  "get_daily_track", "get_daily_track_result", "refresh_daily_track",
+  "retry_daily_track",
 ] as const;
 
 export function dailyTrackDetail(status = "active", phase = "up_to_date", session = "2024-01-31"): Record<string, unknown> {
@@ -13,7 +14,11 @@ export function dailyTrackDetail(status = "active", phase = "up_to_date", sessio
     origin: { research_run_id: ORIGIN_RUN_ID, origin_session: "2024-01-30", result_checksum_sha256: "a".repeat(64) },
     progress: { head_session: session, data_through_session: session, phase, lag_sessions: 0 },
     blocked_reason: status === "blocked" ? "Financial Coverage ends before the next Research Session." : null,
-    action_eligibility: { retry: status === "blocked", stop: ["active", "blocked"].includes(status) },
+    action_eligibility: {
+      refresh: status === "active" && phase === "waiting",
+      retry: status === "blocked",
+      stop: ["active", "blocked"].includes(status),
+    },
     available_result_sections: ["factor", "strategy_summary", "strategy_observations", "origin", "provenance"],
     retry_after_seconds: status === "blocked" || status === "stopped" ? null : phase === "up_to_date" ? 30 : 2,
     private_checkpoint: "private-daily-track-provenance",
@@ -30,6 +35,7 @@ export function dailyTrackFixtureOutput(call: RecordedToolCall, session = "2024-
     case "list_daily_tracks": return { items: [], next_cursor: null };
     case "start_daily_track":
     case "retry_daily_track": return { outcome: "accepted", track_id: TRACK_ID, status: "active", replayed: false, retry_after_seconds: 1 };
+    case "refresh_daily_track": return { outcome: "accepted", track_id: TRACK_ID, status: "active", replayed: false, retry_after_seconds: 2 };
     case "get_daily_track": return dailyTrackDetail("active", "up_to_date", session);
     case "get_daily_track_result": return {
       track_id: call.input.track_id, section: call.input.section,

@@ -12,8 +12,8 @@
    Each case declares its conversational inputs, required/forbidden MCP
    capabilities, independently observable Core outcomes, isolation boundary,
    repetition count and spending/time ceilings. Cover the complete accepted
-   research surface, including honest handling of unavailable DailyTrack
-   Refresh rather than inventing a capability or equating Reload with Refresh.
+   research surface, including explicit DailyTrack Refresh through the current
+   Core MCP capability rather than equating Reload with Refresh.
    Keep Formula repair separate from an actual Core admission-rejection repair;
    the fixed corpus has eleven cases. Baseline runs each case once for 11
    attempts and 12 primary Turns; qualification runs three repetitions for 33
@@ -393,7 +393,7 @@
 - Independently correct ambiguity in the two momentum prompts: they now
   explicitly request cumulative percentage change in closing price over two
   sessions, not absolute price differences or mean daily changes. The corpus
-  snapshot is `research-chat-2026-08-31-explicit-return`; the mathematical oracle,
+  snapshot was `research-chat-2026-08-31-explicit-return`; the mathematical oracle,
   fixed repetition count, outcomes and qualification thresholds are unchanged.
   New negative controls retain those distinct signal semantics. This is not an
   assertion about the uninspected cause of the earlier clarification failure.
@@ -1548,3 +1548,19 @@
   mechanism are unchanged; their staged diff SHA256 excluding this tracker is
   `30396a4a49251f2cccc2ab1f61badefa0aa44c0109c52ed73fd8a73118c7bfb0`.
   Issue 12 is ready for its independent commit, after which Issue 13 may start.
+
+### 2026-09-02 — Main integration aligned Chat with explicit DailyTrack Refresh
+
+- Main introduced `refresh_daily_track` after the Agent feature branch was cut.
+  The merged contract now exposes that capability to the Agent, teaches the
+  scripted model to select it for eligible active Tracks, and verifies stable
+  request replay before polling the refreshed Track to completion.
+- The fixed corpus is now
+  `research-chat-2026-09-01-explicit-track-refresh`: its DailyTrack recovery case
+  requires an actual Refresh command and independently observes the resulting
+  head advancement. The earlier baseline remains historical evidence for the
+  previous corpus only; it is not relabeled as evidence for this changed corpus.
+- No real-model request or 33-attempt qualification ran during merge
+  integration. Under the user's existing Issue 12 waiver, the registered
+  `gpt-5.6-luna` / `high` combination remains explicitly unqualified and the
+  current-corpus qualification status remains `not_run`.

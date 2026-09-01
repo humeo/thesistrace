@@ -93,9 +93,9 @@ forbidden capabilities, final status and bounded explanation semantics. The
 Formula oracle uses the actual Alpha compiler/execution kernel over fixed
 non-monotone panels and compares cross-sectional ordering; it does not require
 an exact generated Formula or exact reply. Long polling holds the real Worker;
-DailyTrack Retry starts from a real blocked Worker outcome. The current MCP
-does not expose DailyTrack Refresh, so that case requires an honest explanation
-and unchanged Track state, not a fabricated Tool or a replacement Start/Retry.
+DailyTrack Retry starts from a real blocked Worker outcome. DailyTrack Refresh
+starts from a real active, lagging, idle Track and must use the discovered
+explicit Refresh command exactly once before inspecting the advanced state.
 
 Formula correction requires the original invalid diagnostic, a valid diagnostic
 of the submitted Formula, and the matching accepted Run. Admission correction

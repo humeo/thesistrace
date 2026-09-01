@@ -15,7 +15,11 @@ export default defineConfig({
   outputDir: `${evidenceDir}/playwright-results`,
   reporter: [
     ["line"],
-    ["html", { open: "never", outputFolder: `${evidenceDir}/playwright-report` }],
+    ["html", {
+      noSnippets: true,
+      open: "never",
+      outputFolder: `${evidenceDir}/playwright-report`,
+    }],
   ],
   use: {
     baseURL,

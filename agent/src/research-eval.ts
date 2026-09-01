@@ -11,7 +11,7 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const rate = z.number().min(0).max(1);
 const dollars = z.number().finite().nonnegative();
-const outcomes = z.enum(["factor", "clarified-factor", "repaired-factor", "admission-repaired-factor", "strategy", "batch", "track-started", "refresh-unavailable", "track-recovered", "polled-factor", "explained-result"]);
+const outcomes = z.enum(["factor", "clarified-factor", "repaired-factor", "admission-repaired-factor", "strategy", "batch", "track-started", "track-refreshed", "track-recovered", "polled-factor", "explained-result"]);
 const corpusSchema = z.object({
   version: identifier,
   dataset: identifier,

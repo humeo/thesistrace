@@ -101,7 +101,7 @@ test "$mcp_agent_scopes" = \
   || fail PRODUCTION_MCP_SCOPE_INVALID
 mcp_deployment_tools=$(required_value THESISTRACE_MCP_DEPLOYMENT_TOOLS)
 test "$mcp_deployment_tools" = \
-  '["diagnose_alpha_formula","get_alpha_catalog","get_daily_track","get_daily_track_result","get_research_batch","get_research_context","get_research_run","get_research_run_result","list_daily_tracks","list_research_batches","list_research_runs","retry_daily_track","start_daily_track","submit_research_batch","submit_research_run"]' \
+  '["diagnose_alpha_formula","get_alpha_catalog","get_daily_track","get_daily_track_result","get_research_batch","get_research_context","get_research_run","get_research_run_result","list_daily_tracks","list_research_batches","list_research_runs","refresh_daily_track","retry_daily_track","start_daily_track","submit_research_batch","submit_research_run"]' \
   || fail PRODUCTION_MCP_TOOL_SET_INVALID
 mcp_allowed_hosts=$(required_value THESISTRACE_MCP_ALLOWED_HOSTS)
 test "$mcp_allowed_hosts" = "[\"api:8100\",\"$public_host\"]" \

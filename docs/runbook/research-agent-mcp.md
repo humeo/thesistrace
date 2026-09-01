@@ -1,9 +1,9 @@
 # Research Agent MCP V1 contract
 
 The Research Agent exposes one hard-cut MCP contract through packaged stdio and
-the current stateless Streamable HTTP `/mcp` endpoint. V1 has exactly 18 tools
+the current stateless Streamable HTTP `/mcp` endpoint. V1 has exactly 19 tools
 and six scopes. The default local stdio authority has the four non-destructive
-read and execute scopes, so it discovers 15 tools. Research cancellation and
+read and execute scopes, so it discovers 16 tools. Research cancellation and
 DailyTrack Stop are present only when their independent scopes are explicitly
 enabled. The registry rechecks the effective authority on every call.
 
@@ -43,7 +43,7 @@ default_tools_approval_mode = "approve"
 ```
 
 The default stdio process binds the explicitly configured Researcher UUID to
-the operational subject `local_operator` and discovers exactly 15 read/execute
+the operational subject `local_operator` and discovers exactly 16 read/execute
 tools. The UUID must identify a bootstrapped Researcher; there is no ownerless
 or implicit default identity. It does not discover
 `cancel_research_run`, `cancel_research_batch`, or `stop_daily_track`.
@@ -122,8 +122,8 @@ it is never truncated or partially returned.
 The inventory test serializes each tool name, required scope, description,
 annotations, input Schema, and output Schema with sorted JSON keys. Its current
 V1 SHA-256 is
-`2b8cc6a48f5df6815a41eeb054973f1b82ac0da8536c088899249d4904dc7952` and
-the canonical inventory is 143,238 bytes. A maximum 20-item Factor Evaluation
+`b011d1801f2dc5040f15519cfbef609c6dfdaaca3827732bb33f43d1e18ee32e` and
+the canonical inventory is 151,707 bytes. A maximum 20-item Factor Evaluation
 Batch with a 4,096-character Formula in every item serializes to 84,536 bytes,
 so it fits the request ceiling without weakening either collection bound.
 

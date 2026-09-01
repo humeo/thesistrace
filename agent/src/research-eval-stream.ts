@@ -118,7 +118,6 @@ export function researchEvalConversationMeetsOutcome(
   if (text.trim().length < 20) return false;
   if (testCase.outcome === "clarified-factor") return streams.length === 2
     && /\?|？/.test(streams[0]!.text) && !streams[0]!.calls.some((call) => /^(submit_|start_|retry_)/.test(call.name));
-  if (testCase.outcome === "refresh-unavailable") return /refresh/i.test(text) && /unavailable|not available|no .*refresh|does not|doesn't|cannot|can't|not .*support/i.test(text);
   if (testCase.outcome === "explained-result") return fixture.runId !== undefined && text.includes(fixture.runId) && /rank.?ic/i.test(text) && /coverage/i.test(text)
     && /unavailable|insufficient|undefined|null|not .*estim|cannot|can't|too (?:few|small)|single.*stock|one.*stock/i.test(text);
   if (testCase.outcome === "polled-factor") return researchEvalPolledRun(streams.flatMap((item) => item.toolEvents));

@@ -1,5 +1,5 @@
 {
-  "version": "research-chat-2026-08-31-explicit-return",
+  "version": "research-chat-2026-09-01-explicit-track-refresh",
   "dataset": "tushare-financial-product-replay",
   "clock_window": { "start": "2026-07-20", "end": "2026-08-04", "head": "2026-08-05" },
   "admission_window": { "requested_start": "2010-01-04", "corrected_start": "2026-07-09" },
@@ -8,77 +8,77 @@
       "id": "idea-to-alpha", "fixture": "empty", "outcome": "factor",
       "messages": ["Test the idea that stocks with a larger cumulative percentage increase in closing price over the last two trading sessions continue to outperform. Measure the percentage change from the close two sessions ago to the current close, not an absolute price difference or an average of daily changes. Create and execute one Factor Evaluation on top300, from 2026-07-20 through 2026-08-04, with no neutralization. Discover the available Alpha language first, diagnose your formula, and inspect the completed Result. This is a small workflow test dataset; do not claim investment efficacy from it."],
       "required_tools": ["get_research_context", "get_alpha_catalog", "diagnose_alpha_formula", "submit_research_run", "get_research_run_result"],
-      "forbidden_tools": ["submit_research_batch", "start_daily_track", "retry_daily_track"],
+      "forbidden_tools": ["submit_research_batch", "start_daily_track", "refresh_daily_track", "retry_daily_track"],
       "max_cost_usd": 1, "max_duration_ms": 180000
     },
     {
       "id": "one-clarification", "fixture": "empty", "outcome": "clarified-factor",
       "messages": ["I want a price trend Alpha but have not decided whether it should reward rising prices or price reversal. Ask me to resolve that choice before starting any research.", "Reward a larger cumulative percentage increase in closing price over the previous two sessions: compare the current close with the close two sessions ago, not an absolute price difference or an average of daily changes. Execute one Factor Evaluation on top300, 2026-07-20 through 2026-08-04, no neutralization. Diagnose the expression first and inspect its completed Result."],
       "required_tools": ["diagnose_alpha_formula", "submit_research_run", "get_research_run_result"],
-      "forbidden_tools": ["submit_research_batch", "start_daily_track", "retry_daily_track"],
+      "forbidden_tools": ["submit_research_batch", "start_daily_track", "refresh_daily_track", "retry_daily_track"],
       "max_cost_usd": 1, "max_duration_ms": 180000
     },
     {
       "id": "invalid-formula-repair", "fixture": "empty", "outcome": "repaired-factor",
       "messages": ["First diagnose my expression rank(not_a_market_field). I meant a cross-sectional rank of closing price. If the original expression is invalid, correct it using the actual catalog, diagnose the correction, then execute one Factor Evaluation on top300 from 2026-07-20 through 2026-08-04 with no neutralization. Inspect its Result and explain the correction."],
       "required_tools": ["get_alpha_catalog", "diagnose_alpha_formula", "submit_research_run", "get_research_run_result"],
-      "forbidden_tools": ["submit_research_batch", "start_daily_track", "retry_daily_track"],
+      "forbidden_tools": ["submit_research_batch", "start_daily_track", "refresh_daily_track", "retry_daily_track"],
       "max_cost_usd": 1, "max_duration_ms": 180000
     },
     {
       "id": "admission-warmup-correction", "fixture": "empty", "outcome": "admission-repaired-factor",
       "messages": ["Exercise real admission correction in this isolated workflow dataset. Diagnose ts_mean(close, 2), then first submit it as one Factor Evaluation on top300 from 2010-01-04 through 2026-08-04 with no neutralization. Keep that first requested start so Core can report its actual Calculation Warm-up decision. If Core rejects for insufficient warmup, keep the same formula and all research settings but move the start to the next published session, 2026-07-09, and use a new request-id revision for that changed command. Inspect the one accepted run's completed Result and explain the authoritative rejection and correction. Do not claim success from diagnosis alone."],
       "required_tools": ["get_research_context", "diagnose_alpha_formula", "submit_research_run", "get_research_run_result"],
-      "forbidden_tools": ["submit_research_batch", "start_daily_track", "retry_daily_track"],
+      "forbidden_tools": ["submit_research_batch", "start_daily_track", "refresh_daily_track", "retry_daily_track"],
       "max_cost_usd": 1, "max_duration_ms": 180000
     },
     {
       "id": "strategy-backtest", "fixture": "empty", "outcome": "strategy",
       "messages": ["Backtest a simple strategy that ranks stocks by closing price. Use top300, 2026-07-20 through 2026-08-04, no neutralization, 10 holdings and rebalance every trading session. Create exactly one Strategy Backtest after diagnosing the formula, then inspect and explain the Result. Do not start tracking."],
       "required_tools": ["diagnose_alpha_formula", "submit_research_run", "get_research_run_result"],
-      "forbidden_tools": ["submit_research_batch", "start_daily_track", "retry_daily_track"],
+      "forbidden_tools": ["submit_research_batch", "start_daily_track", "refresh_daily_track", "retry_daily_track"],
       "max_cost_usd": 1, "max_duration_ms": 250000
     },
     {
       "id": "alpha-comparison-batch", "fixture": "empty", "outcome": "batch",
       "messages": ["Compare two Alpha signals in one Factor Evaluation Research Batch: first positive closing-price rank, then negative closing-price rank. Use top300, 2026-07-20 through 2026-08-04 and no neutralization. Diagnose both expressions, submit one ordered two-item Batch, inspect both completed child Results and explain the comparison. Do not submit independent ResearchRuns instead of the Batch."],
       "required_tools": ["diagnose_alpha_formula", "submit_research_batch", "get_research_batch", "get_research_run_result"],
-      "forbidden_tools": ["submit_research_run", "start_daily_track", "retry_daily_track"],
+      "forbidden_tools": ["submit_research_run", "start_daily_track", "refresh_daily_track", "retry_daily_track"],
       "max_cost_usd": 1, "max_duration_ms": 250000
     },
     {
       "id": "daily-track-start", "fixture": "strategy", "outcome": "track-started",
       "messages": ["Start daily tracking for my completed Strategy Backtest {{run_id}}. Check eligibility, use the available tracking tool, then inspect the resulting DailyTrack and its latest Result. Reuse an existing active track if there is one. Do not create another ResearchRun."],
       "required_tools": ["get_research_run", "start_daily_track", "get_daily_track_result"],
-      "forbidden_tools": ["submit_research_run", "submit_research_batch", "retry_daily_track"],
+      "forbidden_tools": ["submit_research_run", "submit_research_batch", "refresh_daily_track", "retry_daily_track"],
       "max_cost_usd": 1, "max_duration_ms": 180000
     },
     {
-      "id": "daily-track-refresh-unavailable", "fixture": "active-track", "outcome": "refresh-unavailable",
-      "messages": ["Refresh my active DailyTrack {{track_id}} now. Check its current state and available capabilities. If this deployment has no Refresh command, explain that limitation explicitly; reading its state is not executing a Refresh. Do not create, stop or retry any resource."],
-      "required_tools": ["get_daily_track"],
-      "forbidden_tools": ["submit_research_run", "submit_research_batch", "start_daily_track", "retry_daily_track", "refresh_daily_track"],
+      "id": "daily-track-refresh", "fixture": "active-track", "outcome": "track-refreshed",
+      "messages": ["Refresh my active, lagging DailyTrack {{track_id}} to the latest published data. Check its current state and action eligibility, use the explicit Refresh command exactly once, then inspect its current state and Result. Do not create, stop or retry any resource."],
+      "required_tools": ["get_daily_track", "refresh_daily_track", "get_daily_track_result"],
+      "forbidden_tools": ["submit_research_run", "submit_research_batch", "start_daily_track", "retry_daily_track"],
       "max_cost_usd": 1, "max_duration_ms": 180000
     },
     {
       "id": "daily-track-retry", "fixture": "blocked-track", "outcome": "track-recovered",
       "messages": ["Inspect my blocked DailyTrack {{track_id}} and retry it if eligible. The worker capacity problem has been removed. Use the Retry tool, not a new ResearchRun or Start; then inspect its current state and Result."],
       "required_tools": ["get_daily_track", "retry_daily_track", "get_daily_track_result"],
-      "forbidden_tools": ["submit_research_run", "submit_research_batch", "start_daily_track"],
+      "forbidden_tools": ["submit_research_run", "submit_research_batch", "start_daily_track", "refresh_daily_track"],
       "max_cost_usd": 1, "max_duration_ms": 180000
     },
     {
       "id": "long-research-polling", "fixture": "paused-research", "outcome": "polled-factor",
       "messages": ["Execute one Factor Evaluation using closing-price rank, top300, 2026-07-20 through 2026-08-04, no neutralization. Diagnose it first. The Research Worker is temporarily busy: keep checking the admitted run in this turn until it finishes, then inspect its Result. Do not resubmit the same work or start a Batch."],
       "required_tools": ["diagnose_alpha_formula", "submit_research_run", "get_research_run", "get_research_run_result"],
-      "forbidden_tools": ["submit_research_batch", "start_daily_track", "retry_daily_track"],
+      "forbidden_tools": ["submit_research_batch", "start_daily_track", "refresh_daily_track", "retry_daily_track"],
       "max_cost_usd": 1, "max_duration_ms": 180000
     },
     {
       "id": "result-explanation", "fixture": "factor", "outcome": "explained-result",
       "messages": ["Inspect and explain the actual Result of my completed Factor Evaluation {{run_id}}. Discuss Rank IC, coverage and the limitations of this tiny dataset, distinguishing unavailable metrics from zero. Cite the ResearchRun identity and do not create or change any resource."],
       "required_tools": ["get_research_run_result"],
-      "forbidden_tools": ["submit_research_run", "submit_research_batch", "start_daily_track", "retry_daily_track"],
+      "forbidden_tools": ["submit_research_run", "submit_research_batch", "start_daily_track", "refresh_daily_track", "retry_daily_track"],
       "max_cost_usd": 1, "max_duration_ms": 180000
     }
   ]

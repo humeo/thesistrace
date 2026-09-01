@@ -13,6 +13,7 @@ import {
 
 export const SCRIPTED_START_DAILY_TRACK_PROMPT = "Start daily tracking for the successful Strategy in this Chat.";
 export const SCRIPTED_RELOAD_DAILY_TRACK_PROMPT = "Reload the DailyTrack view in this Chat and explain its current observations.";
+export const SCRIPTED_REFRESH_DAILY_TRACK_PROMPT = "Refresh the active DailyTrack in this Chat if it is eligible.";
 export const SCRIPTED_RETRY_DAILY_TRACK_PROMPT = "Retry the blocked DailyTrack in this Chat if it is eligible.";
 export const SCRIPTED_RESUME_DAILY_TRACK_PROMPT = "Resume DailyTrack from this Chat using the same MCP command.";
 export const SCRIPTED_LIST_DAILY_TRACKS_PROMPT = "List my recent DailyTracks.";
@@ -23,7 +24,7 @@ const RUN_ID = /^run_[a-f0-9]{20}$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_POLLS = 3;
 const MAX_PAGES = 3;
-type Intent = Readonly<{ kind: "start" | "reload" | "retry"; id?: string }>;
+type Intent = Readonly<{ kind: "start" | "reload" | "refresh" | "retry"; id?: string }>;
 
 // Deterministic model fixture only. Real models, not the production Host, own
 // these decisions using current Discovery and authoritative Tool results.
@@ -64,15 +65,23 @@ export function scriptedDailyTrackDecision(options: LanguageModelV3CallOptions):
 
   const acceptedRetry = operation.find((item) => item.name === "retry_daily_track"
     && item.input.track_id === target && item.output.outcome === "accepted");
+  const acceptedRefresh = operation.find((item) => item.name === "refresh_daily_track"
+    && item.input.track_id === target && item.output.outcome === "accepted");
+  const acceptedAction = acceptedRetry ?? acceptedRefresh;
   const polls = current.filter((item) => item.name === "get_daily_track" && item.input.track_id === target
-    && (acceptedRetry === undefined || item.promptIndex > acceptedRetry.promptIndex));
+    && (acceptedAction === undefined || item.promptIndex > acceptedAction.promptIndex));
   const poll = polls.at(-1);
   if (poll === undefined) {
-    const accepted = acceptedRetry ?? operation.find((item) => item.name === "start_daily_track" && item.output.track_id === target);
+    const accepted = acceptedAction ?? operation.find((item) => item.name === "start_daily_track" && item.output.track_id === target);
     return requiredTool(options, "get_daily_track", { track_id: target }, accepted === undefined ? undefined : readRetryAfter(accepted.output));
   }
   const detail = poll.output;
   if (!validDetail(detail, target)) return incomplete();
+  if (intent.kind === "refresh" && acceptedRefresh === undefined && detail.status === "active"
+    && detail.action_eligibility.refresh === true) {
+    const requestId = effectRequestId(options, "track_refresh", 1);
+    return requestId === null ? incomplete() : requiredTool(options, "refresh_daily_track", { track_id: target, request_id: requestId });
+  }
   if (intent.kind === "retry" && acceptedRetry === undefined && detail.status === "blocked" && detail.action_eligibility.retry === true) {
     const requestId = effectRequestId(options, "track_retry", 1);
     return requestId === null ? incomplete() : requiredTool(options, "retry_daily_track", { track_id: target, request_id: requestId });
@@ -83,7 +92,9 @@ export function scriptedDailyTrackDecision(options: LanguageModelV3CallOptions):
     const wait = readRetryAfter(detail);
     if (wait !== undefined) return requiredTool(options, "get_daily_track", { track_id: target }, wait);
   }
-  return currentResult(options, detail, current, poll, intent.kind === "retry" && acceptedRetry === undefined);
+  const ineligibleAction = intent.kind === "refresh" && acceptedRefresh === undefined ? "Refresh"
+    : intent.kind === "retry" && acceptedRetry === undefined ? "Retry" : null;
+  return currentResult(options, detail, current, poll, ineligibleAction);
 }
 
 function startTarget(
@@ -122,13 +133,14 @@ type TrackDetail = JsonRecord & {
   id: string; status: string; blocked_reason: string | null;
   origin: { research_run_id: string; origin_session: string };
   progress: { head_session: string; data_through_session: string; phase: string; lag_sessions: number };
-  action_eligibility: { retry: boolean };
+  action_eligibility: { refresh: boolean; retry: boolean };
   available_result_sections: string[];
 };
 
 function currentResult(
   options: LanguageModelV3CallOptions, detail: TrackDetail,
-  current: readonly ToolObservation[], poll: ToolObservation, retryIneligible: boolean,
+  current: readonly ToolObservation[], poll: ToolObservation,
+  ineligibleAction: "Refresh" | "Retry" | null,
 ): ScriptedResearchDecision {
   const requiredSections = ["strategy_summary", "strategy_observations", "provenance"];
   if (!requiredSections.every((section) => detail.available_result_sections.includes(section))) return incomplete();
@@ -165,7 +177,7 @@ function currentResult(
     || (complete && latest?.session !== summary.strategy_session)) return incomplete();
   const surfaceId = `daily-track-${poll.toolCallId}`;
   const note = `DailyTrack ${detail.id} is ${detail.status} (${detail.progress.phase}). The current view can advance; it is not a new immutable Research Result. Core Tracking Worker continues independently of this Chat.`
-    + (retryIneligible ? " The current lifecycle is not eligible for Retry; no Retry was submitted." : "")
+    + (ineligibleAction === null ? "" : ` The current lifecycle is not eligible for ${ineligibleAction}; no ${ineligibleAction} was submitted.`)
     + (complete ? "" : " More Observation pages remain; the displayed row is only the latest retrieved, not the current latest Observation.");
   if (current.some((item) => item.name === "render_a2ui" && item.input.surfaceId === surfaceId)) return text(note);
   const components = [
@@ -202,7 +214,8 @@ function validDetail(value: JsonRecord, id: string): value is TrackDetail {
     && isRecord(value.progress) && typeof value.progress.head_session === "string" && DATE.test(value.progress.head_session)
     && typeof value.progress.data_through_session === "string" && DATE.test(value.progress.data_through_session)
     && typeof value.progress.phase === "string" && ["waiting", "queued", "retry_wait", "starting", "calculating", "result_ready", "staging", "stopping", "blocked", "up_to_date", "stopped"].includes(value.progress.phase)
-    && isRecord(value.action_eligibility) && typeof value.action_eligibility.retry === "boolean"
+    && isRecord(value.action_eligibility) && typeof value.action_eligibility.refresh === "boolean"
+    && typeof value.action_eligibility.retry === "boolean"
     && (value.blocked_reason === null || typeof value.blocked_reason === "string")
     && Array.isArray(value.available_result_sections);
 }
@@ -225,7 +238,8 @@ function validObservation(value: unknown): value is JsonRecord {
 function latestTrackId(observations: readonly ToolObservation[]): string | undefined {
   for (const observation of [...observations].reverse()) {
     const id = observation.name === "get_daily_track" ? observation.output.id
-      : observation.name === "start_daily_track" || observation.name === "retry_daily_track" ? observation.output.track_id : undefined;
+      : ["start_daily_track", "refresh_daily_track", "retry_daily_track"].includes(observation.name)
+        ? observation.output.track_id : undefined;
     if (typeof id === "string" && TRACK_ID.test(id)) return id;
   }
   return undefined;
@@ -234,11 +248,13 @@ function latestTrackId(observations: readonly ToolObservation[]): string | undef
 function intentFor(prompt: string): Intent | null {
   if (prompt === SCRIPTED_START_DAILY_TRACK_PROMPT) return { kind: "start" };
   if (prompt === SCRIPTED_RELOAD_DAILY_TRACK_PROMPT) return { kind: "reload" };
+  if (prompt === SCRIPTED_REFRESH_DAILY_TRACK_PROMPT) return { kind: "refresh" };
   if (prompt === SCRIPTED_RETRY_DAILY_TRACK_PROMPT) return { kind: "retry" };
   const start = /^Start daily tracking for (run_[a-f0-9]{20})\.$/.exec(prompt);
   if (start?.[1] !== undefined) return { kind: "start", id: start[1] };
-  const track = /^(Reload|Retry blocked) DailyTrack (track_[a-f0-9]{20})\.$/.exec(prompt);
-  return track?.[2] === undefined ? null : { kind: track[1] === "Reload" ? "reload" : "retry", id: track[2] };
+  const track = /^(Reload|Refresh|Retry blocked) DailyTrack (track_[a-f0-9]{20})\.$/.exec(prompt);
+  const kind = track?.[1] === "Reload" ? "reload" : track?.[1] === "Refresh" ? "refresh" : "retry";
+  return track?.[2] === undefined ? null : { kind, id: track[2] };
 }
 
 function previousIntent(options: LanguageModelV3CallOptions, before: number): { index: number; intent: Intent } | null {

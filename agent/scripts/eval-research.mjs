@@ -157,7 +157,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
     || data.market_coverage?.start !== corpus.admission_window.requested_start) throw new ResearchEvalError("DEPENDENCY_UNAVAILABLE");
   const allowedTools = JSON.parse(required("THESISTRACE_MCP_DEPLOYMENT_TOOLS"));
   if (!Array.isArray(allowedTools) || allowedTools.some((name) => !/^[a-z][a-z0-9_]{0,127}$/.test(name))
-    || allowedTools.includes("refresh_daily_track")) throw new ResearchEvalError("CONFIG_INVALID");
+    || !allowedTools.includes("refresh_daily_track")) throw new ResearchEvalError("CONFIG_INVALID");
   const observations = [];
   let spending = 0;
   let halted = null;
@@ -352,13 +352,13 @@ async function prepareFixture(researcher, testCase, corpus) {
   const track = await json(researcher, `/api/research-runs/${run.id}/daily-tracks`, { method: "POST", body: JSON.stringify({ request_id: `eval-start-${randomUUID()}` }) });
   fixture.trackId = track.id;
   if (testCase.fixture === "blocked-track") {
+    await json(researcher, `/api/daily-tracks/${track.id}/refresh`, {
+      method: "POST", body: JSON.stringify({ request_id: `eval-refresh-${randomUUID()}` }),
+    });
     docker(["exec", "--env", "THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES=1", `${project}-api-1`, "thesistrace-core-worker", "--role", "tracking", "--once"]);
     const blocked = await json(researcher, `/api/daily-tracks/${track.id}`);
     if (blocked.status !== "blocked") throw new ResearchEvalError("DEPENDENCY_UNAVAILABLE");
     controlWorker("unpause", "tracking-worker");
-  } else {
-    const current = await poll(() => json(researcher, `/api/daily-tracks/${track.id}`), (value) => value.status === "active" && value.strategy_session === corpus.clock_window.head);
-    fixture.fingerprint = digest(JSON.stringify(current));
   }
   return fixture;
 }
@@ -408,12 +408,12 @@ async function checkArtifact(researcher, testCase, fixture, corpus, threadId) {
       && formulaMatches(children[0].input.formula, "price-rank") && formulaMatches(children[1].input.formula, "negative-price-rank"),
     evalBatchWorkerFailure(batch.status));
   }
-  if (["track-started", "track-recovered", "refresh-unavailable"].includes(testCase.outcome)) {
+  if (["track-started", "track-refreshed", "track-recovered"].includes(testCase.outcome)) {
     if (runList.items.length !== 1 || trackList.items.length !== 1 || batchList.items.length !== 0) return result(false);
     const track = await json(researcher, `/api/daily-tracks/${trackList.items[0].id}`);
-    if (testCase.outcome === "refresh-unavailable") return result(fixture.fingerprint === digest(JSON.stringify(track)));
     return result(track.status === "active" && track.origin.seed_run_id === fixture.runId
-      && (testCase.outcome !== "track-recovered" || track.strategy_session === corpus.clock_window.head), track.status === "blocked");
+      && (!["track-refreshed", "track-recovered"].includes(testCase.outcome)
+        || track.strategy_session === corpus.clock_window.head), track.status === "blocked");
   }
   if (runList.items.length !== 1 || trackList.items.length !== 0 || batchList.items.length !== 0) return result(false);
   const run = await json(researcher, `/api/research-runs/${runList.items[0].id}`);

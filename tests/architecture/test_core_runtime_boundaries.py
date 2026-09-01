@@ -507,6 +507,7 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
     assert "THESISTRACE_TEST_WEB_ORIGIN" in browser
     assert "THESISTRACE_TEST_EVIDENCE_DIR" in browser
     assert "retain-on-failure" in browser
+    assert "noSnippets: true" in browser
     assert "webServer" not in browser
     assert "thesistrace-api" not in browser
     assert "thesistrace-worker" not in browser
