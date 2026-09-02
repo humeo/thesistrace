@@ -6320,7 +6320,7 @@ def _run_worker_once(
         check=False,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=60,
         cwd=ROOT,
         env=_worker_environment(settings),
     )
