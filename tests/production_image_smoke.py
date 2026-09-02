@@ -2338,7 +2338,17 @@ def _verify_worker_events(
             for event in factor_events
             if event["event"] == "research_batch_execution_batch_prepared"
         ]
+        factor_started = [
+            event
+            for event in factor_events
+            if event["event"] == "research_batch_execution_item_started"
+        ]
         assert len(factor_prepared) == 1
+        assert [event["item_ordinal"] for event in factor_started] == list(
+            range(1, len(qualification["factor_requests"]) + 1)
+        )
+        assert all(event["alpha_factor_task_started"] is True for event in factor_started)
+        assert all(event["strategy_task_started"] is False for event in factor_started)
         factor_items = [
             event
             for event in factor_events
@@ -2348,10 +2358,13 @@ def _verify_worker_events(
         assert [event["item_ordinal"] for event in factor_items] == list(
             range(1, len(qualification["factor_requests"]) + 1)
         )
-        assert all(event["alpha_factor_task_started"] is True for event in factor_items)
-        assert all(
-            event["data_io"] == factor_prepared[0]["data_io"]
-            for event in factor_items
+        assert all(event["alpha_factor_task_started"] is False for event in factor_items)
+        for started, completed in zip(factor_started, factor_items, strict=True):
+            assert factor_events.index(started) < factor_events.index(completed)
+        assert all(event["data_io"] == factor_items[0]["data_io"] for event in factor_items)
+        assert (
+            factor_items[0]["data_io"]["rows_scanned"]
+            > factor_prepared[0]["data_io"]["rows_scanned"]
         )
 
         strategy_prepared = [
@@ -2365,26 +2378,55 @@ def _verify_worker_events(
             if event["event"]
             == "research_batch_execution_shared_alpha_factor_succeeded"
         ]
+        shared_started = [
+            event
+            for event in strategy_events
+            if event["event"]
+            == "research_batch_execution_shared_alpha_factor_started"
+        ]
+        strategy_started = [
+            event
+            for event in strategy_events
+            if event["event"] == "research_batch_execution_item_started"
+        ]
         strategy_items = [
             event
             for event in strategy_events
             if event["event"] == "research_batch_execution_item_succeeded"
         ]
         assert len(strategy_prepared) == 1
+        assert len(shared_started) == 1
         assert len(shared) == 1
-        assert shared[0]["alpha_factor_task_started"] is True
+        assert shared_started[0]["alpha_factor_task_started"] is True
+        assert strategy_events.index(shared_started[0]) < strategy_events.index(shared[0])
+        assert shared[0]["alpha_factor_task_started"] is False
         assert shared[0]["alpha_factor_task_completed"] is True
+        assert [event["item_ordinal"] for event in strategy_started] == list(
+            range(1, len(qualification["strategy_requests"]) + 1)
+        )
+        assert all(event["strategy_task_started"] is True for event in strategy_started)
+        assert all(
+            event["alpha_factor_task_started"] is False for event in strategy_started
+        )
         assert [event["item_ordinal"] for event in strategy_items] == list(
             range(1, len(qualification["strategy_requests"]) + 1)
         )
         assert all(event["strategy_task_completed"] is True for event in strategy_items)
+        assert all(event["strategy_task_started"] is False for event in strategy_items)
         assert all(
             event["alpha_factor_task_started"] is False for event in strategy_items
         )
-        assert all(
-            event["data_io"] == strategy_prepared[0]["data_io"]
-            for event in strategy_items
+        for started, completed in zip(strategy_started, strategy_items, strict=True):
+            assert strategy_events.index(started) < strategy_events.index(completed)
+        strategy_rows_scanned = [
+            int(shared[0]["data_io"]["rows_scanned"]),
+            *(int(event["data_io"]["rows_scanned"]) for event in strategy_items),
+        ]
+        assert strategy_rows_scanned[0] > int(
+            strategy_prepared[0]["data_io"]["rows_scanned"]
         )
+        assert strategy_rows_scanned == sorted(strategy_rows_scanned)
+        assert len(set(strategy_rows_scanned)) == len(strategy_rows_scanned)
 
     qualified_peak_rss = max(
         int(event["child_peak_rss_bytes"])
