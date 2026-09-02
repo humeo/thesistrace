@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 
 const { Client } = createRequire("/app/auth/package.json")("pg");
 
-const authOrigin = "http://127.0.0.1:8200";
+const authOrigin = process.env.THESISTRACE_AUTH_FIXTURE_AUTH_ORIGIN;
 const resendOrigin = "http://resend-fake:8300";
 const password = process.argv[3] ?? "correct-horse-battery-staple";
 const clientIp = process.argv[4] ?? "127.0.0.1";
@@ -15,6 +15,9 @@ try {
   }
   if (password.length < 12 || password.length > 128) {
     throw new Error("PASSWORD_INVALID");
+  }
+  if (typeof authOrigin !== "string" || authOrigin.length === 0) {
+    throw new Error("AUTH_FIXTURE_AUTH_ORIGIN_REQUIRED");
   }
   if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(clientIp)) {
     throw new Error("CLIENT_IP_INVALID");

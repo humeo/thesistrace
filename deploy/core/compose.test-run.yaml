@@ -38,6 +38,8 @@ services:
     depends_on:
       resend-fake:
         condition: service_healthy
+    environment:
+      THESISTRACE_AUTH_FIXTURE_AUTH_ORIGIN: http://127.0.0.1:8200
     ports:
       - 127.0.0.1::8200
     volumes:
@@ -51,6 +53,7 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:?RESEND_API_KEY is required}
       RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:?RESEND_FROM_EMAIL is required}
       THESISTRACE_AUTH_DATABASE_URL: postgresql://auth_runtime:${THESISTRACE_AUTH_DATABASE_PASSWORD:?THESISTRACE_AUTH_DATABASE_PASSWORD is required}@postgres:5432/thesistrace
+      THESISTRACE_AUTH_FIXTURE_AUTH_ORIGIN: http://auth:8200
       THESISTRACE_AUTH_FIXTURE_CONTROL_PORT: "8260"
       THESISTRACE_ENVIRONMENT: test
       THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS: ${THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS:?THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS is required}

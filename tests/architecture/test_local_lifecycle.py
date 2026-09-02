@@ -1192,6 +1192,9 @@ def test_shared_browser_control_fixtures_do_not_depend_on_docker_exec() -> None:
     fault_proxy = (ROOT / "web" / "e2e-core" / "fault-proxy.ts").read_text()
     auth_fixture = (ROOT / "web" / "e2e-core" / "auth-fixture.ts").read_text()
     auth_control = (ROOT / "auth" / "test-fixtures" / "auth-control.mjs").read_text()
+    session_provisioner = (
+        ROOT / "auth" / "test-fixtures" / "provision-image-smoke-session.mjs"
+    ).read_text()
     auth_service = overlay.split("  auth:\n", maxsplit=1)[1].split(
         "\n  auth-fixture-control:", maxsplit=1
     )[0]
@@ -1203,6 +1206,14 @@ def test_shared_browser_control_fixtures_do_not_depend_on_docker_exec() -> None:
     assert "network_mode: service:auth" not in auth_fixture_service
     assert "127.0.0.1::8260" not in auth_service
     assert "127.0.0.1::8260" in auth_fixture_service
+    assert (
+        "THESISTRACE_AUTH_FIXTURE_AUTH_ORIGIN: http://127.0.0.1:8200"
+        in auth_service
+    )
+    assert (
+        "THESISTRACE_AUTH_FIXTURE_AUTH_ORIGIN: http://auth:8200"
+        in auth_fixture_service
+    )
     assert "THESISTRACE_AUTH_FIXTURE_CONTROL_PORT" in overlay
     assert "THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN" in runner
     assert "THESISTRACE_TEST_AUTH_PROXY_ORIGIN" in runner
@@ -1228,6 +1239,10 @@ def test_shared_browser_control_fixtures_do_not_depend_on_docker_exec() -> None:
     assert 'fetch("http://resend-fake:8300/__test/emails"' in auth_control
     assert 'url.pathname === "/health/ready"' in auth_control
     assert 'SELECT 1 FROM auth."rateLimit" LIMIT 0' in auth_control
+    assert (
+        'process.env.THESISTRACE_AUTH_FIXTURE_AUTH_ORIGIN' in session_provisioner
+    )
+    assert 'const authOrigin = "http://127.0.0.1:8200"' not in session_provisioner
     assert "wait_for_auth_fixture_control" in runner
     assert '"$auth_fixture_origin/health/ready"' in runner
     assert "Auth fixture control did not become ready" in runner
