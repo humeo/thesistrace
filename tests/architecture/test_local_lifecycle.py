@@ -183,6 +183,7 @@ if "port" in arguments:
         "resend-fake": 6,
         "auth-exchange-proxy": 7,
         "mcp-fault-proxy": 8,
+        "auth-fixture-control": 9,
     }[service]
     print(f"127.0.0.1:{base_port + offset}")
 elif "ps" in arguments and "--quiet" in arguments:
@@ -426,6 +427,7 @@ done
 status=200
 body='<html><div id="root"></div></html>'
 case "$url" in
+  */health/ready) body='{"status":"ready"}' ;;
   */health/*|*/internal/*) status=404; body='' ;;
   */api/auth/ok) body='{"ok":true}' ;;
   */api/data) status=401; body='{"detail":"Authentication required"}' ;;
