@@ -1,6 +1,6 @@
 # Research Batch bounded execution
 
-**Status:** ready-for-agent
+**Status:** complete
 
 Research Batch execution must share Data, Universe, Labels, and shared Alpha work
 inside bounded execution Chunks without making Chunks durable Product State. Peak
