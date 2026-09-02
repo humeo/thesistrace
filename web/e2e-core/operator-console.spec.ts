@@ -2373,6 +2373,8 @@ async function findInvitationReissue(
   pagination: Locator,
   email: string,
 ): Promise<Locator> {
+  const previous = pagination.getByRole("button", { name: "Previous" });
+  await expect(previous).toBeEnabled();
   for (let visitedPageCount = 0; visitedPageCount < 20; visitedPageCount += 1) {
     const action = page.getByRole("button", {
       name: `Reissue invitation for ${email}`,
@@ -2387,6 +2389,7 @@ async function findInvitationReissue(
     );
     await next.click();
     await expect(pagination).toContainText(`Page ${currentPage + 1}`);
+    await expect(previous).toBeEnabled();
   }
   throw new Error(`Seeded invitation ${email} was not found in the paged directory.`);
 }
