@@ -27,6 +27,15 @@ const server = http.createServer(async (request, response) => {
     json(response, 200, { status: "ok" });
     return;
   }
+  if (request.method === "GET" && url.pathname === "/health/ready") {
+    try {
+      await pool.query('SELECT 1 FROM auth."rateLimit" LIMIT 0');
+      json(response, 200, { status: "ready" });
+    } catch {
+      json(response, 503, { code: "AUTH_FIXTURE_DATABASE_UNAVAILABLE" });
+    }
+    return;
+  }
   if (request.method !== "POST" || url.search !== "") {
     json(response, 404, { code: "NOT_FOUND" });
     return;

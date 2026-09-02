@@ -1218,6 +1218,12 @@ def test_shared_browser_control_fixtures_do_not_depend_on_docker_exec() -> None:
     assert '"/__test/seed-operator-directory"' in auth_control
     assert '"/__test/resend-emails"' in auth_control
     assert 'fetch("http://resend-fake:8300/__test/emails"' in auth_control
+    assert 'url.pathname === "/health/ready"' in auth_control
+    assert 'SELECT 1 FROM auth."rateLimit" LIMIT 0' in auth_control
+    assert "wait_for_auth_fixture_control" in runner
+    assert '"$auth_fixture_origin/health/ready"' in runner
+    assert "Auth fixture control did not become ready" in runner
+    assert "fetch('http://127.0.0.1:8260/health/ready')" in overlay
     assert '`${testProjectName()}-data-operator-worker-1`' in auth_fixture
     assert '`${testProjectName()}-postgres-1`' in auth_fixture
 
@@ -1820,6 +1826,12 @@ def test_operator_console_release_qualification_runs_inside_final_images() -> No
     assert "image-smoke-operator-browser-worker compose up" in runtime
     assert "python /smoke/browser/publish_financial_track_head.py lagged" in runtime
     assert "python /smoke/browser/publish_financial_track_head.py recovered" in runtime
+    ready = runtime.index(
+        "image-smoke-operator-browser-auth-fixture-ready "
+        "wait_for_auth_fixture_control"
+    )
+    browser = runtime.index("playwright test operator-console.spec.ts")
+    assert ready < browser
     assert "playwright test operator-console.spec.ts" in runtime
     assert "create_private_compose_login_session" in fixture
     assert "run_auth_operator" in fixture

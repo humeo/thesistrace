@@ -400,6 +400,25 @@ wait_for_rustfs_s3() {
   done
 }
 
+wait_for_auth_fixture_control() {
+  auth_fixture_readiness_deadline_seconds=30
+  auth_fixture_readiness_started_at=$(date +%s)
+  while :; do
+    if curl --fail --silent --show-error \
+      --connect-timeout 2 --max-time 5 \
+      "$auth_fixture_origin/health/ready" >/dev/null 2>&1; then
+      return 0
+    fi
+    auth_fixture_readiness_now=$(date +%s)
+    if [ $((auth_fixture_readiness_now - auth_fixture_readiness_started_at)) \
+      -ge "$auth_fixture_readiness_deadline_seconds" ]; then
+      echo "Auth fixture control did not become ready" >&2
+      return 1
+    fi
+    sleep 0.25
+  done
+}
+
 capture_evidence() {
   mkdir -p "$evidence_dir"
   compose ps --all >"$evidence_dir/compose-ps.txt" 2>&1 || true
@@ -1452,6 +1471,7 @@ case "$command" in
     printf 'postgres_port=%s\ns3_port=%s\nresend_port=%s\nauth_fixture_port=%s\nauth_proxy_port=%s\nmcp_proxy_port=%s\n' \
       "$postgres_port" "$s3_port" "$resend_port" "$auth_fixture_port" \
       "$auth_proxy_port" "$mcp_proxy_port" >>"$run_metadata"
+    run_phase e2e-auth-fixture-ready wait_for_auth_fixture_control
     run_phase e2e-caddy-single-origin verify_caddy_single_origin
     if [ "$command" = agent-eval ]; then
       run_phase agent-eval-real-provider run_agent_eval
@@ -1754,6 +1774,7 @@ case "$command" in
       data-operator-worker web
     auth_fixture_port=$(mapped_port auth 8260)
     auth_fixture_origin="http://127.0.0.1:$auth_fixture_port"
+    run_phase image-smoke-operator-browser-auth-fixture-ready wait_for_auth_fixture_control
     run_phase image-smoke-operator-browser run_operator_playwright \
       pnpm --dir web exec playwright test operator-console.spec.ts
     run_phase image-smoke-final-evidence capture_evidence

@@ -74,7 +74,7 @@ services:
         - node
         - --input-type=module
         - --eval
-        - fetch('http://127.0.0.1:8260/health/live').then((response) => { if (!response.ok) process.exit(1) })
+        - fetch('http://127.0.0.1:8260/health/ready').then((response) => { if (!response.ok) process.exit(1) })
       interval: 1s
       timeout: 5s
       retries: 60
