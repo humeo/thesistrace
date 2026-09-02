@@ -880,10 +880,10 @@ print(json.dumps({
 }
 
 reset_product_state() {
-  compose stop auth api research-worker batch-research-worker tracking-worker \
+  compose stop auth auth-fixture-control api research-worker batch-research-worker tracking-worker \
     data-operator-worker postgres rustfs \
     >/dev/null 2>&1 || true
-  compose rm --force auth auth-initialize api research-worker batch-research-worker \
+  compose rm --force auth auth-fixture-control auth-initialize api research-worker batch-research-worker \
     tracking-worker data-operator-worker initialize postgres rustfs \
     >/dev/null 2>&1 || true
   "$repo_root/scripts/product-state-volumes" reset "$project_name"

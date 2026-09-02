@@ -1618,6 +1618,20 @@ def test_image_smoke_provisions_auth_inside_the_private_compose_network() -> Non
     assert "../../auth/test-fixtures:/test-fixtures:ro" in overlay
 
 
+def test_product_state_reset_recreates_the_auth_fixture_network_namespace() -> None:
+    runtime = (ROOT / "scripts" / "test-runtime").read_text()
+    reset = runtime.split("reset_product_state() {", maxsplit=1)[1].split(
+        "\n}\n\nprovision_image_smoke_auth()", maxsplit=1
+    )[0]
+
+    assert "compose stop auth auth-fixture-control" in " ".join(
+        reset.replace("\\", "").split()
+    )
+    assert "compose rm --force auth auth-fixture-control" in " ".join(
+        reset.replace("\\", "").split()
+    )
+
+
 def test_benchmark_reprovisions_an_authenticated_researcher_after_each_reset(
     tmp_path: Path,
 ) -> None:
