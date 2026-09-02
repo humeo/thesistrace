@@ -3,9 +3,9 @@ from dataclasses import dataclass
 
 import numpy as np
 import pytest
-from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, PCT_CHANGE_20
 from series import aligned_market_data
 
+from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, PCT_CHANGE_20
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
 from thesistrace.research_kernel.equivalence import equivalence_bytes

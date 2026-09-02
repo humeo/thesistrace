@@ -1,9 +1,9 @@
 import math
 
 import pytest
-from contracts import FIELD_BINDINGS, field, literal, operation
 from series import aligned_market_data
 
+from contracts import FIELD_BINDINGS, field, literal, operation
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel.alpha import (
     evaluate_alpha_matrix,

@@ -4,8 +4,8 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-from contracts import field, literal, operation
 
+from contracts import field, literal, operation
 from thesistrace.alpha_language import alpha_language
 from thesistrace.research_kernel import series_plan
 from thesistrace.research_kernel.alpha import evaluate_series

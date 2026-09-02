@@ -2,9 +2,9 @@ import copy
 from decimal import Decimal
 
 import pytest
-from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 from series import aligned_market_data
 
+from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
 from thesistrace.research_kernel.strategy import (

@@ -1,7 +1,6 @@
 from collections.abc import Mapping
 
 from contracts import FIELD_BINDINGS
-
 from thesistrace.data.market_series import align_market_research_data
 from thesistrace.research_series import AlignedResearchData
 

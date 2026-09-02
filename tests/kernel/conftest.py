@@ -1,7 +1,7 @@
 import pytest
-from contracts import FIELD_BINDINGS, PCT_CHANGE_20
 from series import aligned_market_data
 
+from contracts import FIELD_BINDINGS, PCT_CHANGE_20
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel import (
     KernelState,

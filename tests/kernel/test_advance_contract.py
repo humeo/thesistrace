@@ -2,10 +2,10 @@ import copy
 from decimal import Decimal
 
 import pytest
-from contracts import CLOSE_ADJUSTED, field, literal, operation
 from fixture_sessions import append_fixture_session
 from series import aligned_market_data
 
+from contracts import CLOSE_ADJUSTED, field, literal, operation
 from thesistrace.daily_track.checkpoint import (
     project_tracking_checkpoint,
     restore_tracking_checkpoint,

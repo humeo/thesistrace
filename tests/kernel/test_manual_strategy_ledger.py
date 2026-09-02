@@ -3,9 +3,9 @@ from __future__ import annotations
 import copy
 from decimal import Decimal
 
-from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 from series import aligned_market_data
 
+from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 from thesistrace.research_kernel import RunInput, StrategyRunInput, run
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
 from thesistrace.research_kernel.strategy import run_strategy

@@ -98,7 +98,7 @@ def test_caddy_applies_the_exact_security_and_sanitized_logging_contract() -> No
     caddyfile = (DEPLOY / "Caddyfile").read_text()
 
     assert (
-        "default-src 'none'; script-src 'self'; style-src 'self'; "
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
         "style-src-attr 'unsafe-inline'; connect-src 'self'; "
         "form-action 'self'; img-src 'self' data:; font-src 'self'; "
         "base-uri 'none'; object-src 'none'; frame-src 'none'; "

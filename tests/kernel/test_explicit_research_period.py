@@ -2,9 +2,9 @@ import copy
 from datetime import date, timedelta
 
 import pytest
-from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, literal, operation
 from series import aligned_market_data
 
+from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, literal, operation
 from thesistrace.research_kernel import (
     AdvanceInput,
     InsufficientCalculationWarmupError,
