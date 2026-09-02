@@ -42,7 +42,7 @@
 	log_append method {http.request.method}
 
 	header {
-		>Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; form-action 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'"
+		>Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; connect-src 'self'; form-action 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'"
 		>Referrer-Policy "no-referrer"
 		>X-Content-Type-Options "nosniff"
 		>X-Frame-Options "DENY"
