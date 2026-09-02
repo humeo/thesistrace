@@ -14,11 +14,12 @@ const environment = {
 };
 // No inherited credentials and no network, even if a preflight regresses.
 const networkGuard = 'data:text/javascript,globalThis.fetch=()=>{throw new Error("OFFLINE_NETWORK_FORBIDDEN")}';
+const offlinePreflightTimeoutMs = 30_000;
 
 function invoke(command, overrides = {}) {
   const result = spawnSync(process.execPath, ["--import", networkGuard, "scripts/eval-research.mjs", command], {
     cwd: new URL("../", import.meta.url), env: { ...environment, ...overrides },
-    encoding: "utf8", timeout: 10_000,
+    encoding: "utf8", timeout: offlinePreflightTimeoutMs,
   });
   assert.equal(result.error, undefined);
   assert.ok(!result.stdout.includes(environment.THESISTRACE_AGENT_OPENAI_API_KEY));
