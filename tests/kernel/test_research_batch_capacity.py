@@ -3,7 +3,10 @@ from datetime import date, timedelta
 from functools import cache
 from types import SimpleNamespace
 
+import pytest
+
 from thesistrace.research_batch.planning import (
+    ResearchBatchCapacityError,
     rechunk_research_execution_plan,
     validate_research_batch_capacity,
 )
@@ -107,7 +110,7 @@ def test_factor_batch_capacity_peak_is_bounded_by_chunk_not_total_history() -> N
 def test_factor_batch_capacity_selects_a_smaller_chunk_for_membership_churn() -> None:
     child = _prepared_child(
         field_id="price.close.adjusted",
-        execution_memory_bytes=256 * 1024**2,
+        execution_memory_bytes=512 * 1024**2,
         calculation_session_count=200,
         maximum_universe_cardinality=100,
         estimated_peak_bytes=80 * 1024**2,
@@ -121,7 +124,36 @@ def test_factor_batch_capacity_selects_a_smaller_chunk_for_membership_churn() ->
     )
 
     assert 1 <= plan.session_count < 64
-    assert plan.estimated_peak_bytes <= 256 * 1024**2
+    assert plan.estimated_peak_bytes <= 512 * 1024**2 * 9 // 10
+
+
+def test_factor_batch_capacity_rejects_one_context_slice_without_rss_headroom() -> None:
+    child = _prepared_child(
+        field_id="price.close.adjusted",
+        execution_memory_bytes=200 * 1024**2,
+        calculation_session_count=58,
+        maximum_universe_cardinality=512,
+        chunk_session_count=64,
+    )
+
+    with pytest.raises(ResearchBatchCapacityError):
+        _validate_research_batch_capacity("factor_evaluation", [child])
+
+
+def test_factor_batch_capacity_keeps_headroom_below_the_enforced_rss_limit() -> None:
+    execution_memory_bytes = 320 * 1024**2
+    child = _prepared_child(
+        field_id="price.close.adjusted",
+        execution_memory_bytes=execution_memory_bytes,
+        calculation_session_count=58,
+        maximum_universe_cardinality=512,
+        chunk_session_count=64,
+    )
+
+    plan = _validate_research_batch_capacity("factor_evaluation", [child])
+
+    assert plan.session_count == 64
+    assert plan.estimated_peak_bytes <= execution_memory_bytes * 9 // 10
 
 
 def test_eleven_year_rotating_top300_never_measures_a_full_history_slice() -> None:

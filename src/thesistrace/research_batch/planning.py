@@ -33,10 +33,19 @@ _BATCH_PROCESS_RUNTIME_MARGIN_BYTES = 96 * 1024**2
 # outcome and Strategy working state.
 _STRATEGY_COMPACT_OUTCOME_BYTES_PER_CELL = 256
 _STRATEGY_COMPACT_OUTCOME_BYTES_PER_CHUNK = 64 * 1024
+_FACTOR_EVALUATION_CAPACITY_UTILIZATION_NUMERATOR = 9
+_FACTOR_EVALUATION_CAPACITY_UTILIZATION_DENOMINATOR = 10
 _STRATEGY_SWEEP_CAPACITY_UTILIZATION_NUMERATOR = 3
 _STRATEGY_SWEEP_CAPACITY_UTILIZATION_DENOMINATOR = 4
 _MAX_PENDING_ALPHA_SESSIONS = 21
-_ALPHA_CONTINUATION_BYTES_PER_CELL = 96
+# Every Alpha keeps one compact value per member for at most 21 unresolved
+# signal sessions. Only the Alpha currently being evaluated expands those
+# values into Python row dictionaries and temporary factor inputs. This split
+# is important: the resident data slice is based on its real member union,
+# while continuation is based on the preserved daily maximum-cardinality
+# contract rather than multiplying the union by every pending day.
+_ALPHA_CONTINUATION_COMPACT_BYTES_PER_CELL = 96
+_ACTIVE_ALPHA_CONTINUATION_WORKING_BYTES_PER_CELL = 4 * 1024
 _STRATEGY_POSITION_CONTINUATION_BYTES = 1024
 _STRATEGY_OBSERVATION_BYTES_PER_SESSION = 64 * 1024
 
@@ -108,8 +117,16 @@ def validate_research_batch_capacity(
     ):
         raise ValueError("Research Batch Universe member union measurement is invalid")
     count_by_window = dict(zip(unique_windows, union_counts, strict=True))
-    capacity_limit_bytes = execution_memory_bytes
-    if batch_kind == "strategy_sweep":
+    if batch_kind == "factor_evaluation":
+        # The model is deliberately conservative but allocator high-water RSS and
+        # interpreter startup still vary by a few MiB between fresh children.
+        # Never admit a Factor slice against the exact enforcement boundary.
+        capacity_limit_bytes = (
+            execution_memory_bytes
+            * _FACTOR_EVALUATION_CAPACITY_UTILIZATION_NUMERATOR
+            // _FACTOR_EVALUATION_CAPACITY_UTILIZATION_DENOMINATOR
+        )
+    else:
         # Canonical compaction temporarily overlaps the active decoded outcome,
         # and Python/Arrow allocators retain high-water pages. Keep explicit
         # headroom proven by the real widest-admitted child RSS boundary.
@@ -119,6 +136,10 @@ def validate_research_batch_capacity(
             // _STRATEGY_SWEEP_CAPACITY_UTILIZATION_DENOMINATOR
         )
     alpha_continuation_count = len(inputs) if batch_kind == "factor_evaluation" else 1
+    maximum_daily_universe_cardinality = max(
+        value.data_admission.universe_instrument_count for value in inputs
+    )
+    pending_alpha_session_count = min(_MAX_PENDING_ALPHA_SESSIONS, len(research_sessions))
     strategy_held_instrument_count = (
         0
         if batch_kind != "strategy_sweep"
@@ -161,9 +182,12 @@ def validate_research_batch_capacity(
         )
         continuation_bytes = (
             alpha_continuation_count
-            * _MAX_PENDING_ALPHA_SESSIONS
-            * maximum_slice_union
-            * _ALPHA_CONTINUATION_BYTES_PER_CELL
+            * pending_alpha_session_count
+            * maximum_daily_universe_cardinality
+            * _ALPHA_CONTINUATION_COMPACT_BYTES_PER_CELL
+            + pending_alpha_session_count
+            * maximum_daily_universe_cardinality
+            * _ACTIVE_ALPHA_CONTINUATION_WORKING_BYTES_PER_CELL
             + strategy_held_instrument_count * _STRATEGY_POSITION_CONTINUATION_BYTES
         )
         strategy_private_bytes = 0

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ctypes
+import gc
 import os
 import resource
 import subprocess
@@ -10,6 +12,7 @@ from pathlib import Path
 from time import monotonic
 
 import numpy as np
+import pyarrow as pa
 
 from thesistrace.data import GenerationStoreError, MountedGenerationStore
 from thesistrace.publication.serialization import parquet_bytes
@@ -756,6 +759,7 @@ def _execute_factor_batch_messages(
 
         first_state = states[first_item.ordinal]
         del forward_labels, research_data
+        _release_chunk_memory()
         if not window.final and first_state.error is None:
             completed = int(first_state.continuation["completed_research_session_count"])
             yield {
@@ -909,6 +913,8 @@ def _execute_strategy_sweep_messages(
             ) as reader:
                 for window, stored in zip(research_windows, reader, strict=True):
                     _require_artifact_window(stored, window)
+                    del stored
+                    _release_chunk_memory()
                 final_alpha_continuation = reader.final_alpha_continuation
                 metadata = reader.metadata
         else:
@@ -980,6 +986,7 @@ def _execute_strategy_sweep_messages(
                         )
                     )
                     del outcome_payload, run_input, forward_labels, research_data
+                    _release_chunk_memory()
                     if not window.final:
                         yield {
                             "status": "shared_alpha_factor_chunk_succeeded",
@@ -1157,7 +1164,23 @@ def _execute_strategy_item_messages(
                     chunk_ordinal=window.ordinal,
                 )
                 _write_strategy_partition(partition_path, observations)
-                del outcome, run_input, alpha_factor_outcome, research_data
+                partition = {
+                    "chunk_ordinal": window.ordinal,
+                    "path": str(partition_path),
+                    "row_count": len(observations),
+                    "first_session": observations[0]["session"],
+                    "last_session": observations[-1]["session"],
+                }
+                completed_research_sessions = stored.completed_research_sessions
+                del (
+                    observations,
+                    outcome,
+                    run_input,
+                    alpha_factor_outcome,
+                    research_data,
+                    stored,
+                )
+                _release_chunk_memory()
                 yield {
                     "status": "item_strategy_chunk_succeeded",
                     "item_ordinal": item.ordinal,
@@ -1166,19 +1189,12 @@ def _execute_strategy_item_messages(
                     "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
                     "task_role": "strategy",
                     "phase": "strategy",
-                    "completed_research_sessions": stored.completed_research_sessions,
+                    "completed_research_sessions": completed_research_sessions,
                     "total_research_sessions": (
                         item.immutable_input.execution_plan.research_session_count
                     ),
-                    "strategy_partition": {
-                        "chunk_ordinal": window.ordinal,
-                        "path": str(partition_path),
-                        "row_count": len(observations),
-                        "first_session": observations[0]["session"],
-                        "last_session": observations[-1]["session"],
-                    },
+                    "strategy_partition": partition,
                 }
-                del observations
             if reader.final_alpha_continuation != dict(final_alpha_continuation):
                 raise ValueError("Strategy Sweep private artifact continuation changed")
         if final_values is None:
@@ -1363,6 +1379,25 @@ def _empty_phase_seconds() -> dict[str, float]:
         "strategy": 0.0,
         "finalize": 0.0,
     }
+
+
+def _release_chunk_memory() -> None:
+    gc.collect()
+    pa.default_memory_pool().release_unused()
+    allocator = ctypes.CDLL(None)
+    if sys.platform == "darwin":
+        pressure_relief = allocator.malloc_zone_pressure_relief
+        pressure_relief.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
+        pressure_relief.restype = ctypes.c_size_t
+        pressure_relief(None, 0)
+        return
+    if sys.platform.startswith("linux"):
+        trim = allocator.malloc_trim
+        trim.argtypes = (ctypes.c_size_t,)
+        trim.restype = ctypes.c_int
+        trim(0)
+        return
+    raise RuntimeError("Research Batch allocator pressure relief is unsupported")
 
 
 def _item_failed_message(

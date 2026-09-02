@@ -56,6 +56,7 @@ def test_factor_batch_prepares_one_shared_chunk_and_releases_it_before_yield(
     reads: list[tuple[str, ...]] = []
     payload_refs: list[weakref.ReferenceType[_ChunkPayload]] = []
     calculation_payload_ids: dict[int, list[int]] = {1: [], 2: []}
+    released_payloads: list[tuple[_ChunkPayload | None, ...]] = []
 
     def read_window(_store, *, research_sessions, **_kwargs):
         payload = _ChunkPayload()
@@ -108,6 +109,11 @@ def test_factor_batch_prepares_one_shared_chunk_and_releases_it_before_yield(
 
     monkeypatch.setattr(execution, "execute_research_chunk", execute_distinct)
     monkeypatch.setattr(execution, "_current_process_peak_rss_bytes", lambda: 1)
+    monkeypatch.setattr(
+        execution,
+        "_release_chunk_memory",
+        lambda: released_payloads.append(tuple(reference() for reference in payload_refs)),
+    )
 
     responses = execution._execute_factor_batch_messages(
         items,
@@ -122,12 +128,14 @@ def test_factor_batch_prepares_one_shared_chunk_and_releases_it_before_yield(
     assert reads == []
     first_chunk = next(responses)
     assert first_chunk["status"] == "item_chunk_succeeded", first_chunk
+    assert released_payloads == [(None,)]
     gc.collect()
     assert payload_refs[0]() is None
     assert reads == [("2026-08-10", "2026-08-11")]
     assert calculation_payload_ids[1][0] == calculation_payload_ids[2][0]
 
     assert next(responses)["status"] == "item_chunk_succeeded"
+    assert released_payloads == [(None,), (None, None)]
     gc.collect()
     assert payload_refs[1]() is None
     assert reads[-1] == ("2026-08-12", "2026-08-13")

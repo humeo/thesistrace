@@ -375,7 +375,7 @@ def test_widest_admitted_shared_slice_stays_inside_child_memory_budget(
     tmp_path: Path,
 ) -> None:
     sessions = _weekday_sessions(date(2026, 5, 1), 58)
-    memory_bytes = 200 * 1024**2
+    memory_bytes = 320 * 1024**2
     settings = replace(
         CoreSettings.from_environment(),
         data_mount=tmp_path,
@@ -407,18 +407,28 @@ def test_widest_admitted_shared_slice_stays_inside_child_memory_budget(
             on_execution_event=events.append
         )
         completed = client.get(f"/api/research-batches/{response.json()['id']}").json()
-        assert completed["status"] == "succeeded"
+        assert completed["status"] == "succeeded", {
+            "completed": completed,
+            "events": events,
+        }
 
     prepared = next(
         event for event in events if event["event"] == "research_batch_execution_batch_prepared"
     )
     assert prepared["shared_session_count"] == 58
     assert int(prepared["data_io"]["rows_scanned"]) == 0
+    chunk_events = [
+        event
+        for event in events
+        if event["event"] == "research_batch_execution_item_chunk_succeeded"
+    ]
+    # A two-Chunk run emits one intermediate progress event; the final Chunk is
+    # closed by item_succeeded rather than a second item_chunk_succeeded event.
+    assert chunk_events
     assert (
         max(
             int(event["data_io"]["rows_scanned"])
-            for event in events
-            if event["event"] == "research_batch_execution_item_chunk_succeeded"
+            for event in chunk_events
         )
         >= 58 * 512
     )
