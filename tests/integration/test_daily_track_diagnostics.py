@@ -708,7 +708,7 @@ def _diagnose(environment: dict[str, str], *arguments: str) -> subprocess.Comple
         capture_output=True,
         env=environment,
         text=True,
-        timeout=15,
+        timeout=30,
     )
 
 
