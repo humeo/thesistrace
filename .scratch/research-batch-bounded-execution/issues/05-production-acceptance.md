@@ -13,3 +13,8 @@ Batches and submit fresh equivalents.
 - Exact-ID repair releases pins and scratch without modifying terminal audit data.
 
 ## Comments
+
+- 2026-09-03: The clean Production Image gate passed at `d2adced` with a
+  1.5 GiB child execution budget, 187,011,072-byte measured Batch peak RSS,
+  semantic result equivalence, crash-restart verification, and zero Product
+  State after reset. The required 11-year live Top300 resubmission remains open.
