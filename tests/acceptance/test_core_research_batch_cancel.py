@@ -32,7 +32,10 @@ from thesistrace.data import DatasetLifecycle
 from thesistrace.entrypoints.runtime import core_environment_is_configured
 from thesistrace.publication import PublicationUnavailableError
 from thesistrace.research_batch import ResearchBatchService
-from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
+from thesistrace.research_batch.execution import (
+    ResearchBatchChildLost,
+    SupervisedResearchBatchExecutor,
+)
 
 pytestmark = pytest.mark.skipif(
     not core_environment_is_configured(),
@@ -566,7 +569,9 @@ def test_cancel_is_terminal_while_object_cleanup_retries_after_rustfs_restart(
         nonlocal interrupted
         if not interrupted and event.get("event") == "research_batch_execution_item_started":
             interrupted = True
-            raise RuntimeError("injected Worker loss after private artifact acknowledgement")
+            raise ResearchBatchChildLost(
+                "injected Worker loss after private artifact acknowledgement"
+            )
 
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from botocore.client import BaseClient
@@ -30,6 +32,7 @@ from thesistrace.publication.serialization import (
 
 MANIFEST_SCHEMA_VERSION = 1
 OBJECT_READ_ATTEMPTS = 3
+OBJECT_STREAM_CHUNK_BYTES = 1024 * 1024
 IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 PUBLICATION_MUTATION_LOCK = "thesistrace-publication-mutation"
 TRANSIENT_S3_ERRORS = (
@@ -194,7 +197,7 @@ class Publication:
             _require_identifier(name, subject="payload name")
             payload = payloads[name]
             if isinstance(payload, StagedPayload):
-                self._read_verified(
+                self._verify_streaming(
                     payload.sha256,
                     payload.byte_size,
                     staging_authority=staging_authority,
@@ -300,6 +303,45 @@ class Publication:
             serialization=canonical_serialization,
         )
 
+    def stage_file(
+        self,
+        path: Path,
+        *,
+        media_type: str,
+        serialization: Mapping[str, object],
+        staging_authority: StagingAuthority | None = None,
+    ) -> StagedPayload:
+        """Stage one file without materializing its complete contents in Python memory."""
+
+        if not media_type:
+            raise PublicationPreparationError("staged file requires a media type")
+        canonical_serialization = _canonical_json_value(
+            serialization,
+            subject="serialization",
+        )
+        if not isinstance(canonical_serialization, dict):
+            raise PublicationPreparationError("staged file serialization must be an object")
+        try:
+            byte_size, digest = _file_size_and_sha256(path)
+        except OSError as error:
+            raise PublicationPreparationError("staged file could not be read") from error
+        if byte_size <= 0:
+            raise PublicationPreparationError("staged file requires content")
+        self._ensure_bucket(staging_authority=staging_authority)
+        self._put_immutable_file(
+            digest,
+            path,
+            byte_size=byte_size,
+            media_type=media_type,
+            staging_authority=staging_authority,
+        )
+        return StagedPayload(
+            sha256=digest,
+            byte_size=byte_size,
+            media_type=media_type,
+            serialization=canonical_serialization,
+        )
+
     def verify_prepared(self, prepared: PreparedPublication) -> VerifiedBundle:
         manifest = _load_manifest(prepared._manifest_bytes, prepared.manifest_sha256)
         objects = _manifest_objects(manifest)
@@ -325,9 +367,14 @@ class Publication:
         prepared: PreparedPublication,
     ) -> PublishedRef:
         lock_publication_mutation(transaction)
-        self.verify_prepared(prepared)
         manifest = _load_manifest(prepared._manifest_bytes, prepared.manifest_sha256)
         objects = _manifest_objects(manifest)
+
+        # Recording verifies each object independently.  It must not retain every
+        # object body as verify_prepared() intentionally does for read callers.
+        for item in objects:
+            _name, digest, byte_size, _media_type, _serialization = _object_descriptor(item)
+            self._verify_streaming(digest, byte_size)
 
         for item in objects:
             _name, digest, byte_size, _media_type, _serialization = _object_descriptor(item)
@@ -417,6 +464,49 @@ class Publication:
                 payload_names,
             )
 
+    def materialize_payload(
+        self,
+        published_ref: PublishedRef,
+        payload_name: str,
+        destination: Path,
+        *,
+        staging_authority: StagingAuthority | None = None,
+    ) -> StagedPayload:
+        """Stream one committed payload to an atomically completed local file."""
+
+        _require_identifier(payload_name, subject="payload name")
+        if destination.exists():
+            raise PublicationPreparationError("Publication destination already exists")
+        partial = destination.with_name(f"{destination.name}.partial")
+        if partial.exists():
+            raise PublicationPreparationError("Publication destination scratch already exists")
+        with self._database.transaction() as transaction:
+            manifest = self._validated_published_manifest(transaction, published_ref)
+        descriptors = {
+            name: (digest, expected_bytes, media_type, serialization)
+            for name, digest, expected_bytes, media_type, serialization in (
+                _object_descriptor(item) for item in _manifest_objects(manifest)
+            )
+        }
+        descriptor = descriptors.get(payload_name)
+        if descriptor is None:
+            raise PublicationVerificationError("Selected Publication payload does not exist")
+        digest, expected_bytes, media_type, serialization = descriptor
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        self._materialize_verified(
+            digest,
+            expected_bytes,
+            partial,
+            destination,
+            staging_authority=staging_authority,
+        )
+        return StagedPayload(
+            sha256=digest,
+            byte_size=expected_bytes,
+            media_type=media_type,
+            serialization=serialization,
+        )
+
     def read_in_transaction(
         self,
         transaction: PostgresTransaction,
@@ -443,30 +533,8 @@ class Publication:
         *,
         payload_names: frozenset[str] | None,
     ) -> VerifiedBundle:
-        row = transaction.execute(
-            """
-            SELECT schema_version, kind, manifest_bytes
-            FROM publication.manifests
-            WHERE sha256 = %s
-            """,
-            (published_ref.manifest_sha256,),
-        ).fetchone()
-        if row is None:
-            raise PublicationNotFoundError("Publication is not committed")
-        manifest_bytes = bytes(row["manifest_bytes"])
-        manifest = _load_manifest(manifest_bytes, published_ref.manifest_sha256)
+        manifest = self._validated_published_manifest(transaction, published_ref)
         objects = _manifest_objects(manifest)
-        self._verify_recorded_links(transaction, published_ref.manifest_sha256, objects)
-        if row["schema_version"] != manifest["schema_version"]:
-            raise PublicationVerificationError(
-                "Publication manifest schema record does not match manifest"
-            )
-        if row["kind"] != published_ref.kind or manifest["kind"] != published_ref.kind:
-            raise PublicationVerificationError("PublishedRef kind does not match manifest")
-        if canonical_json_bytes(manifest["provenance"]) != canonical_json_bytes(
-            published_ref.provenance
-        ):
-            raise PublicationVerificationError("PublishedRef provenance does not match manifest")
         descriptors = {
             name: (digest, expected_bytes, media_type, serialization)
             for name, digest, expected_bytes, media_type, serialization in (
@@ -491,6 +559,37 @@ class Publication:
             provenance=manifest["provenance"],
             payloads=verified_payloads,
         )
+
+    def _validated_published_manifest(
+        self,
+        transaction: PostgresTransaction,
+        published_ref: PublishedRef,
+    ) -> dict[str, object]:
+        row = transaction.execute(
+            """
+            SELECT schema_version, kind, manifest_bytes
+            FROM publication.manifests
+            WHERE sha256 = %s
+            """,
+            (published_ref.manifest_sha256,),
+        ).fetchone()
+        if row is None:
+            raise PublicationNotFoundError("Publication is not committed")
+        manifest_bytes = bytes(row["manifest_bytes"])
+        manifest = _load_manifest(manifest_bytes, published_ref.manifest_sha256)
+        objects = _manifest_objects(manifest)
+        self._verify_recorded_links(transaction, published_ref.manifest_sha256, objects)
+        if row["schema_version"] != manifest["schema_version"]:
+            raise PublicationVerificationError(
+                "Publication manifest schema record does not match manifest"
+            )
+        if row["kind"] != published_ref.kind or manifest["kind"] != published_ref.kind:
+            raise PublicationVerificationError("PublishedRef kind does not match manifest")
+        if canonical_json_bytes(manifest["provenance"]) != canonical_json_bytes(
+            published_ref.provenance
+        ):
+            raise PublicationVerificationError("PublishedRef provenance does not match manifest")
+        return manifest
 
     def find_orphan_sha256s(self, *, uploaded_before: datetime) -> tuple[str, ...]:
         if uploaded_before.tzinfo is None or uploaded_before.utcoffset() is None:
@@ -758,29 +857,145 @@ class Publication:
             raise PublicationUnavailableError(
                 "Publication object upload is temporarily unavailable"
             ) from error
-        self._verify_existing(
+        self._verify_streaming(
             digest,
-            content,
+            len(content),
             staging_authority=staging_authority,
         )
 
-    def _verify_existing(
+    def _put_immutable_file(
         self,
         digest: str,
-        expected: bytes,
+        path: Path,
+        *,
+        byte_size: int,
+        media_type: str,
+        staging_authority: StagingAuthority | None,
+    ) -> None:
+        try:
+            with path.open("rb") as content_file, _staging_authority(staging_authority):
+                self._s3.put_object(
+                    Bucket=self._bucket,
+                    Key=_object_key(digest),
+                    Body=content_file,
+                    ContentLength=byte_size,
+                    ContentType=media_type,
+                    IfNoneMatch="*",
+                    Metadata={"sha256": digest},
+                )
+        except ClientError as error:
+            if _error_code(error) not in {
+                "409",
+                "412",
+                "ConditionalRequestConflict",
+                "PreconditionFailed",
+            }:
+                if _client_error_is_transient(error):
+                    raise PublicationUnavailableError(
+                        "Publication object upload is temporarily unavailable"
+                    ) from error
+                raise PublicationPreparationError("Publication object upload failed") from error
+        except TRANSIENT_S3_ERRORS as error:
+            raise PublicationUnavailableError(
+                "Publication object upload is temporarily unavailable"
+            ) from error
+        except OSError as error:
+            raise PublicationPreparationError("staged file could not be read") from error
+        self._verify_streaming(
+            digest,
+            byte_size,
+            staging_authority=staging_authority,
+        )
+
+    def _verify_streaming(
+        self,
+        digest: str,
+        expected_bytes: int,
+        *,
+        staging_authority: StagingAuthority | None = None,
+    ) -> None:
+        observed_bytes, observed_digest = self._stream_object(
+            digest,
+            staging_authority=staging_authority,
+        )
+        if observed_bytes != expected_bytes:
+            raise PublicationVerificationError("Publication object length is invalid")
+        if observed_digest != digest:
+            raise PublicationVerificationError("Publication object checksum is invalid")
+
+    def _materialize_verified(
+        self,
+        digest: str,
+        expected_bytes: int,
+        partial: Path,
+        destination: Path,
         *,
         staging_authority: StagingAuthority | None,
     ) -> None:
-        actual = self._read_object_bytes(
-            digest,
-            unavailable_message="Publication object verification is temporarily unavailable",
-            missing_message="Publication object is missing",
-            staging_authority=staging_authority,
-        )
-        if actual != expected or hashlib.sha256(actual).hexdigest() != digest:
-            raise PublicationVerificationError(
-                "Publication content address contains different bytes"
+        try:
+            observed_bytes, observed_digest = self._stream_object(
+                digest,
+                destination=partial,
+                staging_authority=staging_authority,
             )
+            if observed_bytes != expected_bytes:
+                raise PublicationVerificationError("Publication object length is invalid")
+            if observed_digest != digest:
+                raise PublicationVerificationError("Publication object checksum is invalid")
+            os.replace(partial, destination)
+        except Exception:
+            partial.unlink(missing_ok=True)
+            raise
+
+    def _stream_object(
+        self,
+        digest: str,
+        *,
+        destination: Path | None = None,
+        staging_authority: StagingAuthority | None = None,
+    ) -> tuple[int, str]:
+        last_transient_error: Exception | None = None
+        for _attempt in range(OBJECT_READ_ATTEMPTS):
+            body = None
+            target = None
+            attempt_failed_transiently = False
+            try:
+                if destination is not None:
+                    target = destination.open("wb")
+                with _staging_authority(staging_authority):
+                    body = self._s3.get_object(
+                        Bucket=self._bucket,
+                        Key=_object_key(digest),
+                    )["Body"]
+                    checksum = hashlib.sha256()
+                    byte_size = 0
+                    while chunk := body.read(OBJECT_STREAM_CHUNK_BYTES):
+                        checksum.update(chunk)
+                        byte_size += len(chunk)
+                        if target is not None:
+                            target.write(chunk)
+                    if target is not None:
+                        target.flush()
+                        os.fsync(target.fileno())
+                    return byte_size, checksum.hexdigest()
+            except ClientError as error:
+                if not _client_error_is_transient(error):
+                    raise PublicationVerificationError("Publication object is missing") from error
+                last_transient_error = error
+                attempt_failed_transiently = True
+            except TRANSIENT_S3_ERRORS as error:
+                last_transient_error = error
+                attempt_failed_transiently = True
+            finally:
+                if body is not None:
+                    body.close()
+                if target is not None:
+                    target.close()
+                if destination is not None and attempt_failed_transiently:
+                    destination.unlink(missing_ok=True)
+        raise PublicationUnavailableError(
+            "Publication object read is temporarily unavailable"
+        ) from last_transient_error
 
     def _read_verified(
         self,
@@ -850,6 +1065,16 @@ def _serialize_payload(
             {"format": "canonical-parquet", "writer_contract": payload.contract.descriptor()},
         )
     raise PublicationPreparationError("unsupported Publication payload type")
+
+
+def _file_size_and_sha256(path: Path) -> tuple[int, str]:
+    checksum = hashlib.sha256()
+    byte_size = 0
+    with path.open("rb") as source:
+        while chunk := source.read(OBJECT_STREAM_CHUNK_BYTES):
+            checksum.update(chunk)
+            byte_size += len(chunk)
+    return byte_size, checksum.hexdigest()
 
 
 def _canonical_json_value(value: object, *, subject: str) -> object:

@@ -4,10 +4,11 @@ import fcntl
 import hashlib
 import json
 import math
+import os
 from base64 import urlsafe_b64encode
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Thread
@@ -26,6 +27,7 @@ from thesistrace.publication import (
     PublicationUnavailableError,
     PublicationVerificationError,
     PublishedRef,
+    StagedPayload,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.publication.service import lock_publication_mutation
@@ -66,6 +68,7 @@ from thesistrace.research_batch.models import (
 )
 from thesistrace.research_batch.planning import (
     ResearchBatchCapacityError,
+    rechunk_research_execution_plan,
     validate_research_batch_capacity,
 )
 from thesistrace.research_batch.private_artifact import (
@@ -73,14 +76,19 @@ from thesistrace.research_batch.private_artifact import (
     PRIVATE_ARTIFACT_PUBLICATION_KIND,
     PRIVATE_ARTIFACT_SCHEMA_VERSION,
     PRIVATE_ARTIFACT_SERIALIZATION,
-    decode_private_alpha_factor_artifact,
+    validate_private_alpha_factor_artifact,
 )
 from thesistrace.research_folder import BATCH_RESEARCH_FOLDER_ID
 from thesistrace.research_kernel.research_chunks import AlphaFactorExecutionBinding
+from thesistrace.research_run.execution import ResearchExecutionResourceExhausted
 from thesistrace.research_run.models import (
     FactorEvaluationAdmissionCommand,
     ResearchRunAdmissionCommand,
     StrategyBacktestAdmissionCommand,
+)
+from thesistrace.research_run.result import (
+    RESULT_DAILY_PARTITION_SESSION_COUNT,
+    STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
 )
 from thesistrace.research_run.service import (
     SEMANTIC_VERSIONS,
@@ -96,6 +104,7 @@ BATCH_ATTEMPT_HEARTBEAT_SECONDS = 30
 MAX_TASK_ATTEMPTS = 3
 FACTOR_TASK_INFRASTRUCTURE_FAILURE = "InfrastructureUnavailable"
 FACTOR_TASK_WORKER_LOST_FAILURE = "WorkerLost"
+FACTOR_TASK_RESOURCE_EXHAUSTED_FAILURE = "ResourceExhausted"
 FACTOR_TASK_PERMANENT_FAILURE = "PermanentExecutionFailure"
 FACTOR_TASK_INFRASTRUCTURE_PUBLIC_REASON = (
     "Research execution could not complete after automatic retries."
@@ -434,10 +443,13 @@ class ResearchBatchService:
                         or message.get("run_id") != run_claim.run_id
                     ):
                         raise RuntimeError("Factor Batch child item identity is invalid")
-                    if message.get("status") in {
-                        "item_started",
-                        "item_strategy_chunk_succeeded",
-                    }:
+                    if message.get("status") == "item_started":
+                        execution.advance("acknowledge_progress")
+                        continue
+                    if message.get("status") == "item_strategy_chunk_succeeded":
+                        if claim.batch_kind != "strategy_sweep":
+                            raise RuntimeError("Research Batch item response Kind is invalid")
+                        self._stage_strategy_partition(claim, message)
                         execution.advance("acknowledge_progress")
                         continue
                     if message.get("status") == "item_failed":
@@ -479,6 +491,13 @@ class ResearchBatchService:
                         self._research_runs.complete_batch_owned_strategy_item(
                             run_claim,
                             chunk,
+                            staged_partitions=self._strategy_partitions(
+                                claim,
+                                item_ordinal=ordinal,
+                                expected_research_sessions=(
+                                    run_claim.immutable_input.execution_plan.research_session_count
+                                ),
+                            ),
                             authorize_batch=lambda transaction: (
                                 self._authorize_claim_in_transaction(transaction, claim)
                             ),
@@ -583,20 +602,25 @@ class ResearchBatchService:
             claim.starting_guard.release()
             if execution is not None:
                 execution.close()
-            if private_artifact_path is not None:
-                private_artifact_path.unlink(missing_ok=True)
+            self._cleanup_attempt_scratch(claim.attempt_id)
         return True
 
     def reconcile_attempt_files(self) -> int:
         cutoff = datetime.now(UTC) - timedelta(seconds=self._lease_seconds * 2)
         removed = 0
         self._attempt_control_directory.mkdir(parents=True, exist_ok=True)
-        for path in sorted(
-            self._attempt_control_directory.glob("batch_attempt_*.alpha-factor.artifact")
+        paths_by_attempt: dict[str, list[Path]] = {}
+        for path in self._attempt_control_directory.glob("batch_attempt_*.alpha-factor.artifact*"):
+            attempt_id = path.name.split(".alpha-factor.artifact", 1)[0]
+            paths_by_attempt.setdefault(attempt_id, []).append(path)
+        for path in self._attempt_control_directory.glob(
+            "batch_attempt_*.strategy-partitions.jsonl"
         ):
-            if datetime.fromtimestamp(path.stat().st_mtime, UTC) > cutoff:
+            attempt_id = path.name.removesuffix(".strategy-partitions.jsonl")
+            paths_by_attempt.setdefault(attempt_id, []).append(path)
+        for attempt_id, paths in sorted(paths_by_attempt.items()):
+            if any(datetime.fromtimestamp(path.stat().st_mtime, UTC) > cutoff for path in paths):
                 continue
-            attempt_id = path.name.removesuffix(".alpha-factor.artifact")
             with self._database.transaction() as transaction:
                 lock_publication_mutation(transaction)
                 active = transaction.execute(
@@ -614,8 +638,8 @@ class ResearchBatchService:
                 ).fetchone()
                 if active is not None:
                     continue
-                path.unlink(missing_ok=True)
-                removed += 1
+                removed += sum(path.exists() for path in paths)
+                self._cleanup_attempt_scratch(attempt_id)
         return removed
 
     def admit(
@@ -676,8 +700,14 @@ class ResearchBatchService:
         if issues:
             raise ResearchBatchAdmissionRejected(_deduplicated_issues(issues))
         _validate_duplicate_computation(command, prepared)
+        assert dataset is not None
         try:
-            validate_research_batch_capacity(command.batch_kind, prepared)
+            capacity = validate_research_batch_capacity(
+                command.batch_kind,
+                prepared,
+                research_calendar=dataset.research_sessions,
+                universe_member_union_cardinalities=(dataset.universe_member_union_cardinalities),
+            )
         except ResearchBatchCapacityError as error:
             raise ResearchBatchAdmissionRejected(
                 [
@@ -688,6 +718,20 @@ class ResearchBatchService:
                     )
                 ]
             ) from error
+        prepared = [
+            replace(
+                child,
+                immutable_input=child.immutable_input.model_copy(
+                    update={
+                        "execution_plan": rechunk_research_execution_plan(
+                            child.immutable_input.execution_plan,
+                            chunk_session_count=capacity.session_count,
+                        )
+                    }
+                ),
+            )
+            for child in prepared
+        ]
 
         batch_id = f"batch_{uuid4().hex[:20]}"
         scope = _scope(prepared)
@@ -1311,7 +1355,7 @@ class ResearchBatchService:
             (batch_id,),
         ).fetchall()
         for row in attempt_ids:
-            self._private_artifact_path(str(row["id"])).unlink(missing_ok=True)
+            self._cleanup_attempt_scratch(str(row["id"]))
 
     def _claim_next(self) -> _ResearchBatchClaim | None:
         with self._database.transaction() as transaction:
@@ -1330,6 +1374,7 @@ class ResearchBatchService:
                            expired.generation_pin_id AS expired_generation_pin_id,
                            expired.child_control_path AS expired_child_control_path,
                            starting.id AS expired_starting_id,
+                           starting.ordinal AS expired_starting_ordinal,
                            starting.fence AS expired_starting_fence,
                            starting.generation_pin_id AS expired_starting_pin_id,
                            starting.child_control_path AS expired_starting_control_path
@@ -1418,6 +1463,7 @@ class ResearchBatchService:
                 (batch_id,),
             ).fetchone()
             assert ordinal_row is not None
+            attempt_ordinal = max(int(ordinal_row["ordinal"]), fence)
             attempt_id = f"batch_attempt_{uuid4().hex[:20]}"
             child_control_path = str(self._attempt_control_directory / f"{attempt_id}.lock")
             starting_guard = _StartingGuard(child_control_path)
@@ -1490,7 +1536,7 @@ class ResearchBatchService:
                 (
                     attempt_id,
                     batch_id,
-                    int(ordinal_row["ordinal"]),
+                    attempt_ordinal,
                     fence,
                     pinned.pin.id,
                     pinned.descriptor.manifest_sha256,
@@ -1607,11 +1653,13 @@ class ResearchBatchService:
     ) -> bool:
         batch_id = str(row["id"])
         claim_id = row["expired_starting_id"]
+        claim_ordinal = row["expired_starting_ordinal"]
         fence = row["expired_starting_fence"]
         pin_id = row["expired_starting_pin_id"]
         control_path = row["expired_starting_control_path"]
         if (
             not isinstance(claim_id, str)
+            or not isinstance(claim_ordinal, int)
             or not isinstance(fence, int)
             or not isinstance(pin_id, str)
             or not isinstance(control_path, str)
@@ -1622,7 +1670,7 @@ class ResearchBatchService:
             return False
         incomplete = transaction.execute(
             """
-            SELECT research_run_id
+            SELECT ordinal, research_run_id
             FROM research_batches.items
             WHERE batch_id = %s AND outcome IS NULL
             ORDER BY ordinal
@@ -1635,6 +1683,24 @@ class ResearchBatchService:
             row["researcher_id"],
             [str(item["research_run_id"]) for item in incomplete],
         )
+        retry_exhausted = claim_ordinal >= MAX_TASK_ATTEMPTS
+        if retry_exhausted:
+            diagnostic = ResearchBatchDiagnostic(
+                code="RESEARCH_BATCH_START_RETRY_EXHAUSTED",
+                category="infrastructure",
+                message="Research Batch could not start after automatic retries.",
+            )
+            for item in incomplete:
+                self._fail_recovered_item_in_transaction(
+                    transaction,
+                    researcher_id=row["researcher_id"],
+                    batch_id=batch_id,
+                    item_ordinal=int(item["ordinal"]),
+                    run_id=str(item["research_run_id"]),
+                    diagnostic=diagnostic,
+                )
+            if row["batch_kind"] == "strategy_sweep":
+                self._release_private_artifact_in_transaction(transaction, batch_id)
         deleted = transaction.execute(
             """
             DELETE FROM research_batches.starting_claims
@@ -1653,10 +1719,16 @@ class ResearchBatchService:
         updated = transaction.execute(
             """
             UPDATE research_batches.batches
-            SET status = 'queued', updated_at = now()
+            SET status = %s, updated_at = now()
             WHERE id = %s AND status = 'running' AND execution_fence = %s
             """,
-            (batch_id, fence),
+            (
+                self._terminal_status_from_items_in_transaction(transaction, batch_id)
+                if retry_exhausted
+                else "queued",
+                batch_id,
+                fence,
+            ),
         )
         if updated.rowcount != 1:
             raise RuntimeError("Expired Factor Batch starting recovery was fenced")
@@ -1983,6 +2055,16 @@ class ResearchBatchService:
                     claim,
                     item_ordinal=item_ordinal,
                 )
+            elif (
+                claim.batch_kind == "strategy_sweep"
+                and name == "research_batch_execution_shared_alpha_factor_started"
+                and event.get("private_artifact_reused") is False
+            ):
+                self._ensure_strategy_task_attempt_in_transaction(
+                    transaction,
+                    claim,
+                    item_ordinal=None,
+                )
             current = transaction.execute(
                 """
                 SELECT current_task_role, current_item_key, current_phase,
@@ -2122,27 +2204,6 @@ class ResearchBatchService:
         )
         if inserted.rowcount != 1:
             raise RuntimeError("Research Batch Attempt activation was fenced")
-        if claim.batch_kind == "factor_evaluation":
-            self._ensure_factor_task_attempt_in_transaction(
-                transaction,
-                claim,
-                claim.items[0][0],
-            )
-        else:
-            artifact = transaction.execute(
-                """
-                SELECT 1
-                FROM research_batches.private_alpha_factor_artifacts
-                WHERE batch_id = %s
-                """,
-                (claim.batch_id,),
-            ).fetchone()
-            if artifact is None:
-                self._ensure_strategy_task_attempt_in_transaction(
-                    transaction,
-                    claim,
-                    item_ordinal=None,
-                )
         deleted = transaction.execute(
             """
             DELETE FROM research_batches.starting_claims
@@ -2315,6 +2376,181 @@ class ResearchBatchService:
     def _private_artifact_path(self, attempt_id: str) -> Path:
         return self._attempt_control_directory / f"{attempt_id}.alpha-factor.artifact"
 
+    def _strategy_partition_ledger_path(self, attempt_id: str) -> Path:
+        return self._attempt_control_directory / f"{attempt_id}.strategy-partitions.jsonl"
+
+    def _stage_strategy_partition(
+        self,
+        claim: _ResearchBatchClaim,
+        message: Mapping[str, object],
+    ) -> None:
+        item_ordinal = message.get("item_ordinal")
+        descriptor = message.get("strategy_partition")
+        if (
+            not isinstance(item_ordinal, int)
+            or isinstance(item_ordinal, bool)
+            or not isinstance(descriptor, Mapping)
+            or set(descriptor)
+            != {"chunk_ordinal", "path", "row_count", "first_session", "last_session"}
+        ):
+            raise RuntimeError("Strategy output partition evidence is invalid")
+        chunk_ordinal = descriptor.get("chunk_ordinal")
+        row_count = descriptor.get("row_count")
+        first_session = descriptor.get("first_session")
+        last_session = descriptor.get("last_session")
+        path_value = descriptor.get("path")
+        if (
+            not isinstance(chunk_ordinal, int)
+            or isinstance(chunk_ordinal, bool)
+            or chunk_ordinal <= 0
+            or not isinstance(row_count, int)
+            or isinstance(row_count, bool)
+            or not 1 <= row_count <= RESULT_DAILY_PARTITION_SESSION_COUNT
+            or not isinstance(first_session, str)
+            or not isinstance(last_session, str)
+            or first_session > last_session
+        ):
+            raise RuntimeError("Strategy output partition evidence is invalid")
+        expected_path = self._private_artifact_path(claim.attempt_id).with_name(
+            f"{claim.attempt_id}.alpha-factor.artifact."
+            f"strategy-{item_ordinal:03d}-{chunk_ordinal:06d}.parquet"
+        )
+        if path_value != str(expected_path) or not expected_path.is_file():
+            raise RuntimeError("Strategy output partition evidence is invalid")
+        staged = self._publication.stage_file(
+            expected_path,
+            media_type="application/vnd.apache.parquet",
+            serialization={
+                "format": "canonical-parquet",
+                "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
+            },
+            staging_authority=lambda: self._authorize_claim_staging(claim),
+        )
+        ledger_entry = canonical_json_bytes(
+            {
+                "item_ordinal": item_ordinal,
+                "chunk_ordinal": chunk_ordinal,
+                "row_count": row_count,
+                "first_session": first_session,
+                "last_session": last_session,
+                "sha256": staged.sha256,
+                "byte_size": staged.byte_size,
+                "media_type": staged.media_type,
+                "serialization": dict(staged.serialization),
+            }
+        )
+        ledger_path = self._strategy_partition_ledger_path(claim.attempt_id)
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        with ledger_path.open("ab") as ledger:
+            ledger.write(ledger_entry + b"\n")
+            ledger.flush()
+            os.fsync(ledger.fileno())
+        expected_path.unlink(missing_ok=True)
+
+    def _strategy_partitions(
+        self,
+        claim: _ResearchBatchClaim,
+        *,
+        item_ordinal: int,
+        expected_research_sessions: int,
+    ) -> tuple[tuple[StagedPayload, int, str, str], ...]:
+        ledger_path = self._strategy_partition_ledger_path(claim.attempt_id)
+        selected: list[tuple[int, StagedPayload, int, str, str]] = []
+        try:
+            with ledger_path.open("rb") as ledger:
+                for raw_line in ledger:
+                    line = raw_line.removesuffix(b"\n")
+                    value = json.loads(line)
+                    if not isinstance(value, dict) or canonical_json_bytes(value) != line:
+                        raise ValueError
+                    if value.get("item_ordinal") != item_ordinal:
+                        continue
+                    selected.append(
+                        (
+                            int(value["chunk_ordinal"]),
+                            StagedPayload(
+                                sha256=str(value["sha256"]),
+                                byte_size=int(value["byte_size"]),
+                                media_type=str(value["media_type"]),
+                                serialization=dict(value["serialization"]),
+                            ),
+                            int(value["row_count"]),
+                            str(value["first_session"]),
+                            str(value["last_session"]),
+                        )
+                    )
+        except FileNotFoundError:
+            raise RuntimeError("Strategy output partition ledger is missing") from None
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            raise RuntimeError("Strategy output partition ledger is invalid") from None
+        if (
+            not selected
+            or tuple(value[0] for value in selected) != tuple(range(1, len(selected) + 1))
+            or sum(value[2] for value in selected) != expected_research_sessions
+        ):
+            raise RuntimeError("Strategy output partitions are incomplete")
+        return tuple(
+            (payload, row_count, first_session, last_session)
+            for _ordinal, payload, row_count, first_session, last_session in selected
+        )
+
+    @contextmanager
+    def _authorize_claim_staging(self, claim: _ResearchBatchClaim) -> Iterator[None]:
+        with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
+            self._authorize_claim_in_transaction(transaction, claim)
+            yield
+
+    @contextmanager
+    def _authorize_starting_claim_staging(
+        self,
+        claim: _ResearchBatchClaim,
+    ) -> Iterator[None]:
+        with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
+            current = transaction.execute(
+                """
+                SELECT batch.status, batch.execution_fence,
+                       starting.generation_pin_id,
+                       starting.data_generation_id
+                FROM research_batches.batches AS batch
+                JOIN research_batches.starting_claims AS starting
+                  ON starting.batch_id = batch.id
+                WHERE batch.researcher_id = %s AND batch.id = %s
+                  AND starting.id = %s AND starting.fence = %s
+                  AND starting.lease_expires_at > now()
+                FOR UPDATE OF batch, starting
+                """,
+                (
+                    claim.researcher_id,
+                    claim.batch_id,
+                    claim.attempt_id,
+                    claim.fence,
+                ),
+            ).fetchone()
+            if current != {
+                "status": "running",
+                "execution_fence": claim.fence,
+                "generation_pin_id": claim.generation_pin_id,
+                "data_generation_id": claim.data_generation_id,
+            }:
+                raise ResearchBatchChildLost(
+                    "Research Batch starting claim was fenced during artifact materialization"
+                )
+            yield
+
+    def _cleanup_attempt_scratch(self, attempt_id: str) -> None:
+        artifact_path = self._private_artifact_path(attempt_id)
+        paths = [
+            artifact_path,
+            artifact_path.with_name(f"{artifact_path.name}.partial"),
+            self._strategy_partition_ledger_path(attempt_id),
+        ]
+        paths.extend(artifact_path.parent.glob(f"{artifact_path.name}.strategy-*.parquet"))
+        paths.extend(artifact_path.parent.glob(f"{artifact_path.name}.strategy-*.parquet.partial"))
+        for path in paths:
+            path.unlink(missing_ok=True)
+
     def _materialize_private_artifact(
         self,
         claim: _ResearchBatchClaim,
@@ -2341,12 +2577,15 @@ class ResearchBatchService:
             "content_sha256": str(row["content_sha256"]),
         }
         try:
-            bundle = self._publication.read(
+            payload = self._publication.materialize_payload(
                 PublishedRef(
                     manifest_sha256=str(row["manifest_sha256"]),
                     kind=PRIVATE_ARTIFACT_PUBLICATION_KIND,
                     provenance=provenance,
-                )
+                ),
+                "private_alpha_factor",
+                path,
+                staging_authority=lambda: self._authorize_starting_claim_staging(claim),
             )
         except PublicationUnavailableError:
             raise
@@ -2354,32 +2593,30 @@ class ResearchBatchService:
             raise ResearchBatchPrivateArtifactRejected(
                 "Private Alpha-and-Factor Publication is invalid"
             ) from error
-        payload = bundle.payloads.get("private_alpha_factor")
         if (
-            payload is None
-            or payload.media_type != PRIVATE_ARTIFACT_MEDIA_TYPE
+            payload.media_type != PRIVATE_ARTIFACT_MEDIA_TYPE
             or payload.serialization != PRIVATE_ARTIFACT_SERIALIZATION
+            or payload.byte_size != int(row["byte_size"])
+            or payload.sha256 != row["content_sha256"]
         ):
+            path.unlink(missing_ok=True)
             raise ResearchBatchPrivateArtifactRejected(
                 "Private Alpha-and-Factor Publication is incomplete"
             )
-        content = payload.content
-        if (
-            len(content) != int(row["byte_size"])
-            or hashlib.sha256(content).hexdigest() != row["content_sha256"]
-        ):
-            raise ResearchBatchPrivateArtifactRejected(
-                "Private Alpha-and-Factor Publication content is invalid"
+        try:
+            metadata, _binding = self._validate_private_artifact_path(
+                claim,
+                path,
+                expected_binding=row["binding"],
+                expected_binding_checksum=str(row["binding_checksum"]),
             )
-        self._validate_private_artifact_content(
-            claim,
-            content,
-            expected_binding=row["binding"],
-            expected_binding_checksum=str(row["binding_checksum"]),
-        )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("xb") as artifact_file:
-            artifact_file.write(content)
+            if metadata.sha256 != payload.sha256 or metadata.byte_size != payload.byte_size:
+                raise ResearchBatchPrivateArtifactRejected(
+                    "Private Alpha-and-Factor Publication content is invalid"
+                )
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
         return True
 
     def _acknowledge_private_artifact(
@@ -2403,22 +2640,21 @@ class ResearchBatchService:
             raise ResearchBatchPrivateArtifactRejected(
                 "Private Alpha-and-Factor child evidence is invalid"
             )
-        try:
-            content = Path(path_value).read_bytes()
-        except FileNotFoundError:
+        path = Path(path_value)
+        if not path.is_file():
             raise ResearchBatchPrivateArtifactRejected(
                 "Private Alpha-and-Factor child artifact is missing"
-            ) from None
-        if hashlib.sha256(content).hexdigest() != digest:
-            raise ResearchBatchPrivateArtifactRejected(
-                "Private Alpha-and-Factor child checksum is invalid"
             )
-        canonical_binding = self._validate_private_artifact_content(
+        metadata, canonical_binding = self._validate_private_artifact_path(
             claim,
-            content,
+            path,
             expected_binding=binding,
             expected_binding_checksum=binding_checksum,
         )
+        if metadata.sha256 != digest:
+            raise ResearchBatchPrivateArtifactRejected(
+                "Private Alpha-and-Factor child checksum is invalid"
+            )
         if reused:
             with self._database.transaction() as transaction:
                 self._authorize_claim_in_transaction(transaction, claim)
@@ -2435,7 +2671,7 @@ class ResearchBatchService:
                     "binding_checksum": binding_checksum,
                     "binding": canonical_binding,
                     "content_sha256": digest,
-                    "byte_size": len(content),
+                    "byte_size": metadata.byte_size,
                 }:
                     raise ResearchBatchPrivateArtifactRejected(
                         "Private Alpha-and-Factor reference changed"
@@ -2447,15 +2683,17 @@ class ResearchBatchService:
             "binding_checksum": binding_checksum,
             "content_sha256": digest,
         }
-        staged = self._publication.stage_bytes(
-            content,
+        staged = self._publication.stage_file(
+            path,
             media_type=PRIVATE_ARTIFACT_MEDIA_TYPE,
             serialization=PRIVATE_ARTIFACT_SERIALIZATION,
+            staging_authority=lambda: self._authorize_claim_staging(claim),
         )
         prepared = self._publication.prepare(
             kind=PRIVATE_ARTIFACT_PUBLICATION_KIND,
             payloads={"private_alpha_factor": staged},
             provenance=provenance,
+            staging_authority=lambda: self._authorize_claim_staging(claim),
         )
         with self._database.transaction() as transaction:
             lock_publication_mutation(transaction)
@@ -2475,7 +2713,7 @@ class ResearchBatchService:
                     binding_checksum,
                     Jsonb(canonical_binding),
                     digest,
-                    len(content),
+                    metadata.byte_size,
                     claim.attempt_id,
                     claim.fence,
                 ),
@@ -2504,14 +2742,14 @@ class ResearchBatchService:
             if progress.rowcount != 1:
                 raise RuntimeError("Shared Alpha-and-Factor progress was fenced")
 
-    def _validate_private_artifact_content(
+    def _validate_private_artifact_path(
         self,
         claim: _ResearchBatchClaim,
-        content: bytes,
+        path: Path,
         *,
         expected_binding: object,
         expected_binding_checksum: str,
-    ) -> dict[str, object]:
+    ) -> tuple[object, dict[str, object]]:
         try:
             if not isinstance(expected_binding, dict):
                 raise ValueError
@@ -2544,12 +2782,13 @@ class ResearchBatchService:
                 or binding.get("label_horizons") != [1, 5, 20]
             ):
                 raise ValueError
-            decode_private_alpha_factor_artifact(
-                content,
+            metadata = validate_private_alpha_factor_artifact(
+                path,
                 expected_batch_id=claim.batch_id,
                 expected_binding=restored_binding,
+                maximum_chunk_payload_bytes=(immutable.execution_plan.execution_memory_bytes),
             )
-            return binding
+            return metadata, binding
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             raise ResearchBatchPrivateArtifactRejected(
                 "Private Alpha-and-Factor artifact binding is invalid"
@@ -2685,7 +2924,7 @@ class ResearchBatchService:
                 lock_publication_mutation(transaction)
             starting = transaction.execute(
                 """
-                SELECT child_control_path
+                SELECT child_control_path, ordinal
                 FROM research_batches.starting_claims
                 WHERE id = %s AND batch_id = %s AND fence = %s
                 FOR UPDATE
@@ -2711,11 +2950,21 @@ class ResearchBatchService:
                 claim.researcher_id,
                 [str(item["research_run_id"]) for item in incomplete],
             )
-            if isinstance(error, ResearchBatchPrivateArtifactRejected):
-                diagnostic = ResearchBatchDiagnostic(
-                    code="PRIVATE_ALPHA_FACTOR_ARTIFACT_REJECTED",
-                    category="infrastructure",
-                    message="The private Alpha-and-Factor artifact is invalid.",
+            policy = (
+                _factor_task_failure_policy(error)
+                if claim.batch_kind == "factor_evaluation"
+                else _strategy_task_failure_policy(error)
+            )
+            terminal = not policy.retryable or int(starting["ordinal"]) >= MAX_TASK_ATTEMPTS
+            if terminal:
+                diagnostic = (
+                    ResearchBatchDiagnostic(
+                        code="PRIVATE_ALPHA_FACTOR_ARTIFACT_REJECTED",
+                        category="infrastructure",
+                        message="The private Alpha-and-Factor artifact is invalid.",
+                    )
+                    if isinstance(error, ResearchBatchPrivateArtifactRejected)
+                    else _exception_diagnostic(error)
                 )
                 for item in incomplete:
                     self._fail_recovered_item_in_transaction(
@@ -2726,10 +2975,11 @@ class ResearchBatchService:
                         run_id=str(item["research_run_id"]),
                         diagnostic=diagnostic,
                     )
-                self._release_private_artifact_in_transaction(
-                    transaction,
-                    claim.batch_id,
-                )
+                if claim.batch_kind == "strategy_sweep":
+                    self._release_private_artifact_in_transaction(
+                        transaction,
+                        claim.batch_id,
+                    )
                 batch_status = self._terminal_status_from_items_in_transaction(
                     transaction,
                     claim.batch_id,
@@ -2847,7 +3097,7 @@ class ResearchBatchService:
         policy: _TaskFailurePolicy,
         require_expired: bool,
     ) -> None:
-        task, incomplete = self._close_interrupted_attempt_in_transaction(
+        task, incomplete, batch_attempt_ordinal = self._close_interrupted_attempt_in_transaction(
             transaction,
             researcher_id=researcher_id,
             batch_id=batch_id,
@@ -2857,10 +3107,27 @@ class ResearchBatchService:
             policy=policy,
             require_expired=require_expired,
         )
-        exhausted = task is not None and (
-            not policy.retryable or int(task["ordinal"]) >= MAX_TASK_ATTEMPTS
-        )
-        if task is not None and task["task_role"] == "shared_alpha_factor" and not exhausted:
+        retry_ordinal = batch_attempt_ordinal if task is None else int(task["ordinal"])
+        exhausted = not policy.retryable or retry_ordinal >= MAX_TASK_ATTEMPTS
+        if task is None and exhausted:
+            transaction.execute(
+                """
+                UPDATE research_batches.progress
+                SET shared_alpha_factor_status = 'failed', updated_at = now()
+                WHERE batch_id = %s AND shared_alpha_factor_status IN ('pending', 'running')
+                """,
+                (batch_id,),
+            )
+            for item in incomplete:
+                self._fail_recovered_item_in_transaction(
+                    transaction,
+                    researcher_id=researcher_id,
+                    batch_id=batch_id,
+                    item_ordinal=int(item["ordinal"]),
+                    run_id=str(item["research_run_id"]),
+                    diagnostic=diagnostic,
+                )
+        elif task is not None and task["task_role"] == "shared_alpha_factor" and not exhausted:
             reset_shared = transaction.execute(
                 """
                 UPDATE research_batches.progress
@@ -2871,15 +3138,19 @@ class ResearchBatchService:
             )
             if reset_shared.rowcount != 1:
                 raise RuntimeError("Shared Alpha-and-Factor retry progress was fenced")
-        if exhausted and task["task_role"] == "shared_alpha_factor":
-            shared_diagnostic = ResearchBatchDiagnostic(
-                code=(
-                    "SHARED_ALPHA_FACTOR_RETRY_EXHAUSTED"
-                    if policy.retryable
-                    else "PRIVATE_ALPHA_FACTOR_ARTIFACT_REJECTED"
-                ),
-                category="infrastructure",
-                message=policy.public_reason,
+        if task is not None and exhausted and task["task_role"] == "shared_alpha_factor":
+            shared_diagnostic = (
+                diagnostic
+                if policy.attempt_reason == FACTOR_TASK_RESOURCE_EXHAUSTED_FAILURE
+                else ResearchBatchDiagnostic(
+                    code=(
+                        "SHARED_ALPHA_FACTOR_RETRY_EXHAUSTED"
+                        if policy.retryable
+                        else "PRIVATE_ALPHA_FACTOR_ARTIFACT_REJECTED"
+                    ),
+                    category="infrastructure",
+                    message=policy.public_reason,
+                )
             )
             transaction.execute(
                 """
@@ -2898,19 +3169,16 @@ class ResearchBatchService:
                     run_id=str(item["research_run_id"]),
                     diagnostic=shared_diagnostic,
                 )
-        elif exhausted and task["task_role"] == "strategy":
+        elif task is not None and exhausted and task["task_role"] == "strategy":
             selected = next(
                 (item for item in incomplete if int(item["ordinal"]) == int(task["item_ordinal"])),
                 None,
             )
             if selected is not None:
-                self._fail_recovered_item_in_transaction(
-                    transaction,
-                    researcher_id=researcher_id,
-                    batch_id=batch_id,
-                    item_ordinal=int(selected["ordinal"]),
-                    run_id=str(selected["research_run_id"]),
-                    diagnostic=ResearchBatchDiagnostic(
+                item_diagnostic = (
+                    diagnostic
+                    if policy.attempt_reason == FACTOR_TASK_RESOURCE_EXHAUSTED_FAILURE
+                    else ResearchBatchDiagnostic(
                         code=(
                             "STRATEGY_TASK_RETRY_EXHAUSTED"
                             if policy.retryable
@@ -2918,7 +3186,15 @@ class ResearchBatchService:
                         ),
                         category=("infrastructure" if policy.retryable else "execution"),
                         message=policy.public_reason,
-                    ),
+                    )
+                )
+                self._fail_recovered_item_in_transaction(
+                    transaction,
+                    researcher_id=researcher_id,
+                    batch_id=batch_id,
+                    item_ordinal=int(selected["ordinal"]),
+                    run_id=str(selected["research_run_id"]),
+                    diagnostic=item_diagnostic,
                 )
         self._finish_interrupted_attempt_in_transaction(
             transaction,
@@ -2940,7 +3216,7 @@ class ResearchBatchService:
         diagnostic: ResearchBatchDiagnostic,
         policy: _TaskFailurePolicy,
         require_expired: bool,
-    ) -> tuple[Mapping[str, object] | None, Sequence[Mapping[str, object]]]:
+    ) -> tuple[Mapping[str, object] | None, Sequence[Mapping[str, object]], int]:
         task = transaction.execute(
             """
             SELECT id, item_ordinal, task_role, ordinal
@@ -2981,6 +3257,7 @@ class ResearchBatchService:
             WHERE id = %s AND batch_id = %s AND fence = %s
               AND status = 'running'
               AND (%s = false OR lease_expires_at <= now())
+            RETURNING ordinal
             """,
             (
                 policy.attempt_reason,
@@ -2993,6 +3270,9 @@ class ResearchBatchService:
         )
         if closed_attempt.rowcount != 1:
             raise RuntimeError("Research Batch Attempt closure was fenced")
+        closed_attempt_row = closed_attempt.fetchone()
+        if closed_attempt_row is None:
+            raise RuntimeError("Research Batch Attempt ordinal is missing")
         incomplete = transaction.execute(
             """
             SELECT ordinal, research_run_id
@@ -3008,7 +3288,7 @@ class ResearchBatchService:
             researcher_id,
             [str(item["research_run_id"]) for item in incomplete],
         )
-        return task, incomplete
+        return task, incomplete, int(closed_attempt_row["ordinal"])
 
     def _finish_interrupted_attempt_in_transaction(
         self,
@@ -3064,20 +3344,43 @@ class ResearchBatchService:
         diagnostic: ResearchBatchDiagnostic,
         require_expired: bool,
     ) -> None:
-        task_attempt, incomplete = self._close_interrupted_attempt_in_transaction(
-            transaction,
-            researcher_id=researcher_id,
-            batch_id=batch_id,
-            attempt_id=attempt_id,
-            fence=fence,
-            diagnostic=diagnostic,
-            policy=policy,
-            require_expired=require_expired,
+        task_attempt, incomplete, batch_attempt_ordinal = (
+            self._close_interrupted_attempt_in_transaction(
+                transaction,
+                researcher_id=researcher_id,
+                batch_id=batch_id,
+                attempt_id=attempt_id,
+                fence=fence,
+                diagnostic=diagnostic,
+                policy=policy,
+                require_expired=require_expired,
+            )
         )
-        terminal_task = task_attempt is not None and (
-            not policy.retryable or int(task_attempt["ordinal"]) >= MAX_TASK_ATTEMPTS
+        retry_ordinal = (
+            batch_attempt_ordinal if task_attempt is None else int(task_attempt["ordinal"])
         )
-        if terminal_task:
+        terminal_task = not policy.retryable or retry_ordinal >= MAX_TASK_ATTEMPTS
+        if policy.attempt_reason == FACTOR_TASK_RESOURCE_EXHAUSTED_FAILURE:
+            for item in incomplete:
+                self._fail_recovered_item_in_transaction(
+                    transaction,
+                    researcher_id=researcher_id,
+                    batch_id=batch_id,
+                    item_ordinal=int(item["ordinal"]),
+                    run_id=str(item["research_run_id"]),
+                    diagnostic=diagnostic,
+                )
+        elif task_attempt is None and terminal_task:
+            for item in incomplete:
+                self._fail_recovered_item_in_transaction(
+                    transaction,
+                    researcher_id=researcher_id,
+                    batch_id=batch_id,
+                    item_ordinal=int(item["ordinal"]),
+                    run_id=str(item["research_run_id"]),
+                    diagnostic=diagnostic,
+                )
+        elif task_attempt is not None and terminal_task:
             selected = next(
                 (
                     item
@@ -3088,13 +3391,10 @@ class ResearchBatchService:
             )
             if selected is not None:
                 exhausted = policy.retryable and int(task_attempt["ordinal"]) >= MAX_TASK_ATTEMPTS
-                self._fail_recovered_item_in_transaction(
-                    transaction,
-                    researcher_id=researcher_id,
-                    batch_id=batch_id,
-                    item_ordinal=int(selected["ordinal"]),
-                    run_id=str(selected["research_run_id"]),
-                    diagnostic=ResearchBatchDiagnostic(
+                item_diagnostic = (
+                    diagnostic
+                    if policy.attempt_reason == FACTOR_TASK_RESOURCE_EXHAUSTED_FAILURE
+                    else ResearchBatchDiagnostic(
                         code=(
                             "FACTOR_TASK_RETRY_EXHAUSTED"
                             if exhausted
@@ -3106,7 +3406,15 @@ class ResearchBatchService:
                             if exhausted
                             else policy.public_reason
                         ),
-                    ),
+                    )
+                )
+                self._fail_recovered_item_in_transaction(
+                    transaction,
+                    researcher_id=researcher_id,
+                    batch_id=batch_id,
+                    item_ordinal=int(selected["ordinal"]),
+                    run_id=str(selected["research_run_id"]),
+                    diagnostic=item_diagnostic,
                 )
         self._finish_interrupted_attempt_in_transaction(
             transaction,
@@ -3875,6 +4183,12 @@ def _message_diagnostic(message: Mapping[str, object]) -> ResearchBatchDiagnosti
 
 
 def _factor_task_failure_policy(error: Exception) -> _TaskFailurePolicy:
+    if isinstance(error, (MemoryError, ResearchExecutionResourceExhausted)):
+        return _TaskFailurePolicy(
+            attempt_reason=FACTOR_TASK_RESOURCE_EXHAUSTED_FAILURE,
+            public_reason="Research Batch execution exceeded its resource limit.",
+            retryable=False,
+        )
     if isinstance(
         error,
         (
@@ -3905,25 +4219,21 @@ def _strategy_task_failure_policy(error: Exception) -> _TaskFailurePolicy:
             public_reason="The private Alpha-and-Factor artifact is invalid.",
             retryable=False,
         )
-    return _TaskFailurePolicy(
-        attempt_reason=FACTOR_TASK_INFRASTRUCTURE_FAILURE,
-        public_reason=FACTOR_TASK_INFRASTRUCTURE_PUBLIC_REASON,
-        retryable=True,
-    )
+    return _factor_task_failure_policy(error)
 
 
 def _exception_diagnostic(error: Exception) -> ResearchBatchDiagnostic:
+    if isinstance(error, (MemoryError, ResearchExecutionResourceExhausted)):
+        return ResearchBatchDiagnostic(
+            code="RESEARCH_BATCH_RESOURCE_EXHAUSTED",
+            category="resource_exhausted",
+            message="Research Batch execution exceeded its resource limit.",
+        )
     if _factor_task_failure_policy(error).retryable:
         return ResearchBatchDiagnostic(
             code="RESEARCH_BATCH_INFRASTRUCTURE_UNAVAILABLE",
             category="infrastructure",
             message="Research Batch execution lost required infrastructure.",
-        )
-    if isinstance(error, MemoryError):
-        return ResearchBatchDiagnostic(
-            code="RESEARCH_BATCH_RESOURCE_EXHAUSTED",
-            category="resource_exhausted",
-            message="Research Batch execution exceeded its resource limit.",
         )
     return ResearchBatchDiagnostic(
         code="RESEARCH_BATCH_EXECUTION_FAILED",

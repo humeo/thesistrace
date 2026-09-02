@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -1261,6 +1261,61 @@ class MountedGenerationStore:
                 if start_session <= session <= end_session:
                     cardinalities.append(int(value[_UNIVERSE_NAMES.index(universe) + 1]))
         return max(cardinalities, default=0)
+
+    def universe_member_union_cardinalities(
+        self,
+        manifest_sha256: str,
+        *,
+        universe: str,
+        session_windows: Sequence[Sequence[str]],
+    ) -> tuple[int, ...]:
+        if (
+            universe not in _UNIVERSE_NAMES
+            or not session_windows
+            or any(
+                not window or tuple(window) != tuple(sorted(set(window)))
+                for window in session_windows
+            )
+        ):
+            raise ValueError("Universe member union windows are invalid")
+        selected_sessions = {session for window in session_windows for session in window}
+        root = self._read_family_generation_root(manifest_sha256)
+        spec, reference = self._family_table_reference(
+            root,
+            "equity.liquidity_universe",
+            "liquidity_universes",
+        )
+        universes = self._open_table_sessions_columnar(
+            spec,
+            reference,
+            selected_sessions=selected_sessions,
+            columns={"session", "universe", "instrument_ids"},
+        )
+        universes = universes.filter(pc.equal(universes["universe"], universe))
+        instrument_bits: dict[str, int] = {}
+        members_by_session: dict[str, int] = {}
+        for index in range(universes.num_rows):
+            session = str(universes["session"][index].as_py())
+            if session in members_by_session:
+                raise GenerationStoreError("Liquidity Universe session is duplicated")
+            member_mask = 0
+            for instrument_id_value in universes["instrument_ids"][index].as_py():
+                instrument_id = str(instrument_id_value)
+                bit = instrument_bits.get(instrument_id)
+                if bit is None:
+                    bit = 1 << len(instrument_bits)
+                    instrument_bits[instrument_id] = bit
+                member_mask |= bit
+            members_by_session[session] = member_mask
+        if set(members_by_session) != selected_sessions:
+            raise GenerationStoreError("Liquidity Universe member union is incomplete")
+        cardinalities: list[int] = []
+        for window in session_windows:
+            union_mask = 0
+            for session in window:
+                union_mask |= members_by_session[session]
+            cardinalities.append(union_mask.bit_count())
+        return tuple(cardinalities)
 
     def open_refresh_base(
         self,

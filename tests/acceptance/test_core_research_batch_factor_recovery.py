@@ -24,6 +24,7 @@ from thesistrace.data import DatasetLifecycle
 from thesistrace.entrypoints.runtime import core_environment_is_configured
 from thesistrace.research_batch import ResearchBatchService
 from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
+from thesistrace.research_run.execution import ResearchExecutionResourceExhausted
 
 
 class _KillSecondFactorExecution:
@@ -109,6 +110,61 @@ class _FinalFactorChunkBarrierExecutor:
             self.final_chunk,
             self.release,
         )
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_resource_exhaustion_fails_the_factor_plan_once_without_retry(
+    tmp_path: Path,
+) -> None:
+    settings = isolated_core_settings(tmp_path)
+    drop_product_schemas(settings)
+    exhausted = False
+
+    def exhaust_after_factor_start(event: dict[str, object]) -> None:
+        nonlocal exhausted
+        if not exhausted and event.get("event") == "research_batch_execution_item_started":
+            exhausted = True
+            raise ResearchExecutionResourceExhausted("injected bounded-memory breach")
+
+    with TestClient(create_app(settings)) as client:
+        _publish_current_data(settings)
+        admitted = client.post(
+            "/api/research-batches",
+            json=_factor_command("factor-resource-exhausted-no-retry"),
+        ).json()
+        runtime = client.app.state.core_runtime
+
+        assert (
+            runtime.research_batches.process_next(on_execution_event=exhaust_after_factor_start)
+            is True
+        )
+        failed = client.get(f"/api/research-batches/{admitted['id']}").json()
+        assert failed["status"] == "failed"
+        assert all(item["outcome"] == "failed" for item in failed["items"])
+        assert all(
+            item["diagnostic"]
+            == {
+                "code": "RESEARCH_BATCH_RESOURCE_EXHAUSTED",
+                "category": "resource_exhausted",
+                "message": "Research Batch execution exceeded its resource limit.",
+            }
+            for item in failed["items"]
+        )
+        assert runtime.research_batches.process_next() is False
+        with runtime.database.transaction() as transaction:
+            attempts = transaction.execute(
+                """
+                SELECT status, failure_reason
+                FROM research_batches.task_attempts
+                WHERE batch_id = %s
+                ORDER BY ordinal
+                """,
+                (admitted["id"],),
+            ).fetchall()
+        assert attempts == [{"status": "failed", "failure_reason": "ResourceExhausted"}]
 
 
 @pytest.mark.skipif(
@@ -280,7 +336,10 @@ def test_expired_lease_rejects_stale_child_output_before_publication(
         assert processor.process_next() is True
         completed = client.get(f"/api/research-batches/{admitted['id']}").json()
         assert completed["status"] == "succeeded"
-        assert [item["task_attempt_count"] for item in completed["items"]] == [2, 1]
+        # The expired Attempt was fenced after preparation but before the first
+        # item_started event, so it consumes the Batch Attempt budget without
+        # manufacturing a Factor task Attempt.
+        assert [item["task_attempt_count"] for item in completed["items"]] == [1, 1]
         assert _lost_attempt_evidence(runtime, [first_attempt]) == [("failed", "WorkerLost")]
 
 
@@ -360,13 +419,13 @@ def test_factor_child_loss_restarts_only_the_unacknowledged_whole_task(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_three_lost_workers_exhaust_only_the_current_factor_and_continue(
+def test_three_pre_start_worker_losses_exhaust_the_batch_attempt_budget(
     tmp_path: Path,
 ) -> None:
     settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:
-        frozen_generation = _publish_current_data(settings)
+        _publish_current_data(settings)
         admitted = client.post(
             "/api/research-batches",
             json=_factor_command("factor-worker-loss-retry-limit"),
@@ -391,42 +450,36 @@ def test_three_lost_workers_exhaust_only_the_current_factor_and_continue(
             assert current["attempt"]["number"] == expected_attempt
             assert current["live_progress"] is None
 
-        replacement = _publish_current_data(
-            settings,
-            operation_id="factor-worker-loss-new-head",
-            expected_generation=frozen_generation,
-        )
-        assert replacement != frozen_generation
-        assert runtime.research_batches.process_next() is True
+        assert runtime.research_batches.process_next() is False
 
         completed = client.get(f"/api/research-batches/{admitted['id']}").json()
-        assert completed["status"] == "completed_with_failures"
+        assert completed["status"] == "failed"
         assert completed["progress"] == {
             "completed_factor_tasks": 2,
             "total_factor_tasks": 2,
         }
         assert [item["status"] for item in completed["items"]] == [
             "failed",
-            "succeeded",
+            "failed",
         ]
-        assert [item["task_attempt_count"] for item in completed["items"]] == [3, 1]
-        assert completed["items"][0]["diagnostic"] == {
-            "code": "FACTOR_TASK_RETRY_EXHAUSTED",
-            "category": "infrastructure",
-            "message": "Research execution could not complete after automatic retries.",
-        }
-        assert completed["attempt"]["number"] == 4
-        assert completed["attempt"]["status"] == "succeeded"
-        assert _attempt_and_pin_counts(runtime, admitted["id"]) == (4, 0, 4)
+        assert [item["task_attempt_count"] for item in completed["items"]] == [0, 0]
+        assert all(
+            item["diagnostic"]
+            == {
+                "code": "FACTOR_TASK_WORKER_LOST",
+                "category": "infrastructure",
+                "message": "The Factor task Worker was lost before acknowledgement.",
+            }
+            for item in completed["items"]
+        )
+        assert completed["attempt"]["number"] == 3
+        assert completed["attempt"]["status"] == "failed"
+        assert _attempt_and_pin_counts(runtime, admitted["id"]) == (3, 0, 3)
         assert _lost_attempt_evidence(runtime, lost_attempt_ids) == [
             ("failed", "WorkerLost"),
             ("failed", "WorkerLost"),
             ("failed", "WorkerLost"),
         ]
-        assert (
-            _run_generation_id(runtime, str(completed["items"][1]["research_run_id"]))
-            == frozen_generation
-        )
 
 
 def _expire_batch_attempt(runtime, attempt_id: str) -> None:

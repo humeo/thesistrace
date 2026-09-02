@@ -18,7 +18,10 @@ from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_co
 from thesistrace.publication import PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_batch import ResearchBatchService
-from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
+from thesistrace.research_batch.execution import (
+    ResearchBatchChildLost,
+    SupervisedResearchBatchExecutor,
+)
 from thesistrace.research_run.result import read_result_bundle
 
 
@@ -39,7 +42,7 @@ class _PreparationBarrierExecutor:
 
 class _TransportFailureExecutor:
     def execute(self, request, *, emit, cancel_requested):
-        raise RuntimeError("injected Batch transport failure")
+        raise ResearchBatchChildLost("injected Batch transport failure")
 
 
 @pytest.mark.skipif(
@@ -171,15 +174,19 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
         event for event in events if event["event"] == "research_batch_execution_batch_prepared"
     ]
     assert len(prepared) == 1
-    assert int(prepared[0]["data_io"]["parquet_object_opens"]) > 0
-    assert int(prepared[0]["data_io"]["rows_scanned"]) > 0
+    assert int(prepared[0]["data_io"]["parquet_object_opens"]) == 0
+    assert int(prepared[0]["data_io"]["rows_scanned"]) == 0
     item_events = [
         event
         for event in events
         if event["event"] == "research_batch_execution_item_chunk_succeeded"
     ]
     assert sorted({int(event["item_ordinal"]) for event in item_events}) == [1, 2]
-    assert sum(event["alpha_factor_task_started"] is True for event in item_events) == 2
+    started = [
+        event for event in events if event["event"] == "research_batch_execution_item_started"
+    ]
+    assert [int(event["item_ordinal"]) for event in started] == [1, 2]
+    assert all(event["alpha_factor_task_started"] is True for event in started)
     assert sum(event["alpha_factor_task_completed"] is True for event in item_events) == 2
     assert [
         int(event["item_ordinal"])
@@ -191,8 +198,11 @@ def test_factor_batch_shares_preparation_preserves_frozen_generation_and_matches
             if candidate["item_ordinal"] == event["item_ordinal"]
         )
     ] == [1, 2]
-    assert all(float(event["child_data_read_seconds"]) == 0 for event in item_events)
-    assert all(event["data_io"] == prepared[0]["data_io"] for event in item_events)
+    assert float(item_events[0]["child_data_read_seconds"]) > 0
+    assert all(
+        int(event["data_io"]["rows_scanned"]) > int(prepared[0]["data_io"]["rows_scanned"])
+        for event in item_events
+    )
     assert (
         max(
             int(event["child_peak_rss_bytes"])
@@ -294,7 +304,7 @@ def test_factor_batch_isolates_one_deterministic_item_failure_and_continues(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_transport_failure_before_child_ready_does_not_charge_a_task_attempt(
+def test_transport_failure_before_child_ready_charges_only_the_batch_retry_budget(
     tmp_path: Path,
 ) -> None:
     settings = isolated_core_settings(tmp_path)
@@ -354,7 +364,7 @@ def test_transport_failure_before_child_ready_does_not_charge_a_task_attempt(
         assert completed["status"] == "succeeded"
         assert [item["status"] for item in completed["items"]] == ["succeeded"] * 3
         assert [item["task_attempt_count"] for item in completed["items"]] == [1, 1, 1]
-        assert completed["attempt"]["number"] == 1
+        assert completed["attempt"]["number"] == 2
 
 
 @pytest.mark.skipif(
@@ -403,7 +413,15 @@ def test_widest_admitted_shared_slice_stays_inside_child_memory_budget(
         event for event in events if event["event"] == "research_batch_execution_batch_prepared"
     )
     assert prepared["shared_session_count"] == 58
-    assert int(prepared["data_io"]["rows_scanned"]) >= 58 * 512
+    assert int(prepared["data_io"]["rows_scanned"]) == 0
+    assert (
+        max(
+            int(event["data_io"]["rows_scanned"])
+            for event in events
+            if event["event"] == "research_batch_execution_item_chunk_succeeded"
+        )
+        >= 58 * 512
+    )
     assert (
         max(
             int(event["child_peak_rss_bytes"])
@@ -496,7 +514,11 @@ def test_one_and_twenty_factor_items_use_the_same_ordered_execution_contract(
                 == expected_items
             )
             assert (
-                sum(event.get("alpha_factor_task_started") is True for event in events)
+                sum(
+                    event["event"] == "research_batch_execution_item_started"
+                    and event.get("alpha_factor_task_started") is True
+                    for event in events
+                )
                 == expected_items
             )
             assert (

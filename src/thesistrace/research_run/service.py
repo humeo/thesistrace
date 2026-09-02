@@ -135,7 +135,6 @@ from thesistrace.research_run.planning import (
     plan_research_chunks,
 )
 from thesistrace.research_run.result import (
-    RESULT_DAILY_PARTITION_SESSION_COUNT,
     STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
     ResearchResultError,
     SemanticResultSectionRead,
@@ -695,12 +694,13 @@ class ResearchRunService:
         claim: ResearchRunExecutionClaim,
         final_chunk: Mapping[str, object],
         *,
+        staged_partitions: Sequence[tuple[StagedPayload, int, str, str]],
         authorize_batch: BatchExecutionAuthorization,
         complete_batch_item: BatchItemCompletion,
     ) -> None:
         if self._publication is None:
             raise RuntimeError("ResearchRun Result publication is not configured")
-        final_values, observations = self._validate_batch_strategy_final_chunk(
+        final_values = self._validate_batch_strategy_final_chunk(
             claim,
             final_chunk,
         )
@@ -710,37 +710,16 @@ class ResearchRunService:
             "strategy_backtest",
             annualized_excess_return=self._strategy_annualized_excess(final_values),
         )
-        partitions: list[tuple[StagedPayload, int, str, str]] = []
-        observation_offset = 0
-        for plan_chunk in claim.immutable_input.execution_plan.chunks:
-            row_count = plan_chunk.research_session_count
-            if row_count == 0:
-                continue
-            partition_rows = observations[observation_offset : observation_offset + row_count]
-            observation_offset += row_count
-            if row_count > RESULT_DAILY_PARTITION_SESSION_COUNT:
-                raise ResearchResultError(
-                    "Strategy Sweep observation partition exceeds the Result contract"
-                )
-            observation_payload = self._publication.stage(
-                ParquetRowsPayload(
-                    rows=tuple(dict(value) for value in partition_rows),
-                    contract=STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
-                ),
-                staging_authority=lambda: self._authorize_batch_result_staging(
-                    claim,
-                    authorize_batch,
-                ),
-            )
-            partitions.append(
-                (
-                    observation_payload,
-                    row_count,
-                    str(partition_rows[0]["session"]),
-                    str(partition_rows[-1]["session"]),
-                )
-            )
-        if observation_offset != len(observations):
+        partitions = tuple(staged_partitions)
+        if (
+            not partitions
+            or sum(row_count for _payload, row_count, _first, _last in partitions)
+            != claim.immutable_input.execution_plan.research_session_count
+            or partitions[0][2]
+            != claim.immutable_input.data_admission.first_research_session.isoformat()
+            or partitions[-1][3]
+            != claim.immutable_input.data_admission.last_research_session.isoformat()
+        ):
             raise ResearchResultError("Strategy Sweep observation partitions are incomplete")
         prepared = self._publication.prepare(
             kind="research.result",
@@ -814,7 +793,7 @@ class ResearchRunService:
         self,
         claim: ResearchRunExecutionClaim,
         chunk: Mapping[str, object],
-    ) -> tuple[Mapping[str, object], list[Mapping[str, object]]]:
+    ) -> Mapping[str, object]:
         immutable_input = claim.immutable_input
         plan = immutable_input.execution_plan
         continuation = chunk.get("continuation")
@@ -829,14 +808,7 @@ class ResearchRunService:
             or int(chunk.get("completed_research_sessions", -1)) != plan.research_session_count
             or not isinstance(continuation, Mapping)
             or not isinstance(final_values, Mapping)
-            or not isinstance(observations, list)
-            or len(observations) != plan.research_session_count
-            or any(not isinstance(value, Mapping) for value in observations)
-            or not observations
-            or str(observations[0].get("session"))
-            != immutable_input.data_admission.first_research_session.isoformat()
-            or str(observations[-1].get("session"))
-            != immutable_input.data_admission.last_research_session.isoformat()
+            or observations != []
         ):
             raise ResearchResultError("Strategy Sweep final task boundary is invalid")
         try:
@@ -846,7 +818,7 @@ class ResearchRunService:
             )
         except ValueError as error:
             raise ResearchResultError("Strategy Sweep final continuation is invalid") from error
-        return final_values, observations
+        return final_values
 
     def _validate_batch_factor_final_chunk(
         self,

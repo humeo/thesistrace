@@ -11,6 +11,10 @@ from thesistrace.data.lifecycle import DatasetLifecycle
 from thesistrace.data.models import FinancialResearchReadiness
 
 type MaximumUniverseCardinality = Callable[[str, date, date], int]
+type UniverseMemberUnionCardinalities = Callable[
+    [str, tuple[tuple[date, ...], ...]],
+    tuple[int, ...],
+]
 
 
 class DatasetWarmupUnavailable(ValueError):
@@ -26,6 +30,7 @@ class DatasetAdmissionSnapshot:
     research_sessions: tuple[date, ...]
     available_field_ids: frozenset[str]
     maximum_universe_cardinality: MaximumUniverseCardinality
+    universe_member_union_cardinalities: UniverseMemberUnionCardinalities
     financial_research_readiness: FinancialResearchReadiness
     financial_coverage_start: date | None = None
     financial_coverage_end: date | None = None
@@ -105,6 +110,15 @@ class DatasetAdmissionService:
                     universe=universe,
                     start_session=start.isoformat(),
                     end_session=end.isoformat(),
+                )
+            ),
+            universe_member_union_cardinalities=lambda universe, windows: (
+                self._generations.universe_member_union_cardinalities(
+                    admission.generation.manifest_sha256,
+                    universe=universe,
+                    session_windows=tuple(
+                        tuple(session.isoformat() for session in window) for window in windows
+                    ),
                 )
             ),
             financial_research_readiness=(

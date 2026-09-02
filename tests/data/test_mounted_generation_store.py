@@ -713,11 +713,14 @@ def test_market_refresh_inherits_industry_publication_coordinate(tmp_path: Path)
     )
 
     assert refreshed.industry_publication_coordinate == "b" * 64
-    assert next(
-        family.manifest_sha256
-        for family in refreshed.families
-        if family.family_id == "equity.industry_membership"
-    ) == candidate.manifest_sha256
+    assert (
+        next(
+            family.manifest_sha256
+            for family in refreshed.families
+            if family.family_id == "equity.industry_membership"
+        )
+        == candidate.manifest_sha256
+    )
 
 
 def test_market_refresh_reuses_industry_family_manifest_and_coverage(
@@ -1618,6 +1621,31 @@ def test_maximum_universe_cardinality_does_not_count_membership_churn(
         )
         == 1
     )
+
+
+def test_universe_member_union_cardinalities_count_membership_churn_per_slice(
+    tmp_path: Path,
+) -> None:
+    canonical = _canonical(session_count=4)
+    for rows in canonical["liquidity_universes"].values():
+        for ordinal, row in enumerate(rows):
+            row["instrument_ids"] = ["equity:A.SH" if ordinal % 2 == 0 else "equity:B.SZ"]
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "membership-churn"},
+    )
+    sessions = tuple(str(value) for value in canonical["research_calendar"])
+
+    counts = store.universe_member_union_cardinalities(
+        generation.manifest_sha256,
+        universe="top3000",
+        session_windows=((sessions[0], sessions[1]), (sessions[2],), sessions),
+    )
+
+    assert counts == (2, 1, 2)
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])

@@ -115,6 +115,9 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
             research_sessions=sessions,
             available_field_ids=frozenset({"price.close.adjusted"}),
             maximum_universe_cardinality=lambda _universe, _start, _end: 1,
+            universe_member_union_cardinalities=lambda _universe, windows: tuple(
+                1 for _ in windows
+            ),
             financial_research_readiness="not_ready",
         )
         admitted = ResearchRunService(
@@ -135,7 +138,7 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
                     "neutralization": "none",
                     "research_kind": "factor_evaluation",
                 }
-            )
+            ),
         )
         assert admitted.status == "queued"
 

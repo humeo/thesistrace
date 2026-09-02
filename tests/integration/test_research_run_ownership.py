@@ -64,6 +64,7 @@ def test_research_run_service_scopes_resources_receipts_and_cursors(
         ),
         available_field_ids=frozenset({"price.close.adjusted"}),
         maximum_universe_cardinality=lambda _universe, _start, _end: 300,
+        universe_member_union_cardinalities=lambda _universe, windows: tuple(300 for _ in windows),
         financial_research_readiness="not_ready",
     )
     service = ResearchRunService(

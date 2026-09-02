@@ -344,7 +344,30 @@ def test_factor_and_strategy_batch_admission_is_atomic_idempotent_and_queryable(
                 "SELECT scope FROM research_batches.batches WHERE id = %s",
                 (factor["id"],),
             ).fetchone()
+            frozen_plans = transaction.execute(
+                """
+                SELECT item.batch_id,
+                       count(*) AS child_count,
+                       count(DISTINCT run.immutable_input
+                           #>> '{execution_plan,chunk_session_count}')
+                           AS distinct_chunk_session_counts
+                FROM research_batches.items AS item
+                JOIN research_runs.runs AS run ON run.id = item.research_run_id
+                WHERE item.batch_id = ANY(%s)
+                GROUP BY item.batch_id
+                ORDER BY item.batch_id
+                """,
+                ([factor["id"], strategy["id"]],),
+            ).fetchall()
         assert stored is not None
+        assert frozen_plans == [
+            {
+                "batch_id": batch_id,
+                "child_count": 2,
+                "distinct_chunk_session_counts": 1,
+            }
+            for batch_id in sorted((factor["id"], strategy["id"]))
+        ]
         frozen_generation = str(stored["scope"]["data_generation_id"])
 
     _expire_batch_retention_leases(settings)

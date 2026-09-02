@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Event
 
 import boto3
@@ -30,19 +30,19 @@ from thesistrace.data import DatasetLifecycle
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.publication import PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
-from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
-from thesistrace.research_batch.planning import (
-    ResearchBatchCapacityError,
-    validate_research_batch_capacity,
+from thesistrace.research_batch.execution import (
+    ResearchBatchChildLost,
+    SupervisedResearchBatchExecutor,
 )
+from thesistrace.research_batch.planning import validate_research_batch_capacity
 from thesistrace.research_batch.private_artifact import (
     PRIVATE_ARTIFACT_MEDIA_TYPE,
     PRIVATE_ARTIFACT_PUBLICATION_KIND,
     PRIVATE_ARTIFACT_SCHEMA_VERSION,
     PRIVATE_ARTIFACT_SERIALIZATION,
+    PrivateAlphaFactorArtifactReader,
+    PrivateAlphaFactorArtifactWriter,
     PrivateAlphaFactorChunk,
-    decode_private_alpha_factor_artifact,
-    encode_private_alpha_factor_artifact,
 )
 from thesistrace.research_batch.service import (
     ResearchBatchService,
@@ -50,6 +50,7 @@ from thesistrace.research_batch.service import (
 )
 from thesistrace.research_folder import BATCH_RESEARCH_FOLDER_ID
 from thesistrace.research_kernel.research_chunks import AlphaFactorExecutionBinding
+from thesistrace.research_run.execution import ResearchExecutionResourceExhausted
 from thesistrace.research_run.models import StrategyBacktestAdmissionCommand
 from thesistrace.research_run.result import read_result_bundle
 from thesistrace.research_run.service import ResearchRunService
@@ -57,7 +58,12 @@ from thesistrace.research_run.service import ResearchRunService
 
 class _StrategyTransportFailureExecutor:
     def execute(self, request, *, emit, cancel_requested):
-        raise RuntimeError("injected Strategy Sweep transport failure")
+        raise ResearchBatchChildLost("injected Strategy Sweep transport failure")
+
+
+class _StrategyPermanentFailureExecutor:
+    def execute(self, request, *, emit, cancel_requested):
+        raise RuntimeError("injected deterministic Strategy failure")
 
 
 class _FirstStrategyStartedBarrierExecution:
@@ -214,52 +220,62 @@ def _replace_private_artifact(
         "binding_checksum": row["binding_checksum"],
         "content_sha256": row["content_sha256"],
     }
-    bundle = runtime.publication.read(
-        PublishedRef(
-            manifest_sha256=row["manifest_sha256"],
-            kind=PRIVATE_ARTIFACT_PUBLICATION_KIND,
-            provenance=provenance,
+    with TemporaryDirectory() as directory:
+        source_path = Path(directory) / "source.artifact"
+        runtime.publication.materialize_payload(
+            PublishedRef(
+                manifest_sha256=row["manifest_sha256"],
+                kind=PRIVATE_ARTIFACT_PUBLICATION_KIND,
+                provenance=provenance,
+            ),
+            "private_alpha_factor",
+            source_path,
         )
-    )
-    decoded = decode_private_alpha_factor_artifact(
-        bundle.payloads["private_alpha_factor"].content,
-        expected_batch_id=batch_id,
-        expected_binding=binding,
-    )
-    binding_value = binding.value_snapshot()
-    if kernel_semantic_version is not None:
-        semantic_versions = dict(binding_value["semantic_versions"])
-        semantic_versions["kernel"] = kernel_semantic_version
-        binding_value["semantic_versions"] = semantic_versions
-    replacement_binding = AlphaFactorExecutionBinding.from_value_snapshot(binding_value)
-    replacement_chunks = decoded.chunks
-    final_alpha_continuation = decoded.final_alpha_continuation
-    if replacement_binding.checksum != binding.checksum:
-        replacement_chunks = tuple(
-            PrivateAlphaFactorChunk(
-                outcome_payload=_replace_compact_binding_checksum(
-                    chunk.outcome_payload,
-                    replacement_binding.checksum,
-                ),
-                completed_research_sessions=chunk.completed_research_sessions,
-                final=chunk.final,
+        with PrivateAlphaFactorArtifactReader(
+            source_path,
+            expected_batch_id=batch_id,
+            expected_binding=binding,
+            maximum_chunk_payload_bytes=source_path.stat().st_size,
+        ) as reader:
+            chunks = tuple(reader)
+            final_alpha_continuation = reader.final_alpha_continuation
+        binding_value = binding.value_snapshot()
+        if kernel_semantic_version is not None:
+            semantic_versions = dict(binding_value["semantic_versions"])
+            semantic_versions["kernel"] = kernel_semantic_version
+            binding_value["semantic_versions"] = semantic_versions
+        replacement_binding = AlphaFactorExecutionBinding.from_value_snapshot(binding_value)
+        if replacement_binding.checksum != binding.checksum:
+            chunks = tuple(
+                PrivateAlphaFactorChunk(
+                    first_session=chunk.first_session,
+                    last_session=chunk.last_session,
+                    outcome_payload=_replace_compact_binding_checksum(
+                        chunk.outcome_payload,
+                        replacement_binding.checksum,
+                    ),
+                    completed_research_sessions=chunk.completed_research_sessions,
+                    final=chunk.final,
+                )
+                for chunk in chunks
             )
-            for chunk in decoded.chunks
+            final_alpha_continuation = dict(final_alpha_continuation)
+            final_alpha_continuation["binding_checksum"] = replacement_binding.checksum
+        replacement_path = Path(directory) / "replacement.artifact"
+        writer = PrivateAlphaFactorArtifactWriter(
+            replacement_path,
+            batch_id=artifact_batch_id or batch_id,
+            binding=replacement_binding,
+            maximum_chunk_payload_bytes=max(len(chunk.outcome_payload) for chunk in chunks),
         )
-        final_alpha_continuation = dict(final_alpha_continuation)
-        final_alpha_continuation["binding_checksum"] = replacement_binding.checksum
-    replacement_content = encode_private_alpha_factor_artifact(
-        batch_id=artifact_batch_id or batch_id,
-        binding=replacement_binding,
-        chunks=replacement_chunks,
-        final_alpha_continuation=final_alpha_continuation,
-    )
-    replacement_digest = hashlib.sha256(replacement_content).hexdigest()
-    staged = runtime.publication.stage_bytes(
-        replacement_content,
-        media_type=PRIVATE_ARTIFACT_MEDIA_TYPE,
-        serialization=PRIVATE_ARTIFACT_SERIALIZATION,
-    )
+        for chunk in chunks:
+            writer.append(chunk)
+        replacement = writer.complete(final_alpha_continuation=final_alpha_continuation)
+        staged = runtime.publication.stage_file(
+            replacement_path,
+            media_type=PRIVATE_ARTIFACT_MEDIA_TYPE,
+            serialization=PRIVATE_ARTIFACT_SERIALIZATION,
+        )
     prepared = runtime.publication.prepare(
         kind=PRIVATE_ARTIFACT_PUBLICATION_KIND,
         payloads={"private_alpha_factor": staged},
@@ -267,7 +283,7 @@ def _replace_private_artifact(
             "schema_version": PRIVATE_ARTIFACT_SCHEMA_VERSION,
             "batch_id": batch_id,
             "binding_checksum": replacement_binding.checksum,
-            "content_sha256": replacement_digest,
+            "content_sha256": replacement.sha256,
         },
     )
     with runtime.database.transaction() as transaction:
@@ -283,8 +299,8 @@ def _replace_private_artifact(
                 published.manifest_sha256,
                 replacement_binding.checksum,
                 Jsonb(replacement_binding.value_snapshot()),
-                replacement_digest,
-                len(replacement_content),
+                replacement.sha256,
+                replacement.byte_size,
                 batch_id,
             ),
         )
@@ -444,7 +460,7 @@ def test_real_postgres_loss_reuses_acknowledged_private_artifact(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_strategy_transport_failure_before_child_ready_requeues_without_an_attempt(
+def test_strategy_transport_failure_before_child_ready_counts_toward_retry_budget(
     tmp_path: Path,
 ) -> None:
     settings = isolated_core_settings(tmp_path)
@@ -465,12 +481,59 @@ def test_strategy_transport_failure_before_child_ready_requeues_without_an_attem
             execution=_StrategyTransportFailureExecutor(),
         )
 
+        for expected_attempt in range(1, 4):
+            assert processor.process_next() is True
+            detail = client.get(f"/api/research-batches/{admitted['id']}").json()
+            assert detail["attempt"] is None
+            if expected_attempt < 3:
+                assert detail["status"] == "queued"
+                assert all(item["status"] == "queued" for item in detail["items"])
+                assert all(item["diagnostic"] is None for item in detail["items"])
+
+        failed = client.get(f"/api/research-batches/{admitted['id']}").json()
+        assert failed["status"] == "failed"
+        assert all(item["outcome"] == "failed" for item in failed["items"])
+        assert all(
+            item["diagnostic"]["code"] == "RESEARCH_BATCH_INFRASTRUCTURE_UNAVAILABLE"
+            for item in failed["items"]
+        )
+        assert processor.process_next() is False
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_strategy_deterministic_start_failure_is_not_retried(
+    tmp_path: Path,
+) -> None:
+    settings = isolated_core_settings(tmp_path)
+    drop_product_schemas(settings)
+    with TestClient(create_app(settings)) as client:
+        _publish_current_data(settings)
+        admitted = client.post(
+            "/api/research-batches",
+            json=_strategy_command("strategy-deterministic-start-failure"),
+        ).json()
+        runtime = client.app.state.core_runtime
+        processor = ResearchBatchService(
+            runtime.database,
+            research_runs=runtime.research_runs,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            publication=runtime.publication,
+            attempt_control_directory=settings.batch_attempt_control_directory,
+            execution=_StrategyPermanentFailureExecutor(),
+        )
+
         assert processor.process_next() is True
-        queued = client.get(f"/api/research-batches/{admitted['id']}").json()
-        assert queued["status"] == "queued"
-        assert queued["attempt"] is None
-        assert all(item["status"] == "queued" for item in queued["items"])
-        assert all(item["diagnostic"] is None for item in queued["items"])
+        failed = client.get(f"/api/research-batches/{admitted['id']}").json()
+        assert failed["status"] == "failed"
+        assert all(item["outcome"] == "failed" for item in failed["items"])
+        assert all(
+            item["diagnostic"]["code"] == "RESEARCH_BATCH_EXECUTION_FAILED"
+            for item in failed["items"]
+        )
+        assert processor.process_next() is False
 
 
 @pytest.mark.skipif(
@@ -707,13 +770,28 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
     ]
     assert len(prepared) == 1
     assert len(shared) == 1
-    assert shared[0]["alpha_factor_task_started"] is True
+    shared_started = next(
+        event
+        for event in events
+        if event["event"] == "research_batch_execution_shared_alpha_factor_started"
+    )
+    assert shared_started["alpha_factor_task_started"] is True
+    assert shared[0]["alpha_factor_task_started"] is False
     assert shared[0]["alpha_factor_task_completed"] is True
     assert [event["item_ordinal"] for event in strategies] == [1, 2]
     assert all(event["alpha_factor_task_started"] is False for event in strategies)
-    assert all(event["strategy_task_started"] is True for event in strategies)
+    assert all(event["strategy_task_started"] is False for event in strategies)
     assert all(event["strategy_task_completed"] is True for event in strategies)
-    assert all(event["data_io"] == prepared[0]["data_io"] for event in strategies)
+    strategy_starts = [
+        event for event in events if event["event"] == "research_batch_execution_item_started"
+    ]
+    assert [event["item_ordinal"] for event in strategy_starts] == [1, 2]
+    assert all(event["strategy_task_started"] is True for event in strategy_starts)
+    assert int(prepared[0]["data_io"]["rows_scanned"]) == 0
+    assert all(
+        int(event["data_io"]["rows_scanned"]) > int(prepared[0]["data_io"]["rows_scanned"])
+        for event in strategies
+    )
     assert (
         max(
             int(event["child_peak_rss_bytes"])
@@ -742,7 +820,9 @@ def test_strategy_sweep_reuses_private_artifact_after_worker_loss(
         first_events.append(event)
         if not interrupted and event.get("event") == "research_batch_execution_item_started":
             interrupted = True
-            raise RuntimeError("injected Worker loss after private artifact acknowledgement")
+            raise ResearchBatchChildLost(
+                "injected Worker loss after private artifact acknowledgement"
+            )
 
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -971,7 +1051,7 @@ def test_three_shared_worker_losses_fail_every_strategy_dependency(
 
     def lose_shared_worker(event: dict[str, object]) -> None:
         if event.get("event") == ("research_batch_execution_shared_alpha_factor_succeeded"):
-            raise RuntimeError("injected shared Worker loss")
+            raise ResearchBatchChildLost("injected shared Worker loss")
 
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -1028,7 +1108,7 @@ def test_recovery_rejects_a_corrupt_private_artifact_binding(tmp_path: Path) -> 
             and event.get("item_ordinal") == 2
         ):
             interrupted = True
-            raise RuntimeError("injected Worker loss before artifact corruption")
+            raise ResearchBatchChildLost("injected Worker loss before artifact corruption")
 
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -1095,7 +1175,7 @@ def test_recovery_rejects_every_invalid_private_artifact_case(
             and event.get("item_ordinal") == 2
         ):
             interrupted = True
-            raise RuntimeError("injected Worker loss before invalid artifact recovery")
+            raise ResearchBatchChildLost("injected Worker loss before invalid artifact recovery")
 
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -1202,7 +1282,7 @@ def test_three_strategy_worker_losses_fail_only_that_strategy_and_continue(
             event.get("event") == "research_batch_execution_item_started"
             and event.get("item_ordinal") == 1
         ):
-            raise RuntimeError("injected Strategy task Worker loss")
+            raise ResearchBatchChildLost("injected Strategy task Worker loss")
 
     with TestClient(create_app(settings)) as client:
         _publish_current_data(settings)
@@ -1230,6 +1310,58 @@ def test_three_strategy_worker_losses_fail_only_that_strategy_and_continue(
             "succeeded",
         ]
         assert [item["task_attempt_count"] for item in completed["items"]] == [3, 1]
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_strategy_resource_exhaustion_is_not_retried_and_other_items_continue(
+    tmp_path: Path,
+) -> None:
+    settings = isolated_core_settings(tmp_path)
+    drop_product_schemas(settings)
+    exhausted = False
+
+    def exhaust_first_strategy(event: dict[str, object]) -> None:
+        nonlocal exhausted
+        if (
+            not exhausted
+            and event.get("event") == "research_batch_execution_item_started"
+            and event.get("item_ordinal") == 1
+        ):
+            exhausted = True
+            raise ResearchExecutionResourceExhausted("injected Strategy memory breach")
+
+    with TestClient(create_app(settings)) as client:
+        _publish_current_data(settings)
+        admitted = client.post(
+            "/api/research-batches",
+            json=_strategy_command("strategy-resource-exhausted-no-retry"),
+        ).json()
+        runtime = client.app.state.core_runtime
+
+        assert (
+            runtime.research_batches.process_next(on_execution_event=exhaust_first_strategy) is True
+        )
+        interrupted = client.get(f"/api/research-batches/{admitted['id']}").json()
+        assert interrupted["status"] == "queued"
+        assert [item["outcome"] for item in interrupted["items"]] == ["failed", None]
+        assert interrupted["items"][0]["diagnostic"] == {
+            "code": "RESEARCH_BATCH_RESOURCE_EXHAUSTED",
+            "category": "resource_exhausted",
+            "message": "Research Batch execution exceeded its resource limit.",
+        }
+        assert [item["task_attempt_count"] for item in interrupted["items"]] == [1, 0]
+
+        assert runtime.research_batches.process_next() is True
+        completed = client.get(f"/api/research-batches/{admitted['id']}").json()
+        assert completed["status"] == "completed_with_failures"
+        assert [item["outcome"] for item in completed["items"]] == [
+            "failed",
+            "succeeded",
+        ]
+        assert [item["task_attempt_count"] for item in completed["items"]] == [1, 1]
 
 
 @pytest.mark.skipif(
@@ -1468,17 +1600,16 @@ def test_long_strategy_sweep_preserves_ordinary_result_partitions_and_equivalenc
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_widest_admitted_multi_chunk_strategy_sweep_stays_inside_memory_budget(
+def test_long_history_multi_chunk_strategy_sweep_stays_inside_memory_budget(
     tmp_path: Path,
 ) -> None:
-    _assert_widest_strategy_capacity_boundary(
+    _assert_strategy_capacity_is_bounded_by_chunk(
         tmp_path,
         case="wide",
         memory_bytes=300 * 1024**2,
         sessions=_business_sessions(324, ending=date(2026, 8, 4)),
         instrument_count=512,
         formula="close",
-        minimum_research_sessions=65,
     )
 
 
@@ -1486,22 +1617,21 @@ def test_widest_admitted_multi_chunk_strategy_sweep_stays_inside_memory_budget(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_high_work_small_chunk_strategy_sweep_prices_pending_overlap(
+def test_high_work_strategy_sweep_selects_a_bounded_chunk(
     tmp_path: Path,
 ) -> None:
     formula = " + ".join("ts_mean(close, 252)" for _ in range(16))
-    _assert_widest_strategy_capacity_boundary(
+    _assert_strategy_capacity_is_bounded_by_chunk(
         tmp_path,
         case="high-work",
         memory_bytes=512 * 1024**2,
         sessions=_business_sessions(400, ending=date(2026, 8, 4)),
         instrument_count=512,
         formula=formula,
-        minimum_research_sessions=22,
     )
 
 
-def _assert_widest_strategy_capacity_boundary(
+def _assert_strategy_capacity_is_bounded_by_chunk(
     tmp_path: Path,
     *,
     case: str,
@@ -1509,7 +1639,6 @@ def _assert_widest_strategy_capacity_boundary(
     sessions: tuple[str, ...],
     instrument_count: int,
     formula: str,
-    minimum_research_sessions: int,
 ) -> None:
     settings = replace(
         CoreSettings.from_environment(),
@@ -1528,57 +1657,71 @@ def _assert_widest_strategy_capacity_boundary(
         command = _strategy_command(f"strategy-sweep-{case}-widest-admitted")
         runtime = client.app.state.core_runtime
         dataset = runtime.research_runs.current_admission_dataset()
-        admitted_start_index: int | None = None
+        assert dataset is not None
         effective_lookback = alpha_language.compile(formula).effective_lookback
-        for start_index in range(effective_lookback, len(sessions)):
-            start_session = sessions[start_index]
-            prepared = runtime.research_runs.prepare_child_admission(
-                TEST_RESEARCHER.researcher_id,
-                StrategyBacktestAdmissionCommand.model_validate(
-                    {
-                        **_ordinary_strategy_command(
-                            f"capacity-probe-{start_index}",
-                            holdings_count=1,
-                            rebalance_every_sessions=1,
-                            start_date=start_session,
-                            end_date=sessions[-1],
-                            formula=formula,
-                        ),
-                        "universe": "top1000",
-                    }
-                ),
-                dataset=dataset,
-            )
-            try:
-                validate_research_batch_capacity("strategy_sweep", [prepared])
-            except ResearchBatchCapacityError:
-                continue
-            admitted_start_index = start_index
-            break
-        assert admitted_start_index is not None
-        assert admitted_start_index > effective_lookback
-        assert len(sessions) - admitted_start_index >= minimum_research_sessions
+        full = runtime.research_runs.prepare_child_admission(
+            TEST_RESEARCHER.researcher_id,
+            StrategyBacktestAdmissionCommand.model_validate(
+                {
+                    **_ordinary_strategy_command(
+                        "capacity-probe-full",
+                        holdings_count=1,
+                        rebalance_every_sessions=1,
+                        start_date=sessions[effective_lookback],
+                        end_date=sessions[-1],
+                        formula=formula,
+                    ),
+                    "universe": "top1000",
+                }
+            ),
+            dataset=dataset,
+        )
+        # Both periods must already fill one Chunk plus the bounded 21-session
+        # Alpha continuation. Otherwise the shorter case legitimately needs a
+        # smaller streamed artifact frame and is not a total-history comparison.
+        short_start_index = max(effective_lookback, len(sessions) - 100)
+        short = runtime.research_runs.prepare_child_admission(
+            TEST_RESEARCHER.researcher_id,
+            StrategyBacktestAdmissionCommand.model_validate(
+                {
+                    **_ordinary_strategy_command(
+                        "capacity-probe-short",
+                        holdings_count=1,
+                        rebalance_every_sessions=1,
+                        start_date=sessions[short_start_index],
+                        end_date=sessions[-1],
+                        formula=formula,
+                    ),
+                    "universe": "top1000",
+                }
+            ),
+            dataset=dataset,
+        )
+        full_capacity = validate_research_batch_capacity(
+            "strategy_sweep",
+            [full],
+            research_calendar=dataset.research_sessions,
+            universe_member_union_cardinalities=(dataset.universe_member_union_cardinalities),
+        )
+        short_capacity = validate_research_batch_capacity(
+            "strategy_sweep",
+            [short],
+            research_calendar=dataset.research_sessions,
+            universe_member_union_cardinalities=(dataset.universe_member_union_cardinalities),
+        )
+        assert full_capacity.session_count == short_capacity.session_count
+        assert full_capacity.estimated_peak_bytes == short_capacity.estimated_peak_bytes
+        assert full_capacity.estimated_peak_bytes <= memory_bytes
         command = {
             **command,
-            "start_date": sessions[admitted_start_index],
+            "start_date": sessions[effective_lookback],
             "end_date": sessions[-1],
             "universe": "top1000",
-            "alpha": {"formula": formula, "hypothesis": "capacity boundary"},
+            "alpha": {"formula": formula, "hypothesis": "bounded capacity"},
             "strategies": [command["strategies"][0]],
         }
         admitted = client.post("/api/research-batches", json=command)
         assert admitted.status_code == 202
-
-        rejected = client.post(
-            "/api/research-batches",
-            json={
-                **command,
-                "request_id": f"strategy-sweep-{case}-one-session-too-wide",
-                "start_date": sessions[admitted_start_index - 1],
-            },
-        )
-        assert rejected.status_code == 422
-        assert rejected.json()["issues"][0]["code"] == ("RESEARCH_BATCH_EXCEEDS_WORKER_CAPACITY")
 
         assert (
             client.app.state.core_runtime.research_batches.process_next(

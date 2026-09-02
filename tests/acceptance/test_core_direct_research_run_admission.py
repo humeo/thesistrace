@@ -287,6 +287,7 @@ def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan()
         research_sessions=sessions,
         available_field_ids=frozenset({"price.close.adjusted"}),
         maximum_universe_cardinality=lambda _universe, _start, _end: 3000,
+        universe_member_union_cardinalities=lambda _universe, windows: tuple(3000 for _ in windows),
         financial_research_readiness="not_ready",
     )
     command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(
@@ -343,6 +344,7 @@ def test_degraded_financial_readiness_is_admitted_and_frozen() -> None:
         research_sessions=sessions,
         available_field_ids=frozenset({"financial.income.total_revenue.latest_fy"}),
         maximum_universe_cardinality=lambda _universe, _start, _end: 300,
+        universe_member_union_cardinalities=lambda _universe, windows: tuple(300 for _ in windows),
         financial_coverage_start=sessions[0],
         financial_coverage_end=sessions[-1],
         financial_research_readiness="ready_with_pending",

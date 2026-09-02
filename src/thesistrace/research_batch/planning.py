@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from datetime import date
 
 from thesistrace.research_batch.models import ResearchBatchKind
-from thesistrace.research_kernel.capacity import SessionCapacityPlan
+from thesistrace.research_kernel.capacity import (
+    SessionCapacityPlan,
+    estimate_session_peak_bytes,
+    estimate_session_work,
+)
+from thesistrace.research_run.models import ResearchExecutionChunk, ResearchExecutionPlan
 from thesistrace.research_run.service import PreparedResearchRunAdmission
 
-# The Batch child retains the complete Arrow source, coordinate indexes, dense
-# numeric views, Python Decimal execution prices, Universe tuples, and Forward
-# Labels while one ordinary bounded chunk is calculated. These deliberately
+# A Batch child retains only the current bounded Arrow slice, coordinate indexes,
+# dense numeric views, Python Decimal execution prices, Universe tuples, and
+# Forward Labels while one ordinary bounded Chunk is calculated. These deliberately
 # conservative per-cell allowances cover both Arrow buffers and Python object
 # ownership; the ordinary execution estimate supplies interpreter/process and
 # current-chunk working memory.
@@ -30,6 +36,14 @@ _STRATEGY_COMPACT_OUTCOME_BYTES_PER_CHUNK = 64 * 1024
 _STRATEGY_SWEEP_CAPACITY_UTILIZATION_NUMERATOR = 3
 _STRATEGY_SWEEP_CAPACITY_UTILIZATION_DENOMINATOR = 4
 _MAX_PENDING_ALPHA_SESSIONS = 21
+_ALPHA_CONTINUATION_BYTES_PER_CELL = 96
+_STRATEGY_POSITION_CONTINUATION_BYTES = 1024
+_STRATEGY_OBSERVATION_BYTES_PER_SESSION = 64 * 1024
+
+type UniverseMemberUnionCardinalities = Callable[
+    [str, tuple[tuple[date, ...], ...]],
+    tuple[int, ...],
+]
 
 
 class ResearchBatchCapacityError(ValueError):
@@ -39,6 +53,9 @@ class ResearchBatchCapacityError(ValueError):
 def validate_research_batch_capacity(
     batch_kind: ResearchBatchKind,
     children: Sequence[PreparedResearchRunAdmission],
+    *,
+    research_calendar: tuple[date, ...],
+    universe_member_union_cardinalities: UniverseMemberUnionCardinalities,
 ) -> SessionCapacityPlan:
     if not children:
         raise ValueError("Research Batch capacity requires child Runs")
@@ -57,43 +74,40 @@ def validate_research_batch_capacity(
     ):
         raise ValueError("Research Batch child scope is inconsistent")
     field_ids = {field_id for value in inputs for field_id in value.field_bindings}
-    calculation_session_count = max(
-        value.data_admission.calculation_session_count for value in inputs
+    maximum_chunk_session_count = min(value.execution_plan.chunk_session_count for value in inputs)
+    if not research_calendar or research_calendar != tuple(sorted(set(research_calendar))):
+        raise ValueError("Research Batch calendar is invalid")
+    research_sessions = tuple(
+        session
+        for session in research_calendar
+        if first.requested_start_date <= session <= first.requested_end_date
     )
-    maximum_universe_cardinality = max(
-        value.data_admission.universe_instrument_count for value in inputs
+    if not research_sessions:
+        raise ValueError("Research Batch plan has no Research Sessions")
+    context_session_count = max(
+        _MAX_PENDING_ALPHA_SESSIONS,
+        max(value.alpha_admission.effective_lookback for value in inputs),
+        2,
     )
-    resident_cell_count = calculation_session_count * maximum_universe_cardinality
-    resident_bytes = resident_cell_count * (
-        _ARROW_SOURCE_AND_COORDINATE_BYTES
-        + _DECIMAL_OPEN_OBJECT_BYTES
-        + _UNIVERSE_MEMBER_BYTES
-        + _BINARY64_BYTES * (len(field_ids) + _ADJUSTED_OPEN_COLUMNS + _FORWARD_LABEL_COLUMNS)
-        + _FORWARD_LABEL_STATE_BYTES
-        + _UNIVERSE_MASK_BYTES
-    )
-    ordinary_chunk_peak_bytes = max(value.execution_plan.estimated_peak_bytes for value in inputs)
-    strategy_private_bytes = 0
-    if batch_kind == "strategy_sweep":
-        encoded_outcome_cell_count = max(
-            strategy_sweep_encoded_outcome_cell_count(
-                research_session_counts=tuple(
-                    chunk.research_session_count for chunk in value.execution_plan.chunks
-                ),
-                maximum_universe_cardinality=(value.data_admission.universe_instrument_count),
-            )
-            for value in inputs
+    candidate_windows = {
+        session_count: _context_windows(
+            shared_sessions=research_calendar,
+            research_sessions=research_sessions,
+            chunk_session_count=session_count,
+            context_session_count=context_session_count,
         )
-        strategy_private_bytes = strategy_sweep_private_artifact_capacity_bytes(
-            encoded_outcome_cell_count=encoded_outcome_cell_count,
-            chunk_count=max(len(value.execution_plan.chunks) for value in inputs),
-        )
-    estimated_peak_bytes = (
-        ordinary_chunk_peak_bytes
-        + _BATCH_PROCESS_RUNTIME_MARGIN_BYTES
-        + resident_bytes
-        + strategy_private_bytes
+        for session_count in range(maximum_chunk_session_count, 0, -1)
+    }
+    unique_windows = tuple(
+        dict.fromkeys(window for windows in candidate_windows.values() for window in windows)
     )
+    union_counts = universe_member_union_cardinalities(first.universe, unique_windows)
+    if len(union_counts) != len(unique_windows) or any(
+        isinstance(count, bool) or not isinstance(count, int) or count <= 0
+        for count in union_counts
+    ):
+        raise ValueError("Research Batch Universe member union measurement is invalid")
+    count_by_window = dict(zip(unique_windows, union_counts, strict=True))
     capacity_limit_bytes = execution_memory_bytes
     if batch_kind == "strategy_sweep":
         # Canonical compaction temporarily overlaps the active decoded outcome,
@@ -104,15 +118,143 @@ def validate_research_batch_capacity(
             * _STRATEGY_SWEEP_CAPACITY_UTILIZATION_NUMERATOR
             // _STRATEGY_SWEEP_CAPACITY_UTILIZATION_DENOMINATOR
         )
-    if estimated_peak_bytes > capacity_limit_bytes:
-        raise ResearchBatchCapacityError(
-            "Worker capacity cannot retain the complete shared Batch data and Forward Labels"
+    alpha_continuation_count = len(inputs) if batch_kind == "factor_evaluation" else 1
+    strategy_held_instrument_count = (
+        0
+        if batch_kind != "strategy_sweep"
+        else max(int(value.strategy["holdings_count"]) for value in inputs if value.strategy)
+    )
+    for session_count, windows in candidate_windows.items():
+        maximum_slice_union = max(count_by_window[window] for window in windows)
+        maximum_execution_cardinality = maximum_slice_union + strategy_held_instrument_count
+        maximum_resident_cell_count = max(
+            len(window) * (count_by_window[window] + strategy_held_instrument_count)
+            for window in windows
         )
-    return SessionCapacityPlan(
-        session_count=min(value.execution_plan.chunk_session_count for value in inputs),
-        time_target_exceeded=any(value.execution_plan.time_target_exceeded for value in inputs),
-        estimated_peak_bytes=estimated_peak_bytes,
-        estimated_work=max(value.execution_plan.estimated_chunk_work for value in inputs),
+        ordinary_chunk_peak_bytes = max(
+            estimate_session_peak_bytes(
+                session_count=session_count,
+                formula_work=value.alpha_admission.formula_work,
+                node_count=value.alpha_admission.node_count,
+                field_count=len(value.field_bindings),
+                maximum_universe_cardinality=maximum_execution_cardinality,
+                effective_lookback=value.alpha_admission.effective_lookback,
+                execution_memory_bytes=execution_memory_bytes,
+            )
+            for value in inputs
+        )
+        ordinary_chunk_work = max(
+            estimate_session_work(
+                session_count=session_count,
+                formula_work=value.alpha_admission.formula_work,
+                maximum_universe_cardinality=maximum_execution_cardinality,
+            )
+            for value in inputs
+        )
+        resident_bytes = maximum_resident_cell_count * (
+            _ARROW_SOURCE_AND_COORDINATE_BYTES
+            + _DECIMAL_OPEN_OBJECT_BYTES
+            + _UNIVERSE_MEMBER_BYTES
+            + _BINARY64_BYTES * (len(field_ids) + _ADJUSTED_OPEN_COLUMNS + _FORWARD_LABEL_COLUMNS)
+            + _FORWARD_LABEL_STATE_BYTES
+            + _UNIVERSE_MASK_BYTES
+        )
+        continuation_bytes = (
+            alpha_continuation_count
+            * _MAX_PENDING_ALPHA_SESSIONS
+            * maximum_slice_union
+            * _ALPHA_CONTINUATION_BYTES_PER_CELL
+            + strategy_held_instrument_count * _STRATEGY_POSITION_CONTINUATION_BYTES
+        )
+        strategy_private_bytes = 0
+        strategy_output_bytes = 0
+        if batch_kind == "strategy_sweep":
+            strategy_private_bytes = strategy_sweep_private_artifact_capacity_bytes(
+                encoded_outcome_cell_count=(
+                    min(
+                        len(research_sessions),
+                        session_count + _MAX_PENDING_ALPHA_SESSIONS,
+                    )
+                    * maximum_slice_union
+                ),
+                chunk_count=1,
+            )
+            strategy_output_bytes = session_count * _STRATEGY_OBSERVATION_BYTES_PER_SESSION
+        estimated_peak_bytes = (
+            ordinary_chunk_peak_bytes
+            + _BATCH_PROCESS_RUNTIME_MARGIN_BYTES
+            + resident_bytes
+            + continuation_bytes
+            + strategy_private_bytes
+            + strategy_output_bytes
+        )
+        if estimated_peak_bytes <= capacity_limit_bytes:
+            return SessionCapacityPlan(
+                session_count=session_count,
+                time_target_exceeded=(
+                    session_count < maximum_chunk_session_count
+                    or any(value.execution_plan.time_target_exceeded for value in inputs)
+                ),
+                estimated_peak_bytes=estimated_peak_bytes,
+                estimated_work=ordinary_chunk_work,
+            )
+    raise ResearchBatchCapacityError(
+        "Worker capacity cannot execute one shared Research Batch session"
+    )
+
+
+def _context_windows(
+    *,
+    shared_sessions: tuple[date, ...],
+    research_sessions: tuple[date, ...],
+    chunk_session_count: int,
+    context_session_count: int,
+) -> tuple[tuple[date, ...], ...]:
+    windows: list[tuple[date, ...]] = []
+    positions = {session: position for position, session in enumerate(shared_sessions)}
+    for start in range(0, len(research_sessions), chunk_session_count):
+        selected = research_sessions[start : start + chunk_session_count]
+        first = positions[selected[0]]
+        last = positions[selected[-1]]
+        windows.append(shared_sessions[max(0, first - context_session_count) : last + 1])
+    return tuple(windows)
+
+
+def rechunk_research_execution_plan(
+    plan: ResearchExecutionPlan,
+    *,
+    chunk_session_count: int,
+) -> ResearchExecutionPlan:
+    if not 1 <= chunk_session_count <= plan.chunk_session_count:
+        raise ValueError("Research Batch Chunk size is invalid")
+    chunks: list[ResearchExecutionChunk] = []
+    for ordinal, start in enumerate(
+        range(0, len(plan.calculation_sessions), chunk_session_count),
+        start=1,
+    ):
+        selected = plan.calculation_sessions[start : start + chunk_session_count]
+        warmup_count = max(
+            0,
+            min(len(selected), plan.research_session_offset - start),
+        )
+        chunks.append(
+            ResearchExecutionChunk(
+                ordinal=ordinal,
+                first_session=selected[0],
+                last_session=selected[-1],
+                session_count=len(selected),
+                warmup_session_count=warmup_count,
+                research_session_count=len(selected) - warmup_count,
+            )
+        )
+    return plan.model_copy(
+        update={
+            "chunk_session_count": chunk_session_count,
+            "time_target_exceeded": (
+                plan.time_target_exceeded or chunk_session_count < plan.chunk_session_count
+            ),
+            "chunks": tuple(chunks),
+        }
     )
 
 

@@ -695,13 +695,41 @@ against current ownership before committing it.
 
 The Batch Research supervisor owns the Batch Attempt, fence, Data Generation
 Pin, complete-task acknowledgements, private shared artifact, cancellation, and
-per-child-Run Result publication. Factor Batches prepare common Data, Universe,
-and Labels once before independent Alpha-and-Factor tasks. Strategy Sweeps
-prepare Data and calculate their single shared Alpha and Factor once before one
-Strategy task per ordered parameter item. A Batch has no Batch-level Result.
-Batch Attempt control files live in their own writable runtime volume outside
-the read-only mounted Canonical Data tree. Runtime configuration rejects any
-Attempt Control Directory nested under the Canonical Data Mount.
+per-child-Run Result publication. Admission measures each candidate slice's
+actual Universe member union and freezes one common bounded Chunk size into all
+child execution plans. Long history increases the number of Chunks, not the
+planned resident-memory peak; a Batch is rejected only when one complete
+Research Session plus required context cannot fit its Worker budget.
+
+A Factor Batch uses one global Chunk loop. It loads that Chunk's common Data,
+Universe, and Labels once, evaluates all incomplete Alphas sequentially with
+bounded in-process continuation, and releases the Arrow source, indexes,
+matrices, labels, and wrappers before loading the next Chunk. Only the current
+complete Alpha task is durable; other Alpha continuation in the same child is
+ephemeral. One Alpha's deterministic failure does not roll back completed items
+or fail unrelated Alpha items. A common Data or Universe failure fails every
+still-dependent item.
+
+A Strategy Sweep writes its shared Alpha-and-Factor output as a sequential v2
+framed file. The child appends to `.partial`; only a complete trailer, binding,
+frame sequence, lengths, and checksums permit atomic rename and streaming stage.
+Each Strategy then reads one artifact frame and the matching Generation slice,
+including securities still held by its bounded continuation. It stages each
+output partition immediately and keeps only an Attempt-local disk ledger until
+the complete Result Bundle is atomically recorded. No Strategy Artifact domain
+resource exists, and a Batch has no Batch-level Result.
+
+Chunk files, continuations, and output ledgers are Attempt scratch rather than
+checkpoints. Worker/process loss or an allowlisted transient infrastructure
+failure discards them and creates a new Attempt from the earliest incomplete
+Alpha or Strategy, preserving only complete published outcomes. The same task
+has at most three Attempts, including failures before its first Chunk starts.
+OOM, `MemoryError`, and resource exhaustion terminate the frozen execution plan
+without identical retry; deterministic calculation, Data, formula, and
+artifact failures are also permanent. Batch Attempt control and scratch files
+live in their own writable runtime volume outside the read-only mounted
+Canonical Data tree. Runtime configuration rejects any Attempt Control
+Directory nested under the Canonical Data Mount.
 
 The Tracking Worker uses the same authority boundary: its supervisor owns the
 Advance, Pin, Working Cache, Tracking Checkpoint, and publication, while its

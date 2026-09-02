@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import hashlib
+import os
 import resource
 import subprocess
 import sys
@@ -12,20 +12,14 @@ from time import monotonic
 import numpy as np
 
 from thesistrace.data import GenerationStoreError, MountedGenerationStore
+from thesistrace.publication.serialization import parquet_bytes
 from thesistrace.research_batch.models import ResearchBatchKind
-from thesistrace.research_batch.planning import (
-    strategy_sweep_encoded_outcome_cell_count,
-    strategy_sweep_private_artifact_capacity_bytes,
-)
 from thesistrace.research_batch.private_artifact import (
+    PrivateAlphaFactorArtifactReader,
+    PrivateAlphaFactorArtifactWriter,
     PrivateAlphaFactorChunk,
-    decode_private_alpha_factor_artifact,
-    encode_private_alpha_factor_artifact,
 )
-from thesistrace.research_kernel.factor import (
-    PreparedColumnarForwardLabels,
-    prepare_columnar_forward_labels,
-)
+from thesistrace.research_kernel.factor import prepare_columnar_forward_labels
 from thesistrace.research_kernel.kernel_run import RunInput, StrategyRunInput
 from thesistrace.research_kernel.research_chunks import (
     AlphaFactorChunkOutcome,
@@ -44,7 +38,8 @@ from thesistrace.research_run.execution import (
     ResearchExecutionInsufficientWarmup,
     ResearchExecutionResourceExhausted,
 )
-from thesistrace.research_run.models import ImmutableRunInput, ResearchExecutionChunk
+from thesistrace.research_run.models import ImmutableRunInput
+from thesistrace.research_run.result import STRATEGY_DAILY_OBSERVATIONS_CONTRACT
 from thesistrace.research_run.supervised_child import (
     ChildTransportCgroupOom,
     ChildTransportError,
@@ -80,11 +75,19 @@ class ResearchBatchExecutionRequest:
 
 
 @dataclass(frozen=True)
-class _SharedStrategyChunk:
-    research_data: _SharedFactorResearchData
-    outcome_payload: bytes
-    completed_research_sessions: int
+class _ResearchWindow:
+    ordinal: int
+    research_sessions: tuple[str, ...]
     final: bool
+
+
+@dataclass
+class _FactorItemState:
+    continuation: dict[str, object]
+    binding: AlphaFactorExecutionBinding | None = None
+    final_values: dict[str, object] | None = None
+    error: Exception | None = None
+    calculation_seconds: float = 0.0
 
 
 class _SharedFactorResearchData:
@@ -256,9 +259,14 @@ class SupervisedResearchBatchExecution:
         self._write_command("acknowledge_batch")
         assert self._process.stdin is not None
         self._process.stdin.close()
-        self._process.wait(timeout=5)
+        try:
+            self._process.wait(timeout=5)
+        except subprocess.TimeoutExpired as error:
+            raise ResearchBatchChildLost(
+                "Research Batch child did not exit after acknowledgement"
+            ) from error
         if self._process.returncode != 0:
-            raise ResearchExecutionError(self._child_failure("after acknowledgement"))
+            raise ResearchBatchChildLost(self._child_failure("after acknowledgement"))
         self._acknowledged = True
         self._emit(self._event("research_batch_execution_child_acknowledged"))
         self._emit_exit()
@@ -384,7 +392,7 @@ class SupervisedResearchBatchExecutor:
         try:
             transport.write(
                 {
-                    "schema_version": "research-batch-child-request-v1",
+                    "schema_version": "research-batch-child-request-v2",
                     "batch_kind": request.batch_kind,
                     "data_mount": str(self._data_mount),
                     "attempt_control_path": str(control_path),
@@ -463,7 +471,7 @@ def execute_research_batch_messages(
     value: Mapping[str, object],
 ) -> Iterator[dict[str, object]]:
     try:
-        if value.get("schema_version") != "research-batch-child-request-v1":
+        if value.get("schema_version") != "research-batch-child-request-v2":
             raise ResearchExecutionInputInvalid("Research Batch child request is incompatible")
         batch_kind = str(value.get("batch_kind"))
         if batch_kind not in {"factor_evaluation", "strategy_sweep"}:
@@ -495,29 +503,17 @@ def execute_research_batch_messages(
         calendar = tuple(str(session) for session in admission.research_calendar)
         common = _validate_common_scope(items, generation_id, calendar)
         union_bindings = _union_field_bindings(items)
-        shared_sessions = _shared_sessions(items, calendar)
-        read_started = monotonic()
-        source_data = store.read_columnar_slice(
-            generation_id,
-            sessions=list(shared_sessions),
-            universe_name=common.universe,
-            neutralization=common.neutralization,
-            field_bindings=union_bindings,
-            fact_instrument_ids=frozenset(),
-        )
-        research_data = _SharedFactorResearchData(
-            source_data,
-            field_ids=tuple(union_bindings),
-        )
-        forward_labels = prepare_columnar_forward_labels(
-            research_data,
-            cancellation_check=lambda: None,
+        research_windows = _shared_research_windows(
+            common,
+            calendar,
         )
         yield {
             "status": "batch_prepared",
             "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
-            "child_data_read_seconds": monotonic() - read_started,
-            "shared_session_count": len(shared_sessions),
+            "child_data_read_seconds": 0.0,
+            "shared_session_count": sum(
+                len(window.research_sessions) for window in research_windows
+            ),
             "shared_field_count": len(union_bindings),
             "max_effective_lookback": max(
                 item.immutable_input.alpha_admission.effective_lookback for item in items
@@ -528,8 +524,10 @@ def execute_research_batch_messages(
                 items,
                 batch_id=batch_id,
                 generation_id=generation_id,
-                research_data=research_data,
-                forward_labels=forward_labels,
+                store=store,
+                calendar=calendar,
+                research_windows=research_windows,
+                union_bindings=union_bindings,
                 private_artifact_path=private_artifact_path,
                 reuse_private_artifact=reuse_private_artifact,
             )
@@ -538,35 +536,19 @@ def execute_research_batch_messages(
                 "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
             }
             return
-        for item in items:
-            yield _task_started_message(item, task_role="factor", phase="research")
-            try:
-                yield from _execute_item_messages(
-                    item,
-                    generation_id=generation_id,
-                    research_data=research_data,
-                    forward_labels=forward_labels,
-                )
-            except MemoryError:
-                raise
-            except Exception as error:
-                yield {
-                    "status": "item_failed",
-                    "category": "calculation",
-                    "message": "Factor item calculation failed.",
-                    "error_type": type(error).__name__,
-                    "item_ordinal": item.ordinal,
-                    "item_key": item.item_key,
-                    "run_id": item.run_id,
-                    "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
-                    "alpha_factor_task_started": True,
-                    "alpha_factor_task_failed": True,
-                }
+        yield from _execute_factor_batch_messages(
+            items,
+            generation_id=generation_id,
+            store=store,
+            calendar=calendar,
+            research_windows=research_windows,
+            union_bindings=union_bindings,
+        )
         yield {
             "status": "batch_succeeded",
             "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
         }
-    except MemoryError:
+    except (MemoryError, ResearchExecutionResourceExhausted):
         yield {
             "status": "failed",
             "category": "resource_exhausted",
@@ -624,6 +606,7 @@ def _validate_common_scope(
         common.numeric_execution_contract,
         common.semantic_versions,
         common.data_admission.generation_manifest_sha256,
+        common.execution_plan.chunk_session_count,
     )
     for item in items:
         immutable_input = item.immutable_input
@@ -635,8 +618,9 @@ def _validate_common_scope(
             immutable_input.numeric_execution_contract,
             immutable_input.semantic_versions,
             immutable_input.data_admission.generation_manifest_sha256,
+            immutable_input.execution_plan.chunk_session_count,
         )
-        if identity != common_identity or identity[-1] != generation_id:
+        if identity != common_identity or identity[-2] != generation_id:
             raise ResearchExecutionInputInvalid("Research Batch scope is inconsistent")
         planned = tuple(
             session.isoformat() for session in immutable_input.execution_plan.calculation_sessions
@@ -665,132 +649,188 @@ def _union_field_bindings(
     return dict(sorted(union.items()))
 
 
-def _shared_sessions(
-    items: Sequence[ResearchBatchExecutionItem],
+def _shared_research_windows(
+    immutable_input: ImmutableRunInput,
     calendar: tuple[str, ...],
-) -> tuple[str, ...]:
-    first = min(
-        item.immutable_input.execution_plan.calculation_sessions[0].isoformat() for item in items
+) -> tuple[_ResearchWindow, ...]:
+    first = immutable_input.data_admission.first_research_session.isoformat()
+    last = immutable_input.data_admission.last_research_session.isoformat()
+    research_sessions = calendar[calendar.index(first) : calendar.index(last) + 1]
+    chunk_session_count = immutable_input.execution_plan.chunk_session_count
+    windows = tuple(
+        _ResearchWindow(
+            ordinal=(offset // chunk_session_count) + 1,
+            research_sessions=research_sessions[offset : offset + chunk_session_count],
+            final=offset + chunk_session_count >= len(research_sessions),
+        )
+        for offset in range(0, len(research_sessions), chunk_session_count)
     )
-    last = max(
-        item.immutable_input.execution_plan.calculation_sessions[-1].isoformat() for item in items
-    )
-    return calendar[calendar.index(first) : calendar.index(last) + 1]
+    if not windows:
+        raise ResearchExecutionInputInvalid("Research Batch research period is empty")
+    return windows
 
 
-def _execute_item_messages(
-    item: ResearchBatchExecutionItem,
+def _execute_factor_batch_messages(
+    items: Sequence[ResearchBatchExecutionItem],
     *,
     generation_id: str,
-    research_data,
-    forward_labels: PreparedColumnarForwardLabels,
+    store: MountedGenerationStore,
+    calendar: tuple[str, ...],
+    research_windows: Sequence[_ResearchWindow],
+    union_bindings: Mapping[str, str],
 ) -> Iterator[dict[str, object]]:
-    immutable_input = item.immutable_input
-    plan = immutable_input.execution_plan
-    research_start = immutable_input.data_admission.first_research_session.isoformat()
-    research_end = immutable_input.data_admission.last_research_session.isoformat()
-    continuation = empty_research_continuation("factor_evaluation")
-    binding: AlphaFactorExecutionBinding | None = None
-    for chunk in plan.chunks:
-        started = monotonic()
-        chunk_sessions = tuple(
-            session.isoformat()
-            for session in plan.calculation_sessions
-            if chunk.first_session <= session <= chunk.last_session
+    states = {
+        item.ordinal: _FactorItemState(
+            continuation=empty_research_continuation("factor_evaluation")
         )
-        research_sessions = tuple(
-            session for session in chunk_sessions if research_start <= session <= research_end
-        )
-        final_values: dict[str, object] | None = None
-        phase_seconds = {
-            "input": 0.0,
-            "alpha_and_pending": 0.0,
-            "factor": 0.0,
-            "strategy": 0.0,
-            "finalize": 0.0,
-        }
-        if research_sessions:
-            calendar = tuple(research_data.sessions)
-            first_research_index = calendar.index(research_sessions[0])
-            context_session_count = max(
-                immutable_input.alpha_admission.effective_lookback,
-                21,
-                2,
+        for item in items
+    }
+    first_item = items[0]
+    yield _task_started_message(first_item, task_role="factor", phase="research")
+    max_lookback = max(item.immutable_input.alpha_admission.effective_lookback for item in items)
+    total_data_read_seconds = 0.0
+    common = first_item.immutable_input
+    for window in research_windows:
+        chunk_started = monotonic()
+        data_read_started = monotonic()
+        try:
+            research_data = _read_shared_window(
+                store,
+                generation_id=generation_id,
+                calendar=calendar,
+                research_sessions=window.research_sessions,
+                universe=common.universe,
+                neutralization=common.neutralization,
+                field_bindings=union_bindings,
+                effective_lookback=max_lookback,
+                fact_instrument_ids=frozenset(),
             )
-            context_start = max(0, first_research_index - context_session_count)
-            context_sessions = calendar[context_start : calendar.index(research_sessions[-1]) + 1]
-            item_data = research_data.slice_sessions(tuple(context_sessions))
-            input_started = monotonic()
-            run_input = RunInput(
-                research_data=item_data,
-                alpha_expression=immutable_input.alpha_expression,
-                field_bindings=immutable_input.field_bindings,
-                effective_alpha_lookback=(immutable_input.alpha_admission.effective_lookback),
-                universe=immutable_input.universe,
-                neutralization=immutable_input.neutralization,
-                research_kind="factor_evaluation",
-                strategy=None,
-                research_start_session=research_start,
-                research_end_session=research_end,
-            )
-            if binding is None:
-                binding = AlphaFactorExecutionBinding.from_run_input(
-                    run_input,
-                    data_generation_id=generation_id,
-                    numeric_execution_contract=immutable_input.numeric_execution_contract,
-                    semantic_versions=immutable_input.semantic_versions,
-                )
-            phase_seconds["input"] = monotonic() - input_started
-            calculation = execute_research_chunk(
-                run_input=run_input,
-                binding=binding,
-                research_data=item_data,
-                forward_labels=forward_labels,
-                research_sessions=research_sessions,
-                final_chunk=chunk.ordinal == len(plan.chunks),
-                continuation=continuation,
+            data_read_seconds = monotonic() - data_read_started
+            total_data_read_seconds += data_read_seconds
+            forward_labels = prepare_columnar_forward_labels(
+                research_data,
                 cancellation_check=lambda: None,
             )
-            continuation = calculation.continuation
-            final_values = calculation.final_values
-            phase_seconds.update(calculation.phase_seconds)
-        else:
-            lookback = immutable_input.alpha_admission.effective_lookback
-            continuation["rolling_tail_sessions"] = (
-                list(chunk_sessions[-lookback:]) if lookback else []
-            )
+        except (MemoryError, ResearchExecutionResourceExhausted):
+            raise
+        except Exception as error:
+            for state in states.values():
+                if state.error is None and state.final_values is None:
+                    state.error = error
+            break
+
+        for item in items:
+            state = states[item.ordinal]
+            if state.error is not None:
+                continue
+            calculation_started = monotonic()
+            try:
+                run_input = _factor_run_input(item.immutable_input, research_data)
+                if state.binding is None:
+                    state.binding = AlphaFactorExecutionBinding.from_run_input(
+                        run_input,
+                        data_generation_id=generation_id,
+                        numeric_execution_contract=(
+                            item.immutable_input.numeric_execution_contract
+                        ),
+                        semantic_versions=item.immutable_input.semantic_versions,
+                    )
+                calculation = execute_research_chunk(
+                    run_input=run_input,
+                    binding=state.binding,
+                    research_data=research_data,
+                    forward_labels=forward_labels,
+                    research_sessions=window.research_sessions,
+                    final_chunk=window.final,
+                    continuation=state.continuation,
+                    cancellation_check=lambda: None,
+                )
+                state.continuation = calculation.continuation
+                state.final_values = calculation.final_values
+                state.calculation_seconds += monotonic() - calculation_started
+                del calculation, run_input
+            except (MemoryError, ResearchExecutionResourceExhausted):
+                raise
+            except Exception as error:
+                state.error = error
+
+        first_state = states[first_item.ordinal]
+        del forward_labels, research_data
+        if not window.final and first_state.error is None:
+            completed = int(first_state.continuation["completed_research_session_count"])
+            yield {
+                "status": "item_chunk_succeeded",
+                "item_ordinal": first_item.ordinal,
+                "item_key": first_item.item_key,
+                "run_id": first_item.run_id,
+                "chunk_ordinal": window.ordinal,
+                "boundary_session": window.research_sessions[-1],
+                "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+                "child_chunk_seconds": monotonic() - chunk_started,
+                "child_data_read_seconds": data_read_seconds,
+                "child_calculation_phase_seconds": _empty_phase_seconds(),
+                "alpha_factor_task_started": False,
+                "alpha_factor_task_completed": False,
+                "task_role": "factor",
+                "phase": "research",
+                "completed_research_sessions": completed,
+                "total_research_sessions": (
+                    first_item.immutable_input.execution_plan.research_session_count
+                ),
+                "chunk": {
+                    "ordinal": window.ordinal,
+                    "boundary_session": window.research_sessions[-1],
+                    "phase": "research",
+                    "completed_warmup_sessions": (
+                        first_item.immutable_input.execution_plan.research_session_offset
+                    ),
+                    "completed_research_sessions": completed,
+                    "continuation": {},
+                    "strategy_daily_observations": [],
+                    "final_values": None,
+                    "final": False,
+                    "reused_checkpoint": False,
+                },
+            }
+
+    for index, item in enumerate(items):
+        if index:
+            yield _task_started_message(item, task_role="factor", phase="finalizing")
+        state = states[item.ordinal]
+        if state.error is not None or state.final_values is None:
+            error = state.error or ValueError("Factor item outcome is incomplete")
+            yield _item_failed_message(item, error, task_role="factor")
+            continue
+        plan = item.immutable_input.execution_plan
         yield {
             "status": "item_chunk_succeeded",
             "item_ordinal": item.ordinal,
             "item_key": item.item_key,
             "run_id": item.run_id,
-            "chunk_ordinal": chunk.ordinal,
-            "boundary_session": chunk.last_session.isoformat(),
+            "chunk_ordinal": len(plan.chunks),
+            "boundary_session": plan.chunks[-1].last_session.isoformat(),
             "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
-            "child_chunk_seconds": monotonic() - started,
-            "child_data_read_seconds": 0.0,
-            "child_calculation_phase_seconds": phase_seconds,
-            "alpha_factor_task_started": chunk.ordinal == 1,
-            "alpha_factor_task_completed": chunk.ordinal == len(plan.chunks),
+            "child_chunk_seconds": state.calculation_seconds,
+            "child_data_read_seconds": (
+                total_data_read_seconds if item.ordinal == first_item.ordinal else 0.0
+            ),
+            "child_calculation_phase_seconds": _empty_phase_seconds(),
+            "alpha_factor_task_started": False,
+            "alpha_factor_task_completed": True,
             "task_role": "factor",
-            "phase": "research" if research_sessions else "warmup",
-            "completed_research_sessions": int(continuation["completed_research_session_count"]),
+            "phase": "finalizing",
+            "completed_research_sessions": plan.research_session_count,
             "total_research_sessions": plan.research_session_count,
             "chunk": {
-                "ordinal": chunk.ordinal,
-                "boundary_session": chunk.last_session.isoformat(),
-                "phase": "research" if research_sessions else "warmup",
-                "completed_warmup_sessions": min(
-                    plan.research_session_offset,
-                    chunk.ordinal * plan.chunk_session_count,
-                ),
-                "completed_research_sessions": int(
-                    continuation["completed_research_session_count"]
-                ),
-                "continuation": continuation,
+                "ordinal": len(plan.chunks),
+                "boundary_session": plan.chunks[-1].last_session.isoformat(),
+                "phase": "research",
+                "completed_warmup_sessions": plan.research_session_offset,
+                "completed_research_sessions": plan.research_session_count,
+                "continuation": state.continuation,
                 "strategy_daily_observations": [],
-                "final_values": final_values,
-                "final": chunk.ordinal == len(plan.chunks),
+                "final_values": state.final_values,
+                "final": True,
                 "reused_checkpoint": False,
             },
         }
@@ -801,8 +841,10 @@ def _execute_strategy_sweep_messages(
     *,
     batch_id: str,
     generation_id: str,
-    research_data: _SharedFactorResearchData,
-    forward_labels: PreparedColumnarForwardLabels,
+    store: MountedGenerationStore,
+    calendar: tuple[str, ...],
+    research_windows: Sequence[_ResearchWindow],
+    union_bindings: Mapping[str, str],
     private_artifact_path: Path,
     reuse_private_artifact: bool,
 ) -> Iterator[dict[str, object]]:
@@ -812,174 +854,164 @@ def _execute_strategy_sweep_messages(
     research_end = shared_input.data_admission.last_research_session.isoformat()
     alpha_continuation = empty_alpha_factor_continuation()
     binding: AlphaFactorExecutionBinding | None = None
-    shared_chunks: list[_SharedStrategyChunk] = []
-    shared_artifact_bytes = 0
-    shared_artifact_capacity_bytes = strategy_sweep_private_artifact_capacity_bytes(
-        encoded_outcome_cell_count=strategy_sweep_encoded_outcome_cell_count(
-            research_session_counts=tuple(chunk.research_session_count for chunk in plan.chunks),
-            maximum_universe_cardinality=max(
-                item.immutable_input.data_admission.universe_instrument_count for item in items
-            ),
-        ),
-        chunk_count=len(plan.chunks),
-    )
+    # This is a disk-size guard, not resident-memory admission. Each payload was
+    # already created under the child memory limit, so total history may grow the
+    # file only by adding bounded frames.
+    shared_artifact_capacity_bytes = plan.execution_memory_bytes * len(
+        research_windows
+    ) + 64 * 1024 * (len(research_windows) + 2)
     final_alpha_continuation: dict[str, object] | None = None
-    phase_seconds = {
-        "input": 0.0,
-        "alpha_and_pending": 0.0,
-        "factor": 0.0,
-        "strategy": 0.0,
-        "finalize": 0.0,
-    }
+    phase_seconds = _empty_phase_seconds()
+    metadata = None
     shared_started = monotonic()
     yield {
         "status": "shared_alpha_factor_started",
         "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
         "task_role": "shared_alpha_factor",
         "phase": "research",
+        "private_artifact_reused": reuse_private_artifact,
+        "alpha_factor_task_started": not reuse_private_artifact,
         "completed_research_sessions": 0,
         "total_research_sessions": plan.research_session_count,
     }
     try:
         _validate_strategy_shared_contract(items)
-        research_chunks = tuple(
-            (chunk, sessions)
-            for chunk in plan.chunks
-            if (
-                sessions := _research_sessions_for_chunk(
+        if reuse_private_artifact:
+            first_window = research_windows[0]
+            first_data = _read_shared_window(
+                store,
+                generation_id=generation_id,
+                calendar=calendar,
+                research_sessions=first_window.research_sessions,
+                universe=shared_input.universe,
+                neutralization=shared_input.neutralization,
+                field_bindings=union_bindings,
+                effective_lookback=shared_input.alpha_admission.effective_lookback,
+                fact_instrument_ids=frozenset(),
+            )
+            binding = AlphaFactorExecutionBinding.from_run_input(
+                _strategy_run_input(
                     shared_input,
-                    chunk,
+                    first_data,
                     research_start=research_start,
                     research_end=research_end,
-                )
+                ),
+                data_generation_id=generation_id,
+                numeric_execution_contract=shared_input.numeric_execution_contract,
+                semantic_versions=shared_input.semantic_versions,
             )
-        )
-        if not research_chunks:
-            raise ResearchExecutionInputInvalid(
-                "Strategy Sweep shared Alpha-and-Factor plan is empty"
-            )
-        _first_chunk, first_sessions = research_chunks[0]
-        first_data = _context_data(
-            research_data,
-            first_sessions,
-            effective_lookback=shared_input.alpha_admission.effective_lookback,
-        )
-        binding = AlphaFactorExecutionBinding.from_run_input(
-            _strategy_run_input(
-                shared_input,
-                first_data,
-                research_start=research_start,
-                research_end=research_end,
-            ),
-            data_generation_id=generation_id,
-            numeric_execution_contract=shared_input.numeric_execution_contract,
-            semantic_versions=shared_input.semantic_versions,
-        )
-        if reuse_private_artifact:
-            artifact = decode_private_alpha_factor_artifact(
-                private_artifact_path.read_bytes(),
+            del first_data
+            with PrivateAlphaFactorArtifactReader(
+                private_artifact_path,
                 expected_batch_id=batch_id,
                 expected_binding=binding,
-            )
-            if len(artifact.chunks) != len(research_chunks):
-                raise ResearchExecutionInputInvalid(
-                    "Strategy Sweep private artifact Chunk count is invalid"
-                )
-            for (_plan_chunk, sessions), stored in zip(
-                research_chunks,
-                artifact.chunks,
-                strict=True,
-            ):
-                item_data = _context_data(
-                    research_data,
-                    sessions,
-                    effective_lookback=shared_input.alpha_admission.effective_lookback,
-                )
-                shared_chunks.append(
-                    _SharedStrategyChunk(
-                        research_data=item_data,
-                        outcome_payload=stored.outcome_payload,
-                        completed_research_sessions=stored.completed_research_sessions,
-                        final=stored.final,
-                    )
-                )
-            final_alpha_continuation = artifact.final_alpha_continuation
-            shared_artifact_bytes = len(artifact.content)
-            del artifact
+                maximum_chunk_payload_bytes=plan.execution_memory_bytes,
+            ) as reader:
+                for window, stored in zip(research_windows, reader, strict=True):
+                    _require_artifact_window(stored, window)
+                final_alpha_continuation = reader.final_alpha_continuation
+                metadata = reader.metadata
         else:
-            for chunk, research_sessions in research_chunks:
-                item_data = _context_data(
-                    research_data,
-                    research_sessions,
-                    effective_lookback=shared_input.alpha_admission.effective_lookback,
-                )
-                input_started = monotonic()
-                run_input = _strategy_run_input(
-                    shared_input,
-                    item_data,
-                    research_start=research_start,
-                    research_end=research_end,
-                )
-                phase_seconds["input"] += monotonic() - input_started
-                final_chunk = chunk == research_chunks[-1][0]
-                outcome = execute_alpha_factor_chunk(
-                    run_input=run_input,
-                    binding=binding,
-                    research_data=item_data,
-                    forward_labels=forward_labels,
-                    research_sessions=research_sessions,
-                    final_chunk=final_chunk,
-                    continuation=alpha_continuation,
-                    cancellation_check=lambda: None,
-                )
-                alpha_continuation = outcome.continuation_snapshot()
-                final_alpha_continuation = alpha_continuation
-                for name in ("alpha_and_pending", "factor", "finalize"):
-                    phase_seconds[name] += outcome.phase_seconds[name]
-                outcome_payload = outcome.compact_for_reuse()
-                shared_chunks.append(
-                    _SharedStrategyChunk(
-                        research_data=item_data,
-                        outcome_payload=outcome_payload,
-                        completed_research_sessions=int(
-                            alpha_continuation["completed_research_session_count"]
-                        ),
-                        final=final_chunk,
+            writer: PrivateAlphaFactorArtifactWriter | None = None
+            try:
+                for window in research_windows:
+                    input_started = monotonic()
+                    research_data = _read_shared_window(
+                        store,
+                        generation_id=generation_id,
+                        calendar=calendar,
+                        research_sessions=window.research_sessions,
+                        universe=shared_input.universe,
+                        neutralization=shared_input.neutralization,
+                        field_bindings=union_bindings,
+                        effective_lookback=(shared_input.alpha_admission.effective_lookback),
+                        fact_instrument_ids=frozenset(),
                     )
-                )
-                del outcome
-                if not final_chunk:
-                    yield {
-                        "status": "shared_alpha_factor_chunk_succeeded",
-                        "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
-                        "task_role": "shared_alpha_factor",
-                        "phase": "research",
-                        "completed_research_sessions": int(
-                            alpha_continuation["completed_research_session_count"]
-                        ),
-                        "total_research_sessions": plan.research_session_count,
-                    }
-            if final_alpha_continuation is not None:
-                artifact_content = encode_private_alpha_factor_artifact(
-                    batch_id=batch_id,
-                    binding=binding,
-                    chunks=tuple(
-                        PrivateAlphaFactorChunk(
-                            outcome_payload=chunk.outcome_payload,
-                            completed_research_sessions=chunk.completed_research_sessions,
-                            final=chunk.final,
+                    phase_seconds["input"] += monotonic() - input_started
+                    forward_labels = prepare_columnar_forward_labels(
+                        research_data,
+                        cancellation_check=lambda: None,
+                    )
+                    run_input = _strategy_run_input(
+                        shared_input,
+                        research_data,
+                        research_start=research_start,
+                        research_end=research_end,
+                    )
+                    if binding is None:
+                        binding = AlphaFactorExecutionBinding.from_run_input(
+                            run_input,
+                            data_generation_id=generation_id,
+                            numeric_execution_contract=(shared_input.numeric_execution_contract),
+                            semantic_versions=shared_input.semantic_versions,
                         )
-                        for chunk in shared_chunks
-                    ),
-                    final_alpha_continuation=final_alpha_continuation,
-                )
-                if len(artifact_content) > shared_artifact_capacity_bytes:
-                    raise MemoryError
-                private_artifact_path.write_bytes(artifact_content)
-                shared_artifact_bytes = len(artifact_content)
-        if binding is None or not shared_chunks or not shared_chunks[-1].final:
+                        writer = PrivateAlphaFactorArtifactWriter(
+                            private_artifact_path,
+                            batch_id=batch_id,
+                            binding=binding,
+                            maximum_chunk_payload_bytes=plan.execution_memory_bytes,
+                        )
+                    assert writer is not None
+                    outcome = execute_alpha_factor_chunk(
+                        run_input=run_input,
+                        binding=binding,
+                        research_data=research_data,
+                        forward_labels=forward_labels,
+                        research_sessions=window.research_sessions,
+                        final_chunk=window.final,
+                        continuation=alpha_continuation,
+                        cancellation_check=lambda: None,
+                    )
+                    alpha_continuation = outcome.continuation_snapshot()
+                    final_alpha_continuation = alpha_continuation
+                    for name in ("alpha_and_pending", "factor", "finalize"):
+                        phase_seconds[name] += outcome.phase_seconds[name]
+                    outcome_payload = outcome.compact_for_reuse()
+                    del outcome
+                    writer.append(
+                        PrivateAlphaFactorChunk(
+                            first_session=window.research_sessions[0],
+                            last_session=window.research_sessions[-1],
+                            outcome_payload=outcome_payload,
+                            completed_research_sessions=int(
+                                alpha_continuation["completed_research_session_count"]
+                            ),
+                            final=window.final,
+                        )
+                    )
+                    del outcome_payload, run_input, forward_labels, research_data
+                    if not window.final:
+                        yield {
+                            "status": "shared_alpha_factor_chunk_succeeded",
+                            "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+                            "task_role": "shared_alpha_factor",
+                            "phase": "research",
+                            "completed_research_sessions": int(
+                                alpha_continuation["completed_research_session_count"]
+                            ),
+                            "total_research_sessions": plan.research_session_count,
+                        }
+                if final_alpha_continuation is None:
+                    raise ResearchExecutionInputInvalid(
+                        "Strategy Sweep shared Alpha-and-Factor task is incomplete"
+                    )
+                assert writer is not None
+                metadata = writer.complete(final_alpha_continuation=final_alpha_continuation)
+            except Exception:
+                if writer is not None:
+                    writer.abort()
+                raise
+        if binding is None or final_alpha_continuation is None or metadata is None:
             raise ResearchExecutionInputInvalid(
                 "Strategy Sweep shared Alpha-and-Factor task is incomplete"
+            )
+        if metadata.chunk_count != len(research_windows):
+            raise ResearchExecutionInputInvalid(
+                "Strategy Sweep private artifact Chunk count is invalid"
+            )
+        if metadata.byte_size > shared_artifact_capacity_bytes:
+            raise ResearchExecutionResourceExhausted(
+                "Strategy Sweep private artifact exceeds its admitted capacity"
             )
         yield {
             "status": "shared_alpha_factor_succeeded",
@@ -987,24 +1019,22 @@ def _execute_strategy_sweep_messages(
             "child_chunk_seconds": monotonic() - shared_started,
             "child_data_read_seconds": 0.0,
             "child_calculation_phase_seconds": phase_seconds,
-            "shared_chunk_count": len(shared_chunks),
-            "shared_artifact_bytes": shared_artifact_bytes,
+            "shared_chunk_count": metadata.chunk_count,
+            "shared_artifact_bytes": metadata.byte_size,
             "shared_artifact_capacity_bytes": shared_artifact_capacity_bytes,
             "private_artifact_path": str(private_artifact_path),
-            "private_artifact_sha256": hashlib.sha256(
-                private_artifact_path.read_bytes()
-            ).hexdigest(),
+            "private_artifact_sha256": metadata.sha256,
             "private_artifact_reused": reuse_private_artifact,
             "private_artifact_binding": binding.value_snapshot(),
             "private_artifact_binding_checksum": binding.checksum,
-            "alpha_factor_task_started": True,
+            "alpha_factor_task_started": False,
             "alpha_factor_task_completed": True,
             "task_role": "shared_alpha_factor",
             "phase": "finalizing",
             "completed_research_sessions": plan.research_session_count,
             "total_research_sessions": plan.research_session_count,
         }
-    except MemoryError:
+    except (MemoryError, ResearchExecutionResourceExhausted):
         raise
     except Exception as error:
         yield {
@@ -1013,7 +1043,7 @@ def _execute_strategy_sweep_messages(
             "message": "Shared Alpha-and-Factor calculation failed.",
             "error_type": type(error).__name__,
             "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
-            "alpha_factor_task_started": True,
+            "alpha_factor_task_started": False,
             "alpha_factor_task_failed": True,
             "strategy_task_started": False,
         }
@@ -1024,8 +1054,13 @@ def _execute_strategy_sweep_messages(
         yield _task_started_message(item, task_role="strategy", phase="strategy")
         yield from _execute_strategy_item_messages(
             item,
+            batch_id=batch_id,
+            generation_id=generation_id,
             binding=binding,
-            shared_chunks=shared_chunks,
+            store=store,
+            calendar=calendar,
+            research_windows=research_windows,
+            private_artifact_path=private_artifact_path,
             final_alpha_continuation=final_alpha_continuation,
             research_start=research_start,
             research_end=research_end,
@@ -1051,46 +1086,78 @@ def _validate_strategy_shared_contract(
 def _execute_strategy_item_messages(
     item: ResearchBatchExecutionItem,
     *,
+    batch_id: str,
+    generation_id: str,
     binding: AlphaFactorExecutionBinding,
-    shared_chunks: Sequence[_SharedStrategyChunk],
+    store: MountedGenerationStore,
+    calendar: tuple[str, ...],
+    research_windows: Sequence[_ResearchWindow],
+    private_artifact_path: Path,
     final_alpha_continuation: Mapping[str, object],
     research_start: str,
     research_end: str,
 ) -> Iterator[dict[str, object]]:
     started = monotonic()
     strategy_continuation = empty_strategy_continuation()
-    observations: list[dict[str, object]] = []
     final_values: dict[str, object] | None = None
+    data_read_seconds = 0.0
     strategy_seconds = 0.0
     finalize_seconds = 0.0
     try:
-        for shared in shared_chunks:
-            alpha_factor_outcome = AlphaFactorChunkOutcome.from_compact_for_reuse(
-                shared.outcome_payload,
-                binding=binding,
-            )
-            run_input = _strategy_run_input(
-                item.immutable_input,
-                shared.research_data,
-                research_start=research_start,
-                research_end=research_end,
-            )
-            outcome = execute_strategy_chunk_from_alpha_factor_outcome(
-                run_input=run_input,
-                binding=binding,
-                alpha_factor_outcome=alpha_factor_outcome,
-                research_data=shared.research_data,
-                final_chunk=shared.final,
-                continuation=strategy_continuation,
-                cancellation_check=lambda: None,
-            )
-            del alpha_factor_outcome
-            strategy_continuation = outcome.continuation_snapshot()
-            observations.extend(outcome.daily_observations_snapshot())
-            final_values = outcome.final_values_snapshot()
-            strategy_seconds += outcome.phase_seconds["strategy"]
-            finalize_seconds += outcome.phase_seconds["finalize"]
-            if not shared.final:
+        with PrivateAlphaFactorArtifactReader(
+            private_artifact_path,
+            expected_batch_id=batch_id,
+            expected_binding=binding,
+            maximum_chunk_payload_bytes=(
+                item.immutable_input.execution_plan.execution_memory_bytes
+            ),
+        ) as reader:
+            for window, stored in zip(research_windows, reader, strict=True):
+                _require_artifact_window(stored, window)
+                data_read_started = monotonic()
+                research_data = _read_shared_window(
+                    store,
+                    generation_id=generation_id,
+                    calendar=calendar,
+                    research_sessions=window.research_sessions,
+                    universe=item.immutable_input.universe,
+                    neutralization=item.immutable_input.neutralization,
+                    field_bindings=item.immutable_input.field_bindings,
+                    effective_lookback=(item.immutable_input.alpha_admission.effective_lookback),
+                    fact_instrument_ids=_continuation_instrument_ids(strategy_continuation),
+                )
+                data_read_seconds += monotonic() - data_read_started
+                alpha_factor_outcome = AlphaFactorChunkOutcome.from_compact_for_reuse(
+                    stored.outcome_payload,
+                    binding=binding,
+                )
+                run_input = _strategy_run_input(
+                    item.immutable_input,
+                    research_data,
+                    research_start=research_start,
+                    research_end=research_end,
+                )
+                outcome = execute_strategy_chunk_from_alpha_factor_outcome(
+                    run_input=run_input,
+                    binding=binding,
+                    alpha_factor_outcome=alpha_factor_outcome,
+                    research_data=research_data,
+                    final_chunk=window.final,
+                    continuation=strategy_continuation,
+                    cancellation_check=lambda: None,
+                )
+                strategy_continuation = outcome.continuation_snapshot()
+                observations = outcome.daily_observations_snapshot()
+                final_values = outcome.final_values_snapshot()
+                strategy_seconds += outcome.phase_seconds["strategy"]
+                finalize_seconds += outcome.phase_seconds["finalize"]
+                partition_path = _strategy_partition_path(
+                    private_artifact_path,
+                    item_ordinal=item.ordinal,
+                    chunk_ordinal=window.ordinal,
+                )
+                _write_strategy_partition(partition_path, observations)
+                del outcome, run_input, alpha_factor_outcome, research_data
                 yield {
                     "status": "item_strategy_chunk_succeeded",
                     "item_ordinal": item.ordinal,
@@ -1099,11 +1166,21 @@ def _execute_strategy_item_messages(
                     "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
                     "task_role": "strategy",
                     "phase": "strategy",
-                    "completed_research_sessions": shared.completed_research_sessions,
+                    "completed_research_sessions": stored.completed_research_sessions,
                     "total_research_sessions": (
                         item.immutable_input.execution_plan.research_session_count
                     ),
+                    "strategy_partition": {
+                        "chunk_ordinal": window.ordinal,
+                        "path": str(partition_path),
+                        "row_count": len(observations),
+                        "first_session": observations[0]["session"],
+                        "last_session": observations[-1]["session"],
+                    },
                 }
+                del observations
+            if reader.final_alpha_continuation != dict(final_alpha_continuation):
+                raise ValueError("Strategy Sweep private artifact continuation changed")
         if final_values is None:
             raise ValueError("Final Strategy Sweep outcome is incomplete")
         plan = item.immutable_input.execution_plan
@@ -1114,7 +1191,7 @@ def _execute_strategy_item_messages(
             "run_id": item.run_id,
             "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
             "child_chunk_seconds": monotonic() - started,
-            "child_data_read_seconds": 0.0,
+            "child_data_read_seconds": data_read_seconds,
             "child_calculation_phase_seconds": {
                 "input": 0.0,
                 "alpha_and_pending": 0.0,
@@ -1123,7 +1200,7 @@ def _execute_strategy_item_messages(
                 "finalize": finalize_seconds,
             },
             "alpha_factor_task_started": False,
-            "strategy_task_started": True,
+            "strategy_task_started": False,
             "strategy_task_completed": True,
             "task_role": "strategy",
             "phase": "finalizing",
@@ -1143,13 +1220,13 @@ def _execute_strategy_item_messages(
                     **final_alpha_continuation,
                     **strategy_continuation,
                 },
-                "strategy_daily_observations": observations,
+                "strategy_daily_observations": [],
                 "final_values": final_values,
                 "final": True,
                 "reused_checkpoint": False,
             },
         }
-    except MemoryError:
+    except (MemoryError, ResearchExecutionResourceExhausted):
         raise
     except Exception as error:
         yield {
@@ -1162,37 +1239,156 @@ def _execute_strategy_item_messages(
             "run_id": item.run_id,
             "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
             "alpha_factor_task_started": False,
-            "strategy_task_started": True,
+            "strategy_task_started": False,
             "strategy_task_failed": True,
         }
 
 
-def _research_sessions_for_chunk(
-    immutable_input: ImmutableRunInput,
-    chunk: ResearchExecutionChunk,
+def _read_shared_window(
+    store: MountedGenerationStore,
     *,
-    research_start: str,
-    research_end: str,
-) -> tuple[str, ...]:
-    return tuple(
-        session.isoformat()
-        for session in immutable_input.execution_plan.calculation_sessions
-        if chunk.first_session <= session <= chunk.last_session
-        and research_start <= session.isoformat() <= research_end
-    )
-
-
-def _context_data(
-    research_data: _SharedFactorResearchData,
+    generation_id: str,
+    calendar: tuple[str, ...],
     research_sessions: tuple[str, ...],
-    *,
+    universe: str,
+    neutralization: str | None,
+    field_bindings: Mapping[str, str],
     effective_lookback: int,
+    fact_instrument_ids: frozenset[str],
 ) -> _SharedFactorResearchData:
-    calendar = tuple(research_data.sessions)
     first_index = calendar.index(research_sessions[0])
     context_start = max(0, first_index - max(effective_lookback, 21, 2))
     context_sessions = calendar[context_start : calendar.index(research_sessions[-1]) + 1]
-    return research_data.slice_sessions(tuple(context_sessions))
+    source = store.read_columnar_slice(
+        generation_id,
+        sessions=list(context_sessions),
+        universe_name=universe,
+        neutralization=neutralization,
+        field_bindings=field_bindings,
+        fact_instrument_ids=fact_instrument_ids,
+    )
+    return _SharedFactorResearchData(
+        source,
+        field_ids=tuple(field_bindings),
+    )
+
+
+def _factor_run_input(
+    immutable_input: ImmutableRunInput,
+    research_data: _SharedFactorResearchData,
+) -> RunInput:
+    if immutable_input.research_kind != "factor_evaluation":
+        raise ResearchExecutionInputInvalid("Factor Batch item input is invalid")
+    return RunInput(
+        research_data=research_data,
+        alpha_expression=immutable_input.alpha_expression,
+        field_bindings=immutable_input.field_bindings,
+        effective_alpha_lookback=immutable_input.alpha_admission.effective_lookback,
+        universe=immutable_input.universe,
+        neutralization=immutable_input.neutralization,
+        research_kind="factor_evaluation",
+        strategy=None,
+        research_start_session=(immutable_input.data_admission.first_research_session.isoformat()),
+        research_end_session=(immutable_input.data_admission.last_research_session.isoformat()),
+    )
+
+
+def _require_artifact_window(
+    stored: PrivateAlphaFactorChunk,
+    window: _ResearchWindow,
+) -> None:
+    if (
+        stored.first_session != window.research_sessions[0]
+        or stored.last_session != window.research_sessions[-1]
+        or stored.final is not window.final
+    ):
+        raise ResearchExecutionInputInvalid(
+            "Strategy Sweep private artifact Chunk boundary is invalid"
+        )
+
+
+def _strategy_partition_path(
+    private_artifact_path: Path,
+    *,
+    item_ordinal: int,
+    chunk_ordinal: int,
+) -> Path:
+    return private_artifact_path.with_name(
+        f"{private_artifact_path.name}.strategy-{item_ordinal:03d}-{chunk_ordinal:06d}.parquet"
+    )
+
+
+def _write_strategy_partition(
+    path: Path,
+    observations: Sequence[Mapping[str, object]],
+) -> None:
+    if not observations:
+        raise ResearchExecutionInputInvalid("Strategy output partition is empty")
+    partial = path.with_name(f"{path.name}.partial")
+    if path.exists() or partial.exists():
+        raise ResearchExecutionInputInvalid("Strategy output partition path is not empty")
+    content = parquet_bytes(observations, STRATEGY_DAILY_OBSERVATIONS_CONTRACT)
+    try:
+        with partial.open("xb") as destination:
+            destination.write(content)
+            destination.flush()
+            os.fsync(destination.fileno())
+        os.replace(partial, path)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
+
+
+def _continuation_instrument_ids(
+    continuation: Mapping[str, object],
+) -> frozenset[str]:
+    strategy = continuation.get("strategy_state")
+    if not isinstance(strategy, Mapping):
+        return frozenset()
+    positions = strategy.get("positions")
+    if not isinstance(positions, list):
+        raise ResearchExecutionInputInvalid("Research Strategy continuation is invalid")
+    return frozenset(
+        str(position["instrument_id"])
+        for position in positions
+        if isinstance(position, Mapping) and "instrument_id" in position
+    )
+
+
+def _empty_phase_seconds() -> dict[str, float]:
+    return {
+        "input": 0.0,
+        "alpha_and_pending": 0.0,
+        "factor": 0.0,
+        "strategy": 0.0,
+        "finalize": 0.0,
+    }
+
+
+def _item_failed_message(
+    item: ResearchBatchExecutionItem,
+    error: Exception,
+    *,
+    task_role: str,
+) -> dict[str, object]:
+    return {
+        "status": "item_failed",
+        "category": "calculation",
+        "message": f"{task_role.title()} item calculation failed.",
+        "error_type": type(error).__name__,
+        "item_ordinal": item.ordinal,
+        "item_key": item.item_key,
+        "run_id": item.run_id,
+        "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+        "alpha_factor_task_started": False,
+        "alpha_factor_task_failed": task_role == "factor",
+        "strategy_task_started": False,
+        "strategy_task_failed": task_role == "strategy",
+        "task_role": task_role,
+        "phase": "finalizing",
+        "completed_research_sessions": 0,
+        "total_research_sessions": (item.immutable_input.execution_plan.research_session_count),
+    }
 
 
 def _strategy_run_input(
@@ -1289,6 +1485,8 @@ def _task_started_message(
         "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
         "task_role": task_role,
         "phase": phase,
+        "alpha_factor_task_started": task_role == "factor",
+        "strategy_task_started": task_role == "strategy",
         "completed_research_sessions": 0,
         "total_research_sessions": item.immutable_input.execution_plan.research_session_count,
     }

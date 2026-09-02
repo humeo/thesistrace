@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 from time import perf_counter
 
 import numpy as np
@@ -15,9 +17,10 @@ from thesistrace.alpha_language import alpha_language
 from thesistrace.publication import JsonPayload, ParquetRowsPayload, VerifiedBundle, VerifiedPayload
 from thesistrace.publication.serialization import canonical_json_bytes, parquet_bytes
 from thesistrace.research_batch.private_artifact import (
+    PRIVATE_ARTIFACT_SCHEMA_VERSION,
+    PrivateAlphaFactorArtifactReader,
+    PrivateAlphaFactorArtifactWriter,
     PrivateAlphaFactorChunk,
-    decode_private_alpha_factor_artifact,
-    encode_private_alpha_factor_artifact,
 )
 from thesistrace.research_kernel.equivalence import equivalence_bytes
 from thesistrace.research_kernel.factor import (
@@ -681,7 +684,9 @@ def test_alpha_factor_outcome_compact_reuse_is_exact_and_binding_scoped() -> Non
         )
 
 
-def test_private_alpha_factor_artifact_is_canonical_and_batch_scoped() -> None:
+def test_private_alpha_factor_artifact_is_streamed_complete_and_batch_scoped(
+    tmp_path: Path,
+) -> None:
     fixture, factor_input = _minimal_alpha_factor_case()
     binding = _alpha_factor_binding(factor_input)
     shared = execute_alpha_factor_chunk(
@@ -694,43 +699,90 @@ def test_private_alpha_factor_artifact_is_canonical_and_batch_scoped() -> None:
         continuation=empty_alpha_factor_continuation(),
         cancellation_check=lambda: None,
     )
-    content = encode_private_alpha_factor_artifact(
+    path = tmp_path / "shared.alpha-factor"
+    payload = shared.compact_for_reuse()
+    writer = PrivateAlphaFactorArtifactWriter(
+        path,
         batch_id="batch_private_artifact",
         binding=binding,
-        chunks=(
-            PrivateAlphaFactorChunk(
-                outcome_payload=shared.compact_for_reuse(),
-                completed_research_sessions=shared.completed_research_session_count,
-                final=True,
-            ),
-        ),
-        final_alpha_continuation=shared.continuation_snapshot(),
+        maximum_chunk_payload_bytes=len(payload),
     )
+    writer.append(
+        PrivateAlphaFactorChunk(
+            first_session=fixture.sessions[0],
+            last_session=fixture.sessions[-1],
+            outcome_payload=payload,
+            completed_research_sessions=shared.completed_research_session_count,
+            final=True,
+        )
+    )
+    metadata = writer.complete(final_alpha_continuation=shared.continuation_snapshot())
 
     restored_binding = AlphaFactorExecutionBinding.from_value_snapshot(binding.value_snapshot())
-    restored = decode_private_alpha_factor_artifact(
-        content,
+    with PrivateAlphaFactorArtifactReader(
+        path,
         expected_batch_id="batch_private_artifact",
         expected_binding=restored_binding,
-    )
+        maximum_chunk_payload_bytes=len(payload),
+    ) as reader:
+        chunks = tuple(reader)
+        final_continuation = reader.final_alpha_continuation
 
-    assert restored.content == content
-    assert restored.binding.checksum == binding.checksum
-    assert restored.chunks[0].outcome_payload == shared.compact_for_reuse()
+    assert PRIVATE_ARTIFACT_SCHEMA_VERSION == "research-batch-private-alpha-factor-v2"
+    assert not path.with_name(f"{path.name}.partial").exists()
+    assert metadata.sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert metadata.byte_size == path.stat().st_size
+    assert chunks[0].outcome_payload == payload
+    assert final_continuation == shared.continuation_snapshot()
     with pytest.raises(ValueError, match="artifact is invalid"):
-        decode_private_alpha_factor_artifact(
-            content,
+        with PrivateAlphaFactorArtifactReader(
+            path,
             expected_batch_id="batch_other",
             expected_binding=restored_binding,
-        )
-    corrupt = bytearray(content)
+            maximum_chunk_payload_bytes=len(payload),
+        ) as wrong_batch:
+            tuple(wrong_batch)
+    corrupt = bytearray(path.read_bytes())
     corrupt[-2] = ord("0") if corrupt[-2] != ord("0") else ord("1")
+    corrupt_path = tmp_path / "corrupt.alpha-factor"
+    corrupt_path.write_bytes(corrupt)
     with pytest.raises(ValueError, match="artifact is invalid"):
-        decode_private_alpha_factor_artifact(
-            bytes(corrupt),
+        with PrivateAlphaFactorArtifactReader(
+            corrupt_path,
             expected_batch_id="batch_private_artifact",
             expected_binding=restored_binding,
-        )
+            maximum_chunk_payload_bytes=len(payload),
+        ) as corrupt_reader:
+            tuple(corrupt_reader)
+    truncated_path = tmp_path / "truncated.alpha-factor"
+    truncated_path.write_bytes(path.read_bytes()[:-1])
+    with pytest.raises(ValueError, match="artifact is invalid"):
+        with PrivateAlphaFactorArtifactReader(
+            truncated_path,
+            expected_batch_id="batch_private_artifact",
+            expected_binding=restored_binding,
+            maximum_chunk_payload_bytes=len(payload),
+        ) as truncated_reader:
+            tuple(truncated_reader)
+    with pytest.raises(ValueError, match="artifact is invalid"):
+        with PrivateAlphaFactorArtifactReader(
+            path,
+            expected_batch_id="batch_private_artifact",
+            expected_binding=_alpha_factor_binding(
+                factor_input,
+                data_generation_id="f" * 64,
+            ),
+            maximum_chunk_payload_bytes=len(payload),
+        ) as wrong_binding:
+            tuple(wrong_binding)
+    with pytest.raises(ValueError, match="artifact is invalid"):
+        with PrivateAlphaFactorArtifactReader(
+            path,
+            expected_batch_id="batch_private_artifact",
+            expected_binding=restored_binding,
+            maximum_chunk_payload_bytes=len(payload) - 1,
+        ) as oversized_frame:
+            tuple(oversized_frame)
 
 
 def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None:

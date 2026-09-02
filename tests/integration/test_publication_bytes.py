@@ -2,6 +2,7 @@ import copy
 import hashlib
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier
 
 import pyarrow as pa
@@ -102,6 +103,47 @@ def test_prepare_is_canonical_idempotent_and_verified(core_settings: CoreSetting
         assert verified.payloads["rows"].media_type == "application/vnd.apache.parquet"
 
 
+def test_file_payload_is_staged_recorded_and_materialized_streaming(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    content = (b"research-batch-private-artifact\n" * 128_000) + b"complete"
+    source = tmp_path / "source.artifact"
+    source.write_bytes(content)
+    destination = tmp_path / "materialized.artifact"
+
+    with open_core_runtime(core_settings) as runtime:
+        staged = runtime.publication.stage_file(
+            source,
+            media_type="application/vnd.thesistrace.alpha-factor-artifact",
+            serialization={"format": "streaming-test", "version": 2},
+        )
+        prepared = runtime.publication.prepare(
+            kind="research-batch-private-alpha-factor",
+            payloads={"private_alpha_factor": staged},
+            provenance={"batch_id": "batch-streaming"},
+        )
+        with runtime.database.transaction() as transaction:
+            published = runtime.publication.record(transaction, prepared)
+
+        materialized = runtime.publication.materialize_payload(
+            published,
+            "private_alpha_factor",
+            destination,
+        )
+        with runtime.database.transaction() as transaction:
+            runtime.publication.release_manifest_in_transaction(
+                transaction,
+                published.manifest_sha256,
+                still_referenced=False,
+            )
+        assert runtime.publication.collect_one_pending_deletion() is True
+
+    assert materialized == staged
+    assert destination.read_bytes() == content
+    assert not destination.with_name(f"{destination.name}.partial").exists()
+
+
 def test_research_result_preparation_uses_bounded_collection_objects(
     core_settings: CoreSettings,
 ) -> None:
@@ -109,16 +151,12 @@ def test_research_result_preparation_uses_bounded_collection_objects(
     with open_core_runtime(core_settings) as runtime:
         first = runtime.publication.prepare(
             kind="research.result",
-            payloads=result_publication_payloads(
-                result, research_kind="strategy_backtest"
-            ),
+            payloads=result_publication_payloads(result, research_kind="strategy_backtest"),
             provenance={"research_run_id": "run-result-codec"},
         )
         second = runtime.publication.prepare(
             kind="research.result",
-            payloads=result_publication_payloads(
-                result, research_kind="strategy_backtest"
-            ),
+            payloads=result_publication_payloads(result, research_kind="strategy_backtest"),
             provenance={"research_run_id": "run-result-codec"},
         )
 
@@ -159,8 +197,7 @@ def test_semantic_result_sections_read_only_bounded_real_rustfs_objects(
         "last_adjusted_price": "10",
     }
     result["terminal_strategy_state"]["positions"] = [
-        {**position, "instrument_id": f"equity:{index:06d}.SZ"}
-        for index in range(101)
+        {**position, "instrument_id": f"equity:{index:06d}.SZ"} for index in range(101)
     ]
 
     with open_core_runtime(core_settings) as runtime:
@@ -539,7 +576,7 @@ class _FailingResponseBody:
     def __init__(self) -> None:
         self.closed = False
 
-    def read(self) -> bytes:
+    def read(self, _size: int = -1) -> bytes:
         raise ResponseStreamingError(error=RuntimeError("incomplete response stream"))
 
     def close(self) -> None:
