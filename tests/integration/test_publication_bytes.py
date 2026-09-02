@@ -137,7 +137,7 @@ def test_file_payload_is_staged_recorded_and_materialized_streaming(
                 published.manifest_sha256,
                 still_referenced=False,
             )
-        assert runtime.publication.collect_one_pending_deletion() is True
+        _collect_pending_deletion_after_transient_failure(runtime.publication)
 
     assert materialized == staged
     assert destination.read_bytes() == content
@@ -615,6 +615,20 @@ def _clear_bucket(s3: BaseClient, bucket: str) -> None:
     objects = [{"Key": item["Key"]} for item in response.get("Contents", [])]
     if objects:
         s3.delete_objects(Bucket=bucket, Delete={"Objects": objects})
+
+
+def _collect_pending_deletion_after_transient_failure(publication: Publication) -> None:
+    """Model later Worker polls without hiding deterministic cleanup failures."""
+
+    last_error: PublicationUnavailableError | None = None
+    for _attempt in range(3):
+        try:
+            assert publication.collect_one_pending_deletion() is True
+            return
+        except PublicationUnavailableError as error:
+            last_error = error
+    assert last_error is not None
+    raise last_error
 
 
 def _legal_result() -> dict[str, object]:
