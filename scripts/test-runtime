@@ -492,7 +492,7 @@ verify_caddy_single_origin() {
   cmp "$evidence_dir/caddy-spa.html" "$evidence_dir/caddy-chat-spa-fallback.html"
   grep -Fi "Content-Security-Policy: default-src 'none'; script-src 'self';" \
     "$evidence_dir/caddy-security-headers.txt"
-  grep -Fi "style-src 'self'; style-src-attr 'unsafe-inline'" \
+  grep -Fi "style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'" \
     "$evidence_dir/caddy-security-headers.txt"
   grep -Fi "Referrer-Policy: no-referrer" \
     "$evidence_dir/caddy-security-headers.txt"

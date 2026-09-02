@@ -225,8 +225,9 @@ to Compose configuration, source control, stdout, or an operator result.
 
 Caddy applies a strict self-only script policy without unsafe inline script or
 evaluation, disallows framing, objects, and base URLs, and sets no-referrer,
-nosniff, and a restrictive Permissions Policy. Styles remain self-only except
-for `style-src-attr 'unsafe-inline'`, which the current chart library requires.
+nosniff, and a restrictive Permissions Policy. Inline styles and style
+attributes remain allowed for the current chart and browser annotation renderers;
+scripts remain self-only.
 Production alone adds one-year HSTS without preload or `includeSubDomains`.
 The release image gate proves the chart, editor, and Auth pages under this
 policy.

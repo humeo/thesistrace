@@ -474,6 +474,9 @@ def test_release_image_gate_uses_the_same_caddyfile_with_an_internal_test_ca() -
     assert "client_ip_two" in smoke
     assert "forged_request_id" in smoke
     assert "Content-Security-Policy" in smoke
+    assert (
+        "style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'" in smoke
+    )
     assert "Strict-Transport-Security" in smoke
     assert "includeSubDomains" in smoke
     assert "preload" in smoke

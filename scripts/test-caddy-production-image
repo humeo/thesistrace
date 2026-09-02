@@ -219,7 +219,8 @@ docker exec "$container_name" wget --server-response --spider \
 security_headers="$evidence_root/security-headers.stderr.log"
 grep -Fi "Content-Security-Policy: default-src 'none'; script-src 'self';" \
   "$security_headers"
-grep -Fi "style-src 'self'; style-src-attr 'unsafe-inline'" "$security_headers"
+grep -Fi "style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'" \
+  "$security_headers"
 grep -Fi "Referrer-Policy: no-referrer" "$security_headers"
 grep -Fi "X-Content-Type-Options: nosniff" "$security_headers"
 grep -Fi "X-Frame-Options: DENY" "$security_headers"
