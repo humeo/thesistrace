@@ -1192,14 +1192,22 @@ def test_shared_browser_control_fixtures_do_not_depend_on_docker_exec() -> None:
     fault_proxy = (ROOT / "web" / "e2e-core" / "fault-proxy.ts").read_text()
     auth_fixture = (ROOT / "web" / "e2e-core" / "auth-fixture.ts").read_text()
     auth_control = (ROOT / "auth" / "test-fixtures" / "auth-control.mjs").read_text()
+    auth_service = overlay.split("  auth:\n", maxsplit=1)[1].split(
+        "\n  auth-fixture-control:", maxsplit=1
+    )[0]
+    auth_fixture_service = overlay.split(
+        "  auth-fixture-control:\n", maxsplit=1
+    )[1].split("\n  auth-exchange-proxy:", maxsplit=1)[0]
 
     assert "auth-fixture-control:" in overlay
-    assert "network_mode: service:auth" in overlay
+    assert "network_mode: service:auth" not in auth_fixture_service
+    assert "127.0.0.1::8260" not in auth_service
+    assert "127.0.0.1::8260" in auth_fixture_service
     assert "THESISTRACE_AUTH_FIXTURE_CONTROL_PORT" in overlay
     assert "THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN" in runner
     assert "THESISTRACE_TEST_AUTH_PROXY_ORIGIN" in runner
     assert "THESISTRACE_TEST_MCP_PROXY_ORIGIN" in runner
-    assert "auth_fixture_port=$(mapped_port auth 8260)" in runner
+    assert "auth_fixture_port=$(mapped_port auth-fixture-control 8260)" in runner
     assert "auth_proxy_port=$(mapped_port auth-exchange-proxy 8250)" in runner
     assert "mcp_proxy_port=$(mapped_port mcp-fault-proxy 8150)" in runner
 
@@ -1612,6 +1620,9 @@ def test_image_smoke_provisions_auth_inside_the_private_compose_network() -> Non
     assert 'authFixtureRequest("/__test/resend-emails"' in browser_fixture
     assert "auth auth-fixture-control api research-worker" in " ".join(
         image_smoke.replace("\\", "").split()
+    )
+    assert (
+        "auth-fixture-control:\n    networks:\n      - default\n      - edge" in overlay
     )
     assert 'THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN="$auth_fixture_origin"' in runtime
     assert "create_private_compose_login_session" in provisioner

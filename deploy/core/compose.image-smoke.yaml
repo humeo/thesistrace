@@ -13,6 +13,11 @@ services:
     volumes:
       - ../../auth/test-fixtures:/test-fixtures:ro
 
+  auth-fixture-control:
+    networks:
+      - default
+      - edge
+
   initialize:
     environment:
       THESISTRACE_S3_ACCESS_KEY_ID: observability-access-canary

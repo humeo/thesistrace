@@ -1461,7 +1461,7 @@ case "$command" in
       tracking-worker data-operator-worker web
     run_phase e2e-tushare-secret-scope verify_tushare_secret_scope
     resend_port=$(mapped_port resend-fake 8300)
-    auth_fixture_port=$(mapped_port auth 8260)
+    auth_fixture_port=$(mapped_port auth-fixture-control 8260)
     auth_proxy_port=$(mapped_port auth-exchange-proxy 8250)
     mcp_proxy_port=$(mapped_port mcp-fault-proxy 8150)
     resend_test_origin="http://127.0.0.1:$resend_port"
@@ -1772,7 +1772,7 @@ case "$command" in
       --wait --wait-timeout 300 \
       auth auth-fixture-control api research-worker batch-research-worker tracking-worker \
       data-operator-worker web
-    auth_fixture_port=$(mapped_port auth 8260)
+    auth_fixture_port=$(mapped_port auth-fixture-control 8260)
     auth_fixture_origin="http://127.0.0.1:$auth_fixture_port"
     run_phase image-smoke-operator-browser-auth-fixture-ready wait_for_auth_fixture_control
     run_phase image-smoke-operator-browser run_operator_playwright \

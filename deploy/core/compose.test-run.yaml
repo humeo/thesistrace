@@ -40,7 +40,6 @@ services:
         condition: service_healthy
     ports:
       - 127.0.0.1::8200
-      - 127.0.0.1::8260
     volumes:
       - ../../auth/test-fixtures:/test-fixtures:ro
 
@@ -78,7 +77,8 @@ services:
       interval: 1s
       timeout: 5s
       retries: 60
-    network_mode: service:auth
+    ports:
+      - 127.0.0.1::8260
     restart: "no"
     volumes:
       - ../../auth/test-fixtures:/test-fixtures:ro
