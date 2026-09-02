@@ -8,6 +8,7 @@ from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
 from thesistrace.research_kernel.strategy import (
+    Position,
     StrategyCalculationError,
     advance_strategy_metric_state,
     legal_order_quantity,
@@ -16,6 +17,7 @@ from thesistrace.research_kernel.strategy import (
     run_strategy,
     split_child_orders,
     strategy_metrics_from_state,
+    sum_position_values,
     transaction_cost,
 )
 
@@ -41,6 +43,33 @@ def test_a_share_quantity_child_order_and_cost_rules() -> None:
     }
     assert transaction_cost(Decimal("1000"), "buy", costs) == Decimal("5.01000")
     assert transaction_cost(Decimal("1000"), "sell", costs) == Decimal("5.51000")
+
+
+def test_position_valuation_is_invariant_to_continuation_rehydration_order() -> None:
+    positions = {
+        "equity:z-large.SH": Position(
+            execution_shares=1,
+            adjusted_units=Decimal("1e28"),
+            last_adjusted_price=Decimal("1"),
+        ),
+        "equity:a-small.SH": Position(
+            execution_shares=1,
+            adjusted_units=Decimal("3"),
+            last_adjusted_price=Decimal("1"),
+        ),
+        "equity:b-small.SH": Position(
+            execution_shares=1,
+            adjusted_units=Decimal("3"),
+            last_adjusted_price=Decimal("1"),
+        ),
+    }
+    marks = {instrument_id: Decimal("1") for instrument_id in positions}
+
+    before_checkpoint = sum_position_values(positions, marks)
+    after_checkpoint = sum_position_values(dict(sorted(positions.items())), marks)
+
+    assert before_checkpoint == after_checkpoint
+    assert before_checkpoint == Decimal("10000000000000000000000000006")
 
 
 def test_market_rejections_are_three_explicit_categories() -> None:

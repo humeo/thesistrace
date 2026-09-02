@@ -1551,15 +1551,18 @@ def unique_events(events: list[dict[str, object]]) -> list[dict[str, object]]:
 
 
 def sum_position_values(positions: dict[str, Position], marks: dict[str, Decimal]) -> Decimal:
-    return money(
-        sum(
-            (
-                position.adjusted_units * marks[instrument_id]
-                for instrument_id, position in positions.items()
-            ),
-            Decimal(0),
-        )
-    )
+    try:
+        with localcontext(ACCOUNTING_CONTEXT):
+            value = sum(
+                (
+                    position.adjusted_units * marks[instrument_id]
+                    for instrument_id, position in sorted(positions.items())
+                ),
+                Decimal(0),
+            )
+    except DecimalException as error:
+        raise StrategyCalculationError("invalid accounting result") from error
+    return money(value)
 
 
 def money(value: Decimal) -> Decimal:
