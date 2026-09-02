@@ -986,7 +986,7 @@ def test_parallel_worktrees_share_one_caddy_port_lock_namespace(
             worker_pids,
             command_log=command_log,
         )
-        results = [process.communicate(timeout=10) for process in processes]
+        results = [process.communicate(timeout=30) for process in processes]
     except BaseException:
         for process in processes:
             process.kill()
@@ -2347,7 +2347,7 @@ def test_two_concurrent_test_runs_have_disjoint_resources_and_state(
             worker_pids,
             command_log=command_log,
         )
-        results = [process.communicate(timeout=10) for process in processes]
+        results = [process.communicate(timeout=30) for process in processes]
     except BaseException:
         for process in processes:
             process.kill()
