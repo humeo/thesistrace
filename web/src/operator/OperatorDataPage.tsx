@@ -277,11 +277,7 @@ export function OperatorDataPage() {
       <section aria-label="Operator Data" className="page-section operator-page">
         <header className="page-hero">
           <div>
-            <p className="eyebrow">Operator Console</p>
             <h1>Data operations</h1>
-            <p className="hero-copy">
-              Queue private refresh work and follow the exact operation through publication.
-            </p>
           </div>
         </header>
 
@@ -296,7 +292,6 @@ export function OperatorDataPage() {
           <header className="operator-section-header">
             <div>
               <h2 id="operator-market-refresh-heading">Market Refresh</h2>
-              <span>Use the same free-form, timezone-aware inputs as the CLI.</span>
             </div>
           </header>
           <form
@@ -370,7 +365,6 @@ export function OperatorDataPage() {
               </p>
             )}
             <footer>
-              <p>Accepted is queued, not published.</p>
               <button
                 className="button-primary"
                 disabled={confirmation !== null || pendingSubmission !== null}

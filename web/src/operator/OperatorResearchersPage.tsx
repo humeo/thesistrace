@@ -308,11 +308,7 @@ export function OperatorResearchersView({
     >
       <header className="page-hero">
         <div>
-          <p className="eyebrow">Operator Console</p>
           <h1>Researcher access</h1>
-          <p className="hero-copy">
-            Review Researcher identity, current Login Sessions, and recent Invitation state.
-          </p>
         </div>
       </header>
 
@@ -332,7 +328,6 @@ export function OperatorResearchersView({
         <header className="operator-section-header">
           <div>
             <h2 id="operator-researchers-title">Researchers</h2>
-            <span>50 per page</span>
           </div>
           <form
             className="operator-search"
@@ -389,7 +384,6 @@ export function OperatorResearchersView({
         <header className="operator-section-header">
           <div>
             <h2 id="operator-invitations-title">Invitations</h2>
-            <span>Effective and terminal within 30 days · 50 per page</span>
           </div>
           {onInvitationAction === undefined ? null : (
             <button

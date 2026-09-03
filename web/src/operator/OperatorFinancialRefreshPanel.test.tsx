@@ -9,7 +9,7 @@ import {
 } from "./OperatorFinancialRefreshPanel";
 import type { FinancialRefreshOperation } from "./operatorMutationClient";
 
-test("renders free-form CLI-equivalent Financial target and key fields", () => {
+test("renders focused Financial target and key fields", () => {
   const markup = renderToStaticMarkup(
     <OperatorFinancialRefreshPanel onAccessNotFound={() => undefined} />,
   );
@@ -19,8 +19,11 @@ test("renders free-form CLI-equivalent Financial target and key fields", () => {
   expect(markup).toContain('type="text"');
   expect(markup).not.toContain('type="date"');
   expect(markup).toContain("Idempotency key");
-  expect(markup).toContain("Accepted is queued, not published.");
   expect(markup).toContain("exactly as accepted by the CLI");
+  expect(markup).not.toContain(
+    "Choose the exact Research Session through which disclosures are observed.",
+  );
+  expect(markup).not.toContain("Accepted is queued, not published.");
 });
 
 test("suggests an editable Financial key without selecting a target", () => {

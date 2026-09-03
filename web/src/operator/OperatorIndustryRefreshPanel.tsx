@@ -230,7 +230,6 @@ export function OperatorIndustryRefreshPanel({
         <header className="operator-section-header">
           <div>
             <h2 id="operator-industry-refresh-heading">Industry Refresh</h2>
-            <span>Choose the exact Research Session through which Industry data is observed.</span>
           </div>
         </header>
         <form
@@ -305,7 +304,6 @@ export function OperatorIndustryRefreshPanel({
             </p>
           )}
           <footer>
-            <p>Accepted is queued, not published.</p>
             <button
               className="button-primary"
               disabled={confirmation !== null || pending !== null}

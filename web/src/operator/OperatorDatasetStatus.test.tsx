@@ -40,7 +40,9 @@ describe("Operator Dataset status", () => {
       />,
     );
 
-    expect(markup.indexOf("Dataset Head")).toBeLessThan(markup.indexOf("Operation history"));
+    expect(markup.indexOf("Current research Dataset")).toBeLessThan(
+      markup.indexOf("Operation history"),
+    );
     expect(markup).toContain("d".repeat(64));
     expect(markup).toContain("Market ready");
     expect(markup).toContain("Benchmark ready");
@@ -57,7 +59,15 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("Market Refresh");
     expect(markup).toContain("Financial Refresh");
     expect(markup).toContain("Industry Refresh");
-    expect(markup).toContain("terminal receipts retained 180 days");
+    expect(markup).not.toContain('<p class="eyebrow">Dataset Head</p>');
+    expect(markup).not.toContain(
+      "One Head, one global Refresh queue, and bounded operational receipts.",
+    );
+    expect(markup).not.toContain("Newest durable receipt for each queue kind");
+    expect(markup).not.toContain("terminal receipts retained 180 days");
+    expect(markup).not.toContain(
+      "Accepted work can be claimed by the single Refresh Worker.",
+    );
     expect(markup).toContain('aria-label="Cancel operation market-accepted"');
     expect(markup).toContain('aria-label="Retry operation market-failed"');
     expect(markup).toContain('aria-label="Retry operation industry-cancelled"');

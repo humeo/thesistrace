@@ -330,11 +330,10 @@ test("only the singleton Operator can open and read the Operator Console", async
   const marketRefreshSection = page.locator(
     'section[aria-labelledby="operator-market-refresh-heading"]',
   );
-  await expect(
-    marketRefreshSection.getByText("Accepted is queued, not published.", {
-      exact: true,
-    }),
-  ).toBeVisible();
+  await expect(marketRefreshSection.getByText(
+    "Use the same free-form, timezone-aware inputs as the CLI.",
+    { exact: true },
+  )).toHaveCount(0);
   const marketAsOf = "2026-08-14T18:00:00+08:00";
   const marketAsOfInput = marketRefreshSection.getByLabel("As-of");
   const marketKeyInput = marketRefreshSection.getByLabel("Idempotency key");
@@ -1520,7 +1519,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(datasetStatus.getByText(
     "Newest first · 50 receipts per page · terminal receipts retained 180 days",
     { exact: true },
-  )).toBeVisible();
+  )).toHaveCount(0);
   for (const key of [marketKey, financialKey, industryKey]) {
     await expect(operationHistory.getByText(key, { exact: true })).toBeVisible();
   }

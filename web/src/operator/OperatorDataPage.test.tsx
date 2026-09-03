@@ -8,7 +8,7 @@ import {
   suggestMarketRefreshKey,
 } from "./OperatorDataPage";
 
-test("renders the focused Market form with free-form CLI inputs and Operator routes", () => {
+test("renders the focused forms without redundant Operator copy", () => {
   const markup = renderToStaticMarkup(<OperatorDataPage />);
 
   expect(markup).toContain('href="/operator/researchers"');
@@ -22,7 +22,18 @@ test("renders the focused Market form with free-form CLI inputs and Operator rou
   expect(markup).not.toContain('type="date"');
   expect(markup).not.toContain('type="datetime-local"');
   expect(markup).toContain(">Idempotency key<");
-  expect(markup).toContain("Accepted is queued, not published.");
+  expect(markup).not.toContain('<p class="eyebrow">Operator Console</p>');
+  expect(markup).not.toContain(
+    "Queue private refresh work and follow the exact operation through publication.",
+  );
+  expect(markup).not.toContain("Use the same free-form, timezone-aware inputs as the CLI.");
+  expect(markup).not.toContain(
+    "Choose the exact Research Session through which disclosures are observed.",
+  );
+  expect(markup).not.toContain(
+    "Choose the exact Research Session through which Industry data is observed.",
+  );
+  expect(markup).not.toContain("Accepted is queued, not published.");
 });
 
 test("suggests a stable kind-and-time key without selecting an as-of target", () => {

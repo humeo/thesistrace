@@ -93,6 +93,12 @@ describe("Operator Researcher view", () => {
     expect(markup).toContain("Reissue");
     expect(markup).toContain("Current Operator");
     expect(markup).toContain("Revoke sessions");
+    expect(markup).not.toContain('<p class="eyebrow">Operator Console</p>');
+    expect(markup).not.toContain(
+      "Review Researcher identity, current Login Sessions, and recent Invitation state.",
+    );
+    expect(markup).not.toContain("50 per page");
+    expect(markup).not.toContain("Effective and terminal within 30 days");
     expect(markup).toContain(
       `aria-label="Revoke 2 Login Sessions for ${otherResearcher.email}"`,
     );

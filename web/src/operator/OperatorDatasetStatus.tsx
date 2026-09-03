@@ -224,9 +224,7 @@ export function OperatorDatasetStatusView({
     >
       <header className="operator-section-header operator-dataset-status-header">
         <div>
-          <p className="eyebrow">Dataset Head</p>
           <h2 id="operator-dataset-status-heading">Current research Dataset</h2>
-          <span>One Head, one global Refresh queue, and bounded operational receipts.</span>
         </div>
         <button onClick={onReload} type="button">Reload</button>
       </header>
@@ -308,21 +306,21 @@ function WorkerAvailability({ data }: Readonly<{ data: DatasetOperationalStatus 
   const running = visibleOperations.some((operation) => operation.status === "running");
   return (
     <div
-      className={`inline-status${worker.available ? "" : " inline-status-error"}`}
+      className={`inline-status operator-worker-status${worker.available ? "" : " inline-status-error"}`}
       role={worker.available ? "status" : "alert"}
     >
       <strong>
         Data Operator Worker {worker.available ? "available" : "unavailable"}
       </strong>
-      <span>
-        {worker.available
-          ? "Accepted work can be claimed by the single Refresh Worker."
-          : accepted
+      {worker.available ? null : (
+        <span>
+          {accepted
             ? "Accepted work is durably queued but cannot start until the Worker recovers."
             : running
               ? "Running work will be recovered from its durable claim when the Worker recovers."
               : "New work can be accepted durably but cannot start until the Worker recovers."}
-      </span>
+        </span>
+      )}
       <small>Last Worker heartbeat: {timestamp(worker.lastHeartbeatAt)}</small>
     </div>
   );
@@ -345,7 +343,6 @@ function LatestRefreshTable({
     <section aria-labelledby="operator-latest-refreshes-heading" className="operator-dataset-subsection">
       <header>
         <h3 id="operator-latest-refreshes-heading">Latest by Refresh kind</h3>
-        <span>Newest durable receipt for each queue kind</span>
       </header>
       <div className="operator-table-scroll">
         <table
@@ -401,7 +398,6 @@ function OperationHistoryTable({
     <section aria-labelledby="operator-operation-history-heading" className="operator-dataset-subsection">
       <header>
         <h3 id="operator-operation-history-heading">Operation history</h3>
-        <span>Newest first · 50 receipts per page · terminal receipts retained 180 days</span>
       </header>
       {operations.length === 0 ? (
         <p className="operator-empty">

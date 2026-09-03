@@ -1825,7 +1825,7 @@ select { color-scheme: dark; }
   display: flex;
   grid-column: 1 / -1;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 16px;
   padding-top: 4px;
 }
@@ -1865,6 +1865,14 @@ select { color-scheme: dark; }
 .operator-refresh-failed { border-left-color: var(--danger); }
 .operator-dataset-status { display: grid; gap: 22px; }
 .operator-dataset-status .operator-section-header { padding-bottom: 0; }
+.operator-worker-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  margin: 0;
+}
+.operator-worker-status small { color: var(--ink-soft); }
 .operator-dataset-head {
   display: grid;
   gap: 0;

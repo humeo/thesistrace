@@ -225,7 +225,6 @@ export function OperatorFinancialRefreshPanel({
         <header className="operator-section-header">
           <div>
             <h2 id="operator-financial-refresh-heading">Financial Refresh</h2>
-            <span>Choose the exact Research Session through which disclosures are observed.</span>
           </div>
         </header>
         <form
@@ -300,7 +299,6 @@ export function OperatorFinancialRefreshPanel({
             </p>
           )}
           <footer>
-            <p>Accepted is queued, not published.</p>
             <button
               className="button-primary"
               disabled={confirmation !== null || pending !== null}

@@ -9,7 +9,7 @@ import {
 } from "./OperatorIndustryRefreshPanel";
 import type { IndustryRefreshOperation } from "./operatorMutationClient";
 
-test("renders free-form CLI-equivalent Industry target and key fields", () => {
+test("renders focused Industry target and key fields", () => {
   const markup = renderToStaticMarkup(
     <OperatorIndustryRefreshPanel onAccessNotFound={() => undefined} />,
   );
@@ -19,8 +19,11 @@ test("renders free-form CLI-equivalent Industry target and key fields", () => {
   expect(markup).toContain('type="text"');
   expect(markup).not.toContain('type="date"');
   expect(markup).toContain("Idempotency key");
-  expect(markup).toContain("Accepted is queued, not published.");
   expect(markup).toContain("exactly as accepted by the CLI");
+  expect(markup).not.toContain(
+    "Choose the exact Research Session through which Industry data is observed.",
+  );
+  expect(markup).not.toContain("Accepted is queued, not published.");
 });
 
 test("suggests an editable Industry key without selecting a target", () => {
