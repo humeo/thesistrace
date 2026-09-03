@@ -12,6 +12,7 @@ import {
   type CommandReceipt,
   type SteerInput,
   type StopInput,
+  type TimelineCursor,
   type TimelinePage,
 } from "./chat-control.js";
 import type { SafeModelCatalog } from "./model-registry.js";
@@ -75,7 +76,7 @@ export type AgentAppDependencies = Readonly<{
   timeline: (
     threadId: string,
     researcher: VerifiedResearcher,
-    before: number | undefined,
+    before: TimelineCursor | undefined,
     limit: number,
   ) => Promise<TimelinePage>;
   sessionPreference: (
@@ -241,14 +242,20 @@ export function createAgentApp(dependencies: AgentAppDependencies): Hono<AgentAp
         query.limit,
       );
       return context.json({
-        entries: page.entries.map((entry) => ({
-          created_at: entry.createdAt,
-          entry_id: entry.entryId,
-          kind: entry.kind,
-          payload: timelinePayloadResponse(entry),
-          turn_id: entry.turnId,
-        })),
         next_cursor: page.nextCursor,
+        turns: page.turns.map((turn) => ({
+          completed_at: turn.completedAt,
+          entries: turn.entries.map((entry) => ({
+            created_at: entry.createdAt,
+            entry_id: entry.entryId,
+            kind: entry.kind,
+            payload: timelinePayloadResponse(entry),
+            turn_id: entry.turnId,
+          })),
+          id: turn.id,
+          started_at: turn.startedAt,
+          status: turn.status,
+        })),
       });
     } catch (error) {
       return sessionErrorResponse(context, error);
@@ -370,7 +377,7 @@ function commandResponse(receipt: CommandReceipt) {
   };
 }
 
-function timelinePayloadResponse(entry: TimelinePage["entries"][number]) {
+function timelinePayloadResponse(entry: TimelinePage["turns"][number]["entries"][number]) {
   if (entry.kind !== "question") return entry.payload;
   return {
     interrupt_id: entry.payload.interruptId,

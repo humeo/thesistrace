@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
 
 import { expect, restoreResearcherSession, sameOriginHeaders, test, testProjectName } from "./auth-fixture";
+import { revealToolActivity } from "./chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 import { controlWorker } from "./research-run-control";
 
@@ -76,7 +77,7 @@ test("Chat shared Session binds two contexts to one Run while another Session ru
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     for (const client of [page, other, parallel]) {
       await expect(client.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled({ timeout: 15_000 });
-      await expect(client.getByRole("article", { name: "Tool get_research_context: Completed", exact: true })).toBeVisible();
+      await expect((await revealToolActivity(client, "get_research_context", "complete")).last()).toBeVisible();
     }
     for (const client of [page, other]) {
       await expect(client.locator(".chat-main")).toHaveAttribute("data-agent-run-id", runId);
@@ -107,7 +108,7 @@ test("Chat Host restart retains completed Tools and Core work without replaying 
     await page.goto("/chat");
     await send(page, factorPrompt);
     await expect.poll(() => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses, { timeout: 30_000 }).toBe(1);
-    await expect(page.getByRole("article", { name: "Tool submit_research_run: Completed", exact: true })).toBeVisible();
+    await expect((await revealToolActivity(page, "submit_research_run", "complete")).last()).toBeVisible();
     const threadId = sessionId(page);
     const runId = identities[0]!.runId;
     const before = databaseFacts(researcher.id);
@@ -129,7 +130,7 @@ test("Chat Host restart retains completed Tools and Core work without replaying 
     await expect(page.locator(".chat-main")).toHaveAttribute("data-agent-run-id", runId);
     await expect(status(page)).toHaveText("Run failed", { timeout: 15_000 });
     await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled();
-    await expect(page.getByRole("article", { name: "Tool submit_research_run: Completed", exact: true })).toContainText(coreRunId);
+    await expect((await revealToolActivity(page, "submit_research_run", "complete")).last()).toBeVisible();
     await expect(page.locator(".chat-message-user")).toHaveCount(1);
     expect(identities).toHaveLength(1);
     expect(databaseFacts(researcher.id)).toMatchObject({ active_runs: 0, admissions: 1, agent_runs: 1, core_runs: 1, user_messages: 1 });

@@ -44,7 +44,7 @@ const sessionHistory = {
   watchGeneratedTitle: vi.fn(),
 };
 
-test("renders the standalone Chat hierarchy and next-Turn model controls", () => {
+test("renders the standalone Chat hierarchy and integrated model picker", () => {
   const markup = renderToStaticMarkup(
     <AuthProvider>
       <ChatShell
@@ -63,10 +63,9 @@ test("renders the standalone Chat hierarchy and next-Turn model controls", () =>
   const positions = labels.map((label) => markup.indexOf(label));
   expect(positions.every((position) => position >= 0)).toBe(true);
   expect(positions).toEqual([...positions].sort((left, right) => left - right));
-  expect(markup).toContain('aria-label="Next Turn settings"');
-  expect(markup).toContain('aria-label="Agent model settings"');
-  expect(markup).toContain('<label for="chat-model">Model</label>');
-  expect(markup).toContain('<label for="chat-reasoning">Reasoning</label>');
+  expect(markup).toContain('class="chat-composer-surface chat-composer-surface-locked"');
+  expect(markup).toContain('aria-label="Model Research Primary, reasoning Medium"');
+  expect(markup).not.toContain("Next Turn settings");
   expect(markup).not.toMatch(/temperature|top-p|endpoint|byok/i);
 });
 
@@ -106,9 +105,9 @@ test("keeps New Chat ephemeral until a canonical opaque session is present", () 
 });
 
 test.each([
-  ["running", "Running"],
-  ["waiting_for_user", "Waiting"],
-] as const)("renders current Turn state %s in Chat history", (status, label) => {
+  ["running", "chat-session-active-spinner"],
+  ["waiting_for_user", "chat-session-waiting-icon"],
+] as const)("renders the icon-only current Turn state %s in Chat history", (status, className) => {
   const currentTurn = turn(status);
   const markup = renderToStaticMarkup(
     <SessionHistoryList
@@ -119,8 +118,8 @@ test.each([
       restoreFocus={vi.fn()}
     />,
   );
-  expect(markup).toContain(`class="chat-session-run-full">${label}</span>`);
-  expect(markup).toContain('class="chat-session-run-compact">Run</span>');
+  expect(markup).toContain(`class="${className}"`);
+  expect(markup).not.toMatch(/chat-session-run-(?:full|compact)/);
 });
 
 test("renders research Markdown while disabling raw HTML, images, and non-Run links", () => {

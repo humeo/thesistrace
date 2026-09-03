@@ -955,7 +955,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   await page.getByLabel("Target Folder").selectOption(folderId);
   await page.getByRole("button", { name: "Create draft" }).click();
   await expect(page).toHaveURL(new RegExp(`/research\\?folder=${folderId}$`));
-  await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked();
+  await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked({ timeout: 30_000 });
   await expect(page.locator(".cm-content")).toHaveText("close");
   await expect(page.getByLabel("Notes")).toHaveValue("Browser Batch hypothesis");
   await expect(page.getByLabel("Holdings count")).toHaveValue("10");

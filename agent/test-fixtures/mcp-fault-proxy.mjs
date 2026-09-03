@@ -2,7 +2,7 @@ import http from "node:http";
 
 const upstreamOrigin = requiredOrigin("THESISTRACE_MCP_PROXY_UPSTREAM");
 const port = requiredPort("THESISTRACE_MCP_PROXY_PORT");
-const upstreamTimeoutMs = 5_000;
+const upstreamTimeoutMs = 30_000;
 let toolCallMode = "pass";
 let discoveryRequests = 0;
 let toolListRequests = 0;

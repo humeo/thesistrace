@@ -395,6 +395,19 @@ exit "${FAKE_PLAYWRIGHT_STATUS:-0}"
 """
     )
     pnpm.chmod(0o755)
+    node = tmp_path / "node"
+    node.write_text(
+        """#!/bin/sh
+set -eu
+printf 'node %s\\n' "$*" >> "$TEST_COMMAND_LOG"
+if [ "${2:-}" = configure ] && [ -n "${FAKE_AGENT_EVAL_CONFIGURE_OUTPUT:-}" ]; then
+  printf '%s\\n' "$FAKE_AGENT_EVAL_CONFIGURE_OUTPUT"
+  exit 0
+fi
+exit 97
+"""
+    )
+    node.chmod(0o755)
     curl = tmp_path / "curl"
     curl.write_text(
         """#!/bin/sh
@@ -1384,6 +1397,19 @@ def test_only_explicit_eval_injects_the_cli_credential_and_selected_endpoint(
 ) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
     observed_path = tmp_path / "agent-environment.json"
+    eval_registry = {
+        "default_model_key": "gpt-5.6-luna",
+        "models": [{
+            "key": "gpt-5.6-luna",
+            "display_name": "GPT-5.6 Luna",
+            "provider_adapter": "openai",
+            "provider_model_id": "gpt-5.6-luna",
+            "reasoning_efforts": ["high"],
+            "default_reasoning_effort": "high",
+            "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
+            "enabled": True,
+        }],
+    }
     environment.update({
         "CLI_API_KEY": "cli-provider-offline-canary",
         "THESISTRACE_AGENT_OPENAI_API_KEY": "ambient-canonical-key-canary",
@@ -1395,6 +1421,7 @@ def test_only_explicit_eval_injects_the_cli_credential_and_selected_endpoint(
         "THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD": "20",
         "THESISTRACE_TEST_EVIDENCE_DIR": str(tmp_path / "prepare-evidence"),
         "FAKE_CONFIG_STATUS": "11",
+        "FAKE_AGENT_EVAL_CONFIGURE_OUTPUT": json.dumps(eval_registry),
         "TEST_AGENT_ENV_LOG": str(observed_path),
         "NODE_OPTIONS": (
             "--import=data:text/javascript,globalThis.fetch=()=>{throw%20"
@@ -1412,8 +1439,7 @@ def test_only_explicit_eval_injects_the_cli_credential_and_selected_endpoint(
     observed = json.loads(observed_path.read_text())
     registry = json.loads(observed["THESISTRACE_AGENT_MODEL_REGISTRY"])
     if command == "agent-eval":
-        assert registry["default_model_key"] == "gpt-5.6-luna"
-        assert registry["models"][0]["reasoning_efforts"] == ["high"]
+        assert registry == eval_registry
         assert observed["THESISTRACE_AGENT_OPENAI_API_KEY"] == "cli-provider-offline-canary"
         assert observed["THESISTRACE_AGENT_OPENAI_BASE_URL"] == "http://host.docker.internal:8317/v1"
         assert observed["THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"] == ""
@@ -1424,6 +1450,11 @@ def test_only_explicit_eval_injects_the_cli_credential_and_selected_endpoint(
         assert observed["THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"]
     for credential in ("cli-provider-offline-canary", "ambient-canonical-key-canary"):
         assert credential not in completed.stdout + completed.stderr + command_log.read_text()
+    if command == "agent-eval":
+        configure_command = (
+            f"node {ROOT / 'agent' / 'scripts' / 'eval-research.mjs'} configure"
+        )
+        assert configure_command in command_log.read_text()
     assert "up --detach" not in command_log.read_text()
 
 

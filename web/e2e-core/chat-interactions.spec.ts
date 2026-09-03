@@ -194,11 +194,14 @@ async function latestOutcome(page: Page): Promise<string | null> {
 
 async function timelineEntries(page: Page, sessionId: string): Promise<TimelineEntry[]> {
   const response = await page.request.get(
-    `/api/agent/sessions/${sessionId}/timeline?limit=50`,
+    `/api/agent/sessions/${sessionId}/timeline?limit=20`,
     { headers: sameOriginHeaders() },
   );
   expect(response.status()).toBe(200);
-  return (await response.json() as { entries: TimelineEntry[] }).entries;
+  const body = await response.json() as {
+    turns: ReadonlyArray<{ entries: TimelineEntry[] }>;
+  };
+  return body.turns.flatMap((turn) => turn.entries);
 }
 
 function observeRunRequests(context: BrowserContext): RunRequest[] {

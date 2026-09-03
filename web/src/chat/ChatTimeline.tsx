@@ -1,14 +1,17 @@
 import type { ActivityMessage } from "@ag-ui/core";
 import {
   ArrowDown,
+  CaretDown,
   Check,
   CheckCircle,
   CircleNotch,
   Copy,
   StopCircle,
   WarningCircle,
+  Wrench,
 } from "@phosphor-icons/react";
 import {
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -19,13 +22,15 @@ import remarkGfm from "remark-gfm";
 
 import { parseResearchRunHref } from "./toolResult";
 import { ResearchA2UIActivity } from "./researchA2UI";
+import type { ChatQuestion, TimelineEntry, TimelineTurn } from "./chatProtocol";
 import type { ChatConversationController } from "./useChatConversation";
-import type { ChatQuestion, TimelineEntry } from "./chatProtocol";
 
 const BOTTOM_THRESHOLD_PX = 24;
 const RESEARCH_MARKDOWN_REMARK_PLUGINS = [remarkGfm];
 
-type ScrollAnchor = Readonly<{ entryId: string; top: number }>;
+type ScrollAnchor = Readonly<{ top: number; turnId: string }>;
+type ToolEntry = Extract<TimelineEntry, { kind: "tool_activity" }>;
+type TurnSegment = TimelineEntry | Readonly<{ entries: readonly ToolEntry[]; kind: "tool_group" }>;
 
 export function ChatTimeline({
   controller,
@@ -35,11 +40,12 @@ export function ChatTimeline({
   onAnnounce: (message: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const sentinelRef = useRef<HTMLDivElement>(null);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
   const previousScrollTopRef = useRef(0);
   const touchYRef = useRef<number | null>(null);
   const anchorRef = useRef<ScrollAnchor | null>(null);
   const initialPositionedRef = useRef(false);
+  const olderRequestRef = useRef(false);
   const [following, setFollowing] = useState(true);
 
   useLayoutEffect(() => {
@@ -47,8 +53,8 @@ export function ChatTimeline({
     if (viewport === null) return;
     const anchor = anchorRef.current;
     if (anchor !== null) {
-      const target = [...viewport.querySelectorAll<HTMLElement>("[data-entry-id]")]
-        .find((element) => element.dataset.entryId === anchor.entryId);
+      const target = [...viewport.querySelectorAll<HTMLElement>("[data-turn-id]")]
+        .find((element) => element.dataset.turnId === anchor.turnId);
       if (target !== undefined) viewport.scrollTop += target.getBoundingClientRect().top - anchor.top;
       anchorRef.current = null;
       previousScrollTopRef.current = viewport.scrollTop;
@@ -59,24 +65,45 @@ export function ChatTimeline({
       previousScrollTopRef.current = viewport.scrollTop;
       initialPositionedRef.current = true;
     }
-  }, [controller.timeline, following]);
+  }, [controller.turns, following]);
 
   async function loadOlder(): Promise<void> {
     const viewport = scrollRef.current;
-    if (viewport === null) return;
+    if (viewport === null || olderRequestRef.current || controller.nextCursor === null) return;
+    olderRequestRef.current = true;
     const viewportBounds = viewport.getBoundingClientRect();
-    const first = [
-      ...viewport.querySelectorAll<HTMLElement>("[data-entry-id]"),
-    ].find((element) => {
-      const bounds = element.getBoundingClientRect();
-      return bounds.bottom > viewportBounds.top && bounds.top < viewportBounds.bottom;
-    });
-    if (first !== undefined) {
-      anchorRef.current = { entryId: first.dataset.entryId ?? "", top: first.getBoundingClientRect().top };
+    const first = [...viewport.querySelectorAll<HTMLElement>("[data-turn-id]")]
+      .find((element) => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.bottom > viewportBounds.top && bounds.top < viewportBounds.bottom;
+      });
+    if (first !== undefined && first.dataset.turnId !== undefined) {
+      anchorRef.current = { top: first.getBoundingClientRect().top, turnId: first.dataset.turnId };
     }
-    const loaded = await controller.loadOlder();
-    if (!loaded) anchorRef.current = null;
+    try {
+      const loaded = await controller.loadOlder();
+      if (!loaded) anchorRef.current = null;
+    } finally {
+      olderRequestRef.current = false;
+    }
   }
+
+  useEffect(() => {
+    const sentinel = topSentinelRef.current;
+    if (
+      sentinel === null
+      || controller.nextCursor === null
+      || controller.timelineError
+      || typeof IntersectionObserver === "undefined"
+    ) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) void loadOlder();
+    }, { root: scrollRef.current, rootMargin: "160px 0px 0px" });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  // loadOlder reads the current controller and is deliberately recreated for each page state.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controller.loadingOlder, controller.nextCursor, controller.timelineError]);
 
   function updateFollowing(): void {
     const viewport = scrollRef.current;
@@ -101,7 +128,7 @@ export function ChatTimeline({
     setFollowing(true);
   }
 
-  const empty = controller.timeline.length === 0;
+  const empty = controller.turns.length === 0;
   return (
     <div className="chat-timeline-shell">
       <div
@@ -121,41 +148,34 @@ export function ChatTimeline({
         role="log"
         tabIndex={0}
       >
-        {controller.nextCursor === null ? null : (
-          <button
-            className="chat-timeline-load-older button-quiet"
-            disabled={controller.loadingOlder}
-            onClick={() => void loadOlder()}
-            type="button"
-          >
-            {controller.loadingOlder ? "Loading earlier messages…" : "Load earlier messages"}
-          </button>
-        )}
-        {controller.timelineError ? (
-          <div className="chat-timeline-error">
-            <span>Conversation history could not be updated.</span>
-            <button className="button-quiet" onClick={() => void controller.refresh()} type="button">Retry</button>
-          </div>
-        ) : null}
         {empty ? <ChatIntroduction opening={controller.phase === "opening"} /> : (
           <div className="chat-timeline-content">
-            {controller.timeline.map((entry) => (
-              <TimelineItem
-                controller={controller}
-                entry={entry}
-                key={entry.entry_id}
-                onAnnounce={onAnnounce}
-              />
-            ))}
-            {controller.phase === "active" && !controller.hasFirstAssistantText ? (
-              <div aria-label="Research Agent is preparing a response" className="chat-response-indicator">
-                <span aria-hidden="true" />
-                <span>Working</span>
+            <div aria-hidden="true" className="chat-top-sentinel" ref={topSentinelRef} />
+            {controller.loadingOlder ? (
+              <CircleNotch aria-label="Loading earlier Turns" className="chat-timeline-loading chat-spinning" size={15} />
+            ) : null}
+            {controller.timelineError ? (
+              <div className="chat-timeline-error">
+                <span>Conversation history could not be updated.</span>
+                <button
+                  className="button-quiet"
+                  onClick={() => void controller.retryTimeline()}
+                  type="button"
+                >
+                  Retry
+                </button>
               </div>
             ) : null}
+            {controller.turns.map((turn) => (
+              <TimelineTurnView
+                controller={controller}
+                key={turn.id}
+                onAnnounce={onAnnounce}
+                turn={turn}
+              />
+            ))}
           </div>
         )}
-        <div aria-hidden="true" className="chat-bottom-sentinel" ref={sentinelRef} />
       </div>
       {!following && !empty ? (
         <button className="chat-back-to-latest" onClick={backToLatest} type="button">
@@ -165,6 +185,70 @@ export function ChatTimeline({
       ) : null}
     </div>
   );
+}
+
+function TimelineTurnView({
+  controller,
+  onAnnounce,
+  turn,
+}: {
+  controller: ChatConversationController;
+  onAnnounce: (message: string) => void;
+  turn: TimelineTurn;
+}) {
+  const firstAssistantIndex = turn.entries.findIndex((entry) => entry.kind !== "user_input");
+  const leadingCount = firstAssistantIndex < 0 ? turn.entries.length : firstAssistantIndex;
+  const leading = turn.entries.slice(0, leadingCount);
+  const assistantEntries = turn.entries.slice(leadingCount);
+  const assistantText = turn.entries
+    .filter((entry): entry is Extract<TimelineEntry, { kind: "assistant_message" }> => (
+      entry.kind === "assistant_message" && entry.payload.content.length > 0
+    ))
+    .map((entry) => entry.payload.content)
+    .join("\n\n");
+  const activeWithoutText = turn.id === controller.currentTurnId
+    && controller.phase === "active"
+    && !controller.hasFirstAssistantText;
+  const showAssistantSection = assistantEntries.length > 0 || activeWithoutText;
+
+  return (
+    <section className="chat-turn" data-turn-id={turn.id}>
+      {leading.map((entry) => (
+        <TimelineItem controller={controller} entry={entry} key={entry.entry_id} onAnnounce={onAnnounce} />
+      ))}
+      {!showAssistantSection ? null : (
+        <div className="chat-turn-assistant-meta">
+          <span><WorkedFor turn={turn} /></span>
+          {assistantText.length === 0 ? null : (
+            <CopyTextButton content={assistantText} label="Copy response" onAnnounce={onAnnounce} />
+          )}
+        </div>
+      )}
+      {segmentTurnEntries(assistantEntries).map((segment) => (
+        segment.kind === "tool_group"
+          ? <ToolActivityGroup entries={segment.entries} key={`tools:${segment.entries[0]?.entry_id}`} />
+          : <TimelineItem controller={controller} entry={segment} key={segment.entry_id} onAnnounce={onAnnounce} />
+      ))}
+      {activeWithoutText ? (
+        <div aria-label="Research Agent is preparing a response" className="chat-response-indicator">
+          <span aria-hidden="true" />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function WorkedFor({ turn }: { turn: TimelineTurn }) {
+  const ticking = turn.completed_at === null && (turn.status === "running" || turn.status === "stopping");
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!ticking) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [ticking]);
+  const startedAt = Date.parse(turn.started_at);
+  const completedAt = turn.completed_at === null ? now : Date.parse(turn.completed_at);
+  return `Worked for ${formatDuration(Math.max(0, completedAt - startedAt))}`;
 }
 
 function TimelineItem({
@@ -190,9 +274,6 @@ function TimelineItem({
   if (entry.kind === "assistant_message") {
     return (
       <article className="chat-message chat-message-assistant" data-entry-id={entry.entry_id}>
-        <div className="chat-message-actions">
-          <CopyTextButton content={entry.payload.content} label="Copy response" onAnnounce={onAnnounce} />
-        </div>
         <div className="chat-message-content">
           <AssistantMarkdown content={entry.payload.content} streaming={entry.payload.status === "streaming"} />
         </div>
@@ -204,9 +285,7 @@ function TimelineItem({
       </article>
     );
   }
-  if (entry.kind === "tool_activity") {
-    return <ToolActivityRow entry={entry} />;
-  }
+  if (entry.kind === "tool_activity") return <ToolActivityGroup entries={[entry]} />;
   if (entry.kind === "a2ui") {
     const message: ActivityMessage = {
       activityType: entry.payload.activityType,
@@ -221,14 +300,78 @@ function TimelineItem({
       && entry.payload.status === "pending";
     return (
       <QuestionSurface
+        active={active}
         controller={controller}
         entryId={entry.entry_id}
         question={entry.payload}
-        active={active}
       />
     );
   }
   return <TurnOutcome entry={entry} />;
+}
+
+function ToolActivityGroup({ entries }: { entries: readonly ToolEntry[] }) {
+  const counts = entries.reduce((current, entry) => ({
+    active: current.active + (entry.payload.status === "running" ? 1 : 0),
+    failed: current.failed + (entry.payload.status === "failed" ? 1 : 0),
+    stopped: current.stopped + (entry.payload.status === "stopped" ? 1 : 0),
+  }), { active: 0, failed: 0, stopped: 0 });
+  const details = [
+    counts.active === 0 ? null : `${counts.active} active`,
+    counts.failed === 0 ? null : `${counts.failed} failed`,
+    counts.stopped === 0 ? null : `${counts.stopped} stopped`,
+  ].filter((value): value is string => value !== null);
+  return (
+    <details className="chat-tool-group" data-entry-id={entries[0]?.entry_id}>
+      <summary>
+        <Wrench aria-hidden="true" size={15} />
+        <span>{counts.active > 0 ? "Using" : "Used"} {entries.length} tool{entries.length === 1 ? "" : "s"}</span>
+        {details.length === 0 ? null : <small>{details.join(" · ")}</small>}
+        <CaretDown aria-hidden="true" className="chat-tool-group-caret" size={13} />
+      </summary>
+      <ol>
+        {entries.map((entry) => <ToolActivityItem entry={entry} key={entry.entry_id} />)}
+      </ol>
+    </details>
+  );
+}
+
+function ToolActivityItem({ entry }: { entry: ToolEntry }) {
+  const status = entry.payload.status;
+  const Icon = status === "running"
+    ? CircleNotch
+    : status === "complete" ? CheckCircle : status === "stopped" ? StopCircle : WarningCircle;
+  const label = status === "complete" ? "Completed" : status[0]?.toUpperCase() + status.slice(1);
+  return (
+    <li
+      aria-label={`Tool ${entry.payload.name}: ${label}`}
+      data-entry-id={entry.entry_id}
+      data-tool-name={entry.payload.name}
+      data-tool-status={status}
+      role="article"
+    >
+      <Icon aria-hidden="true" className={status === "running" ? "chat-spinning" : undefined} size={14} />
+      <code>{entry.payload.name}</code>
+      <span>{label}</span>
+    </li>
+  );
+}
+
+function segmentTurnEntries(entries: readonly TimelineEntry[]): readonly TurnSegment[] {
+  const segments: TurnSegment[] = [];
+  for (const entry of entries) {
+    if (entry.kind !== "tool_activity") {
+      segments.push(entry);
+      continue;
+    }
+    const previous = segments.at(-1);
+    if (previous?.kind === "tool_group") {
+      segments[segments.length - 1] = { entries: [...previous.entries, entry], kind: "tool_group" };
+    } else {
+      segments.push({ entries: [entry], kind: "tool_group" });
+    }
+  }
+  return segments;
 }
 
 function QuestionSurface({
@@ -283,22 +426,6 @@ function QuestionSurface({
   );
 }
 
-function ToolActivityRow({ entry }: { entry: Extract<TimelineEntry, { kind: "tool_activity" }> }) {
-  const status = entry.payload.status;
-  const Icon = status === "running"
-    ? CircleNotch
-    : status === "complete" ? CheckCircle : status === "stopped" ? StopCircle : WarningCircle;
-  const label = status === "complete" ? "Completed" : status[0]?.toUpperCase() + status.slice(1);
-  return (
-    <article aria-label={`Tool ${entry.payload.name}: ${label}`} className={`chat-tool-activity chat-tool-activity-${status}`} data-entry-id={entry.entry_id}>
-      <Icon aria-hidden="true" size={15} />
-      <span className="chat-tool-kind">Tool</span>
-      <code>{entry.payload.name}</code>
-      <span className="chat-tool-status">{label}</span>
-    </article>
-  );
-}
-
 function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_outcome" }> }) {
   if (entry.payload.status === "completed") {
     return <div aria-hidden="true" data-entry-id={entry.entry_id} data-turn-outcome="completed" />;
@@ -309,6 +436,7 @@ function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_ou
       data-entry-id={entry.entry_id}
       data-failure-code={entry.payload.errorCode}
       data-turn-outcome={entry.payload.status}
+      role={entry.payload.status === "failed" ? "alert" : "status"}
     >
       {entry.payload.status === "stopped" ? <StopCircle aria-hidden="true" size={14} /> : <WarningCircle aria-hidden="true" size={14} />}
       <span>{entry.payload.status === "stopped" ? "Turn stopped" : "Turn failed"}</span>
@@ -343,6 +471,13 @@ function CopyTextButton({
       <span>Copy</span>
     </button>
   );
+}
+
+function formatDuration(milliseconds: number): string {
+  const seconds = Math.floor(milliseconds / 1_000);
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return minutes === 0 ? `${remainingSeconds}s` : `${minutes}m ${remainingSeconds}s`;
 }
 
 export function AssistantMarkdown({ content, streaming = false }: { content: string; streaming?: boolean }) {

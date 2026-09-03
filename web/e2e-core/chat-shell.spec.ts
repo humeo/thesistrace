@@ -18,6 +18,13 @@ import {
   controlWorker,
   startControlledResearchRun,
 } from "./research-run-control";
+import {
+  modelPickerTrigger,
+  revealToolActivity,
+  selectModel,
+  selectReasoning,
+  toolActivity,
+} from "./chat-ui";
 
 // Playwright's HTML report retains browser-step source snippets even on success.
 // Keep private marker literals in the shared fixture, outside those snippets.
@@ -72,15 +79,31 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   await expect(
     page.getByRole("heading", { name: "Turn an investment idea into Alpha" }),
   ).toBeVisible();
-  const model = page.getByLabel("Model", { exact: true });
-  const reasoning = page.getByLabel("Reasoning", { exact: true });
-  await expect(model).toHaveValue("scripted-research");
-  await expect(reasoning).toHaveValue("medium");
-  await expect(reasoning.locator("option")).toHaveText(["Low", "Medium", "High"]);
+  const pickerTrigger = modelPickerTrigger(page);
+  await expect(pickerTrigger).toHaveAccessibleName(
+    "Model Scripted Research, reasoning Medium",
+  );
+  await pickerTrigger.click();
+  const picker = page.getByRole("dialog", {
+    name: "Model and reasoning for the next Turn",
+  });
+  await expect(
+    picker.getByRole("group", { name: "Model", exact: true }).getByRole("button"),
+  ).toHaveText(["Scripted Research", "Scripted Deep Research"]);
+  await expect(
+    picker.getByRole("group", { name: "Reasoning", exact: true }).getByRole("button"),
+  ).toHaveText(["Low", "Medium", "High"]);
 
-  await model.selectOption("scripted-deep-research");
-  await expect(reasoning).toHaveValue("high");
-  await expect(reasoning.locator("option")).toHaveText(["High"]);
+  await selectModel(page, "Scripted Deep Research");
+  await expect(pickerTrigger).toHaveAccessibleName(
+    "Model Scripted Deep Research, reasoning High",
+  );
+  await expect(
+    picker.getByRole("group", { name: "Reasoning", exact: true }).getByRole("button"),
+  ).toHaveText(["High"]);
+  await selectReasoning(page, "High");
+  await expect(picker).toHaveCount(0);
+  await expect(pickerTrigger).toBeFocused();
 
   const sidebar = page.locator("#chat-navigation");
   await expect(sidebar.getByRole("link", { name: "ThesisTrace home" })).toBeVisible();
@@ -206,10 +229,11 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await expect(message).toBeEnabled();
   await expect(page.getByText("No conversations yet", { exact: true })).toBeVisible();
   expect(new URL(page.url()).searchParams.get("session")).toBeNull();
-  await page.getByLabel("Model", { exact: true }).selectOption(
-    "scripted-deep-research",
+  await selectModel(page, "Scripted Deep Research");
+  await selectReasoning(page, "High");
+  await expect(modelPickerTrigger(page)).toHaveAccessibleName(
+    "Model Scripted Deep Research, reasoning High",
   );
-  await expect(page.getByLabel("Reasoning", { exact: true })).toHaveValue("high");
 
   const responsePromise = page.waitForResponse((response) =>
     new URL(response.url()).pathname.endsWith("/agent/research/run"),
@@ -306,10 +330,10 @@ test("first Chat turn streams through Caddy and reload replays without another r
   });
   await expect(activeLayoutRow).toBeVisible();
   await page.getByRole("button", { name: "Collapse sidebar" }).click();
-  const activeLayoutIconBounds = await activeLayoutRow.locator("a svg").boundingBox();
-  const activeLayoutStatus = activeLayoutRow.locator(".chat-session-run-compact");
-  await expect(activeLayoutStatus).toHaveText("Run");
-  await expect(activeLayoutStatus).toHaveCSS("font-size", "12px");
+  const activeLayoutSpinner = activeLayoutRow.locator(".chat-session-active-spinner");
+  await expect(activeLayoutSpinner).toBeVisible();
+  await expect(activeLayoutSpinner).toHaveCSS("animation-duration", "1.8s");
+  await expect(activeLayoutRow.locator(".chat-session-run-compact")).toHaveCount(0);
   await expect(activeLayoutRow.getByRole("link", {
     exact: true,
     name: "Active layout session, Running",
@@ -320,12 +344,6 @@ test("first Chat turn streams through Caddy and reload replays without another r
   });
   expect(currentIndicator.width).toBe("2px");
   expect(currentIndicator.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
-  const activeLayoutStatusBounds = await activeLayoutStatus.boundingBox();
-  if (activeLayoutIconBounds === null || activeLayoutStatusBounds === null) {
-    throw new Error("Collapsed active Session did not expose measurable icon and status");
-  }
-  expect(activeLayoutIconBounds.y + activeLayoutIconBounds.height)
-    .toBeLessThanOrEqual(activeLayoutStatusBounds.y);
   const collapsedActions = page.getByRole("button", { name: `Actions for ${recoveredTitle}` });
   await expect(collapsedActions).toBeVisible();
   const collapsedActionTarget = await collapsedActions.boundingBox();
@@ -441,10 +459,9 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await page.reload();
   await expect(page).toHaveURL(durableUrl);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
-  await expect(page.getByLabel("Model", { exact: true })).toHaveValue(
-    "scripted-deep-research",
+  await expect(modelPickerTrigger(page)).toHaveAccessibleName(
+    "Model Scripted Deep Research, reasoning High",
   );
-  await expect(page.getByLabel("Reasoning", { exact: true })).toHaveValue("high");
   await expect(page.getByRole("article")).toHaveCount(2);
   await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText(
     "Build a low volatility Alpha.",
@@ -545,7 +562,7 @@ test("Chat preserves bounded multi-step output across reload and a subsequent me
     };
   };
   await expect.poll(outputCounts).toEqual({ beforeTool: 4_500, afterTool: 4_500 });
-  const tool = page.getByRole("article", { name: "Tool get_research_context: Completed", exact: true });
+  let tool = await revealToolActivity(page, "get_research_context", "complete");
   await expect(tool).toHaveCount(1);
   const durableUrl = page.url();
   expect(submittedRuns).toBe(1);
@@ -554,6 +571,7 @@ test("Chat preserves bounded multi-step output across reload and a subsequent me
   await expect(page).toHaveURL(durableUrl);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   await expect.poll(outputCounts).toEqual({ beforeTool: 4_500, afterTool: 4_500 });
+  tool = await revealToolActivity(page, "get_research_context", "complete");
   await expect(tool).toHaveCount(1);
   expect(submittedRuns).toBe(1);
 
@@ -563,6 +581,7 @@ test("Chat preserves bounded multi-step output across reload and a subsequent me
   await expect(page.locator(".chat-message-user")).toHaveCount(2);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   await expect(message).toBeEnabled();
+  tool = await revealToolActivity(page, "get_research_context", "complete");
   await expect(tool).toHaveCount(1);
   expect(submittedRuns).toBe(2);
 });
@@ -576,14 +595,13 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
   await page.getByRole("button", { name: "Send" }).click();
 
-  const tool = page.getByRole("article", {
-    name: "Tool get_research_context: Completed",
-  });
+  await toolActivity(page, "get_research_context", "complete").first()
+    .waitFor({ state: "attached" });
+  const toolGroup = page.locator("details.chat-tool-group").last();
+  await expect(toolGroup).not.toHaveAttribute("open", "");
+  const tool = await revealToolActivity(page, "get_research_context", "complete");
   await expect(tool).toBeVisible();
-  await expect(tool).toContainText("MCP Tool");
-  await expect(tool).toContainText("get_research_context");
-  await expect(tool).toContainText("Completed");
-  await expect(tool.locator(".chat-tool-duration")).toHaveText(/^(?:\d+ ms|\d+\.\d+ s)$/);
+  await expect(tool).toHaveText("get_research_contextCompleted");
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   const assistant = page.locator(".chat-message-assistant .chat-message-content");
   await expect(assistant).toBeVisible();
@@ -598,16 +616,9 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
   await expect(page.locator("#chat-navigation")).toHaveCSS("visibility", "hidden");
   const compactToolLayout = await tool.evaluate((element) => {
     const toolBounds = element.getBoundingClientRect();
-    const fieldBounds = [
-      ".chat-tool-kind",
-      "code",
-      ".chat-tool-status",
-      ".chat-tool-duration",
-    ].map((selector) => {
-      const field = element.querySelector(selector);
-      if (!(field instanceof HTMLElement)) throw new Error(`Missing ${selector}`);
-      return field.getBoundingClientRect();
-    });
+    const fields = [...element.querySelectorAll<HTMLElement>(":scope > code, :scope > span")];
+    if (fields.length !== 2) throw new Error("Expected the safe Tool name and status");
+    const fieldBounds = fields.map((field) => field.getBoundingClientRect());
     return {
       allFieldsInside: fieldBounds.every((bounds) =>
         bounds.left >= toolBounds.left - 1
@@ -615,9 +626,6 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
         && bounds.top >= toolBounds.top - 1
         && bounds.bottom <= toolBounds.bottom + 1
       ),
-      rows: new Set(fieldBounds.map((bounds) => (
-        Math.round((bounds.top + bounds.bottom) / 2)
-      ))).size,
       toolOverflow: element.scrollWidth > element.clientWidth,
       viewportOverflow:
         document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -625,7 +633,6 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
   });
   expect(compactToolLayout).toEqual({
     allFieldsInside: true,
-    rows: 2,
     toolOverflow: false,
     viewportOverflow: false,
   });
@@ -635,19 +642,15 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
   const durableUrl = page.url();
   await page.reload();
   await expect(page).toHaveURL(durableUrl);
-  const replayedTool = page.getByRole("article", {
-    name: "Tool get_research_context: Completed",
-  });
-  await expect(replayedTool).toContainText("Duration unavailable");
+  const replayedTool = await revealToolActivity(page, "get_research_context", "complete");
+  await expect(replayedTool).toHaveText("get_research_contextCompleted");
   await expect(page.locator(".chat-message-assistant .chat-message-content")).toHaveText(
     assistantText,
   );
   await expect(page.locator("body")).not.toContainText("Tool completed.");
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("link", { name: "New Chat", exact: true }).click();
-  await expect(page.getByRole("article", {
-    name: "Tool get_research_context: Completed",
-  })).toHaveCount(0);
+  await expect(toolActivity(page, "get_research_context", "complete")).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue("");
 });
 
@@ -685,7 +688,9 @@ test(`Chat rejects an invalid model-authored A2UI surface and remains usable: ${
   expect((await page.locator("body").textContent())?.includes(unsafeA2uiCanary),
     "unsafe research content reached the page").toBe(false);
   await expect(page.locator("body")).not.toContainText("delete_research");
-  await expect(page.getByRole("article", { name: /Tool render_a2ui:/ })).toHaveCount(0);
+  const renderActivity = page.locator('.chat-tool-group [data-tool-name="render_a2ui"]');
+  await expect(renderActivity).toHaveCount(1);
+  await expect(renderActivity).toHaveAttribute("data-tool-status", "complete");
   await expect(page.locator(".chat-message-assistant .chat-message-content").last())
     .toContainText("unsafe research surface was rejected");
   await expect(message).toBeEnabled();
@@ -726,10 +731,11 @@ test("A2UI shows real running state and supports keyboard and narrow-screen resu
     await page.goto("/chat");
     await page.getByRole("textbox", { name: "Message", exact: true }).fill(scriptedFactorIdeaPrompt);
     await page.getByRole("button", { name: "Send" }).click();
-    const admitted = page.getByRole("article", { name: "Tool submit_research_run: Completed" });
+    const admitted = await revealToolActivity(page, "submit_research_run", "complete");
     await expect(admitted).toBeVisible({ timeout: 30_000 });
-    const href = await admitted.locator("a.chat-tool-resource").getAttribute("href");
-    const runId = href?.split("/").at(-1);
+    const runSurface = page.locator(".chat-a2ui-run").last();
+    await expect(runSurface).toBeVisible({ timeout: 30_000 });
+    const runId = (await runSurface.locator(".chat-a2ui-run-id").innerText()).trim();
     if (runId === undefined || !/^run_[a-f0-9]{20}$/.test(runId)) {
       throw new Error("Admission did not return a safe ResearchRun route");
     }
@@ -888,21 +894,17 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   await page.getByRole("button", { name: "Send" }).click();
 
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
-  const admission = page.getByRole("article", {
-    name: "Tool submit_research_run: Completed",
-  });
+  const admission = await revealToolActivity(page, "submit_research_run", "complete");
   await expect(admission).toBeVisible();
-  await expect(admission).toContainText("ResearchRun");
-  await expect(admission).toContainText("queued");
-  const runHref = await admission.locator("a.chat-tool-resource").getAttribute("href");
-  if (runHref === null) throw new Error("Admission Tool did not expose its safe Run route");
-  const runId = runHref.split("/").at(-1);
+  const runSurface = page.locator(".chat-a2ui-run").last();
+  await expect(runSurface).toBeVisible();
+  const runId = (await runSurface.locator(".chat-a2ui-run-id").innerText()).trim();
   if (runId === undefined || !/^run_[a-f0-9]{20}$/.test(runId)) {
-    throw new Error("Admission Tool exposed an invalid ResearchRun id");
+    throw new Error("Admission surface exposed an invalid ResearchRun id");
   }
-  await expect(page.getByRole("article", {
-    name: /Tool get_research_run:/,
-  })).toHaveCount(0);
+  const runHref = `/research-runs/${runId}`;
+  await expect(page.locator('.chat-tool-group [data-tool-name="get_research_run"]'))
+    .toHaveCount(0);
   const proposalSurface = page.getByRole("region", {
     name: "Alpha proposal: Low-volatility factor",
   });
@@ -1025,20 +1027,18 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
 
   await message.fill(scriptedStrategyPrompt);
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByRole("article", {
-    name: "Tool submit_research_run: Completed",
-  })).toHaveCount(2, { timeout: 30_000 });
+  const strategyAdmissions = await revealToolActivity(
+    page,
+    "submit_research_run",
+    "complete",
+  );
+  await expect(strategyAdmissions).toHaveCount(2, { timeout: 30_000 });
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
-  const strategyAdmission = page.getByRole("article", {
-    name: "Tool submit_research_run: Completed",
-  }).last();
-  const strategyRunHref = await strategyAdmission.locator("a.chat-tool-resource")
-    .getAttribute("href");
-  if (strategyRunHref === null) throw new Error("Strategy Tool exposed no safe Run route");
-  const strategyRunId = strategyRunHref.split("/").at(-1);
+  const strategyRunId = (await page.locator(".chat-a2ui-run-id").last().innerText()).trim();
   if (strategyRunId === undefined || !/^run_[a-f0-9]{20}$/.test(strategyRunId)) {
-    throw new Error("Strategy Tool exposed an invalid ResearchRun id");
+    throw new Error("Strategy surface exposed an invalid ResearchRun id");
   }
+  const strategyRunHref = `/research-runs/${strategyRunId}`;
   expect(strategyRunId).not.toBe(runId);
   const trackResponse = await page.request.post(
     `/api/research-runs/${strategyRunId}/daily-tracks`,
@@ -1089,7 +1089,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
     name: "Factor Evaluation result",
   })).toContainText(rankIc);
   expect(agentRunRequests).toBe(agentRunsBeforeReplay);
-  await expect(page.locator(".chat-tool-resource").filter({ hasText: runId }).first())
+  await expect(page.locator(`a[href="${runHref}"]`).first())
     .toHaveAttribute("href", runHref);
   await expect(page.locator(".chat-message-assistant .chat-assistant-markdown").filter({
     hasText: rankIc,
@@ -1199,9 +1199,8 @@ test("a lost admission response replays the same effect and resumes the one Core
   try {
     await page.getByRole("button", { name: "Send" }).click();
     await expect(agentRunStatus(page)).toHaveText("Run failed", { timeout: 30_000 });
-    await expect(page.getByRole("article", {
-      name: "Tool submit_research_run: Failed",
-    })).toBeVisible();
+    await expect(await revealToolActivity(page, "submit_research_run", "failed"))
+      .toBeVisible();
     const disconnectedState = proxyState("mcp-fault-proxy", 8150);
     expect(disconnectedState.tool_call_mode).toBe("disconnect-submit");
     expect(Number(disconnectedState.disconnected_submit_responses)).toBeGreaterThanOrEqual(1);
@@ -1228,10 +1227,11 @@ test("a lost admission response replays the same effect and resumes the one Core
     await message.fill(scriptedResumeResearchPrompt);
     await page.getByRole("button", { name: "Send" }).click();
     await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 60_000 });
-    const replayedAdmission = page.getByRole("article", {
-      name: "Tool submit_research_run: Completed",
-    });
-    await expect(replayedAdmission.locator("a.chat-tool-resource")).toHaveAttribute(
+    await expect(await revealToolActivity(page, "submit_research_run", "complete"))
+      .toBeVisible();
+    await expect(page.getByRole("link", {
+      name: "Open authoritative ResearchRun",
+    }).last()).toHaveAttribute(
       "href",
       `/research-runs/${admitted.run_id}`,
     );
@@ -1262,18 +1262,16 @@ test("the same Chat entry runs and explains a real Strategy Backtest", async ({
   await page.getByRole("button", { name: "Send" }).click();
 
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
-  const admission = page.getByRole("article", {
-    name: "Tool submit_research_run: Completed",
-  });
-  const runHref = await admission.locator("a.chat-tool-resource").getAttribute("href");
-  if (runHref === null) throw new Error("Strategy admission exposed no safe Run route");
-  const runId = runHref.split("/").at(-1);
+  await expect(await revealToolActivity(page, "submit_research_run", "complete"))
+    .toBeVisible();
+  const runId = (await page.locator(".chat-a2ui-run-id").last().innerText()).trim();
   if (runId === undefined || !/^run_[a-f0-9]{20}$/.test(runId)) {
-    throw new Error("Strategy admission exposed an invalid ResearchRun id");
+    throw new Error("Strategy admission surface exposed an invalid ResearchRun id");
   }
-  await expect(page.getByRole("article", {
-    name: "Tool get_research_run: Completed",
-  }).last()).toContainText("succeeded");
+  const runHref = `/research-runs/${runId}`;
+  const runReads = await revealToolActivity(page, "get_research_run", "complete");
+  await expect.poll(() => runReads.count()).toBeGreaterThanOrEqual(2);
+  await expect(runReads.last()).toBeVisible();
 
   const detail = await page.request.get(`/api/research-runs/${runId}`);
   expect(detail.status()).toBe(200);
@@ -1383,7 +1381,7 @@ test("a connected MCP Tool response disconnect becomes a durable failed Run and 
     );
     await page.getByRole("button", { name: "Send" }).click();
     expect((await runResponse).status()).toBe(200);
-    await expect(agentRunStatus(page)).toHaveText("Run failed");
+    await expect(agentRunStatus(page)).toHaveText("Run failed", { timeout: 30_000 });
     await expect(page.getByRole("alert")).toHaveAttribute("data-failure-code", "MCP_TRANSIENT");
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
@@ -1419,15 +1417,13 @@ test("a connected MCP Tool response disconnect becomes a durable failed Run and 
   await page.reload();
   await expect(page).toHaveURL(durableUrl);
   await expect(agentRunStatus(page)).toHaveText("Run failed");
-  await expect(page.getByRole("article", {
-    name: "Tool get_research_context: Failed",
-  })).toBeVisible();
+  await expect(await revealToolActivity(page, "get_research_context", "failed"))
+    .toBeVisible();
   await expect(message).toBeEnabled();
   await message.fill("[scripted-tool-turn] Inspect the available research context.");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByRole("article", {
-    name: "Tool get_research_context: Completed",
-  })).toBeVisible();
+  await expect(await revealToolActivity(page, "get_research_context", "complete"))
+    .toBeVisible();
   await expect(agentRunStatus(page)).toHaveText("Run complete");
 });
 

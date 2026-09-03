@@ -25,6 +25,7 @@ import { parseSafeToolResult, projectSafeToolResult } from "./safe-tool-result.j
 import { McpRunPreparationError } from "./mcp-token-exchanger.js";
 import type { AgentSettings } from "./config.js";
 import { chatCommandFingerprint, chatRunFingerprint, readValidatedChatRun } from "./chat-request.js";
+import { readTimelineQuery } from "./chat-control.js";
 import { createMcpRunFactory, type McpRun } from "./mcp-run.js";
 import { readModelRegistry } from "./model-registry.js";
 import { createResearchRuntime as createRuntime, type ResearchRuntime, type ResearchRuntimeDependencies } from "./research-runtime.js";
@@ -465,15 +466,16 @@ describe.sequential("durable Research Agent runtime", () => {
         latestTurn: { id: runId, status: "completed" },
       });
 
-      const timeline = await runtime.timeline(threadId, primaryResearcher, undefined, 50);
-      expect(timeline.entries.filter((entry) => entry.kind === "question"))
+      const timeline = await runtime.timeline(threadId, primaryResearcher, undefined, 20);
+      const entries = timeline.turns.flatMap((turn) => turn.entries);
+      expect(entries.filter((entry) => entry.kind === "question"))
         .toMatchObject([{ payload: { status: "answered" }, turnId: runId }]);
-      expect(timeline.entries.filter((entry) => entry.kind === "user_input"))
+      expect(entries.filter((entry) => entry.kind === "user_input"))
         .toMatchObject([
           { payload: { source: "prompt" } },
           { payload: { content: "Quality", inputId: answerId, source: "answer" } },
         ]);
-      expect(timeline.entries).toContainEqual(expect.objectContaining({
+      expect(entries).toContainEqual(expect.objectContaining({
         kind: "assistant_message",
         payload: expect.objectContaining({
           content: "I will lead with quality and keep risk as a constraint.",
@@ -533,10 +535,11 @@ describe.sequential("durable Research Agent runtime", () => {
         currentTurn: null,
         latestTurn: { id: runId, status: "stopped" },
       });
-      const timeline = await runtime.timeline(threadId, primaryResearcher, undefined, 50);
-      expect(timeline.entries.filter((entry) => entry.kind === "question"))
+      const timeline = await runtime.timeline(threadId, primaryResearcher, undefined, 20);
+      const entries = timeline.turns.flatMap((turn) => turn.entries);
+      expect(entries.filter((entry) => entry.kind === "question"))
         .toMatchObject([{ payload: { status: "stopped" } }]);
-      expect(timeline.entries.at(-1)).toMatchObject({
+      expect(entries.at(-1)).toMatchObject({
         kind: "turn_outcome",
         payload: { status: "stopped" },
         turnId: runId,
@@ -596,8 +599,9 @@ describe.sequential("durable Research Agent runtime", () => {
       const events = await pending;
       expect(events.filter((event) => event.type === "RUN_STARTED")).toHaveLength(1);
       expect(events.at(-1)).toMatchObject({ runId, type: "RUN_FINISHED" });
-      const timeline = await runtime.timeline(threadId, primaryResearcher, undefined, 50);
-      expect(timeline.entries.filter((entry) => (
+      const timeline = await runtime.timeline(threadId, primaryResearcher, undefined, 20);
+      const entries = timeline.turns.flatMap((turn) => turn.entries);
+      expect(entries.filter((entry) => (
         entry.kind === "user_input" && entry.payload.source === "steer"
       ))).toEqual([expect.objectContaining({
         payload: { content, inputId, source: "steer" },
@@ -614,6 +618,99 @@ describe.sequential("durable Research Agent runtime", () => {
       await pending;
       await runtime.close();
     }
+  });
+
+  it("paginates complete Turns without splitting a large Tool trace", async () => {
+    const threadId = fixedUuid(8890);
+    const runIds = Array.from({ length: 22 }, (_, index) => fixedUuid(8891 + index));
+    const largeTurnId = runIds[20];
+    const activeTurnId = runIds[21];
+    if (largeTurnId === undefined || activeTurnId === undefined) throw new Error("TURN_FIXTURE_MISSING");
+    await seedSession({
+      id: threadId,
+      researcherId: primaryResearcher.researcher_id,
+      title: "Turn pagination",
+    });
+    await owner.query(`
+      INSERT INTO agent.agent_run (
+        id, thread_id, kind, request_fingerprint, model_key, provider_model_id,
+        reasoning_effort, agent_build_revision, status, token_usage, started_at, completed_at
+      )
+      SELECT
+        fixture.id,
+        $1::uuid,
+        'prompt',
+        decode(repeat('89', 32), 'hex'),
+        'scripted-research',
+        'scripted-v1',
+        'medium',
+        'pagination-test',
+        CASE WHEN fixture.ordinality = 22 THEN 'running' ELSE 'completed' END,
+        CASE WHEN fixture.ordinality = 22 THEN NULL ELSE '{"reported":false}'::jsonb END,
+        '2026-09-02T05:00:00.123456Z'::timestamp with time zone,
+        CASE WHEN fixture.ordinality = 22
+          THEN NULL
+          ELSE '2026-09-02T05:01:00.123456Z'::timestamp with time zone
+        END
+      FROM unnest($2::uuid[]) WITH ORDINALITY AS fixture(id, ordinality)
+    `, [threadId, runIds]);
+    await owner.query(`
+      INSERT INTO agent.chat_timeline_entry (
+        thread_id, entry_id, turn_id, kind, payload, created_at, updated_at
+      )
+      SELECT
+        $1::uuid,
+        'tool:pagination:' || fixture.number::text,
+        $2::uuid,
+        'tool_activity',
+        pg_catalog.jsonb_build_object(
+          'name', 'tool_' || fixture.number::text,
+          'status', 'complete'
+        ),
+        '2026-09-02T05:00:30.123456Z'::timestamp with time zone,
+        '2026-09-02T05:00:30.123456Z'::timestamp with time zone
+      FROM generate_series(1, 55) AS fixture(number)
+    `, [threadId, largeTurnId]);
+
+    const repository = new ResearchSessionRepository(agentStore);
+    const latest = await repository.timeline(
+      threadId,
+      primaryResearcher.researcher_id,
+      undefined,
+      20,
+    );
+    expect(latest.turns.map((turn) => turn.id)).toEqual(runIds.slice(2));
+    expect(latest.turns.find((turn) => turn.id === largeTurnId)?.entries).toHaveLength(55);
+    expect(latest.turns.find((turn) => turn.id === activeTurnId)).toMatchObject({
+      completedAt: null,
+      entries: [],
+      startedAt: "2026-09-02T05:00:00.123456Z",
+      status: "running",
+    });
+    expect(latest.nextCursor).not.toBeNull();
+
+    const before = readTimelineQuery(new Request(
+      `http://agent.test/timeline?before=${latest.nextCursor ?? ""}&limit=20`,
+    )).before;
+    expect(before).toEqual({
+      startedAt: "2026-09-02T05:00:00.123456Z",
+      turnId: runIds[2],
+    });
+    const earlier = await repository.timeline(
+      threadId,
+      primaryResearcher.researcher_id,
+      before,
+      20,
+    );
+    expect(earlier.turns.map((turn) => turn.id)).toEqual(runIds.slice(0, 2));
+    expect(earlier.nextCursor).toBeNull();
+    expect(new Set([...earlier.turns, ...latest.turns].map((turn) => turn.id)).size).toBe(22);
+    await expect(repository.timeline(
+      threadId,
+      foreignResearcher.researcher_id,
+      undefined,
+      20,
+    )).rejects.toBeInstanceOf(SessionNotFoundError);
   });
 
   it("stops a running Turn and Continue starts a new empty-message Turn", async () => {

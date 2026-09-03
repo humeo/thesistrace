@@ -1,7 +1,9 @@
 import {
   ChatCircle,
+  CircleNotch,
   DotsThree,
   NotePencil,
+  Question,
   Trash,
   X,
 } from "@phosphor-icons/react";
@@ -253,9 +255,10 @@ export function SessionHistoryList({
                     <ChatCircle aria-hidden="true" size={15} weight="regular" />
                     <span>{session.title}</span>
                     {session.current_turn === null ? null : (
-                      <em>
-                        <span className="chat-session-run-full">{session.current_turn.status === "waiting_for_user" ? "Waiting" : "Running"}</span>
-                        <span className="chat-session-run-compact">Run</span>
+                      <em aria-hidden="true" className="chat-session-turn-state">
+                        {session.current_turn.status === "waiting_for_user"
+                          ? <Question className="chat-session-waiting-icon" size={15} weight="bold" />
+                          : <CircleNotch className="chat-session-active-spinner" size={15} />}
                       </em>
                     )}
                   </a>

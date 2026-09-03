@@ -472,7 +472,7 @@ function authFixtureRequest(path: string, body: Record<string, unknown>): unknow
         "--connect-timeout",
         "2",
         "--max-time",
-        "30",
+        "60",
         "--header",
         "content-type: application/json",
         "--request",
@@ -487,11 +487,23 @@ function authFixtureRequest(path: string, body: Record<string, unknown>): unknow
         killSignal: "SIGKILL",
         maxBuffer: 8 * 1024 * 1024,
         stdio: ["pipe", "pipe", "pipe"],
-        timeout: 35_000,
+        timeout: 65_000,
       },
     );
-  } catch {
-    throw new Error("Private Auth test control request failed");
+  } catch (failure) {
+    const record = isRecord(failure) ? failure : {};
+    const stderr = typeof record.stderr === "string"
+      ? record.stderr
+      : Buffer.isBuffer(record.stderr)
+        ? record.stderr.toString("utf8")
+        : "";
+    const curlCode = /curl: \((\d+)\)/.exec(stderr)?.[1];
+    const reason = record.signal === "SIGKILL"
+      ? "timeout"
+      : curlCode === undefined
+        ? "unknown"
+        : `curl ${curlCode}`;
+    throw new Error(`Private Auth test control request failed (${reason})`);
   }
   try {
     return JSON.parse(output) as unknown;

@@ -80,7 +80,7 @@ function AuthoritativeConversation({
     if (announcementTimerRef.current !== null) window.clearTimeout(announcementTimerRef.current);
   }, []);
   const controller = useChatConversation({ agent, ...props });
-  const newChat = controller.timeline.length === 0 && controller.phase === "new";
+  const newChat = controller.turns.length === 0 && controller.phase === "new";
 
   if (newChat) {
     return (
@@ -118,19 +118,23 @@ export function StaticChatMain({
       <div className="chat-new-chat-start">
         <ChatIntroduction opening={opening} />
         <div className="chat-composer-dock chat-composer-static">
-          <section aria-label="Next Turn settings" className="chat-next-turn-settings">{modelControls}</section>
           {error === undefined ? null : (
-            <div className="chat-run-error">
+            <div className="chat-run-error" role="alert">
               <WarningCircle aria-hidden="true" size={15} />
               <span>{error}</span>
               <button className="button-quiet" onClick={() => window.location.reload()} type="button">Reconnect</button>
             </div>
           )}
-          <div className="chat-composer-input chat-composer-input-locked">
+          <div className="chat-composer-surface chat-composer-surface-locked">
             <textarea aria-label="Message" disabled placeholder="Ask about an investment idea…" rows={2} />
-            <button aria-label="Send" className="chat-main-action" disabled type="button">
-              <ArrowUp aria-hidden="true" size={18} weight="bold" />
-            </button>
+            <div className="chat-composer-toolbar">
+              <div className="chat-composer-toolbar-actions">
+                {modelControls}
+                <button aria-label="Send" className="chat-main-action" disabled type="button">
+                  <ArrowUp aria-hidden="true" size={18} weight="bold" />
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

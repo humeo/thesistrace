@@ -29,6 +29,7 @@ import {
   type CommandReceipt,
   type PendingQuestion,
   type PublicTurn,
+  type TimelineCursor,
   type TimelinePage,
   type TurnKind,
   type TurnStatus,
@@ -1135,40 +1136,94 @@ export class ResearchSessionRepository {
   async timeline(
     threadId: string,
     researcherId: string,
-    before: number | undefined,
+    before: TimelineCursor | undefined,
     limit: number,
   ): Promise<TimelinePage> {
     if (await this.ownership(threadId, researcherId) !== "owned") {
       throw new SessionNotFoundError();
     }
     const parameters: unknown[] = [threadId];
-    const beforeClause = before === undefined ? "" : "AND sequence < $2";
-    if (before !== undefined) parameters.push(before);
-    parameters.push(limit + 1);
+    const beforeClause = before === undefined
+      ? ""
+      : "AND (run.started_at, run.id) < ($2::timestamptz, $3::uuid)";
+    if (before !== undefined) parameters.push(before.startedAt, before.turnId);
+    parameters.push(limit + 1, limit);
+    const candidateLimitParameter = parameters.length - 1;
+    const pageLimitParameter = parameters.length;
     const result = await this.pool.query<TimelineRow>(`
+      WITH candidate_turns AS (
+        SELECT
+          run.id,
+          run.status,
+          run.started_at,
+          run.completed_at,
+          pg_catalog.row_number() OVER (
+            ORDER BY run.started_at DESC, run.id DESC
+          ) AS page_rank
+        FROM agent.agent_run AS run
+        WHERE run.thread_id = $1::uuid ${beforeClause}
+        ORDER BY run.started_at DESC, run.id DESC
+        LIMIT $${candidateLimitParameter}
+      ), selected_turns AS (
+        SELECT *
+        FROM candidate_turns
+        WHERE page_rank <= $${pageLimitParameter}
+      )
       SELECT
-        entry_id,
-        sequence::text,
-        turn_id::text,
-        kind,
-        payload,
+        turn.id::text AS turn_id,
+        turn.status AS turn_status,
         pg_catalog.to_char(
-          created_at AT TIME ZONE 'UTC',
+          turn.started_at AT TIME ZONE 'UTC',
           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
-        ) AS created_at
-      FROM agent.chat_timeline_entry
-      WHERE thread_id = $1::uuid ${beforeClause}
-      ORDER BY sequence DESC
-      LIMIT $${parameters.length}
+        ) AS turn_started_at,
+        CASE WHEN turn.completed_at IS NULL THEN NULL ELSE pg_catalog.to_char(
+          turn.completed_at AT TIME ZONE 'UTC',
+          'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+        ) END AS turn_completed_at,
+        entry.entry_id,
+        entry.sequence::text,
+        entry.kind,
+        entry.payload,
+        CASE WHEN entry.created_at IS NULL THEN NULL ELSE pg_catalog.to_char(
+          entry.created_at AT TIME ZONE 'UTC',
+          'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+        ) END AS created_at,
+        EXISTS(
+          SELECT 1 FROM candidate_turns WHERE page_rank > $${pageLimitParameter}
+        ) AS has_more
+      FROM selected_turns AS turn
+      LEFT JOIN agent.chat_timeline_entry AS entry
+        ON entry.thread_id = $1::uuid
+       AND entry.turn_id = turn.id
+      ORDER BY turn.started_at ASC, turn.id ASC, entry.sequence ASC NULLS FIRST
     `, parameters);
-    const hasMore = result.rows.length > limit;
-    const selected = result.rows.slice(0, limit);
-    const oldest = selected.at(-1);
+    const turns: Array<{
+      completedAt: string | null;
+      entries: ChatTimelineEntry[];
+      id: string;
+      startedAt: string;
+      status: TurnStatus;
+    }> = [];
+    for (const row of result.rows) {
+      let turn = turns.at(-1);
+      if (turn?.id !== row.turn_id) {
+        turn = {
+          completedAt: row.turn_completed_at,
+          entries: [],
+          id: row.turn_id,
+          startedAt: row.turn_started_at,
+          status: row.turn_status,
+        };
+        turns.push(turn);
+      }
+      if (row.entry_id !== null) turn.entries.push(timelineEntryFromRow(row));
+    }
+    const oldest = turns[0];
     return {
-      entries: selected.map(timelineEntryFromRow).reverse(),
-      nextCursor: hasMore && oldest !== undefined
-        ? encodeTimelineCursor(Number(oldest.sequence))
+      nextCursor: result.rows[0]?.has_more === true && oldest !== undefined
+        ? encodeTimelineCursor({ startedAt: oldest.startedAt, turnId: oldest.id })
         : null,
+      turns,
     };
   }
 
@@ -1628,12 +1683,16 @@ type StoredCommand = Readonly<{
 }>;
 
 type TimelineRow = Readonly<{
-  created_at: string;
-  entry_id: string;
-  kind: ChatTimelineEntry["kind"];
+  created_at: string | null;
+  entry_id: string | null;
+  has_more: boolean;
+  kind: ChatTimelineEntry["kind"] | null;
   payload: unknown;
-  sequence: string;
+  sequence: string | null;
+  turn_completed_at: string | null;
   turn_id: string;
+  turn_started_at: string;
+  turn_status: TurnStatus;
 }>;
 
 async function prepareAnswerRun(
@@ -2040,7 +2099,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function timelineEntryFromRow(row: TimelineRow): ChatTimelineEntry {
-  if (!isCanonicalTimelineBase(row) || !isRecord(row.payload)) {
+  if (!isCanonicalTimelineEntry(row) || !isRecord(row.payload)) {
     throw new TranscriptConflictError();
   }
   return {
@@ -2052,11 +2111,17 @@ function timelineEntryFromRow(row: TimelineRow): ChatTimelineEntry {
   } as ChatTimelineEntry;
 }
 
-function isCanonicalTimelineBase(row: TimelineRow): boolean {
+function isCanonicalTimelineEntry(row: TimelineRow): row is TimelineRow & Readonly<{
+  created_at: string;
+  entry_id: string;
+  kind: ChatTimelineEntry["kind"];
+  sequence: string;
+}> {
   return typeof row.entry_id === "string"
     && typeof row.created_at === "string"
     && typeof row.turn_id === "string"
     && Number.isSafeInteger(Number(row.sequence))
+    && typeof row.kind === "string"
     && [
       "user_input",
       "assistant_message",

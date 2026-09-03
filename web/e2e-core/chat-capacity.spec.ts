@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import { expect, test, testProjectName } from "./auth-fixture";
+import { revealToolActivity } from "./chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 
 test("Chat saturation rejects an unaccepted Session and preserves an explicit browser retry", async ({ page, researcher }, testInfo) => {
@@ -60,7 +61,7 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 30_000 });
     await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText(prompt);
-    await expect(page.getByRole("article", { name: "Tool get_research_context: Completed", exact: true })).toBeVisible();
+    await expect((await revealToolActivity(page, "get_research_context", "complete")).last()).toBeVisible();
     await expect(page).toHaveURL(/\/chat\?session=[a-f0-9-]{36}$/);
     expect(databaseCounts(researcher.id)).toEqual({ sessions: 5, runs: 5, running: 0 });
   } finally {

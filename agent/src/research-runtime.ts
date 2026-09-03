@@ -23,7 +23,12 @@ import {
   readValidatedChatRun,
   type ValidatedChatRun,
 } from "./chat-request.js";
-import { ChatControlError, type CommandReceipt, type TimelinePage } from "./chat-control.js";
+import {
+  ChatControlError,
+  type CommandReceipt,
+  type TimelineCursor,
+  type TimelinePage,
+} from "./chat-control.js";
 import type { AgentSettings } from "./config.js";
 import {
   createAgentPool,
@@ -121,7 +126,7 @@ export type ResearchRuntime = Readonly<{
   timeline: (
     threadId: string,
     researcher: VerifiedResearcher,
-    before: number | undefined,
+    before: TimelineCursor | undefined,
     limit: number,
   ) => Promise<TimelinePage>;
 }>;

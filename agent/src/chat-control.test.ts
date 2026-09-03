@@ -96,15 +96,29 @@ describe("chat control boundary", () => {
   });
 
   it("uses opaque, bounded timeline cursors", () => {
-    const before = encodeTimelineCursor(51);
+    const before = encodeTimelineCursor({
+      startedAt: "2026-08-30T02:03:04.123456Z",
+      turnId: TURN_ID,
+    });
     expect(readTimelineQuery(new Request(
-      `http://agent.test/api/agent/sessions/${THREAD_ID}/timeline?before=${before}&limit=25`,
-    ))).toEqual({ before: 51, limit: 25 });
+      `http://agent.test/api/agent/sessions/${THREAD_ID}/timeline?before=${before}&limit=20`,
+    ))).toEqual({
+      before: {
+        startedAt: "2026-08-30T02:03:04.123456Z",
+        turnId: TURN_ID,
+      },
+      limit: 20,
+    });
     expect(() => readTimelineQuery(new Request(
       `http://agent.test/api/agent/sessions/${THREAD_ID}/timeline?before=51`,
     ))).toThrowError(ChatControlError);
     expect(() => readTimelineQuery(new Request(
-      `http://agent.test/api/agent/sessions/${THREAD_ID}/timeline?limit=51`,
+      `http://agent.test/api/agent/sessions/${THREAD_ID}/timeline?limit=21`,
+    ))).toThrowError(ChatControlError);
+    const legacy = Buffer.from(JSON.stringify({ sequence: 51, version: 1 }), "utf8")
+      .toString("base64url");
+    expect(() => readTimelineQuery(new Request(
+      `http://agent.test/api/agent/sessions/${THREAD_ID}/timeline?before=${legacy}`,
     ))).toThrowError(ChatControlError);
   });
 });

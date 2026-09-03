@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
 import { expect, test, testProjectName } from "./auth-fixture";
+import { modelPickerTrigger, revealToolActivity, selectModel, selectReasoning } from "./chat-ui";
 import { proxyState } from "./fault-proxy";
 import { controlWorker } from "./research-run-control";
 
@@ -44,9 +45,9 @@ for (const [code, prompt] of Object.entries(SCRIPTED_FAILURE_PROMPTS)) {
     await expect(page.locator(".chat-main")).toHaveAttribute("data-agent-run-id", runId!);
     await expect(page.locator(".chat-message-user")).toHaveCount(1);
     expect(requests).toHaveLength(1);
-    const model = page.getByLabel("Model", { exact: true });
-    await model.selectOption("scripted-deep-research");
-    await expect(page.getByLabel("Reasoning", { exact: true })).toHaveValue("high");
+    await selectModel(page, "Scripted Deep Research");
+    await selectReasoning(page, "High");
+    await expect(modelPickerTrigger(page)).toHaveAccessibleName("Model Scripted Deep Research, reasoning High");
     expect(requests).toHaveLength(1);
     await send(page, "Continue with a testable Alpha idea.");
     await expect(status(page)).toHaveText("Run complete");
@@ -77,17 +78,14 @@ test("Chat provider failure preserves admitted Core work and completed Tools wit
     await page.goto("/chat");
     await send(page, SCRIPTED_FAILURE_AFTER_ADMISSION_PROMPT);
     await expect(page.locator('.chat-turn-outcome-failed[data-failure-code="PROVIDER_TIMEOUT"]')).toBeVisible({ timeout: 30_000 });
-    const submitted = page.getByRole("article", { name: "Tool submit_research_run: Completed", exact: true });
-    await expect(submitted).toBeVisible();
-    const href = await submitted.getByRole("link").getAttribute("href");
-    expect(href).toMatch(/^\/research-runs\/run_[a-f0-9]{20}$/);
-    const coreRunId = href!.split("/").at(-1)!;
-    await page.reload();
-    await expect(submitted).toContainText(coreRunId);
-    await expect(page.locator('.chat-turn-outcome-failed[data-failure-code="PROVIDER_TIMEOUT"]')).toBeVisible();
-    expect(requests).toHaveLength(1);
+    await expect((await revealToolActivity(page, "submit_research_run", "complete")).last()).toBeVisible();
     const before = databaseFacts(researcher.id);
     expect(before).toMatchObject({ agent_runs: 1, user_messages: 1, active_runs: 0, core_runs: 1 });
+    const coreRunId = before.core_run_ids[0]!;
+    await page.reload();
+    await expect((await revealToolActivity(page, "submit_research_run", "complete")).last()).toBeVisible();
+    await expect(page.locator('.chat-turn-outcome-failed[data-failure-code="PROVIDER_TIMEOUT"]')).toBeVisible();
+    expect(requests).toHaveLength(1);
     controlWorker("unpause"); paused = false;
     await expect.poll(async () => {
       const response = await page.request.get(`/api/research-runs/${coreRunId}`);
@@ -135,7 +133,7 @@ function observeRuns(page: Page) {
   return requests;
 }
 
-function databaseFacts(researcherId: string): { agent_runs: number; user_messages: number; active_runs: number; core_runs: number; models: Array<Record<string, unknown>> } {
+function databaseFacts(researcherId: string): { agent_runs: number; user_messages: number; active_runs: number; core_runs: number; core_run_ids: string[]; models: Array<Record<string, unknown>> } {
   if (!/^[0-9a-f-]{36}$/.test(researcherId)) throw new Error("A validated Researcher identity is required");
   return JSON.parse(execFileSync("docker", ["exec", "--env", "PGPASSWORD=owner-test-password", `${testProjectName()}-postgres-1`,
     "psql", "--username", "thesistrace_owner", "--dbname", "thesistrace", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1", "--command", `
@@ -143,6 +141,7 @@ function databaseFacts(researcherId: string): { agent_runs: number; user_message
       SELECT json_build_object('agent_runs', (SELECT count(*) FROM runs), 'active_runs', (SELECT count(*) FROM runs WHERE status = 'running'),
         'user_messages', (SELECT count(*) FROM agent.mastra_messages message JOIN agent.chat_session session ON message.thread_id = session.id::text WHERE message.role = 'user' AND session.researcher_id = '${researcherId}'::uuid),
         'core_runs', (SELECT count(*) FROM research_runs.runs WHERE researcher_id = '${researcherId}'::uuid),
+        'core_run_ids', (SELECT coalesce(json_agg(id ORDER BY id), '[]') FROM research_runs.runs WHERE researcher_id = '${researcherId}'::uuid),
         'models', (SELECT coalesce(json_agg(json_build_object('run_id', id, 'model_key', model_key, 'reasoning', reasoning_effort, 'status', status, 'code', terminal_error_code) ORDER BY started_at), '[]') FROM runs))
     `], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10_000 }));
 }

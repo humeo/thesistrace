@@ -1,7 +1,7 @@
 import { isUuid } from "../uuid";
 
 const REQUEST_TIMEOUT_MS = 5_000;
-const TIMELINE_LIMIT = 50;
+const TIMELINE_LIMIT = 20;
 
 export type ChatTurnStatus =
   | "running"
@@ -60,9 +60,17 @@ export type TimelineEntry = Readonly<{
     }>
 );
 
-export type TimelinePage = Readonly<{
+export type TimelineTurn = Readonly<{
+  completed_at: string | null;
   entries: readonly TimelineEntry[];
+  id: string;
+  started_at: string;
+  status: ChatTurnStatus;
+}>;
+
+export type TimelinePage = Readonly<{
   next_cursor: string | null;
+  turns: readonly TimelineTurn[];
 }>;
 
 export type ChatCommandReceipt = Readonly<{
@@ -176,16 +184,16 @@ export function decodeChatTurn(value: unknown): ChatTurn | null {
 
 export function decodeTimelinePage(value: unknown): TimelinePage {
   if (
-    !isExactRecord(value, ["entries", "next_cursor"])
-    || !Array.isArray(value.entries)
-    || value.entries.length > TIMELINE_LIMIT
+    !isExactRecord(value, ["next_cursor", "turns"])
+    || !Array.isArray(value.turns)
+    || value.turns.length > TIMELINE_LIMIT
     || !(value.next_cursor === null || isCursor(value.next_cursor))
   ) throw new ChatApiError("INVALID_CHAT_RESPONSE", 500);
-  const entries = value.entries.map(decodeTimelineEntry);
-  if (new Set(entries.map((entry) => entry.entry_id)).size !== entries.length) {
+  const turns = value.turns.map(decodeTimelineTurn);
+  if (new Set(turns.map((turn) => turn.id)).size !== turns.length) {
     throw new ChatApiError("INVALID_CHAT_RESPONSE", 500);
   }
-  return { entries, next_cursor: value.next_cursor };
+  return { next_cursor: value.next_cursor, turns };
 }
 
 export function decodeCommandReceipt(value: unknown): ChatCommandReceipt {
@@ -262,7 +270,36 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-function decodeTimelineEntry(value: unknown): TimelineEntry {
+function decodeTimelineTurn(value: unknown): TimelineTurn {
+  if (!isExactRecord(value, ["completed_at", "entries", "id", "started_at", "status"])) {
+    throw new ChatApiError("INVALID_CHAT_RESPONSE", 500);
+  }
+  if (
+    typeof value.id !== "string"
+    || !isUuid(value.id)
+    || typeof value.started_at !== "string"
+    || !isDatabaseUtc(value.started_at)
+    || (value.completed_at !== null && (
+      typeof value.completed_at !== "string" || !isDatabaseUtc(value.completed_at)
+    ))
+    || !isTurnStatus(value.status)
+    || !Array.isArray(value.entries)
+  ) throw new ChatApiError("INVALID_CHAT_RESPONSE", 500);
+  const turnId = value.id;
+  const entries = value.entries.map((entry) => decodeTimelineEntry(entry, turnId));
+  if (new Set(entries.map((entry) => entry.entry_id)).size !== entries.length) {
+    throw new ChatApiError("INVALID_CHAT_RESPONSE", 500);
+  }
+  return {
+    completed_at: value.completed_at,
+    entries,
+    id: turnId,
+    started_at: value.started_at,
+    status: value.status,
+  };
+}
+
+function decodeTimelineEntry(value: unknown, expectedTurnId: string): TimelineEntry {
   if (!isExactRecord(value, ["created_at", "entry_id", "kind", "payload", "turn_id"])) {
     throw new ChatApiError("INVALID_CHAT_RESPONSE", 500);
   }
@@ -274,6 +311,7 @@ function decodeTimelineEntry(value: unknown): TimelineEntry {
     || value.entry_id.length > 800
     || typeof value.turn_id !== "string"
     || !isUuid(value.turn_id)
+    || value.turn_id !== expectedTurnId
     || !isRecord(value.payload)
   ) throw new ChatApiError("INVALID_CHAT_RESPONSE", 500);
   const base = {

@@ -2,11 +2,9 @@ import {
   ArrowClockwise,
   ArrowUp,
   CaretDown,
-  CircleNotch,
   PencilSimple,
   Stop,
   Trash,
-  TrayArrowDown,
 } from "@phosphor-icons/react";
 import { useLayoutEffect, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 
@@ -65,29 +63,18 @@ export function ChatComposer({
           onToggle={() => setQueueExpanded((current) => !current)}
         />
       )}
-      <section aria-label="Next Turn settings" className="chat-next-turn-settings">
-        <div className="chat-next-turn-heading">
-          <span>Next Turn</span>
-          <span>{controller.phase === "active" || controller.phase === "waiting_for_user"
-            ? "Steer and answers keep current settings"
-            : "Settings apply when a new Turn starts"}</span>
-        </div>
-        {modelControls}
-      </section>
-      <div className="chat-composer-status-row">
-        <span data-chat-status>{phaseLabel(controller.phase, controller.latestTurnStatus)}</span>
-        <span className={tooLarge ? "chat-byte-count-invalid" : undefined}>
-          {controller.draftBytes.toLocaleString()} / {MAX_CHAT_MESSAGE_BYTES.toLocaleString()} bytes
-        </span>
-      </div>
       {controller.error === null ? null : (
-        <div className="chat-run-error">
+        <div
+          className="chat-run-error"
+          data-failure-code={controller.errorCode ?? undefined}
+          role="alert"
+        >
           <span>{controller.error}</span>
           <button className="button-quiet" onClick={() => void controller.retryRecovery()} type="button">Retry</button>
         </div>
       )}
       {tooLarge ? <p className="chat-composer-validation" id="chat-composer-validation">Input exceeds the 16 KiB limit.</p> : null}
-      <div className={`chat-composer-input${interactionLocked ? " chat-composer-input-locked" : ""}`}>
+      <div className={`chat-composer-surface${interactionLocked ? " chat-composer-surface-locked" : ""}`}>
         <textarea
           aria-describedby={tooLarge ? "chat-composer-guidance chat-composer-validation" : "chat-composer-guidance"}
           aria-invalid={tooLarge || undefined}
@@ -99,24 +86,39 @@ export function ChatComposer({
             ? "Select an answer in the question above"
             : controller.phase === "waiting_for_user"
               ? "Type your answer…"
-              : controller.phase === "active" ? "Add an input to the staging queue…" : "Ask about an investment idea…"}
+              : controller.phase === "active" ? "Steer this Turn or write the next prompt…" : "Ask about an investment idea…"}
           ref={controller.textareaRef}
           rows={2}
           value={controller.draft}
         />
-        <button
-          aria-label={controller.action.label}
-          className={`chat-main-action chat-main-action-${controller.action.kind}`}
-          disabled={!controller.action.enabled}
-          type="submit"
-        >
-          <MainActionIcon kind={controller.action.kind} pending={!controller.action.enabled && interactionLocked} />
-        </button>
+        <div className="chat-composer-toolbar">
+          {controller.draftBytes < MAX_CHAT_MESSAGE_BYTES * .8 ? null : (
+            <span className={`chat-byte-count${tooLarge ? " chat-byte-count-invalid" : ""}`}>
+              {controller.draftBytes.toLocaleString()} / {MAX_CHAT_MESSAGE_BYTES.toLocaleString()} bytes
+            </span>
+          )}
+          <div className="chat-composer-toolbar-actions">
+            {modelControls}
+            <button
+              aria-label={controller.action.label}
+              className={`chat-main-action chat-main-action-${controller.action.kind}`}
+              disabled={!controller.action.enabled}
+              type="submit"
+            >
+              <MainActionIcon kind={controller.action.kind} />
+            </button>
+          </div>
+        </div>
       </div>
       <div className="chat-composer-guidance" id="chat-composer-guidance">
-        <span>Enter to {enterActionLabel(controller.action.kind)} · Shift+Enter for newline</span>
-        <span>Text only</span>
+        <span>Enter to {enterActionLabel(controller.action.kind, controller.phase)} · Shift+Enter for newline</span>
+        <span>{controller.phase === "active" || controller.phase === "waiting_for_user"
+          ? "Settings apply to the next new Turn"
+          : "Text only"}</span>
       </div>
+      <span aria-hidden="true" className="visually-hidden" data-chat-status>
+        {phaseLabel(controller.phase, controller.latestTurnStatus)}
+      </span>
       <div aria-atomic="true" aria-live="polite" className="visually-hidden">
         {announcement || controller.statusAnnouncement}
       </div>
@@ -192,12 +194,19 @@ function StagedQueueItem({
   );
 }
 
-function MainActionIcon({ kind, pending }: { kind: ChatConversationController["action"]["kind"]; pending: boolean }) {
-  if (pending) return <CircleNotch aria-hidden="true" className="chat-spinning" size={18} />;
+function MainActionIcon({ kind }: { kind: ChatConversationController["action"]["kind"] }) {
   if (kind === "stop") return <Stop aria-hidden="true" size={17} weight="fill" />;
   if (kind === "continue") return <ArrowClockwise aria-hidden="true" size={18} weight="bold" />;
-  if (kind === "stage") return <TrayArrowDown aria-hidden="true" size={18} weight="bold" />;
   return <ArrowUp aria-hidden="true" size={18} weight="bold" />;
+}
+
+function enterActionLabel(
+  kind: ChatConversationController["action"]["kind"],
+  phase: ChatConversationController["phase"],
+): string {
+  if (kind === "stage" || phase === "active") return "stage";
+  if (kind === "answer" || phase === "waiting_for_user") return "answer";
+  return "send";
 }
 
 function phaseLabel(
@@ -217,12 +226,6 @@ function phaseLabel(
     case "stopping": return "Stopping Turn";
     case "recovering": return "Confirming command acceptance";
   }
-}
-
-function enterActionLabel(kind: ChatConversationController["action"]["kind"]): string {
-  if (kind === "stage") return "stage";
-  if (kind === "answer") return "answer";
-  return "send";
 }
 
 function oneLine(value: string): string {

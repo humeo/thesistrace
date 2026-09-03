@@ -13,7 +13,7 @@ import {
   type ChatCommandReceipt,
   type ChatQuestion,
   type ChatTurnStatus,
-  type TimelineEntry,
+  type TimelineTurn,
 } from "./chatProtocol";
 import {
   deriveChatPhase,
@@ -52,6 +52,7 @@ export type ChatConversationController = Readonly<{
   draftBytes: number;
   editStaged: (item: StagedInput) => Promise<void>;
   error: string | null;
+  errorCode: string | null;
   executeMainAction: () => Promise<void>;
   focusComposer: () => void;
   hasFirstAssistantText: boolean;
@@ -67,12 +68,13 @@ export type ChatConversationController = Readonly<{
   refresh: () => Promise<void>;
   removeStaged: (item: StagedInput) => Promise<void>;
   retryRecovery: () => Promise<void>;
+  retryTimeline: () => Promise<void>;
   setAnswerSelections: (values: readonly string[]) => void;
   setDraft: (value: string) => void;
   steerStaged: (item: StagedInput) => Promise<void>;
   statusAnnouncement: string;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
-  timeline: readonly TimelineEntry[];
+  turns: readonly TimelineTurn[];
   timelineError: boolean;
 }>;
 
@@ -95,14 +97,16 @@ export function useChatConversation(options: Readonly<{
   const [localCommand, setLocalCommand] = useState<LocalCommand>("none");
   const [draft, setDraft] = useState("");
   const [answerSelections, setAnswerSelectionsState] = useState<readonly string[]>([]);
-  const [timeline, setTimeline] = useState<readonly TimelineEntry[]>([]);
+  const [turns, setTurns] = useState<readonly TimelineTurn[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [timelineError, setTimelineError] = useState(false);
+  const [latestTimelineError, setLatestTimelineError] = useState(false);
+  const [olderTimelineError, setOlderTimelineError] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [queue, setQueue] = useState<readonly StagedInput[]>([]);
   const [queueLocked, setQueueLocked] = useState(false);
   const [stageWriting, setStageWriting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [recovery, setRecovery] = useState<Recovery | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const storeRef = useRef<StagedInputStore | null>(null);
@@ -170,10 +174,10 @@ export function useChatConversation(options: Readonly<{
     ? { ...derivedAction, enabled: false }
     : derivedAction;
   const currentTurnId = session?.current_turn?.id ?? null;
-  const hasFirstAssistantText = currentTurnId === null || timeline.some((entry) => (
-    entry.turn_id === currentTurnId
-    && entry.kind === "assistant_message"
-    && entry.payload.content.trim().length > 0
+  const hasFirstAssistantText = currentTurnId === null || turns.some((turn) => (
+    turn.id === currentTurnId
+    && turn.entries.some((entry) => entry.kind === "assistant_message"
+      && entry.payload.content.trim().length > 0)
   ));
 
   const focusComposer = useCallback(() => {
@@ -221,16 +225,16 @@ export function useChatConversation(options: Readonly<{
         try {
           const page = await loadTimelinePage(options.threadId, undefined, requestSignal);
           if (generationRef.current !== generation) return;
-          setTimeline((current) => mergeLatestTimeline(current, page.entries));
+          setTurns((current) => mergeLatestTurns(current, page.turns));
           if (!timelineInitializedRef.current) {
             timelineInitializedRef.current = true;
             setNextCursor(page.next_cursor);
           }
-          setTimelineError(false);
+          setLatestTimelineError(false);
         } catch (failure) {
           if (generationRef.current !== generation) return;
           if (!(failure instanceof DOMException && failure.name === "AbortError")) {
-            setTimelineError(true);
+            setLatestTimelineError(true);
           }
         }
         // A coalesced refresh belongs to the same controller generation, but
@@ -333,6 +337,7 @@ export function useChatConversation(options: Readonly<{
 
   const observeSession = useCallback((next: AgentSessionSummary, generation = generationRef.current) => {
     if (generationRef.current !== generation) return;
+    const previous = sessionRef.current;
     const active = next.current_turn;
     if (active !== null && active.status === "running") {
       observedActiveTurnsRef.current.add(active.id);
@@ -361,6 +366,15 @@ export function useChatConversation(options: Readonly<{
     }
     setSession(next);
     sessionRef.current = next;
+    if (
+      previous !== null
+      && (
+        previous.current_turn?.id !== next.current_turn?.id
+        || previous.current_turn?.status !== next.current_turn?.status
+      )
+    ) {
+      callbacksRef.current.onSessionChanged();
+    }
   }, [deliverNextStaged]);
 
   const refresh = useCallback(async () => {
@@ -368,14 +382,14 @@ export function useChatConversation(options: Readonly<{
     if (!sessionEstablishedRef.current && !options.existingSession) return;
     try {
       const next = await loadAgentSession(options.threadId);
-      observeSession(next, generation);
+      await loadLatestTimeline();
       if (generationRef.current !== generation) return;
+      observeSession(next, generation);
       setOpening(false);
     } catch (failure) {
       if (failure instanceof DOMException && failure.name === "AbortError") return;
       setError("The authoritative Chat state could not be refreshed.");
     }
-    await loadLatestTimeline();
   }, [loadLatestTimeline, observeSession, options.existingSession, options.threadId]);
 
   async function settleAcceptedInput(
@@ -455,6 +469,28 @@ export function useChatConversation(options: Readonly<{
     }
   }
 
+  async function settleRejectedInput(
+    target: Recovery,
+    rejectionCode: string,
+    generation = generationRef.current,
+  ): Promise<void> {
+    if (generationRef.current !== generation) return;
+    if (target.item !== null) {
+      storeRef.current ??= new StagedInputStore();
+      await storeRef.current.release(target.item).catch(() => undefined);
+      await loadQueue();
+      stagedChannelRef.current?.notify();
+    }
+    if (target.draft !== null) setDraft(target.draft);
+    setRecovery(null);
+    setLocalCommand("none");
+    setErrorCode(rejectionCode);
+    setError(rejectedRunErrorCopy(rejectionCode));
+    if (rejectionCode === "CHAT_SESSION_NOT_FOUND") {
+      callbacksRef.current.onSessionChanged();
+    }
+  }
+
   async function startPrompt(
     content: string,
     inputId: string,
@@ -472,9 +508,11 @@ export function useChatConversation(options: Readonly<{
     runInFlightRef.current = true;
     setLocalCommand("opening");
     setError(null);
+    setErrorCode(null);
     options.agent.setMessages([{ content, id: inputId, role: "user" }]);
     let accepted = false;
     let authoritativeRejection = false;
+    let authoritativeRejectionCode: string | null = null;
     const subscriber: AgentSubscriber = {
       onRunStartedEvent: ({ event }) => {
         if (generationRef.current !== generation || event.runId !== runId || accepted) return;
@@ -482,8 +520,11 @@ export function useChatConversation(options: Readonly<{
         observedActiveTurnsRef.current.add(runId);
         void settleAcceptedInput(inputId, item, item === null ? content : null, false, generation);
       },
-      onRunErrorEvent: () => {
-        if (!accepted) authoritativeRejection = true;
+      onRunErrorEvent: ({ event }) => {
+        if (!accepted) {
+          authoritativeRejection = true;
+          authoritativeRejectionCode = event.code ?? "INTERNAL_FAILURE";
+        }
         void loadLatestTimeline();
       },
       onRunFailed: () => { void loadLatestTimeline(); },
@@ -509,7 +550,11 @@ export function useChatConversation(options: Readonly<{
     } finally {
       runInFlightRef.current = false;
       if (generationRef.current !== generation) return;
-      if (!accepted) await reconcileCommand(recoveryTarget, generation, authoritativeRejection);
+      if (!accepted && authoritativeRejectionCode !== null) {
+        await settleRejectedInput(recoveryTarget, authoritativeRejectionCode, generation);
+      } else if (!accepted) {
+        await reconcileCommand(recoveryTarget, generation, authoritativeRejection);
+      }
       await refresh();
       focusComposer();
     }
@@ -523,6 +568,7 @@ export function useChatConversation(options: Readonly<{
     runInFlightRef.current = true;
     setLocalCommand("opening");
     setError(null);
+    setErrorCode(null);
     options.agent.setMessages([]);
     let accepted = false;
     let authoritativeRejection = false;
@@ -637,6 +683,7 @@ export function useChatConversation(options: Readonly<{
         if (generationRef.current !== generation) return;
         stagedChannelRef.current?.notify();
         setError(null);
+        setErrorCode(null);
       } catch (failure) {
         if (generationRef.current !== generation) return;
         setError(stageErrorCopy(failure));
@@ -662,6 +709,7 @@ export function useChatConversation(options: Readonly<{
     const commandId = crypto.randomUUID();
     setLocalCommand("stopping");
     setError(null);
+    setErrorCode(null);
     try {
       const receipt = await stopChat(options.threadId, { commandId, expectedTurnId: turnId });
       if (receipt.status === "pending") {
@@ -767,21 +815,30 @@ export function useChatConversation(options: Readonly<{
     setLoadingOlder(true);
     try {
       const page = await loadTimelinePage(options.threadId, nextCursor);
-      setTimeline((current) => prependOlderTimeline(current, page.entries));
+      setTurns((current) => prependOlderTurns(current, page.turns));
       setNextCursor(page.next_cursor);
-      setTimelineError(false);
+      setOlderTimelineError(false);
       return true;
     } catch {
-      setTimelineError(true);
+      setOlderTimelineError(true);
       return false;
     } finally {
       setLoadingOlder(false);
     }
   }, [loadingOlder, nextCursor, options.threadId]);
 
+  const retryTimeline = useCallback(async () => {
+    if (olderTimelineError) {
+      await loadOlder();
+      return;
+    }
+    await refresh();
+  }, [loadOlder, olderTimelineError, refresh]);
+
   const retryRecovery = useCallback(async () => {
     if (recovery === null) {
       setError(null);
+      setErrorCode(null);
       await refresh();
       await loadQueue();
       return;
@@ -802,11 +859,14 @@ export function useChatConversation(options: Readonly<{
     setOpening(options.existingSession && initialSessionRef.current === undefined);
     setLocalCommand("none");
     setRecovery(null);
+    setErrorCode(null);
     setDraft("");
     setAnswerSelectionsState([]);
-    setTimeline([]);
+    setTurns([]);
     timelineInitializedRef.current = false;
     setNextCursor(null);
+    setLatestTimelineError(false);
+    setOlderTimelineError(false);
     setQueueLocked(false);
     stageWritingRef.current = false;
     setStageWriting(false);
@@ -815,10 +875,12 @@ export function useChatConversation(options: Readonly<{
     void loadQueue();
     if (options.existingSession) {
       void Promise.all([
-        loadAgentSession(options.threadId, controller.signal).then((next) => observeSession(next, generation)),
+        loadAgentSession(options.threadId, controller.signal),
         loadLatestTimeline(controller.signal),
-      ]).then(() => {
-        if (generationRef.current === generation) setOpening(false);
+      ]).then(([next]) => {
+        if (generationRef.current !== generation) return;
+        observeSession(next, generation);
+        setOpening(false);
       }).catch((failure: unknown) => {
         if (generationRef.current !== generation) return;
         if (!(failure instanceof DOMException && failure.name === "AbortError")) {
@@ -851,11 +913,10 @@ export function useChatConversation(options: Readonly<{
       const generation = generationRef.current;
       const previous = sessionRef.current;
       void loadAgentSession(options.threadId, controller.signal)
-        .then((next) => {
-          observeSession(next, generation);
+        .then(async (next) => {
           if (generationRef.current !== generation) return;
           const status = next.current_turn?.status;
-          if (
+          const timelineChanged = (
             status === "running"
             || status === "stopping"
             || status === "waiting_for_user"
@@ -864,8 +925,23 @@ export function useChatConversation(options: Readonly<{
             || previous?.current_turn?.status !== next.current_turn?.status
             || previous?.latest_turn?.id !== next.latest_turn?.id
             || previous?.latest_turn?.status !== next.latest_turn?.status
-          ) {
-            return loadLatestTimeline(controller.signal);
+          );
+          const projectionMustLead = previous?.current_turn !== null
+            && previous?.current_turn !== undefined
+            && (
+              next.current_turn?.id !== previous.current_turn.id
+              || (
+                next.current_turn?.status === "waiting_for_user"
+                && previous.current_turn.status !== "waiting_for_user"
+              )
+            );
+          if (timelineChanged && projectionMustLead) {
+            await loadLatestTimeline(controller.signal);
+            if (generationRef.current !== generation) return;
+          }
+          observeSession(next, generation);
+          if (timelineChanged && !projectionMustLead) {
+            await loadLatestTimeline(controller.signal);
           }
         })
         .catch(() => undefined)
@@ -893,6 +969,7 @@ export function useChatConversation(options: Readonly<{
     draftBytes,
     editStaged,
     error,
+    errorCode,
     executeMainAction,
     focusComposer,
     hasFirstAssistantText,
@@ -908,13 +985,14 @@ export function useChatConversation(options: Readonly<{
     refresh,
     removeStaged,
     retryRecovery,
+    retryTimeline,
     setAnswerSelections: setAnswerSelectionsState,
     setDraft,
     steerStaged,
     statusAnnouncement,
     textareaRef,
-    timeline,
-    timelineError,
+    timelineError: latestTimelineError || olderTimelineError,
+    turns,
   };
 }
 
@@ -928,21 +1006,21 @@ function answerIsValid(answer: string | readonly string[]): boolean {
     : answer.length > 0 && new Set(answer).size === answer.length;
 }
 
-function mergeLatestTimeline(
-  current: readonly TimelineEntry[],
-  latest: readonly TimelineEntry[],
-): readonly TimelineEntry[] {
-  const latestIds = new Set(latest.map((entry) => entry.entry_id));
-  const older = current.filter((entry) => !latestIds.has(entry.entry_id));
+export function mergeLatestTurns(
+  current: readonly TimelineTurn[],
+  latest: readonly TimelineTurn[],
+): readonly TimelineTurn[] {
+  const latestIds = new Set(latest.map((turn) => turn.id));
+  const older = current.filter((turn) => !latestIds.has(turn.id));
   return [...older, ...latest];
 }
 
-function prependOlderTimeline(
-  current: readonly TimelineEntry[],
-  older: readonly TimelineEntry[],
-): readonly TimelineEntry[] {
-  const existing = new Set(current.map((entry) => entry.entry_id));
-  return [...older.filter((entry) => !existing.has(entry.entry_id)), ...current];
+export function prependOlderTurns(
+  current: readonly TimelineTurn[],
+  older: readonly TimelineTurn[],
+): readonly TimelineTurn[] {
+  const existing = new Set(current.map((turn) => turn.id));
+  return [...older.filter((turn) => !existing.has(turn.id)), ...current];
 }
 
 function stageErrorCopy(error: unknown): string {
@@ -970,6 +1048,16 @@ function commandErrorCopy(code: string | null): string {
     case "CHAT_STORAGE_FAILURE": return "Chat storage is temporarily unavailable. Your local input was retained.";
     default: return "The Agent command could not be completed. Your local input was retained.";
   }
+}
+
+function rejectedRunErrorCopy(code: string): string {
+  if (code === "AGENT_CAPACITY") {
+    return "Agent at capacity. The Turn was not accepted and your input was restored.";
+  }
+  if (code === "AUTHENTICATION_REQUIRED") {
+    return "Authentication was rejected before the Turn was accepted. Your input was restored.";
+  }
+  return "The command was rejected before the Turn was accepted. Your input was restored.";
 }
 
 function statusCopy(phase: ChatPhase, latestTurnStatus: ChatTurnStatus | null, queued: number): string {

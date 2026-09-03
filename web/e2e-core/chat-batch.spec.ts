@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
 
 import { expect, sameOriginHeaders, test, testProjectName } from "./auth-fixture";
+import { revealToolActivity } from "./chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 import { controlWorker } from "./research-run-control";
 
@@ -29,7 +30,7 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
   let batchId = "";
   try {
     await send(page, mode === "factor_evaluation" ? factorPrompt : strategyPrompt);
-    await expect(page.getByRole("article", { name: "Tool submit_research_batch: Completed" })).toBeVisible();
+    await expect((await revealToolActivity(page, "submit_research_batch", "complete")).last()).toBeVisible();
     const surface = page.getByRole("article", { name: "Research surface" }).first();
     await expect(surface).toBeVisible();
     originalSurface = await surface.innerText();
@@ -116,7 +117,7 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
   await expect(rename).toHaveCount(0);
   expect(await batch(page, batchId)).toEqual(complete);
   await send(page, "List my recent Research Batches.");
-  await expect(page.getByRole("article", { name: "Tool list_research_batches: Completed" })).toBeVisible();
+  await expect((await revealToolActivity(page, "list_research_batches", "complete")).last()).toBeVisible();
   expect(batchDatabaseFacts(researcher.id)).toMatchObject({ admissions: 1, batches: 1 });
   const navigation = page.getByRole("link", { name: `Open ${complete.items[0]!.item_key} ResearchRun`, exact: true }).last();
   await navigation.click();
@@ -142,7 +143,7 @@ test("Chat Batch response loss replays the same admission and child identities",
     await page.getByRole("textbox", { name: "Message", exact: true }).fill(factorPrompt);
     await page.getByRole("button", { name: "Send" }).click();
     await expect(runStatus(page)).toHaveText("Run failed", { timeout: 30_000 });
-    await expect(page.getByRole("article", { name: "Tool submit_research_batch: Failed" })).toBeVisible();
+    await expect((await revealToolActivity(page, "submit_research_batch", "failed")).last()).toBeVisible();
     expect(Number(proxyState("mcp-fault-proxy", 8150).disconnected_submit_responses)).toBeGreaterThanOrEqual(1);
     const before = batchDatabaseFacts(researcher.id);
     expect(before).toMatchObject({ admissions: 1, batches: 1, children: 2 });
@@ -152,7 +153,7 @@ test("Chat Batch response loss replays the same admission and child identities",
     const beforeReplay = await batch(page, batchId);
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     await send(page, resumePrompt);
-    await expect(page.getByRole("article", { name: "Tool submit_research_batch: Completed" })).toBeVisible();
+    await expect((await revealToolActivity(page, "submit_research_batch", "complete")).last()).toBeVisible();
     await expect(page.getByRole("table", { name: "Ordered child ResearchRun results" })).toBeVisible();
     expect(batchDatabaseFacts(researcher.id)).toEqual(before);
     expect(await batch(page, batchId)).toEqual(beforeReplay);

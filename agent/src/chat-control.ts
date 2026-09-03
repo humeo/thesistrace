@@ -4,7 +4,7 @@ import { MAX_CHAT_MESSAGE_BYTES, chatCommandFingerprint } from "./chat-request.j
 import { isCanonicalUuid } from "./uuid.js";
 
 export const MAX_CHAT_COMMAND_BODY_BYTES = MAX_CHAT_MESSAGE_BYTES + 2 * 1024;
-export const TIMELINE_PAGE_SIZE = 50;
+export const TIMELINE_PAGE_SIZE = 20;
 
 export type TurnKind = "prompt" | "continue";
 export type TurnStatus =
@@ -90,9 +90,22 @@ export type ChatTimelineEntry =
       turnId: string;
     }>;
 
-export type TimelinePage = Readonly<{
+export type ChatTimelineTurn = Readonly<{
+  completedAt: string | null;
   entries: readonly ChatTimelineEntry[];
+  id: string;
+  startedAt: string;
+  status: TurnStatus;
+}>;
+
+export type TimelinePage = Readonly<{
   nextCursor: string | null;
+  turns: readonly ChatTimelineTurn[];
+}>;
+
+export type TimelineCursor = Readonly<{
+  startedAt: string;
+  turnId: string;
 }>;
 
 export type SteerInput = Readonly<{
@@ -245,32 +258,49 @@ export function validateAnswerForQuestion(
   }
 }
 
-export function encodeTimelineCursor(sequence: number): string {
-  if (!Number.isSafeInteger(sequence) || sequence < 1) throw invalidChatInput();
-  return Buffer.from(JSON.stringify({ sequence, version: 1 }), "utf8").toString("base64url");
+export function encodeTimelineCursor(cursor: TimelineCursor): string {
+  const startedAt = parseDatabaseUtc(cursor.startedAt);
+  if (!isCanonicalUuid(cursor.turnId)) throw invalidChatInput();
+  return Buffer.from(JSON.stringify({
+    i: cursor.turnId,
+    s: startedAt,
+    v: 2,
+  }), "utf8").toString("base64url");
 }
 
-export function readTimelineQuery(request: Request): Readonly<{ before?: number; limit: number }> {
+export function readTimelineQuery(request: Request): Readonly<{
+  before?: TimelineCursor;
+  limit: number;
+}> {
   const params = new URL(request.url).searchParams;
   for (const key of params.keys()) {
     if (key !== "before" && key !== "limit") throw invalidChatInput();
   }
   const before = params.get("before");
   const limit = params.get("limit");
-  let parsedBefore: number | undefined;
+  let parsedBefore: TimelineCursor | undefined;
   if (before !== null) {
     try {
+      if (before.length === 0 || before.length > 512 || !/^[A-Za-z0-9_-]+$/u.test(before)) {
+        throw invalidChatInput();
+      }
+      const bytes = Buffer.from(before, "base64url");
+      if (bytes.toString("base64url") !== before) throw invalidChatInput();
       const decoded = JSON.parse(Buffer.from(before, "base64url").toString("utf8")) as unknown;
       if (
         !isRecord(decoded)
-        || Object.keys(decoded).length !== 2
-        || decoded.version !== 1
-        || !Number.isSafeInteger(decoded.sequence)
-        || (decoded.sequence as number) < 1
+        || Object.keys(decoded).length !== 3
+        || decoded.v !== 2
+        || typeof decoded.s !== "string"
+        || typeof decoded.i !== "string"
+        || !isCanonicalUuid(decoded.i)
       ) {
         throw invalidChatInput();
       }
-      parsedBefore = decoded.sequence as number;
+      parsedBefore = {
+        startedAt: parseDatabaseUtc(decoded.s),
+        turnId: decoded.i,
+      };
     } catch (error) {
       if (error instanceof ChatControlError) throw error;
       throw invalidChatInput();
@@ -281,6 +311,18 @@ export function readTimelineQuery(request: Request): Readonly<{ before?: number;
     throw invalidChatInput();
   }
   return { before: parsedBefore, limit: parsedLimit };
+}
+
+function parseDatabaseUtc(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/u.test(value)) {
+    throw invalidChatInput();
+  }
+  const milliseconds = `${value.slice(0, 23)}Z`;
+  const parsed = new Date(milliseconds);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== milliseconds) {
+    throw invalidChatInput();
+  }
+  return value;
 }
 
 function readQuestionOptions(value: unknown): readonly QuestionOption[] | null {

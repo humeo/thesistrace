@@ -45,10 +45,37 @@ test("Enter submits textual actions while Shift+Enter and an empty Stop do not",
   await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", shiftKey: true })));
   expect(execute).toHaveBeenCalledOnce();
 
-  await mount(composerController({ action: { enabled: true, kind: "stop", label: "Stop" }, executeMainAction: execute }));
+  await mount(composerController({
+    action: { enabled: true, kind: "stop", label: "Stop" },
+    executeMainAction: execute,
+    phase: "active",
+  }));
   const stopTextarea = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!;
+  expect(document.querySelector(".chat-composer-guidance")?.textContent).toContain("Enter to stage");
   await act(async () => stopTextarea.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
   expect(execute).toHaveBeenCalledOnce();
+});
+
+test("keeps the authoritative run status available without restoring the visible phase row", async () => {
+  await mount(composerController({ latestTurnStatus: "completed", phase: "idle" }));
+
+  const status = document.querySelector<HTMLElement>("[data-chat-status]");
+  expect(status?.textContent).toBe("Run complete");
+  expect(status?.classList.contains("visually-hidden")).toBe(true);
+  expect(document.querySelector(".chat-composer-status-row")).toBeNull();
+});
+
+test("exposes a rejected command as a coded alert without clearing the composer", async () => {
+  await mount(composerController({
+    draft: "Retained input",
+    error: "Agent at capacity. The Turn was not accepted and your input was restored.",
+    errorCode: "AGENT_CAPACITY",
+  }));
+
+  const alert = document.querySelector<HTMLElement>('[role="alert"]');
+  expect(alert?.getAttribute("data-failure-code")).toBe("AGENT_CAPACITY");
+  expect(alert?.textContent).toContain("Agent at capacity");
+  expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Retained input");
 });
 
 test("shows FIFO controls and exposes Steer only on the active head item", async () => {
@@ -102,14 +129,16 @@ function composerController(overrides: Partial<ChatConversationController> = {})
     refresh: vi.fn(async () => undefined),
     removeStaged: vi.fn(async () => undefined),
     retryRecovery: vi.fn(async () => undefined),
+    retryTimeline: vi.fn(async () => undefined),
     setAnswerSelections: vi.fn(),
     setDraft: vi.fn(),
     steerStaged: vi.fn(async () => undefined),
     statusAnnouncement: "Ready.",
     textareaRef: { current: null },
-    timeline: [],
     timelineError: false,
+    turns: [],
     ...overrides,
+    errorCode: overrides.errorCode ?? null,
   };
 }
 

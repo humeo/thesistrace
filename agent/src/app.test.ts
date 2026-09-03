@@ -72,7 +72,7 @@ function dependencies(
       status: "accepted" as const,
       turnId: input.expectedTurnId,
     })),
-    timeline: vi.fn(async () => ({ entries: [], nextCursor: null })),
+    timeline: vi.fn(async () => ({ nextCursor: null, turns: [] })),
     sessionPreference: vi.fn(async () => ({
       model_key: "research-primary",
       reasoning_effort: "medium",
@@ -297,6 +297,50 @@ describe("Agent Host HTTP boundary", () => {
     );
     expect(hidden.status).toBe(404);
     expect(await hidden.json()).toEqual({ code: "CHAT_SESSION_NOT_FOUND" });
+  });
+
+  it("returns complete Turn envelopes for the owner-scoped timeline", async () => {
+    const threadId = "00000000-0000-4000-8000-000000000222";
+    const turnId = "00000000-0000-4000-8000-000000000333";
+    const timeline = vi.fn(async () => ({
+      nextCursor: null,
+      turns: [{
+        completedAt: "2026-08-30T02:04:04.000000Z",
+        entries: [{
+          createdAt: "2026-08-30T02:03:05.000000Z",
+          entryId: "assistant:1",
+          kind: "assistant_message" as const,
+          payload: { content: "Complete response", status: "complete" as const },
+          turnId,
+        }],
+        id: turnId,
+        startedAt: "2026-08-30T02:03:04.000000Z",
+        status: "completed" as const,
+      }],
+    }));
+    const response = await createAgentApp(dependencies({ timeline })).request(
+      `http://agent.test/api/agent/sessions/${threadId}/timeline`,
+      { headers: { origin: "http://agent.test" } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      next_cursor: null,
+      turns: [{
+        completed_at: "2026-08-30T02:04:04.000000Z",
+        entries: [{
+          created_at: "2026-08-30T02:03:05.000000Z",
+          entry_id: "assistant:1",
+          kind: "assistant_message",
+          payload: { content: "Complete response", status: "complete" },
+          turn_id: turnId,
+        }],
+        id: turnId,
+        started_at: "2026-08-30T02:03:04.000000Z",
+        status: "completed",
+      }],
+    });
+    expect(timeline).toHaveBeenCalledWith(threadId, researcher, undefined, 20);
   });
 
   it("renames one owned Session with optimistic concurrency", async () => {

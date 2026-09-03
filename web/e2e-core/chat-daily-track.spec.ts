@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
 
 import { expect, sameOriginHeaders, test, testProjectName } from "./auth-fixture";
+import { revealToolActivity } from "./chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 import { controlWorker } from "./research-run-control";
 
@@ -19,7 +20,7 @@ test("Chat DailyTrack uses the full grant and explains a real Strategy's current
   await page.goto("/chat");
   await send(page, "Backtest a low-volatility Alpha strategy using reliable ThesisTrace defaults.");
   await send(page, startPrompt);
-  await expect(page.getByRole("article", { name: "Tool start_daily_track: Completed" })).toBeVisible();
+  await expect((await revealToolActivity(page, "start_daily_track", "complete")).last()).toBeVisible();
   const surface = page.getByRole("article", { name: "Research surface" }).last();
   const link = surface.getByRole("link", { name: "Open DailyTrack", exact: true });
   const href = await link.getAttribute("href");
@@ -37,10 +38,10 @@ test("Chat DailyTrack uses the full grant and explains a real Strategy's current
   await send(page, reloadPrompt);
   await assertCurrentObservation(page, await track(page, id));
   await send(page, startPrompt);
-  await expect(page.getByRole("article", { name: "Tool start_daily_track: Completed" })).toHaveCount(1);
+  await expect(await revealToolActivity(page, "start_daily_track", "complete")).toHaveCount(1);
   expect(trackFacts(researcher.id)).toMatchObject({ tracks: 1, starts: 1, retries: 0, stops: 0 });
   await send(page, "List my recent DailyTracks.");
-  await expect(page.getByRole("article", { name: "Tool list_daily_tracks: Completed" }).last()).toBeVisible();
+  await expect((await revealToolActivity(page, "list_daily_tracks", "complete")).last()).toBeVisible();
   await send(page, "List the authenticated capabilities available in this Chat.");
   const capabilities = page.locator(".chat-message-assistant .chat-assistant-markdown").last();
   for (const name of [
@@ -88,7 +89,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
     await page.goto("/chat");
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "disconnect-submit");
     await send(page, `Start daily tracking for ${runId}.`, "Run failed");
-    await expect(page.getByRole("article", { name: "Tool start_daily_track: Failed" })).toBeVisible();
+    await expect((await revealToolActivity(page, "start_daily_track", "failed")).last()).toBeVisible();
     const started = trackFacts(researcher.id);
     expect(started).toMatchObject({ starts: 1, tracks: 1, refreshes: 0, retries: 0 });
     expect(Number(proxyState("mcp-fault-proxy", 8150).disconnected_submit_responses)).toBeGreaterThanOrEqual(1);
@@ -98,7 +99,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
     await assertCurrentObservation(page, await track(page, id));
     expect(trackFacts(researcher.id)).toEqual(started);
     await send(page, refreshPrompt);
-    await expect(page.getByRole("article", { name: "Tool refresh_daily_track: Completed" })).toBeVisible();
+    await expect((await revealToolActivity(page, "refresh_daily_track", "complete")).last()).toBeVisible();
     const refreshed = trackFacts(researcher.id);
     expect(refreshed).toMatchObject({ tracks: 1, starts: 1, refreshes: 1, retries: 0 });
     // A real one-shot Tracking Worker rejects its frozen target at a one-byte
@@ -116,7 +117,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
     await expect(page.getByRole("article", { name: "Research surface" }).last()).toContainText(blocked.blocked_reason!);
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "disconnect-submit");
     await send(page, "Retry the blocked DailyTrack in this Chat if it is eligible.", "Run failed");
-    await expect(page.getByRole("article", { name: "Tool retry_daily_track: Failed" })).toBeVisible();
+    await expect((await revealToolActivity(page, "retry_daily_track", "failed")).last()).toBeVisible();
     const retryAccepted = trackFacts(researcher.id);
     expect(retryAccepted).toMatchObject({ tracks: 1, starts: 1, refreshes: 1, retries: 1, stops: 0 });
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");

@@ -37,6 +37,7 @@ import {
   reasoningEffortLabel,
   type AgentModelCatalog,
 } from "./modelCatalog";
+import { ModelPicker } from "./ModelPicker";
 import { ResearchChatCopilotProvider } from "./ResearchChatCopilotProvider";
 import { SessionHistoryList } from "./SessionHistoryList";
 import {
@@ -471,31 +472,16 @@ function CatalogControls({
   }
   if (catalogState.status === "ready" && selectionRequired) {
     return (
-      <div>
-        <p className="chat-catalog-error" role="alert">
+      <div className="chat-model-picker-with-error">
+        <p className="visually-hidden" role="alert">
           The previous model selection is no longer available. Choose a registered model.
         </p>
-        <div className="chat-model-controls" aria-label="Agent model settings">
-          <div className="chat-model-field">
-            <label htmlFor="chat-model">Model</label>
-            <select
-              id="chat-model"
-              onChange={(event) => onModelChange(event.target.value)}
-              value=""
-            >
-              <option disabled value="">Select a model</option>
-              {catalogState.catalog.models.map((model) => (
-                <option key={model.key} value={model.key}>{model.display_name}</option>
-              ))}
-            </select>
-          </div>
-          <div className="chat-model-field">
-            <label htmlFor="chat-reasoning">Reasoning</label>
-            <select disabled id="chat-reasoning" value="">
-              <option value="">Select a model first</option>
-            </select>
-          </div>
-        </div>
+        <ModelPicker
+          catalog={catalogState.catalog}
+          onModelChange={onModelChange}
+          onReasoningChange={onReasoningChange}
+          selection={null}
+        />
       </div>
     );
   }
@@ -517,32 +503,12 @@ function CatalogControls({
     );
   }
   return (
-    <div className="chat-model-controls" aria-label="Agent model settings">
-      <div className="chat-model-field">
-        <label htmlFor="chat-model">Model</label>
-        <select
-          id="chat-model"
-          onChange={(event) => onModelChange(event.target.value)}
-          value={selection.model.key}
-        >
-          {catalogState.catalog.models.map((model) => (
-            <option key={model.key} value={model.key}>{model.display_name}</option>
-          ))}
-        </select>
-      </div>
-      <div className="chat-model-field">
-        <label htmlFor="chat-reasoning">Reasoning</label>
-        <select
-          id="chat-reasoning"
-          onChange={(event) => onReasoningChange(event.target.value)}
-          value={selection.reasoningEffort}
-        >
-          {selection.model.reasoning_efforts.map((effort) => (
-            <option key={effort} value={effort}>{reasoningEffortLabel(effort)}</option>
-          ))}
-        </select>
-      </div>
-    </div>
+    <ModelPicker
+      catalog={catalogState.catalog}
+      onModelChange={onModelChange}
+      onReasoningChange={onReasoningChange}
+      selection={selection}
+    />
   );
 }
 

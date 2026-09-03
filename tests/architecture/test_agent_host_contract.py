@@ -257,12 +257,16 @@ def test_browser_bundle_source_has_no_provider_or_mcp_credential_contract() -> N
 
 def test_research_chat_uses_copilotkit_public_headless_boundary() -> None:
     chat_page = (ROOT / "web" / "src" / "chat" / "ChatPage.tsx").read_text()
+    conversation = (
+        ROOT / "web" / "src" / "chat" / "ChatConversation.tsx"
+    ).read_text()
     provider = (
         ROOT / "web" / "src" / "chat" / "ResearchChatCopilotProvider.tsx"
     ).read_text()
 
-    assert 'from "@copilotkit/react-core/v2/headless"' in chat_page
-    assert 'from "@copilotkit/react-core/v2"' not in chat_page
+    assert 'from "./ChatConversation"' in chat_page
+    assert 'from "@copilotkit/react-core/v2/headless"' in conversation
+    assert 'from "@copilotkit/react-core/v2"' not in conversation
     assert 'from "@copilotkit/react-core/v2/context"' in provider
     assert 'from "@copilotkit/react-core/v2"' not in provider
     assert 'runtimeTransport: "rest"' in provider
