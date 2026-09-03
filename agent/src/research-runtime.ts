@@ -2,6 +2,7 @@ import { Agent } from "@mastra/core/agent";
 import { noopLogger } from "@mastra/core/logger";
 import { Mastra } from "@mastra/core/mastra";
 import { RequestContext } from "@mastra/core/request-context";
+import { askUserTool } from "@mastra/core/tools";
 import { Memory } from "@mastra/memory";
 import { PostgresStore } from "@mastra/pg";
 import {
@@ -22,6 +23,7 @@ import {
   readValidatedChatRun,
   type ValidatedChatRun,
 } from "./chat-request.js";
+import { ChatControlError, type CommandReceipt, type TimelinePage } from "./chat-control.js";
 import type { AgentSettings } from "./config.js";
 import {
   createAgentPool,
@@ -41,6 +43,7 @@ import {
   type McpRunFactory,
 } from "./mcp-run.js";
 import { ResearchMastraAgent } from "./research-mastra-agent.js";
+import { MastraTurnControl } from "./mastra-turn-control.js";
 import {
   RESEARCH_A2UI_TOOL_NAME,
   researchA2UITool,
@@ -48,6 +51,8 @@ import {
 import { createAgentReadiness } from "./readiness.js";
 import {
   ResearchSessionRepository,
+  ChatRunConflictError,
+  SessionActiveRunError,
   SessionNotFoundError,
   type RenamedSession,
   type SessionPage,
@@ -79,6 +84,11 @@ export type ResearchRuntime = Readonly<{
   close: () => Promise<void>;
   deleteSession: (threadId: string, researcher: VerifiedResearcher) => Promise<void>;
   handle: (request: Request, researcher: VerifiedResearcher) => Promise<Response>;
+  commandReceipt: (
+    threadId: string,
+    commandId: string,
+    researcher: VerifiedResearcher,
+  ) => Promise<CommandReceipt>;
   preference: (
     threadId: string,
     researcher: VerifiedResearcher,
@@ -98,6 +108,22 @@ export type ResearchRuntime = Readonly<{
     cursor: SessionCursor | undefined,
     researcher: VerifiedResearcher,
   ) => Promise<SessionPage>;
+  steer: (
+    threadId: string,
+    researcher: VerifiedResearcher,
+    input: import("./chat-control.js").SteerInput,
+  ) => Promise<CommandReceipt>;
+  stop: (
+    threadId: string,
+    researcher: VerifiedResearcher,
+    input: import("./chat-control.js").StopInput,
+  ) => Promise<CommandReceipt>;
+  timeline: (
+    threadId: string,
+    researcher: VerifiedResearcher,
+    before: number | undefined,
+    limit: number,
+  ) => Promise<TimelinePage>;
 }>;
 export type ResearchRuntimeDependencies = Readonly<{
   mcpRunFactory?: McpRunFactory;
@@ -210,8 +236,21 @@ export async function createResearchRuntime(
       const validated = isRun
         ? await readValidatedChatRun(request, settings.modelRegistry)
         : undefined;
-      const usageCapture = validated === undefined ? undefined : new RunUsageCapture();
-      const modelObservation = usageCapture === undefined ? undefined : new RunModelObservation(usageCapture);
+      const resumedExecution = validated?.command === "answer"
+        ? await repository.runExecution(
+            validated,
+            researcherId,
+          )
+        : undefined;
+      const usageCapture = validated === undefined
+        ? undefined
+        : new RunUsageCapture(resumedExecution?.usage);
+      const modelObservation = usageCapture === undefined
+        ? undefined
+        : new RunModelObservation(usageCapture, {
+            generatedBytes: resumedExecution?.generatedBytes,
+            steps: resumedExecution?.stepCount,
+          });
       const selection = validated === undefined
         ? modelRuntime.resolve(
             settings.modelRegistry.defaultModelKey,
@@ -220,15 +259,26 @@ export async function createResearchRuntime(
             )?.defaultReasoningEffort ?? "medium",
           )
         : modelRuntime.resolve(
-            validated.modelKey,
-            validated.reasoningEffort,
+            validated.command === "answer"
+              ? resumedExecution?.selection.modelKey ?? ""
+              : validated.modelKey,
+            validated.command === "answer"
+              ? resumedExecution?.selection.reasoningEffort ?? "medium"
+              : validated.reasoningEffort,
             modelObservation,
           );
-      const titleSelection = validated === undefined
+      if (
+        resumedExecution !== undefined
+        && selection.model.providerModelId !== resumedExecution.selection.providerModelId
+      ) {
+        throw new Error("RESUMED_MODEL_CAPABILITY_CHANGED");
+      }
+      const titleSelection = validated?.command !== "prompt"
         ? undefined
         : modelRuntime.resolve(validated.modelKey, validated.reasoningEffort);
       const requestContext = createRequestContext(selection);
       requestContext.set("modelObservation", modelObservation);
+      requestContext.set("continueIntent", validated?.command === "continue");
 
       if (validated === undefined) {
         return {
@@ -246,7 +296,7 @@ export async function createResearchRuntime(
       if (usageCapture === undefined || modelObservation === undefined) {
         throw new Error("RUN_USAGE_CAPTURE_NOT_CREATED");
       }
-      if (titleSelection === undefined) {
+      if (validated.command === "prompt" && titleSelection === undefined) {
         throw new Error("TITLE_MODEL_SELECTION_NOT_CREATED");
       }
 
@@ -270,6 +320,7 @@ export async function createResearchRuntime(
           traceId: agentTraceId(request.headers),
           titleGenerator,
           titleSelection,
+          selection,
           usageCapture,
         }),
       };
@@ -286,6 +337,7 @@ export async function createResearchRuntime(
     mode: "multi-route",
     runtime,
   });
+  const turnControl = new MastraTurnControl(agent, runner, repository);
   let closePromise: Promise<void> | undefined;
 
   return {
@@ -309,6 +361,11 @@ export async function createResearchRuntime(
         () => repository.deleteSession(threadId, researcher.researcher_id),
       );
     },
+    commandReceipt: (threadId, commandId, researcher) => repository.commandReceipt(
+      threadId,
+      researcher.researcher_id,
+      commandId,
+    ),
     handle: (request, researcher) => handleAuthenticatedRuntimeRequest({
       repository,
       request,
@@ -344,6 +401,22 @@ export async function createResearchRuntime(
       researcher.researcher_id,
       cursor,
     ),
+    steer: (threadId, researcher, input) => turnControl.steer(
+      threadId,
+      researcher.researcher_id,
+      input,
+    ),
+    stop: (threadId, researcher, input) => turnControl.stop(
+      threadId,
+      researcher.researcher_id,
+      input,
+    ),
+    timeline: (threadId, researcher, before, limit) => repository.timeline(
+      threadId,
+      researcher.researcher_id,
+      before,
+      limit,
+    ),
   };
 }
 
@@ -362,7 +435,8 @@ function createRunAgent(options: Readonly<{
   telemetry: AgentTelemetryWriter | undefined;
   traceId: string;
   titleGenerator: SessionTitleGenerator;
-  titleSelection: ResolvedModelSelection;
+  titleSelection?: ResolvedModelSelection;
+  selection: ResolvedModelSelection;
   usageCapture: RunUsageCapture;
 }>): ResearchMastraAgent {
   const agent = options.mastra.getAgent(RESEARCH_AGENT_ID);
@@ -387,10 +461,19 @@ function createRunAgent(options: Readonly<{
     researcherId: options.researcherId,
     run: options.run,
     runMaxWallMs: options.runMaxWallMs,
-    telemetry: createRunTelemetry({
-      modelKey: options.run.modelKey,
+    metrics: () => ({
+      generatedBytes: options.modelObservation.outputBytes,
+      steps: options.modelObservation.steps,
+    }),
+    selection: {
+      modelKey: options.selection.model.key,
       providerModelId: options.providerModelId,
-      reasoningEffort: options.run.reasoningEffort,
+      reasoningEffort: options.selection.effort,
+    },
+    telemetry: createRunTelemetry({
+      modelKey: options.selection.model.key,
+      providerModelId: options.providerModelId,
+      reasoningEffort: options.selection.effort,
       researcherId: options.researcherId,
       runId: options.run.input.runId,
       threadId: options.run.input.threadId,
@@ -399,13 +482,15 @@ function createRunAgent(options: Readonly<{
       metrics: () => ({ steps: options.modelObservation.steps, usage: options.usageCapture.value() }),
       write: options.telemetry,
     }),
-    scheduleTitle: () => options.titleGenerator.schedule({
-      languageModel: options.titleSelection.languageModel,
-      message: options.run.latestUserMessage.content,
-      providerOptions: options.titleSelection.providerOptions,
-      researcherId: options.researcherId,
-      threadId: options.run.input.threadId,
-    }),
+    scheduleTitle: options.run.command === "prompt" && options.titleSelection !== undefined
+      ? () => options.titleGenerator.schedule({
+          languageModel: options.titleSelection!.languageModel,
+          message: options.run.command === "prompt" ? options.run.userMessage.content : "",
+          providerOptions: options.titleSelection!.providerOptions,
+          researcherId: options.researcherId,
+          threadId: options.run.input.threadId,
+        })
+      : undefined,
     usage: () => options.usageCapture.value(),
   });
 }
@@ -437,10 +522,18 @@ async function handleAuthenticatedRuntimeRequest(options: Readonly<{
     }
     if (isRun) {
       const run = await readValidatedChatRun(options.request, options.settings.modelRegistry);
-      if (run.sessionMode === "existing") {
+      if (run.command !== "prompt" || run.sessionMode === "existing") {
         await assertOwnedThread(options.repository, run.input.threadId, options.researcher.researcher_id);
       } else {
         await assertRunnableThread(options.repository, run.input.threadId, options.researcher.researcher_id);
+      }
+      // Answer has no new Turn identity on which the generic runtime can
+      // report admission errors. Validate its exact suspended Turn and command
+      // identity at the product boundary so stale/conflicting answers retain
+      // the documented 409 contract. The durable mutation still occurs later
+      // in prepareRun under the Session transaction.
+      if (run.command === "answer") {
+        await options.repository.runExecution(run, options.researcher.researcher_id);
       }
     } else if (isConnect) {
       const threadId = await readThreadId(options.request);
@@ -460,6 +553,15 @@ async function handleAuthenticatedRuntimeRequest(options: Readonly<{
   } catch (error) {
     if (error instanceof ChatRequestError) {
       return safeJsonResponse(error.code, error.status);
+    }
+    if (error instanceof ChatControlError) {
+      return safeJsonResponse(error.code, error.status);
+    }
+    if (error instanceof ChatRunConflictError) {
+      return safeJsonResponse("CHAT_COMMAND_CONFLICT", 409);
+    }
+    if (error instanceof SessionActiveRunError) {
+      return safeJsonResponse("CHAT_SESSION_RUN_ACTIVE", 409);
     }
     if (error instanceof SessionNotFoundError) {
       return safeJsonResponse("CHAT_SESSION_NOT_FOUND", 404);
@@ -547,10 +649,14 @@ function mcpToolsFrom(context: RequestContext): DiscoveredMcpTools {
 
 function researchToolsFrom(context: RequestContext): DiscoveredMcpTools {
   const mcpTools = mcpToolsFrom(context);
-  if (Object.hasOwn(mcpTools, RESEARCH_A2UI_TOOL_NAME)) {
+  if (Object.hasOwn(mcpTools, RESEARCH_A2UI_TOOL_NAME) || Object.hasOwn(mcpTools, "ask_user")) {
     throw new Error("MCP_TOOL_NAME_RESERVED");
   }
-  return { ...mcpTools, [RESEARCH_A2UI_TOOL_NAME]: researchA2UITool };
+  return {
+    ...mcpTools,
+    ask_user: askUserTool,
+    [RESEARCH_A2UI_TOOL_NAME]: researchA2UITool,
+  };
 }
 
 function mcpRunFrom(context: RequestContext): import("./mcp-run.js").McpRun | undefined {
@@ -562,9 +668,12 @@ function researchAgentInstructions(context: RequestContext): string {
   const instructions = selectionFrom(context).model.providerAdapter === "scripted"
     ? `${RESEARCH_AGENT_INSTRUCTIONS}\nDeterministic privacy fixture: ${PRIVACY_CANARIES.system}.`
     : RESEARCH_AGENT_INSTRUCTIONS;
-  return agentRunId === undefined
+  const identified = agentRunId === undefined
     ? instructions
     : `${instructions}\nAgent Run identity: ${agentRunId}.`;
+  return context.get<string, boolean | undefined>("continueIntent") === true
+    ? `${identified}\nContinue the work the user explicitly stopped. Reconstruct the next useful step from authoritative memory; do not invent a new user message.`
+    : identified;
 }
 
 function safeJsonResponse(code: string, status: number): Response {

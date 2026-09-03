@@ -374,10 +374,11 @@ function session(
   overrides: Partial<AgentSessionSummary> = {},
 ): AgentSessionSummary {
   return {
-    active_run: false,
     activity_at: "2026-08-30T04:00:00.000000Z",
     created_at: "2026-08-29T04:00:00.000000Z",
+    current_turn: null,
     id: "00000000-0000-4000-8000-000000000001",
+    latest_turn: null,
     title: "Untitled",
     version: "2026-08-30T04:00:00.000Z",
     ...overrides,

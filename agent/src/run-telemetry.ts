@@ -18,7 +18,7 @@ type RunIdentity = Readonly<{
 
 export type AgentTelemetryEvent = Readonly<{
   component: "agent";
-  event: "agent_run_accepted" | "agent_tool_finished" | "agent_run_finished";
+  event: "agent_run_accepted" | "agent_tool_finished" | "agent_run_waiting" | "agent_run_finished";
   level: "INFO" | "WARN";
   timestamp: string;
   researcher_correlation: string | null;
@@ -31,7 +31,7 @@ export type AgentTelemetryEvent = Readonly<{
   token_usage: PersistedTokenUsage | Readonly<{ reported: false }>;
   step_count: number | null;
   duration_ms: number | null;
-  status: "running" | "completed" | "failed";
+  status: "running" | "waiting_for_user" | "completed" | "stopped" | "failed";
   retry_classification: string;
   error_category: AgentFailureCode | null;
 }>;
@@ -88,6 +88,10 @@ export function createRunTelemetry(identity: RunIdentity, options: Readonly<{
       accepted = true;
       emit("agent_run_accepted", "running", null);
     },
+    resumed() {
+      if (accepted || terminal) return;
+      accepted = true;
+    },
     toolFinished(failure: AgentFailureCode | null) {
       if (accepted && !terminal) emit("agent_tool_finished", failure === null ? "completed" : "failed", failure);
     },
@@ -95,6 +99,16 @@ export function createRunTelemetry(identity: RunIdentity, options: Readonly<{
       if (!accepted || terminal) return;
       terminal = true;
       emit("agent_run_finished", failure === null ? "completed" : "failed", failure);
+    },
+    stopped() {
+      if (!accepted || terminal) return;
+      terminal = true;
+      emit("agent_run_finished", "stopped", null);
+    },
+    waiting() {
+      if (!accepted || terminal) return;
+      terminal = true;
+      emit("agent_run_waiting", "waiting_for_user", null);
     },
   };
 }

@@ -1,4 +1,5 @@
 import { isUuid } from "../uuid";
+import { decodeChatTurn, type ChatTurn } from "./chatProtocol";
 
 const SESSION_PAGE_SIZE = 30;
 const MAX_TITLE_CHARACTERS = 80;
@@ -9,10 +10,11 @@ const SESSION_TITLE_DEFAULT_IGNORABLE = /\p{Default_Ignorable_Code_Point}/u;
 const SESSION_TITLE_VISIBLE_BASE = /[\p{L}\p{N}\p{S}]/u;
 
 export type AgentSessionSummary = Readonly<{
-  active_run: boolean;
   activity_at: string;
   created_at: string;
+  current_turn: ChatTurn | null;
   id: string;
+  latest_turn: ChatTurn | null;
   title: string;
   version: string;
 }>;
@@ -274,14 +276,14 @@ export function decodeAgentSessionPage(value: unknown): AgentSessionPage {
 export function decodeAgentSessionSummary(value: unknown): AgentSessionSummary {
   if (
     !isExactRecord(value, [
-      "active_run",
       "activity_at",
       "created_at",
+      "current_turn",
       "id",
+      "latest_turn",
       "title",
       "version",
     ])
-    || typeof value.active_run !== "boolean"
     || typeof value.activity_at !== "string"
     || !isExactDatabaseUtc(value.activity_at)
     || typeof value.created_at !== "string"
@@ -297,11 +299,24 @@ export function decodeAgentSessionSummary(value: unknown): AgentSessionSummary {
   ) {
     throw new AgentSessionInvalidError();
   }
+  let currentTurn: ChatTurn | null;
+  let latestTurn: ChatTurn | null;
+  try {
+    currentTurn = decodeChatTurn(value.current_turn);
+    latestTurn = decodeChatTurn(value.latest_turn);
+  } catch {
+    throw new AgentSessionInvalidError();
+  }
+  if (
+    (currentTurn !== null && !["running", "waiting_for_user", "stopping"].includes(currentTurn.status))
+    || (currentTurn !== null && currentTurn.id !== latestTurn?.id)
+  ) throw new AgentSessionInvalidError();
   return {
-    active_run: value.active_run,
     activity_at: value.activity_at,
     created_at: value.created_at,
+    current_turn: currentTurn,
     id: value.id,
+    latest_turn: latestTurn,
     title: value.title,
     version: value.version,
   };

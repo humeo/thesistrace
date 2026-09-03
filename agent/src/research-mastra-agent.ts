@@ -22,6 +22,7 @@ import {
   BrowserEventProjector,
 } from "./browser-message-safety.js";
 import type { ValidatedChatRun } from "./chat-request.js";
+import { projectAskUserInterrupt } from "./chat-control.js";
 import type { McpRun } from "./mcp-run.js";
 import type { ResearchSessionRepository } from "./session-repository.js";
 import type { PersistedTokenUsage } from "./usage-capture.js";
@@ -43,7 +44,9 @@ type ResearchExecutionContext = Readonly<{
   requestContext: import("@mastra/core/request-context").RequestContext;
   run: ValidatedChatRun;
   runMaxWallMs: number;
-  scheduleTitle: () => Promise<void>;
+  scheduleTitle?: () => Promise<void>;
+  selection: RunSelection;
+  metrics: () => Readonly<{ generatedBytes: number; steps: number }>;
   telemetry: RunTelemetry;
   usage: () => PersistedTokenUsage | undefined;
 }>;
@@ -117,7 +120,7 @@ export class ResearchMastraAgent extends MastraAgent {
         return mcpClosePromise;
       };
       const scheduleTitle = async () => {
-        if (!shouldScheduleTitle || titleScheduled) return;
+        if (!shouldScheduleTitle || titleScheduled || this.execution.scheduleTitle === undefined) return;
         titleScheduled = true;
         try {
           await this.execution.scheduleTitle();
@@ -134,8 +137,13 @@ export class ResearchMastraAgent extends MastraAgent {
           researcherId: this.execution.researcherId,
           run: this.execution.run,
         });
-        if (prepared.kind === "new") this.execution.telemetry.accepted();
-        shouldScheduleTitle = prepared.kind === "new" && prepared.generateTitle;
+        if (prepared.kind === "new") {
+          if (prepared.execution === "start") this.execution.telemetry.accepted();
+          else this.execution.telemetry.resumed();
+        }
+        shouldScheduleTitle = prepared.kind === "new"
+          && this.execution.run.command === "prompt"
+          && prepared.generateTitle;
         // The first accepted message owns title generation, but the title is
         // not part of the Agent Run lifecycle. Start it once admission is
         // durable and never hold RUN_FINISHED/RUN_ERROR or Runner cleanup open
@@ -151,19 +159,26 @@ export class ResearchMastraAgent extends MastraAgent {
       }).pipe(
         concatMap((prepared) => {
           if (prepared.kind === "duplicate") {
-            return replayDuplicate(input, prepared.durableMessages, prepared.status, prepared.terminalErrorCode, prepared.selection);
+            return replayDuplicate(
+              input,
+              prepared.durableMessages,
+              prepared.status,
+              prepared.terminalErrorCode,
+              prepared.selection,
+              prepared.question,
+            );
           }
           ownsRun = true;
           return concat(
+            // AG-UI requires every HTTP Run stream, including a Mastra
+            // resumeStream request, to open with RUN_STARTED. Answer keeps
+            // the exact same durable Turn identity; this is a transport frame,
+            // not a second agent_run or a reset of started_at.
             of<BaseEvent>({
               runId: input.runId,
               threadId: input.threadId,
               type: EventType.RUN_STARTED,
-              selection: {
-                modelKey: this.execution.run.modelKey,
-                providerModelId: this.execution.providerModelId,
-                reasoningEffort: this.execution.run.reasoningEffort,
-              },
+              selection: this.execution.selection,
             }),
             defer(async () => {
               mcpRunPromise = this.execution.mcpRun();
@@ -175,15 +190,13 @@ export class ResearchMastraAgent extends MastraAgent {
               activeMcpRun = mcpRun;
               this.execution.requestContext.set("mcpRun", mcpRun);
               this.execution.requestContext.set("mcpTools", mcpRun.tools);
-              return {
-                ...this.execution.run.input,
-                // prepareRun already compared the browser transcript with the
-                // server projection. Pass only the new user message so Mastra
-                // recalls prior Tool arguments/results from authoritative
-                // Memory; browser-safe synthetic Tool messages never re-enter
-                // the model or persistence path.
-                messages: [this.execution.run.latestUserMessage],
-              };
+              if (this.execution.run.command === "prompt") {
+                return {
+                  ...this.execution.run.input,
+                  messages: [this.execution.run.userMessage],
+                };
+              }
+              return { ...this.execution.run.input, messages: [] };
             }).pipe(
               concatMap((authoritativeInput) => this.runBridge(authoritativeInput)),
               // The durable acceptance event above is the sole RUN_STARTED.
@@ -314,10 +327,29 @@ export class ResearchMastraAgent extends MastraAgent {
       return this.persistFailure(runId, closeMcp, failure ?? "INTERNAL_FAILURE");
     }
     if (event.type !== EventType.RUN_FINISHED) return of(event);
+    const question = projectAskUserInterrupt(event, runId);
+    if (question !== null) {
+      const metrics = this.execution.metrics();
+      return from(
+        this.execution.repository
+          .markWaiting(
+            runId,
+            this.execution.usage(),
+            metrics.steps,
+            metrics.generatedBytes,
+            question,
+          )
+          .then(() => this.execution.telemetry.waiting())
+          .then(closeMcp),
+      ).pipe(map(() => event));
+    }
+    const metrics = this.execution.metrics();
     return from(
       this.execution.repository
-        .markCompleted(runId, this.execution.usage())
-        .then(() => this.execution.telemetry.finished(null))
+        .markCompleted(runId, this.execution.usage(), metrics.steps, metrics.generatedBytes)
+        .then((status) => status === "stopped"
+          ? this.execution.telemetry.stopped()
+          : this.execution.telemetry.finished(null))
         .then(closeMcp),
     ).pipe(
       map(() => event),
@@ -342,11 +374,20 @@ export class ResearchMastraAgent extends MastraAgent {
     toolCallId?: string,
   ): Promise<void> {
     const closePromise = closeMcp();
+    let stopped = false;
     try {
-      await Promise.all([
-        this.execution.repository.markFailed(runId, this.execution.usage(), code),
+      const metrics = this.execution.metrics();
+      const [status] = await Promise.all([
+        this.execution.repository.markFailed(
+          runId,
+          this.execution.usage(),
+          code,
+          metrics.steps,
+          metrics.generatedBytes,
+        ),
         closePromise,
       ]);
+      stopped = status === "stopped";
       if (toolCallId !== undefined) {
         await this.execution.repository.awaitDurableToolResult(
           this.execution.run.input.threadId,
@@ -358,7 +399,8 @@ export class ResearchMastraAgent extends MastraAgent {
     } catch {
       await closePromise;
     } finally {
-      this.execution.telemetry.finished(code);
+      if (stopped) this.execution.telemetry.stopped();
+      else this.execution.telemetry.finished(code);
     }
   }
 }
@@ -366,9 +408,10 @@ export class ResearchMastraAgent extends MastraAgent {
 function replayDuplicate(
   input: RunAgentInput,
   messages: readonly import("@ag-ui/core").Message[],
-  status: "completed" | "failed" | "running",
+  status: import("./chat-control.js").TurnStatus,
   terminalErrorCode: string | null,
   selection: RunSelection,
+  question: import("./chat-control.js").PendingQuestion | null,
 ): Observable<BaseEvent> {
   const events: BaseEvent[] = [
     {
@@ -382,14 +425,44 @@ function replayDuplicate(
       messages: [...messages],
     },
   ];
-  if (status === "completed") {
+  if (status === "completed" || status === "stopped") {
     events.push({
       type: EventType.RUN_FINISHED,
       threadId: input.threadId,
       runId: input.runId,
     });
+  } else if (status === "waiting_for_user" && question !== null) {
+    events.push({
+      type: EventType.RUN_FINISHED,
+      threadId: input.threadId,
+      runId: input.runId,
+      outcome: {
+        type: "interrupt",
+        interrupts: [{
+          id: question.interruptId,
+          metadata: {
+            mastra: {
+              runId: input.runId,
+              suspendPayload: {
+                options: question.options ?? undefined,
+                question: question.question,
+                selectionMode: question.selectionMode === "free_text"
+                  ? undefined
+                  : question.selectionMode,
+              },
+              toolName: "ask_user",
+              type: "mastra_suspend",
+            },
+          },
+          reason: "mastra:tool_suspend",
+          toolCallId: question.toolCallId,
+        }],
+      },
+    });
   } else {
-    events.push(runFailureEvent(terminalErrorCode));
+    events.push(runFailureEvent(
+      status === "failed" ? terminalErrorCode : "AGENT_RUN_CONFLICT",
+    ));
   }
   return from(events);
 }

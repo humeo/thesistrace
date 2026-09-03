@@ -7,10 +7,11 @@ import { watchSelectedSession } from "./sessionSynchronization";
 
 const threadId = "00000000-0000-4000-8000-000000009001";
 const session: AgentSessionSummary = {
-  active_run: false,
   activity_at: "2026-08-30T04:00:00.000000Z",
   created_at: "2026-08-30T04:00:00.000000Z",
+  current_turn: null,
   id: threadId,
+  latest_turn: null,
   title: "Research comparison",
   version: "2026-08-30T04:00:00.000Z",
 };
@@ -41,10 +42,20 @@ describe("selected Chat synchronization", () => {
 
     await vi.advanceTimersByTimeAsync(2_000);
     expect(synchronize).toHaveBeenCalledTimes(1);
-    current = { ...session, active_run: true, activity_at: "2026-08-30T04:00:01.000000Z" };
+    const activeTurn = {
+      id: "00000000-0000-4000-8000-000000009002",
+      kind: "prompt" as const,
+      model_key: "primary",
+      question: null,
+      reasoning_effort: "medium",
+      started_at: "2026-08-30T04:00:01.000000Z",
+      status: "running" as const,
+      terminal_error_code: null,
+    };
+    current = { ...session, current_turn: activeTurn, latest_turn: activeTurn, activity_at: "2026-08-30T04:00:01.000000Z" };
     await vi.advanceTimersByTimeAsync(2_000);
     expect(synchronize).toHaveBeenLastCalledWith(current);
-    current = { ...current, active_run: false };
+    current = { ...current, current_turn: null, latest_turn: { ...activeTurn, status: "completed" as const } };
     await vi.advanceTimersByTimeAsync(2_000);
     expect(synchronize).toHaveBeenCalledTimes(3);
     expect(fetch.mock.calls.every((call) => String(call[0]).endsWith(`/sessions/${threadId}`))).toBe(true);

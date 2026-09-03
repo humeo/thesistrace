@@ -48,6 +48,7 @@ export {
 export type ScriptedLanguageModelMode = "reply" | "throw-before-stream";
 export const SCRIPTED_FAILURE_MODEL_ID = "scripted-failure-v1";
 export const SCRIPTED_TOOL_PROMPT = "[scripted-tool-turn] Inspect the available research context.";
+export const SCRIPTED_ASK_USER_PROMPT = "[scripted-ask-user] Ask which objective should lead.";
 export const SCRIPTED_DISCOVERY_PROMPT = "List the authenticated capabilities available in this Chat.";
 export const SCRIPTED_INVALID_A2UI_PROMPT =
   "[scripted-invalid-a2ui] Attempt one unsafe research surface.";
@@ -223,6 +224,8 @@ function scriptedResponse(options: LanguageModelV3CallOptions): ScriptedResponse
   if (batch !== null) return responseFromResearchDecision(batch);
   const track = scriptedDailyTrackDecision(options);
   if (track !== null) return responseFromResearchDecision(track);
+  const askUser = scriptedAskUser(options);
+  if (askUser !== null) return askUser;
   if (latestUserText(options)?.text === SCRIPTED_DISCOVERY_PROMPT) {
     return responseFromResearchDecision({
       kind: "text",
@@ -248,6 +251,34 @@ function scriptedResponse(options: LanguageModelV3CallOptions): ScriptedResponse
       : responseChunks,
     text: selectedText,
     tool: null,
+  };
+}
+
+function scriptedAskUser(options: LanguageModelV3CallOptions): ScriptedResponse | null {
+  const promptIndex = latestExactUserPromptIndex(options, SCRIPTED_ASK_USER_PROMPT);
+  if (promptIndex < 0) return null;
+  const answered = options.prompt.slice(promptIndex + 1).some((message) => (
+    message.role === "tool"
+    && message.content.some((part) => part.type === "tool-result" && part.toolName === "ask_user")
+  ));
+  if (answered) {
+    const text = "I will lead with quality and keep risk as a constraint.";
+    return { chunks: [text], text, tool: null };
+  }
+  return {
+    chunks: [],
+    text: "",
+    tool: {
+      input: {
+        options: [
+          { description: "Prioritize durable fundamentals", label: "Quality" },
+          { description: "Prioritize drawdown control", label: "Risk" },
+        ],
+        question: "Which objective should lead?",
+        selectionMode: "single_select",
+      },
+      name: "ask_user",
+    },
   };
 }
 

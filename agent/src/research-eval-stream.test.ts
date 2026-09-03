@@ -106,6 +106,23 @@ describe("real-model evaluator AG-UI transport", () => {
     ]), frames.at(-1)])));
     expect(researchEvalConversationMeetsOutcome({ outcome: "explained-result" }, [turn], { runId: "run_0123456789abcdef0123" })).toBe(false);
   });
+  it("returns only the opaque interrupt identity needed to resume an eval Turn", async () => {
+    const interruptId = `${runId}::ask-user`;
+    const turn = await observeResearchEvalTurn(response(encode([
+      frames[0],
+      {
+        outcome: {
+          interrupts: [{ id: interruptId, metadata: { private: "not projected" }, reason: "mastra:tool_suspend", toolCallId: "ask-user" }],
+          type: "interrupt",
+        },
+        runId,
+        threadId,
+        type: "RUN_FINISHED",
+      },
+    ])));
+    expect(turn).toMatchObject({ interrupt: { id: interruptId }, terminal: true });
+    expect(turn.interrupt).toEqual({ id: interruptId });
+  });
   it("retains the terminal event after a case misses its quality deadline", async () => {
     vi.useFakeTimers();
     const observed: Array<"completed" | "failed"> = [];

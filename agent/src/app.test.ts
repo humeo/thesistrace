@@ -29,6 +29,13 @@ function dependencies(
   overrides: Partial<AgentAppDependencies> = {},
 ): AgentAppDependencies {
   return {
+    commandReceipt: vi.fn(async (_threadId, commandId) => ({
+      commandId,
+      errorCode: null,
+      kind: "steer" as const,
+      status: "accepted" as const,
+      turnId: "00000000-0000-4000-8000-000000000222",
+    })),
     deleteSession: vi.fn(async () => undefined),
     handleRuntime: vi.fn(async () => new Response("runtime-response")),
     modelCatalog: catalog,
@@ -39,10 +46,11 @@ function dependencies(
       version: "2026-08-30T02:03:05.000Z",
     })),
     session: vi.fn(async (threadId) => ({
-      activeRun: false,
       activityAt: "2026-08-30T02:03:04.000000Z",
       createdAt: "2026-08-29T02:03:04.000000Z",
+      currentTurn: null,
       id: threadId,
+      latestTurn: null,
       title: "Quality Alpha",
       version: "2026-08-30T02:03:05.000Z",
     })),
@@ -50,6 +58,21 @@ function dependencies(
       nextCursor: null,
       sessions: [],
     })),
+    steer: vi.fn(async (_threadId, _researcher, input) => ({
+      commandId: input.inputId,
+      errorCode: null,
+      kind: "steer" as const,
+      status: "accepted" as const,
+      turnId: input.expectedTurnId,
+    })),
+    stop: vi.fn(async (_threadId, _researcher, input) => ({
+      commandId: input.commandId,
+      errorCode: null,
+      kind: "stop" as const,
+      status: "accepted" as const,
+      turnId: input.expectedTurnId,
+    })),
+    timeline: vi.fn(async () => ({ entries: [], nextCursor: null })),
     sessionPreference: vi.fn(async () => ({
       model_key: "research-primary",
       reasoning_effort: "medium",
@@ -184,6 +207,20 @@ describe("Agent Host HTTP boundary", () => {
     expect(await hidden.json()).toEqual({ code: "CHAT_SESSION_NOT_FOUND" });
   });
 
+  it("distinguishes product storage failure from runtime service availability", async () => {
+    const response = await createAgentApp(dependencies({
+      session: vi.fn(async () => {
+        throw new Error("private database diagnostic");
+      }),
+    })).request(
+      "http://agent.test/api/agent/sessions/00000000-0000-4000-8000-000000000222",
+      { headers: { origin: "http://agent.test" } },
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ code: "CHAT_STORAGE_FAILURE" });
+  });
+
   it("lists one bounded owner-scoped Session page with an opaque cursor", async () => {
     const nextCursor = encodeSessionCursor({
       activityAt: "2026-08-29T01:02:03.000000Z",
@@ -192,10 +229,11 @@ describe("Agent Host HTTP boundary", () => {
     const sessions = vi.fn(async () => ({
       nextCursor,
       sessions: [{
-        activeRun: false,
         activityAt: "2026-08-30T01:02:03.000000Z",
         createdAt: "2026-08-29T01:02:03.000000Z",
+        currentTurn: null,
         id: "00000000-0000-4000-8000-000000000222",
+        latestTurn: null,
         title: "Quality Alpha",
         version: "2026-08-30T01:02:04.000Z",
       }],
@@ -209,10 +247,11 @@ describe("Agent Host HTTP boundary", () => {
     expect(await response.json()).toEqual({
       next_cursor: nextCursor,
       sessions: [{
-        active_run: false,
         activity_at: "2026-08-30T01:02:03.000000Z",
         created_at: "2026-08-29T01:02:03.000000Z",
+        current_turn: null,
         id: "00000000-0000-4000-8000-000000000222",
+        latest_turn: null,
         title: "Quality Alpha",
         version: "2026-08-30T01:02:04.000Z",
       }],
@@ -238,10 +277,11 @@ describe("Agent Host HTTP boundary", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      active_run: false,
       activity_at: "2026-08-30T02:03:04.000000Z",
       created_at: "2026-08-29T02:03:04.000000Z",
+      current_turn: null,
       id: threadId,
+      latest_turn: null,
       title: "Quality Alpha",
       version: "2026-08-30T02:03:05.000Z",
     });

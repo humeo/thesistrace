@@ -177,7 +177,7 @@ case "$command" in
       -H 'Content-Type: application/json' \
       -H 'Cookie: thesistrace.session_token=image-smoke-session' \
       -H 'Origin: https://thesistrace.test' \
-      --data '{"threadId":"00000000-0000-4000-8000-000000000201","runId":"00000000-0000-4000-8000-000000000301","messages":[{"id":"00000000-0000-4000-8000-000000000401","role":"user","content":"Inspect the available research context."}],"state":{},"tools":[],"context":[],"forwardedProps":{"thesistrace":{"modelKey":"gpt-5.6-luna","reasoningEffort":"high","sessionMode":"new"}}}' \
+      --data '{"threadId":"00000000-0000-4000-8000-000000000201","runId":"00000000-0000-4000-8000-000000000301","messages":[{"id":"00000000-0000-4000-8000-000000000401","role":"user","content":"Inspect the available research context."}],"state":{},"tools":[],"context":[],"forwardedProps":{"thesistrace":{"command":"prompt","modelKey":"gpt-5.6-luna","reasoningEffort":"high","sessionMode":"new"}}}' \
       "http://127.0.0.1:$agent_port/api/agent/copilotkit/agent/research/run" \
       >"$evidence_root/run.sse"
     grep -F '"type":"RUN_STARTED"' "$evidence_root/run.sse" >/dev/null

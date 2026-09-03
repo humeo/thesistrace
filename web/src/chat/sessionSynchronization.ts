@@ -27,7 +27,8 @@ export async function watchSelectedSession(options: Readonly<{
       if (session !== undefined && !options.isStreaming() && (
         observed === undefined
         || observed.activity_at !== session.activity_at
-        || observed.active_run !== session.active_run
+        || observed.current_turn?.id !== session.current_turn?.id
+        || observed.current_turn?.status !== session.current_turn?.status
       )) {
         observed = session;
         await options.synchronize(session);

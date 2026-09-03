@@ -59,7 +59,6 @@ const { MAX_ACTIVE_AGENT_RUNS } = durableRuntime;
 const { MAX_CHAT_MESSAGE_BYTES } = chatRequestRuntime;
 const {
   RESEARCH_EVAL_TURN_OBSERVATION_MS,
-  observeResearchEvalStream: readEvents,
   requestResearchEvalTurn,
   researchEvalConversationMeetsOutcome,
   researchEvalToolRetryCount,
@@ -183,16 +182,27 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
         const researcher = await provision(origin, `${testCase.id}-${repetition}`);
         fixture = await prepareFixture(researcher, testCase, corpus);
         caseStarted = performance.now();
-        let history = [];
+        let pendingInterrupt = null;
+        let currentRunId = null;
         for (let turn = 0; turn < testCase.messages.length; turn++) {
-          const runId = randomUUID();
-          runIds.push(runId);
           const text = testCase.messages[turn].replaceAll("{{run_id}}", fixture.runId ?? "").replaceAll("{{track_id}}", fixture.trackId ?? "");
-          const input = {
+          const answering = pendingInterrupt !== null;
+          const runId = answering ? currentRunId : randomUUID();
+          if (runId === null) throw new ResearchEvalError("PROTOCOL_INVALID");
+          const inputId = randomUUID();
+          const input = answering ? {
+            threadId, runId, state: {}, context: [], tools: [], messages: [],
+            resume: [{ interruptId: pendingInterrupt.id, payload: text, status: "resolved" }],
+            forwardedProps: { thesistrace: { command: "answer", inputId, interruptId: pendingInterrupt.id } },
+          } : {
             threadId, runId, state: {}, context: [], tools: [],
-            messages: [...history, { id: randomUUID(), role: "user", content: text }],
-            forwardedProps: { thesistrace: { modelKey: candidate.key, reasoningEffort: effort, sessionMode: turn === 0 ? "new" : "existing" } },
+            messages: [{ id: inputId, role: "user", content: text }],
+            forwardedProps: { thesistrace: { command: "prompt", modelKey: candidate.key, reasoningEffort: effort, sessionMode: turn === 0 ? "new" : "existing" } },
           };
+          if (!answering) {
+            currentRunId = runId;
+            runIds.push(runId);
+          }
           const stream = await requestResearchEvalTurn((timeout) => request(researcher, "/api/agent/copilotkit/agent/research/run", {
             method: "POST", body: JSON.stringify(input),
           }, timeout), (call) => {
@@ -201,14 +211,18 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
               && testCase.fixture === "paused-research" && paused.has("research-worker")) controlWorker("unpause", "research-worker");
           });
           streams.push(stream);
-          runs.push(await terminalObservation(runId, candidate, effort));
-          if (usageCostUsd(runs.at(-1).token_usage, candidate.pricing) === null) {
+          pendingInterrupt = stream.interrupt;
+          if (pendingInterrupt === null) {
+            runs.push(await terminalObservation(runId, candidate, effort));
+            currentRunId = null;
+          }
+          if (runs.length > 0 && usageCostUsd(runs.at(-1).token_usage, candidate.pricing) === null) {
             // Stop paid work, but retain the independently observed failure.
             // Missing accounting is not itself a transport failure.
             break;
           }
           if (stream.failure !== null) break;
-          if (turn + 1 < testCase.messages.length) history = await historyFor(researcher, input);
+          if (pendingInterrupt !== null && turn + 1 >= testCase.messages.length) break;
         }
         artifact = await checkArtifact(researcher, testCase, fixture, corpus, threadId);
         fixtureFailed = artifact.workerFailure === true;
@@ -239,7 +253,9 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
       const checks = {
         artifact: artifact.passed, required_tools: testCase.required_tools.every((name) => namedCalls.some((call) => call.name === name && call.outcome?.outcome === "completed")),
         forbidden_tools: forbidden === 0 && invalid === 0, ownership, conversation,
-        terminal: !transportFailed && runs.length === testCase.messages.length && runs.every((run) => run.status === "completed"),
+        terminal: !transportFailed && pendingInterrupt === null
+          && runs.length === runIds.length && runs.length > 0
+          && runs.every((run) => run.status === "completed"),
         within_time: duration <= testCase.max_duration_ms,
         within_cost: cost !== null && cost + titleReserve <= testCase.max_cost_usd,
         usage_complete: usageComplete,
@@ -363,14 +379,6 @@ async function prepareFixture(researcher, testCase, corpus) {
   return fixture;
 }
 
-async function historyFor(researcher, input) {
-  let history;
-  await readEvents(await request(researcher, "/api/agent/copilotkit/agent/research/connect", { method: "POST", body: JSON.stringify(input) }), (event) => {
-    if (event.type === "MESSAGES_SNAPSHOT") history = event.messages;
-  });
-  if (!Array.isArray(history)) throw new ResearchEvalError("PROTOCOL_INVALID");
-  return history;
-}
 function logEvents() {
   const result = [];
   const logs = spawnSync("docker", ["logs", `${project}-agent-1`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 10000, maxBuffer: 32 * 1024 * 1024 });

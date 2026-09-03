@@ -88,7 +88,7 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
     request_ids: [expect.stringMatching(/^agent_[a-f0-9]{32}_batch_v1$/)],
   });
   await expect(page.getByRole("button", { name: /^(Cancel|Confirm|Stop)( Batch)?$/ })).toHaveCount(0);
-  const transcript = page.getByRole("region", { name: "Conversation", exact: true });
+  const transcript = page.getByRole("log", { name: "Conversation timeline", exact: true });
   await expect(transcript).not.toContainText(/manifest|checkpoint|object_key|lease_owner/);
   expect(browserCoreWrites).toEqual([]);
   const durableUrl = page.url();
@@ -140,7 +140,7 @@ test("Chat Batch response loss replays the same admission and child identities",
   setProxyMode("mcp-fault-proxy", 8150, "tool-call", "disconnect-submit");
   try {
     await page.getByRole("textbox", { name: "Message", exact: true }).fill(factorPrompt);
-    await page.getByRole("button", { name: "Send message" }).click();
+    await page.getByRole("button", { name: "Send" }).click();
     await expect(runStatus(page)).toHaveText("Run failed", { timeout: 30_000 });
     await expect(page.getByRole("article", { name: "Tool submit_research_batch: Failed" })).toBeVisible();
     expect(Number(proxyState("mcp-fault-proxy", 8150).disconnected_submit_responses)).toBeGreaterThanOrEqual(1);
@@ -161,11 +161,11 @@ test("Chat Batch response loss replays the same admission and child identities",
   }
 });
 
-function runStatus(page: Page) { return page.locator(".chat-composer-status-row").getByRole("status"); }
+function runStatus(page: Page) { return page.locator("[data-chat-status]"); }
 
 async function send(page: Page, prompt: string): Promise<void> {
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
   await expect(runStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
 }
 

@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
-import { agentFailure } from "../../contracts/agent-failure.mjs";
 import { expect, test, testProjectName } from "./auth-fixture";
 import { proxyState } from "./fault-proxy";
 import { controlWorker } from "./research-run-control";
@@ -26,18 +25,13 @@ for (const [code, prompt] of Object.entries(SCRIPTED_FAILURE_PROMPTS)) {
     const started = performance.now();
     await page.goto("/chat");
     await send(page, prompt);
-    const error = page.locator(`.chat-run-error[data-failure-code="${code}"]`);
+    const error = page.locator(`.chat-turn-outcome-failed[data-failure-code="${code}"]`);
     await expect(error).toBeVisible();
     await expect(status(page)).toHaveText("Run failed");
-    await expect(page.locator(".chat-run-selection")).toHaveAttribute("data-run-model", "scripted-research");
-    await expect(page.locator(".chat-run-selection")).toBeVisible();
     if (code === "PROVIDER_TIMEOUT") {
-      const sizes = await error.locator("button, a").evaluateAll((elements) => elements.map((element) => {
-        const { width, height } = element.getBoundingClientRect();
-        return { width, height };
-      }));
-      expect(sizes.length).toBeGreaterThan(0);
-      for (const size of sizes) { expect(size.width).toBeGreaterThanOrEqual(44); expect(size.height).toBeGreaterThanOrEqual(44); }
+      const actionSize = await page.getByRole("button", { name: "Send", exact: true }).boundingBox();
+      expect(actionSize?.width).toBeGreaterThanOrEqual(44);
+      expect(actionSize?.height).toBeGreaterThanOrEqual(44);
       await testInfo.attach("mobile-bounded-failure", { contentType: "image/png", body: await page.screenshot() });
     }
     const runId = await page.locator(".chat-main").getAttribute("data-agent-run-id");
@@ -51,24 +45,13 @@ for (const [code, prompt] of Object.entries(SCRIPTED_FAILURE_PROMPTS)) {
     await expect(page.locator(".chat-message-user")).toHaveCount(1);
     expect(requests).toHaveLength(1);
     const model = page.getByLabel("Model", { exact: true });
-    const choose = error.getByRole("button", { name: "Choose model" });
-    if (await choose.count()) { await choose.press("Enter"); await expect(model).toBeFocused(); }
     await model.selectOption("scripted-deep-research");
     await expect(page.getByLabel("Reasoning", { exact: true })).toHaveValue("high");
-    await expect(page.locator(".chat-run-selection")).toHaveAttribute("data-run-model", "scripted-research");
-    await expect(page.locator(".chat-run-selection")).toBeVisible();
     expect(requests).toHaveLength(1);
-    if (agentFailure(code).action === "retry") {
-      await error.getByRole("button", { name: "Retry with selected model" }).press("Enter");
-      await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeFocused();
-    } else {
-      const revise = error.getByRole("button", { name: "Revise message" });
-      if (await revise.count()) { await revise.press("Enter"); await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeFocused(); }
-      await send(page, "Continue with a testable Alpha idea.");
-    }
-    await expect(error).toHaveCount(0);
+    await send(page, "Continue with a testable Alpha idea.");
+    await expect(status(page)).toHaveText("Run complete");
+    await expect(error).toHaveCount(1);
     await expect(page.locator(".chat-message-user")).toHaveCount(2);
-    await expect(page.locator(".chat-run-selection")).toHaveAttribute("data-run-model", "scripted-deep-research");
     await expect(page.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled();
     expect(requests).toHaveLength(2);
     expect(new Set(requests.map((request) => request.run_id)).size).toBe(2);
@@ -93,7 +76,7 @@ test("Chat provider failure preserves admitted Core work and completed Tools wit
     controlWorker("pause"); paused = true;
     await page.goto("/chat");
     await send(page, SCRIPTED_FAILURE_AFTER_ADMISSION_PROMPT);
-    await expect(page.locator('.chat-run-error[data-failure-code="PROVIDER_TIMEOUT"]')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.chat-turn-outcome-failed[data-failure-code="PROVIDER_TIMEOUT"]')).toBeVisible({ timeout: 30_000 });
     const submitted = page.getByRole("article", { name: "Tool submit_research_run: Completed", exact: true });
     await expect(submitted).toBeVisible();
     const href = await submitted.getByRole("link").getAttribute("href");
@@ -101,7 +84,7 @@ test("Chat provider failure preserves admitted Core work and completed Tools wit
     const coreRunId = href!.split("/").at(-1)!;
     await page.reload();
     await expect(submitted).toContainText(coreRunId);
-    await expect(page.locator('.chat-run-error[data-failure-code="PROVIDER_TIMEOUT"]')).toBeVisible();
+    await expect(page.locator('.chat-turn-outcome-failed[data-failure-code="PROVIDER_TIMEOUT"]')).toBeVisible();
     expect(requests).toHaveLength(1);
     const before = databaseFacts(researcher.id);
     expect(before).toMatchObject({ agent_runs: 1, user_messages: 1, active_runs: 0, core_runs: 1 });
@@ -129,12 +112,9 @@ test("Chat missing login fails before token exchange or durable acceptance", asy
   const before = proxyState("auth-exchange-proxy", 8250).exchange_requests;
   await page.getByRole("textbox", { name: "Message", exact: true }).fill("Do not admit this unauthenticated turn.");
   await page.context().clearCookies();
-  await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.locator('.chat-run-error[data-failure-code="AUTHENTICATION_REQUIRED"]')).toBeVisible();
-  await expect(page.getByRole("link", { name: "Sign in", exact: true })).toBeVisible();
-  const signInSize = await page.getByRole("link", { name: "Sign in", exact: true }).boundingBox();
-  expect(signInSize!.width).toBeGreaterThanOrEqual(44);
-  expect(signInSize!.height).toBeGreaterThanOrEqual(44);
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.locator(".chat-run-error")).toContainText("rejected before the Turn was accepted");
+  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue("Do not admit this unauthenticated turn.");
   expect(proxyState("auth-exchange-proxy", 8250).exchange_requests).toBe(before);
   expect(databaseFacts(researcher.id)).toMatchObject({ agent_runs: 0, user_messages: 0 });
   await expect(page.locator(".chat-message-user")).toHaveCount(0);
@@ -142,9 +122,9 @@ test("Chat missing login fails before token exchange or durable acceptance", asy
 
 async function send(page: Page, prompt: string) {
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
 }
-function status(page: Page) { return page.locator(".chat-composer-status-row").getByRole("status"); }
+function status(page: Page) { return page.locator("[data-chat-status]"); }
 function observeRuns(page: Page) {
   const requests: Array<{ run_id: string; message_id: string; model_key: string; reasoning: string }> = [];
   page.on("request", (request) => {

@@ -16,6 +16,7 @@ export type ResearchEvalToolEvent = {
 export type ResearchEvalTurn = {
   calls: ResearchEvalToolCall[]; toolEvents: ResearchEvalToolEvent[];
   text: string; failure: string | null; terminal: boolean;
+  interrupt: Readonly<{ id: string }> | null;
 };
 
 // The isolated Eval Host has a 600-second Run ceiling. Allow 30 seconds for
@@ -35,7 +36,14 @@ export async function observeResearchEvalTurn(
   response: Response,
   onToolResult: (call: ResearchEvalToolCall) => void | Promise<void> = () => undefined,
 ): Promise<ResearchEvalTurn> {
-  const result: ResearchEvalTurn = { calls: [], toolEvents: [], text: "", failure: null, terminal: false };
+  const result: ResearchEvalTurn = {
+    calls: [],
+    failure: null,
+    interrupt: null,
+    terminal: false,
+    text: "",
+    toolEvents: [],
+  };
   const surfaceText = new Map<string, string>();
   await observeResearchEvalStream(response, async (event) => {
     if (event.type === "TOOL_CALL_START") {
@@ -64,10 +72,26 @@ export async function observeResearchEvalTurn(
       surfaceText.set(event.messageId, event.replace === true ? visibleA2UIText(event.content) : "");
     }
     if (event.type === "RUN_ERROR") { result.failure = String(event.code); result.terminal = true; }
-    if (event.type === "RUN_FINISHED") result.terminal = true;
+    if (event.type === "RUN_FINISHED") {
+      result.terminal = true;
+      const outcome = event.outcome;
+      const interrupt = isRecord(outcome)
+        && outcome.type === "interrupt"
+        && Array.isArray(outcome.interrupts)
+        && outcome.interrupts.length === 1
+        ? outcome.interrupts[0]
+        : undefined;
+      if (isRecord(interrupt) && typeof interrupt.id === "string") {
+        result.interrupt = { id: interrupt.id };
+      }
+    }
   });
   result.text = [result.text, ...surfaceText.values()].filter(Boolean).join("\n");
   return result;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const DISPLAY_FIELDS: Readonly<Record<string, readonly string[]>> = {

@@ -67,7 +67,10 @@ const expectedCatalogUrl = new URL("../schema/catalog-contract.json", import.met
 const writableTables = [
   "a2ui_message",
   "agent_run",
+  "chat_command",
+  "chat_interrupt",
   "chat_session",
+  "chat_timeline_entry",
   "mastra_messages",
   "mastra_observational_memory",
   "mastra_resources",

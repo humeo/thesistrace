@@ -25,7 +25,7 @@ test("Chat content-free telemetry survives success faults restart and deletion i
     const response = await request("/api/agent/copilotkit/agent/research/run", {
       method: "POST", body: JSON.stringify({ threadId, runId,
         messages: [{ id: randomUUID(), role: "user", content: prompt }], state: {}, context: [], tools: [],
-        forwardedProps: { thesistrace: { modelKey: "scripted-research", reasoningEffort: "medium", sessionMode: "new" } },
+        forwardedProps: { thesistrace: { command: "prompt", modelKey: "scripted-research", reasoningEffort: "medium", sessionMode: "new" } },
       }),
     });
     expect(response.status).toBe(200);

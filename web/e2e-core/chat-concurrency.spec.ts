@@ -38,10 +38,10 @@ test("Chat shared Session binds two contexts to one Run while another Session ru
     await expect.poll(() => identities.length).toBe(2);
     const runId = identities[1]!.runId;
     for (const client of [page, other]) {
-      await expect(status(client)).toHaveText("Research Agent is responding…", { timeout: 10_000 });
+      await expect(status(client)).toHaveText("Research Agent is working", { timeout: 10_000 });
       await expect(client.locator(".chat-main")).toHaveAttribute("data-agent-run-id", runId);
-      await expect(client.getByRole("textbox", { name: "Message", exact: true })).toBeDisabled();
-      await expect(client.getByRole("button", { name: "Send message" })).toBeDisabled();
+      await expect(client.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled();
+      await expect(client.getByRole("button", { name: "Stop", exact: true })).toBeEnabled();
       await expect(client.locator(".chat-message-user")).toHaveCount(2);
     }
     const rejected = await other.request.post(`${runtimePath}/run`, {
@@ -67,7 +67,7 @@ test("Chat shared Session binds two contexts to one Run while another Session ru
     // Reload tears down the HTTP stream, not the accepted model invocation.
     await page.reload();
     await expect(page.locator(".chat-main")).toHaveAttribute("data-agent-run-id", runId);
-    await expect(status(page)).toHaveText("Research Agent is responding…");
+    await expect(status(page)).toHaveText("Research Agent is working");
     await expect(page.locator(".chat-message-user")).toHaveCount(2);
     expect(identities).toHaveLength(2);
     expect(databaseFacts(researcher.id).user_messages).toBe(3);
@@ -162,10 +162,10 @@ test("Chat Host restart retains completed Tools and Core work without replaying 
 
 async function send(page: Page, prompt: string): Promise<void> {
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
 }
 
-function status(page: Page) { return page.locator(".chat-composer-status-row").getByRole("status"); }
+function status(page: Page) { return page.locator("[data-chat-status]"); }
 function sessionId(page: Page): string {
   const id = new URL(page.url()).searchParams.get("session");
   if (id === null || !uuid.test(id)) throw new Error("A durable Session identity is required");
@@ -185,7 +185,7 @@ function observeRunRequests(page: Page): Array<{ messageId: string; runId: strin
 function requestInput(threadId: string) {
   return {
     context: [],
-    forwardedProps: { thesistrace: { modelKey: "scripted-research", reasoningEffort: "medium", sessionMode: "existing" } },
+    forwardedProps: { thesistrace: { command: "prompt", modelKey: "scripted-research", reasoningEffort: "medium", sessionMode: "existing" } },
     messages: [{ content: "Competing turn must not be admitted.", id: "00000000-0000-4000-8000-000000009411", role: "user" }],
     runId: "00000000-0000-4000-8000-000000009412", state: {}, threadId, tools: [],
   };

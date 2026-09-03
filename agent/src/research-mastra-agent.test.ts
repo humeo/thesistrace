@@ -41,7 +41,7 @@ test("subscriber disposal terminates a new Run whose preparation is still pendin
   });
   repository.markFailed.mockImplementation(async () => {
     failurePersisted.resolve();
-    return undefined;
+    return "failed" as const;
   });
   const subscription = agent.run(input).subscribe();
 
@@ -49,6 +49,7 @@ test("subscriber disposal terminates a new Run whose preparation is still pendin
   subscription.unsubscribe();
   prepared.resolve({
     durableMessages: [],
+    execution: "start",
     generateTitle: false,
     kind: "new",
     status: "running",
@@ -379,6 +380,7 @@ test("a newly accepted Untitled session schedules title generation once", async 
     }),
     prepareRun: async () => ({
       durableMessages: [],
+      execution: "start",
       generateTitle: true,
       kind: "new",
       status: "running",
@@ -411,6 +413,7 @@ test("a slow title never delays the terminal event or Runner release", async () 
     }),
     prepareRun: async () => ({
       durableMessages: [],
+      execution: "start",
       generateTitle: true,
       kind: "new",
       status: "running",
@@ -476,8 +479,10 @@ function testAgent(options: Readonly<{
     tools: [],
   };
   const run: ValidatedChatRun = {
+    command: "prompt",
+    commandId: "00000000-0000-4000-8000-000000000003",
     input,
-    latestUserMessage: {
+    userMessage: {
       content: "Inspect the current research context.",
       id: "00000000-0000-4000-8000-000000000003",
       role: "user",
@@ -489,10 +494,12 @@ function testAgent(options: Readonly<{
   const repository = {
     awaitDurableToolResult: vi.fn(async () => undefined),
     awaitFrameworkRunSettled: vi.fn(async () => undefined),
-    markCompleted: vi.fn(async () => undefined),
-    markFailed: vi.fn(async () => undefined),
+    markCompleted: vi.fn(async () => "completed" as const),
+    markFailed: vi.fn(async () => "failed" as const),
+    markWaiting: vi.fn(async () => undefined),
     prepareRun: vi.fn(options.prepareRun ?? (async () => ({
       durableMessages: [],
+      execution: "start" as const,
       generateTitle: false,
       kind: "new" as const,
       status: "running" as const,
@@ -521,9 +528,15 @@ function testAgent(options: Readonly<{
     researcherId: "00000000-0000-4000-8000-000000000010",
     run,
     runMaxWallMs: options.runMaxWallMs,
+    metrics: () => ({ generatedBytes: 0, steps: 0 }),
+    selection: {
+      modelKey: "scripted",
+      providerModelId: "scripted-v1",
+      reasoningEffort: "medium",
+    },
     scheduleTitle,
     telemetry: createRunTelemetry({
-      modelKey: run.modelKey, providerModelId: "scripted-v1", reasoningEffort: run.reasoningEffort,
+      modelKey: "scripted", providerModelId: "scripted-v1", reasoningEffort: "medium",
       researcherId: "00000000-0000-4000-8000-000000000010",
       threadId: input.threadId, runId: input.runId, traceId: input.runId,
     }, { metrics: () => ({ steps: 0, usage: undefined }), write: (event) => { telemetryEvents.push(event); } }),

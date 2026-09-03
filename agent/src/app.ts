@@ -3,6 +3,17 @@ import { bodyLimit } from "hono/body-limit";
 
 import { AgentAuthenticationUnavailableError } from "./failure.js";
 import { isChatThreadId } from "./chat-request.js";
+import {
+  ChatControlError,
+  MAX_CHAT_COMMAND_BODY_BYTES,
+  readSteerInput,
+  readStopInput,
+  readTimelineQuery,
+  type CommandReceipt,
+  type SteerInput,
+  type StopInput,
+  type TimelinePage,
+} from "./chat-control.js";
 import type { SafeModelCatalog } from "./model-registry.js";
 import {
   MAX_SESSION_RENAME_BODY_BYTES,
@@ -21,6 +32,11 @@ import {
 import type { VerifiedResearcher } from "./session-verifier.js";
 
 export type AgentAppDependencies = Readonly<{
+  commandReceipt: (
+    threadId: string,
+    commandId: string,
+    researcher: VerifiedResearcher,
+  ) => Promise<CommandReceipt>;
   deleteSession: (
     threadId: string,
     researcher: VerifiedResearcher,
@@ -46,6 +62,22 @@ export type AgentAppDependencies = Readonly<{
     cursor: SessionCursor | undefined,
     researcher: VerifiedResearcher,
   ) => Promise<SessionPage>;
+  steer: (
+    threadId: string,
+    researcher: VerifiedResearcher,
+    input: SteerInput,
+  ) => Promise<CommandReceipt>;
+  stop: (
+    threadId: string,
+    researcher: VerifiedResearcher,
+    input: StopInput,
+  ) => Promise<CommandReceipt>;
+  timeline: (
+    threadId: string,
+    researcher: VerifiedResearcher,
+    before: number | undefined,
+    limit: number,
+  ) => Promise<TimelinePage>;
   sessionPreference: (
     threadId: string,
     researcher: VerifiedResearcher,
@@ -177,15 +209,116 @@ export function createAgentApp(dependencies: AgentAppDependencies): Hono<AgentAp
   });
 
   app.get("/api/agent/sessions/:threadId/preferences", async (context) => {
-    const preference = await dependencies.sessionPreference(
-      context.req.param("threadId"),
-      context.get("researcher"),
-    );
-    if (preference === null) {
+    const threadId = context.req.param("threadId");
+    if (!isChatThreadId(threadId)) {
       return context.json({ code: "CHAT_SESSION_NOT_FOUND" }, 404);
     }
-    return context.json(preference);
+    try {
+      const preference = await dependencies.sessionPreference(
+        threadId,
+        context.get("researcher"),
+      );
+      if (preference === null) {
+        return context.json({ code: "CHAT_SESSION_NOT_FOUND" }, 404);
+      }
+      return context.json(preference);
+    } catch (error) {
+      return sessionErrorResponse(context, error);
+    }
   });
+
+  app.get("/api/agent/sessions/:threadId/timeline", async (context) => {
+    const threadId = context.req.param("threadId");
+    if (!isChatThreadId(threadId)) {
+      return context.json({ code: "CHAT_SESSION_NOT_FOUND" }, 404);
+    }
+    try {
+      const query = readTimelineQuery(context.req.raw);
+      const page = await dependencies.timeline(
+        threadId,
+        context.get("researcher"),
+        query.before,
+        query.limit,
+      );
+      return context.json({
+        entries: page.entries.map((entry) => ({
+          created_at: entry.createdAt,
+          entry_id: entry.entryId,
+          kind: entry.kind,
+          payload: timelinePayloadResponse(entry),
+          turn_id: entry.turnId,
+        })),
+        next_cursor: page.nextCursor,
+      });
+    } catch (error) {
+      return sessionErrorResponse(context, error);
+    }
+  });
+
+  app.get("/api/agent/sessions/:threadId/commands/:commandId", async (context) => {
+    const threadId = context.req.param("threadId");
+    const commandId = context.req.param("commandId");
+    if (!isChatThreadId(threadId) || !isChatThreadId(commandId)) {
+      return context.json({ code: "CHAT_SESSION_NOT_FOUND" }, 404);
+    }
+    try {
+      return context.json(commandResponse(await dependencies.commandReceipt(
+        threadId,
+        commandId,
+        context.get("researcher"),
+      )));
+    } catch (error) {
+      return sessionErrorResponse(context, error);
+    }
+  });
+
+  app.post(
+    "/api/agent/sessions/:threadId/steer",
+    bodyLimit({
+      maxSize: MAX_CHAT_COMMAND_BODY_BYTES,
+      onError: (context) => context.json({ code: "INVALID_CHAT_INPUT" }, 400),
+    }),
+    async (context) => {
+      const threadId = context.req.param("threadId");
+      if (!isChatThreadId(threadId)) {
+        return context.json({ code: "CHAT_SESSION_NOT_FOUND" }, 404);
+      }
+      try {
+        const receipt = await dependencies.steer(
+          threadId,
+          context.get("researcher"),
+          await readSteerInput(context.req.raw),
+        );
+        return context.json(commandResponse(receipt), receipt.status === "pending" ? 202 : 200);
+      } catch (error) {
+        return sessionErrorResponse(context, error);
+      }
+    },
+  );
+
+  app.post(
+    "/api/agent/sessions/:threadId/stop",
+    bodyLimit({
+      maxSize: MAX_CHAT_COMMAND_BODY_BYTES,
+      onError: (context) => context.json({ code: "INVALID_CHAT_INPUT" }, 400),
+    }),
+    async (context) => {
+      const threadId = context.req.param("threadId");
+      if (!isChatThreadId(threadId)) {
+        return context.json({ code: "CHAT_SESSION_NOT_FOUND" }, 404);
+      }
+      try {
+        const receipt = await dependencies.stop(
+          threadId,
+          context.get("researcher"),
+          await readStopInput(context.req.raw),
+        );
+        return context.json(commandResponse(receipt), receipt.status === "pending" ? 202 : 200);
+      } catch (error) {
+        return sessionErrorResponse(context, error);
+      }
+    },
+  );
 
   app.all("/api/agent/copilotkit/*", (context) => {
     return dependencies.handleRuntime(
@@ -199,12 +332,52 @@ export function createAgentApp(dependencies: AgentAppDependencies): Hono<AgentAp
 
 function sessionResponse(session: SessionPage["sessions"][number]) {
   return {
-    active_run: session.activeRun,
     activity_at: session.activityAt,
     created_at: session.createdAt,
+    current_turn: turnResponse(session.currentTurn),
     id: session.id,
+    latest_turn: turnResponse(session.latestTurn),
     title: session.title,
     version: session.version,
+  };
+}
+
+function turnResponse(turn: SessionPage["sessions"][number]["latestTurn"]) {
+  return turn === null ? null : {
+    id: turn.id,
+    kind: turn.kind,
+    model_key: turn.modelKey,
+    question: turn.question === null ? null : {
+      interrupt_id: turn.question.interruptId,
+      options: turn.question.options,
+      question: turn.question.question,
+      selection_mode: turn.question.selectionMode,
+    },
+    reasoning_effort: turn.reasoningEffort,
+    started_at: turn.startedAt,
+    status: turn.status,
+    terminal_error_code: turn.terminalErrorCode,
+  };
+}
+
+function commandResponse(receipt: CommandReceipt) {
+  return {
+    command_id: receipt.commandId,
+    error_code: receipt.errorCode,
+    kind: receipt.kind,
+    status: receipt.status,
+    turn_id: receipt.turnId,
+  };
+}
+
+function timelinePayloadResponse(entry: TimelinePage["entries"][number]) {
+  if (entry.kind !== "question") return entry.payload;
+  return {
+    interrupt_id: entry.payload.interruptId,
+    options: entry.payload.options,
+    question: entry.payload.question,
+    selection_mode: entry.payload.selectionMode,
+    status: entry.payload.status,
   };
 }
 
@@ -215,6 +388,9 @@ function sessionErrorResponse(
   if (error instanceof SessionInputError) {
     return context.json({ code: "INVALID_CHAT_SESSION_REQUEST" }, 400);
   }
+  if (error instanceof ChatControlError) {
+    return context.json({ code: error.code }, error.status);
+  }
   if (error instanceof SessionNotFoundError) {
     return context.json({ code: "CHAT_SESSION_NOT_FOUND" }, 404);
   }
@@ -224,7 +400,10 @@ function sessionErrorResponse(
   if (error instanceof SessionActiveRunError) {
     return context.json({ code: "CHAT_SESSION_RUN_ACTIVE" }, 409);
   }
-  throw error;
+  // Every dependency behind the product Session surface is storage-backed.
+  // Runtime/provider availability uses the separate CopilotKit boundary and
+  // keeps AGENT_SERVICE_UNAVAILABLE, so clients can recover appropriately.
+  return context.json({ code: "CHAT_STORAGE_FAILURE" }, 503);
 }
 
 function isSameOriginBrowserRequest(headers: Headers, publicOrigin: string): boolean {

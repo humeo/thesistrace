@@ -19,7 +19,7 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
             signal: AbortSignal.timeout(90_000), body: JSON.stringify({
               threadId: randomUUID(), runId: randomUUID(), state: {}, context: [], tools: [],
               messages: [{ id: randomUUID(), role: "user", content: prompt }],
-              forwardedProps: { thesistrace: { modelKey: "scripted-research", reasoningEffort: "medium", sessionMode: "new" } },
+              forwardedProps: { thesistrace: { command: "prompt", modelKey: "scripted-research", reasoningEffort: "medium", sessionMode: "new" } },
             }),
           });
           const body = await response.text();
@@ -30,7 +30,7 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
     await expect.poll(() => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses, { timeout: 20_000 }).toBe(4);
     await page.goto("/chat");
     await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-    await page.getByRole("button", { name: "Send message" }).click();
+    await page.getByRole("button", { name: "Send" }).click();
     await expect(page.getByRole("alert")).toHaveAttribute("data-failure-code", "AGENT_CAPACITY");
     await expect(page.getByRole("alert")).toContainText("Agent at capacity");
     await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue(prompt);
@@ -57,8 +57,8 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
 
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     expect(await Promise.all(pending)).toEqual(Array.from({ length: 4 }, () => ({ ok: true, finished: true })));
-    await page.getByRole("button", { name: "Retry with selected model", exact: true }).click();
-    await expect(page.locator(".chat-composer-status-row").getByRole("status")).toHaveText("Run complete", { timeout: 30_000 });
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 30_000 });
     await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText(prompt);
     await expect(page.getByRole("article", { name: "Tool get_research_context: Completed", exact: true })).toBeVisible();
     await expect(page).toHaveURL(/\/chat\?session=[a-f0-9-]{36}$/);

@@ -198,6 +198,8 @@ describe("DurableResearchAgentRunner", () => {
     });
     const repository = {
       persistA2UIActivity: vi.fn(() => persistence),
+      persistAssistantMessage: vi.fn(async () => undefined),
+      persistToolActivity: vi.fn(async () => undefined),
     } as unknown as ResearchSessionRepository;
     const runner = new DurableResearchAgentRunner(repository);
     const agent = new HoldingAgent();

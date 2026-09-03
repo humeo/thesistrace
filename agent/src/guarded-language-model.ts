@@ -22,7 +22,17 @@ export class RunModelObservation {
   private generatedBytes = 0;
   private hasRunAnswer = false;
 
-  constructor(readonly usage: RunUsageCapture) {}
+  constructor(
+    readonly usage: RunUsageCapture,
+    initial: Readonly<{ generatedBytes?: number; steps?: number }> = {},
+  ) {
+    this.generatedBytes = initial.generatedBytes ?? 0;
+    this.steps = initial.steps ?? 0;
+  }
+
+  get outputBytes(): number {
+    return this.generatedBytes;
+  }
 
   fail(code: AgentFailureCode): AgentRunFailure {
     this.failure ??= code;

@@ -114,6 +114,7 @@ CREATE TABLE agent.chat_session (
 CREATE TABLE agent.agent_run (
     id uuid NOT NULL,
     thread_id uuid NOT NULL,
+    kind text NOT NULL,
     request_fingerprint bytea NOT NULL,
     model_key text NOT NULL,
     provider_model_id text NOT NULL,
@@ -121,14 +122,20 @@ CREATE TABLE agent.agent_run (
     agent_build_revision text NOT NULL,
     status text NOT NULL,
     token_usage jsonb,
+    step_count integer DEFAULT 0 NOT NULL,
+    generated_bytes integer DEFAULT 0 NOT NULL,
     terminal_error_code text,
     started_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
     completed_at timestamp with time zone,
     CONSTRAINT agent_run_pkey PRIMARY KEY (id),
+    CONSTRAINT agent_run_thread_id_id_key UNIQUE (thread_id, id),
     CONSTRAINT agent_run_thread_id_fkey FOREIGN KEY (thread_id)
         REFERENCES agent.chat_session(id) ON DELETE CASCADE,
     CONSTRAINT agent_run_request_fingerprint_check CHECK (
         pg_catalog.octet_length(request_fingerprint) = 32
+    ),
+    CONSTRAINT agent_run_kind_check CHECK (
+        kind = ANY (ARRAY['prompt'::text, 'continue'::text])
     ),
     CONSTRAINT agent_run_model_key_check CHECK (
         model_key ~ '^[a-z0-9][a-z0-9._-]{0,63}$'::text
@@ -147,7 +154,20 @@ CREATE TABLE agent.agent_run (
         AND pg_catalog.char_length(agent_build_revision) BETWEEN 1 AND 128
     ),
     CONSTRAINT agent_run_status_check CHECK (
-        status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text])
+        status = ANY (
+            ARRAY[
+                'running'::text,
+                'waiting_for_user'::text,
+                'stopping'::text,
+                'completed'::text,
+                'stopped'::text,
+                'failed'::text
+            ]
+        )
+    ),
+    CONSTRAINT agent_run_budget_check CHECK (
+        step_count BETWEEN 0 AND 16
+        AND generated_bytes BETWEEN 0 AND 262144
     ),
     CONSTRAINT agent_run_terminal_check CHECK (
         (
@@ -156,7 +176,21 @@ CREATE TABLE agent.agent_run (
             AND token_usage IS NULL
             AND terminal_error_code IS NULL
         ) OR (
+            status = 'waiting_for_user'::text
+            AND completed_at IS NULL
+            AND token_usage IS NOT NULL
+            AND terminal_error_code IS NULL
+        ) OR (
+            status = 'stopping'::text
+            AND completed_at IS NULL
+            AND terminal_error_code IS NULL
+        ) OR (
             status = 'completed'::text
+            AND completed_at IS NOT NULL
+            AND token_usage IS NOT NULL
+            AND terminal_error_code IS NULL
+        ) OR (
+            status = 'stopped'::text
             AND completed_at IS NOT NULL
             AND token_usage IS NOT NULL
             AND terminal_error_code IS NULL
@@ -167,6 +201,151 @@ CREATE TABLE agent.agent_run (
             AND terminal_error_code IS NOT NULL
         )
     )
+);
+
+CREATE TABLE agent.chat_command (
+    thread_id uuid NOT NULL,
+    id uuid NOT NULL,
+    turn_id uuid NOT NULL,
+    kind text NOT NULL,
+    request_fingerprint bytea NOT NULL,
+    status text NOT NULL,
+    error_code text,
+    created_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
+    CONSTRAINT chat_command_pkey PRIMARY KEY (thread_id, id),
+    CONSTRAINT chat_command_thread_id_fkey FOREIGN KEY (thread_id)
+        REFERENCES agent.chat_session(id) ON DELETE CASCADE,
+    CONSTRAINT chat_command_turn_fkey FOREIGN KEY (thread_id, turn_id)
+        REFERENCES agent.agent_run(thread_id, id) ON DELETE CASCADE,
+    CONSTRAINT chat_command_kind_check CHECK (
+        kind = ANY (
+            ARRAY[
+                'prompt'::text,
+                'continue'::text,
+                'steer'::text,
+                'answer'::text,
+                'stop'::text
+            ]
+        )
+    ),
+    CONSTRAINT chat_command_request_fingerprint_check CHECK (
+        pg_catalog.octet_length(request_fingerprint) = 32
+    ),
+    CONSTRAINT chat_command_status_check CHECK (
+        status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text])
+    ),
+    CONSTRAINT chat_command_outcome_check CHECK (
+        (status = 'rejected'::text AND error_code IS NOT NULL)
+        OR (status <> 'rejected'::text AND error_code IS NULL)
+    ),
+    CONSTRAINT chat_command_error_code_check CHECK (
+        error_code IS NULL OR (
+            error_code = pg_catalog.btrim(error_code)
+            AND pg_catalog.char_length(error_code) BETWEEN 1 AND 80
+        )
+    ),
+    CONSTRAINT chat_command_timestamps_check CHECK (updated_at >= created_at)
+);
+
+CREATE TABLE agent.chat_interrupt (
+    thread_id uuid NOT NULL,
+    id text NOT NULL,
+    turn_id uuid NOT NULL,
+    tool_call_id text NOT NULL,
+    question text NOT NULL,
+    options jsonb,
+    selection_mode text NOT NULL,
+    status text NOT NULL,
+    answer_command_id uuid,
+    created_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
+    answered_at timestamp with time zone,
+    CONSTRAINT chat_interrupt_pkey PRIMARY KEY (thread_id, id),
+    CONSTRAINT chat_interrupt_thread_id_fkey FOREIGN KEY (thread_id)
+        REFERENCES agent.chat_session(id) ON DELETE CASCADE,
+    CONSTRAINT chat_interrupt_turn_fkey FOREIGN KEY (thread_id, turn_id)
+        REFERENCES agent.agent_run(thread_id, id) ON DELETE CASCADE,
+    CONSTRAINT chat_interrupt_answer_command_fkey FOREIGN KEY (thread_id, answer_command_id)
+        REFERENCES agent.chat_command(thread_id, id),
+    CONSTRAINT chat_interrupt_id_check CHECK (
+        pg_catalog.char_length(id) BETWEEN 1 AND 800
+        AND id !~ '[[:cntrl:]]'::text
+    ),
+    CONSTRAINT chat_interrupt_tool_call_id_check CHECK (
+        pg_catalog.char_length(tool_call_id) BETWEEN 1 AND 512
+        AND tool_call_id !~ '[[:cntrl:]]'::text
+    ),
+    CONSTRAINT chat_interrupt_question_check CHECK (
+        question = pg_catalog.btrim(question)
+        AND pg_catalog.octet_length(question) BETWEEN 1 AND 4096
+    ),
+    CONSTRAINT chat_interrupt_options_check CHECK (
+        options IS NULL OR (
+            pg_catalog.jsonb_typeof(options) = 'array'::text
+            AND pg_catalog.octet_length(options::text) <= 65536
+        )
+    ),
+    CONSTRAINT chat_interrupt_selection_mode_check CHECK (
+        selection_mode = ANY (
+            ARRAY['free_text'::text, 'single_select'::text, 'multi_select'::text]
+        )
+    ),
+    CONSTRAINT chat_interrupt_status_check CHECK (
+        status = ANY (ARRAY['pending'::text, 'answered'::text, 'stopped'::text])
+    ),
+    CONSTRAINT chat_interrupt_outcome_check CHECK (
+        (
+            status = 'pending'::text
+            AND answer_command_id IS NULL
+            AND answered_at IS NULL
+        ) OR (
+            status = 'answered'::text
+            AND answer_command_id IS NOT NULL
+            AND answered_at IS NOT NULL
+        ) OR (
+            status = 'stopped'::text
+            AND answer_command_id IS NULL
+            AND answered_at IS NOT NULL
+        )
+    )
+);
+
+CREATE TABLE agent.chat_timeline_entry (
+    thread_id uuid NOT NULL,
+    entry_id text NOT NULL,
+    sequence bigint GENERATED ALWAYS AS IDENTITY,
+    turn_id uuid NOT NULL,
+    kind text NOT NULL,
+    payload jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT pg_catalog.now() NOT NULL,
+    CONSTRAINT chat_timeline_entry_pkey PRIMARY KEY (thread_id, entry_id),
+    CONSTRAINT chat_timeline_entry_sequence_key UNIQUE (sequence),
+    CONSTRAINT chat_timeline_entry_thread_id_fkey FOREIGN KEY (thread_id)
+        REFERENCES agent.chat_session(id) ON DELETE CASCADE,
+    CONSTRAINT chat_timeline_entry_turn_fkey FOREIGN KEY (thread_id, turn_id)
+        REFERENCES agent.agent_run(thread_id, id) ON DELETE CASCADE,
+    CONSTRAINT chat_timeline_entry_id_check CHECK (
+        pg_catalog.char_length(entry_id) BETWEEN 1 AND 800
+        AND entry_id !~ '[[:cntrl:]]'::text
+    ),
+    CONSTRAINT chat_timeline_entry_kind_check CHECK (
+        kind = ANY (
+            ARRAY[
+                'user_input'::text,
+                'assistant_message'::text,
+                'tool_activity'::text,
+                'a2ui'::text,
+                'question'::text,
+                'turn_outcome'::text
+            ]
+        )
+    ),
+    CONSTRAINT chat_timeline_entry_payload_check CHECK (
+        pg_catalog.jsonb_typeof(payload) = 'object'::text
+        AND pg_catalog.octet_length(payload::text) <= 524288
+    ),
+    CONSTRAINT chat_timeline_entry_timestamps_check CHECK (updated_at >= created_at)
 );
 
 CREATE TABLE agent.a2ui_message (
@@ -250,5 +429,17 @@ CREATE INDEX chat_session_researcher_activity_idx
     ON agent.chat_session USING btree (researcher_id, updated_at DESC, id DESC);
 CREATE INDEX agent_run_thread_started_idx
     ON agent.agent_run USING btree (thread_id, started_at, id);
+CREATE UNIQUE INDEX agent_run_one_current_per_thread_idx
+    ON agent.agent_run USING btree (thread_id)
+    WHERE status = ANY (
+        ARRAY['running'::text, 'waiting_for_user'::text, 'stopping'::text]
+    );
+CREATE INDEX chat_command_turn_created_idx
+    ON agent.chat_command USING btree (thread_id, turn_id, created_at, id);
+CREATE UNIQUE INDEX chat_interrupt_one_pending_per_turn_idx
+    ON agent.chat_interrupt USING btree (turn_id)
+    WHERE status = 'pending'::text;
+CREATE INDEX chat_timeline_thread_sequence_idx
+    ON agent.chat_timeline_entry USING btree (thread_id, sequence DESC);
 CREATE INDEX a2ui_message_owner_idx
     ON agent.a2ui_message USING btree (thread_id, owner_message_id, sequence, id);

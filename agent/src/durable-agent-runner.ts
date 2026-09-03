@@ -25,7 +25,8 @@ import {
 } from "rxjs";
 
 import { safeBrowserMessages } from "./browser-message-safety.js";
-import { chatRunFingerprint } from "./chat-request.js";
+import { chatCommandFingerprint } from "./chat-request.js";
+import { ChatTimelineProjector } from "./chat-timeline-projector.js";
 import {
   SessionActiveRunError,
   type ResearchSessionRepository,
@@ -61,7 +62,7 @@ export class DurableResearchAgentRunner extends AgentRunner {
       return of(safeRunConflict());
     }
     const current = this.active.get(request.threadId);
-    const fingerprint = chatRunFingerprint(request.input);
+    const fingerprint = chatCommandFingerprint(request.input);
     if (current?.runId === request.input.runId) {
       if (!current.fingerprint.equals(fingerprint)) {
         return of(safeRunConflict());
@@ -85,10 +86,16 @@ export class DurableResearchAgentRunner extends AgentRunner {
         : safeRunError());
     }
     const a2ui = new ResearchA2UIEventProjector();
+    const timeline = new ChatTimelineProjector(
+      this.repository,
+      request.threadId,
+      request.input.runId,
+    );
     let presentationFailed = false;
     const source = accepted.pipe(
       concatMap((event) => defer(async () => {
         if (presentationFailed) return [];
+        await timeline.project(event);
         const batch = a2ui.project(event);
         for (const activity of batch.activities) {
           await this.repository.persistA2UIActivity({
@@ -170,13 +177,21 @@ export class DurableResearchAgentRunner extends AgentRunner {
         if (active === undefined) {
           if (latestRun === null) return from([]);
           const started = replayRunStarted(request.threadId, latestRun.id, latestRun.selection);
-          return latestRun.status === "completed"
-            ? from([
-                started,
-                snapshot,
-                replayRunFinished(request.threadId, latestRun.id),
-              ])
-            : from([started, snapshot, runFailureEvent(latestRun.terminalErrorCode)]);
+          if (latestRun.status === "completed" || latestRun.status === "stopped") {
+            return from([started, snapshot, replayRunFinished(request.threadId, latestRun.id)]);
+          }
+          if (latestRun.status === "waiting_for_user" && latestRun.question !== null) {
+            return from([
+              started,
+              snapshot,
+              replayInterruptFinished(request.threadId, latestRun.id, latestRun.question),
+            ]);
+          }
+          return from([
+            started,
+            snapshot,
+            runFailureEvent(latestRun.terminalErrorCode ?? "AGENT_UNAVAILABLE"),
+          ]);
         }
 
         const persistedIds = new Set(messages.map((message) => message.id));
@@ -211,6 +226,12 @@ export class DurableResearchAgentRunner extends AgentRunner {
 
   stop(request: AgentRunnerStopRequest): Promise<boolean | undefined> {
     return this.delegate.stop(request);
+  }
+
+  async stopTurn(threadId: string, runId: string): Promise<boolean> {
+    const active = this.active.get(threadId);
+    if (active?.runId !== runId) return false;
+    return await this.delegate.stop({ threadId, runId }) === true;
   }
 
   async shutdown(): Promise<readonly string[]> {
@@ -253,6 +274,40 @@ function replayRunStarted(threadId: string, runId: string, selection: RunSelecti
 
 function replayRunFinished(threadId: string, runId: string): BaseEvent {
   return { type: EventType.RUN_FINISHED, threadId, runId };
+}
+
+function replayInterruptFinished(
+  threadId: string,
+  runId: string,
+  question: import("./chat-control.js").PendingQuestion,
+): BaseEvent {
+  return {
+    type: EventType.RUN_FINISHED,
+    threadId,
+    runId,
+    outcome: {
+      type: "interrupt",
+      interrupts: [{
+        id: question.interruptId,
+        metadata: {
+          mastra: {
+            runId,
+            suspendPayload: {
+              options: question.options ?? undefined,
+              question: question.question,
+              selectionMode: question.selectionMode === "free_text"
+                ? undefined
+                : question.selectionMode,
+            },
+            toolName: "ask_user",
+            type: "mastra_suspend",
+          },
+        },
+        reason: "mastra:tool_suspend",
+        toolCallId: question.toolCallId,
+      }],
+    },
+  };
 }
 
 function safeRunError(): BaseEvent {

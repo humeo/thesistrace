@@ -64,6 +64,8 @@ export function SessionHistoryList({
   }> | null>(null);
   const groups = groupSessionsByRecency(controller.sessions);
   const openMenuSession = controller.sessions.find((session) => session.id === openMenu);
+  const openMenuHasActiveTurn = openMenuSession?.current_turn !== null
+    && openMenuSession?.current_turn !== undefined;
 
   useEffect(() => {
     if (openMenu === null) return;
@@ -90,17 +92,17 @@ export function SessionHistoryList({
     }
     const previous = openMenuActivity.current;
     openMenuActivity.current = {
-      activeRun: openMenuSession.active_run,
+      activeRun: openMenuHasActiveTurn,
       id: openMenuSession.id,
     };
     if (
       previous?.id === openMenuSession.id
       && !previous.activeRun
-      && openMenuSession.active_run
+      && openMenuHasActiveTurn
     ) {
       closeMenu(true);
     }
-  }, [openMenu, openMenuSession]);
+  }, [openMenu, openMenuHasActiveTurn, openMenuSession]);
 
   useEffect(() => {
     if (openMenu === null) return;
@@ -241,21 +243,21 @@ export function SessionHistoryList({
                 >
                   <a
                     aria-current={session.id === currentSessionId ? "page" : undefined}
-                    aria-label={`${session.title}${session.active_run ? ", Running" : ""}`}
+                    aria-label={`${session.title}${session.current_turn === null ? "" : `, ${session.current_turn.status === "waiting_for_user" ? "Waiting for answer" : "Running"}`}`}
                     href={chatSessionHref(session.id)}
                     onClick={(event) => handleChatNavigation(event, () => {
                       if (session.id !== currentSessionId) navigate(chatSessionHref(session.id));
                     })}
-                    title={`${session.title}${session.active_run ? " — Running" : ""}`}
+                    title={`${session.title}${session.current_turn === null ? "" : session.current_turn.status === "waiting_for_user" ? " — Waiting for answer" : " — Running"}`}
                   >
                     <ChatCircle aria-hidden="true" size={15} weight="regular" />
                     <span>{session.title}</span>
-                    {session.active_run ? (
+                    {session.current_turn === null ? null : (
                       <em>
-                        <span className="chat-session-run-full">Running</span>
+                        <span className="chat-session-run-full">{session.current_turn.status === "waiting_for_user" ? "Waiting" : "Running"}</span>
                         <span className="chat-session-run-compact">Run</span>
                       </em>
-                    ) : null}
+                    )}
                   </a>
                   <button
                     aria-controls={openMenu === session.id
@@ -327,7 +329,7 @@ export function SessionHistoryList({
                 <NotePencil aria-hidden="true" size={15} />
                 Rename
               </button>
-              {openMenuSession.active_run ? null : (
+              {openMenuSession.current_turn === null ? (
                 <button
                   onClick={() => openDialog("delete", openMenuSession)}
                   role="menuitem"
@@ -336,7 +338,7 @@ export function SessionHistoryList({
                   <Trash aria-hidden="true" size={15} />
                   Delete Chat
                 </button>
-              )}
+              ) : null}
             </div>,
             document.body,
           )}

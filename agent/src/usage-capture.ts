@@ -6,6 +6,10 @@ export class RunUsageCapture {
   private reportedSteps = 0;
   private unreported = false;
 
+  constructor(initial?: PersistedTokenUsage) {
+    this.usage = initial === undefined ? undefined : structuredClone(initial);
+  }
+
   beginStep(): void {
     this.startedSteps++;
   }

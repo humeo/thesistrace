@@ -7,7 +7,11 @@ import {
   readValidatedChatRun,
 } from "./chat-request.js";
 import { readModelRegistry } from "./model-registry.js";
-import { SAFE_TOOL_COMPLETED } from "./safe-tool-result.js";
+
+const THREAD_ID = "00000000-0000-4000-8000-000000000001";
+const RUN_ID = "00000000-0000-4000-8000-000000000002";
+const INPUT_ID = "00000000-0000-4000-8000-000000000003";
+const INTERRUPT_ID = `${RUN_ID}::provider-call-1`;
 
 const registry = readModelRegistry(JSON.stringify({
   default_model_key: "scripted",
@@ -23,185 +27,160 @@ const registry = readModelRegistry(JSON.stringify({
   }],
 }), { THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "test-secret" });
 
-test("accepts the one strict text-only AG-UI run shape", async () => {
+test("accepts one strict Prompt containing only the new User input", async () => {
   const request = runRequest();
   await expect(readValidatedChatRun(request, registry)).resolves.toMatchObject({
+    command: "prompt",
+    commandId: INPUT_ID,
     modelKey: "scripted",
     reasoningEffort: "medium",
     sessionMode: "new",
-    latestUserMessage: {
-      content: "Build an Alpha.",
-      id: "00000000-0000-4000-8000-000000000003",
-      role: "user",
-    },
+    userMessage: { content: "Build an Alpha.", id: INPUT_ID, role: "user" },
   });
-  await expect(readThreadId(request)).resolves.toBe(
-    "00000000-0000-4000-8000-000000000001",
-  );
+  await expect(readThreadId(request)).resolves.toBe(THREAD_ID);
+});
+
+test("accepts Continue only as an empty-message new Run", async () => {
+  await expect(readValidatedChatRun(runRequest({
+    messages: [],
+    forwardedProps: {
+      thesistrace: {
+        command: "continue",
+        modelKey: "scripted",
+        reasoningEffort: "medium",
+        sessionMode: "existing",
+      },
+    },
+  }), registry)).resolves.toMatchObject({
+    command: "continue",
+    commandId: RUN_ID,
+    sessionMode: "existing",
+  });
+});
+
+test.each([
+  "A focused answer",
+  ["Quality", "Low volatility"],
+])("accepts Answer as the sole resolved interrupt payload %#", async (answer) => {
+  await expect(readValidatedChatRun(runRequest({
+    messages: [],
+    resume: [{ interruptId: INTERRUPT_ID, payload: answer, status: "resolved" }],
+    forwardedProps: {
+      thesistrace: { command: "answer", inputId: INPUT_ID, interruptId: INTERRUPT_ID },
+    },
+  }), registry)).resolves.toMatchObject({
+    answer,
+    command: "answer",
+    commandId: INPUT_ID,
+    interruptId: INTERRUPT_ID,
+  });
 });
 
 test.each([
   ["missing", "medium", "INVALID_MODEL"],
   ["scripted", "high", "UNSUPPORTED_REASONING"],
-  ["scripted", "not-a-reasoning-level", "UNSUPPORTED_REASONING"],
-])("distinguishes rejected model selection %s / %s", async (modelKey, reasoningEffort, code) => {
+])("distinguishes rejected next-Turn settings %s / %s", async (modelKey, reasoningEffort, code) => {
   await expect(readValidatedChatRun(runRequest({
-    forwardedProps: { thesistrace: { modelKey, reasoningEffort, sessionMode: "new" } },
+    forwardedProps: {
+      thesistrace: { command: "prompt", modelKey, reasoningEffort, sessionMode: "new" },
+    },
   }), registry)).rejects.toMatchObject({ code, status: 400 });
+});
+
+test.each([
+  { messages: [] },
+  { messages: [userMessage(), userMessage("00000000-0000-4000-8000-000000000004")] },
+  { state: { browserOwned: true } },
+  { tools: [{ name: "browser-tool" }] },
+  { context: [{ description: "browser context", value: "unsafe" }] },
+  { resume: [{ interruptId: INTERRUPT_ID, payload: "answer", status: "resolved" }] },
+])("rejects unsupported Prompt input %#", async (override) => {
+  await expect(readValidatedChatRun(runRequest(override), registry)).rejects.toMatchObject({
+    code: "INVALID_CHAT_INPUT",
+    status: 400,
+  } satisfies Partial<ChatRequestError>);
+});
+
+test("rejects old browser transcript replay instead of accepting a compatibility path", async () => {
+  await expect(readValidatedChatRun(runRequest({
+    messages: [
+      userMessage("00000000-0000-4000-8000-000000000004"),
+      { content: "Prior answer", id: "00000000-0000-4000-8000-000000000005", role: "assistant" },
+      userMessage(),
+    ],
+  }), registry)).rejects.toMatchObject({ code: "INVALID_CHAT_INPUT", status: 400 });
+});
+
+test.each([
+  {
+    forwardedProps: {
+      thesistrace: {
+        command: "answer",
+        inputId: INPUT_ID,
+        interruptId: INTERRUPT_ID,
+        modelKey: "scripted",
+      },
+    },
+    messages: [],
+    resume: [{ interruptId: INTERRUPT_ID, payload: "answer", status: "resolved" }],
+  },
+  {
+    forwardedProps: {
+      thesistrace: { command: "answer", inputId: INPUT_ID, interruptId: INTERRUPT_ID },
+    },
+    messages: [],
+    resume: [{ interruptId: "wrong", payload: "answer", status: "resolved" }],
+  },
+  {
+    forwardedProps: {
+      thesistrace: { command: "continue", modelKey: "scripted", reasoningEffort: "medium", sessionMode: "existing" },
+    },
+    messages: [userMessage()],
+  },
+])("rejects a command that smuggles another command's fields %#", async (override) => {
+  await expect(readValidatedChatRun(runRequest(override), registry)).rejects.toMatchObject({
+    code: "INVALID_CHAT_INPUT",
+    status: 400,
+  });
+});
+
+test("rejects an oversized UTF-8 Prompt before execution", async () => {
+  const content = `${"a".repeat(MAX_CHAT_MESSAGE_BYTES - 2)}低`;
+  await expect(readValidatedChatRun(runRequest({ messages: [userMessage(INPUT_ID, content)] }), registry))
+    .rejects.toMatchObject({ code: "CHAT_INPUT_TOO_LARGE", status: 413 });
 });
 
 test.each([
   { threadId: "00000000-0000-0000-0000-000000000000" },
   { runId: "ffffffff-ffff-ffff-ffff-ffffffffffff" },
-  { threadId: "00000000-0000-4000-8000-00000000000A" },
-])("rejects a non-canonical browser UUID at the run boundary %#", async (override) => {
-  const request = runRequest(override);
-  await expect(readValidatedChatRun(request, registry)).rejects.toMatchObject({
-    code: "INVALID_CHAT_REQUEST",
+  { messages: [userMessage("00000000-0000-4000-8000-00000000000A")] },
+])("rejects non-canonical identities %#", async (override) => {
+  await expect(readValidatedChatRun(runRequest(override), registry)).rejects.toMatchObject({
+    code: "INVALID_CHAT_INPUT",
     status: 400,
-  } satisfies Partial<ChatRequestError>);
-  if ("threadId" in override) {
-    await expect(readThreadId(request)).rejects.toMatchObject({
-      code: "INVALID_CHAT_REQUEST",
-      status: 400,
-    } satisfies Partial<ChatRequestError>);
-  }
-});
-
-test("accepts CopilotKit's exact split Assistant text shape on a later turn", async () => {
-  const assistantId = "00000000-0000-4000-8000-000000000004";
-  await expect(readValidatedChatRun(runRequest({ messages: [{
-    id: "00000000-0000-4000-8000-000000000003",
-    role: "user",
-    content: "Build an Alpha.",
-  }, {
-    id: assistantId,
-    role: "assistant",
-    toolCalls: [{
-      id: "provider-call-1",
-      type: "function",
-      function: {
-        arguments: "{}",
-        name: "submit_research_run",
-      },
-    }],
-  }, {
-    id: "00000000-0000-4000-8000-000000000005",
-    role: "tool",
-    toolCallId: "provider-call-1",
-    content: SAFE_TOOL_COMPLETED,
-  }, {
-    id: `${assistantId}-agui-text`,
-    role: "assistant",
-    content: "The Core Worker continues independently.",
-  }, {
-    id: "00000000-0000-4000-8000-000000000006",
-    role: "user",
-    content: "Read the completed Result.",
-  }] }), registry)).resolves.toMatchObject({
-    latestUserMessage: {
-      content: "Read the completed Result.",
-      id: "00000000-0000-4000-8000-000000000006",
-      role: "user",
-    },
   });
 });
 
-test.each([
-  { messages: [{
-    id: "00000000-0000-4000-8000-000000000003",
-    role: "user",
-    content: "Build an Alpha.",
-  }, {
-    id: "00000000-0000-4000-8000-000000000004-agui-text",
-    role: "assistant",
-    content: "Orphan text.",
-  }, {
-    id: "00000000-0000-4000-8000-000000000006",
-    role: "user",
-    content: "Continue.",
-  }] },
-  { messages: [{
-    id: "00000000-0000-4000-8000-000000000003",
-    role: "user",
-    content: "Build an Alpha.",
-  }, {
-    id: "00000000-0000-4000-8000-000000000004",
-    role: "assistant",
-    toolCalls: [{
-      id: "provider-call-1",
-      type: "function",
-      function: { arguments: "{}", name: "submit_research_run" },
-    }],
-  }, {
-    id: "00000000-0000-4000-8000-000000000004-agui-text",
-    role: "assistant",
-    content: "Text before the Tool result.",
-  }, {
-    id: "00000000-0000-4000-8000-000000000006",
-    role: "user",
-    content: "Continue.",
-  }] },
-  { messages: [{
-    id: "00000000-0000-4000-8000-000000000003",
-    role: "user",
-    content: "Build an Alpha.",
-  }, {
-    id: "00000000-0000-4000-8000-000000000003",
-    role: "user",
-    content: "Duplicate id.",
-  }] },
-])("rejects malformed split Assistant history %#", async ({ messages }) => {
-  await expect(readValidatedChatRun(runRequest({ messages }), registry)).rejects.toMatchObject({
-    code: "INVALID_CHAT_REQUEST",
-    status: 400,
-  } satisfies Partial<ChatRequestError>);
-});
-
-test("rejects an oversized UTF-8 message before execution", async () => {
-  const content = `${"a".repeat(MAX_CHAT_MESSAGE_BYTES - 2)}低`;
-  await expect(readValidatedChatRun(runRequest({ messages: [{
-    id: "00000000-0000-4000-8000-000000000003",
-    role: "user",
-    content,
-  }] }), registry)).rejects.toMatchObject({
-    code: "AGENT_LIMIT",
-    status: 413,
-  } satisfies Partial<ChatRequestError>);
-});
-
-test.each([
-  { state: { browserOwned: true } },
-  { tools: [{ name: "browser-tool" }] },
-  { context: [{ description: "browser context", value: "unsafe" }] },
-  { forwardedProps: { command: "parallel-protocol" } },
-  { messages: [{ id: "00000000-0000-4000-8000-000000000003", role: "assistant", content: "last" }] },
-])("rejects unsupported browser-authored input %#", async (override) => {
-  await expect(readValidatedChatRun(runRequest(override), registry)).rejects.toMatchObject({
-    code: "INVALID_CHAT_REQUEST",
-    status: 400,
-  } satisfies Partial<ChatRequestError>);
-});
+function userMessage(id = INPUT_ID, content = "Build an Alpha.") {
+  return { content, id, role: "user" };
+}
 
 function runRequest(override: Record<string, unknown> = {}): Request {
   const body = {
-    threadId: "00000000-0000-4000-8000-000000000001",
-    runId: "00000000-0000-4000-8000-000000000002",
-    messages: [{
-      id: "00000000-0000-4000-8000-000000000003",
-      role: "user",
-      content: "Build an Alpha.",
-    }],
-    state: {},
-    tools: [],
     context: [],
     forwardedProps: {
       thesistrace: {
+        command: "prompt",
         modelKey: "scripted",
         reasoningEffort: "medium",
         sessionMode: "new",
       },
     },
+    messages: [userMessage()],
+    runId: RUN_ID,
+    state: {},
+    threadId: THREAD_ID,
+    tools: [],
     ...override,
   };
   return new Request("http://agent.test/agent/research/run", {

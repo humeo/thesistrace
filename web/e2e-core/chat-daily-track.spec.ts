@@ -51,7 +51,7 @@ test("Chat DailyTrack uses the full grant and explains a real Strategy's current
   await send(page, "Stop the DailyTrack in this Chat.");
   expect(trackFacts(researcher.id)).toMatchObject({ tracks: 1, starts: 1, refreshes: 0, retries: 0, stops: 0 });
   await expect(page.getByRole("button", { name: /^(Stop|Confirm|Retry)( DailyTrack)?$/ })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Conversation", exact: true })).not.toContainText(/checkpoint|lease_owner|object_key/);
+  await expect(page.getByRole("log", { name: "Conversation timeline", exact: true })).not.toContainText(/checkpoint|lease_owner|object_key/);
   expect(browserCoreWrites).toEqual([]);
   await page.getByRole("table", { name: "Latest DailyTrack Observation", exact: true }).last().scrollIntoViewIfNeeded();
   await testInfo.attach("daily-track-desktop", { body: await page.screenshot(), contentType: "image/png" });
@@ -166,8 +166,8 @@ async function assertCurrentObservation(page: Page, detail: Track): Promise<void
 
 async function send(page: Page, prompt: string, status = "Run complete"): Promise<void> {
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-  await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.locator(".chat-composer-status-row").getByRole("status")).toHaveText(status, { timeout: 90_000 });
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.locator("[data-chat-status]")).toHaveText(status, { timeout: 90_000 });
 }
 
 async function deleteChat(page: Page): Promise<void> {

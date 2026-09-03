@@ -37,7 +37,7 @@ const scriptedLargeA2UITablePrompt =
   "[scripted-a2ui-table] Show a large renderer acceptance sample, not research evidence.";
 
 function agentRunStatus(page: Page) {
-  return page.locator(".chat-composer-status-row").getByRole("status");
+  return page.locator("[data-chat-status]");
 }
 
 securityTest("Chat preserves returnTo and opens after login without a document reload", async ({ page }) => {
@@ -118,7 +118,7 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   const closeBox = await close.boundingBox();
   expect(closeBox?.width).toBeGreaterThanOrEqual(44);
   expect(closeBox?.height).toBeGreaterThanOrEqual(44);
-  const sendBox = await page.getByRole("button", { name: "Send message" }).boundingBox();
+  const sendBox = await page.getByRole("button", { name: "Send" }).boundingBox();
   expect(sendBox?.width).toBeGreaterThanOrEqual(44);
   expect(sendBox?.height).toBeGreaterThanOrEqual(44);
   await page.keyboard.press("Escape");
@@ -134,8 +134,8 @@ test("Chat exposes an accessible 16 KiB text boundary before execution", async (
   await message.fill("a".repeat(16 * 1024 + 1));
 
   await expect(message).toHaveAttribute("aria-invalid", "true");
-  await expect(page.getByRole("alert")).toHaveText("Message exceeds the 16 KiB limit.");
-  await expect(page.getByRole("button", { name: "Send message" })).toBeDisabled();
+  await expect(page.locator("#chat-composer-validation")).toHaveText("Input exceeds the 16 KiB limit.");
+  await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
   expect(new URL(page.url()).searchParams.get("session")).toBeNull();
 });
 
@@ -163,7 +163,7 @@ for (const viewport of [
     const message = page.getByRole("textbox", { name: "Message", exact: true });
     await expect(message).toBeEnabled();
     await message.fill("Build a low volatility Alpha.");
-    await page.getByRole("button", { name: "Send message" }).click();
+    await page.getByRole("button", { name: "Send" }).click();
     await expect(agentRunStatus(page)).toHaveText("Run complete");
     const sessionUrl = page.url();
     expect(new URL(sessionUrl).searchParams.get("session")).not.toBeNull();
@@ -218,7 +218,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
     status: response.status(),
   }));
   await message.fill("Build a low volatility Alpha.");
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
 
   await expect.poll(() => new URL(page.url()).searchParams.get("session")).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
@@ -534,7 +534,7 @@ test("Chat preserves bounded multi-step output across reload and a subsequent me
   await page.goto("/chat");
   const message = page.getByRole("textbox", { name: "Message", exact: true });
   await message.fill("[scripted-multi-step-output] Produce two bounded outputs around a research context inspection.");
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   const assistant = page.locator(".chat-message-assistant .chat-assistant-markdown");
   const outputCounts = async () => {
@@ -559,7 +559,7 @@ test("Chat preserves bounded multi-step output across reload and a subsequent me
 
   await expect(message).toBeEnabled();
   await message.fill("Continue this research.");
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
   await expect(page.locator(".chat-message-user")).toHaveCount(2);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   await expect(message).toBeEnabled();
@@ -574,7 +574,7 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
   await page.goto("/chat");
   const prompt = "[scripted-tool-turn] Inspect the available research context.";
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
 
   const tool = page.getByRole("article", {
     name: "Tool get_research_context: Completed",
@@ -668,7 +668,7 @@ test(`Chat rejects an invalid model-authored A2UI surface and remains usable: ${
   }, unsafeA2uiCanary);
   const message = page.getByRole("textbox", { name: "Message", exact: true });
   await message.fill(prompt);
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
 
   // This assertion spans admission, native Tool validation and persisted
   // completion in the resource-bounded image, not just a synchronous UI update.
@@ -707,7 +707,7 @@ test(`Chat rejects an invalid model-authored A2UI surface and remains usable: ${
     new URL(response.url()).pathname.endsWith("/agent/research/run")
   ));
   await message.fill("Continue after rejecting that unsafe surface.");
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
   expect((await continuationResponse).status()).toBe(200);
   await expect(assistantMessages).toHaveCount(assistantCount + 1, { timeout: 30_000 });
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
@@ -725,7 +725,7 @@ test("A2UI shows real running state and supports keyboard and narrow-screen resu
   try {
     await page.goto("/chat");
     await page.getByRole("textbox", { name: "Message", exact: true }).fill(scriptedFactorIdeaPrompt);
-    await page.getByRole("button", { name: "Send message" }).click();
+    await page.getByRole("button", { name: "Send" }).click();
     const admitted = page.getByRole("article", { name: "Tool submit_research_run: Completed" });
     await expect(admitted).toBeVisible({ timeout: 30_000 });
     const href = await admitted.locator("a.chat-tool-resource").getAttribute("href");
@@ -813,7 +813,7 @@ test("an A2UI-only answer completes, replays and preserves large table layout on
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(scriptedLargeA2UITablePrompt);
   const admission = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/agent/copilotkit/agent/research/run"
     && response.request().method() === "POST");
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
   const admitted = await admission;
   if (admitted.status() !== 200) {
     const body: unknown = await admitted.json().catch(() => null);
@@ -885,7 +885,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   await page.goto("/chat");
   const message = page.getByRole("textbox", { name: "Message", exact: true });
   await message.fill(scriptedFactorSubmitOnlyPrompt);
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
 
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
   const admission = page.getByRole("article", {
@@ -943,7 +943,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   expect(durableFacts.data_generation_id).toMatch(/^[a-f0-9]{64}$/);
 
   await message.fill(scriptedResumeResearchPrompt);
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
 
   const detail = await page.request.get(`/api/research-runs/${runId}`);
@@ -1024,7 +1024,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   })).toHaveCount(0);
 
   await message.fill(scriptedStrategyPrompt);
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("article", {
     name: "Tool submit_research_run: Completed",
   })).toHaveCount(2, { timeout: 30_000 });
@@ -1197,7 +1197,7 @@ test("a lost admission response replays the same effect and resumes the one Core
   await message.fill(scriptedFactorSubmitOnlyPrompt);
   setProxyMode("mcp-fault-proxy", 8150, "tool-call", "disconnect-submit");
   try {
-    await page.getByRole("button", { name: "Send message" }).click();
+    await page.getByRole("button", { name: "Send" }).click();
     await expect(agentRunStatus(page)).toHaveText("Run failed", { timeout: 30_000 });
     await expect(page.getByRole("article", {
       name: "Tool submit_research_run: Failed",
@@ -1226,7 +1226,7 @@ test("a lost admission response replays the same effect and resumes the one Core
     }, { timeout: 90_000 }).toBe("succeeded");
 
     await message.fill(scriptedResumeResearchPrompt);
-    await page.getByRole("button", { name: "Send message" }).click();
+    await page.getByRole("button", { name: "Send" }).click();
     await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 60_000 });
     const replayedAdmission = page.getByRole("article", {
       name: "Tool submit_research_run: Completed",
@@ -1259,7 +1259,7 @@ test("the same Chat entry runs and explains a real Strategy Backtest", async ({
   await page.goto("/chat");
   const message = page.getByRole("textbox", { name: "Message", exact: true });
   await message.fill(scriptedStrategyPrompt);
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
 
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
   const admission = page.getByRole("article", {
@@ -1338,7 +1338,7 @@ test("Chat fails closed on a real Auth exchange timeout and recovers", async ({ 
     const runResponse = page.waitForResponse((response) =>
       new URL(response.url()).pathname.endsWith("/agent/research/run"),
     );
-    await page.getByRole("button", { name: "Send message" }).click();
+    await page.getByRole("button", { name: "Send" }).click();
     expect((await runResponse).status()).toBe(200);
     await expect(agentRunStatus(page)).toHaveText("Run failed");
     await expect(page.getByRole("alert")).toHaveAttribute("data-failure-code", "MCP_TRANSIENT");
@@ -1366,7 +1366,7 @@ test("Chat fails closed on a real Auth exchange timeout and recovers", async ({ 
     exchange_requests: exchangeRequestsBeforeReload,
   });
   await message.fill("Build a testable quality Alpha idea.");
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   await expect(page.locator(".chat-message-assistant .chat-message-content")).toBeVisible();
 });
@@ -1381,7 +1381,7 @@ test("a connected MCP Tool response disconnect becomes a durable failed Run and 
     const runResponse = page.waitForResponse((response) =>
       new URL(response.url()).pathname.endsWith("/agent/research/run"),
     );
-    await page.getByRole("button", { name: "Send message" }).click();
+    await page.getByRole("button", { name: "Send" }).click();
     expect((await runResponse).status()).toBe(200);
     await expect(agentRunStatus(page)).toHaveText("Run failed");
     await expect(page.getByRole("alert")).toHaveAttribute("data-failure-code", "MCP_TRANSIENT");
@@ -1424,7 +1424,7 @@ test("a connected MCP Tool response disconnect becomes a durable failed Run and 
   })).toBeVisible();
   await expect(message).toBeEnabled();
   await message.fill("[scripted-tool-turn] Inspect the available research context.");
-  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("article", {
     name: "Tool get_research_context: Completed",
   })).toBeVisible();
@@ -1512,10 +1512,10 @@ function setAgentSessionActiveRun(threadId: string, active: boolean): void {
     BEGIN;
     DELETE FROM agent.agent_run WHERE id = '${menuFocusRunId}'::uuid;
     INSERT INTO agent.agent_run (
-      id, thread_id, request_fingerprint, model_key, provider_model_id,
+      id, thread_id, kind, request_fingerprint, model_key, provider_model_id,
       reasoning_effort, agent_build_revision, status
     ) VALUES (
-      '${menuFocusRunId}'::uuid, '${threadId}'::uuid,
+      '${menuFocusRunId}'::uuid, '${threadId}'::uuid, 'prompt',
       decode(repeat('56', 32), 'hex'), 'scripted-research', 'scripted-v1',
       'medium', 'browser-menu-focus-test', 'running'
     );
@@ -1552,10 +1552,10 @@ function seedActiveAgentLayoutSession(sourceThreadId: string): void {
     FROM agent."mastra_threads"
     WHERE id = '${sourceThreadId}';
     INSERT INTO agent.agent_run (
-      id, thread_id, request_fingerprint, model_key, provider_model_id,
+      id, thread_id, kind, request_fingerprint, model_key, provider_model_id,
       reasoning_effort, agent_build_revision, status
     ) VALUES (
-      '${activeLayoutRunId}'::uuid, '${activeLayoutSessionId}'::uuid,
+      '${activeLayoutRunId}'::uuid, '${activeLayoutSessionId}'::uuid, 'prompt',
       decode(repeat('55', 32), 'hex'), 'scripted-research', 'scripted-v1',
       'medium', 'browser-layout-test', 'running'
     );

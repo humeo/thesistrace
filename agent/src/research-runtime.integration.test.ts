@@ -20,14 +20,11 @@ import {
   RESEARCH_A2UI_PROTOCOL_VERSION,
   safeResearchA2UIErrorContent,
 } from "../../contracts/research-a2ui.mjs";
-import {
-  canonicalSubmittedBrowserMessages,
-  SAFE_TOOL_COMPLETED,
-} from "./browser-message-safety.js";
+import { SAFE_TOOL_COMPLETED } from "./browser-message-safety.js";
 import { parseSafeToolResult, projectSafeToolResult } from "./safe-tool-result.js";
 import { McpRunPreparationError } from "./mcp-token-exchanger.js";
 import type { AgentSettings } from "./config.js";
-import { chatRunFingerprint, readValidatedChatRun } from "./chat-request.js";
+import { chatCommandFingerprint, chatRunFingerprint, readValidatedChatRun } from "./chat-request.js";
 import { createMcpRunFactory, type McpRun } from "./mcp-run.js";
 import { readModelRegistry } from "./model-registry.js";
 import { createResearchRuntime as createRuntime, type ResearchRuntime, type ResearchRuntimeDependencies } from "./research-runtime.js";
@@ -45,6 +42,7 @@ import {
   SCRIPTED_INVALID_A2UI_TOP_LEVEL_PROMPT,
   SCRIPTED_INVALID_A2UI_DATA_PROMPT,
   SCRIPTED_LARGE_A2UI_TABLE_PROMPT,
+  SCRIPTED_ASK_USER_PROMPT,
   SCRIPTED_TOOL_PROMPT,
 } from "./scripted-language-model.js";
 import {
@@ -185,7 +183,7 @@ describe.sequential("durable Research Agent runtime", () => {
       const retryMessage = { id: fixedUuid(704), role: "user" as const, content: "Retry the previous request. Inspect retained research before starting new work." };
       const retried = await run(runtime, runInput({
         content: retryMessage.content, messageId: retryMessage.id, runId: fixedUuid(703), threadId: input.threadId,
-        messages: [...snapshotMessages(replay), retryMessage],
+        messages: [retryMessage],
       }), primaryResearcher);
       expect(retried.at(-1)?.type).toBe("RUN_FINISHED");
       const counts = await owner.query(`SELECT (SELECT count(*) FROM agent.agent_run) AS runs, (SELECT count(*) FROM agent.mastra_messages WHERE role = 'user') AS users`);
@@ -275,17 +273,17 @@ describe.sequential("durable Research Agent runtime", () => {
       const replay = await connect(restarted, input.threadId, primaryResearcher);
       expect(replay[0]).toMatchObject({ selection: { modelKey: "scripted-research", providerModelId: "scripted-v1", reasoningEffort: "medium" } });
       const message = { content: "Refine the idea", role: "user" as const, id: fixedUuid(734) };
-      const next = runInput({ content: message.content, messageId: message.id, runId: fixedUuid(733), threadId: input.threadId, messages: [...snapshotMessages(replay), message] });
+      const next = runInput({ content: message.content, messageId: message.id, runId: fixedUuid(733), threadId: input.threadId, messages: [message] });
       const invalid = await restarted.handle(runRequest(next), primaryResearcher);
       expect(invalid.status).toBe(400);
       expect(await invalid.json()).toEqual({ code: "INVALID_MODEL" });
       expect(discover).not.toHaveBeenCalled();
-      const unsupported = { ...next, forwardedProps: { thesistrace: { modelKey: "scripted-next", reasoningEffort: "medium", sessionMode: "existing" } } };
+      const unsupported = { ...next, forwardedProps: { thesistrace: { command: "prompt", modelKey: "scripted-next", reasoningEffort: "medium", sessionMode: "existing" } } };
       const badEffort = await restarted.handle(runRequest(unsupported), primaryResearcher);
       expect(badEffort.status).toBe(400);
       expect(await badEffort.json()).toEqual({ code: "UNSUPPORTED_REASONING" });
       expect(discover).not.toHaveBeenCalled();
-      const accepted = await run(restarted, { ...next, forwardedProps: { thesistrace: { modelKey: "scripted-next", reasoningEffort: "high", sessionMode: "existing" } } }, primaryResearcher);
+      const accepted = await run(restarted, { ...next, forwardedProps: { thesistrace: { command: "prompt", modelKey: "scripted-next", reasoningEffort: "high", sessionMode: "existing" } } }, primaryResearcher);
       expect(accepted.at(-1)?.type).toBe("RUN_FINISHED");
       const identities = await owner.query("SELECT model_key, provider_model_id, reasoning_effort FROM agent.agent_run ORDER BY started_at");
       expect(identities.rows).toEqual([
@@ -416,6 +414,278 @@ describe.sequential("durable Research Agent runtime", () => {
     }
   });
 
+  it("persists an ask_user interrupt and resumes the same durable Turn", async () => {
+    const runtime = await createIntegrationRuntime();
+    const threadId = fixedUuid(8801);
+    const runId = fixedUuid(8802);
+    const answerId = fixedUuid(8804);
+    try {
+      const waitingEvents = await run(runtime, runInput({
+        content: SCRIPTED_ASK_USER_PROMPT,
+        messageId: fixedUuid(8803),
+        runId,
+        threadId,
+      }), primaryResearcher);
+      expect(waitingEvents.filter((event) => event.type === "RUN_STARTED")).toHaveLength(1);
+      expect(waitingEvents.at(-1)).toMatchObject({
+        runId,
+        threadId,
+        type: "RUN_FINISHED",
+      });
+
+      const waiting = await runtime.session(threadId, primaryResearcher);
+      expect(waiting).toMatchObject({
+        currentTurn: {
+          id: runId,
+          kind: "prompt",
+          question: {
+            options: [{ label: "Quality" }, { label: "Risk" }],
+            question: "Which objective should lead?",
+            selectionMode: "single_select",
+          },
+          status: "waiting_for_user",
+        },
+      });
+      const question = waiting.currentTurn?.question;
+      if (question === null || question === undefined) throw new Error("expected pending question");
+
+      const input = answerInput({
+        answer: "Quality",
+        inputId: answerId,
+        interruptId: question.interruptId,
+        runId,
+        threadId,
+      });
+      const answeredEvents = await run(runtime, input, primaryResearcher);
+      expect(answeredEvents.filter((event) => event.type === "RUN_STARTED"))
+        .toMatchObject([{ runId, threadId }]);
+      expect(answeredEvents.at(-1)).toMatchObject({ runId, threadId, type: "RUN_FINISHED" });
+      await expect(runtime.session(threadId, primaryResearcher)).resolves.toMatchObject({
+        currentTurn: null,
+        latestTurn: { id: runId, status: "completed" },
+      });
+
+      const timeline = await runtime.timeline(threadId, primaryResearcher, undefined, 50);
+      expect(timeline.entries.filter((entry) => entry.kind === "question"))
+        .toMatchObject([{ payload: { status: "answered" }, turnId: runId }]);
+      expect(timeline.entries.filter((entry) => entry.kind === "user_input"))
+        .toMatchObject([
+          { payload: { source: "prompt" } },
+          { payload: { content: "Quality", inputId: answerId, source: "answer" } },
+        ]);
+      expect(timeline.entries).toContainEqual(expect.objectContaining({
+        kind: "assistant_message",
+        payload: expect.objectContaining({
+          content: "I will lead with quality and keep risk as a constraint.",
+          status: "complete",
+        }),
+        turnId: runId,
+      }));
+
+      const replay = await run(runtime, input, primaryResearcher);
+      expect(replay.at(-1)).toMatchObject({ runId, type: "RUN_FINISHED" });
+      const counts = await owner.query<{ commands: number; runs: number }>(`
+        SELECT
+          (SELECT count(*) FROM agent.agent_run WHERE thread_id = $1::uuid)::int AS runs,
+          (SELECT count(*) FROM agent.chat_command WHERE thread_id = $1::uuid AND kind = 'answer')::int AS commands
+      `, [threadId]);
+      expect(counts.rows).toEqual([{ commands: 1, runs: 1 }]);
+
+      const conflict = await runtime.handle(runRequest(answerInput({
+        answer: "Risk",
+        inputId: answerId,
+        interruptId: question.interruptId,
+        runId,
+        threadId,
+      })), primaryResearcher);
+      expect(conflict.status).toBe(409);
+      await expect(conflict.json()).resolves.toEqual({ code: "CHAT_COMMAND_CONFLICT" });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("stops a waiting Turn precisely and makes the Stop command idempotent", async () => {
+    const runtime = await createIntegrationRuntime();
+    const threadId = fixedUuid(8811);
+    const runId = fixedUuid(8812);
+    const commandId = fixedUuid(8814);
+    try {
+      await run(runtime, runInput({
+        content: SCRIPTED_ASK_USER_PROMPT,
+        messageId: fixedUuid(8813),
+        runId,
+        threadId,
+      }), primaryResearcher);
+      const input = stopInput(commandId, runId);
+      await expect(runtime.stop(threadId, primaryResearcher, input)).resolves.toEqual({
+        commandId,
+        errorCode: null,
+        kind: "stop",
+        status: "accepted",
+        turnId: runId,
+      });
+      await expect(runtime.stop(threadId, primaryResearcher, input)).resolves.toMatchObject({
+        commandId,
+        status: "accepted",
+      });
+      await expect(runtime.session(threadId, primaryResearcher)).resolves.toMatchObject({
+        currentTurn: null,
+        latestTurn: { id: runId, status: "stopped" },
+      });
+      const timeline = await runtime.timeline(threadId, primaryResearcher, undefined, 50);
+      expect(timeline.entries.filter((entry) => entry.kind === "question"))
+        .toMatchObject([{ payload: { status: "stopped" } }]);
+      expect(timeline.entries.at(-1)).toMatchObject({
+        kind: "turn_outcome",
+        payload: { status: "stopped" },
+        turnId: runId,
+      });
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it("delivers Steer at the next model boundary without creating another Turn", async () => {
+    const threadId = fixedUuid(8821);
+    const runId = fixedUuid(8822);
+    const inputId = fixedUuid(8824);
+    const content = "Keep the refinement focused on quality.";
+    const barrier = toolBarrier();
+    const calls: string[] = [];
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => undefined,
+        hasFatalToolFailure: () => false,
+        toolFailure: () => undefined,
+        tools: {
+          get_research_context: createTool({
+            description: "Read the current research context.",
+            execute: async () => {
+              calls.push("get_research_context");
+              await barrier.promise;
+              return { available: true };
+            },
+            id: "get_research_context",
+            inputSchema: z.object({}).strict(),
+          }),
+        },
+      }),
+    });
+    const pending = run(runtime, runInput({
+      content: SCRIPTED_TOOL_PROMPT,
+      messageId: fixedUuid(8823),
+      runId,
+      threadId,
+    }), primaryResearcher);
+    try {
+      await vi.waitFor(() => expect(calls).toEqual(["get_research_context"]));
+      const input = steerInput(inputId, runId, content);
+      await expect(runtime.steer(threadId, primaryResearcher, input)).resolves.toEqual({
+        commandId: inputId,
+        errorCode: null,
+        kind: "steer",
+        status: "accepted",
+        turnId: runId,
+      });
+      await expect(runtime.steer(threadId, primaryResearcher, input)).resolves.toMatchObject({
+        commandId: inputId,
+        status: "accepted",
+      });
+      barrier.resolve();
+      const events = await pending;
+      expect(events.filter((event) => event.type === "RUN_STARTED")).toHaveLength(1);
+      expect(events.at(-1)).toMatchObject({ runId, type: "RUN_FINISHED" });
+      const timeline = await runtime.timeline(threadId, primaryResearcher, undefined, 50);
+      expect(timeline.entries.filter((entry) => (
+        entry.kind === "user_input" && entry.payload.source === "steer"
+      ))).toEqual([expect.objectContaining({
+        payload: { content, inputId, source: "steer" },
+        turnId: runId,
+      })]);
+      const persisted = await owner.query<{ runs: number; steers: number }>(`
+        SELECT
+          (SELECT count(*) FROM agent.agent_run WHERE thread_id = $1::uuid)::int AS runs,
+          (SELECT count(*) FROM agent.chat_command WHERE thread_id = $1::uuid AND kind = 'steer')::int AS steers
+      `, [threadId]);
+      expect(persisted.rows).toEqual([{ runs: 1, steers: 1 }]);
+    } finally {
+      barrier.resolve();
+      await pending;
+      await runtime.close();
+    }
+  });
+
+  it("stops a running Turn and Continue starts a new empty-message Turn", async () => {
+    const threadId = fixedUuid(8831);
+    const stoppedRunId = fixedUuid(8832);
+    const stopCommandId = fixedUuid(8834);
+    const continueRunId = fixedUuid(8835);
+    const barrier = toolBarrier();
+    const calls: string[] = [];
+    const runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => undefined,
+        hasFatalToolFailure: () => false,
+        toolFailure: () => undefined,
+        tools: {
+          get_research_context: createTool({
+            description: "Read the current research context.",
+            execute: async () => {
+              calls.push("get_research_context");
+              await barrier.promise;
+              return { available: true };
+            },
+            id: "get_research_context",
+            inputSchema: z.object({}).strict(),
+          }),
+        },
+      }),
+    });
+    const pending = run(runtime, runInput({
+      content: SCRIPTED_TOOL_PROMPT,
+      messageId: fixedUuid(8833),
+      runId: stoppedRunId,
+      threadId,
+    }), primaryResearcher);
+    try {
+      await vi.waitFor(() => expect(calls).toEqual(["get_research_context"]));
+      await expect(runtime.stop(
+        threadId,
+        primaryResearcher,
+        stopInput(stopCommandId, stoppedRunId),
+      )).resolves.toMatchObject({ kind: "stop", status: "accepted", turnId: stoppedRunId });
+      barrier.resolve();
+      await pending;
+      await expect(runtime.session(threadId, primaryResearcher)).resolves.toMatchObject({
+        currentTurn: null,
+        latestTurn: { id: stoppedRunId, status: "stopped" },
+      });
+
+      const continued = await run(runtime, continueInput({
+        runId: continueRunId,
+        threadId,
+      }), primaryResearcher);
+      expect(continued.filter((event) => event.type === "RUN_STARTED"))
+        .toMatchObject([{ runId: continueRunId, threadId }]);
+      expect(continued.at(-1)).toMatchObject({ runId: continueRunId, type: "RUN_FINISHED" });
+      await expect(runtime.session(threadId, primaryResearcher)).resolves.toMatchObject({
+        currentTurn: null,
+        latestTurn: { id: continueRunId, kind: "continue", status: "completed" },
+      });
+      const state = await owner.query<{ continue_runs: number; user_messages: number }>(`
+        SELECT
+          (SELECT count(*) FROM agent.agent_run WHERE thread_id = $1::uuid AND kind = 'continue')::int AS continue_runs,
+          (SELECT count(*) FROM agent.mastra_messages WHERE thread_id = $2 AND role = 'user')::int AS user_messages
+      `, [threadId, threadId]);
+      expect(state.rows).toEqual([{ continue_runs: 1, user_messages: 1 }]);
+    } finally {
+      barrier.resolve();
+      await pending;
+      await runtime.close();
+    }
+  });
+
   it("rejects an overlapping Thread Run explicitly while another Thread runs independently", async () => {
     const threadId = fixedUuid(9001);
     const runId = fixedUuid(9002);
@@ -506,7 +776,7 @@ describe.sequential("durable Research Agent runtime", () => {
         .toEqual([fixedUuid(9003)]);
       expect(persisted.filter((message) => message.role === "tool")).toHaveLength(1);
       await expect(runtime.session(threadId, primaryResearcher))
-        .resolves.toMatchObject({ activeRun: false });
+        .resolves.toMatchObject({ currentTurn: null, latestTurn: { status: "completed" } });
     } finally {
       barrier.resolve();
       await first;
@@ -548,7 +818,7 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(acceptedTools.has(overflow.runId)).toBe(false);
       const replay = connect(runtime, inputs[0]!.threadId, primaryResearcher);
       const current = await runtime.session(inputs[0]!.threadId, primaryResearcher);
-      expect(current.activeRun).toBe(true);
+      expect(current.currentTurn?.status).toBe("running");
       barrier.resolve();
       const completed = await Promise.all([...pending, replay]);
       for (const events of completed) expect(events.at(-1)?.type).toBe("RUN_FINISHED");
@@ -654,7 +924,7 @@ describe.sequential("durable Research Agent runtime", () => {
 
       const resumed = await run(runtime, runInput({
         messageId: fixedUuid(9304),
-        messages: [...retained.filter((message) => message.role !== "activity"), {
+        messages: [{
           content: SCRIPTED_RESUME_RESEARCH_PROMPT, id: fixedUuid(9304), role: "user",
         }],
         runId: fixedUuid(9305), threadId,
@@ -829,10 +1099,10 @@ describe.sequential("durable Research Agent runtime", () => {
     });
     await owner.query(`
       INSERT INTO agent.agent_run (
-        id, thread_id, request_fingerprint, model_key, provider_model_id,
+        id, thread_id, kind, request_fingerprint, model_key, provider_model_id,
         reasoning_effort, agent_build_revision, status
       ) VALUES (
-        $1, $2, decode(repeat('44', 32), 'hex'), 'scripted-research',
+        $1, $2, 'prompt', decode(repeat('44', 32), 'hex'), 'scripted-research',
         'scripted-v1', 'medium', 'interrupted-build', 'running'
       )
     `, [runId, threadId]);
@@ -884,7 +1154,8 @@ describe.sequential("durable Research Agent runtime", () => {
         lifecycle_status: "error",
       }]);
       await expect(runtime.session(threadId, primaryResearcher)).resolves.toMatchObject({
-        activeRun: false,
+        currentTurn: null,
+        latestTurn: { status: "failed" },
       });
       await expect(runtime.deleteSession(threadId, primaryResearcher)).resolves.toBeUndefined();
     } finally {
@@ -1077,15 +1348,10 @@ describe.sequential("durable Research Agent runtime", () => {
 
     runtime = await createIntegrationRuntime();
     try {
-      const durable = snapshotMessages(await connect(
-        runtime,
-        retryThreadId,
-        primaryResearcher,
-      ));
       await run(runtime, runInput({
         content: "Now refine it with balance-sheet quality.",
-        messageId: fixedUuid(426),
-        messages: [...durable, {
+        messageId: fixedUuid(427),
+        messages: [{
           content: "Now refine it with balance-sheet quality.",
           id: fixedUuid(427),
           role: "user",
@@ -1116,10 +1382,10 @@ describe.sequential("durable Research Agent runtime", () => {
     });
     await owner.query(`
       INSERT INTO agent.agent_run (
-        id, thread_id, request_fingerprint, model_key, provider_model_id,
+        id, thread_id, kind, request_fingerprint, model_key, provider_model_id,
         reasoning_effort, agent_build_revision, status, token_usage, completed_at
       ) VALUES (
-        $1, $2, decode(repeat('00', 32), 'hex'), 'scripted-research',
+        $1, $2, 'prompt', decode(repeat('00', 32), 'hex'), 'scripted-research',
         'scripted-v1', 'medium', 'integration-build', 'completed',
         '{"reported":false}'::jsonb, pg_catalog.now()
       )
@@ -1199,10 +1465,10 @@ describe.sequential("durable Research Agent runtime", () => {
     });
     await owner.query(`
       INSERT INTO agent.agent_run (
-        id, thread_id, request_fingerprint, model_key, provider_model_id,
+        id, thread_id, kind, request_fingerprint, model_key, provider_model_id,
         reasoning_effort, agent_build_revision, status
       ) VALUES (
-        $1, $2, decode(repeat('11', 32), 'hex'), 'scripted-research',
+        $1, $2, 'prompt', decode(repeat('11', 32), 'hex'), 'scripted-research',
         'scripted-v1', 'medium', 'integration-build', 'running'
       )
     `, [activeRunId, activeThreadId]);
@@ -1211,7 +1477,7 @@ describe.sequential("durable Research Agent runtime", () => {
       primaryResearcher.researcher_id,
     )).rejects.toBeInstanceOf(SessionActiveRunError);
     expect((await repository.listSessions(primaryResearcher.researcher_id)).sessions[0])
-      .toMatchObject({ activeRun: true, id: activeThreadId });
+      .toMatchObject({ currentTurn: { id: activeRunId, status: "running" }, id: activeThreadId });
   });
 
   it("serializes deletion with admission across repository instances and never recreates a deleted Session", async () => {
@@ -1297,14 +1563,13 @@ describe.sequential("durable Research Agent runtime", () => {
         runId: firstRunId,
         threadId,
       }), primaryResearcher);
-      const snapshot = await connect(runtime, threadId, primaryResearcher);
-      const durable = snapshotMessages(snapshot);
       const secondRunId = randomUUID();
+      const secondMessageId = randomUUID();
       await run(runtime, runInput({
-        messageId: randomUUID(),
-        messages: [...durable, {
+        messageId: secondMessageId,
+        messages: [{
           content: "Now remove reasoning.",
-          id: randomUUID(),
+          id: secondMessageId,
           role: "user",
         }],
         modelKey: "scripted-research",
@@ -1436,21 +1701,13 @@ describe.sequential("durable Research Agent runtime", () => {
       });
 
       const followUpMessageId = randomUUID();
-      const durableSnapshot = snapshotMessages(duplicate);
-      const submittedHistory = splitAssistantTextForCopilotKit(durableSnapshot);
-      expect(canonicalSubmittedBrowserMessages(submittedHistory)).toEqual(
-        durableSnapshot,
-      );
       const followUp = await run(runtime, runInput({
         messageId: followUpMessageId,
-        messages: [
-          ...submittedHistory,
-          {
+        messages: [{
             content: "Explain the next research step.",
             id: followUpMessageId,
             role: "user",
-          },
-        ],
+        }],
         runId: randomUUID(),
         threadId,
       }), primaryResearcher);
@@ -1583,7 +1840,8 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(snapshotMessages(replay).map((message) => message.role)).toEqual(["user"]);
       expect(replay.at(-1)?.type).toBe("RUN_ERROR");
       await expect(runtime.session(threadId, primaryResearcher)).resolves.toMatchObject({
-        activeRun: false,
+        currentTurn: null,
+        latestTurn: { status: "failed" },
       });
     } finally {
       await runtime.close();
@@ -1788,7 +2046,7 @@ describe.sequential("durable Research Agent runtime", () => {
       const refreshMessageId = randomUUID();
       const refresh = runInput({
         messageId: refreshMessageId, runId: randomUUID(), threadId,
-        messages: [...snapshotMessages(await connect(runtime, threadId, primaryResearcher)).filter((message) => message.role !== "activity"), {
+        messages: [{
           id: refreshMessageId, role: "user", content: SCRIPTED_RELOAD_DAILY_TRACK_PROMPT,
         }],
       });
@@ -1802,7 +2060,7 @@ describe.sequential("durable Research Agent runtime", () => {
     } finally {
       await runtime.close();
     }
-  });
+  }, 15_000);
 
   it("passes every four-scope capability and subsequent discovery changes through to the native Mastra model", async () => {
     const completeDiscovery = [
@@ -1830,11 +2088,11 @@ describe.sequential("durable Research Agent runtime", () => {
         const messageId = randomUUID();
         const events = await run(runtime, runInput({
           content: SCRIPTED_DISCOVERY_PROMPT, messageId, runId: randomUUID(), threadId,
-          ...(history === undefined ? {} : { messages: [...history, { id: messageId, role: "user" as const, content: SCRIPTED_DISCOVERY_PROMPT }] }),
+          ...(history === undefined ? {} : { messages: [{ id: messageId, role: "user" as const, content: SCRIPTED_DISCOVERY_PROMPT }] }),
         }), primaryResearcher);
         expect(events.at(-1)?.type).toBe("RUN_FINISHED");
         const reply = events.filter((event) => event.type === "TEXT_MESSAGE_CONTENT").map((event) => event.delta).join("");
-        expect(reply).toBe(`Available capabilities: ${[...names, "render_a2ui"].sort().join(", ")}`);
+        expect(reply).toBe(`Available capabilities: ${[...names, "ask_user", "render_a2ui"].sort().join(", ")}`);
         expect(reply).not.toContain("stop_daily_track");
         expect(reply).not.toContain("cancel_research_run");
         history = snapshotMessages(await connect(runtime, threadId, primaryResearcher));
@@ -2179,14 +2437,11 @@ describe.sequential("durable Research Agent runtime", () => {
       const followUp = await run(runtime, runInput({
         content: "Continue with the available research context.",
         messageId: followUpMessageId,
-        messages: [
-          ...snapshotMessages(replay),
-          {
+        messages: [{
             content: "Continue with the available research context.",
             id: followUpMessageId,
             role: "user",
-          },
-        ],
+        }],
         runId: randomUUID(),
         threadId,
       }), primaryResearcher);
@@ -2488,16 +2743,16 @@ describe.sequential("durable Research Agent runtime", () => {
       `, [threadId, primaryResearcher.researcher_id, UNTITLED_SESSION_TITLE]);
       await owner.query(`
         INSERT INTO agent.agent_run (
-          id, thread_id, request_fingerprint, model_key, provider_model_id,
+          id, thread_id, kind, request_fingerprint, model_key, provider_model_id,
           reasoning_effort, agent_build_revision, status
         ) VALUES (
-          $2, $1, $3, 'scripted-research', 'scripted-v1',
+          $2, $1, 'prompt', $3, 'scripted-research', 'scripted-v1',
           'medium', 'integration-build', 'running'
         )
       `, [
         threadId,
         runId,
-        chatRunFingerprint(original),
+        chatRunFingerprint(await readValidatedChatRun(runRequest(original), modelRegistry)),
       ]);
 
       const conflicting = runInput({
@@ -2545,7 +2800,7 @@ describe.sequential("durable Research Agent runtime", () => {
       for (const input of invalidInputs) {
         const response = await runtime.handle(runRequest(input), primaryResearcher);
         expect(response.status).toBe(400);
-        await expect(response.json()).resolves.toEqual({ code: "INVALID_CHAT_REQUEST" });
+        await expect(response.json()).resolves.toEqual({ code: "INVALID_CHAT_INPUT" });
       }
 
       const nilSession = await owner.query<{ count: string }>(
@@ -2580,7 +2835,7 @@ describe.sequential("durable Research Agent runtime", () => {
         threadId: oversizedThread,
       })), primaryResearcher);
       expect(oversized.status).toBe(413);
-      await expect(oversized.json()).resolves.toEqual({ code: "AGENT_LIMIT" });
+      await expect(oversized.json()).resolves.toEqual({ code: "CHAT_INPUT_TOO_LARGE" });
       const absent = await owner.query<{ count: string }>(
         "SELECT count(*)::text FROM agent.chat_session WHERE id = $1",
         [oversizedThread],
@@ -3012,11 +3267,80 @@ function runInput(options: Readonly<{
     context: [],
     forwardedProps: {
       thesistrace: {
+        command: "prompt",
         modelKey: options.modelKey ?? "scripted-research",
         reasoningEffort: options.reasoningEffort ?? "medium",
         sessionMode: options.sessionMode ?? (options.messages === undefined ? "new" : "existing"),
       },
     },
+  };
+}
+
+function answerInput(options: Readonly<{
+  answer: string | readonly string[];
+  inputId: string;
+  interruptId: string;
+  runId: string;
+  threadId: string;
+}>): RunAgentInput {
+  return {
+    threadId: options.threadId,
+    runId: options.runId,
+    messages: [],
+    state: {},
+    tools: [],
+    context: [],
+    resume: [{
+      interruptId: options.interruptId,
+      payload: options.answer,
+      status: "resolved",
+    }],
+    forwardedProps: {
+      thesistrace: {
+        command: "answer",
+        inputId: options.inputId,
+        interruptId: options.interruptId,
+      },
+    },
+  };
+}
+
+function continueInput(options: Readonly<{
+  runId: string;
+  threadId: string;
+}>): RunAgentInput {
+  return {
+    threadId: options.threadId,
+    runId: options.runId,
+    messages: [],
+    state: {},
+    tools: [],
+    context: [],
+    forwardedProps: {
+      thesistrace: {
+        command: "continue",
+        modelKey: "scripted-research",
+        reasoningEffort: "medium",
+        sessionMode: "existing",
+      },
+    },
+  };
+}
+
+function steerInput(inputId: string, expectedTurnId: string, content: string) {
+  return {
+    content,
+    expectedTurnId,
+    fingerprint: chatCommandFingerprint({ content, expectedTurnId, inputId, kind: "steer" }),
+    inputId,
+  };
+}
+
+function stopInput(commandId: string, expectedTurnId: string) {
+  return {
+    commandId,
+    expectedTurnId,
+    fingerprint: chatCommandFingerprint({ commandId, expectedTurnId, kind: "stop" }),
   };
 }
 
@@ -3114,32 +3438,6 @@ function a2uiMessages(values: readonly unknown[]): Array<Readonly<{
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function splitAssistantTextForCopilotKit(messages: readonly Message[]): Message[] {
-  const assistantIndex = messages.findIndex((message) => (
-    message.role === "assistant"
-    && message.toolCalls !== undefined
-    && typeof message.content === "string"
-    && message.content.length > 0
-  ));
-  const assistant = messages[assistantIndex];
-  if (assistant?.role !== "assistant" || typeof assistant.content !== "string") {
-    throw new Error("expected one Tool-calling Assistant message with text");
-  }
-  let toolEnd = assistantIndex + 1;
-  while (messages[toolEnd]?.role === "tool") toolEnd += 1;
-  return [
-    ...messages.slice(0, assistantIndex),
-    { ...assistant, content: undefined },
-    ...messages.slice(assistantIndex + 1, toolEnd),
-    {
-      content: assistant.content,
-      id: `${assistant.id}-agui-text`,
-      role: "assistant",
-    },
-    ...messages.slice(toolEnd),
-  ];
 }
 
 function durableTextContent(text: string, createdAt: number): string {

@@ -3,271 +3,126 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
-import type { RunAgentInput } from "@ag-ui/core";
 
-import { AuthProvider } from "../auth/AuthProvider";
-import { ChatShell } from "./ChatPage";
-import { ResearchChatCopilotProvider } from "./ResearchChatCopilotProvider";
-import { SessionHistoryList } from "./SessionHistoryList";
-
-vi.mock("../auth/client", () => ({ authClient: { getSession: async () => ({ data: null, error: null }) } }));
+import { ChatComposer } from "./ChatComposer";
+import type { StagedInput } from "./stagedInputStore";
+import type { ChatConversationController } from "./useChatConversation";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root | undefined;
+
 afterEach(async () => {
-  await act(async () => { root?.unmount(); });
+  await act(async () => root?.unmount());
   root = undefined;
-  vi.unstubAllGlobals();
   document.body.replaceChildren();
 });
 
-test("Chat waits for runtime discovery before enabling its private Agent proxy", async () => {
-  const pending = await mountChat();
-  expect(composer().disabled).toBe(true);
-  await act(async () => { pending.resolveInfo(); });
-  expect(composer().disabled).toBe(false);
+test.each([
+  ["send", "Send"],
+  ["stage", "Stage"],
+  ["stop", "Stop"],
+  ["answer", "Send answer"],
+  ["continue", "Continue"],
+] as const)("renders the state machine's %s primary action with an action name", async (kind, label) => {
+  const execute = vi.fn(async () => undefined);
+  await mount(composerController({ action: { enabled: true, kind, label }, executeMainAction: execute }));
+  const button = document.querySelector<HTMLButtonElement>(`.chat-main-action-${kind}`);
+  expect(button?.getAttribute("aria-label")).toBe(label);
+  await act(async () => button?.click());
+  expect(execute).toHaveBeenCalledOnce();
 });
 
-test("a login that expires before the first Turn remains Authentication Required", async () => {
-  const pending = await mountChat();
-  await act(async () => { pending.resolveInfo(); });
-  expect(composer().disabled).toBe(false);
-  pending.expireLogin();
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(composer(), "An Alpha idea.");
-    composer().dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await act(async () => {
-    document.querySelector<HTMLFormElement>("form.chat-composer-dock")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  });
-  expect(document.querySelector(".chat-run-error")?.getAttribute("data-failure-code")).toBe("AUTHENTICATION_REQUIRED");
-  expect(document.querySelector('.chat-run-error a')?.getAttribute("href")).toBe("/login");
-  expect(document.querySelectorAll(".chat-message-user")).toHaveLength(0);
-  expect(composer().value).toBe("An Alpha idea.");
-  expect(pending.requests.filter((path) => path.endsWith("/info"))).toHaveLength(1);
-});
-
-test.each([false, true])("an unaccepted Turn retry preserves its original request (existing Session: %s)", async (existing) => {
-  const submitted: RunAgentInput[] = [];
-  const pending = await mountChat({ existing, run: (input) => {
-    submitted.push(input);
-    return eventStream([{ type: "RUN_ERROR", code: "AGENT_CAPACITY", message: "Agent at capacity" }]);
-  } });
-  await act(async () => { pending.resolveInfo(); });
-  expect(composer().disabled).toBe(false);
-  const original = "Inspect this new Alpha idea, not my earlier request.";
-  await setDraft(original);
-  await act(async () => {
-    document.querySelector<HTMLFormElement>("form.chat-composer-dock")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  });
-  expect(composer().value).toBe(original);
-  expect(document.querySelector(".chat-run-error")?.getAttribute("data-failure-code")).toBe("AGENT_CAPACITY");
-  await setDraft("An unsent edit is separate from retrying the rejected Turn.");
-  await act(async () => {
-    [...document.querySelectorAll<HTMLButtonElement>(".chat-run-error button")]
-      .find((button) => button.textContent === "Retry with selected model")!.click();
-  });
-  expect(submitted).toHaveLength(2);
-  expect(submitted.map((input) => input.messages.at(-1)?.content)).toEqual([original, original]);
-  expect(submitted[1]?.forwardedProps.thesistrace.sessionMode).toBe(existing ? "existing" : "new");
-});
-
-test("once a retried Turn is accepted, later retry inspects durable history instead of repeating the original command", async () => {
-  const submitted: RunAgentInput[] = [];
-  const pending = await mountChat({ existing: true, run: (input) => {
-    submitted.push(input);
-    return eventStream(submitted.length === 1
-      ? [{ type: "RUN_ERROR", code: "AGENT_CAPACITY", message: "Agent at capacity" }]
-      : [{ type: "RUN_STARTED", threadId: input.threadId, runId: input.runId },
-        { type: "RUN_ERROR", code: "PROVIDER_RATE_LIMIT", message: "Provider rate limit" }]);
-  } });
-  await act(async () => { pending.resolveInfo(); });
-  await setDraft("Create the research run once.");
-  await act(async () => {
-    document.querySelector<HTMLFormElement>("form.chat-composer-dock")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    await act(async () => {
-      [...document.querySelectorAll<HTMLButtonElement>(".chat-run-error button")]
-        .find((button) => button.textContent === "Retry with selected model")!.click();
-    });
-  }
-  expect(submitted.map((input) => input.messages.at(-1)?.content)).toEqual([
-    "Create the research run once.", "Create the research run once.",
-    "Retry the previous request. Inspect retained research before starting new work.",
-  ]);
-});
-
-test.each(["accepted success", "immediate failure"] as const)(
-  "a completed retry restores keyboard focus to the Composer after %s",
-  async (outcome) => {
-    let attempts = 0;
-    let releaseAccepted: (() => void) | undefined;
-    const pending = await mountChat({ existing: true, run: (input) => {
-      attempts += 1;
-      if (attempts === 1) {
-        return eventStream([
-          { type: "RUN_ERROR", code: "AGENT_CAPACITY", message: "Agent at capacity" },
-        ]);
-      }
-      return outcome === "immediate failure"
-        ? eventStream([
-            { type: "RUN_ERROR", code: "INTERNAL_FAILURE", message: "Internal failure" },
-          ])
-        : (() => {
-            const deferred = deferredEventStream([
-              { type: "RUN_STARTED", threadId: input.threadId, runId: input.runId },
-              { type: "RUN_FINISHED", threadId: input.threadId, runId: input.runId },
-            ]);
-            releaseAccepted = deferred.release;
-            return deferred.response;
-          })();
-    } });
-    await act(async () => { pending.resolveInfo(); });
-    await setDraft("Inspect this Alpha idea.");
-    await act(async () => {
-      document.querySelector<HTMLFormElement>("form.chat-composer-dock")!
-        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    });
-    expect(document.querySelector(".chat-run-error")?.getAttribute("data-failure-code"))
-      .toBe("AGENT_CAPACITY");
-
-    await act(async () => {
-      const retry = [...document.querySelectorAll<HTMLButtonElement>(".chat-run-error button")]
-        .find((button) => button.textContent === "Retry with selected model")!;
-      retry.focus();
-      retry.click();
-    });
-
-    expect(attempts).toBe(2);
-    await act(async () => {
-      releaseAccepted?.();
-    });
-    await vi.waitFor(async () => {
-      await act(async () => { await Promise.resolve(); });
-      expect(composer().disabled).toBe(false);
-      expect(document.activeElement).toBe(composer());
-    }, { interval: 1, timeout: 1_000 });
-  },
-);
-
-test.each(["succeeds", "fails"])("Chat deletion preserves modal and navigation state when it %s", async (outcome) => {
-  const session = {
-    id: "00000000-0000-4000-8000-000000000010", title: "Earlier research", active_run: false,
-    created_at: "2026-08-31T00:00:00.000000Z", activity_at: "2026-08-31T00:00:00.000000Z",
-    version: "2026-08-31T00:00:00.000Z",
-  };
-  let navigation: { href: string; modalOpen: boolean } | undefined;
-  const container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-  await act(async () => {
-    root!.render(<SessionHistoryList
-      controller={{ status: "ready", error: null, sessions: [session], nextCursor: null,
-        loadingMore: false, refreshVersion: 0, refresh: vi.fn(),
-        loadMore: vi.fn(async () => undefined), watchGeneratedTitle: vi.fn(),
-        deleteSession: async () => { if (outcome === "fails") throw new Error("Request failed"); },
-        renameSession: vi.fn(async (item) => item),
-      }}
-      currentSessionId={session.id}
-      navigate={(href) => { navigation = { href, modalOpen: document.querySelector("dialog[open]") !== null }; }}
-      navigationInteractive
-      restoreFocus={() => undefined}
-    />);
-  });
-  await act(async () => {
-    document.querySelector<HTMLButtonElement>('[aria-label="Actions for Earlier research"]')!.click();
-  });
-  await act(async () => {
-    [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-      .find((button) => button.textContent?.trim() === "Delete Chat")!.click();
-  });
-  expect(document.querySelector<HTMLDialogElement>("dialog")?.open).toBe(true);
-  await act(async () => {
-    document.querySelector<HTMLFormElement>("dialog form")!
-      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  });
-  if (outcome === "succeeds") {
-    expect(navigation).toEqual({ href: "/chat", modalOpen: false });
-    expect(document.querySelector("dialog")).toBeNull();
-  } else {
-    expect(navigation).toBeUndefined();
-    expect(document.querySelector<HTMLDialogElement>("dialog")?.open).toBe(true);
-    expect(document.querySelector('dialog [role="alert"]')?.textContent)
-      .toBe("The Chat could not be deleted.");
-  }
-});
-
-function composer(): HTMLTextAreaElement { return document.querySelector('textarea[aria-label="Message"]')!; }
-
-async function setDraft(content: string): Promise<void> {
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(composer(), content);
-    composer().dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
-function eventStream(events: unknown[]): Response {
-  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
-}
-
-function deferredEventStream(events: unknown[]): Readonly<{
-  release: () => void;
-  response: Response;
-}> {
-  const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
-  let release = () => undefined;
-  const response = new Response(new ReadableStream<Uint8Array>({
-    start(controller) {
-      release = () => {
-        controller.enqueue(new TextEncoder().encode(body));
-        controller.close();
-      };
-    },
-  }), { headers: { "content-type": "text/event-stream" } });
-  return { release, response };
-}
-
-async function mountChat(options: { existing?: boolean; run?: (input: RunAgentInput) => Response } = {}) {
-  const requests: string[] = [];
-  const session = { id: "00000000-0000-4000-8000-000000000010", title: "Earlier research", active_run: false,
-    created_at: "2026-08-31T00:00:00.000000Z", activity_at: "2026-08-31T00:00:00.000000Z", version: "2026-08-31T00:00:00.000Z" };
-  let expired = false;
-  let resolveInfo!: () => void;
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const path = String(input);
-    requests.push(path);
-    if (path.endsWith("/info") && !expired) return new Promise<Response>((resolve) => {
-      resolveInfo = () => resolve(Response.json({ version: "1.69.3", agents: { research: { description: "Research Agent" } }, mode: "sse" }));
-    });
-    if (options.run && path.endsWith("/run")) return options.run(JSON.parse(String(init?.body)) as RunAgentInput);
-    if (options.existing && path.endsWith(`/sessions/${session.id}`)) return Response.json(session);
-    if (options.existing && path.endsWith("/connect")) return eventStream([
-      { type: "RUN_STARTED", threadId: session.id, runId: "earlier-run" },
-      { type: "MESSAGES_SNAPSHOT", messages: [{ id: "earlier-message", role: "user", content: "An earlier, unrelated idea." }] },
-      { type: "RUN_FINISHED", threadId: session.id, runId: "earlier-run" },
-    ]);
-    if (path.includes("/api/agent/")) return Response.json({ code: "AUTHENTICATION_REQUIRED" }, { status: 401 });
-    return Response.json(null);
+test("Enter submits textual actions while Shift+Enter and an empty Stop do not", async () => {
+  const execute = vi.fn(async () => undefined);
+  await mount(composerController({
+    action: { enabled: true, kind: "stage", label: "Stage" },
+    draft: "Investigate quality",
+    executeMainAction: execute,
   }));
+  const textarea = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!;
+  await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
+  expect(execute).toHaveBeenCalledOnce();
+  await act(async () => textarea.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", shiftKey: true })));
+  expect(execute).toHaveBeenCalledOnce();
+
+  await mount(composerController({ action: { enabled: true, kind: "stop", label: "Stop" }, executeMainAction: execute }));
+  const stopTextarea = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!;
+  await act(async () => stopTextarea.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
+  expect(execute).toHaveBeenCalledOnce();
+});
+
+test("shows FIFO controls and exposes Steer only on the active head item", async () => {
+  const steer = vi.fn(async () => undefined);
+  const head = staged("First staged input", 1);
+  await mount(composerController({
+    phase: "active",
+    queue: [head, staged("Second staged input", 2)],
+    steerStaged: steer,
+  }));
+  expect(document.querySelectorAll(".chat-staged-queue li")).toHaveLength(2);
+  const steerButtons = [...document.querySelectorAll<HTMLButtonElement>(".chat-staged-actions button")]
+    .filter((button) => button.textContent === "Steer");
+  expect(steerButtons).toHaveLength(1);
+  await act(async () => steerButtons[0]?.click());
+  expect(steer).toHaveBeenCalledExactlyOnceWith(head);
+});
+
+async function mount(controller: ChatConversationController): Promise<void> {
+  if (root !== undefined) await act(async () => root?.unmount());
+  document.body.replaceChildren();
   const container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
   await act(async () => {
-    root!.render(<AuthProvider><ResearchChatCopilotProvider><ChatShell
-      catalogState={{ status: "ready", catalog: { default_model_key: "registered-model", models: [{
-        key: "registered-model", display_name: "Registered model", default_reasoning_effort: "medium", reasoning_efforts: ["medium"],
-      }] } }}
-      navigateChat={vi.fn()}
-      preferenceState={options.existing ? { status: "ready", preference: { model_key: "registered-model", reasoning_effort: "medium" } } : { status: "not-required" }}
-      reloadCatalog={vi.fn()}
-      selectedSessionState={options.existing ? { status: "ready", session } : { status: "not-required" }}
-      sessionHistory={{ status: "ready", error: null, sessions: [], nextCursor: null, loadingMore: false, refreshVersion: 0,
-        refresh: vi.fn(), loadMore: vi.fn(async () => undefined), watchGeneratedTitle: vi.fn(),
-        deleteSession: vi.fn(async () => undefined), renameSession: vi.fn(async (session) => session),
-      }}
-      thread={{ kind: options.existing ? "session" : "new", id: session.id }}
-    /></ResearchChatCopilotProvider></AuthProvider>);
+    root?.render(<ChatComposer announcement="" controller={controller} modelControls={<span>Model settings</span>} />);
   });
-  return { requests, resolveInfo: () => resolveInfo(), expireLogin: () => { expired = true; } };
+}
+
+function composerController(overrides: Partial<ChatConversationController> = {}): ChatConversationController {
+  return {
+    action: { enabled: false, kind: "send", label: "Send" },
+    answerSelections: [],
+    currentTurnId: null,
+    draft: "",
+    draftBytes: 0,
+    editStaged: vi.fn(async () => undefined),
+    error: null,
+    executeMainAction: vi.fn(async () => undefined),
+    focusComposer: vi.fn(),
+    hasFirstAssistantText: true,
+    loadOlder: vi.fn(async () => true),
+    loadingOlder: false,
+    latestTurnId: null,
+    latestTurnStatus: null,
+    nextCursor: null,
+    phase: "idle",
+    question: null,
+    queue: [],
+    queueLocked: false,
+    refresh: vi.fn(async () => undefined),
+    removeStaged: vi.fn(async () => undefined),
+    retryRecovery: vi.fn(async () => undefined),
+    setAnswerSelections: vi.fn(),
+    setDraft: vi.fn(),
+    steerStaged: vi.fn(async () => undefined),
+    statusAnnouncement: "Ready.",
+    textareaRef: { current: null },
+    timeline: [],
+    timelineError: false,
+    ...overrides,
+  };
+}
+
+function staged(content: string, sequence: number): StagedInput {
+  return {
+    content,
+    createdAt: "2026-09-02T00:00:00.000Z",
+    inputId: `00000000-0000-4000-8000-${sequence.toString().padStart(12, "0")}`,
+    leaseOwner: null,
+    leaseUntil: null,
+    researcherId: "00000000-0000-4000-8000-000000000900",
+    sequence,
+    sessionId: "00000000-0000-4000-8000-000000000901",
+    status: "staged",
+  };
 }

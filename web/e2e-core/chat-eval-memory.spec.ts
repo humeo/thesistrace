@@ -33,8 +33,8 @@ for (const kind of ["formula", "admission"] as const) {
       : "Evaluate a low-volatility Alpha and correct one structured admission issue if needed.";
     await page.goto("/chat");
     await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-    await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.locator(".chat-composer-status-row").getByRole("status")).toHaveText("Run complete", { timeout: 90_000 });
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 90_000 });
     const threadId = new URL(page.url()).searchParams.get("session");
     expect(threadId).toMatch(/^[a-f0-9-]{36}$/);
     const list = await (await page.request.get("/api/research-runs")).json();
@@ -63,8 +63,8 @@ test("Eval Memory oracle does not confuse completed Batch artifacts with inspect
   controlWorker("pause", "batch-research-worker");
   try {
     await page.getByRole("textbox", { name: "Message", exact: true }).fill("Compare positive and negative price-rank Alpha signals as Factor Evaluations.");
-    await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.locator(".chat-composer-status-row").getByRole("status")).toHaveText("Run complete", { timeout: 60_000 });
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 60_000 });
   } finally { controlWorker("unpause", "batch-research-worker"); }
   const threadId = new URL(page.url()).searchParams.get("session");
   expect(threadId).toMatch(/^[a-f0-9-]{36}$/);
@@ -82,8 +82,8 @@ test("Eval Memory oracle does not confuse completed Batch artifacts with inspect
   const input = { thread_id: threadId, researcher_id: researcher.id, expectation: { kind: "batch-results", run_ids: runIds } };
   expect(oracle(input)).toMatchObject({ batch_results_inspected: false });
   await page.getByRole("textbox", { name: "Message", exact: true }).fill("Resume the Research Batch from this Chat and explain each authoritative Child Result.");
-  await page.getByRole("button", { name: "Send message" }).click();
-  await expect(page.locator(".chat-composer-status-row").getByRole("status")).toHaveText("Run complete", { timeout: 60_000 });
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 60_000 });
   const facts = oracle(input);
   expect(facts).toEqual({ formula_corrected: false, admission_corrected: false, unresolved_admission_rejection: false, batch_results_inspected: true });
   expect(oracle({ ...input, expectation: { kind: "batch-results", run_ids: [runIds[0], "run_00000000000000000001"] } }))
