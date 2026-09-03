@@ -2,6 +2,7 @@ import { EventType, type BaseEvent } from "@ag-ui/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatTimelineProjector } from "./chat-timeline-projector.js";
+import { SAFE_TOOL_COMPLETED, SAFE_TOOL_FAILED } from "./safe-tool-result.js";
 import type { ResearchSessionRepository } from "./session-repository.js";
 
 const THREAD_ID = "00000000-0000-4000-8000-000000000001";
@@ -49,12 +50,12 @@ describe("browser-safe chat timeline projection", () => {
     expect(JSON.stringify(persistToolActivity.mock.calls)).not.toContain("private-argument");
 
     await projector.project(event({
-      content: "private-argument-and-result",
+      content: SAFE_TOOL_FAILED,
       messageId: "tool-message",
       role: "tool",
       toolCallId: "tool-1",
       type: EventType.TOOL_CALL_RESULT,
-    }), true);
+    }));
     expect(persistToolActivity).toHaveBeenLastCalledWith(
       THREAD_ID,
       RUN_ID,
@@ -62,7 +63,28 @@ describe("browser-safe chat timeline projection", () => {
       "get_research_context",
       "failed",
     );
-    expect(JSON.stringify(persistToolActivity.mock.calls)).not.toContain("private-argument-and-result");
+    expect(JSON.stringify(persistToolActivity.mock.calls)).not.toContain(SAFE_TOOL_FAILED);
+
+    await projector.project(event({
+      parentMessageId: "assistant-1",
+      toolCallId: "tool-2",
+      toolCallName: "list_research_runs",
+      type: EventType.TOOL_CALL_START,
+    }));
+    await projector.project(event({
+      content: SAFE_TOOL_COMPLETED,
+      messageId: "tool-message-2",
+      role: "tool",
+      toolCallId: "tool-2",
+      type: EventType.TOOL_CALL_RESULT,
+    }));
+    expect(persistToolActivity).toHaveBeenLastCalledWith(
+      THREAD_ID,
+      RUN_ID,
+      "tool-2",
+      "list_research_runs",
+      "complete",
+    );
   });
 
   it("rejects unsafe Tool names and force-flushes text before terminal events", async () => {

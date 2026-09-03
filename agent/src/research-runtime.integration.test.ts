@@ -713,6 +713,73 @@ describe.sequential("durable Research Agent runtime", () => {
     )).rejects.toBeInstanceOf(SessionNotFoundError);
   });
 
+  it("keeps a successful Tool result that arrives after its Turn failure is finalized", async () => {
+    const threadId = fixedUuid(8915);
+    const runId = fixedUuid(8916);
+    const toolCallId = "late-successful-tool-result";
+    await seedSession({
+      id: threadId,
+      researcherId: primaryResearcher.researcher_id,
+      title: "Late Tool result",
+    });
+    await owner.query(`
+      INSERT INTO agent.agent_run (
+        id, thread_id, kind, request_fingerprint, model_key, provider_model_id,
+        reasoning_effort, agent_build_revision, status, token_usage
+      ) VALUES (
+        $1::uuid, $2::uuid, 'prompt', decode(repeat('91', 32), 'hex'),
+        'scripted-research', 'scripted-v1', 'medium', 'late-tool-test',
+        'running', NULL
+      )
+    `, [runId, threadId]);
+
+    const repository = new ResearchSessionRepository(agentStore);
+    await repository.persistToolActivity(
+      threadId,
+      runId,
+      toolCallId,
+      "submit_research_run",
+      "running",
+    );
+    await repository.markFailed(runId, undefined, "PROVIDER_TIMEOUT");
+    await repository.persistToolActivity(
+      threadId,
+      runId,
+      toolCallId,
+      "submit_research_run",
+      "complete",
+    );
+
+    const timeline = await repository.timeline(
+      threadId,
+      primaryResearcher.researcher_id,
+      undefined,
+      20,
+    );
+    expect(timeline.turns).toEqual([
+      expect.objectContaining({
+        id: runId,
+        status: "failed",
+        entries: expect.arrayContaining([
+          expect.objectContaining({
+            kind: "tool_activity",
+            payload: {
+              name: "submit_research_run",
+              status: "complete",
+            },
+          }),
+          expect.objectContaining({
+            kind: "turn_outcome",
+            payload: {
+              errorCode: "PROVIDER_TIMEOUT",
+              status: "failed",
+            },
+          }),
+        ]),
+      }),
+    ]);
+  });
+
   it("stops a running Turn and Continue starts a new empty-message Turn", async () => {
     const threadId = fixedUuid(8831);
     const stoppedRunId = fixedUuid(8832);

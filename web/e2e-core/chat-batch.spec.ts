@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
 
 import { expect, sameOriginHeaders, test, testProjectName } from "./auth-fixture";
-import { revealToolActivity } from "./chat-ui";
+import { revealToolActivity, submitChatPrompt } from "./chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 import { controlWorker } from "./research-run-control";
 
@@ -165,8 +165,7 @@ test("Chat Batch response loss replays the same admission and child identities",
 function runStatus(page: Page) { return page.locator("[data-chat-status]"); }
 
 async function send(page: Page, prompt: string): Promise<void> {
-  await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-  await page.getByRole("button", { name: "Send" }).click();
+  await submitChatPrompt(page, prompt);
   await expect(runStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
 }
 

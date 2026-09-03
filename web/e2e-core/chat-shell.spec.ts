@@ -23,6 +23,7 @@ import {
   revealToolActivity,
   selectModel,
   selectReasoning,
+  submitChatPrompt,
   toolActivity,
 } from "./chat-ui";
 
@@ -889,9 +890,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
     }
   });
   await page.goto("/chat");
-  const message = page.getByRole("textbox", { name: "Message", exact: true });
-  await message.fill(scriptedFactorSubmitOnlyPrompt);
-  await page.getByRole("button", { name: "Send" }).click();
+  await submitChatPrompt(page, scriptedFactorSubmitOnlyPrompt);
 
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
   const admission = await revealToolActivity(page, "submit_research_run", "complete");
@@ -944,8 +943,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   });
   expect(durableFacts.data_generation_id).toMatch(/^[a-f0-9]{64}$/);
 
-  await message.fill(scriptedResumeResearchPrompt);
-  await page.getByRole("button", { name: "Send" }).click();
+  await submitChatPrompt(page, scriptedResumeResearchPrompt);
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
 
   const detail = await page.request.get(`/api/research-runs/${runId}`);
@@ -1025,8 +1023,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
     name: /Submit|Retry|Cancel|Stop|Delete/,
   })).toHaveCount(0);
 
-  await message.fill(scriptedStrategyPrompt);
-  await page.getByRole("button", { name: "Send" }).click();
+  await submitChatPrompt(page, scriptedStrategyPrompt);
   const strategyAdmissions = await revealToolActivity(
     page,
     "submit_research_run",

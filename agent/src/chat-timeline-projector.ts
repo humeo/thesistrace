@@ -1,5 +1,6 @@
 import { EventType, type BaseEvent } from "@ag-ui/core";
 
+import { parseSafeToolResult } from "./safe-tool-result.js";
 import type { ResearchSessionRepository } from "./session-repository.js";
 
 const FLUSH_INTERVAL_MS = 75;
@@ -27,7 +28,7 @@ export class ChatTimelineProjector {
     private readonly runId: string,
   ) {}
 
-  async project(event: BaseEvent, toolFailed = false): Promise<void> {
+  async project(event: BaseEvent): Promise<void> {
     if (
       event.type === EventType.TEXT_MESSAGE_CHUNK
       || event.type === EventType.TEXT_MESSAGE_CONTENT
@@ -82,12 +83,13 @@ export class ChatTimelineProjector {
         ? this.tools.get(event.toolCallId)
         : undefined;
       if (name !== undefined && typeof event.toolCallId === "string") {
+        const result = parseSafeToolResult(event.content);
         await this.repository.persistToolActivity(
           this.threadId,
           this.runId,
           event.toolCallId,
           name,
-          toolFailed ? "failed" : "complete",
+          result?.outcome === "failed" ? "failed" : "complete",
         );
         this.tools.delete(event.toolCallId);
       }

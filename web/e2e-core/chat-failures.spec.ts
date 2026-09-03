@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
 import { expect, test, testProjectName } from "./auth-fixture";
-import { modelPickerTrigger, revealToolActivity, selectModel, selectReasoning } from "./chat-ui";
+import { modelPickerTrigger, revealToolActivity, selectModel, selectReasoning, submitChatPrompt } from "./chat-ui";
 import { proxyState } from "./fault-proxy";
 import { controlWorker } from "./research-run-control";
 
@@ -119,8 +119,7 @@ test("Chat missing login fails before token exchange or durable acceptance", asy
 });
 
 async function send(page: Page, prompt: string) {
-  await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-  await page.getByRole("button", { name: "Send" }).click();
+  await submitChatPrompt(page, prompt);
 }
 function status(page: Page) { return page.locator("[data-chat-status]"); }
 function observeRuns(page: Page) {

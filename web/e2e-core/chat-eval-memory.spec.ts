@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import { expect, sameOriginHeaders, test, testProjectName } from "./auth-fixture";
+import { submitChatPrompt } from "./chat-ui";
 import { controlWorker } from "./research-run-control";
 
 test("Eval correction fixture produces a real warmup rejection and one accepted fixed-window Run", async ({ page }) => {
@@ -81,8 +82,7 @@ test("Eval Memory oracle does not confuse completed Batch artifacts with inspect
   }
   const input = { thread_id: threadId, researcher_id: researcher.id, expectation: { kind: "batch-results", run_ids: runIds } };
   expect(oracle(input)).toMatchObject({ batch_results_inspected: false });
-  await page.getByRole("textbox", { name: "Message", exact: true }).fill("Resume the Research Batch from this Chat and explain each authoritative Child Result.");
-  await page.getByRole("button", { name: "Send" }).click();
+  await submitChatPrompt(page, "Resume the Research Batch from this Chat and explain each authoritative Child Result.");
   await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 60_000 });
   const facts = oracle(input);
   expect(facts).toEqual({ formula_corrected: false, admission_corrected: false, unresolved_admission_rejection: false, batch_results_inspected: true });

@@ -1282,6 +1282,7 @@ export class ResearchSessionRepository {
         pg_catalog.jsonb_build_object(
           'name', $4::text,
           'status', CASE
+            WHEN $5::text != 'running' THEN $5::text
             WHEN run.status = 'failed' THEN 'failed'
             WHEN run.status = ANY (ARRAY['stopping', 'stopped']) THEN 'stopped'
             WHEN run.status = ANY (ARRAY['waiting_for_user', 'completed']) THEN 'complete'
