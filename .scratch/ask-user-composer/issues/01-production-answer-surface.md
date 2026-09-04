@@ -52,3 +52,25 @@ above are closed and the feature's scoped verification passed. The prototype
 remains clean on its separate branch. No merge into main or dev-service update
 was performed; Web and Agent must be deployed together for the hard-cut Answer
 envelope.
+
+### 2026-09-04 — merged into local main
+
+- Rebased the two unpublished feature commits onto main `d1ca2b8`; range-diff
+  confirmed unchanged patches. Functional commit `9897ebf` is now `27a36b8`,
+  and its delivery record is `8febbef`. Fast-forwarded main to `8febbef`.
+- Temporarily stashed only `web/src/styles.css` and
+  `web/e2e-core/chat-composer-layout.spec.ts`, then restored them without
+  conflicts. All 159 original dirty paths, the complete unstaged patch, and
+  staged state matched the pre-merge snapshot; every unrelated file hash
+  matched. The verified temporary stash was removed, with all four previous
+  stashes retained.
+- Revalidated the actual main checkout after restoring its existing changes:
+  Web typecheck and 302 shell tests; Agent typecheck and 519 unit tests; 64 real
+  PostgreSQL integration tests; 8 desktop/mobile composer browser tests;
+  `git diff --check`. All passed.
+- Browser evidence: `/private/tmp/ask-user-main-merge-layout`. Isolated database
+  project: `thesistrace-agent-test-20260904t084300z-45238-dca5d356`, cleaned up
+  successfully by the test runner.
+- No remote push, branch/worktree removal, or explicit dev-service restart.
+  The earlier branch E2E and image-smoke evidence remains separate from these
+  post-merge checks; no full release gate is claimed.

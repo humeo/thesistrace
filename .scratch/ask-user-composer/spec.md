@@ -34,7 +34,8 @@ actions are 36px; touch actions are 44px. Long questions/options scroll inside
 the question surface while the answer row remains reachable. Verify the
 contract, recovery, rendering, and real-browser same-Turn flow with fake models.
 
-Implemented as `9897ebf` on `codex/ask-user-composer`; verification and delivery
-evidence are recorded in `issues/01-production-answer-surface.md`. Main and the
-running development service remain unchanged. Web and Agent require an atomic
-release; deployment is not included in this delivery.
+Implemented as `9897ebf`, rebased unchanged to `27a36b8` and fast-forwarded into
+local main with delivery commit `8febbef`. Verification, preservation of existing
+uncommitted changes, and post-merge main checks are recorded in
+`issues/01-production-answer-surface.md`. Web and Agent require an atomic
+release; no remote push or explicit development-service restart was performed.
