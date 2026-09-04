@@ -1,0 +1,18 @@
+services:
+  smoke:
+    image: thesistrace-cninfo-retry:20260904
+    entrypoint: ["uv", "run", "--no-sync", "--offline", "python", "/smoke/image_smoke.py"]
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    cpus: 1
+    environment:
+      UV_CACHE_DIR: /tmp/uv-cache
+      PYTHONDONTWRITEBYTECODE: "1"
+      TQDM_DISABLE: "1"
+    tmpfs:
+      - /tmp:size=32m
+    volumes:
+      - ./image_smoke.py:/smoke/image_smoke.py:ro

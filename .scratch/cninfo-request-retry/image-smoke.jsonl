@@ -1,0 +1,19 @@
+{"case": "uninterrupted", "passed": true, "pages": [1, 1, 2], "delays": []}
+{"attempt_number":1,"component":"data_operator","event":"cninfo_request_retry","exception_type":"ReadTimeout","level":"WARNING","method":"POST","outcome":"retry_scheduled","phase":"discovery","timestamp":"2026-09-04T07:56:52.673Z"}
+{"case": "page_timeout_recovers", "passed": true, "pages": [1, 1, 2, 2], "delays": [1.0]}
+{"attempt_number":1,"component":"data_operator","event":"cninfo_request_retry","exception_type":"ReadTimeout","level":"WARNING","method":"POST","outcome":"retry_scheduled","phase":"discovery","timestamp":"2026-09-04T07:56:52.683Z"}
+{"attempt_number":2,"component":"data_operator","event":"cninfo_request_retry","exception_type":"ReadTimeout","level":"WARNING","method":"POST","outcome":"retry_scheduled","phase":"discovery","timestamp":"2026-09-04T07:56:52.684Z"}
+{"case": "third_attempt_recovers", "passed": true, "pages": [1, 1, 2, 2, 2], "delays": [1.0, 2.0]}
+{"attempt_number":1,"component":"data_operator","event":"cninfo_request_retry","exception_type":"ReadTimeout","level":"WARNING","method":"POST","outcome":"retry_scheduled","phase":"discovery","timestamp":"2026-09-04T07:56:52.693Z"}
+{"attempt_number":2,"component":"data_operator","event":"cninfo_request_retry","exception_type":"ReadTimeout","level":"WARNING","method":"POST","outcome":"retry_scheduled","phase":"discovery","timestamp":"2026-09-04T07:56:52.694Z"}
+{"attempt_number":3,"component":"data_operator","event":"cninfo_request_failed","exception_type":"ReadTimeout","level":"ERROR","method":"POST","outcome":"failed","phase":"discovery","timestamp":"2026-09-04T07:56:52.694Z"}
+{"case": "exhausted_stops_at_three", "passed": true, "pages": [1, 1, 2, 2, 2], "delays": [1.0, 2.0]}
+{"attempt_number":1,"component":"data_operator","event":"cninfo_request_retry","exception_type":"JSONDecodeError","level":"WARNING","method":"POST","outcome":"retry_scheduled","phase":"discovery","status_code":200,"timestamp":"2026-09-04T07:56:52.699Z"}
+{"case": "json_error_recovers", "passed": true, "pages": [1, 1, 2, 2], "delays": [1.0]}
+{"attempt_number":1,"component":"data_operator","event":"cninfo_request_retry","exception_type":"HTTPError","level":"WARNING","method":"POST","outcome":"retry_scheduled","phase":"discovery","status_code":503,"timestamp":"2026-09-04T07:56:52.712Z"}
+{"case": "http_503_recovers", "passed": true, "pages": [1, 1, 2, 2], "delays": [1.0]}
+{"attempt_number":1,"component":"data_operator","event":"cninfo_request_failed","exception_type":"HTTPError","level":"ERROR","method":"POST","outcome":"failed","phase":"discovery","status_code":403,"timestamp":"2026-09-04T07:56:52.724Z"}
+{"case": "http_403_is_terminal", "passed": true, "pages": [1, 1, 2], "delays": []}
+{"attempt_number":1,"component":"data_operator","event":"cninfo_request_retry","exception_type":"HTTPError","level":"WARNING","method":"POST","outcome":"retry_scheduled","phase":"discovery","status_code":429,"timestamp":"2026-09-04T07:56:52.731Z"}
+{"case": "retry_after_respected", "passed": true, "pages": [1, 1, 2, 2], "delays": [5.0]}
+{"result": "passed", "cases": 8, "network": "disabled"}

@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+import time
+from datetime import UTC, date, datetime
+from email.utils import parsedate_to_datetime
 from importlib import import_module
 from math import isfinite
 from threading import RLock
 from typing import Protocol, cast
+
+from requests import Response
+from requests.exceptions import (
+    ChunkedEncodingError,
+    HTTPError,
+    JSONDecodeError,
+    RequestException,
+    SSLError,
+    Timeout,
+)
+from requests.exceptions import ConnectionError as RequestConnectionError
 
 from thesistrace.data.financial_announcements import (
     FINANCIAL_ANNOUNCEMENT_CATEGORIES,
@@ -15,8 +28,17 @@ from thesistrace.data.financial_announcements import (
     financial_announcement_id,
     financial_discovery_lineage_sha256,
 )
+from thesistrace.operational_events import (
+    emit_operational_event_data,
+    non_blocking_operational_event_sink,
+)
 
 _EXPECTED_COLUMNS = frozenset({"代码", "简称", "公告标题", "公告时间", "公告链接"})
+_RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+_MAX_RETRY_WAIT_SECONDS = 30
+_emit_cninfo_event = non_blocking_operational_event_sink(
+    emit_operational_event_data, component="data_operator"
+)
 
 
 class _Frame(Protocol):
@@ -38,32 +60,106 @@ class _AkshareClient(Protocol):
 
 
 class _RequestsTransport(Protocol):
-    def get(self, *args: object, **kwargs: object) -> object: ...
+    def get(self, *args: object, **kwargs: object) -> Response: ...
 
-    def post(self, *args: object, **kwargs: object) -> object: ...
+    def post(self, *args: object, **kwargs: object) -> Response: ...
 
 
-class _RequestsWithTimeout:
-    def __init__(self, transport: _RequestsTransport, timeout_seconds: float) -> None:
+class _RequestsWithRetry:
+    def __init__(
+        self, transport: _RequestsTransport, timeout_seconds: float, max_attempts: int
+    ) -> None:
         self._transport = transport
         self._timeout_seconds = timeout_seconds
+        self._max_attempts = max_attempts
 
-    def get(self, *args: object, **kwargs: object) -> object:
-        kwargs.setdefault("timeout", self._timeout_seconds)
-        return self._transport.get(*args, **kwargs)
+    def get(self, *args: object, **kwargs: object) -> Response:
+        return self._request("GET", args, kwargs)
 
-    def post(self, *args: object, **kwargs: object) -> object:
+    def post(self, *args: object, **kwargs: object) -> Response:
+        return self._request("POST", args, kwargs)
+
+    def _request(
+        self, method: str, args: tuple[object, ...], kwargs: dict[str, object]
+    ) -> Response:
         kwargs.setdefault("timeout", self._timeout_seconds)
-        return self._transport.post(*args, **kwargs)
+        request = self._transport.get if method == "GET" else self._transport.post
+        for attempt in range(1, self._max_attempts + 1):
+            response = None
+            try:
+                response = request(*args, **kwargs)
+                response.raise_for_status()
+                # AKShare decodes outside its request call. Validate here so a truncated
+                # or non-JSON response retries this page, not the entire category.
+                response.json()
+                return response
+            except RequestException as error:
+                status_code = response.status_code if response is not None else None
+                delay = _retry_delay(response, attempt)
+                retry = (
+                    attempt < self._max_attempts
+                    and _request_is_retryable(error, status_code)
+                    and delay is not None
+                )
+                if response is not None:
+                    response.close()
+                _emit_cninfo_event(
+                    {
+                        "event": "cninfo_request_retry" if retry else "cninfo_request_failed",
+                        "level": "WARNING" if retry else "ERROR",
+                        "phase": "discovery",
+                        "outcome": "retry_scheduled" if retry else "failed",
+                        "attempt_number": attempt,
+                        "exception_type": type(error).__name__,
+                        "status_code": status_code,
+                        "method": method,
+                    }
+                )
+                if not retry:
+                    raise
+                assert delay is not None
+                time.sleep(delay)
+        raise AssertionError("CNINFO retry loop exhausted")
+
+
+def _request_is_retryable(error: RequestException, status_code: int | None) -> bool:
+    if isinstance(error, SSLError):
+        return False
+    if isinstance(error, HTTPError):
+        return status_code in _RETRYABLE_STATUS_CODES
+    return isinstance(
+        error, (RequestConnectionError, Timeout, JSONDecodeError, ChunkedEncodingError)
+    )
+
+
+def _retry_delay(response: Response | None, attempt: int) -> float | None:
+    delay = float(min(2 ** min(attempt - 1, 5), _MAX_RETRY_WAIT_SECONDS))
+    retry_after = response.headers.get("Retry-After") if response is not None else None
+    if retry_after is not None:
+        try:
+            if retry_after.isascii() and retry_after.isdigit():
+                requested = float(retry_after)
+            else:
+                until = parsedate_to_datetime(retry_after)
+                if until.tzinfo is None:
+                    return None
+                requested = max(0.0, (until - datetime.now(UTC)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not isfinite(requested) or requested > _MAX_RETRY_WAIT_SECONDS:
+            return None
+        delay = max(delay, requested)
+    return delay
 
 
 _AKSHARE_TRANSPORT_LOCK = RLock()
 
 
 class _BoundedAkshareClient:
-    def __init__(self, client: _AkshareClient, timeout_seconds: float) -> None:
+    def __init__(self, client: _AkshareClient, timeout_seconds: float, max_attempts: int) -> None:
         self._client = client
         self._timeout_seconds = timeout_seconds
+        self._max_attempts = max_attempts
 
     def stock_zh_a_disclosure_report_cninfo(
         self,
@@ -77,9 +173,10 @@ class _BoundedAkshareClient:
         module = import_module("akshare.stock_feature.stock_disclosure_cninfo")
         with _AKSHARE_TRANSPORT_LOCK:
             transport = cast(_RequestsTransport, module.requests)
-            module.requests = _RequestsWithTimeout(  # type: ignore[attr-defined]
+            module.requests = _RequestsWithRetry(  # type: ignore[attr-defined]
                 transport,
                 self._timeout_seconds,
+                self._max_attempts,
             )
             try:
                 return self._client.stock_zh_a_disclosure_report_cninfo(
@@ -99,14 +196,17 @@ class AkshareCninfoFinancialAnnouncementSource:
         client: _AkshareClient | None = None,
         *,
         timeout_seconds: float = 30,
+        max_attempts: int = 3,
     ) -> None:
         timeout = float(timeout_seconds)
         if not isfinite(timeout) or timeout <= 0:
             raise ValueError("CNINFO request timeout must be positive and finite")
+        if type(max_attempts) is not int or max_attempts <= 0:
+            raise ValueError("CNINFO max_attempts must be a positive integer")
         if client is None:
             import akshare
 
-            client = _BoundedAkshareClient(akshare, timeout)
+            client = _BoundedAkshareClient(akshare, timeout, max_attempts)
         self._client = client
 
     def discover(
@@ -246,6 +346,4 @@ def _discovery_failure_code(error: Exception) -> str:
     return "CNINFO_DISCOVERY_INVALID"
 
 
-__all__ = (
-    "AkshareCninfoFinancialAnnouncementSource",
-)
+__all__ = ("AkshareCninfoFinancialAnnouncementSource",)
