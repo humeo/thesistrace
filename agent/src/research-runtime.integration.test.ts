@@ -13,6 +13,7 @@ import { z } from "zod";
 
 import { BATCH_ID, BATCH_TOOL_NAMES, CHILD_IDS, batchFixtureOutput } from "../test-fixtures/batch-research.js";
 import { DAILY_TRACK_TOOL_NAMES, ORIGIN_RUN_ID, TRACK_ID, dailyTrackFixtureOutput } from "../test-fixtures/daily-track.js";
+import { openAIToolProvider } from "../test-fixtures/openai-tool-provider.js";
 
 import {
   RESEARCH_A2UI_ACTIVITY_TYPE,
@@ -516,6 +517,83 @@ describe.sequential("durable Research Agent runtime", () => {
       await runtime.close();
     }
   });
+
+  it.each(["free_text", "single_select", "multi_select"] as const)(
+    "persists a native OpenAI %s question across restart and answers the same Turn",
+    async (mode) => {
+      const options = mode === "free_text" ? null : [{ label: "Quality", description: null }, { label: "Risk", description: null }];
+      const provider = openAIToolProvider([{ name: "ask_user", arguments: {
+        question: "Which research objective should lead?", options,
+        selectionMode: mode === "free_text" ? null : mode,
+      } }]);
+      vi.stubGlobal("fetch", provider.fetch);
+      const configuration: AgentSettings = { ...settings, modelRegistry: readModelRegistry(JSON.stringify({
+        default_model_key: "gpt-5.6-luna", models: [{
+          key: "gpt-5.6-luna", display_name: "GPT-5.6 Luna", enabled: true,
+          provider_adapter: "openai", provider_model_id: "gpt-5.6-luna",
+          default_reasoning_effort: "high", reasoning_efforts: ["high"],
+          secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
+        }],
+      }), { THESISTRACE_AGENT_OPENAI_API_KEY: "fixture-only" }) };
+      const openRuntime = () => createResearchRuntime(configuration, { mcpRunFactory: async () => ({
+        close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {},
+      }) });
+      let runtime: ResearchRuntime | undefined;
+      const threadId = fixedUuid(8851);
+      const runId = fixedUuid(8852);
+      try {
+        runtime = await openRuntime();
+        const initial = await run(runtime, runInput({
+          content: "Ask me a question.", messageId: fixedUuid(8853), runId, threadId,
+          modelKey: "gpt-5.6-luna", reasoningEffort: "high",
+        }), primaryResearcher);
+        expect(provider.schemaErrors).toEqual([]);
+        expect(initial.filter((event) => event.type === "RUN_ERROR")).toEqual([]);
+        const waiting = await runtime.session(threadId, primaryResearcher);
+        expect(waiting.currentTurn).toMatchObject({
+          id: runId, status: "waiting_for_user", question: { selectionMode: mode },
+        });
+        const question = waiting.currentTurn?.question;
+        if (question === undefined || question === null) throw new Error("expected native pending question");
+        expect(question.options).toEqual(options === null ? null : [{ label: "Quality" }, { label: "Risk" }]);
+        await runtime.close();
+        runtime = await openRuntime();
+        const reopened = await runtime.session(threadId, primaryResearcher);
+        expect(reopened.currentTurn).toEqual(waiting.currentTurn);
+        expect((await connect(runtime, threadId, primaryResearcher)).at(-1))
+          .toMatchObject({ type: "RUN_FINISHED", runId, outcome: { type: "interrupt" } });
+
+        const answer = { selections: mode === "free_text" ? [] : mode === "multi_select" ? ["Quality", "Risk"] : ["Quality"], text: "Keep turnover low." };
+        const input = answerInput({ answer, inputId: fixedUuid(8854), interruptId: question.interruptId, runId, threadId });
+        const answered = await run(runtime, input, primaryResearcher);
+        expect(answered.filter((event) => event.type === "RUN_ERROR")).toEqual([]);
+        expect(answered.at(-1)).toMatchObject({ type: "RUN_FINISHED", runId });
+        expect((await runtime.session(threadId, primaryResearcher)).latestTurn)
+          .toMatchObject({ id: runId, status: "completed", startedAt: waiting.currentTurn?.startedAt });
+        const timeline = await runtime.timeline(threadId, primaryResearcher, undefined, 20);
+        expect(timeline.turns).toHaveLength(1);
+        expect(timeline.turns[0]?.entries.filter((entry) => entry.kind === "question"))
+          .toMatchObject([{ payload: { status: "answered" } }]);
+        expect(timeline.turns[0]?.entries.filter((entry) => entry.kind === "user_input"))
+          .toMatchObject([{ payload: { source: "prompt" } }, { payload: { source: "answer", inputId: fixedUuid(8854) } }]);
+        expect(provider.requests.every((request) => request.store === false && request.reasoning?.effort === "high")).toBe(true);
+        expect(provider.requests.at(-1)?.input).toContainEqual(expect.objectContaining({
+          type: "function_call_output", output: expect.stringContaining(answer.text),
+        }));
+        expect((await run(runtime, input, primaryResearcher)).at(-1)).toMatchObject({ type: "RUN_FINISHED", runId });
+        const stored = await owner.query(`SELECT model_key, reasoning_effort, step_count, token_usage,
+          (SELECT count(*)::int FROM agent.chat_command WHERE thread_id = $1::uuid AND kind = 'answer') AS answers
+          FROM agent.agent_run WHERE thread_id = $1::uuid`, [threadId]);
+        expect(stored.rows).toEqual([expect.objectContaining({
+          model_key: "gpt-5.6-luna", reasoning_effort: "high", step_count: 2, answers: 1,
+          token_usage: expect.objectContaining({ reported: true, inputTokens: expect.objectContaining({ total: 40 }) }),
+        })]);
+      } finally {
+        await runtime?.close();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it("stops a waiting Turn precisely and makes the Stop command idempotent", async () => {
     const runtime = await createIntegrationRuntime();
@@ -3423,7 +3501,7 @@ function runInput(options: Readonly<{
   messageId: string;
   messages?: Message[];
   modelKey?: string;
-  reasoningEffort?: "medium" | "none";
+  reasoningEffort?: "medium" | "none" | "high";
   sessionMode?: "new" | "existing";
   runId: string;
   threadId: string;

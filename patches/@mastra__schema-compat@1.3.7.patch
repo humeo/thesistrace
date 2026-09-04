@@ -1,0 +1,28 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index 85db835daf87b3bc906958b118aff68147840a1e..1d279be1a29c0e48dab4bd0cd8891e0a3bdef58e 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -5220,6 +5220,9 @@ var OpenAISchemaCompatLayer = class extends SchemaCompatLayer {
+ 						delete propSchema.anyOf;
+ 						delete propSchema.type;
+ 						delete prop.type;
++						// Value constraints belong to the non-null branch only.
++						delete prop.enum;
++						delete prop.const;
+ 						prop.anyOf = [{
+ 							...propSchema,
+ 							type: originalType
+diff --git a/dist/index.js b/dist/index.js
+index 58ae13c4d380008f653bdf69655a6592bbc0031e..1cb401694eb1dd2a4fcc60f59878515f12b40cc2 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -5218,6 +5218,9 @@ var OpenAISchemaCompatLayer = class extends SchemaCompatLayer {
+ 						delete propSchema.anyOf;
+ 						delete propSchema.type;
+ 						delete prop.type;
++						// Value constraints belong to the non-null branch only.
++						delete prop.enum;
++						delete prop.const;
+ 						prop.anyOf = [{
+ 							...propSchema,
+ 							type: originalType

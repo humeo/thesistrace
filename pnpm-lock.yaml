@@ -7,6 +7,7 @@ settings:
 
 patchedDependencies:
   '@ag-ui/mastra@1.1.1': 73d6dc738481caa7ef2764bcffc2bb0b76b2ae62d617b1909ffa2f6a7f8ce18b
+  '@mastra/schema-compat@1.3.7': eae173177d0e7d5745945343ed62e741f2dc06a9f20c77fbc103d0153940d74a
 
 importers:
 
@@ -84,6 +85,9 @@ importers:
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
       esbuild:
         specifier: 0.25.12
         version: 0.25.12
@@ -5901,7 +5905,7 @@ snapshots:
       '@ai-sdk/ui-utils': 1.2.11(zod@4.4.3)
       '@lukeed/uuid': 2.0.1
       '@mastra/core': 1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3)
-      '@mastra/schema-compat': 1.3.7(zod@4.4.3)
+      '@mastra/schema-compat': 1.3.7(patch_hash=eae173177d0e7d5745945343ed62e741f2dc06a9f20c77fbc103d0153940d74a)(zod@4.4.3)
       canonicalize: 1.0.8
       jose: 6.2.10
       json-schema: 0.4.0
@@ -5929,7 +5933,7 @@ snapshots:
       '@ai-sdk/provider-v7': '@ai-sdk/provider@4.0.4'
       '@isaacs/ttlcache': 2.1.5
       '@lukeed/uuid': 2.0.1
-      '@mastra/schema-compat': 1.3.7(zod@4.4.3)
+      '@mastra/schema-compat': 1.3.7(patch_hash=eae173177d0e7d5745945343ed62e741f2dc06a9f20c77fbc103d0153940d74a)(zod@4.4.3)
       '@modelcontextprotocol/server': 2.0.0
       '@sindresorhus/slugify': 2.2.1
       '@standard-schema/spec': 1.1.0
@@ -5987,7 +5991,7 @@ snapshots:
   '@mastra/memory@1.28.1(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3))(supports-color@7.2.0)':
     dependencies:
       '@mastra/core': 1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1(supports-color@7.2.0))(rxjs@7.8.1)(supports-color@7.2.0)(zod@4.4.3)
-      '@mastra/schema-compat': 1.3.7(zod@4.4.3)
+      '@mastra/schema-compat': 1.3.7(patch_hash=eae173177d0e7d5745945343ed62e741f2dc06a9f20c77fbc103d0153940d74a)(zod@4.4.3)
       async-mutex: 0.5.0
       diff: 8.0.4
       json-schema: 0.4.0
@@ -6009,7 +6013,7 @@ snapshots:
     transitivePeerDependencies:
       - pg-native
 
-  '@mastra/schema-compat@1.3.7(zod@4.4.3)':
+  '@mastra/schema-compat@1.3.7(patch_hash=eae173177d0e7d5745945343ed62e741f2dc06a9f20c77fbc103d0153940d74a)(zod@4.4.3)':
     dependencies:
       json-schema-to-zod: 2.8.1
       zod: 4.4.3
