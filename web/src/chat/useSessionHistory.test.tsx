@@ -19,11 +19,47 @@ type PendingRequest = Readonly<{
   .IS_REACT_ACT_ENVIRONMENT = true;
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   document.body.replaceChildren();
 });
 
 describe("Session history Hook lifecycle", () => {
+  it("updates active sessions without discarding loaded history and cancels background probes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-04T00:00:00Z"));
+    const requests = installPendingFetch();
+    let controller: SessionHistoryController | null = null;
+    const mounted = await mountProbe((value) => { controller = value; });
+    const turn = {
+      id: "00000000-0000-4000-8000-000000000100", kind: "prompt", status: "running",
+      model_key: "research-primary", reasoning_effort: "medium",
+      started_at: "2026-09-04T00:00:00.000000Z", terminal_error_code: null, question: null,
+    };
+    const page = sessionPage();
+    const active = { ...page.sessions[0]!, current_turn: turn, latest_turn: turn };
+    await act(async () => {
+      requests[0]!.resolve(jsonResponse({ ...page, sessions: [active, ...page.sessions.slice(1)] }));
+      await flushMicrotasks();
+    });
+    try {
+      await act(async () => vi.advanceTimersByTimeAsync(2_000));
+      expect(requests[1]!.input).toContain(`/sessions/${active.id}`);
+      await act(async () => {
+        requests[1]!.resolve(jsonResponse({ ...active, title: "Background Chat", current_turn: null,
+          latest_turn: { ...turn, status: "completed" } }));
+        await flushMicrotasks();
+      });
+      expect(controller).toMatchObject({ nextCursor: "opaque_cursor", status: "ready" });
+      expect(controller!.sessions).toHaveLength(30);
+      expect(controller!.sessions[0]).toMatchObject({ current_turn: null, title: "Background Chat" });
+      expect(controller!.sessions[29]!.id).toBe(page.sessions[29]!.id);
+      const requestCount = requests.length;
+      await act(async () => vi.advanceTimersByTimeAsync(10_000));
+      expect(requests).toHaveLength(requestCount);
+    } finally { await unmountProbe(mounted); }
+  });
+
   it("aborts its real first-page, load-more, and title requests when unmounted", async () => {
     const requests = installPendingFetch();
     let controller: SessionHistoryController | null = null;

@@ -28,6 +28,7 @@ from thesistrace.benchmark import (
     BenchmarkLevel,
     BenchmarkLevelSource,
     BenchmarkSnapshotStore,
+    BenchmarkSnapshotUpdater,
 )
 from thesistrace.data import (
     CanonicalSourceBatch,
@@ -1083,6 +1084,11 @@ def test_operational_status_has_safe_head_latest_kinds_and_stable_fifty_row_page
     try:
         current = _twenty_session_canonical()
         _establish_head(database, tmp_path, current)
+        BenchmarkSnapshotUpdater(
+            BenchmarkSnapshotStore(benchmark_mount_for_data_mount(tmp_path)),
+            FixtureBenchmarkSource(),
+            clock=lambda: FIRST_BENCHMARK_PUBLISHED_AT,
+        ).update(current["research_calendar"])
         pointer = MountedDatasetHeadStore(tmp_path).current_pointer()
         assert pointer is not None
         target = current["research_calendar"][-1]
@@ -1135,6 +1141,22 @@ def test_operational_status_has_safe_head_latest_kinds_and_stable_fifty_row_page
         assert first.head.data_identity == pointer.data_identity
         assert first.head.data_through_session.isoformat() == target
         assert first.head.market_research_readiness is True
+        overview = _overview_service(database, tmp_path).overview()
+        assert overview.market_coverage is not None
+        assert overview.benchmark_coverage is not None
+        assert first.head.market_coverage_start == overview.market_coverage.start
+        assert first.head.market_last_refresh_at == overview.last_market_refresh_at
+        assert first.head.benchmark_coverage_start == overview.benchmark_coverage.start
+        assert first.head.benchmark_coverage_end == overview.benchmark_coverage.end
+        assert first.head.benchmark_last_published_at == overview.benchmark_last_published_at
+        assert first.head.financial_coverage_start is None
+        assert first.head.financial_pending_instrument_count is None
+        assert overview.industry_coverage is not None
+        assert first.head.industry_coverage_start == overview.industry_coverage.start
+        assert first.head.industry_observation_through_session == (
+            overview.industry_coverage.observation_through_session
+        )
+        assert first.head.industry_last_refresh_at == overview.last_industry_refresh_at
         assert [item.idempotency_key for item in first.latest_by_kind] == [
             "status-051",
             "status-052",

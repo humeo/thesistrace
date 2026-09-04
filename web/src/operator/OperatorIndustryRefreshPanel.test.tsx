@@ -16,10 +16,12 @@ test("renders focused Industry target and key fields", () => {
 
   expect(markup).toContain("Industry Refresh");
   expect(markup).toContain("Observation-through Research Session");
-  expect(markup).toContain('type="text"');
-  expect(markup).not.toContain('type="date"');
+  expect(markup).toContain('for="operator-industry-target"');
+  expect(markup).toContain('id="operator-industry-target"');
+  expect(markup).toContain('type="date"');
   expect(markup).toContain("Idempotency key");
-  expect(markup).toContain("exactly as accepted by the CLI");
+  expect(markup).toContain("Select the observation-through Research Session.");
+  expect(markup).not.toContain("exactly as accepted by the CLI");
   expect(markup).not.toContain(
     "Choose the exact Research Session through which Industry data is observed.",
   );

@@ -44,6 +44,21 @@ class DatasetOperationalHead(BaseModel):
         "not_ready",
     ]
     industry_research_readiness: bool
+    market_coverage_start: date | None
+    market_last_refresh_at: datetime | None
+    benchmark_coverage_start: date | None
+    benchmark_coverage_end: date | None
+    benchmark_last_published_at: datetime | None
+    financial_coverage_start: date | None
+    financial_attempted_through_session: date | None
+    financial_complete_through_session: date | None
+    financial_last_refresh_at: datetime | None
+    financial_pending_instrument_count: int | None = Field(ge=0)
+    financial_discovery_gap_count: int | None = Field(ge=0)
+    financial_earliest_unresolved_date: date | None
+    industry_coverage_start: date | None
+    industry_observation_through_session: date | None
+    industry_last_refresh_at: datetime | None
 
 
 class DataOperatorWorkerStatus(BaseModel):
@@ -185,6 +200,10 @@ class DatasetOperationalStatusService:
 def _head_from_snapshot(snapshot: DatasetOverviewSnapshot) -> DatasetOperationalHead:
     pointer = snapshot.pointer
     overview = snapshot.overview
+    market = overview.market_coverage
+    benchmark = overview.benchmark_coverage
+    financial = overview.financial_coverage
+    industry = overview.industry_coverage
     return DatasetOperationalHead(
         data_identity=None if pointer is None else pointer.data_identity,
         prepared_at=None if pointer is None else _aware_datetime(pointer.prepared_at),
@@ -195,6 +214,31 @@ def _head_from_snapshot(snapshot: DatasetOverviewSnapshot) -> DatasetOperational
         benchmark_research_readiness=overview.benchmark_research_readiness,
         financial_research_readiness=overview.financial_research_readiness,
         industry_research_readiness=overview.industry_research_readiness,
+        market_coverage_start=None if market is None else market.start,
+        market_last_refresh_at=overview.last_market_refresh_at,
+        benchmark_coverage_start=None if benchmark is None else benchmark.start,
+        benchmark_coverage_end=None if benchmark is None else benchmark.end,
+        benchmark_last_published_at=overview.benchmark_last_published_at,
+        financial_coverage_start=None if financial is None else financial.start,
+        financial_attempted_through_session=(
+            None if financial is None else financial.discovery_attempted_through_session
+        ),
+        financial_complete_through_session=(
+            None if financial is None else financial.discovery_complete_through_session
+        ),
+        financial_last_refresh_at=overview.last_financial_refresh_at,
+        financial_pending_instrument_count=(
+            None if financial is None else financial.pending_instrument_count
+        ),
+        financial_discovery_gap_count=None if financial is None else financial.discovery_gap_count,
+        financial_earliest_unresolved_date=(
+            None if financial is None else financial.earliest_unresolved_date
+        ),
+        industry_coverage_start=None if industry is None else industry.start,
+        industry_observation_through_session=(
+            None if industry is None else industry.observation_through_session
+        ),
+        industry_last_refresh_at=overview.last_industry_refresh_at,
     )
 
 

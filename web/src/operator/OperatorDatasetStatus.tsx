@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+
+import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
 import {
@@ -279,23 +281,86 @@ function DatasetHeadSummary({ data }: Readonly<{ data: DatasetOperationalStatus 
         </div>
         <div>
           <dt>Prepared</dt>
-          <dd>{timestamp(head.preparedAt)}</dd>
+          <dd>{datasetTimestamp(head.preparedAt) ?? "Not available"}</dd>
         </div>
       </dl>
-      <ul aria-label="Research readiness" className="operator-dataset-readiness">
-        <ReadinessItem label="Market" ready={head.marketResearchReadiness} />
-        <ReadinessItem label="Benchmark" ready={head.benchmarkResearchReadiness} />
-        <li>
-          <span className={`operator-state ${head.financialResearchReadiness === "ready"
-            ? "operator-state-active"
-            : ""}`}
-          >
-            {financialReadinessText(head.financialResearchReadiness)}
-          </span>
-        </li>
-        <ReadinessItem label="Industry" ready={head.industryResearchReadiness} />
-      </ul>
+      <div aria-label="Current data coverage" role="group">
+        <DatasetFamilyStatus
+          name="Market"
+          status={<ReadinessStatus label="Market" ready={head.marketResearchReadiness} />}
+        >
+          <DatasetFact label="Coverage start" value={head.marketCoverageStart} />
+          <DatasetFact label="Data through" value={head.dataThroughSession} />
+          <DatasetFact label="Last refresh" value={datasetTimestamp(head.marketLastRefreshAt)} />
+        </DatasetFamilyStatus>
+        <DatasetFamilyStatus
+          name={`${STRATEGY_BENCHMARK_DISPLAY_NAME} Benchmark`}
+          note="Updates with Market Refresh"
+          status={<ReadinessStatus label="Benchmark" ready={head.benchmarkResearchReadiness} />}
+        >
+          <DatasetFact label="Coverage start" value={head.benchmarkCoverageStart} />
+          <DatasetFact label="Coverage end" value={head.benchmarkCoverageEnd} />
+          <DatasetFact label="Last publication" value={datasetTimestamp(head.benchmarkLastPublishedAt)} />
+        </DatasetFamilyStatus>
+        <DatasetFamilyStatus
+          name="Financial"
+          status={(
+            <span className={`operator-state ${head.financialResearchReadiness === "ready"
+              ? "operator-state-active"
+              : head.financialResearchReadiness === "not_ready" ? "" : "operator-state-warning"}`}
+            >
+              {financialReadinessText(head.financialResearchReadiness)}
+            </span>
+          )}
+        >
+          <DatasetFact label="Coverage start" value={head.financialCoverageStart} />
+          <DatasetFact label="Discovery attempted through" value={head.financialAttemptedThroughSession} />
+          <DatasetFact label="Discovery complete through" value={head.financialCompleteThroughSession} />
+          <DatasetFact label="Pending instruments" value={head.financialPendingInstrumentCount} />
+          <DatasetFact label="Discovery gaps" value={head.financialDiscoveryGapCount} />
+          <DatasetFact label="Earliest unresolved" value={head.financialEarliestUnresolvedDate} />
+          <DatasetFact label="Last refresh" value={datasetTimestamp(head.financialLastRefreshAt)} />
+        </DatasetFamilyStatus>
+        <DatasetFamilyStatus
+          name="Industry"
+          status={<ReadinessStatus label="Industry" ready={head.industryResearchReadiness} />}
+        >
+          <DatasetFact label="Coverage start" value={head.industryCoverageStart} />
+          <DatasetFact label="Observed through" value={head.industryObservationThroughSession} />
+          <DatasetFact label="Last refresh" value={datasetTimestamp(head.industryLastRefreshAt)} />
+        </DatasetFamilyStatus>
+      </div>
     </div>
+  );
+}
+
+function DatasetFamilyStatus({ name, status, note, children }: Readonly<{
+  name: string;
+  status: ReactNode;
+  note?: string;
+  children: ReactNode;
+}>) {
+  return (
+    <section aria-label={`${name} data status`} className="operator-data-family">
+      <header>
+        <h3>{name}</h3>
+        {status}
+        {note === undefined ? null : <small>{note}</small>}
+      </header>
+      <dl>{children}</dl>
+    </section>
+  );
+}
+
+function DatasetFact({ label, value }: Readonly<{ label: string; value: ReactNode }>) {
+  return <div><dt>{label}</dt><dd>{value ?? <span className="operator-muted">Not available</span>}</dd></div>;
+}
+
+function datasetTimestamp(value: string | null): ReactNode {
+  return value === null ? null : (
+    <time dateTime={value} title={value}>
+      {new Date(value).toISOString().slice(0, 19).replace("T", " ")} UTC
+    </time>
   );
 }
 
@@ -326,13 +391,11 @@ function WorkerAvailability({ data }: Readonly<{ data: DatasetOperationalStatus 
   );
 }
 
-function ReadinessItem({ label, ready }: Readonly<{ label: string; ready: boolean }>) {
+function ReadinessStatus({ label, ready }: Readonly<{ label: string; ready: boolean }>) {
   return (
-    <li>
-      <span className={`operator-state ${ready ? "operator-state-active" : ""}`}>
-        {label} {ready ? "ready" : "not ready"}
-      </span>
-    </li>
+    <span className={`operator-state ${ready ? "operator-state-active" : ""}`}>
+      {label} {ready ? "ready" : "not ready"}
+    </span>
   );
 }
 

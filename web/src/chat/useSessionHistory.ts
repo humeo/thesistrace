@@ -270,6 +270,45 @@ export function useSessionHistory(researcherId: string): SessionHistoryControlle
   const visible = state.ownerId === researcherId
     ? state
     : initialState(researcherId, generationRef.current);
+  const activeSessionIds = visible.sessions
+    .filter((session) => session.current_turn !== null)
+    .map((session) => session.id).sort().join(",");
+
+  useEffect(() => {
+    if (activeSessionIds === "") return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      if (document.visibilityState !== "hidden") {
+        const generation = generationRef.current;
+        const updates = await Promise.all(activeSessionIds.split(",").map(async (id) => {
+          try { return await loadAgentSession(id, controller.signal); }
+          catch { return null; }
+        }));
+        if (controller.signal.aborted || researcherRef.current !== researcherId) return;
+        const byId = new Map(updates.filter((session) => session !== null).map((session) => [session.id, session]));
+        setState((current) => {
+          if (current.ownerId !== researcherId || current.generation !== generation) return current;
+          let changed = false;
+          const sessions = current.sessions.map((session) => {
+            const next = byId.get(session.id);
+            if (next === undefined || JSON.stringify(next) === JSON.stringify(session)) return session;
+            changed = true;
+            return next;
+          });
+          const activityError = "Chat activity could not be refreshed.";
+          const error = updates.includes(null)
+            ? current.error ?? activityError
+            : current.error === activityError ? null : current.error;
+          return changed || error !== current.error ? { ...current, error, sessions } : current;
+        });
+      }
+      if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 2_000);
+    };
+    timer = setTimeout(() => void poll(), 2_000);
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [activeSessionIds, researcherId]);
+
   return {
     deleteSession,
     error: visible.error,

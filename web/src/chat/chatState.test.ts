@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  chatNavigationReducer,
   deriveChatPhase,
   deriveMainAction,
-  initialChatNavigationState,
   resolveModelSelection,
   shouldSubmitFromEnter,
 } from "./chatState";
@@ -29,23 +27,7 @@ const catalog: AgentModelCatalog = {
   ],
 };
 
-describe("Chat shell state", () => {
-  it("toggles desktop collapse independently of the mobile drawer", () => {
-    const collapsed = chatNavigationReducer(initialChatNavigationState, {
-      type: "toggle-sidebar",
-    });
-    const opened = chatNavigationReducer(collapsed, {
-      type: "open-mobile-navigation",
-    });
-    const closed = chatNavigationReducer(opened, {
-      type: "close-mobile-navigation",
-    });
-
-    expect(collapsed).toEqual({ mobileNavigationOpen: false, sidebarCollapsed: true });
-    expect(opened).toEqual({ mobileNavigationOpen: true, sidebarCollapsed: true });
-    expect(closed).toEqual({ mobileNavigationOpen: false, sidebarCollapsed: true });
-  });
-
+describe("Chat model selection", () => {
   it("constrains reasoning to the selected model and uses registered defaults", () => {
     expect(resolveModelSelection(catalog, null, null)).toMatchObject({
       model: { key: "primary" },

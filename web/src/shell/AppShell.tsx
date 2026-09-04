@@ -1,204 +1,242 @@
 import {
-  ChartLineUp,
-  ClockCounterClockwise,
-  ChatCircle,
-  Database,
-  Flask,
-  List,
-  ShieldCheck,
-  SidebarSimple,
-  X,
+  ChartLineUp, ClockCounterClockwise, Database, Flask, List, NotePencil,
+  ShieldCheck, SidebarSimple, X,
 } from "@phosphor-icons/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createContext, useContext, useEffect, useRef, useState,
+  type KeyboardEvent, type ReactNode, type RefObject,
+} from "react";
 
 import { AccountMenu } from "../auth/AccountMenu";
+import { SessionHistoryList } from "../chat/SessionHistoryList";
+import type { SessionHistoryController } from "../chat/useSessionHistory";
+import { handleWorkspaceNavigation, type WorkspaceNavigate } from "./navigation";
 
 const resourceRoutes = [
-  { path: "/chat", label: "Chat", icon: ChatCircle },
   { path: "/data", label: "Data", icon: Database },
   { path: "/research", label: "Research", icon: Flask },
   { path: "/research-runs", label: "Research Runs", icon: ChartLineUp },
   { path: "/daily-tracks", label: "Daily Tracks", icon: ClockCounterClockwise },
 ] as const;
-
 const operatorRoute = {
-  activeRoot: "/operator",
-  path: "/operator/researchers",
-  label: "Operator",
-  icon: ShieldCheck,
+  activeRoot: "/operator", path: "/operator/researchers", label: "Operator", icon: ShieldCheck,
 } as const;
+
+type WorkspaceContextValue = Readonly<{
+  isCollapsed: boolean;
+  isNavigationOpen: boolean;
+  mobileNavigationToggleRef: RefObject<HTMLButtonElement | null>;
+  navigate: WorkspaceNavigate;
+  openNavigation: () => void;
+  sessionHistory: SessionHistoryController;
+  toggleSidebar: () => void;
+}>;
+const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
+
+export function useWorkspace(): WorkspaceContextValue {
+  const workspace = useContext(WorkspaceContext);
+  if (workspace === null) throw new Error("Workspace content requires AppShell");
+  return workspace;
+}
 
 type AppShellProps = {
   currentPath: string;
+  currentSessionId: string | null;
+  isNewChat: boolean;
   children: ReactNode;
   isOperator: boolean;
+  navigate: WorkspaceNavigate;
+  sessionHistory: SessionHistoryController;
 };
 
-export function AppShell({ currentPath, children, isOperator }: AppShellProps) {
-  const isResearch = currentPath === "/research";
+export function AppShell({
+  currentPath, currentSessionId, isNewChat, children, isOperator, navigate, sessionHistory,
+}: AppShellProps) {
+  const isChat = currentPath === "/chat";
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isNavigationOpen, setIsNavigationOpen] = useState(false);
-  const mobileNavigationRef = useRef<HTMLElement>(null);
+  const mobileViewport = useMobileViewport();
   const mobileNavigationCloseRef = useRef<HTMLButtonElement>(null);
   const mobileNavigationToggleRef = useRef<HTMLButtonElement>(null);
+  const newChatRef = useRef<HTMLAnchorElement>(null);
   const currentResource = [...resourceRoutes, ...(isOperator ? [operatorRoute] : [])]
     .find((resource) => isResourceCurrent(currentPath, resource));
 
   useEffect(() => {
     if (!isNavigationOpen) return;
-    mobileNavigationCloseRef.current?.focus();
-    const handleNavigationKeyboard = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setIsNavigationOpen(false);
-        requestAnimationFrame(() => mobileNavigationToggleRef.current?.focus());
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const navigation = mobileNavigationRef.current;
-      if (navigation === null) return;
-      const focusable = [...navigation.querySelectorAll<HTMLElement>(
-        "a[href], button:not([disabled]), [tabindex]:not([tabindex='-1'])",
-      )].filter((element) => element.getAttribute("aria-hidden") !== "true");
-      const first = focusable.at(0);
-      const last = focusable.at(-1);
-      if (first === undefined || last === undefined) return;
-      const active = document.activeElement;
-      if (event.shiftKey && (active === first || !navigation.contains(active))) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && (active === last || !navigation.contains(active))) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener("keydown", handleNavigationKeyboard);
-    return () => document.removeEventListener("keydown", handleNavigationKeyboard);
+    mobileNavigationCloseRef.current?.focus({ preventScroll: true });
   }, [isNavigationOpen]);
 
-  const closeNavigation = () => {
+  function closeNavigation(): void {
     setIsNavigationOpen(false);
-    requestAnimationFrame(() => mobileNavigationToggleRef.current?.focus());
+    window.requestAnimationFrame(() => mobileNavigationToggleRef.current?.focus());
+  }
+
+  const openPage: WorkspaceNavigate = (href, options) => {
+    navigate(href, options);
+    if (isNavigationOpen) closeNavigation();
   };
 
+  function handleNavigationKeyboard(event: KeyboardEvent<HTMLElement>): void {
+    if (!isNavigationOpen || event.defaultPrevented) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeNavigation();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = [...event.currentTarget.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), summary, input:not([disabled]), select:not([disabled]), textarea:not([disabled])',
+    )].filter((element) => {
+      // Closed details can still report layout boxes for their hidden controls.
+      const closedDetails = element.closest("details:not([open])");
+      return element.getClientRects().length > 0 && (
+        closedDetails === null || element === closedDetails.querySelector(":scope > summary")
+      );
+    });
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (first === undefined || last === undefined) return;
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   return (
-    <div
-      className={`app-shell${isResearch ? " app-shell-research" : ""}${isCollapsed ? " app-shell-collapsed" : ""}${isNavigationOpen ? " app-shell-navigation-open" : ""}`}
-    >
-      <aside
-        aria-label={isNavigationOpen ? "Navigation" : undefined}
-        aria-modal={isNavigationOpen ? true : undefined}
-        className="application-sidebar"
-        id="primary-navigation"
-        ref={mobileNavigationRef}
-        role={isNavigationOpen ? "dialog" : undefined}
-      >
-        <div className="sidebar-brand-row">
-          <a className="brand" aria-label="ThesisTrace home" href="/data">
-            <span className="brand-mark" aria-hidden="true">T</span>
-            <span className="brand-name">ThesisTrace</span>
+    <WorkspaceContext value={{
+      isCollapsed, isNavigationOpen, mobileNavigationToggleRef, navigate: openPage,
+      openNavigation: () => setIsNavigationOpen(true), sessionHistory,
+      toggleSidebar: () => setIsCollapsed((collapsed) => !collapsed),
+    }}>
+      <div className={`app-shell${isChat ? " app-shell-chat" : ""}${currentPath === "/research" ? " app-shell-research" : ""}${isCollapsed ? " app-shell-collapsed" : ""}${isNavigationOpen ? " app-shell-navigation-open" : ""}`}>
+        <aside
+          aria-hidden={mobileViewport && !isNavigationOpen ? true : undefined}
+          aria-label={mobileViewport && isNavigationOpen ? "Navigation" : undefined}
+          aria-modal={mobileViewport && isNavigationOpen ? true : undefined}
+          className="application-sidebar"
+          id="primary-navigation"
+          inert={mobileViewport && !isNavigationOpen ? true : undefined}
+          onKeyDown={handleNavigationKeyboard}
+          role={mobileViewport && isNavigationOpen ? "dialog" : undefined}
+        >
+          <div className="sidebar-brand-row">
+            <a className="brand" aria-label="ThesisTrace home" href="/data"
+              onClick={(event) => handleWorkspaceNavigation(event, () => openPage("/data"))}>
+              <span className="brand-mark" aria-hidden="true">T</span>
+              <span className="sidebar-label">ThesisTrace</span>
+            </a>
+            <button aria-label="Close navigation" className="mobile-navigation-close"
+              onClick={closeNavigation} ref={mobileNavigationCloseRef} type="button">
+              <X aria-hidden="true" size={18} weight="regular" />
+            </button>
+          </div>
+          <a aria-current={isNewChat ? "page" : undefined} className="sidebar-new-chat" href="/chat"
+            onClick={(event) => handleWorkspaceNavigation(event, () => openPage("/chat"))}
+            ref={newChatRef} title="New Chat">
+            <NotePencil aria-hidden="true" size={18} weight="regular" />
+            <span className="sidebar-label">New Chat</span>
           </a>
-          <button
-            aria-label="Close navigation"
-            className="mobile-navigation-close"
-            onClick={closeNavigation}
-            ref={mobileNavigationCloseRef}
-            type="button"
-          >
-            <X aria-hidden="true" size={18} weight="regular" />
-          </button>
-        </div>
-        <nav aria-label="Product resources" className="resource-nav">
-          {resourceRoutes.map((resource) => (
-            <ResourceLink
-              currentPath={currentPath}
-              key={resource.path}
-              resource={resource}
+          <nav aria-label="Workspace" className="resource-nav">
+            {resourceRoutes.map((resource) => (
+              <ResourceLink currentPath={currentPath} key={resource.path} navigate={openPage} resource={resource} />
+            ))}
+          </nav>
+          <section aria-label="Chats" className="chat-session-region">
+            <SessionHistoryList
+              controller={sessionHistory}
+              currentSessionId={currentSessionId}
+              navigate={openPage}
+              navigationInteractive={!mobileViewport || isNavigationOpen}
+              restoreFocus={(deletedCurrentSession) => {
+                if (mobileViewport && (deletedCurrentSession || !isNavigationOpen)) {
+                  mobileNavigationToggleRef.current?.focus();
+                } else newChatRef.current?.focus();
+              }}
             />
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
+          </section>
           {isOperator ? (
             <nav aria-label="Operator" className="resource-nav operator-nav">
-              <ResourceLink currentPath={currentPath} resource={operatorRoute} />
+              <ResourceLink currentPath={currentPath} navigate={openPage} resource={operatorRoute} />
             </nav>
           ) : null}
-          <div className="sidebar-footer">
-            <span className="sidebar-footer-label">Research workspace</span>
-            <span className="sidebar-footer-short" aria-hidden="true">TT</span>
-          </div>
+          <div className="sidebar-account-area"><AccountMenu /></div>
+        </aside>
+        <div className="application-frame">
+          {isChat ? children : (
+            <>
+              <AppHeader title={
+                <div className="context-breadcrumb" aria-label="Current resource">
+                  <span>Workspace</span><span aria-hidden="true">/</span>
+                  <strong>{currentResource?.label ?? "Resource"}</strong>
+                </div>
+              } />
+              <main className="main-content">{children}</main>
+            </>
+          )}
         </div>
-      </aside>
-      <div className="application-frame">
-        <header className="context-bar">
-          <div className="context-bar-leading">
-            <button
-              aria-controls="primary-navigation"
-              aria-expanded={isNavigationOpen}
-              aria-label="Open navigation"
-              className="mobile-navigation-toggle"
-              onClick={() => setIsNavigationOpen(true)}
-              ref={mobileNavigationToggleRef}
-              type="button"
-            >
-              <List aria-hidden="true" size={19} weight="regular" />
-            </button>
-            <button
-              aria-controls="primary-navigation"
-              aria-expanded={!isCollapsed}
-              aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-              className="sidebar-toggle"
-              onClick={() => setIsCollapsed((collapsed) => !collapsed)}
-              type="button"
-            >
-              <SidebarSimple aria-hidden="true" size={18} weight="regular" />
-            </button>
-            <div className="context-breadcrumb" aria-label="Current resource">
-              <span>Workspace</span>
-              <span aria-hidden="true">/</span>
-              <strong>{currentResource?.label ?? "Resource"}</strong>
-            </div>
-          </div>
-          <AccountMenu />
-        </header>
-        <main className="main-content">{children}</main>
+        <button aria-label="Close navigation" className="navigation-backdrop"
+          onClick={closeNavigation} type="button" />
       </div>
-      <button
-        aria-label="Close navigation"
-        className="navigation-backdrop"
-        onClick={closeNavigation}
-        type="button"
-      />
-    </div>
+    </WorkspaceContext>
   );
 }
 
-function ResourceLink({
-  currentPath,
-  resource,
-}: {
+export function AppHeader({ title, trailing }: { title: ReactNode; trailing?: ReactNode }) {
+  const workspace = useWorkspace();
+  return (
+    <header className="context-bar">
+      <div className="context-bar-leading">
+        <button aria-controls="primary-navigation" aria-expanded={workspace.isNavigationOpen}
+          aria-label="Open navigation" className="mobile-navigation-toggle"
+          onClick={workspace.openNavigation} ref={workspace.mobileNavigationToggleRef} type="button">
+          <List aria-hidden="true" size={19} weight="regular" />
+        </button>
+        <button aria-controls="primary-navigation" aria-expanded={!workspace.isCollapsed}
+          aria-label={workspace.isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="sidebar-toggle" onClick={workspace.toggleSidebar} type="button">
+          <SidebarSimple aria-hidden="true" size={18} weight="regular" />
+        </button>
+        {title}
+      </div>
+      {trailing}
+    </header>
+  );
+}
+
+function ResourceLink({ currentPath, navigate, resource }: {
   currentPath: string;
-  resource: Readonly<{
-    icon: typeof Database;
-    label: string;
-    path: string;
-    activeRoot?: string;
-  }>;
+  navigate: WorkspaceNavigate;
+  resource: Readonly<{ icon: typeof Database; label: string; path: string; activeRoot?: string }>;
 }) {
   const Icon = resource.icon;
   const isCurrent = isResourceCurrent(currentPath, resource);
   return (
-    <a aria-current={isCurrent ? "page" : undefined} href={resource.path} title={resource.label}>
+    <a aria-current={isCurrent ? "page" : undefined} href={resource.path}
+      onClick={(event) => handleWorkspaceNavigation(event, () => navigate(resource.path))} title={resource.label}>
       <Icon aria-hidden="true" size={18} weight={isCurrent ? "fill" : "regular"} />
-      <span>{resource.label}</span>
+      <span className="sidebar-label">{resource.label}</span>
     </a>
   );
 }
 
-function isResourceCurrent(
-  currentPath: string,
-  resource: Readonly<{ activeRoot?: string; path: string }>,
-): boolean {
-  const activeRoot = resource.activeRoot ?? resource.path;
-  return currentPath === resource.path || currentPath.startsWith(`${activeRoot}/`);
+function isResourceCurrent(currentPath: string, resource: Readonly<{ activeRoot?: string; path: string }>): boolean {
+  return currentPath === resource.path || currentPath.startsWith(`${resource.activeRoot ?? resource.path}/`);
+}
+
+function useMobileViewport(): boolean {
+  const [mobile, setMobile] = useState(() => typeof window !== "undefined"
+    && window.matchMedia("(max-width: 768px)").matches);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 768px)");
+    const update = () => setMobile(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  return mobile;
 }

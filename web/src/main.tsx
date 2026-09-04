@@ -134,7 +134,9 @@ function BrowserRoutedApp() {
   }
   return (
     <CoreApp
-      currentPath={location.pathname}
+      key={researcherId}
+      location={location}
+      navigate={navigate}
       isOperator={state.session.operator}
       researcherId={researcherId}
     />

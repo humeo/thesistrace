@@ -154,11 +154,12 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expectMinimumTouchTarget(closeNavigation);
   const mobileOperatorLink = page.getByRole("link", { name: "Operator", exact: true });
   const mobileHomeLink = page.getByRole("link", { name: "ThesisTrace home" });
+  const mobileAccountMenu = applicationSidebar.getByLabel("Account menu");
   await expect(mobileOperatorLink).toBeVisible();
   await mobileHomeLink.focus();
   await mobileHomeLink.press("Shift+Tab");
-  await expect(mobileOperatorLink).toBeFocused();
-  await mobileOperatorLink.press("Tab");
+  await expect(mobileAccountMenu).toBeFocused();
+  await mobileAccountMenu.press("Tab");
   await expect(mobileHomeLink).toBeFocused();
   const reducedTransitionSeconds = await page.locator(".navigation-backdrop").evaluate(
     (element) => {
@@ -334,9 +335,13 @@ test("only the singleton Operator can open and read the Operator Console", async
     "Use the same free-form, timezone-aware inputs as the CLI.",
     { exact: true },
   )).toHaveCount(0);
-  const marketAsOf = "2026-08-14T18:00:00+08:00";
-  const marketAsOfInput = marketRefreshSection.getByLabel("As-of");
+  const marketAsOfDate = "2026-08-14";
+  const marketAsOf = `${marketAsOfDate}T18:00:00+08:00`;
+  const marketAsOfInput = marketRefreshSection.getByLabel("As-of", { exact: true });
   const marketKeyInput = marketRefreshSection.getByLabel("Idempotency key");
+  await expect(marketAsOfInput).toHaveAttribute("type", "date");
+  await marketAsOfInput.fill(marketAsOfDate);
+  await expect(marketAsOfInput).toHaveValue(marketAsOfDate);
   await expect(marketKeyInput).toHaveValue(/^market-\d{8}T\d{6}Z$/);
   const reviewRefresh = marketRefreshSection.getByRole("button", {
     name: "Review Refresh",
@@ -347,26 +352,6 @@ test("only the singleton Operator can open and read the Operator Console", async
   const marketRefreshReconciliation = page.locator(
     'section[aria-labelledby="operator-market-refresh-reconciliation"]',
   );
-
-  await marketAsOfInput.fill("2026-08-11");
-  await marketKeyInput.fill("browser-invalid-market-refresh");
-  await reviewRefresh.click();
-  let marketConfirmation = page.getByRole("dialog", {
-    name: "Submit Market Refresh?",
-  });
-  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
-  await marketConfirmation.getByLabel("Current password").press("Enter");
-  await expect(marketConfirmation).toHaveCount(0);
-  const asOfError = page.getByText(
-    "Enter the same explicit timezone-aware ISO timestamp accepted by the CLI.",
-    { exact: true },
-  );
-  await expect(asOfError).toBeVisible();
-  await expect(marketAsOfInput).toHaveAttribute("aria-invalid", "true");
-  await expect(marketAsOfInput).toBeFocused();
-  await marketAsOfInput.press("Tab");
-  await expect(asOfError).toBeVisible();
-  resetAuthRateLimits();
 
   let releasePendingProof = (): void => {};
   let markPendingProofStarted = (): void => {};
@@ -400,10 +385,10 @@ test("only the singleton Operator can open and read the Operator Console", async
     await route.continue();
   };
   await page.route("**/api/auth/operator/proofs", pendingProofHandler);
-  await marketAsOfInput.fill(marketAsOf);
+  await marketAsOfInput.fill(marketAsOfDate);
   await marketKeyInput.fill(pendingKey);
   await reviewRefresh.click();
-  marketConfirmation = page.getByRole("dialog", {
+  let marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
   await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
@@ -457,7 +442,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     "**/api/operator/data/refreshes/market**",
     delayedCoreResponseHandler,
   );
-  await marketAsOfInput.fill(marketAsOf);
+  await marketAsOfInput.fill(marketAsOfDate);
   await marketKeyInput.fill(marketKey);
   await reviewRefresh.focus();
   await reviewRefresh.press("Enter");
@@ -496,7 +481,8 @@ test("only the singleton Operator can open and read the Operator Console", async
     .toBeVisible();
   await expect(reviewRefresh).toBeFocused();
 
-  const conflictingMarketAsOf = "2026-08-12T18:00:00+08:00";
+  const conflictingMarketAsOfDate = "2026-08-12";
+  const conflictingMarketAsOf = `${conflictingMarketAsOfDate}T18:00:00+08:00`;
   let releaseConflictResponse = (): void => {};
   let markConflictRejected = (): void => {};
   let markConflictResponseDropped = (): void => {};
@@ -534,7 +520,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     "**/api/operator/data/refreshes/market**",
     delayedConflictHandler,
   );
-  await marketAsOfInput.fill(conflictingMarketAsOf);
+  await marketAsOfInput.fill(conflictingMarketAsOfDate);
   await marketKeyInput.fill(marketKey);
   await reviewRefresh.click();
   marketConfirmation = page.getByRole("dialog", {
@@ -570,7 +556,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   const marketMutations = operatorMutationRequests.filter(
     (request) => request.path === "/api/operator/data/refreshes/market",
   );
-  expect(marketProofRequests).toHaveLength(4);
+  expect(marketProofRequests).toHaveLength(3);
   const completedMarketProof = marketProofRequests.find((request) =>
     JSON.parse(request.body).idempotency_key === marketKey
   );
@@ -580,7 +566,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     operation: "data.refresh.market.submit",
     password: browserPassword,
   });
-  expect(marketMutations).toHaveLength(3);
+  expect(marketMutations).toHaveLength(2);
   const completedMarketMutation = marketMutations.find((request) =>
     JSON.parse(request.body).idempotency_key === marketKey
   );
@@ -618,7 +604,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     "**/api/operator/data/refreshes/market**",
     droppedAfterAcceptanceHandler,
   );
-  await marketAsOfInput.fill(marketAsOf);
+  await marketAsOfInput.fill(marketAsOfDate);
   await marketKeyInput.fill(droppedAfterAcceptanceKey);
   await reviewRefresh.click();
   marketConfirmation = page.getByRole("dialog", {
@@ -729,7 +715,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     "**/api/operator/data/refreshes/market**",
     recoveredBeforePostHandler,
   );
-  await marketAsOfInput.fill(marketAsOf);
+  await marketAsOfInput.fill(marketAsOfDate);
   await marketKeyInput.fill(recoveredBeforePostKey);
   await reviewRefresh.click();
   marketConfirmation = page.getByRole("dialog", {
@@ -798,7 +784,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     "**/api/operator/data/refreshes/market**",
     submissionRaceHandler,
   );
-  await marketAsOfInput.fill(marketAsOf);
+  await marketAsOfInput.fill(marketAsOfDate);
   await marketKeyInput.fill(staleMarketKey);
   await reviewRefresh.click();
   marketConfirmation = page.getByRole("dialog", {
@@ -933,7 +919,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     "**/api/operator/data/refreshes/market**",
     pollingRaceHandler,
   );
-  await marketAsOfInput.fill(marketAsOf);
+  await marketAsOfInput.fill(marketAsOfDate);
   await marketKeyInput.fill(polledMarketKey);
   await reviewRefresh.click();
   marketConfirmation = page.getByRole("dialog", {
@@ -974,15 +960,18 @@ test("only the singleton Operator can open and read the Operator Console", async
   const financialReview = financialRefreshSection.getByRole("button", {
     name: "Review Refresh",
   });
-  await expect(financialTarget).toHaveAttribute("type", "text");
+  await expect(financialTarget).toHaveAttribute("type", "date");
+  await expect(financialTarget).toHaveAttribute("required", "");
   await expect(financialKeyInput).toHaveValue(/^financial-\d{8}T\d{6}Z$/);
   const financialTargetSession = "2026-08-14";
   const financialKey = "browser-financial-refresh-20260814";
-  await financialTarget.fill("0000-01-01");
   await financialReview.click();
-  await expect(financialRefreshSection.getByRole("alert")).toContainText(
-    "exactly as accepted by the CLI",
-  );
+  expect(
+    await financialTarget.evaluate(
+      (input) => (input as HTMLInputElement).validity.valueMissing,
+    ),
+  ).toBe(true);
+  await expect(financialTarget).toBeFocused();
   await expect(page.getByRole("dialog", { name: "Submit Financial Refresh?" }))
     .toHaveCount(0);
   await financialTarget.fill(financialTargetSession);
@@ -1051,15 +1040,18 @@ test("only the singleton Operator can open and read the Operator Console", async
   const industryReview = industryRefreshSection.getByRole("button", {
     name: "Review Refresh",
   });
-  await expect(industryTarget).toHaveAttribute("type", "text");
+  await expect(industryTarget).toHaveAttribute("type", "date");
+  await expect(industryTarget).toHaveAttribute("required", "");
   await expect(industryKeyInput).toHaveValue(/^industry-\d{8}T\d{6}Z$/);
   const industryTargetSession = "2026-08-14";
   const industryKey = "browser-industry-refresh-20260814";
-  await industryTarget.fill("0000-01-01");
   await industryReview.click();
-  await expect(industryRefreshSection.getByRole("alert")).toContainText(
-    "exactly as accepted by the CLI",
-  );
+  expect(
+    await industryTarget.evaluate(
+      (input) => (input as HTMLInputElement).validity.valueMissing,
+    ),
+  ).toBe(true);
+  await expect(industryTarget).toBeFocused();
   await expect(page.getByRole("dialog", { name: "Submit Industry Refresh?" }))
     .toHaveCount(0);
   await industryTarget.fill(industryTargetSession);

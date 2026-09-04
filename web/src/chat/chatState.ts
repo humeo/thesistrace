@@ -1,31 +1,6 @@
 import type { ChatTurn } from "./chatProtocol";
 import type { AgentModel, AgentModelCatalog, ReasoningEffort } from "./modelCatalog";
 
-export type ChatNavigationState = Readonly<{
-  mobileNavigationOpen: boolean;
-  sidebarCollapsed: boolean;
-}>;
-export type ChatNavigationAction =
-  | Readonly<{ type: "close-mobile-navigation" }>
-  | Readonly<{ type: "open-mobile-navigation" }>
-  | Readonly<{ type: "toggle-sidebar" }>;
-
-export const initialChatNavigationState: ChatNavigationState = {
-  mobileNavigationOpen: false,
-  sidebarCollapsed: false,
-};
-
-export function chatNavigationReducer(
-  state: ChatNavigationState,
-  action: ChatNavigationAction,
-): ChatNavigationState {
-  switch (action.type) {
-    case "close-mobile-navigation": return { ...state, mobileNavigationOpen: false };
-    case "open-mobile-navigation": return { ...state, mobileNavigationOpen: true };
-    case "toggle-sidebar": return { ...state, sidebarCollapsed: !state.sidebarCollapsed };
-  }
-}
-
 export type ResolvedModelSelection = Readonly<{
   model: AgentModel;
   reasoningEffort: ReasoningEffort;

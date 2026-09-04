@@ -16,6 +16,54 @@ import type {
 } from "./operatorDataStatusClient";
 
 describe("Operator Dataset status", () => {
+  it("shows each published dataset's own coverage and freshness without requiring receipts", () => {
+    const markup = renderStatus(statusPage({ latestByKind: [], operations: [] }));
+
+    expect(markup).toContain('aria-label="Current data coverage"');
+    expect(markup).toContain("CSI 300 Benchmark");
+    expect(markup).toContain("Updates with Market Refresh");
+    expect(markup).toContain("2010-01-04");
+    expect(markup).toContain("2026-08-31");
+    expect(markup).toContain("Discovery attempted through");
+    expect(markup).toContain("Discovery complete through");
+    expect(markup).toContain("2026-08-28");
+    expect(markup).toContain("Pending instruments");
+    expect(markup).toContain("Discovery gaps");
+    expect(markup).toContain("Earliest unresolved");
+    expect(markup).toContain("2026-08-26");
+    expect(markup).toContain("2026-08-30 08:02:00 UTC");
+    expect(markup).toContain("2026-08-29 08:03:00 UTC");
+    expect(markup).toContain("No Data Refresh operations have been accepted.");
+  });
+
+  it("keeps absent coverage and zero unresolved counts distinct", () => {
+    const page = statusPage();
+    const markup = renderStatus({
+      ...page,
+      head: {
+        ...page.head,
+        benchmarkCoverageStart: null,
+        benchmarkCoverageEnd: null,
+        benchmarkLastPublishedAt: null,
+        benchmarkResearchReadiness: false,
+        financialPendingInstrumentCount: 0,
+        financialDiscoveryGapCount: 0,
+        financialEarliestUnresolvedDate: null,
+        industryCoverageStart: null,
+        industryObservationThroughSession: null,
+        industryLastRefreshAt: null,
+        industryResearchReadiness: false,
+      },
+    });
+
+    expect(markup).toContain("Benchmark not ready");
+    expect(markup).toContain("Industry not ready");
+    expect(markup).toContain("Not available");
+    expect(markup).toContain("<dt>Pending instruments</dt><dd>0</dd>");
+    expect(markup).toContain("<dt>Discovery gaps</dt><dd>0</dd>");
+    expect(markup).not.toContain("undefined");
+  });
+
   it("leads with Head readiness and renders every lifecycle meaning as text", () => {
     const operations = [
       operation({ idempotencyKey: "market-accepted", kind: "market", status: "accepted" }),
@@ -271,6 +319,21 @@ function statusPage(
       benchmarkResearchReadiness: true,
       financialResearchReadiness: "ready_with_pending",
       industryResearchReadiness: true,
+      marketCoverageStart: "2015-01-05",
+      marketLastRefreshAt: "2026-08-29T08:00:00Z",
+      benchmarkCoverageStart: "2010-01-04",
+      benchmarkCoverageEnd: "2026-08-31",
+      benchmarkLastPublishedAt: "2026-08-30T08:02:00Z",
+      financialCoverageStart: "2015-01-01",
+      financialAttemptedThroughSession: "2026-08-29",
+      financialCompleteThroughSession: "2026-08-28",
+      financialLastRefreshAt: "2026-08-29T08:03:00Z",
+      financialPendingInstrumentCount: 2,
+      financialDiscoveryGapCount: 1,
+      financialEarliestUnresolvedDate: "2026-08-26",
+      industryCoverageStart: "2015-01-05",
+      industryObservationThroughSession: "2026-08-29",
+      industryLastRefreshAt: "2026-08-29T08:04:00Z",
     },
     worker: { available: true, lastHeartbeatAt: "2026-08-30T08:01:00Z" },
     latestByKind: [operation({ outcome: "published", status: "succeeded" })],
@@ -278,6 +341,22 @@ function statusPage(
     nextCursor: null,
     ...overrides,
   };
+}
+
+function renderStatus(data: DatasetOperationalStatus): string {
+  return renderToStaticMarkup(
+    <OperatorDatasetStatusView
+      cursorDepth={0}
+      data={data}
+      error={false}
+      loading={false}
+      onDetails={() => undefined}
+      onNext={() => undefined}
+      onPrevious={() => undefined}
+      onReload={() => undefined}
+      onAction={() => undefined}
+    />,
+  );
 }
 
 function operation(

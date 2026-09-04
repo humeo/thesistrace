@@ -16,7 +16,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-import { chatSessionHref, handleChatNavigation } from "./chatNavigation";
+import { chatSessionHref } from "./chatNavigation";
+import { handleWorkspaceNavigation } from "../shell/navigation";
 import {
   AgentSessionActiveRunError,
   AgentSessionChangedError,
@@ -247,7 +248,7 @@ export function SessionHistoryList({
                     aria-current={session.id === currentSessionId ? "page" : undefined}
                     aria-label={`${session.title}${session.current_turn === null ? "" : `, ${session.current_turn.status === "waiting_for_user" ? "Waiting for answer" : "Running"}`}`}
                     href={chatSessionHref(session.id)}
-                    onClick={(event) => handleChatNavigation(event, () => {
+                    onClick={(event) => handleWorkspaceNavigation(event, () => {
                       if (session.id !== currentSessionId) navigate(chatSessionHref(session.id));
                     })}
                     title={`${session.title}${session.current_turn === null ? "" : session.current_turn.status === "waiting_for_user" ? " — Waiting for answer" : " — Running"}`}

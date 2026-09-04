@@ -106,17 +106,18 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   await expect(picker).toHaveCount(0);
   await expect(pickerTrigger).toBeFocused();
 
-  const sidebar = page.locator("#chat-navigation");
+  const sidebar = page.locator("#primary-navigation");
   await expect(sidebar.getByRole("link", { name: "ThesisTrace home" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "New Chat" })).toBeVisible();
   await expect(sidebar.getByRole("navigation", { name: "Workspace" })).toBeVisible();
-  await expect(sidebar.getByRole("heading", { name: "Chats" })).toBeVisible();
+  await expect(sidebar.getByRole("heading", { name: "Chats" })).toHaveCount(0);
+  await expect(sidebar.getByRole("region", { name: "Chats", exact: true })).toBeVisible();
   await expect(sidebar.getByLabel("Account menu")).toBeVisible();
 
   const collapse = page.getByRole("button", { name: "Collapse sidebar" });
   await expect(page.getByText("No conversations yet", { exact: true })).toBeVisible();
   await collapse.click();
-  await expect(page.locator(".chat-shell")).toHaveClass(/chat-shell-collapsed/);
+  await expect(page.locator(".app-shell")).toHaveClass(/app-shell-collapsed/);
   await expect(sidebar.getByText("Empty", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute(
     "aria-expanded",
@@ -132,7 +133,7 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   await open.click();
   await expect(open).toHaveAttribute("aria-expanded", "true");
   await expect(sidebar).not.toHaveAttribute("inert", "");
-  await expect(page.locator(".chat-shell")).toHaveClass(/chat-shell-navigation-open/);
+  await expect(page.locator(".app-shell")).toHaveClass(/app-shell-navigation-open/);
   await expect.poll(
     () => sidebar.evaluate((element) => element.getBoundingClientRect().left),
   ).toBe(0);
@@ -149,7 +150,87 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   await expect(open).toBeFocused();
   await expect(open).toHaveAttribute("aria-expanded", "false");
   await expect(sidebar).toHaveAttribute("inert", "");
-  await expect(page.locator(".chat-shell")).not.toHaveClass(/chat-shell-navigation-open/);
+  await expect(page.locator(".app-shell")).not.toHaveClass(/app-shell-navigation-open/);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await open.press("Enter");
+  await expect(close).toBeFocused();
+  const home = sidebar.getByRole("link", { name: "ThesisTrace home" });
+  const account = sidebar.getByLabel("Account menu");
+  await home.focus();
+  await home.press("Shift+Tab");
+  await expect(account).toBeFocused();
+  await account.press("Tab");
+  await expect(home).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(open).toBeFocused();
+});
+
+for (const mobile of [false, true]) {
+  test(`shared sidebar keeps Chat available across resources on ${mobile ? "mobile" : "desktop"}`, async ({ page }) => {
+    await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 });
+    await page.goto("/chat");
+    await submitChatPrompt(page, "Build a low volatility Alpha.");
+    await expect(agentRunStatus(page)).toHaveText("Run complete");
+    const sessionUrl = page.url();
+    const sessionId = new URL(sessionUrl).searchParams.get("session")!;
+    const sidebar = page.locator("#primary-navigation");
+    const sessionLink = sidebar.locator(`a[href="/chat?session=${sessionId}"]`);
+    await expect(sessionLink).toHaveCount(1);
+    const documentRequests: string[] = [];
+    page.on("request", (request) => {
+      if (request.resourceType() === "document") documentRequests.push(request.url());
+    });
+    const sidebarElement = await sidebar.elementHandle();
+    if (!mobile) await page.getByRole("button", { name: "Collapse sidebar" }).click();
+
+    for (const [path, label] of [
+      ["/data", "Data"], ["/research", "Research"],
+      ["/research-runs", "Research Runs"], ["/daily-tracks", "Daily Tracks"],
+    ]) {
+      if (mobile) await page.getByRole("button", { name: "Open navigation" }).click();
+      await sidebar.getByRole("link", { name: label!, exact: true }).click();
+      await expect(page).toHaveURL(new RegExp(`${path}$`));
+      await expect(sessionLink).toHaveCount(1);
+      await expect(sidebar.locator(`.resource-nav a[href="${path}"]`)).toHaveAttribute("aria-current", "page");
+      expect(await sidebarElement!.evaluate((element) => element.isConnected)).toBe(true);
+      if (mobile) await expect(sidebar).toHaveAttribute("inert", "");
+      else await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
+    }
+    if (mobile) await page.getByRole("button", { name: "Open navigation" }).click();
+    await sessionLink.click();
+    await expect(page).toHaveURL(sessionUrl);
+    await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText("Build a low volatility Alpha.");
+    await expect(agentRunStatus(page)).toHaveText("Run complete");
+    await page.goBack();
+    await expect(page).toHaveURL(/\/daily-tracks$/);
+    await page.goForward();
+    await expect(page).toHaveURL(sessionUrl);
+    await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText("Build a low volatility Alpha.");
+    expect(await sidebarElement!.evaluate((element) => element.isConnected)).toBe(true);
+    expect(documentRequests).toEqual([]);
+    await expect(page.locator("aside")).toHaveCount(1);
+  });
+}
+
+test("shared sidebar observes an active Chat finishing while viewing Data", async ({ page }) => {
+  await page.goto("/chat");
+  await submitChatPrompt(page, "Build a low volatility Alpha.");
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  const sessionId = new URL(page.url()).searchParams.get("session")!;
+  setAgentSessionActiveRun(sessionId, true);
+  try {
+    await page.reload();
+    const sidebar = page.locator("#primary-navigation");
+    await expect(sidebar.locator(".chat-session-active-spinner")).toBeVisible();
+    await sidebar.getByRole("link", { name: "Data", exact: true }).click();
+    await expect(page).toHaveURL(/\/data$/);
+    await expect(sidebar.locator(".chat-session-active-spinner")).toBeVisible();
+    setAgentSessionActiveRun(sessionId, false);
+    await expect(sidebar.locator(".chat-session-active-spinner")).toHaveCount(0, { timeout: 10_000 });
+    await expect(sidebar.locator(`a[href="/chat?session=${sessionId}"]`)).toBeVisible();
+  } finally {
+    setAgentSessionActiveRun(sessionId, false);
+  }
 });
 
 test("Chat exposes an accessible 16 KiB text boundary before execution", async ({ page }) => {
@@ -209,7 +290,7 @@ for (const viewport of [
     await expect(focusTarget).toBeFocused();
     if (viewport.name === "mobile") {
       await expect(navigation).toHaveAttribute("aria-expanded", "false");
-      await expect(page.locator("#chat-navigation")).toHaveAttribute("inert", "");
+      await expect(page.locator("#primary-navigation")).toHaveAttribute("inert", "");
     }
     await page.goto(sessionUrl);
     await expect(page.getByRole("heading", { name: "Chat not found" })).toBeVisible();
@@ -485,7 +566,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   }
   await mobileActions.click();
   await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toBeVisible();
-  const navigationBackdrop = page.locator(".chat-navigation-backdrop");
+  const navigationBackdrop = page.locator(".navigation-backdrop");
   const navigationBackdropBounds = await navigationBackdrop.boundingBox();
   if (navigationBackdropBounds === null) {
     throw new Error("Mobile navigation exposed no clickable backdrop");
@@ -497,17 +578,17 @@ test("first Chat turn streams through Caddy and reload replays without another r
     },
   });
   await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toHaveCount(0);
-  await expect(page.locator("#chat-navigation")).toHaveAttribute("inert", "");
+  await expect(page.locator("#primary-navigation")).toHaveAttribute("inert", "");
   await expect(openNavigation).toBeFocused();
   await openNavigation.click();
   await mobileActions.click();
   await page.keyboard.press("Escape");
-  await expect(page.locator(".chat-shell")).toHaveClass(/chat-shell-navigation-open/);
+  await expect(page.locator(".app-shell")).toHaveClass(/app-shell-navigation-open/);
   await expect(mobileActions).toBeFocused();
   await mobileActions.click();
   await page.getByRole("menuitem", { name: "Rename" }).click();
   await page.keyboard.press("Escape");
-  await expect(page.locator(".chat-shell")).toHaveClass(/chat-shell-navigation-open/);
+  await expect(page.locator(".app-shell")).toHaveClass(/app-shell-navigation-open/);
   await expect(mobileActions).toBeFocused();
   await mobileActions.click();
   await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toBeVisible();
@@ -537,10 +618,10 @@ test("first Chat turn streams through Caddy and reload replays without another r
   });
   await expect(page.getByRole("menu", { name: `Actions for ${renamedTitle}` })).toHaveCount(0);
   await expect(page.getByText("No conversations yet", { exact: true })).toBeVisible();
-  await expect(page.locator(".chat-shell")).toHaveClass(/chat-shell-navigation-open/);
+  await expect(page.locator(".app-shell")).toHaveClass(/app-shell-navigation-open/);
   await expect(page.getByRole("link", { name: "New Chat", exact: true })).toBeFocused();
   await page.keyboard.press("Escape");
-  await expect(page.locator(".chat-shell")).not.toHaveClass(/chat-shell-navigation-open/);
+  await expect(page.locator(".app-shell")).not.toHaveClass(/app-shell-navigation-open/);
   await expect(openNavigation).toBeFocused();
 });
 
@@ -614,7 +695,7 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
   const response = await runResponse;
   expect(response.status()).toBe(200);
   await page.setViewportSize({ width: 320, height: 720 });
-  await expect(page.locator("#chat-navigation")).toHaveCSS("visibility", "hidden");
+  await expect(page.locator("#primary-navigation")).toHaveCSS("visibility", "hidden");
   const compactToolLayout = await tool.evaluate((element) => {
     const toolBounds = element.getBoundingClientRect();
     const fields = [...element.querySelectorAll<HTMLElement>(":scope > code, :scope > span")];

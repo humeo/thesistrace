@@ -38,6 +38,21 @@ const response = {
     benchmark_research_readiness: true,
     financial_research_readiness: "ready_with_pending",
     industry_research_readiness: true,
+    market_coverage_start: "2015-01-05",
+    market_last_refresh_at: "2026-08-29T08:00:00Z",
+    benchmark_coverage_start: "2010-01-04",
+    benchmark_coverage_end: "2026-08-31",
+    benchmark_last_published_at: "2026-08-30T08:02:00Z",
+    financial_coverage_start: "2015-01-01",
+    financial_attempted_through_session: "2026-08-29",
+    financial_complete_through_session: "2026-08-28",
+    financial_last_refresh_at: "2026-08-29T08:03:00Z",
+    financial_pending_instrument_count: 2,
+    financial_discovery_gap_count: 1,
+    financial_earliest_unresolved_date: "2026-08-26",
+    industry_coverage_start: "2015-01-05",
+    industry_observation_through_session: "2026-08-29",
+    industry_last_refresh_at: "2026-08-29T08:04:00Z",
   },
   worker: {
     available: false,
@@ -59,6 +74,21 @@ describe("Operator Dataset operational status decoder", () => {
         benchmarkResearchReadiness: true,
         financialResearchReadiness: "ready_with_pending",
         industryResearchReadiness: true,
+        marketCoverageStart: "2015-01-05",
+        marketLastRefreshAt: "2026-08-29T08:00:00Z",
+        benchmarkCoverageStart: "2010-01-04",
+        benchmarkCoverageEnd: "2026-08-31",
+        benchmarkLastPublishedAt: "2026-08-30T08:02:00Z",
+        financialCoverageStart: "2015-01-01",
+        financialAttemptedThroughSession: "2026-08-29",
+        financialCompleteThroughSession: "2026-08-28",
+        financialLastRefreshAt: "2026-08-29T08:03:00Z",
+        financialPendingInstrumentCount: 2,
+        financialDiscoveryGapCount: 1,
+        financialEarliestUnresolvedDate: "2026-08-26",
+        industryCoverageStart: "2015-01-05",
+        industryObservationThroughSession: "2026-08-29",
+        industryLastRefreshAt: "2026-08-29T08:04:00Z",
       },
       worker: {
         available: false,
@@ -116,6 +146,37 @@ describe("Operator Dataset operational status decoder", () => {
       ...response,
       operations: Array.from({ length: 51 }, () => operation),
     })).toThrow("Dataset operational status response is invalid");
+  });
+
+  it.each([
+    ["benchmark_coverage_end", "2026-02-30"],
+    ["financial_pending_instrument_count", -1],
+    ["financial_discovery_gap_count", "0"],
+    ["industry_last_refresh_at", "yesterday"],
+    ["market_coverage_start", undefined],
+  ])("rejects malformed or missing coverage field %s", (field, value) => {
+    expect(() => decodeDatasetOperationalStatus({
+      ...response,
+      head: { ...response.head, [field]: value },
+    })).toThrow("Dataset operational status response is invalid");
+  });
+
+  it("accepts explicitly unavailable coverage without manufacturing dates or counts", () => {
+    const decoded = decodeDatasetOperationalStatus({
+      ...response,
+      head: {
+        ...response.head,
+        financial_coverage_start: null,
+        financial_attempted_through_session: null,
+        financial_complete_through_session: null,
+        financial_pending_instrument_count: null,
+        financial_discovery_gap_count: null,
+        financial_earliest_unresolved_date: null,
+        financial_research_readiness: "not_ready",
+      },
+    });
+    expect(decoded.head.financialPendingInstrumentCount).toBeNull();
+    expect(decoded.head.financialCompleteThroughSession).toBeNull();
   });
 
   it("accepts an explicit cancelled terminal state without a mutation control", () => {

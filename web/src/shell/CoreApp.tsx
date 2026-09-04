@@ -1,6 +1,11 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, useMemo } from "react";
 
-import { AppShell } from "./AppShell";
+import type { BrowserLocation } from "../auth/routing";
+import { readBrowserChatThread } from "../chat/chatNavigation";
+import { useSessionHistory } from "../chat/useSessionHistory";
+import type { WorkspaceNavigate } from "./navigation";
+
+import { AppHeader, AppShell } from "./AppShell";
 
 const DataPage = lazy(() =>
   import("../data/DataPage").then(({ DataPage }) => ({ default: DataPage })),
@@ -34,27 +39,34 @@ const OperatorDataPage = lazy(() =>
   })),
 );
 
-export function CoreApp({ currentPath, isOperator, researcherId }: {
-  currentPath: string;
+export function CoreApp({ location, navigate, isOperator, researcherId }: {
+  location: BrowserLocation;
+  navigate: WorkspaceNavigate;
   isOperator: boolean;
   researcherId: string;
 }) {
-  if (currentPath === "/chat") {
-    return (
-      <Suspense
-        fallback={<section className="state-section chat-route-loading"><p>Loading Chat…</p></section>}
-      >
-        <ChatPage researcherId={researcherId} />
-      </Suspense>
-    );
-  }
+  const currentPath = location.pathname;
+  const sessionHistory = useSessionHistory(researcherId);
+  const thread = useMemo(() => currentPath === "/chat"
+    ? readBrowserChatThread(location.search) : null, [currentPath, location]);
+  useEffect(() => { window.scrollTo(0, 0); }, [currentPath]);
   const researchRunMatch = currentPath.match(/^\/research-runs\/(run_[a-f0-9]+)$/);
   const dailyTrackMatch = currentPath.match(/^\/daily-tracks\/(track_[a-f0-9]+)$/);
   return (
-    <AppShell currentPath={currentPath} isOperator={isOperator}>
+    <AppShell
+      currentPath={currentPath}
+      currentSessionId={thread?.kind === "session" ? thread.id : null}
+      isNewChat={thread?.kind === "new"}
+      isOperator={isOperator}
+      navigate={navigate}
+      sessionHistory={sessionHistory}
+    >
       <Suspense
-        fallback={<section className="state-section"><p>Loading workspace…</p></section>}
+        fallback={currentPath === "/chat"
+          ? <><AppHeader title={<strong>Loading Chat…</strong>} /><main className="chat-main" /></>
+          : <section className="state-section"><p>Loading workspace…</p></section>}
       >
+        {thread === null ? null : <ChatPage key={thread.id ?? "invalid"} researcherId={researcherId} thread={thread} />}
         {currentPath === "/data" ? <DataPage /> : null}
         {currentPath === "/research" ? (
           <ResearchWorkspacePage researcherId={researcherId} />
@@ -76,7 +88,7 @@ export function CoreApp({ currentPath, isOperator, researcherId }: {
             <p>The requested resource is not available.</p>
           </section>
         ) : null}
-        {currentPath !== "/data" &&
+        {currentPath !== "/chat" && currentPath !== "/data" &&
         currentPath !== "/research" &&
         currentPath !== "/operator/researchers" &&
         currentPath !== "/operator/data" &&

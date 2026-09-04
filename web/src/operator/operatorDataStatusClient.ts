@@ -21,6 +21,21 @@ export type DatasetOperationalHead = Readonly<{
   benchmarkResearchReadiness: boolean;
   financialResearchReadiness: "ready" | "ready_with_pending" | "ready_with_gaps" | "not_ready";
   industryResearchReadiness: boolean;
+  marketCoverageStart: string | null;
+  marketLastRefreshAt: string | null;
+  benchmarkCoverageStart: string | null;
+  benchmarkCoverageEnd: string | null;
+  benchmarkLastPublishedAt: string | null;
+  financialCoverageStart: string | null;
+  financialAttemptedThroughSession: string | null;
+  financialCompleteThroughSession: string | null;
+  financialLastRefreshAt: string | null;
+  financialPendingInstrumentCount: number | null;
+  financialDiscoveryGapCount: number | null;
+  financialEarliestUnresolvedDate: string | null;
+  industryCoverageStart: string | null;
+  industryObservationThroughSession: string | null;
+  industryLastRefreshAt: string | null;
 }>;
 
 export type DataOperatorWorkerStatus = Readonly<{
@@ -176,6 +191,21 @@ function decodeHead(value: unknown): DatasetOperationalHead {
       "benchmark_research_readiness",
       "financial_research_readiness",
       "industry_research_readiness",
+      "market_coverage_start",
+      "market_last_refresh_at",
+      "benchmark_coverage_start",
+      "benchmark_coverage_end",
+      "benchmark_last_published_at",
+      "financial_coverage_start",
+      "financial_attempted_through_session",
+      "financial_complete_through_session",
+      "financial_last_refresh_at",
+      "financial_pending_instrument_count",
+      "financial_discovery_gap_count",
+      "financial_earliest_unresolved_date",
+      "industry_coverage_start",
+      "industry_observation_through_session",
+      "industry_last_refresh_at",
     ])
     || (value.data_identity !== null
       && (typeof value.data_identity !== "string" || !/^[0-9a-f]{64}$/.test(value.data_identity)))
@@ -185,6 +215,21 @@ function decodeHead(value: unknown): DatasetOperationalHead {
     || typeof value.benchmark_research_readiness !== "boolean"
     || !isFinancialReadiness(value.financial_research_readiness)
     || typeof value.industry_research_readiness !== "boolean"
+    || !isOptionalSession(value.market_coverage_start)
+    || !isOptionalTimestamp(value.market_last_refresh_at)
+    || !isOptionalSession(value.benchmark_coverage_start)
+    || !isOptionalSession(value.benchmark_coverage_end)
+    || !isOptionalTimestamp(value.benchmark_last_published_at)
+    || !isOptionalSession(value.financial_coverage_start)
+    || !isOptionalSession(value.financial_attempted_through_session)
+    || !isOptionalSession(value.financial_complete_through_session)
+    || !isOptionalTimestamp(value.financial_last_refresh_at)
+    || !isOptionalCount(value.financial_pending_instrument_count)
+    || !isOptionalCount(value.financial_discovery_gap_count)
+    || !isOptionalSession(value.financial_earliest_unresolved_date)
+    || !isOptionalSession(value.industry_coverage_start)
+    || !isOptionalSession(value.industry_observation_through_session)
+    || !isOptionalTimestamp(value.industry_last_refresh_at)
     || !(
       (value.data_identity === null
         && value.prepared_at === null
@@ -202,6 +247,21 @@ function decodeHead(value: unknown): DatasetOperationalHead {
     benchmarkResearchReadiness: value.benchmark_research_readiness,
     financialResearchReadiness: value.financial_research_readiness,
     industryResearchReadiness: value.industry_research_readiness,
+    marketCoverageStart: value.market_coverage_start,
+    marketLastRefreshAt: value.market_last_refresh_at,
+    benchmarkCoverageStart: value.benchmark_coverage_start,
+    benchmarkCoverageEnd: value.benchmark_coverage_end,
+    benchmarkLastPublishedAt: value.benchmark_last_published_at,
+    financialCoverageStart: value.financial_coverage_start,
+    financialAttemptedThroughSession: value.financial_attempted_through_session,
+    financialCompleteThroughSession: value.financial_complete_through_session,
+    financialLastRefreshAt: value.financial_last_refresh_at,
+    financialPendingInstrumentCount: value.financial_pending_instrument_count,
+    financialDiscoveryGapCount: value.financial_discovery_gap_count,
+    financialEarliestUnresolvedDate: value.financial_earliest_unresolved_date,
+    industryCoverageStart: value.industry_coverage_start,
+    industryObservationThroughSession: value.industry_observation_through_session,
+    industryLastRefreshAt: value.industry_last_refresh_at,
   };
 }
 

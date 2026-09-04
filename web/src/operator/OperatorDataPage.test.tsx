@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   MarketRefreshReceipt,
   OperatorDataPage,
+  marketRefreshAsOfForDate,
   marketRefreshPollGenerationIsCurrent,
   suggestMarketRefreshKey,
 } from "./OperatorDataPage";
@@ -19,8 +20,10 @@ test("renders the focused forms without redundant Operator copy", () => {
   expect(markup).toContain(">As-of<");
   expect(markup).toContain("Observation-through Research Session");
   expect(markup).toContain('type="text"');
-  expect(markup).not.toContain('type="date"');
+  expect(markup).toContain('type="date"');
   expect(markup).not.toContain('type="datetime-local"');
+  expect(markup).toContain('id="operator-market-as-of"');
+  expect(markup).toContain("Submitted at 18:00 Asia/Shanghai (+08:00)");
   expect(markup).toContain(">Idempotency key<");
   expect(markup).not.toContain('<p class="eyebrow">Operator Console</p>');
   expect(markup).not.toContain(
@@ -34,6 +37,14 @@ test("renders the focused forms without redundant Operator copy", () => {
     "Choose the exact Research Session through which Industry data is observed.",
   );
   expect(markup).not.toContain("Accepted is queued, not published.");
+});
+
+test("maps a calendar date to an explicit post-close Shanghai timestamp", () => {
+  expect(marketRefreshAsOfForDate("2026-08-14")).toBe(
+    "2026-08-14T18:00:00+08:00",
+  );
+  expect(marketRefreshAsOfForDate("2026-02-30")).toBe("");
+  expect(marketRefreshAsOfForDate("")).toBe("");
 });
 
 test("suggests a stable kind-and-time key without selecting an as-of target", () => {

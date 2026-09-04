@@ -1,8 +1,15 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import type { SessionHistoryController } from "../chat/useSessionHistory";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { AuthProvider } from "../auth/AuthProvider";
-import { AppShell } from "./AppShell";
+import { AppHeader, AppShell } from "./AppShell";
+
+const sessionHistory: SessionHistoryController = {
+  deleteSession: vi.fn(), error: null, loadMore: vi.fn(), loadingMore: false,
+  nextCursor: null, refresh: vi.fn(), refreshVersion: 0, renameSession: vi.fn(),
+  sessions: [], status: "ready", watchGeneratedTitle: vi.fn(),
+};
 
 function renderShell(
   currentPath: string,
@@ -11,14 +18,25 @@ function renderShell(
 ): string {
   return renderToStaticMarkup(
     <AuthProvider>
-      <AppShell currentPath={currentPath} isOperator={isOperator}>
+      <AppShell currentPath={currentPath} currentSessionId={null} isNewChat={currentPath === "/chat"}
+        isOperator={isOperator} navigate={vi.fn()} sessionHistory={sessionHistory}>
+        {currentPath === "/chat" ? <AppHeader title="New chat" /> : null}
         <section>{content}</section>
       </AppShell>
     </AuthProvider>,
   );
 }
 
-test("renders Chat and the four Research resources with only the active content", () => {
+test("keeps the conversation sidebar available on Data without a separate Chat destination", () => {
+  const markup = renderShell("/data");
+
+  expect(markup).toContain('aria-label="Chats"');
+  expect(markup).toContain("New Chat");
+  expect(markup).not.toContain(">Chat<");
+  expect(markup).not.toContain(">Chats<");
+});
+
+test("renders New Chat and the four Research resources with only the active content", () => {
   const markup = renderShell("/research-runs", "Selected resource");
 
   expect(markup.match(/<a /g)).toHaveLength(6);

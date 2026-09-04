@@ -151,7 +151,7 @@ export function OperatorFinancialRefreshPanel({
   function review(): void {
     const nextTargetError = isIsoResearchSession(target)
       ? null
-      : "Enter an explicit Research Session as YYYY-MM-DD, exactly as accepted by the CLI.";
+      : "Choose a valid Research Session date.";
     const nextKeyError = isMarketRefreshIdempotencyKey(idempotencyKey)
       ? null
       : "Use 1–512 characters with no boundary whitespace, NUL, or unpaired surrogate.";
@@ -191,9 +191,7 @@ export function OperatorFinancialRefreshPanel({
         : "Use 1–512 characters with no boundary whitespace, NUL, or unpaired surrogate.");
       focusAfterCommit.current = keyInput.current;
     } else {
-      setTargetError(
-        "Enter an explicit Research Session as YYYY-MM-DD, exactly as accepted by the CLI.",
-      );
+      setTargetError("Choose a valid Research Session date.");
       focusAfterCommit.current = targetInput.current;
     }
   }
@@ -234,8 +232,10 @@ export function OperatorFinancialRefreshPanel({
             review();
           }}
         >
-          <label>
-            <span>Observation-through Research Session</span>
+          <div className="operator-refresh-field">
+            <label htmlFor="operator-financial-target">
+              Observation-through Research Session
+            </label>
             <input
               aria-describedby={targetError === null
                 ? "operator-financial-target-help"
@@ -243,28 +243,25 @@ export function OperatorFinancialRefreshPanel({
               aria-invalid={targetError === null ? undefined : true}
               autoComplete="off"
               disabled={confirmation !== null || pending !== null}
-              maxLength={10}
+              id="operator-financial-target"
               onChange={(event) => {
                 setTarget(event.target.value);
                 setTargetError(null);
               }}
-              placeholder="2026-08-14"
               ref={targetInput}
               required
-              spellCheck={false}
-              type="text"
+              type="date"
               value={target}
             />
             <small id="operator-financial-target-help">
-              YYYY-MM-DD Research Session, exactly as accepted by the CLI. No collection
-              boundary is selected for you.
+              Select the observation-through Research Session.
             </small>
             {targetError === null ? null : (
               <small className="operator-field-error" id="operator-financial-target-error" role="alert">
                 {targetError}
               </small>
             )}
-          </label>
+          </div>
           <label>
             <span>Idempotency key</span>
             <input

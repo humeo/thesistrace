@@ -215,7 +215,10 @@ export function OperatorDataPage() {
     }
     setPollError(false);
     setSubmissionError(null);
-    beginConfirmation({ asOf, idempotencyKey });
+    beginConfirmation({
+      asOf: marketRefreshAsOfForDate(asOf),
+      idempotencyKey,
+    });
   }
 
   function beginConfirmation(request: MarketRefreshRequest): void {
@@ -248,7 +251,7 @@ export function OperatorDataPage() {
     }
     pendingFieldFocus.current = "asOf";
     setFieldErrors({
-      asOf: "Enter the same explicit timezone-aware ISO timestamp accepted by the CLI.",
+      asOf: "The selected As-of date is not valid for Market Refresh.",
       idempotencyKey: null,
     });
   }
@@ -301,8 +304,8 @@ export function OperatorDataPage() {
               reviewRefresh();
             }}
           >
-            <label>
-              <span>As-of</span>
+            <div className="operator-refresh-field">
+              <label htmlFor="operator-market-as-of">As-of</label>
               <input
                 aria-describedby={fieldErrors.asOf === null
                   ? "operator-market-as-of-help"
@@ -310,27 +313,25 @@ export function OperatorDataPage() {
                 aria-invalid={fieldErrors.asOf === null ? undefined : true}
                 autoComplete="off"
                 disabled={confirmation !== null || pendingSubmission !== null}
-                maxLength={128}
+                id="operator-market-as-of"
                 onChange={(event) => {
                   setAsOf(event.target.value);
                   setFieldErrors((current) => ({ ...current, asOf: null }));
                 }}
-                placeholder="2026-08-11T18:00:00+08:00"
                 required
                 ref={asOfInput}
-                spellCheck={false}
-                type="text"
+                type="date"
                 value={asOf}
               />
               <small id="operator-market-as-of-help">
-                Timezone-aware ISO timestamp. No target is selected for you.
+                Submitted at 18:00 Asia/Shanghai (+08:00); the exact timestamp is shown before submission.
               </small>
               {fieldErrors.asOf === null ? null : (
                 <small className="operator-field-error" id="operator-market-as-of-error" role="alert">
                   {fieldErrors.asOf}
                 </small>
               )}
-            </label>
+            </div>
             <label>
               <span>Idempotency key</span>
               <input
@@ -584,6 +585,13 @@ export function suggestMarketRefreshKey(now: Date): string {
   return `market-${now.toISOString().replace(/\.\d{3}Z$/, "Z").replaceAll("-", "").replaceAll(":", "")}`;
 }
 
+export function marketRefreshAsOfForDate(date: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "";
+  const parsed = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(parsed.valueOf()) || !parsed.toISOString().startsWith(date)) return "";
+  return `${date}T18:00:00+08:00`;
+}
+
 export function marketRefreshPollGenerationIsCurrent(
   source: "operation" | "pending",
   trackedGeneration: number,
@@ -604,9 +612,8 @@ function marketRefreshFieldErrors(
   const asOfCharacters = Array.from(asOf);
   return {
     asOf: asOfCharacters.length === 0
-      || asOfCharacters.length > 128
-      || asOf !== asOf.trim()
-      ? "Enter an explicit timezone-aware ISO timestamp of at most 128 characters."
+      || marketRefreshAsOfForDate(asOf) === ""
+      ? "Choose a valid As-of date."
       : null,
     idempotencyKey: isMarketRefreshIdempotencyKey(idempotencyKey)
       ? null

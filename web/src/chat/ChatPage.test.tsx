@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 
+import type { ReactNode } from "react";
+import { AppShell } from "../shell/AppShell";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test, vi } from "vitest";
 
 import { AuthProvider } from "../auth/AuthProvider";
-import { AssistantMarkdown, ChatShell, readBrowserChatThread } from "./ChatPage";
-import { chatSessionHref } from "./chatNavigation";
+import { AssistantMarkdown, ChatContent } from "./ChatPage";
+import { chatSessionHref, readBrowserChatThread } from "./chatNavigation";
 import { SessionHistoryList, sessionDialogErrorMessage } from "./SessionHistoryList";
 import {
   AgentSessionInvalidError,
@@ -44,10 +46,10 @@ const sessionHistory = {
   watchGeneratedTitle: vi.fn(),
 };
 
-test("renders the standalone Chat hierarchy and integrated model picker", () => {
+test("renders Chat within the shared workspace hierarchy and integrated model picker", () => {
   const markup = renderToStaticMarkup(
-    <AuthProvider>
-      <ChatShell
+    <TestWorkspace>
+      <ChatContent
         catalogState={catalogState}
         navigateChat={vi.fn()}
         preferenceState={{ status: "not-required" }}
@@ -56,13 +58,15 @@ test("renders the standalone Chat hierarchy and integrated model picker", () => 
         selectedSessionState={{ status: "not-required" }}
         sessionHistory={sessionHistory}
       />
-    </AuthProvider>,
+    </TestWorkspace>,
   );
 
-  const labels = ["ThesisTrace", "New Chat", ">Data<", ">Research<", "Research Runs", "Daily Tracks", ">Chats<"];
+  const labels = ["ThesisTrace", "New Chat", ">Data<", ">Research<", "Research Runs", "Daily Tracks"];
   const positions = labels.map((label) => markup.indexOf(label));
   expect(positions.every((position) => position >= 0)).toBe(true);
   expect(positions).toEqual([...positions].sort((left, right) => left - right));
+  expect(markup).toContain('aria-label="Chats"');
+  expect(markup).not.toContain(">Chats<");
   expect(markup).toContain('class="chat-composer-surface chat-composer-surface-locked"');
   expect(markup).toContain('aria-label="Model Research Primary, reasoning Medium"');
   expect(markup).not.toContain("Next Turn settings");
@@ -80,13 +84,13 @@ test("uses explicit loading and Not Found titles instead of Untitled", () => {
     thread,
   };
   const loading = renderToStaticMarkup(
-    <AuthProvider><ChatShell {...common} preferenceState={{ status: "loading" }} selectedSessionState={{ status: "loading" }} /></AuthProvider>,
+    <TestWorkspace><ChatContent {...common} preferenceState={{ status: "loading" }} selectedSessionState={{ status: "loading" }} /></TestWorkspace>,
   );
   expect(loading).toContain("Loading Chat");
   expect(loading).not.toContain("<strong>Untitled</strong>");
 
   const missing = renderToStaticMarkup(
-    <AuthProvider><ChatShell {...common} preferenceState={{ status: "not-found" }} selectedSessionState={{ status: "not-found" }} /></AuthProvider>,
+    <TestWorkspace><ChatContent {...common} preferenceState={{ status: "not-found" }} selectedSessionState={{ status: "not-found" }} /></TestWorkspace>,
   );
   expect(missing).toContain("<strong>Chat not found</strong>");
 });
@@ -175,4 +179,15 @@ function turn(status: "running" | "waiting_for_user"): NonNullable<AgentSessionS
     status,
     terminal_error_code: null,
   };
+}
+
+function TestWorkspace({ children }: { children: ReactNode }) {
+  return (
+    <AuthProvider>
+      <AppShell currentPath="/chat" currentSessionId={null} isNewChat isOperator={false}
+        navigate={vi.fn()} sessionHistory={sessionHistory}>
+        {children}
+      </AppShell>
+    </AuthProvider>
+  );
 }

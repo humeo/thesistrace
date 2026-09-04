@@ -33,9 +33,9 @@ export function ChatComposer({
     const textarea = controller.textareaRef.current;
     if (textarea === null) return;
     textarea.style.height = "auto";
-    const maxHeight = window.innerHeight * (window.matchMedia("(max-width: 768px)").matches ? 0.32 : 0.4);
-    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
-    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+    // CSS owns the responsive maximum and scrolling; resetting height first
+    // also lets the composer shrink when text or blank lines are removed.
+    textarea.style.height = `${textarea.scrollHeight}px`;
   }, [controller.draft, controller.textareaRef]);
 
   function submit(event: FormEvent): void {
