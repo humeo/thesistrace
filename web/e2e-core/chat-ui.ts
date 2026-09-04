@@ -56,6 +56,10 @@ export function modelPickerTrigger(page: Page): Locator {
   return page.getByRole("button", { name: /^Model .* reasoning / });
 }
 
+export function currentChatTitle(page: Page): Locator {
+  return page.locator('.chat-session-row > a[aria-current="page"] > span');
+}
+
 export async function submitChatPrompt(
   page: Page,
   prompt: string,

@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { coreFetch } from "../auth/coreFetch";
 import { StrategyComparisonPanel } from "../analysis/StrategyComparisonPanel";
+import { MetricHelp, type MetricHelpContent } from "../analysis/MetricHelp";
 import type { StrategyComparison } from "../analysis/strategyComparison";
 import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
 import {
@@ -16,6 +17,7 @@ import {
   type FrozenResearchAuthorableInput,
 } from "../research/draft";
 import { followCoreLink, navigateCorePath } from "../shell/navigation";
+import { factorMetricHelp, strategyMetricHelp } from "./metricHelp";
 
 type CorrelationSummary = {
   mean: number | null;
@@ -61,7 +63,7 @@ type StrategyMetrics = {
   annualized_excess_return: number | null;
   maximum_drawdown: { value: number | null };
   sharpe: number | null;
-  transaction_costs: { cumulative_amount: number };
+  transaction_costs: { ratio: number };
 };
 
 export type TerminalStrategyState = {
@@ -534,7 +536,6 @@ export function ResearchRunsPage({ researcherId, runId }: {
       <section aria-label="Research Runs" className="research-run-page">
         <header className="research-run-header">
           <div>
-            <p className="eyebrow">Immutable research execution</p>
             <h1>ResearchRun</h1>
           </div>
           <div>
@@ -1392,23 +1393,27 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
           <h2>Strategy Summary</h2>
         </div>
         <div className="strategy-metrics">
-          <Metric label="Net cumulative" value={formatPercent(strategyResult.strategy.summary.metrics.net_cumulative_return)} />
+          <Metric label="Net cumulative" help={strategyMetricHelp.netCumulative} value={formatPercent(strategyResult.strategy.summary.metrics.net_cumulative_return)} />
           <Metric
             label={`${STRATEGY_BENCHMARK_DISPLAY_NAME} cumulative`}
+            help={strategyMetricHelp.benchmarkCumulative}
             value={formatPercent(strategyResult.strategy.summary.metrics.benchmark_cumulative_return)}
           />
           <Metric
             label="Annualized excess"
+            help={strategyMetricHelp.annualizedExcess}
             value={formatPercent(strategyResult.strategy.summary.metrics.annualized_excess_return)}
           />
           <Metric
             label="Maximum drawdown"
+            help={strategyMetricHelp.maximumDrawdown}
             value={formatPercent(strategyResult.strategy.summary.metrics.maximum_drawdown.value)}
           />
-          <Metric label="Sharpe" value={formatDecimal(strategyResult.strategy.summary.metrics.sharpe)} />
+          <Metric label="Sharpe" help={strategyMetricHelp.sharpe} value={formatDecimal(strategyResult.strategy.summary.metrics.sharpe)} />
           <Metric
-            label="Transaction costs"
-            value={formatCny(strategyResult.strategy.summary.metrics.transaction_costs.cumulative_amount)}
+            label="Cumulative cost ratio"
+            help={strategyMetricHelp.cumulativeCostRatio}
+            value={formatPercent(strategyResult.strategy.summary.metrics.transaction_costs.ratio)}
           />
         </div>
         <StrategyComparisonPanel comparison={strategyResult.strategy.comparison} />
@@ -1419,13 +1424,15 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
 }
 
 function FactorHorizonView({ horizon }: { horizon: FactorHorizon }) {
+  const help = factorMetricHelp(horizon.horizon);
+  const context = `${horizon.horizon}-session`;
   return (
     <section aria-label={`${horizon.horizon}-session Factor`}>
       <strong>{horizon.horizon}-session</strong>
-      <Metric label="Rank IC" value={formatDecimal(horizon.summary.rank_ic.mean)} />
-      <Metric label="Rank ICIR" value={formatDecimal(horizon.summary.rank_ic.icir)} />
-      <Metric label="IC" value={formatDecimal(horizon.summary.ic.mean)} />
-      <Metric label="ICIR" value={formatDecimal(horizon.summary.ic.icir)} />
+      <Metric label="Rank IC" context={context} help={help.rankIc} value={formatDecimal(horizon.summary.rank_ic.mean)} />
+      <Metric label="Rank ICIR" context={context} help={help.rankIcir} value={formatDecimal(horizon.summary.rank_ic.icir)} />
+      <Metric label="IC" context={context} help={help.ic} value={formatDecimal(horizon.summary.ic.mean)} />
+      <Metric label="ICIR" context={context} help={help.icir} value={formatDecimal(horizon.summary.ic.icir)} />
       <p className="factor-coverage">
         Rank IC coverage {horizon.coverage.rank_ic_valid_session_count}/
         {horizon.coverage.signal_session_count}
@@ -1438,11 +1445,19 @@ function FactorHorizonView({ horizon }: { horizon: FactorHorizon }) {
   );
 }
 
-function Metric({ label, value, exactValue }: { label: string; value: string; exactValue?: string }) {
+function Metric({ label, value, help, context }: {
+  label: string;
+  value: string;
+  help: MetricHelpContent;
+  context?: string;
+}) {
   return (
     <div className="result-metric">
-      <span>{label}</span>
-      <strong title={exactValue}>{value}</strong>
+      <div className="result-metric-heading">
+        <span>{label}</span>
+        <MetricHelp label={context === undefined ? label : `${context} ${label}`} content={help} />
+      </div>
+      <strong>{value}</strong>
     </div>
   );
 }
@@ -1461,13 +1476,6 @@ function formatDecimal(value: number | null) {
   return value === null ? "Not available" : value.toFixed(3);
 }
 
-function formatCny(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "CNY",
-    maximumFractionDigits: 0,
-  }).format(value);
-}
 function researchKindLabel(
   value: ResearchRun["research_kind"],
 ): "Factor Evaluation" | "Strategy Backtest" {

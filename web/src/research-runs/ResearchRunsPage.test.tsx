@@ -270,7 +270,7 @@ describe("ResearchResultView", () => {
             annualized_excess_return: 0.03,
             maximum_drawdown: { value: -0.02 },
             sharpe: 1.2,
-            transaction_costs: { cumulative_amount: 25 },
+            transaction_costs: { ratio: 0.0000025 },
           },
         },
         observations: [{

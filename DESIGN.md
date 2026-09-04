@@ -102,7 +102,7 @@ layout:
   content-max: 1440px
   sidebar-expanded: 224px
   sidebar-collapsed: 56px
-  context-bar-height: 48px
+  sidebar-header-height: 48px
   desktop-breakpoint: 1024px
   mobile-breakpoint: 768px
 ---
@@ -131,11 +131,11 @@ This direction replaces the previous OpenAI light theme. Do not keep a legacy li
 ### Desktop
 
 - Use a persistent, collapsible left sidebar. It is 224px expanded and 56px collapsed.
-- Place the ThesisTrace wordmark at the top of the sidebar. It may use the product sans stack; do not introduce a decorative display face.
+- Place the ThesisTrace wordmark and sidebar collapse control in the sidebar's top row. When collapsed, retain the expand control in that row. The wordmark may use the product sans stack; do not introduce a decorative display face.
 - The primary resource order is fixed: **Data**, **Research**, **Research Runs**, **Daily Tracks**.
 - Use icons plus labels in the expanded state and icons with accessible tooltips in the collapsed state.
-- Keep a 48px context bar above page content for the current folder, canonical data state, data-through date, breadcrumbs, and page-level actions.
-- Do not duplicate the same navigation or context controls in both the sidebar and context bar.
+- Resource pages start directly with their page content, without a shared context bar or Workspace breadcrumb. Keep resource identity in the sidebar and page-specific context and actions in the page itself.
+- Chat fills the viewport, keeps its identity in the sidebar, and places model settings in the composer.
 - The main canvas fills the remaining viewport. Apply a max width only to reading-heavy overview pages; editors, charts, and result tables may use the full available width.
 
 ### Resource Structure
@@ -158,7 +158,8 @@ This direction replaces the previous OpenAI light theme. Do not keep a legacy li
 
 - Below 1024px, collapse the sidebar by default.
 - Below 768px, replace it with an off-canvas navigation drawer; do not leave a 56px rail consuming mobile width.
-- Context-bar metadata may wrap into a second row, but the page title and primary action remain visible.
+- On every page, use a standalone top-left navigation button. Keep the drawer's close control in its brand row, and leave enough space above page content for the navigation button.
+- Page titles and primary actions remain visible as page-specific controls wrap on narrow screens.
 - Dense data rows may switch to labeled stacked rows. Preserve every field and its meaning; do not hide critical provenance.
 
 ## Color and Surface Rules
@@ -168,7 +169,7 @@ This direction replaces the previous OpenAI light theme. Do not keep a legacy li
 | Level | Token | Use |
 |---|---|---|
 | 0 | `{colors.canvas}` | App background, editor canvas, uninterrupted reading areas |
-| 1 | `{colors.surface-1}` | Sidebar, context bar, cards, drawers |
+| 1 | `{colors.surface-1}` | Sidebar, cards, drawers |
 | 2 | `{colors.surface-2}` | Selected rows, hover states, nested panels |
 | 3 | `{colors.surface-3}` | Menus, popovers, elevated controls |
 | 4 | `{colors.surface-4}` | Rare nested emphasis; never a default page background |

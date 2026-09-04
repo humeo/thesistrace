@@ -70,10 +70,12 @@ test("renders Chat within the shared workspace hierarchy and integrated model pi
   expect(markup).toContain('class="chat-composer-surface chat-composer-surface-locked"');
   expect(markup).toContain('aria-label="Model Research Primary, reasoning Medium"');
   expect(markup).not.toContain("Next Turn settings");
+  expect(markup).not.toContain('class="context-bar"');
+  expect(markup).not.toContain("chat-model-context");
   expect(markup).not.toMatch(/temperature|top-p|endpoint|byok/i);
 });
 
-test("uses explicit loading and Not Found titles instead of Untitled", () => {
+test("keeps loading and Not Found states in the chat canvas without a top bar", () => {
   const thread = { id: "00000000-0000-4000-8000-000000000111", kind: "session" as const };
   const common = {
     catalogState,
@@ -86,13 +88,14 @@ test("uses explicit loading and Not Found titles instead of Untitled", () => {
   const loading = renderToStaticMarkup(
     <TestWorkspace><ChatContent {...common} preferenceState={{ status: "loading" }} selectedSessionState={{ status: "loading" }} /></TestWorkspace>,
   );
-  expect(loading).toContain("Loading Chat");
-  expect(loading).not.toContain("<strong>Untitled</strong>");
+  expect(loading).toContain("Loading Session settings…");
+  expect(loading).not.toContain('class="context-bar"');
 
   const missing = renderToStaticMarkup(
     <TestWorkspace><ChatContent {...common} preferenceState={{ status: "not-found" }} selectedSessionState={{ status: "not-found" }} /></TestWorkspace>,
   );
-  expect(missing).toContain("<strong>Chat not found</strong>");
+  expect(missing).toContain("<h1>Chat not found</h1>");
+  expect(missing).not.toContain('class="context-bar"');
 });
 
 test("keeps New Chat ephemeral until a canonical opaque session is present", () => {

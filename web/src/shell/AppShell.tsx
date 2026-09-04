@@ -4,7 +4,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   createContext, useContext, useEffect, useRef, useState,
-  type KeyboardEvent, type ReactNode, type RefObject,
+  type KeyboardEvent, type ReactNode,
 } from "react";
 
 import { AccountMenu } from "../auth/AccountMenu";
@@ -23,13 +23,8 @@ const operatorRoute = {
 } as const;
 
 type WorkspaceContextValue = Readonly<{
-  isCollapsed: boolean;
-  isNavigationOpen: boolean;
-  mobileNavigationToggleRef: RefObject<HTMLButtonElement | null>;
   navigate: WorkspaceNavigate;
-  openNavigation: () => void;
   sessionHistory: SessionHistoryController;
-  toggleSidebar: () => void;
 }>;
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
@@ -59,8 +54,6 @@ export function AppShell({
   const mobileNavigationCloseRef = useRef<HTMLButtonElement>(null);
   const mobileNavigationToggleRef = useRef<HTMLButtonElement>(null);
   const newChatRef = useRef<HTMLAnchorElement>(null);
-  const currentResource = [...resourceRoutes, ...(isOperator ? [operatorRoute] : [])]
-    .find((resource) => isResourceCurrent(currentPath, resource));
 
   useEffect(() => {
     if (!isNavigationOpen) return;
@@ -69,7 +62,7 @@ export function AppShell({
 
   function closeNavigation(): void {
     setIsNavigationOpen(false);
-    window.requestAnimationFrame(() => mobileNavigationToggleRef.current?.focus());
+    window.requestAnimationFrame(() => mobileNavigationToggleRef.current?.focus({ preventScroll: true }));
   }
 
   const openPage: WorkspaceNavigate = (href, options) => {
@@ -107,12 +100,17 @@ export function AppShell({
     }
   }
 
+  const mobileNavigationToggle = (
+    <button aria-controls="primary-navigation" aria-expanded={isNavigationOpen}
+      aria-label="Open navigation"
+      className="mobile-navigation-toggle"
+      onClick={() => setIsNavigationOpen(true)} ref={mobileNavigationToggleRef} type="button">
+      <List aria-hidden="true" size={19} weight="regular" />
+    </button>
+  );
+
   return (
-    <WorkspaceContext value={{
-      isCollapsed, isNavigationOpen, mobileNavigationToggleRef, navigate: openPage,
-      openNavigation: () => setIsNavigationOpen(true), sessionHistory,
-      toggleSidebar: () => setIsCollapsed((collapsed) => !collapsed),
-    }}>
+    <WorkspaceContext value={{ navigate: openPage, sessionHistory }}>
       <div className={`app-shell${isChat ? " app-shell-chat" : ""}${currentPath === "/research" ? " app-shell-research" : ""}${isCollapsed ? " app-shell-collapsed" : ""}${isNavigationOpen ? " app-shell-navigation-open" : ""}`}>
         <aside
           aria-hidden={mobileViewport && !isNavigationOpen ? true : undefined}
@@ -130,6 +128,12 @@ export function AppShell({
               <span className="brand-mark" aria-hidden="true">T</span>
               <span className="sidebar-label">ThesisTrace</span>
             </a>
+            <button aria-controls="primary-navigation" aria-expanded={!isCollapsed}
+              aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              className="sidebar-toggle" onClick={() => setIsCollapsed((collapsed) => !collapsed)}
+              title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"} type="button">
+              <SidebarSimple aria-hidden="true" size={18} weight="regular" />
+            </button>
             <button aria-label="Close navigation" className="mobile-navigation-close"
               onClick={closeNavigation} ref={mobileNavigationCloseRef} type="button">
               <X aria-hidden="true" size={18} weight="regular" />
@@ -167,44 +171,13 @@ export function AppShell({
           <div className="sidebar-account-area"><AccountMenu /></div>
         </aside>
         <div className="application-frame">
-          {isChat ? children : (
-            <>
-              <AppHeader title={
-                <div className="context-breadcrumb" aria-label="Current resource">
-                  <span>Workspace</span><span aria-hidden="true">/</span>
-                  <strong>{currentResource?.label ?? "Resource"}</strong>
-                </div>
-              } />
-              <main className="main-content">{children}</main>
-            </>
-          )}
+          {mobileNavigationToggle}
+          {isChat ? children : <main className="main-content">{children}</main>}
         </div>
         <button aria-label="Close navigation" className="navigation-backdrop"
           onClick={closeNavigation} type="button" />
       </div>
     </WorkspaceContext>
-  );
-}
-
-export function AppHeader({ title, trailing }: { title: ReactNode; trailing?: ReactNode }) {
-  const workspace = useWorkspace();
-  return (
-    <header className="context-bar">
-      <div className="context-bar-leading">
-        <button aria-controls="primary-navigation" aria-expanded={workspace.isNavigationOpen}
-          aria-label="Open navigation" className="mobile-navigation-toggle"
-          onClick={workspace.openNavigation} ref={workspace.mobileNavigationToggleRef} type="button">
-          <List aria-hidden="true" size={19} weight="regular" />
-        </button>
-        <button aria-controls="primary-navigation" aria-expanded={!workspace.isCollapsed}
-          aria-label={workspace.isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="sidebar-toggle" onClick={workspace.toggleSidebar} type="button">
-          <SidebarSimple aria-hidden="true" size={18} weight="regular" />
-        </button>
-        {title}
-      </div>
-      {trailing}
-    </header>
   );
 }
 

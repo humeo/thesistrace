@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
 
 import { expect, sameOriginHeaders, test, testProjectName } from "./auth-fixture";
-import { revealToolActivity, submitChatPrompt } from "./chat-ui";
+import { currentChatTitle, revealToolActivity, submitChatPrompt } from "./chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 import { controlWorker } from "./research-run-control";
 
@@ -107,7 +107,7 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
   await testInfo.attach(`${mode}-mobile`, { body: await page.screenshot({ fullPage: true }), contentType: "image/png" });
   await page.setViewportSize({ width: 1280, height: 900 });
 
-  const currentTitle = (await page.locator(".chat-session-title strong").innerText()).trim();
+  const currentTitle = (await currentChatTitle(page).innerText()).trim();
   await page.getByRole("button", { name: `Actions for ${currentTitle}` }).click();
   await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
   const rename = page.getByRole("dialog", { name: "Rename Chat" });

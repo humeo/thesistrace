@@ -5,7 +5,7 @@ import { readBrowserChatThread } from "../chat/chatNavigation";
 import { useSessionHistory } from "../chat/useSessionHistory";
 import type { WorkspaceNavigate } from "./navigation";
 
-import { AppHeader, AppShell } from "./AppShell";
+import { AppShell } from "./AppShell";
 
 const DataPage = lazy(() =>
   import("../data/DataPage").then(({ DataPage }) => ({ default: DataPage })),
@@ -63,7 +63,7 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
     >
       <Suspense
         fallback={currentPath === "/chat"
-          ? <><AppHeader title={<strong>Loading Chat…</strong>} /><main className="chat-main" /></>
+          ? <main aria-busy="true" aria-label="Loading Chat" className="chat-main" />
           : <section className="state-section"><p>Loading workspace…</p></section>}
       >
         {thread === null ? null : <ChatPage key={thread.id ?? "invalid"} researcherId={researcherId} thread={thread} />}

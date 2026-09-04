@@ -253,7 +253,6 @@ export function SessionHistoryList({
                     })}
                     title={`${session.title}${session.current_turn === null ? "" : session.current_turn.status === "waiting_for_user" ? " — Waiting for answer" : " — Running"}`}
                   >
-                    <ChatCircle aria-hidden="true" size={15} weight="regular" />
                     <span>{session.title}</span>
                     {session.current_turn === null ? null : (
                       <em aria-hidden="true" className="chat-session-turn-state">

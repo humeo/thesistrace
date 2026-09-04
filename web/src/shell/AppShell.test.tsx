@@ -3,7 +3,7 @@ import type { SessionHistoryController } from "../chat/useSessionHistory";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { AuthProvider } from "../auth/AuthProvider";
-import { AppHeader, AppShell } from "./AppShell";
+import { AppShell } from "./AppShell";
 
 const sessionHistory: SessionHistoryController = {
   deleteSession: vi.fn(), error: null, loadMore: vi.fn(), loadingMore: false,
@@ -20,7 +20,6 @@ function renderShell(
     <AuthProvider>
       <AppShell currentPath={currentPath} currentSessionId={null} isNewChat={currentPath === "/chat"}
         isOperator={isOperator} navigate={vi.fn()} sessionHistory={sessionHistory}>
-        {currentPath === "/chat" ? <AppHeader title="New chat" /> : null}
         <section>{content}</section>
       </AppShell>
     </AuthProvider>,
@@ -75,10 +74,10 @@ test("places the Operator destination at the bottom only for the Operator", () =
   expect(dataMarkup).toContain(
     'aria-current="page" href="/operator/researchers"',
   );
-  expect(dataMarkup).toContain('<strong>Operator</strong>');
+  expect(dataMarkup).toContain("Operator data");
 });
 
-test("keeps the Research header focused on navigation and folder context", () => {
+test("keeps Research context in the workspace content", () => {
   const markup = renderShell("/research", "Research workspace");
 
   expect(markup).not.toContain("Canonical data");
@@ -87,12 +86,18 @@ test("keeps the Research header focused on navigation and folder context", () =>
   expect(markup).toContain("Research workspace");
 });
 
-test.each(["/chat", "/data", "/research", "/research-runs", "/daily-tracks"])(
-  "defaults the sidebar to expanded on %s",
+test.each([
+  "/chat", "/data", "/research", "/research-runs", "/research-runs/run-example",
+  "/daily-tracks", "/daily-tracks/track-example", "/operator/researchers", "/operator/data",
+])(
+  "shows an expanded sidebar without a shared context bar on %s",
   (currentPath) => {
-    const markup = renderShell(currentPath);
+    const markup = renderShell(currentPath, "Page content", currentPath.startsWith("/operator"));
 
     expect(markup).not.toContain("app-shell-collapsed");
     expect(markup).toContain('aria-expanded="true" aria-label="Collapse sidebar"');
+    expect(markup).not.toContain("context-bar");
+    expect(markup).not.toContain("context-breadcrumb");
+    expect(markup).toContain("Page content");
   },
 );

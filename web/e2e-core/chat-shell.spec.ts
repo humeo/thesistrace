@@ -19,6 +19,7 @@ import {
   startControlledResearchRun,
 } from "./research-run-control";
 import {
+  currentChatTitle,
   modelPickerTrigger,
   revealToolActivity,
   selectModel,
@@ -107,28 +108,53 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   await expect(pickerTrigger).toBeFocused();
 
   const sidebar = page.locator("#primary-navigation");
+  await expect(page.locator(".context-bar")).toHaveCount(0);
+  const canvas = (await page.locator(".chat-main").boundingBox())!;
+  expect(canvas.y).toBe(0);
+  expect(canvas.height).toBe(900);
   await expect(sidebar.getByRole("link", { name: "ThesisTrace home" })).toBeVisible();
   await expect(sidebar.getByRole("link", { name: "New Chat" })).toBeVisible();
   await expect(sidebar.getByRole("navigation", { name: "Workspace" })).toBeVisible();
   await expect(sidebar.getByRole("heading", { name: "Chats" })).toHaveCount(0);
   await expect(sidebar.getByRole("region", { name: "Chats", exact: true })).toBeVisible();
   await expect(sidebar.getByLabel("Account menu")).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("chat-expanded.png") });
 
-  const collapse = page.getByRole("button", { name: "Collapse sidebar" });
+  const collapse = sidebar.getByRole("button", { name: "Collapse sidebar" });
   await expect(page.getByText("No conversations yet", { exact: true })).toBeVisible();
   await collapse.click();
   await expect(page.locator(".app-shell")).toHaveClass(/app-shell-collapsed/);
   await expect(sidebar.getByText("Empty", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute(
+  await expect(sidebar.getByRole("button", { name: "Expand sidebar" })).toHaveAttribute(
     "aria-expanded",
     "false",
   );
   await expect.poll(
     () => sidebar.evaluate((element) => element.getBoundingClientRect().width),
   ).toBe(56);
+  await page.screenshot({ path: test.info().outputPath("chat-collapsed.png") });
+  await sidebar.getByRole("button", { name: "Expand sidebar" }).click();
+  await expect.poll(
+    () => sidebar.evaluate((element) => element.getBoundingClientRect().width),
+  ).toBe(224);
+  await collapse.click();
 
   await page.setViewportSize({ width: 390, height: 844 });
   const open = page.getByRole("button", { name: "Open navigation" });
+  await expect(page.locator(".context-bar")).toHaveCount(0);
+  const openBox = (await open.boundingBox())!;
+  expect(openBox.x).toBe(8);
+  expect(openBox.y).toBe(8);
+  expect(openBox.width).toBeGreaterThanOrEqual(44);
+  expect(openBox.height).toBeGreaterThanOrEqual(44);
+  const mobileCanvas = (await page.locator(".chat-main").boundingBox())!;
+  expect(mobileCanvas.y).toBe(0);
+  expect(mobileCanvas.height).toBe(844);
+  await expect(sidebar).toBeHidden();
+  await expect.poll(
+    () => page.locator(".chat-main").evaluate((element) => element.getBoundingClientRect().x),
+  ).toBe(0);
+  await page.screenshot({ path: test.info().outputPath("chat-mobile.png") });
   await expect(sidebar).toHaveAttribute("inert", "");
   await open.click();
   await expect(open).toHaveAttribute("aria-expanded", "true");
@@ -171,6 +197,7 @@ for (const mobile of [false, true]) {
     await page.goto("/chat");
     await submitChatPrompt(page, "Build a low volatility Alpha.");
     await expect(agentRunStatus(page)).toHaveText("Run complete");
+    await expect(page.locator(".context-bar")).toHaveCount(0);
     const sessionUrl = page.url();
     const sessionId = new URL(sessionUrl).searchParams.get("session")!;
     const sidebar = page.locator("#primary-navigation");
@@ -190,6 +217,7 @@ for (const mobile of [false, true]) {
       if (mobile) await page.getByRole("button", { name: "Open navigation" }).click();
       await sidebar.getByRole("link", { name: label!, exact: true }).click();
       await expect(page).toHaveURL(new RegExp(`${path}$`));
+      await expect(page.locator(".context-bar")).toHaveCount(0);
       await expect(sessionLink).toHaveCount(1);
       await expect(sidebar.locator(`.resource-nav a[href="${path}"]`)).toHaveAttribute("aria-current", "page");
       expect(await sidebarElement!.evaluate((element) => element.isConnected)).toBe(true);
@@ -199,6 +227,7 @@ for (const mobile of [false, true]) {
     if (mobile) await page.getByRole("button", { name: "Open navigation" }).click();
     await sessionLink.click();
     await expect(page).toHaveURL(sessionUrl);
+    await expect(page.locator(".context-bar")).toHaveCount(0);
     await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText("Build a low volatility Alpha.");
     await expect(agentRunStatus(page)).toHaveText("Run complete");
     await page.goBack();
@@ -339,7 +368,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   if (assistantText === null) throw new Error("Expected one assistant response");
   expect(assistantText.trim().length).toBeGreaterThan(0);
   expect(new TextEncoder().encode(assistantText).byteLength).toBeLessThanOrEqual(512);
-  const generatedTitleElement = page.locator(".chat-session-title strong");
+  const generatedTitleElement = currentChatTitle(page);
   await expect.poll(async () => {
     const value = (await generatedTitleElement.textContent())?.trim();
     return value !== undefined
@@ -360,7 +389,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   if (durableSession === null) throw new Error("Accepted Chat exposed no durable Session id");
   setAgentSessionTitle(durableSession, "Untitled");
   await page.reload();
-  await expect(page.locator(".chat-session-title strong")).toHaveText("Untitled");
+  await expect(currentChatTitle(page)).toHaveText("Untitled");
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   const failedDelete = async (route: Route) => {
     if (route.request().method() !== "DELETE") {
@@ -404,7 +433,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   } finally {
     setAgentSessionActiveRun(durableSession, false);
   }
-  await expect(page.locator(".chat-session-title strong")).toHaveText(recoveredTitle);
+  await expect(currentChatTitle(page)).toHaveText(recoveredTitle);
   seedActiveAgentLayoutSession(durableSession);
   await page.reload();
   const activeLayoutRow = page.locator(".chat-session-row").filter({
@@ -513,7 +542,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await renameDialog.getByLabel("Title").fill(renamedTitle);
   await renameDialog.getByRole("button", { name: "Save title" }).click();
   await expect(renameDialog).toHaveCount(0);
-  await expect(page.locator(".chat-session-title strong")).toHaveText(renamedTitle);
+  await expect(currentChatTitle(page)).toHaveText(renamedTitle);
   await expect(page.getByRole("link", { name: renamedTitle, exact: true })).toHaveAttribute(
     "aria-current",
     "page",
@@ -530,7 +559,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await page.goBack();
   await expect(page).toHaveURL(durableUrl);
   await expect(page.getByText("Build a low volatility Alpha.", { exact: true })).toBeVisible();
-  await expect(page.locator(".chat-session-title strong")).toHaveText(renamedTitle);
+  await expect(currentChatTitle(page)).toHaveText(renamedTitle);
   await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue("");
   await page.goForward();
   await expect(page).toHaveURL(/\/chat$/);
@@ -551,7 +580,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await expect(page.locator(".chat-message-assistant .chat-message-content")).toHaveText(
     assistantText,
   );
-  await expect(page.locator(".chat-session-title strong")).toHaveText(renamedTitle);
+  await expect(currentChatTitle(page)).toHaveText(renamedTitle);
   expect(runRequests).toHaveLength(1);
 
   await page.setViewportSize({ height: 844, width: 390 });
@@ -1209,7 +1238,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
     hasText: rankIc,
   }).last())
     .toContainText(rankIc);
-  const currentTitleText = await page.locator(".chat-session-title strong").textContent();
+  const currentTitleText = await currentChatTitle(page).textContent();
   const currentTitle = currentTitleText?.trim();
   if (currentTitle === undefined || currentTitle.length === 0) {
     throw new Error("Durable Research Chat exposed no title");

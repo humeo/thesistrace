@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { AppHeader, useWorkspace } from "../shell/AppShell";
+import { useWorkspace } from "../shell/AppShell";
 import { handleWorkspaceNavigation, type WorkspaceNavigate } from "../shell/navigation";
 import {
   AgentConversation as AuthoritativeAgentConversation,
@@ -11,7 +11,7 @@ import { chatSessionHref, type BrowserChatThread } from "./chatNavigation";
 import { resolveModelSelection } from "./chatState";
 import {
   AgentCatalogAuthenticationRequiredError, AgentCatalogInvalidError, loadAgentModelCatalog,
-  reasoningEffortLabel, type AgentModelCatalog,
+  type AgentModelCatalog,
 } from "./modelCatalog";
 import { ModelPicker } from "./ModelPicker";
 import { ResearchChatCopilotProvider } from "./ResearchChatCopilotProvider";
@@ -101,9 +101,6 @@ export function ChatContent({
       ?? (selectedSessionState.status === "ready" ? selectedSessionState.session : undefined);
   const selection = catalogState.status === "ready" && preferenceReady
     ? resolveModelSelection(catalogState.catalog, effectiveModelKey, effectiveReasoning) : null;
-  const contextTitle = chatContextTitle({
-    accepted, currentSessionTitle: currentSession?.title, preferenceState, selectedSessionState, thread,
-  });
 
   useEffect(() => {
     setRequestedModelKey(null);
@@ -135,17 +132,6 @@ export function ChatContent({
 
   return (
     <>
-      <AppHeader
-        title={<div className="chat-session-title"><strong>{contextTitle}</strong><span>Research Agent</span></div>}
-        trailing={
-          <span className="chat-model-context">
-            {selection === null
-              ? catalogState.status === "ready" && preferenceState.status === "ready"
-                ? "Model selection required" : "Model catalog"
-              : `${selection.model.display_name} · ${reasoningEffortLabel(selection.reasoningEffort)}`}
-          </span>
-        }
-      />
         {thread === undefined ? (
           <AuthoritativeStaticChatMain modelControls={modelControls} />
         ) : thread.kind === "invalid"
@@ -341,37 +327,4 @@ function useAgentSessionPreference(
   return owned.key === preferenceKey
     ? owned.state
     : thread.kind === "session" ? { status: "loading" } : { status: "not-required" };
-}
-
-function chatContextTitle(options: Readonly<{
-  accepted: boolean;
-  currentSessionTitle: string | undefined;
-  preferenceState: AgentSessionPreferenceState;
-  selectedSessionState: SelectedSessionState;
-  thread: BrowserChatThread | undefined;
-}>): string {
-  if (
-    options.thread?.kind === "invalid"
-    || options.preferenceState.status === "not-found"
-    || options.selectedSessionState.status === "not-found"
-  ) {
-    return "Chat not found";
-  }
-  if (options.thread?.kind === "session") {
-    if (
-      options.preferenceState.status === "loading"
-      || options.selectedSessionState.status === "loading"
-    ) {
-      return "Loading Chat";
-    }
-    if (
-      options.preferenceState.status !== "ready"
-      || options.selectedSessionState.status !== "ready"
-    ) {
-      return "Chat unavailable";
-    }
-    return options.selectedSessionState.session.title;
-  }
-  if (options.accepted) return options.currentSessionTitle ?? "Untitled";
-  return "New chat";
 }
