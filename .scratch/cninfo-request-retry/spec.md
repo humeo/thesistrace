@@ -1,6 +1,6 @@
 # Bounded retries for Financial Announcement Discovery
 
-Status: ready-for-agent
+Status: complete
 
 Add request-level retry to the pinned AKShare CNINFO adapter, not whole-category
 or whole-Refresh retry. Default to three total attempts (initial plus two retries),
@@ -34,3 +34,10 @@ Keep all unrelated current worktree edits unchanged. Do not submit a Refresh.
 - Build the backend production image and test the same scenarios in an isolated
   container. Deployment, if performed, must first verify the Worker has no active
   or queued Refresh work and must not resubmit the historical operation.
+
+## Comments
+
+- 2026-09-04: Implementation and verification committed as `805ea04`. The bounded
+  retry issue is complete. Final pre-commit checks passed: 172 tests, repository
+  Ruff checks and staged whitespace checks. Production-image and local Worker
+  acceptance evidence is recorded in verification.md.

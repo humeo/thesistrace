@@ -1,10 +1,10 @@
 # CNINFO request-level bounded retry
 
-**Status:** ready-for-agent
+**Status:** complete
 
 Implement the feature in ../spec.md. Preserve Financial discovery/publication
 semantics, add deterministic regression coverage and record verification results.
-Do not mark complete until committed; no commit was requested in this turn.
+Implementation committed as `805ea04`; verification and review are complete.
 
 ## Comments
 
@@ -14,3 +14,6 @@ Do not mark complete until committed; no commit was requested in this turn.
   deployment was verified after correcting environment-only Tushare token injection.
 - See ../verification.md. Delivery is verified but uncommitted, so the triage
   status remains `ready-for-agent` rather than terminal `complete`.
+- 2026-09-04: The user requested a commit. All acceptance criteria were checked,
+  review found no remaining issues, and 172 tests plus repository Ruff checks
+  passed again. Implementation commit `805ea04` is now recorded; status is complete.
