@@ -111,6 +111,21 @@ test("keeps corrupt staged storage fail-closed without restarting the session co
   expect(latestController?.error).toBeNull();
 });
 
+test("keeps staged prompts out of a pending question answer", async () => {
+  const question = { interrupt_id: "turn::question", question: "Which objective?", selection_mode: "free_text" as const, options: null };
+  const staged = stagedInput("Research a different idea");
+  vi.mocked(loadAgentSession).mockResolvedValue({ ...session, current_turn: { ...session.current_turn!, status: "waiting_for_user", question } });
+  vi.mocked(loadTimelinePage).mockResolvedValue({ next_cursor: null, turns: [] });
+  vi.spyOn(StagedInputStore.prototype, "list").mockResolvedValue([staged]);
+  const remove = vi.spyOn(StagedInputStore.prototype, "delete").mockResolvedValue();
+  await mountConversation({ agent: { runAgent: vi.fn(), setMessages: vi.fn() } as unknown as HttpAgent, existingSession: true });
+  await vi.waitFor(() => expect(latestController?.phase).toBe("waiting_for_user"));
+  await act(async () => latestController?.editStaged(staged));
+  expect(latestController?.draft).toBe("");
+  expect(latestController?.queue).toEqual([staged]);
+  expect(remove).not.toHaveBeenCalled();
+});
+
 test("serializes Stage writes and preserves a draft changed while IndexedDB is pending", async () => {
   vi.mocked(loadAgentSession).mockResolvedValue(session);
   vi.mocked(loadTimelinePage).mockResolvedValue({ next_cursor: null, turns: [] });
@@ -344,6 +359,50 @@ async function mountConversation(options: Readonly<{
   root = createRoot(container);
   await act(async () => root?.render(<ConversationHarness {...options} />));
 }
+
+test.each([
+  { selections: ["Quality"], text: "Keep churn low" },
+  { selections: [], text: "A different objective" },
+])("submits selections and custom text together and retains them until receipt confirmation %#", async (answer) => {
+  const question = { interrupt_id: `${turnId}::question`, question: "Which objective?", options: [{ label: "Quality" }], selection_mode: "single_select" as const };
+  const waiting = { ...session, current_turn: { ...turn, status: "waiting_for_user" as const, question } };
+  vi.mocked(loadAgentSession).mockResolvedValue(session);
+  vi.mocked(loadTimelinePage).mockResolvedValue({ next_cursor: null, turns: [] });
+  vi.spyOn(StagedInputStore.prototype, "list").mockResolvedValue([]);
+  vi.mocked(loadCommandReceipt).mockRejectedValue(new TypeError("Receipt lost"));
+  const runAgent = vi.fn(async (_input: Parameters<HttpAgent["runAgent"]>[0]) => { throw new TypeError("Response lost"); });
+  await mountConversation({ agent: { runAgent, setMessages: vi.fn() } as unknown as HttpAgent, existingSession: true });
+  // A next-prompt draft is not silently reused as the answer on suspension.
+  await act(async () => latestController?.setDraft("Unsent next prompt"));
+  vi.mocked(loadAgentSession).mockResolvedValue(waiting);
+  await act(async () => latestController?.refresh());
+  expect(latestController?.draft).toBe("");
+  await act(async () => { latestController?.setAnswerSelections(answer.selections); latestController?.setDraft(answer.text); });
+  expect(latestController?.action).toMatchObject({ kind: "answer", enabled: true });
+  await act(async () => latestController?.executeMainAction());
+  expect(runAgent.mock.calls[0]?.[0]).toMatchObject({
+    runId: turnId,
+    forwardedProps: { thesistrace: { command: "answer", interruptId: question.interrupt_id } },
+    resume: [{ interruptId: question.interrupt_id, status: "resolved", payload: answer }],
+  });
+  const sent = runAgent.mock.calls[0]?.[0] as { forwardedProps: { thesistrace: { inputId: string } } };
+  expect(latestController?.phase).toBe("recovering");
+  expect(latestController?.draft).toBe(answer.text);
+  expect(latestController?.answerSelections).toEqual(answer.selections);
+  // Polling a running session alone cannot clear or hide the pending answer.
+  vi.mocked(loadAgentSession).mockResolvedValue(session);
+  await act(async () => latestController?.refresh());
+  expect(latestController?.question?.interrupt_id).toBe(question.interrupt_id);
+  expect(latestController?.draft).toBe(answer.text);
+  vi.mocked(loadCommandReceipt).mockResolvedValue({
+    command_id: sent.forwardedProps.thesistrace.inputId, kind: "answer", status: "accepted", error_code: null, turn_id: turnId,
+  });
+  await act(async () => latestController?.retryRecovery());
+  expect(latestController?.question).toBeNull();
+  expect(latestController?.answerSelections).toEqual([]);
+  expect(latestController?.draft).toBe("Unsent next prompt");
+  expect(runAgent).toHaveBeenCalledOnce();
+});
 
 function ConversationHarness({
   agent = { runAgent: vi.fn(), setMessages: vi.fn() } as unknown as HttpAgent,

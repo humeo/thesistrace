@@ -17,6 +17,8 @@ import {
   throwError,
 } from "rxjs";
 
+import { formatChatAnswer } from "../../contracts/chat-answer.mjs";
+
 import {
   A2UI_FRAMEWORK_TOOL_NAMES,
   BrowserEventProjector,
@@ -194,6 +196,17 @@ export class ResearchMastraAgent extends MastraAgent {
                 return {
                   ...this.execution.run.input,
                   messages: [this.execution.run.userMessage],
+                };
+              }
+              if (this.execution.run.command === "answer") {
+                return {
+                  ...this.execution.run.input,
+                  messages: [],
+                  resume: [{
+                    interruptId: this.execution.run.interruptId,
+                    payload: formatChatAnswer(this.execution.run.answer),
+                    status: "resolved" as const,
+                  }],
                 };
               }
               return { ...this.execution.run.input, messages: [] };

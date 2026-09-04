@@ -9,6 +9,7 @@ import {
 import { useLayoutEffect, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 
 import { shouldSubmitFromEnter } from "./chatState";
+import { QuestionComposer } from "./QuestionComposer";
 import type { StagedInput } from "./stagedInputStore";
 import type { ChatConversationController } from "./useChatConversation";
 
@@ -23,8 +24,7 @@ export function ChatComposer({
   controller: ChatConversationController;
   modelControls: ReactNode;
 }) {
-  const selectionQuestion = controller.phase === "waiting_for_user"
-    && controller.question?.selection_mode !== "free_text";
+  const question = controller.question;
   const interactionLocked = ["opening", "stopping", "recovering"].includes(controller.phase);
   const tooLarge = controller.draftBytes > MAX_CHAT_MESSAGE_BYTES;
   const [queueExpanded, setQueueExpanded] = useState(true);
@@ -36,10 +36,11 @@ export function ChatComposer({
     // CSS owns the responsive maximum and scrolling; resetting height first
     // also lets the composer shrink when text or blank lines are removed.
     textarea.style.height = `${textarea.scrollHeight}px`;
-  }, [controller.draft, controller.textareaRef]);
+  }, [controller.draft, controller.textareaRef, question?.interrupt_id]);
 
   function submit(event: FormEvent): void {
     event.preventDefault();
+    if (question !== null && controller.action.kind !== "answer") return;
     void controller.executeMainAction();
   }
 
@@ -74,19 +75,18 @@ export function ChatComposer({
         </div>
       )}
       {tooLarge ? <p className="chat-composer-validation" id="chat-composer-validation">Input exceeds the 16 KiB limit.</p> : null}
-      <div className={`chat-composer-surface${interactionLocked ? " chat-composer-surface-locked" : ""}`}>
+      {question !== null ? (
+        <QuestionComposer controller={controller} question={question} locked={interactionLocked}
+          tooLarge={tooLarge} onKeyDown={keyDown} />
+      ) : <div className={`chat-composer-surface${interactionLocked ? " chat-composer-surface-locked" : ""}`}>
         <textarea
           aria-describedby={tooLarge ? "chat-composer-guidance chat-composer-validation" : "chat-composer-guidance"}
           aria-invalid={tooLarge || undefined}
-          aria-label={controller.phase === "waiting_for_user" ? "Answer" : "Message"}
-          disabled={interactionLocked || selectionQuestion}
+          aria-label="Message"
+          disabled={interactionLocked}
           onChange={(event) => controller.setDraft(event.target.value)}
           onKeyDown={keyDown}
-          placeholder={selectionQuestion
-            ? "Select an answer in the question above"
-            : controller.phase === "waiting_for_user"
-              ? "Type your answer…"
-              : controller.phase === "active" ? "Steer this Turn or write the next prompt…" : "Ask about an investment idea…"}
+          placeholder={controller.phase === "active" ? "Steer this Turn or write the next prompt…" : "Ask about an investment idea…"}
           ref={controller.textareaRef}
           rows={2}
           value={controller.draft}
@@ -109,10 +109,14 @@ export function ChatComposer({
             </button>
           </div>
         </div>
-      </div>
+      </div>}
       <div className="chat-composer-guidance" id="chat-composer-guidance">
-        <span>Enter to {enterActionLabel(controller.action.kind, controller.phase)} · Shift+Enter for newline</span>
-        <span>{controller.phase === "active" || controller.phase === "waiting_for_user"
+        <span>Enter to {question !== null ? "answer" : enterActionLabel(controller.action.kind, controller.phase)} · Shift+Enter for newline</span>
+        <span>{question !== null
+          ? controller.draftBytes >= MAX_CHAT_MESSAGE_BYTES * .8
+            ? `${controller.draftBytes.toLocaleString()} / ${MAX_CHAT_MESSAGE_BYTES.toLocaleString()} bytes`
+            : "Continues this Turn"
+          : controller.phase === "active"
           ? "Settings apply to the next new Turn"
           : "Text only"}</span>
       </div>
@@ -179,9 +183,10 @@ function StagedQueueItem({
         ) : null}
         <button
           aria-label="Edit staged input"
-          disabled={locked || controller.draft.length !== 0}
+          disabled={locked || controller.question !== null || controller.draft.length !== 0}
           onClick={() => void controller.editStaged(item)}
-          title={controller.draft.length === 0 ? "Edit" : "Clear the draft before editing"}
+          title={controller.question !== null ? "Finish answering before editing a staged input"
+            : controller.draft.length === 0 ? "Edit" : "Clear the draft before editing"}
           type="button"
         >
           <PencilSimple aria-hidden="true" size={14} />

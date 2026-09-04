@@ -634,44 +634,13 @@ code { font-family: var(--mono); }
   animation: chat-response-spin 1.8s linear infinite;
 }
 @keyframes chat-response-spin { to { transform: rotate(360deg); } }
-.chat-question {
-  display: grid;
-  width: min(100%, 680px);
-  gap: 10px;
-  padding: 14px 16px;
-  color: var(--ink-muted);
-  background: var(--surface-1);
-  border: 1px solid var(--line);
-  border-left: 2px solid var(--line-strong);
-  border-radius: 7px;
-}
-.chat-question-active { border-left-color: var(--primary); }
-.chat-question-kicker,
-.chat-question-resolution {
-  color: var(--primary-hover);
-  font: 11px/1.4 var(--mono);
-  letter-spacing: .04em;
-  text-transform: uppercase;
-}
-.chat-question h2 { margin: 0; color: var(--ink); font-size: 14px; line-height: 1.5; }
-.chat-question fieldset { display: grid; gap: 7px; margin: 2px 0 0; padding: 0; border: 0; }
-.chat-question legend { margin-bottom: 6px; color: var(--ink-soft); font-size: 11px; }
-.chat-question label {
-  display: grid;
-  min-height: 44px;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  padding: 7px 9px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  cursor: pointer;
-}
-.chat-question label:has(input:checked) { background: var(--surface-2); border-color: var(--primary); }
-.chat-question label span { display: grid; gap: 2px; }
-.chat-question label strong { color: var(--ink); font-size: 12px; font-weight: 500; }
-.chat-question label small,
-.chat-question-hint { margin: 0; color: var(--ink-soft); font-size: 11px; line-height: 1.5; }
+.chat-question-activity { display: grid; gap: 6px; color: var(--ink-soft); font-size: 13px; }
+.chat-question-activity summary,
+.chat-question-waiting { display: flex; align-items: center; gap: 9px; min-height: 36px; width: fit-content; padding: 4px; color: inherit; background: transparent; border: 0; border-radius: 6px; font-size: 13px; list-style: none; cursor: pointer; }
+.chat-question-activity summary::-webkit-details-marker { display: none; }
+.chat-question-activity summary:hover,
+.chat-question-waiting:hover { color: var(--ink); background: var(--surface-1); }
+.chat-question-activity p { margin: 6px 0 12px 29px; color: var(--ink-muted); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-turn-outcome {
   display: flex;
   align-items: center;
@@ -1280,6 +1249,44 @@ code { font-family: var(--mono); }
   color: var(--ink-soft);
   font-family: var(--mono);
   font-size: 10px;
+}
+.chat-question-composer { display: flex; flex-direction: column; max-height: min(560px, 65dvh); overflow: clip; border-radius: 18px; }
+.chat-question-body { position: relative; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.chat-question-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 18px 20px 10px; }
+.chat-question-header h2 { min-width: 0; margin: 3px 0 0; color: var(--ink); font-size: 15px; font-weight: 550; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-question-stop { display: grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; min-height: 36px; margin: -3px -8px 0 0; padding: 0; color: var(--ink-soft); background: transparent; border: 0; border-radius: 6px; }
+.chat-question-stop:hover:not(:disabled) { color: var(--ink); background: var(--surface-3); }
+.chat-question-choice-help { display: flex; justify-content: space-between; align-items: center; min-height: 30px; margin: 0 22px 4px; color: var(--ink-soft); font-size: 12px; }
+.chat-question-choice-help button { min-height: 30px; padding: 0 8px; color: inherit; background: transparent; border: 0; font-size: 12px; }
+.chat-question-choices { display: grid; gap: 3px; min-width: 0; margin: 0 10px; padding: 0; border: 0; }
+.chat-question-choice { position: relative; display: flex; align-items: center; gap: 13px; min-height: 56px; padding: 10px 12px; border-radius: 10px; cursor: pointer; }
+.chat-question-choice input { min-height: 1px; }
+.chat-question-choice:hover { background: var(--surface-2); }
+.chat-question-choice.is-selected { background: var(--surface-3); }
+.chat-question-choice:has(input:focus-visible) { outline: 2px solid var(--primary-focus); outline-offset: -2px; }
+.chat-question-choices:disabled .chat-question-choice { cursor: default; }
+.chat-question-number { display: grid; flex: 0 0 29px; place-items: center; width: 29px; height: 29px; color: var(--ink-soft); background: var(--surface-2); border: 1px solid var(--line-strong); border-radius: 50%; font-size: 12px; }
+.is-selected .chat-question-number { color: var(--ink); background: var(--surface-3); border-color: var(--line-tertiary); }
+.chat-question-option-text { display: grid; min-width: 0; gap: 3px; overflow-wrap: anywhere; }
+.chat-question-option-text strong { color: var(--ink); font-size: 13px; font-weight: 500; }
+.chat-question-option-text small { color: var(--ink-soft); font-size: 12px; line-height: 1.5; }
+.chat-question-answer-row { display: flex; flex: 0 0 auto; align-items: center; gap: 14px; margin: 8px 12px 10px; padding: 6px 4px 0 10px; }
+.chat-question-answer-row > svg { flex: 0 0 27px; color: var(--ink-soft); }
+.chat-question-composer .chat-question-answer-row textarea { min-width: 0; min-height: 40px; max-height: min(140px, 20dvh); padding: 10px 0; color: var(--ink); background: transparent; border-radius: 0; line-height: 1.6; }
+.chat-question-composer:has(textarea:focus-visible) { outline: 2px solid var(--primary-focus); outline-offset: 2px; }
+.chat-question-send { display: grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; min-height: 36px; padding: 0; color: var(--canvas); background: var(--ink); border: 1px solid var(--ink); border-radius: 50%; }
+.chat-question-send:disabled { color: var(--ink-tertiary); background: var(--surface-2); border-color: var(--line); }
+@media (max-width: 768px) {
+  .chat-question-header { gap: 8px; padding: 14px 16px 8px; }
+  .chat-question-header h2 { font-size: 14px; }
+  .chat-question-choice { gap: 10px; padding-inline: 8px; }
+  .chat-question-choice-help { margin-inline: 18px; }
+  .chat-question-answer-row { gap: 8px; margin-inline: 10px; padding-left: 8px; }
+  .chat-question-answer-row > svg { flex-basis: 18px; }
+}
+@media (any-pointer: coarse), (max-width: 768px) {
+  .chat-question-send, .chat-question-stop { width: 44px; height: 44px; min-height: 44px; flex-basis: 44px; }
+  .chat-question-choice-help button, .chat-question-waiting, .chat-question-activity summary { min-height: 44px; }
 }
 .chat-spinning { animation: chat-a2ui-spin .8s linear infinite; }
 .app-shell-collapsed .application-sidebar { width: var(--sidebar-collapsed); }

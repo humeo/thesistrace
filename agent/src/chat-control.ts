@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { isChatAnswer, type ChatAnswer } from "../../contracts/chat-answer.mjs";
+
 import { MAX_CHAT_MESSAGE_BYTES, chatCommandFingerprint } from "./chat-request.js";
 import { isCanonicalUuid } from "./uuid.js";
 
@@ -238,24 +240,16 @@ export function projectAskUserInterrupt(event: unknown, expectedRunId: string): 
 }
 
 export function validateAnswerForQuestion(
-  answer: string | readonly string[],
+  answer: ChatAnswer,
   question: PendingQuestion,
 ): void {
-  if (question.selectionMode === "multi_select") {
-    if (!Array.isArray(answer)) throw invalidChatInput();
-    const labels = new Set(question.options?.map((option) => option.label));
-    if (new Set(answer).size !== answer.length || answer.some((value) => !labels.has(value))) {
-      throw invalidChatInput();
-    }
-    return;
-  }
-  if (typeof answer !== "string") throw invalidChatInput();
+  if (!isChatAnswer(answer)) throw invalidChatInput();
+  const labels = new Set(question.options?.map((option) => option.label));
   if (
-    question.selectionMode === "single_select"
-    && !question.options?.some((option) => option.label === answer)
-  ) {
-    throw invalidChatInput();
-  }
+    answer.selections.some((label) => !labels.has(label))
+    || (question.selectionMode === "single_select" && answer.selections.length > 1)
+    || (question.selectionMode === "free_text" && answer.selections.length > 0)
+  ) throw invalidChatInput();
 }
 
 export function encodeTimelineCursor(cursor: TimelineCursor): string {

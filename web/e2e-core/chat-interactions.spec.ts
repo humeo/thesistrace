@@ -77,7 +77,10 @@ test("waiting_for_user survives reload and Answer resumes the same Turn", async 
   await page.reload();
   await expect(status(page)).toHaveText("Waiting for your answer");
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeEnabled();
-  await page.getByLabel("Quality").check();
+  await page.getByText("Quality", { exact: true }).click();
+  await expect(page.getByRole("radio", { name: "Quality", exact: true })).toBeChecked();
+  await page.getByRole("textbox", { name: "Answer", exact: true }).fill("Keep turnover low.");
+  await page.screenshot({ path: `${test.info().outputDir}/question-composer-a.png` });
   await page.getByRole("button", { name: "Send answer", exact: true }).click();
   await expect(page.getByText("I will lead with quality and keep risk as a constraint.", { exact: true }))
     .toBeVisible({ timeout: 30_000 });
@@ -85,7 +88,9 @@ test("waiting_for_user survives reload and Answer resumes the same Turn", async 
 
   expect(runs).toHaveLength(2);
   expect(runs[1]).toMatchObject({ command: "answer", messages: [], runId: firstRunId });
-  expect(runs[1]?.resume).toMatchObject([{ payload: "Quality", status: "resolved" }]);
+  expect(runs[1]?.resume).toMatchObject([{ payload: { selections: ["Quality"], text: "Keep turnover low." }, status: "resolved" }]);
+  await expect(page.locator(".chat-message-user").filter({ hasText: "Quality\n\nKeep turnover low." })).toBeVisible();
+  await expect(page.locator(".chat-question-composer")).toHaveCount(0);
   const sessionId = new URL(sessionUrl).searchParams.get("session")!;
   const response = await page.request.get(`/api/agent/sessions/${sessionId}`, { headers: sameOriginHeaders() });
   expect(response.status()).toBe(200);

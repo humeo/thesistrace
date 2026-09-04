@@ -2,6 +2,8 @@ import { convertMessages, type MastraDBMessage } from "@mastra/core/agent";
 import type { Message } from "@ag-ui/core";
 import type { Pool, PoolClient } from "pg";
 
+import { formatChatAnswer } from "../../contracts/chat-answer.mjs";
+
 import {
   isResearchA2UIMessageId,
   projectResearchA2UIContent,
@@ -830,6 +832,11 @@ export class ResearchSessionRepository {
       answer_fingerprint: Buffer | null;
       answer_kind: CommandKind | null;
       answer_status: "accepted" | "pending" | "rejected" | null;
+      interrupt_id: string | null;
+      options: unknown;
+      question: string | null;
+      selection_mode: PendingQuestion["selectionMode"] | null;
+      tool_call_id: string | null;
       generated_bytes: number;
       model_key: string;
       provider_model_id: string;
@@ -848,26 +855,45 @@ export class ResearchSessionRepository {
         run.token_usage,
         answer.kind AS answer_kind,
         answer.status AS answer_status,
-        answer.request_fingerprint AS answer_fingerprint
+        answer.request_fingerprint AS answer_fingerprint,
+        interrupt.id AS interrupt_id,
+        interrupt.options,
+        interrupt.question,
+        interrupt.selection_mode,
+        interrupt.tool_call_id
       FROM agent.agent_run AS run
       JOIN agent.chat_session AS session ON session.id = run.thread_id
       LEFT JOIN agent.chat_command AS answer
         ON answer.thread_id = run.thread_id
        AND answer.id = $4::uuid
+      LEFT JOIN agent.chat_interrupt AS interrupt
+        ON interrupt.turn_id = run.id AND interrupt.thread_id = run.thread_id
+       AND interrupt.id = $5 AND interrupt.status = 'pending'
       WHERE run.thread_id = $1::uuid
         AND run.id = $2::uuid
         AND session.researcher_id = $3::uuid
-    `, [run.input.threadId, run.input.runId, researcherId, run.commandId]);
+    `, [run.input.threadId, run.input.runId, researcherId, run.commandId, run.interruptId]);
     const row = result.rows[0];
     if (row === undefined) throw new SessionNotFoundError();
     const duplicateAcceptedAnswer = row.answer_kind === "answer"
       && row.answer_status === "accepted"
       && row.answer_fingerprint?.equals(chatRunFingerprint(run)) === true;
-    if (row.status !== "waiting_for_user" && row.answer_kind !== null && !duplicateAcceptedAnswer) {
+    if (row.answer_kind !== null && !duplicateAcceptedAnswer) {
       throw new ChatControlError("CHAT_COMMAND_CONFLICT", 409);
     }
     if (row.status !== "waiting_for_user" && !duplicateAcceptedAnswer) {
       throw new ChatControlError("CHAT_QUESTION_NOT_FOUND", 409);
+    }
+    // Reject invalid/stale answers before opening the native resume stream.
+    // prepareAnswerRun repeats validation under the Turn lock at acceptance.
+    if (!duplicateAcceptedAnswer) {
+      if (row.interrupt_id === null || row.question === null || row.selection_mode === null || row.tool_call_id === null) {
+        throw new ChatControlError("CHAT_QUESTION_NOT_FOUND", 409);
+      }
+      validateAnswerForQuestion(run.answer, pendingQuestionFromRow({
+        id: row.interrupt_id, options: row.options, question: row.question,
+        selection_mode: row.selection_mode, tool_call_id: row.tool_call_id,
+      }));
     }
     return {
       generatedBytes: row.generated_bytes,
@@ -1756,9 +1782,7 @@ async function prepareAnswerRun(
     entryId: `user:${options.run.commandId}`,
     kind: "user_input",
     payload: {
-      content: typeof options.run.answer === "string"
-        ? options.run.answer
-        : options.run.answer.join(", "),
+      content: formatChatAnswer(options.run.answer),
       inputId: options.run.commandId,
       source: "answer",
     },

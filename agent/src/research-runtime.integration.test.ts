@@ -415,7 +415,10 @@ describe.sequential("durable Research Agent runtime", () => {
     }
   });
 
-  it("persists an ask_user interrupt and resumes the same durable Turn", async () => {
+  it.each([
+    { selections: ["Quality"], text: "Keep turnover low." },
+    { selections: [], text: "Research liquidity instead." },
+  ])("persists an ask_user interrupt and resumes the same durable Turn %#", async (answer) => {
     const runtime = await createIntegrationRuntime();
     const threadId = fixedUuid(8801);
     const runId = fixedUuid(8802);
@@ -450,8 +453,12 @@ describe.sequential("durable Research Agent runtime", () => {
       const question = waiting.currentTurn?.question;
       if (question === null || question === undefined) throw new Error("expected pending question");
 
+      const invalidInput = answerInput({ answer: { selections: ["Unknown"], text: "A note" }, inputId: fixedUuid(8805), interruptId: question.interruptId, runId, threadId });
+      expect((await runtime.handle(runRequest(invalidInput), primaryResearcher)).status).toBe(400);
+      expect((await runtime.handle(runRequest(answerInput({ answer, inputId: answerId, interruptId: question.interruptId, runId, threadId })), foreignResearcher)).status).toBe(404);
+
       const input = answerInput({
-        answer: "Quality",
+        answer,
         inputId: answerId,
         interruptId: question.interruptId,
         runId,
@@ -473,7 +480,7 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(entries.filter((entry) => entry.kind === "user_input"))
         .toMatchObject([
           { payload: { source: "prompt" } },
-          { payload: { content: "Quality", inputId: answerId, source: "answer" } },
+          { payload: { content: [answer.selections.join(", "), answer.text].filter(Boolean).join("\n\n"), inputId: answerId, source: "answer" } },
         ]);
       expect(entries).toContainEqual(expect.objectContaining({
         kind: "assistant_message",
@@ -492,9 +499,12 @@ describe.sequential("durable Research Agent runtime", () => {
           (SELECT count(*) FROM agent.chat_command WHERE thread_id = $1::uuid AND kind = 'answer')::int AS commands
       `, [threadId]);
       expect(counts.rows).toEqual([{ commands: 1, runs: 1 }]);
+      expect(timeline.turns[0]?.startedAt).toBe(waiting.currentTurn?.startedAt);
+      const memory = await owner.query("SELECT content FROM agent.mastra_messages WHERE thread_id = $1", [threadId]);
+      expect(JSON.stringify(memory.rows)).toContain(answer.text);
 
       const conflict = await runtime.handle(runRequest(answerInput({
-        answer: "Risk",
+        answer: { selections: ["Quality"], text: "A changed note" },
         inputId: answerId,
         interruptId: question.interruptId,
         runId,
@@ -3441,7 +3451,7 @@ function runInput(options: Readonly<{
 }
 
 function answerInput(options: Readonly<{
-  answer: string | readonly string[];
+  answer: import("./chat-request.js").ChatAnswer;
   inputId: string;
   interruptId: string;
   runId: string;

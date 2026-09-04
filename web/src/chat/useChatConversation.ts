@@ -1,5 +1,7 @@
 import { HttpAgent, type AgentSubscriber } from "@ag-ui/client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
+
+import { formatChatAnswer, isChatAnswer, type ChatAnswer } from "../../../contracts/chat-answer.mjs";
 
 import type { AgentSessionSummary } from "./sessionHistory";
 import { loadAgentSession } from "./sessionHistory";
@@ -72,6 +74,7 @@ export type ChatConversationController = Readonly<{
   setAnswerSelections: (values: readonly string[]) => void;
   setDraft: (value: string) => void;
   steerStaged: (item: StagedInput) => Promise<void>;
+  stopTurn: () => Promise<void>;
   statusAnnouncement: string;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   turns: readonly TimelineTurn[];
@@ -95,8 +98,9 @@ export function useChatConversation(options: Readonly<{
   );
   const [opening, setOpening] = useState(options.existingSession && options.initialSession === undefined);
   const [localCommand, setLocalCommand] = useState<LocalCommand>("none");
-  const [draft, setDraft] = useState("");
-  const [answerSelections, setAnswerSelectionsState] = useState<readonly string[]>([]);
+  const [messageDraft, setMessageDraft] = useState("");
+  const [answerDraft, setAnswerDraft] = useState<ChatAnswer & { interruptId: string } | null>(null);
+  const [submittingQuestion, setSubmittingQuestion] = useState<ChatQuestion | null>(null);
   const [turns, setTurns] = useState<readonly TimelineTurn[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [latestTimelineError, setLatestTimelineError] = useState(false);
@@ -125,6 +129,7 @@ export function useChatConversation(options: Readonly<{
   const stageWritingRef = useRef(false);
   const generationRef = useRef(0);
   const runInFlightRef = useRef(false);
+  const stopInFlightRef = useRef(false);
   const sessionEstablishedRef = useRef(options.existingSession);
   const observedActiveTurnsRef = useRef(new Set<string>());
   const handledCompletionsRef = useRef(new Set<string>());
@@ -144,18 +149,45 @@ export function useChatConversation(options: Readonly<{
     titleMaySettle: options.titleMaySettle,
   };
 
-  const draftBytes = new TextEncoder().encode(draft).byteLength;
-  const question = session?.current_turn?.status === "waiting_for_user"
+  const question = submittingQuestion ?? (session?.current_turn?.status === "waiting_for_user"
     ? session.current_turn.question
-    : null;
-  const semanticAnswer = question?.selection_mode === "multi_select"
-    ? answerSelections
-    : question?.selection_mode === "single_select"
-      ? answerSelections[0] ?? ""
-      : draft;
-  const draftValidity: DraftValidity = answerIsEmpty(semanticAnswer)
+    : null);
+  const currentAnswer = question !== null && answerDraft?.interruptId === question.interrupt_id
+    ? answerDraft : null;
+  const answerSelections = currentAnswer?.selections ?? [];
+  const draft = question === null ? messageDraft : currentAnswer?.text ?? "";
+  const semanticAnswer: ChatAnswer = { selections: answerSelections, text: draft };
+  const draftBytes = Math.max(
+    new TextEncoder().encode(draft).byteLength,
+    question === null ? 0 : new TextEncoder().encode(formatChatAnswer(semanticAnswer)).byteLength,
+  );
+  const draftValidity: DraftValidity = draft.trim().length === 0 && (question === null || answerSelections.length === 0)
     ? "empty"
-    : answerIsValid(semanticAnswer) && draftBytes <= 16 * 1024 ? "valid" : "invalid";
+    : (question === null || isChatAnswer(semanticAnswer)) && draftBytes <= 16 * 1024 ? "valid" : "invalid";
+
+  const setDraft = useCallback((value: SetStateAction<string>) => {
+    if (question === null) {
+      setMessageDraft(value);
+      return;
+    }
+    setAnswerDraft((current) => {
+      const previous = current?.interruptId === question.interrupt_id ? current : null;
+      return {
+        interruptId: question.interrupt_id,
+        selections: previous?.selections ?? [],
+        text: typeof value === "function" ? value(previous?.text ?? "") : value,
+      };
+    });
+  }, [question?.interrupt_id]);
+
+  const setAnswerSelections = useCallback((selections: readonly string[]) => {
+    if (question === null) return;
+    setAnswerDraft((current) => ({
+      interruptId: question.interrupt_id,
+      selections,
+      text: current?.interruptId === question.interrupt_id ? current.text : "",
+    }));
+  }, [question?.interrupt_id]);
   const phase = deriveChatPhase({
     currentTurn: session?.current_turn ?? null,
     localCommand: localCommand === "recovering"
@@ -407,10 +439,13 @@ export function useChatConversation(options: Readonly<{
       if (generationRef.current !== generation) return;
       stagedChannelRef.current?.notify();
     }
-    if (acceptedDraft !== null) {
-      setDraft((current) => current === acceptedDraft ? "" : current);
+    if (acceptedDraft !== null && !clearAnswer) {
+      setMessageDraft((current) => current === acceptedDraft ? "" : current);
     }
-    if (clearAnswer) setAnswerSelectionsState([]);
+    if (clearAnswer) {
+      setAnswerDraft(null);
+      setSubmittingQuestion(null);
+    }
     setRecovery((current) => current?.commandId === commandId ? null : current);
     setLocalCommand("none");
     sessionEstablishedRef.current = true;
@@ -442,7 +477,8 @@ export function useChatConversation(options: Readonly<{
         await loadQueue();
         stagedChannelRef.current?.notify();
       }
-      if (target.draft !== null) setDraft(target.draft);
+      if (target.draft !== null && !target.clearAnswer) setMessageDraft(target.draft);
+      if (target.clearAnswer) setSubmittingQuestion(null);
       setRecovery(null);
       setLocalCommand("none");
       setError(commandErrorCopy(receipt.error_code));
@@ -456,7 +492,8 @@ export function useChatConversation(options: Readonly<{
           await loadQueue();
           stagedChannelRef.current?.notify();
         }
-        if (target.draft !== null) setDraft(target.draft);
+        if (target.draft !== null && !target.clearAnswer) setMessageDraft(target.draft);
+        if (target.clearAnswer) setSubmittingQuestion(null);
         setRecovery(null);
         setLocalCommand("none");
         setError("The command was rejected before the Turn was accepted. Your input was restored.");
@@ -481,7 +518,8 @@ export function useChatConversation(options: Readonly<{
       await loadQueue();
       stagedChannelRef.current?.notify();
     }
-    if (target.draft !== null) setDraft(target.draft);
+    if (target.draft !== null && !target.clearAnswer) setMessageDraft(target.draft);
+    if (target.clearAnswer) setSubmittingQuestion(null);
     setRecovery(null);
     setLocalCommand("none");
     setErrorCode(rejectionCode);
@@ -610,16 +648,16 @@ export function useChatConversation(options: Readonly<{
     }
   }
 
-  async function startAnswer(answer: string | readonly string[]): Promise<void> {
+  async function startAnswer(answer: ChatAnswer): Promise<void> {
     const generation = generationRef.current;
     const turn = sessionRef.current?.current_turn;
     const activeQuestion = turn?.status === "waiting_for_user" ? turn.question : null;
     if (turn === undefined || turn === null || activeQuestion === null || runInFlightRef.current) return;
     observedActiveTurnsRef.current.add(turn.id);
     const inputId = crypto.randomUUID();
-    const visibleDraft = typeof answer === "string" ? answer : "";
-    const target = { clearAnswer: true, commandId: inputId, draft: visibleDraft || null, item: null };
+    const target = { clearAnswer: true, commandId: inputId, draft: answer.text || null, item: null };
     runInFlightRef.current = true;
+    setSubmittingQuestion(activeQuestion);
     setLocalCommand("opening");
     setError(null);
     options.agent.setMessages([]);
@@ -645,6 +683,7 @@ export function useChatConversation(options: Readonly<{
         }],
         runId: turn.id,
       }, {
+        onRunStartedEvent: () => { reconcileOnce(); },
         onRunFinishedEvent: () => { reconcileOnce(true); void refresh(); },
         onRunErrorEvent: () => { reconcileOnce(true); void refresh(); },
         onTextMessageContentEvent: () => { reconcileOnce(); void loadLatestTimeline(); },
@@ -660,6 +699,45 @@ export function useChatConversation(options: Readonly<{
       focusComposer();
     }
   }
+
+  const stopTurn = useCallback(async () => {
+    const turn = sessionRef.current?.current_turn;
+    if (!turn || !["running", "waiting_for_user"].includes(turn.status) || stopInFlightRef.current) return;
+    const generation = generationRef.current;
+    const commandId = crypto.randomUUID();
+    stopInFlightRef.current = true;
+    setLocalCommand("stopping");
+    setError(null);
+    setErrorCode(null);
+    try {
+      const receipt = await stopChat(options.threadId, { commandId, expectedTurnId: turn.id });
+      if (generationRef.current !== generation) return;
+      if (receipt.status === "pending") {
+        setRecovery({ clearAnswer: false, commandId, draft: null, item: null });
+        setLocalCommand("recovering");
+      } else if (receipt.status === "accepted") {
+        setLocalCommand("none");
+        await refresh();
+      } else {
+        setLocalCommand("none");
+        setError(commandErrorCopy(receipt.error_code));
+      }
+    } catch (failure) {
+      if (generationRef.current !== generation) return;
+      if (failure instanceof ChatCommandAcceptanceUnknownError) {
+        setRecovery({ clearAnswer: false, commandId, draft: null, item: null });
+        setLocalCommand("recovering");
+      } else {
+        setLocalCommand("none");
+        setError(apiErrorCopy(failure));
+      }
+    } finally {
+      if (generationRef.current === generation) {
+        stopInFlightRef.current = false;
+        focusComposer();
+      }
+    }
+  }, [focusComposer, options.threadId, refresh]);
 
   const executeMainAction = useCallback(async () => {
     if (!action.enabled) return;
@@ -704,37 +782,10 @@ export function useChatConversation(options: Readonly<{
       await startContinue();
       return;
     }
-    const turnId = sessionRef.current?.current_turn?.id;
-    if (turnId === undefined) return;
-    const commandId = crypto.randomUUID();
-    setLocalCommand("stopping");
-    setError(null);
-    setErrorCode(null);
-    try {
-      const receipt = await stopChat(options.threadId, { commandId, expectedTurnId: turnId });
-      if (receipt.status === "pending") {
-        setRecovery({ clearAnswer: false, commandId, draft: null, item: null });
-        setLocalCommand("recovering");
-      } else if (receipt.status === "accepted") {
-        setLocalCommand("none");
-        await refresh();
-      } else {
-        setLocalCommand("none");
-        setError(commandErrorCopy(receipt.error_code));
-      }
-    } catch (failure) {
-      if (failure instanceof ChatCommandAcceptanceUnknownError) {
-        setRecovery({ clearAnswer: false, commandId, draft: null, item: null });
-        setLocalCommand("recovering");
-      } else {
-        setLocalCommand("none");
-        setError(apiErrorCopy(failure));
-      }
-    }
-    focusComposer();
+    await stopTurn();
   // startPrompt/startAnswer/startContinue are declarations backed by current refs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [action, draft, focusComposer, loadQueue, options.researcherId, options.threadId, refresh, semanticAnswer]);
+  }, [action, draft, focusComposer, loadQueue, options.researcherId, options.threadId, refresh, semanticAnswer, stopTurn]);
 
   const removeStaged = useCallback(async (item: StagedInput) => {
     if (queueLocked) return;
@@ -749,7 +800,7 @@ export function useChatConversation(options: Readonly<{
   }, [loadQueue, queueLocked]);
 
   const editStaged = useCallback(async (item: StagedInput) => {
-    if (queueLocked || draft.length !== 0 || item.status !== "staged") return;
+    if (queueLocked || question !== null || draft.length !== 0 || item.status !== "staged") return;
     setDraft(item.content);
     focusComposer();
     try {
@@ -760,7 +811,7 @@ export function useChatConversation(options: Readonly<{
     } catch (failure) {
       setError(stageErrorCopy(failure));
     }
-  }, [draft.length, focusComposer, loadQueue, queueLocked]);
+  }, [draft.length, focusComposer, loadQueue, question, queueLocked, setDraft]);
 
   const steerStaged = useCallback(async (item: StagedInput) => {
     const turnId = sessionRef.current?.current_turn?.id;
@@ -860,8 +911,10 @@ export function useChatConversation(options: Readonly<{
     setLocalCommand("none");
     setRecovery(null);
     setErrorCode(null);
-    setDraft("");
-    setAnswerSelectionsState([]);
+    setMessageDraft("");
+    setAnswerDraft(null);
+    setSubmittingQuestion(null);
+    stopInFlightRef.current = false;
     setTurns([]);
     timelineInitializedRef.current = false;
     setNextCursor(null);
@@ -954,10 +1007,6 @@ export function useChatConversation(options: Readonly<{
     };
   }, [loadLatestTimeline, observeSession, options.threadId, session?.id]);
 
-  useEffect(() => {
-    setAnswerSelectionsState([]);
-  }, [question?.interrupt_id]);
-
   const latestTurnStatus = session?.latest_turn?.status ?? null;
   const latestTurnId = session?.latest_turn?.id ?? null;
   const statusAnnouncement = error ?? statusCopy(phase, latestTurnStatus, queue.length);
@@ -986,24 +1035,15 @@ export function useChatConversation(options: Readonly<{
     removeStaged,
     retryRecovery,
     retryTimeline,
-    setAnswerSelections: setAnswerSelectionsState,
+    setAnswerSelections,
     setDraft,
     steerStaged,
+    stopTurn,
     statusAnnouncement,
     textareaRef,
     timelineError: latestTimelineError || olderTimelineError,
     turns,
   };
-}
-
-function answerIsEmpty(answer: string | readonly string[]): boolean {
-  return typeof answer === "string" ? answer.trim().length === 0 : answer.length === 0;
-}
-
-function answerIsValid(answer: string | readonly string[]): boolean {
-  return typeof answer === "string"
-    ? answer.trim().length > 0
-    : answer.length > 0 && new Set(answer).size === answer.length;
 }
 
 export function mergeLatestTurns(

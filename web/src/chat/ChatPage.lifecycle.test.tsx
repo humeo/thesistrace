@@ -65,6 +65,66 @@ test("keeps the authoritative run status available without restoring the visible
   expect(document.querySelector(".chat-composer-status-row")).toBeNull();
 });
 
+const pendingQuestion = {
+  interrupt_id: "turn::question",
+  options: [{ label: "Quality", description: "Lower turnover" }, { label: "Risk" }],
+  question: "Which objective should lead?",
+  selection_mode: "single_select" as const,
+};
+
+test.each(["single_select", "multi_select", "free_text"] as const)("keeps %s questions and custom input in the one composer surface", async (mode) => {
+  const selections = vi.fn();
+  await mount(composerController({
+    action: { enabled: true, kind: "stop", label: "Stop" },
+    phase: "waiting_for_user",
+    question: { ...pendingQuestion, selection_mode: mode, options: mode === "free_text" ? null : pendingQuestion.options },
+    setAnswerSelections: selections,
+  }));
+  expect(document.querySelector(".chat-question-composer h2")?.textContent).toBe(pendingQuestion.question);
+  expect(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Answer"]')?.disabled).toBe(false);
+  expect(document.querySelector<HTMLButtonElement>('[aria-label="Send answer"]')?.disabled).toBe(true);
+  expect(document.body.textContent).not.toContain("Model settings");
+  if (mode !== "free_text") {
+    await act(async () => document.querySelector<HTMLInputElement>('input[value="Quality"]')?.click());
+    expect(selections).toHaveBeenCalledWith(["Quality"]);
+  }
+});
+
+test("answers explicitly, keeps Stop independent, and never treats blank Enter as Stop", async () => {
+  const execute = vi.fn(async () => undefined);
+  const stop = vi.fn(async () => undefined);
+  const controller = composerController({
+    action: { enabled: true, kind: "stop", label: "Stop" },
+    executeMainAction: execute, stopTurn: stop, phase: "waiting_for_user", question: pendingQuestion,
+  });
+  await mount(controller);
+  const input = document.querySelector("textarea")!;
+  await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
+  await act(async () => document.querySelector("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  expect(execute).not.toHaveBeenCalled();
+  expect(stop).not.toHaveBeenCalled();
+  await mount({ ...controller, action: { enabled: true, kind: "answer", label: "Send answer" }, draft: "Keep churn low", answerSelections: ["Quality"] });
+  const answer = document.querySelector("textarea")!;
+  await act(async () => answer.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter", isComposing: true })));
+  expect(execute).not.toHaveBeenCalled();
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Send answer"]')?.click());
+  expect(execute).toHaveBeenCalledOnce();
+  await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Stop"]')?.click());
+  expect(stop).toHaveBeenCalledOnce();
+});
+
+test.each(["opening", "recovering", "stopping"] as const)("retains but locks the question form during %s", async (phase) => {
+  await mount(composerController({
+    action: { enabled: false, kind: "stop", label: "Stop" },
+    phase, question: pendingQuestion, draft: "Retained note", answerSelections: ["Quality"],
+  }));
+  expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Retained note");
+  expect(document.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+  expect(document.querySelector<HTMLInputElement>('input[value="Quality"]')?.checked).toBe(true);
+  expect(document.querySelector<HTMLFieldSetElement>("fieldset")?.disabled).toBe(true);
+  expect(document.querySelector<HTMLButtonElement>('[aria-label="Stop"]')?.disabled).toBe(true);
+});
+
 test("exposes a rejected command as a coded alert without clearing the composer", async () => {
   await mount(composerController({
     draft: "Retained input",
@@ -76,6 +136,16 @@ test("exposes a rejected command as a coded alert without clearing the composer"
   expect(alert?.getAttribute("data-failure-code")).toBe("AGENT_CAPACITY");
   expect(alert?.textContent).toContain("Agent at capacity");
   expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Retained input");
+});
+
+test("does not offer to edit a staged prompt into a pending answer", async () => {
+  await mount(composerController({
+    phase: "waiting_for_user",
+    question: pendingQuestion,
+    queue: [staged("Research a different idea", 1)],
+  }));
+  expect(document.querySelector<HTMLButtonElement>('[aria-label="Edit staged input"]')?.disabled).toBe(true);
+  expect(document.querySelector<HTMLButtonElement>('[aria-label="Delete staged input"]')?.disabled).toBe(false);
 });
 
 test("shows FIFO controls and exposes Steer only on the active head item", async () => {
@@ -133,6 +203,7 @@ function composerController(overrides: Partial<ChatConversationController> = {})
     setAnswerSelections: vi.fn(),
     setDraft: vi.fn(),
     steerStaged: vi.fn(async () => undefined),
+    stopTurn: vi.fn(async () => undefined),
     statusAnnouncement: "Ready.",
     textareaRef: { current: null },
     timelineError: false,

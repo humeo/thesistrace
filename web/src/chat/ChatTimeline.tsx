@@ -6,6 +6,8 @@ import {
   CheckCircle,
   CircleNotch,
   Copy,
+  ListChecks,
+  Question,
   StopCircle,
   WarningCircle,
   Wrench,
@@ -386,42 +388,18 @@ function QuestionSurface({
   question: ChatQuestion & Readonly<{ status: "pending" | "answered" | "stopped" }>;
 }) {
   return (
-    <section className={`chat-question${active ? " chat-question-active" : ""}`} data-entry-id={entryId}>
-      <span className="chat-question-kicker">Input required</span>
-      <h2>{question.question}</h2>
-      {!active || question.options === null ? null : (
-        <fieldset>
-          <legend>{question.selection_mode === "multi_select" ? "Select all that apply" : "Select one"}</legend>
-          {question.options.map((option) => {
-            const selected = controller.answerSelections.includes(option.label);
-            return (
-              <label key={option.label}>
-                <input
-                  checked={selected}
-                  name={`question-${question.interrupt_id}`}
-                  onChange={() => {
-                    controller.setAnswerSelections(question.selection_mode === "multi_select"
-                      ? selected
-                        ? controller.answerSelections.filter((value) => value !== option.label)
-                        : [...controller.answerSelections, option.label]
-                      : [option.label]);
-                  }}
-                  type={question.selection_mode === "multi_select" ? "checkbox" : "radio"}
-                  value={option.label}
-                />
-                <span>
-                  <strong>{option.label}</strong>
-                  {option.description === undefined ? null : <small>{option.description}</small>}
-                </span>
-              </label>
-            );
-          })}
-        </fieldset>
-      )}
-      {active && question.selection_mode === "free_text" ? (
-        <p className="chat-question-hint">Type your answer below, then send it to continue this Turn.</p>
-      ) : null}
-      {!active ? <span className="chat-question-resolution">{question.status === "answered" ? "Answered" : "Stopped"}</span> : null}
+    <section className="chat-question-activity" data-entry-id={entryId}>
+      <details>
+        <summary>
+          <Question aria-hidden="true" size={16} />
+          <span>{question.status === "answered" ? "Question answered" : question.status === "stopped" ? "Question stopped" : "Asking questions"}</span>
+          <CaretDown aria-hidden="true" size={13} />
+        </summary>
+        <p>{question.question}</p>
+      </details>
+      {active ? <button className="chat-question-waiting" onClick={controller.focusComposer} type="button">
+        <ListChecks aria-hidden="true" size={16} /><span>Waiting for your answer</span>
+      </button> : null}
     </section>
   );
 }

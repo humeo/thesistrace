@@ -81,14 +81,17 @@ describe("chat control boundary", () => {
 
   it("validates single, multiple, and free-text answers against the saved question", () => {
     const single = question("single_select");
-    expect(() => validateAnswerForQuestion("Quality", single)).not.toThrow();
-    expect(() => validateAnswerForQuestion("Unknown", single)).toThrowError(ChatControlError);
+    expect(() => validateAnswerForQuestion({ selections: ["Quality"], text: "With a note" }, single)).not.toThrow();
+    expect(() => validateAnswerForQuestion({ selections: [], text: "A different objective" }, single)).not.toThrow();
+    expect(() => validateAnswerForQuestion({ selections: ["Unknown"], text: "" }, single)).toThrowError(ChatControlError);
+    expect(() => validateAnswerForQuestion({ selections: ["Quality", "Risk"], text: "" }, single)).toThrowError(ChatControlError);
 
     const multiple = question("multi_select");
-    expect(() => validateAnswerForQuestion(["Quality", "Risk"], multiple)).not.toThrow();
-    expect(() => validateAnswerForQuestion(["Quality", "Quality"], multiple)).toThrowError(ChatControlError);
+    expect(() => validateAnswerForQuestion({ selections: ["Quality", "Risk"], text: "Keep both" }, multiple)).not.toThrow();
+    expect(() => validateAnswerForQuestion({ selections: [], text: "Custom objective" }, multiple)).not.toThrow();
+    expect(() => validateAnswerForQuestion({ selections: ["Quality", "Quality"], text: "" }, multiple)).toThrowError(ChatControlError);
 
-    expect(() => validateAnswerForQuestion("Explain the trade-off", {
+    expect(() => validateAnswerForQuestion({ selections: [], text: "Explain the trade-off" }, {
       ...single,
       options: null,
       selectionMode: "free_text",

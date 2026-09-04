@@ -38,6 +38,83 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const mobile of [false, true]) {
+  test(`question composer supports options plus text, custom-only and Stop on ${mobile ? "mobile" : "desktop"}`, async ({ page }) => {
+    await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1159, height: 964 });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const mode = page.getByLabel("Test question mode");
+    await mode.selectOption("single_select");
+    const answer = page.getByRole("textbox", { name: "Answer", exact: true });
+    const send = page.getByRole("button", { name: "Send answer", exact: true });
+    await expect(answer).toBeEnabled();
+    await expect(send).toBeDisabled();
+    await answer.press("Enter");
+    await expect(page.locator(".chat-question-composer")).toBeVisible();
+    await page.getByText("Quality", { exact: true }).click();
+    await expect(page.getByRole("radio", { name: "Quality", exact: true })).toBeChecked();
+    await answer.fill("Keep turnover low.");
+    await expect(answer).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(answer).toHaveCSS("outline-style", "none");
+    await expect(page.getByRole("button", { name: "Model and reasoning" })).toHaveCount(0);
+    expect((await send.boundingBox())!.height).toBe(mobile ? 44 : 36);
+    await answer.press("Tab");
+    await expect(send).toBeFocused();
+    await expect(send).toHaveCSS("outline-width", "2px");
+    await send.press("Enter");
+    await expect(page.locator("[data-answer-receipt]")).toHaveText("Quality\n\nKeep turnover low.");
+
+    await mode.selectOption("multi_select");
+    await page.getByText("Quality", { exact: true }).click();
+    await page.getByText("Risk", { exact: true }).click();
+    await page.getByRole("button", { name: "Clear", exact: true }).click();
+    await expect(send).toBeDisabled();
+    await answer.fill("Research liquidity instead.");
+    await answer.press("Enter");
+    await expect(page.locator("[data-answer-receipt]")).toHaveText("Research liquidity instead.");
+
+    await mode.selectOption("free_text");
+    await answer.fill("A custom answer");
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(page.locator("[data-answer-receipt]")).toHaveText("Stopped");
+    await expect(page.locator(".chat-question-composer")).toHaveCount(0);
+  });
+
+  test(`long question composer keeps its answer row reachable on ${mobile ? "mobile" : "desktop"}`, async ({ page }) => {
+    await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1159, height: 964 });
+    await page.getByLabel("Test question mode").selectOption("long");
+    const panel = page.locator(".chat-question-composer");
+    const body = page.locator(".chat-question-body");
+    const answer = page.getByRole("textbox", { name: "Answer", exact: true });
+    await expect(panel).toBeVisible();
+    await expect(body).toHaveCSS("overflow-y", "auto");
+    expect(await body.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+    await page.getByText("Objective 20", { exact: true }).click();
+    await expect(page.getByRole("checkbox", { name: "Objective 20", exact: true })).toBeChecked();
+    await answer.fill("A note\n".repeat(30));
+    await expect(page.getByRole("button", { name: "Send answer", exact: true })).toBeInViewport();
+    const panelBox = (await panel.boundingBox())!;
+    const rowBox = (await page.locator(".chat-question-answer-row").boundingBox())!;
+    const answerBox = (await answer.boundingBox())!;
+    await test.info().attach("question-layout", {
+      body: JSON.stringify({ panelBox, rowBox, answerBox, geometry: await panel.evaluate((element) =>
+        [element, ...element.children].map((node) => ({
+          className: node.className,
+          scrollTop: node.scrollTop,
+          scrollHeight: node.scrollHeight,
+          clientHeight: node.clientHeight,
+          height: getComputedStyle(node).height,
+          flex: getComputedStyle(node).flex,
+        }))) }),
+      contentType: "application/json",
+    });
+    expect(rowBox.height).toBeLessThanOrEqual(answerBox.height + 6);
+    expect(panelBox.y + panelBox.height - rowBox.y - rowBox.height).toBeLessThanOrEqual(12);
+    expect(await panel.evaluate((element) => element.scrollTop)).toBe(0);
+    expect(answerBox.height).toBeLessThanOrEqual(140);
+    expect((await panel.boundingBox())!.height).toBeLessThanOrEqual(mobile ? 549 : 560);
+    expect(await page.locator("body").evaluate((element) => element.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `${test.info().outputDir}/question-${mobile ? "mobile" : "desktop"}.png` });
+  });
+
   test(`composer keeps a compact toolbar and seamless typing surface on ${mobile ? "mobile" : "desktop"}`, async ({ page }) => {
     await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1159, height: 964 });
     const input = page.getByRole("textbox", { name: "Message" });

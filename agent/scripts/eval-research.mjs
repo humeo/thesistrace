@@ -192,7 +192,7 @@ async function evaluate({ candidate, candidateBytes, repetitions, effort, regist
           const inputId = randomUUID();
           const input = answering ? {
             threadId, runId, state: {}, context: [], tools: [], messages: [],
-            resume: [{ interruptId: pendingInterrupt.id, payload: text, status: "resolved" }],
+            resume: [{ interruptId: pendingInterrupt.id, payload: { selections: [], text }, status: "resolved" }],
             forwardedProps: { thesistrace: { command: "answer", inputId, interruptId: pendingInterrupt.id } },
           } : {
             threadId, runId, state: {}, context: [], tools: [],

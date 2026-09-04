@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { RunAgentInputSchema, type RunAgentInput } from "@ag-ui/core";
 import { z } from "zod";
 
+import { formatChatAnswer, isChatAnswer, type ChatAnswer } from "../../contracts/chat-answer.mjs";
+
 import type { ModelRegistry, ReasoningEffort } from "./model-registry.js";
 import { isCanonicalUuid } from "./uuid.js";
 
@@ -55,7 +57,7 @@ export type ValidatedContinueRun = Readonly<{
   sessionMode: "existing";
 }>;
 
-export type ChatAnswer = string | readonly string[];
+export type { ChatAnswer } from "../../contracts/chat-answer.mjs";
 
 export type ValidatedAnswerRun = Readonly<{
   answer: ChatAnswer;
@@ -208,23 +210,9 @@ function resolveSelection(
 }
 
 function readAnswer(value: unknown): ChatAnswer {
-  if (typeof value === "string") {
-    if (value.trim().length === 0) throw invalidRequest();
-    enforceMessageSize(value);
-    return value;
-  }
-  if (
-    !Array.isArray(value)
-    || value.length < 1
-    || value.length > 20
-    || value.some((item) => (
-      typeof item !== "string"
-      || item.trim().length === 0
-      || Buffer.byteLength(item, "utf8") > 200
-    ))
-  ) {
-    throw invalidRequest();
-  }
+  if (!isChatAnswer(value)) throw invalidRequest();
+  enforceMessageSize(value.text);
+  enforceMessageSize(formatChatAnswer(value));
   return value;
 }
 

@@ -59,8 +59,9 @@ test("accepts Continue only as an empty-message new Run", async () => {
 });
 
 test.each([
-  "A focused answer",
-  ["Quality", "Low volatility"],
+  { selections: [], text: "A focused answer" },
+  { selections: ["Quality", "Low volatility"], text: "" },
+  { selections: ["Quality"], text: "Keep turnover low." },
 ])("accepts Answer as the sole resolved interrupt payload %#", async (answer) => {
   await expect(readValidatedChatRun(runRequest({
     messages: [],
@@ -74,6 +75,30 @@ test.each([
     commandId: INPUT_ID,
     interruptId: INTERRUPT_ID,
   });
+});
+
+test.each([
+  "Legacy answer", ["Quality"], {}, { selections: [], text: "  " },
+  { selections: ["Quality", "Quality"], text: "" },
+  { selections: [""], text: "A note" },
+  { selections: ["界".repeat(67)], text: "" },
+  { selections: [], text: "Answer", modelKey: "scripted" },
+])("rejects invalid or legacy Answer payloads %#", async (payload) => {
+  await expect(readValidatedChatRun(runRequest({
+    messages: [],
+    resume: [{ interruptId: INTERRUPT_ID, payload, status: "resolved" }],
+    forwardedProps: { thesistrace: { command: "answer", inputId: INPUT_ID, interruptId: INTERRUPT_ID } },
+  }), registry)).rejects.toMatchObject({ code: "INVALID_CHAT_INPUT", status: 400 });
+});
+
+test("bounds the combined UTF-8 answer, including selected options", async () => {
+  await expect(readValidatedChatRun(runRequest({
+    messages: [],
+    resume: [{ interruptId: INTERRUPT_ID, payload: {
+      selections: ["Quality"], text: "界".repeat(Math.floor(MAX_CHAT_MESSAGE_BYTES / 3)),
+    }, status: "resolved" }],
+    forwardedProps: { thesistrace: { command: "answer", inputId: INPUT_ID, interruptId: INTERRUPT_ID } },
+  }), registry)).rejects.toMatchObject({ code: "CHAT_INPUT_TOO_LARGE", status: 413 });
 });
 
 test.each([

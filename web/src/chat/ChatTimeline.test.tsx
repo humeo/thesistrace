@@ -93,8 +93,8 @@ test("announces a failed Turn with its public failure code", async () => {
   expect(alert?.textContent).toContain("Turn failed");
 });
 
-test("renders a structured pending question and sends selection changes to the controller", async () => {
-  const setAnswerSelections = vi.fn();
+test("keeps a compact question activity and directs answering to the composer", async () => {
+  const focusComposer = vi.fn();
   const question = {
     interrupt_id: `${TURN_ID}::tool-1`,
     options: [{ description: "Lower turnover", label: "Quality" }, { label: "Risk" }],
@@ -104,16 +104,17 @@ test("renders a structured pending question and sends selection changes to the c
   await mount(controller({
     phase: "waiting_for_user",
     question,
-    setAnswerSelections,
+    focusComposer,
     turns: [timelineTurn([
       entry("question", "question:1", { ...question, status: "pending" }),
     ], { completed_at: null, status: "waiting_for_user" })],
   }));
 
-  expect(document.querySelector(".chat-question")?.textContent).toContain("Which objective should lead?");
-  const quality = document.querySelector<HTMLInputElement>('input[value="Quality"]')!;
-  await act(async () => quality.click());
-  expect(setAnswerSelections).toHaveBeenCalledWith(["Quality"]);
+  expect(document.querySelector(".chat-question-activity summary")?.textContent).toBe("Asking questions");
+  expect(document.querySelector(".chat-question-activity p")?.textContent).toBe("Which objective should lead?");
+  expect(document.querySelector(".chat-question-activity input")).toBeNull();
+  await act(async () => document.querySelector<HTMLButtonElement>(".chat-question-waiting")?.click());
+  expect(focusComposer).toHaveBeenCalledOnce();
 });
 
 test("copies the complete assistant response once while retaining user Copy", async () => {
@@ -235,6 +236,7 @@ function controller(overrides: Partial<ChatConversationController> = {}): ChatCo
     setAnswerSelections: vi.fn(),
     setDraft: vi.fn(),
     steerStaged: vi.fn(async () => undefined),
+    stopTurn: vi.fn(async () => undefined),
     statusAnnouncement: "Ready.",
     textareaRef: { current: null },
     timelineError: false,
