@@ -1,6 +1,6 @@
 # Composer-based question answering
 
-Status: ready-for-agent
+Status: complete
 
 ## Decision
 
@@ -33,3 +33,8 @@ Use the existing DESIGN.md surfaces and prototype A density. Compact pointer
 actions are 36px; touch actions are 44px. Long questions/options scroll inside
 the question surface while the answer row remains reachable. Verify the
 contract, recovery, rendering, and real-browser same-Turn flow with fake models.
+
+Implemented as `9897ebf` on `codex/ask-user-composer`; verification and delivery
+evidence are recorded in `issues/01-production-answer-surface.md`. Main and the
+running development service remain unchanged. Web and Agent require an atomic
+release; deployment is not included in this delivery.

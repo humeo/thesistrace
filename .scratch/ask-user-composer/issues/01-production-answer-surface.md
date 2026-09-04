@@ -1,6 +1,6 @@
 # Ship selected question composer A
 
-**Status:** ready-for-agent
+**Status:** complete
 
 ## Context
 
@@ -15,7 +15,7 @@ commit `68d65fe5f18a467bb7f89af45b07b598d902053c`.
 - [x] Same Turn, immutable settings, idempotent acceptance and safe recovery.
 - [x] Keyboard, IME, focus, mobile/long-content layout and compact actions.
 - [x] Focused Agent/Web tests and isolated integration/E2E pass.
-- [ ] Reviewed, committed; prototype and parallel main changes preserved.
+- [x] Reviewed, committed; prototype and parallel main changes preserved.
 
 ## Comments
 
@@ -26,7 +26,11 @@ commit `68d65fe5f18a467bb7f89af45b07b598d902053c`.
 - Desktop/390px browser layout and interaction suite: 8 passed. Evidence:
   `/private/tmp/ask-user-layout-fixed`.
 - Isolated full-stack reload/Answer/same-Turn E2E passed in run
-  `20260904t081350z-32546-d6c5b92c`. A final-image rerun is in progress.
+  `20260904t081350z-32546-d6c5b92c`. The final-image rerun also passed:
+  `20260904t082707z-37226-785b0b2b` (12-second Playwright phase, exit 0,
+  privacy scan and isolated environment cleanup both passed).
+  Screenshot and report are retained under that run's `.local/test-runs`
+  evidence directory.
 - Agent production-image smoke passed in isolated project
   `thesistrace-agent-test-20260904t082400z-36221-a7ea8a27`.
 - Review findings fixed with failing tests first: reject unknown selections
@@ -40,3 +44,11 @@ commit `68d65fe5f18a467bb7f89af45b07b598d902053c`.
   path were introduced. Main and prototype worktrees were left untouched.
 - Full repository `pnpm check` / `pnpm check:release` are outside this scoped
   verification; this is not a release or deployment claim.
+
+### Delivery
+
+Functional commit: `9897ebf` on `codex/ask-user-composer`. All review findings
+above are closed and the feature's scoped verification passed. The prototype
+remains clean on its separate branch. No merge into main or dev-service update
+was performed; Web and Agent must be deployed together for the hard-cut Answer
+envelope.
