@@ -1,0 +1,18 @@
+services:
+  probe:
+    # Exact image of the running Data Operator Worker, not a rebuilt application.
+    image: sha256:decca8f9b0a5ac8675aece10ea928b44eed8c4bff5374f078933ec1d17c4a789
+    entrypoint: ["uv", "run", "--no-sync", "--offline", "python", "/probe/probe.py"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    cpus: 0.5
+    environment:
+      UV_CACHE_DIR: /tmp/uv-cache
+      PYTHONDONTWRITEBYTECODE: "1"
+      TQDM_DISABLE: "1"
+    tmpfs:
+      - /tmp:size=32m
+    volumes:
+      - ./probe.py:/probe/probe.py:ro
