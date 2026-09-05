@@ -1,6 +1,6 @@
 # MCP connections
 
-**Status:** ready-for-agent
+**Status:** complete
 
 ## Accepted design
 
@@ -38,3 +38,5 @@ login continuation, explicit consent, scope-filtered external MCP discovery,
 revocation, and desktop/mobile rendering. Database integration checks cover
 cross-Researcher isolation, rejected grants, and token lifecycle. Component
 checks cover copying without authorization and failed check/revoke states.
+
+Implementation and verification committed in `e2aa976`.
