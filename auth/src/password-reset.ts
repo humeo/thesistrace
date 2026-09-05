@@ -1,3 +1,4 @@
+import { revokeResearcherMcpAccess } from "./mcp-revocation.js";
 import { randomUUID } from "node:crypto";
 
 import { hashPassword } from "better-auth/crypto";
@@ -336,6 +337,7 @@ export class PasswordResetLifecycle {
             'DELETE FROM auth."session" WHERE "userId" = $1',
             [userId],
           );
+          await revokeResearcherMcpAccess(client, userId);
           const deletedVerification = await client.query(
             'DELETE FROM auth."verification" WHERE id = $1',
             [verificationId],

@@ -156,3 +156,13 @@ async function healthyFetch(input: string | URL | Request): Promise<Response> {
     resource: "https://research.thesistrace.test/mcp",
   });
 }
+
+
+it.each(["test", "development", "production"] as const)("only permits loopback HTTP metadata outside production (%s)", async environment => {
+  const ready = createAgentReadiness({ ...settings, environment }, readyPool(), {
+    fetch: async input => new URL(input instanceof Request ? input.url : input).pathname === "/health/ready"
+      ? Response.json({ status: "ready" })
+      : Response.json({ resource: "http://127.0.0.1:5173/mcp", authorization_servers: ["http://127.0.0.1:5173/api/auth"] }),
+  });
+  await expect(ready()).resolves.toBe(environment !== "production");
+});

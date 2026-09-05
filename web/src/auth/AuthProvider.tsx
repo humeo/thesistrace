@@ -146,6 +146,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const result = await authClient.signIn.email({ email, password });
       if (result.error !== null) return failure("Email or password is incorrect.");
+      if (result.data?.redirect && result.data.url) {
+        // Better Auth owns the OAuth redirect; do not race it with workspace bootstrap.
+        return { ok: true };
+      }
       readyResearcherId.current = null;
       await refreshSession(true);
       return { ok: true };

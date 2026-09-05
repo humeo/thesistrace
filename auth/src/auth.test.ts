@@ -9,6 +9,12 @@ import { authTestSettings } from "../test-fixtures/auth-settings.js";
 import { InvitationAdmission } from "./invitation-admission.js";
 import { passwordResetIdentifier } from "./password-reset-token.js";
 
+// Configuration unit tests do not start the provider's database resource seeding.
+// The real plugin is exercised against PostgreSQL in mcp-connections.integration.test.
+vi.mock("@better-auth/oauth-provider", () => ({
+  oauthProvider: (options: unknown) => ({ id: "oauth-provider", options }),
+}));
+
 const settings = authTestSettings();
 
 function lifecycle(
@@ -64,7 +70,7 @@ describe("ThesisTrace Better Auth configuration", () => {
       expect(auth.options.baseURL).toBe(settings.publicOrigin);
       expect(auth.options.basePath).toBe("/api/auth");
       expect(auth.options.trustedOrigins).toEqual([settings.publicOrigin]);
-      expect(auth.options.plugins?.map((plugin) => plugin.id)).toEqual(["jwt"]);
+      expect(auth.options.plugins?.map((plugin) => plugin.id)).toEqual(["oauth-provider", "jwt"]);
       expect(auth.options.emailAndPassword).toMatchObject({
         enabled: true,
         maxPasswordLength: 128,

@@ -14,6 +14,38 @@ Subscriptions, generic code or network execution, object-storage access, or
 operator functions. Durable ResearchRun, Research Batch, and DailyTrack state
 remains the recovery truth after a connection closes.
 
+## Connect an external AI client
+
+Open **MCP** in the product sidebar at `/connections/mcp`. Copy the configured
+Server URL, then use the English setup prompt or the displayed Codex / Claude
+Code command. The client starts authorization in a browser, the Researcher signs
+in to ThesisTrace and approves the requested permissions, and the client
+retrieves the scope-filtered tool set. Copying instructions does not create an
+authorization. Check connection performs MCP discovery without executing a tool
+or calling a model.
+
+Auth serves OAuth authorization-server metadata at
+`/.well-known/oauth-authorization-server/api/auth` and
+`/api/auth/.well-known/oauth-authorization-server`. Core serves the protected
+resource metadata at `/.well-known/oauth-protected-resource/mcp`. The configured
+issuer must be the public ThesisTrace origin followed by `/api/auth`; Production
+requires HTTPS, while Development/Test allow loopback HTTP. The protocol URL
+remains `/mcp` and is never a product HTML route.
+
+External clients use authorization code + S256 PKCE and the `resource` parameter.
+They may request the four read/execute scopes and `offline_access`; cancellation
+and Stop scopes are not granted by this Auth provider. Access and refresh tokens
+remain with the AI client, never in the website. Auth stores their hashes; Core
+checks external access with the private Auth verifier on every request.
+
+**Authorized apps** lists only the current Researcher's consent records. Revoke
+access removes the app's pending authorization codes, access tokens, refresh
+tokens and consent. Reauthorization starts again from the AI client. Authorization
+does not indicate an active network connection, and the page does not claim a
+last tool-use time. Expired token and assertion records are handled by Auth's
+existing cleanup job. A fresh current Auth schema is required; startup verifies
+its exact catalog and does not migrate an existing schema.
+
 ## Local Codex stdio configuration
 
 Install the project package, then register the packaged entrypoint in a trusted

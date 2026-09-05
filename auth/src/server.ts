@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server";
 
 import { ResearcherAccessService } from "./access.js";
+import { createMcpConnectionsApp } from "./mcp-connections.js";
 import { createAuthApp } from "./app.js";
 import { createThesisTraceAuth } from "./auth.js";
 import { AuthEventRecorder } from "./auth-events.js";
@@ -88,6 +89,7 @@ async function main(): Promise<void> {
       recordSession: credentialCoordinator.recordSession,
       sendResetPassword: passwordReset.sendResetPassword,
     });
+    await auth.$context;
     const issueMcpAccessToken = createMcpAccessTokenIssuer(settings, {
       sign: (payload) => auth.api.signJWT({ body: { payload } }),
     });
@@ -187,7 +189,7 @@ async function main(): Promise<void> {
       revokeOperatorResearcherSessions: (principal, input) =>
         operatorSessionRevocations.revoke(principal, input),
       resetPassword: passwordReset.completeReset,
-    });
+    }, createMcpConnectionsApp(auth, pool, settings, coordination));
     const server = serve({
       fetch: app.fetch,
       hostname: settings.host,

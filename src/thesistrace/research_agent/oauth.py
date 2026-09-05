@@ -42,6 +42,7 @@ class ResearchAgentProductionSettings:
     deployment_tool_allowlist: frozenset[str]
     allowed_hosts: tuple[str, ...]
     allowed_origins: tuple[str, ...]
+    allow_loopback_http: bool = False
 
     @classmethod
     def from_environment(
@@ -49,13 +50,16 @@ class ResearchAgentProductionSettings:
         environment: Mapping[str, str] | None = None,
     ) -> ResearchAgentProductionSettings:
         selected = os.environ if environment is None else environment
+        allow_loopback = selected.get("THESISTRACE_ENVIRONMENT") in {"test", "development"}
         issuer_url = _canonical_https_url(
             _required(selected, "THESISTRACE_MCP_ISSUER_URL"),
             "THESISTRACE_MCP_ISSUER_URL",
+            allow_loopback=allow_loopback,
         )
         resource_server_url = _canonical_https_url(
             _required(selected, "THESISTRACE_MCP_RESOURCE_URL"),
             "THESISTRACE_MCP_RESOURCE_URL",
+            allow_loopback=allow_loopback,
         )
         if urlsplit(resource_server_url).path != "/mcp":
             raise RuntimeError(
@@ -64,9 +68,7 @@ class ResearchAgentProductionSettings:
         client_id = _required(selected, "THESISTRACE_MCP_CLIENT_ID")
         if _CLIENT_ID.fullmatch(client_id) is None:
             raise RuntimeError("THESISTRACE_MCP_CLIENT_ID is invalid")
-        public_jwk = _public_jwk(
-            _required(selected, "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK")
-        )
+        public_jwk = _public_jwk(_required(selected, "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK"))
         clock_skew_seconds = _nonnegative_integer(
             _required(selected, "THESISTRACE_MCP_CLOCK_SKEW_SECONDS"),
             "THESISTRACE_MCP_CLOCK_SKEW_SECONDS",
@@ -105,6 +107,7 @@ class ResearchAgentProductionSettings:
             deployment_tool_allowlist=deployment_tool_allowlist,
             allowed_hosts=allowed_hosts,
             allowed_origins=allowed_origins,
+            allow_loopback_http=allow_loopback,
         )
 
     def http_configuration(self) -> ResearchAgentHTTPConfiguration:
@@ -122,6 +125,7 @@ class ResearchAgentProductionSettings:
             allowed_hosts=self.allowed_hosts,
             allowed_origins=self.allowed_origins,
             supported_scopes=PRODUCTION_RESEARCH_AGENT_SCOPES,
+            allow_loopback_http=self.allow_loopback_http,
         )
 
 
@@ -176,7 +180,7 @@ class ProductionResearchAgentTokenVerifier(TokenVerifier):
                         "exp",
                         "jti",
                         "scope",
-                    ]
+                    ],
                 },
             )
             return self._access_token(token, claims, now=self._clock())
@@ -227,9 +231,7 @@ class ProductionResearchAgentTokenVerifier(TokenVerifier):
         if not isinstance(scope_claim, str) or not scope_claim:
             return None
         scopes = scope_claim.split(" ")
-        allowed_scopes = {
-            scope.value for scope in PRODUCTION_RESEARCH_AGENT_SCOPES
-        }
+        allowed_scopes = {scope.value for scope in PRODUCTION_RESEARCH_AGENT_SCOPES}
         if (
             scope_claim != " ".join(scopes)
             or len(set(scopes)) != len(scopes)
@@ -254,10 +256,17 @@ def _required(environment: Mapping[str, str], name: str) -> str:
     return value
 
 
-def _canonical_https_url(value: str, variable_name: str) -> str:
+def _canonical_https_url(value: str, variable_name: str, *, allow_loopback: bool = False) -> str:
     parts = urlsplit(value)
     if (
-        parts.scheme != "https"
+        (
+            parts.scheme != "https"
+            and not (
+                allow_loopback
+                and parts.scheme == "http"
+                and parts.hostname in {"127.0.0.1", "localhost", "::1"}
+            )
+        )
         or not parts.hostname
         or parts.username is not None
         or parts.password is not None

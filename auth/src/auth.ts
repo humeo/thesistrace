@@ -1,3 +1,5 @@
+import { oauthProvider } from "@better-auth/oauth-provider";
+import { mcpOAuthOptions } from "./mcp-oauth.js";
 import { betterAuth } from "better-auth";
 import { jwt } from "better-auth/plugins";
 import type { Pool } from "pg";
@@ -16,6 +18,7 @@ import { sha256 } from "./security.js";
 
 const DAY_SECONDS = 60 * 60 * 24;
 const disabledBetterAuthPaths = [
+  "/token",
   "/account-info",
   "/change-email",
   "/delete-user",
@@ -182,6 +185,7 @@ export function createThesisTraceAuth(
     },
     logger: { disabled: true },
     plugins: [
+      oauthProvider(mcpOAuthOptions(settings, lifecycle.isResearcherActive)),
       jwt({
         adapter: {
           async createJwk() {

@@ -29,7 +29,7 @@ const mcpEnvironment = {
     '["research:read","research:execute","tracking:read","tracking:execute"]',
   THESISTRACE_MCP_CLIENT_ID: "thesistrace-agent",
   THESISTRACE_MCP_CLOCK_SKEW_SECONDS: "30",
-  THESISTRACE_MCP_ISSUER_URL: "https://issuer.test/",
+  THESISTRACE_MCP_ISSUER_URL: "http://127.0.0.1:5173/api/auth",
   THESISTRACE_MCP_RESOURCE_URL: "https://core.test/mcp",
   THESISTRACE_MCP_SIGNING_PRIVATE_JWK:
     '{"alg":"EdDSA","crv":"Ed25519","d":"2SCCVM_DYKEJvq18KV1M4UNFhxTHLKtdXxQFXLGlEBs","kid":"test-signing-key-01","kty":"OKP","use":"sig","x":"3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8"}',

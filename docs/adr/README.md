@@ -83,6 +83,8 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 
 ## Agent access
 
+- [ADR-0242 — Own external MCP authorization and revocation in Auth](0242-own-external-mcp-authorization-in-auth.md)
+
 - [ADR-0220 — Expose Research Agent access through a native Core MCP adapter](0220-expose-research-agent-access-through-a-native-core-mcp-adapter.md)
 - [ADR-0221 — Authenticate remote Research Agent access with OAuth](0221-authenticate-remote-research-agent-access-with-oauth.md)
 - [ADR-0222 — Keep Research Agent execution stateless and resource-addressed](0222-keep-research-agent-execution-stateless-and-resource-addressed.md)

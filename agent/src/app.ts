@@ -33,6 +33,7 @@ import {
 import type { VerifiedResearcher } from "./session-verifier.js";
 
 export type AgentAppDependencies = Readonly<{
+  mcpConnection: (headers: Headers) => Promise<import("./mcp-connection.js").McpConnection>;
   commandReceipt: (
     threadId: string,
     commandId: string,
@@ -130,6 +131,11 @@ export function createAgentApp(dependencies: AgentAppDependencies): Hono<AgentAp
     }
     context.set("researcher", researcher);
     await next();
+  });
+
+  app.get("/api/agent/mcp/connection", async (context) => {
+    try { return context.json(await dependencies.mcpConnection(context.req.raw.headers)); }
+    catch { return context.json({ code: "MCP_CONNECTION_UNAVAILABLE" }, 502); }
   });
 
   app.get("/api/agent/models", (context) => {

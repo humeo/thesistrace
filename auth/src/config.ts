@@ -88,11 +88,14 @@ export function readAuthSettings(environment: Environment = process.env): AuthSe
     parsedEnvironment.data,
   );
   const mcpIssuer = parseMcpIssuer(
-    required(environment, "THESISTRACE_MCP_ISSUER_URL"),
+    required(environment, "THESISTRACE_MCP_ISSUER_URL"), parsedEnvironment.data !== "production",
   );
   const mcpAudience = parseMcpAudience(
-    required(environment, "THESISTRACE_MCP_RESOURCE_URL"),
+    required(environment, "THESISTRACE_MCP_RESOURCE_URL"), parsedEnvironment.data !== "production",
   );
+  if (mcpIssuer !== `${publicOrigin}/api/auth`) {
+    throw new AuthConfigurationError("THESISTRACE_MCP_ISSUER_URL must match THESISTRACE_PUBLIC_ORIGIN/api/auth");
+  }
   const mcpClientId = parseMcpClientId(
     required(environment, "THESISTRACE_MCP_CLIENT_ID"),
   );
@@ -163,15 +166,15 @@ export function readAuthSettings(environment: Environment = process.env): AuthSe
   };
 }
 
-function parseMcpIssuer(value: string): string {
-  return parseCanonicalHttpsUrl(value, "THESISTRACE_MCP_ISSUER_URL", false);
+function parseMcpIssuer(value: string, allowLoopback: boolean): string {
+  return parseCanonicalHttpsUrl(value, "THESISTRACE_MCP_ISSUER_URL", false, allowLoopback);
 }
 
-function parseMcpAudience(value: string): string {
+function parseMcpAudience(value: string, allowLoopback: boolean): string {
   const canonical = parseCanonicalHttpsUrl(
     value,
     "THESISTRACE_MCP_RESOURCE_URL",
-    true,
+    true, allowLoopback,
   );
   if (new URL(canonical).pathname !== "/mcp") {
     throw new AuthConfigurationError(
@@ -185,6 +188,7 @@ function parseCanonicalHttpsUrl(
   value: string,
   variableName: string,
   rejectTrailingSlash: boolean,
+  allowLoopback: boolean,
 ): string {
   let url: URL;
   try {
@@ -193,7 +197,7 @@ function parseCanonicalHttpsUrl(
     throw new AuthConfigurationError(`${variableName} must be a canonical HTTPS URL`);
   }
   if (
-    url.protocol !== "https:"
+    (url.protocol !== "https:" && !(allowLoopback && url.protocol === "http:" && isLoopbackHostname(unbracketedHostname(url.hostname))))
     || url.username.length > 0
     || url.password.length > 0
     || url.search.length > 0

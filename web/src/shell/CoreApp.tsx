@@ -7,6 +7,9 @@ import type { WorkspaceNavigate } from "./navigation";
 
 import { AppShell } from "./AppShell";
 
+const McpPage = lazy(() => import("../mcp/McpPage").then(({ McpPage }) => ({ default: McpPage })));
+const McpAuthorizePage = lazy(() => import("../mcp/McpAuthorizePage").then(({ McpAuthorizePage }) => ({ default: McpAuthorizePage })));
+
 const DataPage = lazy(() =>
   import("../data/DataPage").then(({ DataPage }) => ({ default: DataPage })),
 );
@@ -68,6 +71,8 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
       >
         {thread === null ? null : <ChatPage key={thread.id ?? "invalid"} researcherId={researcherId} thread={thread} />}
         {currentPath === "/data" ? <DataPage /> : null}
+        {currentPath === "/connections/mcp" ? <McpPage /> : null}
+        {currentPath === "/connections/mcp/authorize" ? <McpAuthorizePage search={location.search} /> : null}
         {currentPath === "/research" ? (
           <ResearchWorkspacePage researcherId={researcherId} />
         ) : null}
@@ -90,6 +95,7 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
         ) : null}
         {currentPath !== "/chat" && currentPath !== "/data" &&
         currentPath !== "/research" &&
+        !currentPath.startsWith("/connections/mcp") &&
         currentPath !== "/operator/researchers" &&
         currentPath !== "/operator/data" &&
         !currentPath.startsWith("/research-runs") &&

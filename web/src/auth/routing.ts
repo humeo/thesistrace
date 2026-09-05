@@ -22,6 +22,8 @@ const PRODUCT_ROOTS = new Set([
   "/research",
   "/research-runs",
   "/daily-tracks",
+  "/connections/mcp",
+  "/connections/mcp/authorize",
 ]);
 
 export function locationHref(location: BrowserLocation): string {

@@ -1,3 +1,4 @@
+import { revokeResearcherMcpAccess } from "./mcp-revocation.js";
 import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
 
@@ -143,6 +144,7 @@ export class ResearcherAccessService {
         'DELETE FROM auth."session" WHERE "userId" = $1',
         [researcherId],
       );
+      await revokeResearcherMcpAccess(client, researcherId);
       const resets = await client.query(
         `
           UPDATE auth.password_reset

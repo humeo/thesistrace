@@ -2,6 +2,8 @@ import { serve } from "@hono/node-server";
 import { createServer, type Server } from "node:http";
 import { asyncExitHook } from "exit-hook";
 
+import { createMcpRunFactory } from "./mcp-run.js";
+import { checkMcpConnection } from "./mcp-connection.js";
 import { createAgentApp } from "./app.js";
 import { readAgentSettings } from "./config.js";
 import { createResearchRuntime } from "./research-runtime.js";
@@ -10,7 +12,9 @@ import { createSessionVerifier } from "./session-verifier.js";
 async function main(): Promise<void> {
   const settings = readAgentSettings();
   const researchRuntime = await createResearchRuntime(settings);
+  const mcpFactory = createMcpRunFactory(settings);
   const app = createAgentApp({
+    mcpConnection: (headers) => checkMcpConnection(mcpFactory, headers),
     commandReceipt: researchRuntime.commandReceipt,
     deleteSession: researchRuntime.deleteSession,
     handleRuntime: researchRuntime.handle,

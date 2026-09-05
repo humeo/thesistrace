@@ -71,6 +71,12 @@ export async function enforceAuthSecretContract(
         WHERE identifier LIKE 'reset-password:%'
       `,
     );
+    await client.query('DELETE FROM auth."oauthAccessToken"');
+    await client.query('DELETE FROM auth."oauthRefreshToken"');
+    await client.query('DELETE FROM auth."oauthConsent"');
+    await client.query(`DELETE FROM auth."verification" WHERE
+      CASE WHEN value IS JSON OBJECT THEN value::jsonb ELSE '{}'::jsonb END
+        @> '{"type":"authorization_code"}'::jsonb`);
     await client.query('DELETE FROM auth."session"');
     await client.query(
       `

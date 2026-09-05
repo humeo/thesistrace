@@ -37,7 +37,7 @@ export function authTestSettings(
       "tracking:read",
       "tracking:execute",
     ],
-    mcpIssuer: "https://issuer.test/",
+    mcpIssuer: "http://127.0.0.1:5173/api/auth",
     mcpPrivateJwk: privateJwk,
     mcpPublicJwk: publicJwk,
     mcpTokenLifetimeSeconds: 360,

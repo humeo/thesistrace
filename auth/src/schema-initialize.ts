@@ -187,6 +187,13 @@ async function verifyAuthRoleGrants(client: PoolClient): Promise<void> {
   for (const table of [
     "account",
     "auth_secret_contract",
+    "oauthClient",
+    "oauthResource",
+    "oauthClientResource",
+    "oauthRefreshToken",
+    "oauthAccessToken",
+    "oauthConsent",
+    "oauthClientAssertion",
     "operator_assignment",
     "operator_proof",
     "password_reset",

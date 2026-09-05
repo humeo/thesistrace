@@ -69,6 +69,7 @@ async function main(): Promise<void> {
       recordSession: credentialCoordinator.recordSession,
       sendResetPassword: passwordReset.sendResetPassword,
     });
+    await auth.$context;
     const result = await runOperatorCommand(process.argv.slice(2), {
       access: new ResearcherAccessService({
         authSecret: settings.secret,

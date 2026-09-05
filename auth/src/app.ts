@@ -49,7 +49,7 @@ const invitationAcceptSchema = z
   })
   .strict();
 const signInSchema = z
-  .object({ email: z.email(), password: z.string().min(12).max(128) })
+  .object({ email: z.email(), password: z.string().min(12).max(128), oauth_query: z.string().max(16384).optional() })
   .strict();
 const requestPasswordResetSchema = z.object({ email: z.email() }).strict();
 const resetPasswordSchema = z
@@ -210,6 +210,14 @@ type GetSessionInput = Readonly<{
 }>;
 
 const publicBetterAuthPaths = new Set([
+  "/api/auth/oauth2/authorize",
+  "/api/auth/oauth2/token",
+  "/api/auth/oauth2/register",
+  "/api/auth/oauth2/consent",
+  "/api/auth/oauth2/continue",
+  "/api/auth/oauth2/public-client",
+  "/api/auth/oauth2/revoke",
+  "/api/auth/oauth2/introspect",
   "/api/auth/change-password",
   "/api/auth/get-session",
   "/api/auth/ok",
@@ -283,7 +291,7 @@ export type AuthAppDependencies = Readonly<{
   resetPassword: (token: string, newPassword: string) => Promise<void>;
 }>;
 
-export function createAuthApp(dependencies: AuthAppDependencies): Hono {
+export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: ReturnType<typeof import("./mcp-connections.js").createMcpConnectionsApp>): Hono {
   const app = new Hono();
   app.use("*", async (context, next) => {
     const observer = dependencies.httpObserver;
@@ -658,6 +666,8 @@ export function createAuthApp(dependencies: AuthAppDependencies): Hono {
       throw error;
     }
   });
+  if (mcpRoutes) app.route("/", mcpRoutes);
+
   app.all("/api/auth/*", async (context) => {
     if (!publicBetterAuthPaths.has(context.req.path)) {
       return context.body(null, 404);

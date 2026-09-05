@@ -43,6 +43,7 @@ class ResearchAgentHTTPConfiguration:
     allowed_hosts: tuple[str, ...]
     supported_scopes: frozenset[ResearchAgentScope]
     allowed_origins: tuple[str, ...] = ()
+    allow_loopback_http: bool = False
 
     def __post_init__(self) -> None:
         if not callable(getattr(self.token_verifier, "verify_token", None)):
@@ -53,12 +54,20 @@ class ResearchAgentHTTPConfiguration:
             field="resource_server_url",
         )
         issuer_parts = urlsplit(str(issuer_url))
-        if issuer_parts.scheme != "https":
+        if issuer_parts.scheme != "https" and not (
+            self.allow_loopback_http
+            and issuer_parts.scheme == "http"
+            and issuer_parts.hostname in {"localhost", "127.0.0.1", "::1"}
+        ):
             raise ValueError("Research Agent HTTP issuer_url must use HTTPS")
         if issuer_parts.query or issuer_parts.fragment:
             raise ValueError("Research Agent HTTP issuer_url cannot contain query or fragment")
         resource_parts = urlsplit(str(resource_server_url))
-        if resource_parts.scheme != "https":
+        if resource_parts.scheme != "https" and not (
+            self.allow_loopback_http
+            and resource_parts.scheme == "http"
+            and resource_parts.hostname in {"localhost", "127.0.0.1", "::1"}
+        ):
             raise ValueError("Research Agent HTTP resource_server_url must use HTTPS")
         if resource_parts.path != "/mcp" or resource_parts.query or resource_parts.fragment:
             raise ValueError("Research Agent HTTP resource_server_url must end at /mcp")
@@ -108,10 +117,7 @@ class _BoundedMCPRequestBody:
             await self._app(scope, receive, send)
             return
         content_length = _content_length(scope)
-        if (
-            content_length is not None
-            and content_length > RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
-        ):
+        if content_length is not None and content_length > RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES:
             await _request_too_large_response(scope, receive, send)
             return
 
@@ -175,9 +181,7 @@ def create_research_agent_http_transport(
         if token is None:
             raise RuntimeError("authenticated Research Agent token is unavailable")
         granted_scopes = frozenset(
-            scope
-            for scope in configuration.supported_scopes
-            if scope.value in token.scopes
+            scope for scope in configuration.supported_scopes if scope.value in token.scopes
         )
         return ResearchAgentCapabilityRegistry(
             authority=ResearchAgentAuthority(
@@ -217,15 +221,14 @@ def create_research_agent_http_transport(
     protected_app = AuthContextMiddleware(protected_app)
     protected_app = AuthenticationMiddleware(
         protected_app,
-        backend=BearerAuthBackend(
-            _ResearcherBoundTokenVerifier(configuration.token_verifier)
-        ),
+        backend=BearerAuthBackend(_ResearcherBoundTokenVerifier(configuration.token_verifier)),
     )
     metadata_routes: Sequence[BaseRoute] = create_protected_resource_routes(
         resource_url=configuration.resource_server_url,
         authorization_servers=[configuration.issuer_url],
         scopes_supported=[
-            scope.value for scope in sorted(
+            scope.value
+            for scope in sorted(
                 configuration.supported_scopes,
                 key=lambda scope: scope.value,
             )
@@ -252,9 +255,7 @@ def _token_researcher_id(token: AccessToken) -> UUID:
     try:
         return UUID(token.subject)
     except (AttributeError, TypeError, ValueError) as error:
-        raise ValueError(
-            "Research Agent access token subject must be a Researcher UUID"
-        ) from error
+        raise ValueError("Research Agent access token subject must be a Researcher UUID") from error
 
 
 def _new_trace_id() -> str:
@@ -262,11 +263,7 @@ def _new_trace_id() -> str:
 
 
 def _is_mcp_call(scope: Scope) -> bool:
-    return (
-        scope["type"] == "http"
-        and scope.get("method") == "POST"
-        and scope.get("path") == "/mcp"
-    )
+    return scope["type"] == "http" and scope.get("method") == "POST" and scope.get("path") == "/mcp"
 
 
 def _content_length(scope: Scope) -> int | None:

@@ -129,6 +129,806 @@
       "type": "text"
     },
     {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthAccessToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "token",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthAccessToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "clientId",
+      "notNull": true,
+      "position": 3,
+      "relation": "oauthAccessToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "sessionId",
+      "notNull": false,
+      "position": 4,
+      "relation": "oauthAccessToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "userId",
+      "notNull": false,
+      "position": 5,
+      "relation": "oauthAccessToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "referenceId",
+      "notNull": false,
+      "position": 6,
+      "relation": "oauthAccessToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "authorizationCodeId",
+      "notNull": false,
+      "position": 7,
+      "relation": "oauthAccessToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "resources",
+      "notNull": false,
+      "position": 8,
+      "relation": "oauthAccessToken",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "requestedUserInfoClaims",
+      "notNull": false,
+      "position": 9,
+      "relation": "oauthAccessToken",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "refreshId",
+      "notNull": false,
+      "position": 10,
+      "relation": "oauthAccessToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "expiresAt",
+      "notNull": true,
+      "position": 11,
+      "relation": "oauthAccessToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "createdAt",
+      "notNull": true,
+      "position": 12,
+      "relation": "oauthAccessToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "revoked",
+      "notNull": false,
+      "position": 13,
+      "relation": "oauthAccessToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "confirmation",
+      "notNull": false,
+      "position": 14,
+      "relation": "oauthAccessToken",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "scopes",
+      "notNull": true,
+      "position": 15,
+      "relation": "oauthAccessToken",
+      "type": "jsonb"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthClient",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "clientId",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "clientSecret",
+      "notNull": false,
+      "position": 3,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "clientDiscoveryId",
+      "notNull": false,
+      "position": 4,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "disabled",
+      "notNull": false,
+      "position": 5,
+      "relation": "oauthClient",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "skipConsent",
+      "notNull": false,
+      "position": 6,
+      "relation": "oauthClient",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "enableEndSession",
+      "notNull": false,
+      "position": 7,
+      "relation": "oauthClient",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "subjectType",
+      "notNull": false,
+      "position": 8,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "scopes",
+      "notNull": false,
+      "position": 9,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "clientCredentialsScopes",
+      "notNull": false,
+      "position": 10,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "userId",
+      "notNull": false,
+      "position": 11,
+      "relation": "oauthClient",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "createdAt",
+      "notNull": false,
+      "position": 12,
+      "relation": "oauthClient",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "updatedAt",
+      "notNull": false,
+      "position": 13,
+      "relation": "oauthClient",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "name",
+      "notNull": false,
+      "position": 14,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "uri",
+      "notNull": false,
+      "position": 15,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "icon",
+      "notNull": false,
+      "position": 16,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "contacts",
+      "notNull": false,
+      "position": 17,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "tos",
+      "notNull": false,
+      "position": 18,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "policy",
+      "notNull": false,
+      "position": 19,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "softwareId",
+      "notNull": false,
+      "position": 20,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "softwareVersion",
+      "notNull": false,
+      "position": 21,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "softwareStatement",
+      "notNull": false,
+      "position": 22,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "redirectUris",
+      "notNull": true,
+      "position": 23,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "postLogoutRedirectUris",
+      "notNull": false,
+      "position": 24,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "backchannelLogoutUri",
+      "notNull": false,
+      "position": 25,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "backchannelLogoutSessionRequired",
+      "notNull": false,
+      "position": 26,
+      "relation": "oauthClient",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "tokenEndpointAuthMethod",
+      "notNull": false,
+      "position": 27,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "applicationType",
+      "notNull": false,
+      "position": 28,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "jwks",
+      "notNull": false,
+      "position": 29,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "jwksUri",
+      "notNull": false,
+      "position": 30,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "grantTypes",
+      "notNull": false,
+      "position": 31,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "responseTypes",
+      "notNull": false,
+      "position": 32,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "requirePKCE",
+      "notNull": false,
+      "position": 33,
+      "relation": "oauthClient",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "dpopBoundAccessTokens",
+      "notNull": false,
+      "position": 34,
+      "relation": "oauthClient",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "referenceId",
+      "notNull": false,
+      "position": 35,
+      "relation": "oauthClient",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "metadata",
+      "notNull": false,
+      "position": 36,
+      "relation": "oauthClient",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthClientAssertion",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "expiresAt",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthClientAssertion",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthClientResource",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "clientId",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthClientResource",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "resourceId",
+      "notNull": true,
+      "position": 3,
+      "relation": "oauthClientResource",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "metadata",
+      "notNull": false,
+      "position": 4,
+      "relation": "oauthClientResource",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "createdAt",
+      "notNull": false,
+      "position": 5,
+      "relation": "oauthClientResource",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthConsent",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "clientId",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthConsent",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "userId",
+      "notNull": false,
+      "position": 3,
+      "relation": "oauthConsent",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "referenceId",
+      "notNull": false,
+      "position": 4,
+      "relation": "oauthConsent",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "resources",
+      "notNull": false,
+      "position": 5,
+      "relation": "oauthConsent",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "requestedUserInfoClaims",
+      "notNull": false,
+      "position": 6,
+      "relation": "oauthConsent",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "scopes",
+      "notNull": true,
+      "position": 7,
+      "relation": "oauthConsent",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "createdAt",
+      "notNull": true,
+      "position": 8,
+      "relation": "oauthConsent",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "updatedAt",
+      "notNull": true,
+      "position": 9,
+      "relation": "oauthConsent",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthRefreshToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "token",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthRefreshToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "clientId",
+      "notNull": true,
+      "position": 3,
+      "relation": "oauthRefreshToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "sessionId",
+      "notNull": false,
+      "position": 4,
+      "relation": "oauthRefreshToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "userId",
+      "notNull": true,
+      "position": 5,
+      "relation": "oauthRefreshToken",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "referenceId",
+      "notNull": false,
+      "position": 6,
+      "relation": "oauthRefreshToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "authorizationCodeId",
+      "notNull": false,
+      "position": 7,
+      "relation": "oauthRefreshToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "resources",
+      "notNull": false,
+      "position": 8,
+      "relation": "oauthRefreshToken",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "requestedUserInfoClaims",
+      "notNull": false,
+      "position": 9,
+      "relation": "oauthRefreshToken",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "expiresAt",
+      "notNull": true,
+      "position": 10,
+      "relation": "oauthRefreshToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "createdAt",
+      "notNull": true,
+      "position": 11,
+      "relation": "oauthRefreshToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "revoked",
+      "notNull": false,
+      "position": 12,
+      "relation": "oauthRefreshToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "rotatedAt",
+      "notNull": false,
+      "position": 13,
+      "relation": "oauthRefreshToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "rotationReplayResponse",
+      "notNull": false,
+      "position": 14,
+      "relation": "oauthRefreshToken",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "rotationReplayExpiresAt",
+      "notNull": false,
+      "position": 15,
+      "relation": "oauthRefreshToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "authTime",
+      "notNull": false,
+      "position": 16,
+      "relation": "oauthRefreshToken",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "confirmation",
+      "notNull": false,
+      "position": 17,
+      "relation": "oauthRefreshToken",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "scopes",
+      "notNull": true,
+      "position": 18,
+      "relation": "oauthRefreshToken",
+      "type": "jsonb"
+    },
+    {
+      "default": "gen_random_uuid()",
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "oauthResource",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "identifier",
+      "notNull": true,
+      "position": 2,
+      "relation": "oauthResource",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "name",
+      "notNull": true,
+      "position": 3,
+      "relation": "oauthResource",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "accessTokenTtl",
+      "notNull": false,
+      "position": 4,
+      "relation": "oauthResource",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "name": "refreshTokenTtl",
+      "notNull": false,
+      "position": 5,
+      "relation": "oauthResource",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "name": "signingAlgorithm",
+      "notNull": false,
+      "position": 6,
+      "relation": "oauthResource",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "signingKeyId",
+      "notNull": false,
+      "position": 7,
+      "relation": "oauthResource",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "allowedScopes",
+      "notNull": false,
+      "position": 8,
+      "relation": "oauthResource",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "customClaims",
+      "notNull": false,
+      "position": 9,
+      "relation": "oauthResource",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "dpopBoundAccessTokensRequired",
+      "notNull": false,
+      "position": 10,
+      "relation": "oauthResource",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "disabled",
+      "notNull": false,
+      "position": 11,
+      "relation": "oauthResource",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "createdAt",
+      "notNull": false,
+      "position": 12,
+      "relation": "oauthResource",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "updatedAt",
+      "notNull": false,
+      "position": 13,
+      "relation": "oauthResource",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
+      "name": "policyVersion",
+      "notNull": false,
+      "position": 14,
+      "relation": "oauthResource",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "name": "metadata",
+      "notNull": false,
+      "position": 15,
+      "relation": "oauthResource",
+      "type": "jsonb"
+    },
+    {
       "default": null,
       "name": "singleton",
       "notNull": true,
@@ -673,6 +1473,144 @@
       "type": "c"
     },
     {
+      "definition": "FOREIGN KEY (\"clientId\") REFERENCES auth.\"oauthClient\"(\"clientId\") ON DELETE CASCADE",
+      "name": "oauthAccessToken_clientId_fkey",
+      "relation": "oauthAccessToken",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthAccessToken_pkey",
+      "relation": "oauthAccessToken",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"refreshId\") REFERENCES auth.\"oauthRefreshToken\"(id) ON DELETE CASCADE",
+      "name": "oauthAccessToken_refreshId_fkey",
+      "relation": "oauthAccessToken",
+      "type": "f"
+    },
+    {
+      "definition": "FOREIGN KEY (\"sessionId\") REFERENCES auth.session(id) ON DELETE SET NULL",
+      "name": "oauthAccessToken_sessionId_fkey",
+      "relation": "oauthAccessToken",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (token)",
+      "name": "oauthAccessToken_token_key",
+      "relation": "oauthAccessToken",
+      "type": "u"
+    },
+    {
+      "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "oauthAccessToken_userId_fkey",
+      "relation": "oauthAccessToken",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (\"clientId\")",
+      "name": "oauthClient_clientId_key",
+      "relation": "oauthClient",
+      "type": "u"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthClient_pkey",
+      "relation": "oauthClient",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "oauthClient_userId_fkey",
+      "relation": "oauthClient",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthClientAssertion_pkey",
+      "relation": "oauthClientAssertion",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"clientId\") REFERENCES auth.\"oauthClient\"(\"clientId\") ON DELETE CASCADE",
+      "name": "oauthClientResource_clientId_fkey",
+      "relation": "oauthClientResource",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthClientResource_pkey",
+      "relation": "oauthClientResource",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"resourceId\") REFERENCES auth.\"oauthResource\"(identifier) ON DELETE CASCADE",
+      "name": "oauthClientResource_resourceId_fkey",
+      "relation": "oauthClientResource",
+      "type": "f"
+    },
+    {
+      "definition": "FOREIGN KEY (\"clientId\") REFERENCES auth.\"oauthClient\"(\"clientId\") ON DELETE CASCADE",
+      "name": "oauthConsent_clientId_fkey",
+      "relation": "oauthConsent",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthConsent_pkey",
+      "relation": "oauthConsent",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "oauthConsent_userId_fkey",
+      "relation": "oauthConsent",
+      "type": "f"
+    },
+    {
+      "definition": "FOREIGN KEY (\"clientId\") REFERENCES auth.\"oauthClient\"(\"clientId\") ON DELETE CASCADE",
+      "name": "oauthRefreshToken_clientId_fkey",
+      "relation": "oauthRefreshToken",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthRefreshToken_pkey",
+      "relation": "oauthRefreshToken",
+      "type": "p"
+    },
+    {
+      "definition": "FOREIGN KEY (\"sessionId\") REFERENCES auth.session(id) ON DELETE SET NULL",
+      "name": "oauthRefreshToken_sessionId_fkey",
+      "relation": "oauthRefreshToken",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (token)",
+      "name": "oauthRefreshToken_token_key",
+      "relation": "oauthRefreshToken",
+      "type": "u"
+    },
+    {
+      "definition": "FOREIGN KEY (\"userId\") REFERENCES auth.\"user\"(id) ON DELETE CASCADE",
+      "name": "oauthRefreshToken_userId_fkey",
+      "relation": "oauthRefreshToken",
+      "type": "f"
+    },
+    {
+      "definition": "UNIQUE (identifier)",
+      "name": "oauthResource_identifier_key",
+      "relation": "oauthResource",
+      "type": "u"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "oauthResource_pkey",
+      "relation": "oauthResource",
+      "type": "p"
+    },
+    {
       "definition": "PRIMARY KEY (singleton)",
       "name": "operator_assignment_pkey",
       "relation": "operator_assignment",
@@ -959,6 +1897,131 @@
       "relation": "auth_secret_contract"
     },
     {
+      "definition": "CREATE INDEX \"oauthAccessToken_authorizationCodeId_idx\" ON auth.\"oauthAccessToken\" USING btree (\"authorizationCodeId\")",
+      "name": "oauthAccessToken_authorizationCodeId_idx",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthAccessToken_clientId_idx\" ON auth.\"oauthAccessToken\" USING btree (\"clientId\")",
+      "name": "oauthAccessToken_clientId_idx",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthAccessToken_pkey\" ON auth.\"oauthAccessToken\" USING btree (id)",
+      "name": "oauthAccessToken_pkey",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthAccessToken_refreshId_idx\" ON auth.\"oauthAccessToken\" USING btree (\"refreshId\")",
+      "name": "oauthAccessToken_refreshId_idx",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthAccessToken_sessionId_idx\" ON auth.\"oauthAccessToken\" USING btree (\"sessionId\")",
+      "name": "oauthAccessToken_sessionId_idx",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthAccessToken_token_key\" ON auth.\"oauthAccessToken\" USING btree (token)",
+      "name": "oauthAccessToken_token_key",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthAccessToken_userId_idx\" ON auth.\"oauthAccessToken\" USING btree (\"userId\")",
+      "name": "oauthAccessToken_userId_idx",
+      "relation": "oauthAccessToken"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthClient_clientId_key\" ON auth.\"oauthClient\" USING btree (\"clientId\")",
+      "name": "oauthClient_clientId_key",
+      "relation": "oauthClient"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthClient_pkey\" ON auth.\"oauthClient\" USING btree (id)",
+      "name": "oauthClient_pkey",
+      "relation": "oauthClient"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthClient_userId_idx\" ON auth.\"oauthClient\" USING btree (\"userId\")",
+      "name": "oauthClient_userId_idx",
+      "relation": "oauthClient"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthClientAssertion_pkey\" ON auth.\"oauthClientAssertion\" USING btree (id)",
+      "name": "oauthClientAssertion_pkey",
+      "relation": "oauthClientAssertion"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthClientResource_clientId_idx\" ON auth.\"oauthClientResource\" USING btree (\"clientId\")",
+      "name": "oauthClientResource_clientId_idx",
+      "relation": "oauthClientResource"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthClientResource_pkey\" ON auth.\"oauthClientResource\" USING btree (id)",
+      "name": "oauthClientResource_pkey",
+      "relation": "oauthClientResource"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthClientResource_resourceId_idx\" ON auth.\"oauthClientResource\" USING btree (\"resourceId\")",
+      "name": "oauthClientResource_resourceId_idx",
+      "relation": "oauthClientResource"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthConsent_clientId_idx\" ON auth.\"oauthConsent\" USING btree (\"clientId\")",
+      "name": "oauthConsent_clientId_idx",
+      "relation": "oauthConsent"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthConsent_pkey\" ON auth.\"oauthConsent\" USING btree (id)",
+      "name": "oauthConsent_pkey",
+      "relation": "oauthConsent"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthConsent_userId_idx\" ON auth.\"oauthConsent\" USING btree (\"userId\")",
+      "name": "oauthConsent_userId_idx",
+      "relation": "oauthConsent"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthRefreshToken_authorizationCodeId_idx\" ON auth.\"oauthRefreshToken\" USING btree (\"authorizationCodeId\")",
+      "name": "oauthRefreshToken_authorizationCodeId_idx",
+      "relation": "oauthRefreshToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthRefreshToken_clientId_idx\" ON auth.\"oauthRefreshToken\" USING btree (\"clientId\")",
+      "name": "oauthRefreshToken_clientId_idx",
+      "relation": "oauthRefreshToken"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthRefreshToken_pkey\" ON auth.\"oauthRefreshToken\" USING btree (id)",
+      "name": "oauthRefreshToken_pkey",
+      "relation": "oauthRefreshToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthRefreshToken_sessionId_idx\" ON auth.\"oauthRefreshToken\" USING btree (\"sessionId\")",
+      "name": "oauthRefreshToken_sessionId_idx",
+      "relation": "oauthRefreshToken"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthRefreshToken_token_key\" ON auth.\"oauthRefreshToken\" USING btree (token)",
+      "name": "oauthRefreshToken_token_key",
+      "relation": "oauthRefreshToken"
+    },
+    {
+      "definition": "CREATE INDEX \"oauthRefreshToken_userId_idx\" ON auth.\"oauthRefreshToken\" USING btree (\"userId\")",
+      "name": "oauthRefreshToken_userId_idx",
+      "relation": "oauthRefreshToken"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthResource_identifier_key\" ON auth.\"oauthResource\" USING btree (identifier)",
+      "name": "oauthResource_identifier_key",
+      "relation": "oauthResource"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX \"oauthResource_pkey\" ON auth.\"oauthResource\" USING btree (id)",
+      "name": "oauthResource_pkey",
+      "relation": "oauthResource"
+    },
+    {
       "definition": "CREATE UNIQUE INDEX operator_assignment_pkey ON auth.operator_assignment USING btree (singleton)",
       "name": "operator_assignment_pkey",
       "relation": "operator_assignment"
@@ -1100,97 +2163,153 @@
       "forceRowSecurity": false,
       "kind": "r",
       "name": "account",
-      "rowSecurity": false,
       "owner": "thesistrace_owner",
-      "persistence": "p"
+      "persistence": "p",
+      "rowSecurity": false
     },
     {
       "forceRowSecurity": false,
       "kind": "r",
       "name": "auth_secret_contract",
-      "rowSecurity": false,
       "owner": "thesistrace_owner",
-      "persistence": "p"
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthAccessToken",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthClient",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthClientAssertion",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthClientResource",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthConsent",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthRefreshToken",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "oauthResource",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
     },
     {
       "forceRowSecurity": false,
       "kind": "r",
       "name": "operator_assignment",
-      "rowSecurity": false,
       "owner": "thesistrace_owner",
-      "persistence": "p"
+      "persistence": "p",
+      "rowSecurity": false
     },
     {
       "forceRowSecurity": false,
       "kind": "r",
       "name": "operator_proof",
-      "rowSecurity": false,
       "owner": "thesistrace_owner",
-      "persistence": "p"
+      "persistence": "p",
+      "rowSecurity": false
     },
     {
       "forceRowSecurity": false,
       "kind": "r",
       "name": "password_reset",
-      "rowSecurity": false,
       "owner": "thesistrace_owner",
-      "persistence": "p"
+      "persistence": "p",
+      "rowSecurity": false
     },
     {
       "forceRowSecurity": false,
       "kind": "r",
       "name": "rateLimit",
-      "rowSecurity": false,
       "owner": "thesistrace_owner",
-      "persistence": "p"
+      "persistence": "p",
+      "rowSecurity": false
     },
     {
       "forceRowSecurity": false,
       "kind": "r",
       "name": "researcher_invitation",
-      "rowSecurity": false,
       "owner": "thesistrace_owner",
-      "persistence": "p"
+      "persistence": "p",
+      "rowSecurity": false
     },
     {
       "forceRowSecurity": false,
       "kind": "r",
       "name": "schema_contract",
-      "rowSecurity": false,
       "owner": "thesistrace_owner",
-      "persistence": "p"
+      "persistence": "p",
+      "rowSecurity": false
     },
     {
       "forceRowSecurity": false,
       "kind": "r",
       "name": "security_audit",
-      "rowSecurity": false,
       "owner": "thesistrace_owner",
-      "persistence": "p"
+      "persistence": "p",
+      "rowSecurity": false
     },
     {
       "forceRowSecurity": false,
       "kind": "r",
       "name": "session",
-      "rowSecurity": false,
       "owner": "thesistrace_owner",
-      "persistence": "p"
+      "persistence": "p",
+      "rowSecurity": false
     },
     {
       "forceRowSecurity": false,
       "kind": "r",
       "name": "user",
-      "rowSecurity": false,
       "owner": "thesistrace_owner",
-      "persistence": "p"
+      "persistence": "p",
+      "rowSecurity": false
     },
     {
       "forceRowSecurity": false,
       "kind": "r",
       "name": "verification",
-      "rowSecurity": false,
       "owner": "thesistrace_owner",
-      "persistence": "p"
+      "persistence": "p",
+      "rowSecurity": false
     }
   ],
   "routines": [

@@ -32,7 +32,7 @@ const baseEnvironment = {
     '["research:read","research:execute","tracking:read","tracking:execute"]',
   THESISTRACE_MCP_CLIENT_ID: "thesistrace-agent",
   THESISTRACE_MCP_CLOCK_SKEW_SECONDS: "30",
-  THESISTRACE_MCP_ISSUER_URL: "https://issuer.test/",
+  THESISTRACE_MCP_ISSUER_URL: "http://127.0.0.1:5173/api/auth",
   THESISTRACE_MCP_RESOURCE_URL: "https://core.test/mcp",
   THESISTRACE_MCP_SIGNING_PRIVATE_JWK: JSON.stringify(mcpPrivateJwk),
   THESISTRACE_MCP_VERIFYING_PUBLIC_JWK: JSON.stringify(mcpPublicJwk),
@@ -46,6 +46,7 @@ const productionEnvironment = {
     "a4f781c2d6e9035b8a1f74c092e5bd3680c4f719a2e65b03d8f14c7a9e256bd0",
   THESISTRACE_ENVIRONMENT: "production",
   THESISTRACE_PUBLIC_ORIGIN: "https://thesistrace.test",
+  THESISTRACE_MCP_ISSUER_URL: "https://thesistrace.test/api/auth",
   THESISTRACE_RESEND_API_URL: "https://api.resend.com",
 };
 
@@ -68,7 +69,7 @@ describe("readAuthSettings", () => {
         "tracking:read",
         "tracking:execute",
       ],
-      mcpIssuer: "https://issuer.test/",
+      mcpIssuer: "http://127.0.0.1:5173/api/auth",
       mcpTokenLifetimeSeconds: 360,
     });
   });

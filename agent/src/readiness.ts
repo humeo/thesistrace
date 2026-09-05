@@ -28,7 +28,7 @@ export function createAgentReadiness(
     const [database, auth, mcpMetadata] = await Promise.all([
       databaseReady(pool, timeoutMs),
       probeJson(fetcher, authReadinessUrl, timeoutMs, isAuthReady),
-      probeJson(fetcher, mcpMetadataUrl, timeoutMs, isMcpMetadata),
+      probeJson(fetcher, mcpMetadataUrl, timeoutMs, value => isMcpMetadata(value, settings.environment === "test" || settings.environment === "development")),
     ]);
     return database && auth && mcpMetadata;
   };
@@ -129,29 +129,29 @@ function isAuthReady(value: unknown): boolean {
   return isRecord(value) && value.status === "ready";
 }
 
-function isMcpMetadata(value: unknown): boolean {
+function isMcpMetadata(value: unknown, allowLoopback: boolean): boolean {
   if (
     !isRecord(value)
-    || !isCanonicalHttpsMcpResource(value.resource)
+    || !isCanonicalMcpResource(value.resource, allowLoopback)
     || !Array.isArray(value.authorization_servers)
     || value.authorization_servers.length === 0
-    || !value.authorization_servers.every(isCanonicalHttpsUrl)
+    || !value.authorization_servers.every(url => isCanonicalUrl(url, allowLoopback))
   ) {
     return false;
   }
   return true;
 }
 
-function isCanonicalHttpsMcpResource(value: unknown): boolean {
-  if (!isCanonicalHttpsUrl(value)) return false;
+function isCanonicalMcpResource(value: unknown, allowLoopback: boolean): boolean {
+  if (!isCanonicalUrl(value, allowLoopback)) return false;
   return new URL(value).pathname === "/mcp";
 }
 
-function isCanonicalHttpsUrl(value: unknown): value is string {
+function isCanonicalUrl(value: unknown, allowLoopback: boolean): value is string {
   if (typeof value !== "string") return false;
   try {
     const url = new URL(value);
-    return url.protocol === "https:"
+    return (url.protocol === "https:" || (allowLoopback && url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)))
       && url.username.length === 0
       && url.password.length === 0
       && url.search.length === 0

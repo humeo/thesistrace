@@ -35,12 +35,13 @@ test("keeps the conversation sidebar available on Data without a separate Chat d
   expect(markup).not.toContain(">Chats<");
 });
 
-test("renders New Chat and the four Research resources with only the active content", () => {
+test("renders New Chat, Research resources and MCP with only the active content", () => {
   const markup = renderShell("/research-runs", "Selected resource");
 
-  expect(markup.match(/<a /g)).toHaveLength(6);
+  expect(markup.match(/<a /g)).toHaveLength(7);
   expect(markup).toContain('href="/chat"');
   expect(markup).toContain('href="/data"');
+  expect(markup).toContain('href="/connections/mcp"');
   expect(markup).toContain('href="/research"');
   expect(markup).not.toContain("Definitions");
   expect(markup).toContain('aria-current="page" href="/research-runs"');

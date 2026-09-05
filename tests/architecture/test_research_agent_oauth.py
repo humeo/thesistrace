@@ -46,9 +46,7 @@ def test_production_settings_build_one_complete_mcp_configuration() -> None:
     assert settings.allowed_hosts == ("core.test", "api:8100")
     assert settings.allowed_origins == ("https://agent.test",)
     assert settings.http_configuration().resource_server_url.unicode_string() == _AUDIENCE
-    assert settings.http_configuration().supported_scopes == (
-        PRODUCTION_RESEARCH_AGENT_SCOPES
-    )
+    assert settings.http_configuration().supported_scopes == (PRODUCTION_RESEARCH_AGENT_SCOPES)
 
 
 def test_production_factory_mounts_only_the_canonical_protected_resource(
@@ -57,6 +55,9 @@ def test_production_factory_mounts_only_the_canonical_protected_resource(
     for name, value in _environment().items():
         monkeypatch.setenv(name, value)
 
+    monkeypatch.setenv("THESISTRACE_ENVIRONMENT", "production")
+    monkeypatch.setenv("THESISTRACE_PUBLIC_ORIGIN", "https://core.test")
+    monkeypatch.setenv("THESISTRACE_AUTH_INTERNAL_ORIGIN", "http://auth:8200")
     app = create_production_app()
     route_paths = [getattr(route, "path", None) for route in app.routes]
 
@@ -111,9 +112,7 @@ def test_production_settings_reject_malformed_security_policy(
     value: str,
 ) -> None:
     with pytest.raises(RuntimeError):
-        ResearchAgentProductionSettings.from_environment(
-            {**_environment(), name: value}
-        )
+        ResearchAgentProductionSettings.from_environment({**_environment(), name: value})
 
 
 def test_production_verifier_returns_one_researcher_bound_access_token() -> None:
@@ -172,9 +171,7 @@ def _environment() -> dict[str, str]:
         "THESISTRACE_MCP_CLIENT_ID": _CLIENT_ID,
         "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK": json.dumps(_PUBLIC_JWK),
         "THESISTRACE_MCP_CLOCK_SKEW_SECONDS": "30",
-        "THESISTRACE_MCP_DEPLOYMENT_TOOLS": json.dumps(
-            sorted(RESEARCH_AGENT_TOOL_NAMES)
-        ),
+        "THESISTRACE_MCP_DEPLOYMENT_TOOLS": json.dumps(sorted(RESEARCH_AGENT_TOOL_NAMES)),
         "THESISTRACE_MCP_ALLOWED_HOSTS": '["core.test","api:8100"]',
         "THESISTRACE_MCP_ALLOWED_ORIGINS": '["https://agent.test"]',
     }
@@ -222,3 +219,20 @@ def _token(claims: dict[str, object], *, key_id: str | None = None) -> str:
         algorithm="EdDSA",
         headers={"kid": key_id or _PRIVATE_JWK["kid"]},
     )
+
+
+@pytest.mark.parametrize("mode", ["test", "development"])
+def test_local_settings_build_http_configuration(mode: str) -> None:
+    environment = _environment()
+    environment.update(
+        {
+            "THESISTRACE_ENVIRONMENT": mode,
+            "THESISTRACE_MCP_ISSUER_URL": "http://127.0.0.1:5173/api/auth",
+            "THESISTRACE_MCP_RESOURCE_URL": "http://127.0.0.1:5173/mcp",
+        }
+    )
+    config = ResearchAgentProductionSettings.from_environment(environment).http_configuration()
+    assert str(config.resource_server_url) == "http://127.0.0.1:5173/mcp"
+    environment["THESISTRACE_ENVIRONMENT"] = "production"
+    with pytest.raises(RuntimeError, match="HTTPS"):
+        ResearchAgentProductionSettings.from_environment(environment)

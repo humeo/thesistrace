@@ -20,3 +20,13 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
 TO auth_runtime;
 GRANT SELECT ON TABLE auth.schema_contract TO auth_runtime;
 GRANT EXECUTE ON FUNCTION auth.enforce_active_session_owner() TO auth_runtime;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+    auth."oauthClient",
+    auth."oauthResource",
+    auth."oauthClientResource",
+    auth."oauthRefreshToken",
+    auth."oauthAccessToken",
+    auth."oauthConsent",
+    auth."oauthClientAssertion"
+TO auth_runtime;

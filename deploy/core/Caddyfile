@@ -100,6 +100,11 @@
 		}
 	}
 
+	handle /.well-known/oauth-authorization-server/api/auth {
+		header Cache-Control "no-store"
+		reverse_proxy auth:8200
+	}
+
 	handle /api/auth/* {
 		log_append path /api/auth/*
 		header Cache-Control "no-store"

@@ -29,6 +29,7 @@ function dependencies(
   overrides: Partial<AgentAppDependencies> = {},
 ): AgentAppDependencies {
   return {
+    mcpConnection: vi.fn(async () => ({ checked_at: new Date().toISOString(), tools: [] })),
     commandReceipt: vi.fn(async (_threadId, commandId) => ({
       commandId,
       errorCode: null,

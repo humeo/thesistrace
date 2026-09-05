@@ -14,6 +14,9 @@ export type AuthCleanupResult =
         audits: number;
         invitations: number;
         proofs: number;
+        oauthAccessTokens: number;
+        oauthRefreshTokens: number;
+        oauthAssertions: number;
         rateLimits: number;
         resets: number;
         sessions: number;
@@ -94,6 +97,9 @@ export async function runAuthCleanup(
       'DELETE FROM auth."verification" WHERE "expiresAt" <= $1',
       [now],
     );
+    const oauthAccessTokens = await client.query('DELETE FROM auth."oauthAccessToken" WHERE "expiresAt" <= $1 OR revoked IS NOT NULL', [now]);
+    const oauthRefreshTokens = await client.query('DELETE FROM auth."oauthRefreshToken" WHERE "expiresAt" <= $1', [now]);
+    const oauthAssertions = await client.query('DELETE FROM auth."oauthClientAssertion" WHERE "expiresAt" <= $1', [now]);
     const rateLimits = await client.query(
       'DELETE FROM auth."rateLimit" WHERE "lastRequest" < $1',
       [now.getTime() - RATE_LIMIT_RETENTION_MS],
@@ -104,6 +110,9 @@ export async function runAuthCleanup(
         audits: rowCount(audits),
         invitations: rowCount(invitations),
         proofs: rowCount(proofs),
+        oauthAccessTokens: rowCount(oauthAccessTokens),
+        oauthRefreshTokens: rowCount(oauthRefreshTokens),
+        oauthAssertions: rowCount(oauthAssertions),
         rateLimits: rowCount(rateLimits),
         resets: rowCount(resets),
         sessions: rowCount(sessions),

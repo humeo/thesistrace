@@ -1561,9 +1561,20 @@ def _trusted_http_request_id(
 
 def create_production_app() -> FastAPI:
     research_agent = ResearchAgentProductionSettings.from_environment()
+    from dataclasses import replace
+
+    from thesistrace.research_agent.external_oauth import McpTokenVerifier
+
+    configuration = research_agent.http_configuration()
+    http_settings = CoreHttpSettings.from_environment()
+    configuration = replace(configuration, token_verifier=McpTokenVerifier(
+        internal=configuration.token_verifier,
+        auth_origin=http_settings.auth_internal_origin,
+        resource=research_agent.resource_server_url,
+    ))
     return create_app(
         enable_research_agent_http=True,
-        research_agent_http=research_agent.http_configuration(),
+        research_agent_http=configuration,
     )
 
 

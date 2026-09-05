@@ -265,6 +265,13 @@ describe.sequential("Auth physical schema", () => {
     expect(relations.rows.map((row) => row.name)).toEqual([
       "account",
       "auth_secret_contract",
+      "oauthAccessToken",
+      "oauthClient",
+      "oauthClientAssertion",
+      "oauthClientResource",
+      "oauthConsent",
+      "oauthRefreshToken",
+      "oauthResource",
       "operator_assignment",
       "operator_proof",
       "password_reset",

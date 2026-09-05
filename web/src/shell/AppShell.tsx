@@ -1,6 +1,6 @@
 import {
   ChartLineUp, ClockCounterClockwise, Database, Flask, List, NotePencil,
-  ShieldCheck, SidebarSimple, X,
+  Plug, ShieldCheck, SidebarSimple, X,
 } from "@phosphor-icons/react";
 import {
   createContext, useContext, useEffect, useRef, useState,
@@ -13,10 +13,12 @@ import type { SessionHistoryController } from "../chat/useSessionHistory";
 import { handleWorkspaceNavigation, type WorkspaceNavigate } from "./navigation";
 
 const resourceRoutes = [
+
   { path: "/data", label: "Data", icon: Database },
   { path: "/research", label: "Research", icon: Flask },
   { path: "/research-runs", label: "Research Runs", icon: ChartLineUp },
   { path: "/daily-tracks", label: "Daily Tracks", icon: ClockCounterClockwise },
+  { path: "/connections/mcp", label: "MCP", icon: Plug },
 ] as const;
 const operatorRoute = {
   activeRoot: "/operator", path: "/operator/researchers", label: "Operator", icon: ShieldCheck,

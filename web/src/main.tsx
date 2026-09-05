@@ -80,8 +80,15 @@ function BrowserRoutedApp() {
       ? locationHref(location)
       : "/data")}`
     : null;
+  const oauthQuery = location.pathname === "/login" && new URLSearchParams(location.search).has("sig")
+    ? location.search : null;
+  useEffect(() => {
+    if (state.status === "authenticated" && oauthQuery) {
+      window.location.replace(`/api/auth/oauth2/authorize${oauthQuery}`);
+    }
+  }, [state.status, oauthQuery]);
   const authenticatedRedirect = state.status === "authenticated" && isAuthPath(location.pathname)
-    ? returnToFromLocation(location) ?? "/data"
+    ? oauthQuery ? null : returnToFromLocation(location) ?? "/data"
     : state.status === "authenticated" && !isProductPath(location.pathname)
       ? "/data"
       : null;

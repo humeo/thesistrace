@@ -321,3 +321,141 @@ CREATE INDEX security_audit_researcher_id_idx
     ON auth.security_audit (researcher_id);
 CREATE INDEX security_audit_unknown_email_hmac_idx
     ON auth.security_audit (unknown_email_hmac);
+
+-- OAuth provider 1.7.2: current schema, installed only into an empty auth scope.
+
+CREATE TABLE auth."oauthClient" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY,
+    "clientId" text NOT NULL UNIQUE,
+    "clientSecret" text,
+    "clientDiscoveryId" text,
+    "disabled" boolean,
+    "skipConsent" boolean,
+    "enableEndSession" boolean,
+    "subjectType" text,
+    "scopes" jsonb,
+    "clientCredentialsScopes" jsonb,
+    "userId" uuid REFERENCES auth."user" ("id") ON DELETE CASCADE,
+    "createdAt" timestamp with time zone,
+    "updatedAt" timestamp with time zone,
+    "name" text,
+    "uri" text,
+    "icon" text,
+    "contacts" jsonb,
+    "tos" text,
+    "policy" text,
+    "softwareId" text,
+    "softwareVersion" text,
+    "softwareStatement" text,
+    "redirectUris" jsonb NOT NULL,
+    "postLogoutRedirectUris" jsonb,
+    "backchannelLogoutUri" text,
+    "backchannelLogoutSessionRequired" boolean,
+    "tokenEndpointAuthMethod" text,
+    "applicationType" text,
+    "jwks" text,
+    "jwksUri" text,
+    "grantTypes" jsonb,
+    "responseTypes" jsonb,
+    "requirePKCE" boolean,
+    "dpopBoundAccessTokens" boolean,
+    "referenceId" text,
+    "metadata" jsonb
+);
+CREATE INDEX "oauthClient_userId_idx" ON auth."oauthClient" ("userId");
+
+CREATE TABLE auth."oauthResource" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY,
+    "identifier" text NOT NULL UNIQUE,
+    "name" text NOT NULL,
+    "accessTokenTtl" integer,
+    "refreshTokenTtl" integer,
+    "signingAlgorithm" text,
+    "signingKeyId" text,
+    "allowedScopes" jsonb,
+    "customClaims" jsonb,
+    "dpopBoundAccessTokensRequired" boolean,
+    "disabled" boolean,
+    "createdAt" timestamp with time zone,
+    "updatedAt" timestamp with time zone,
+    "policyVersion" integer,
+    "metadata" jsonb
+);
+
+
+CREATE TABLE auth."oauthClientResource" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY,
+    "clientId" text NOT NULL REFERENCES auth."oauthClient" ("clientId") ON DELETE CASCADE,
+    "resourceId" text NOT NULL REFERENCES auth."oauthResource" ("identifier") ON DELETE CASCADE,
+    "metadata" jsonb,
+    "createdAt" timestamp with time zone
+);
+CREATE INDEX "oauthClientResource_clientId_idx" ON auth."oauthClientResource" ("clientId");
+CREATE INDEX "oauthClientResource_resourceId_idx" ON auth."oauthClientResource" ("resourceId");
+
+CREATE TABLE auth."oauthRefreshToken" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY,
+    "token" text NOT NULL UNIQUE,
+    "clientId" text NOT NULL REFERENCES auth."oauthClient" ("clientId") ON DELETE CASCADE,
+    "sessionId" uuid REFERENCES auth."session" ("id") ON DELETE SET NULL,
+    "userId" uuid NOT NULL REFERENCES auth."user" ("id") ON DELETE CASCADE,
+    "referenceId" text,
+    "authorizationCodeId" text,
+    "resources" jsonb,
+    "requestedUserInfoClaims" jsonb,
+    "expiresAt" timestamp with time zone NOT NULL,
+    "createdAt" timestamp with time zone NOT NULL,
+    "revoked" timestamp with time zone,
+    "rotatedAt" timestamp with time zone,
+    "rotationReplayResponse" text,
+    "rotationReplayExpiresAt" timestamp with time zone,
+    "authTime" timestamp with time zone,
+    "confirmation" jsonb,
+    "scopes" jsonb NOT NULL
+);
+CREATE INDEX "oauthRefreshToken_clientId_idx" ON auth."oauthRefreshToken" ("clientId");
+CREATE INDEX "oauthRefreshToken_sessionId_idx" ON auth."oauthRefreshToken" ("sessionId");
+CREATE INDEX "oauthRefreshToken_userId_idx" ON auth."oauthRefreshToken" ("userId");
+CREATE INDEX "oauthRefreshToken_authorizationCodeId_idx" ON auth."oauthRefreshToken" ("authorizationCodeId");
+
+CREATE TABLE auth."oauthAccessToken" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY,
+    "token" text NOT NULL UNIQUE,
+    "clientId" text NOT NULL REFERENCES auth."oauthClient" ("clientId") ON DELETE CASCADE,
+    "sessionId" uuid REFERENCES auth."session" ("id") ON DELETE SET NULL,
+    "userId" uuid REFERENCES auth."user" ("id") ON DELETE CASCADE,
+    "referenceId" text,
+    "authorizationCodeId" text,
+    "resources" jsonb,
+    "requestedUserInfoClaims" jsonb,
+    "refreshId" uuid REFERENCES auth."oauthRefreshToken" ("id") ON DELETE CASCADE,
+    "expiresAt" timestamp with time zone NOT NULL,
+    "createdAt" timestamp with time zone NOT NULL,
+    "revoked" timestamp with time zone,
+    "confirmation" jsonb,
+    "scopes" jsonb NOT NULL
+);
+CREATE INDEX "oauthAccessToken_clientId_idx" ON auth."oauthAccessToken" ("clientId");
+CREATE INDEX "oauthAccessToken_sessionId_idx" ON auth."oauthAccessToken" ("sessionId");
+CREATE INDEX "oauthAccessToken_userId_idx" ON auth."oauthAccessToken" ("userId");
+CREATE INDEX "oauthAccessToken_authorizationCodeId_idx" ON auth."oauthAccessToken" ("authorizationCodeId");
+CREATE INDEX "oauthAccessToken_refreshId_idx" ON auth."oauthAccessToken" ("refreshId");
+
+CREATE TABLE auth."oauthConsent" (
+    "id" uuid DEFAULT pg_catalog.gen_random_uuid() PRIMARY KEY,
+    "clientId" text NOT NULL REFERENCES auth."oauthClient" ("clientId") ON DELETE CASCADE,
+    "userId" uuid REFERENCES auth."user" ("id") ON DELETE CASCADE,
+    "referenceId" text,
+    "resources" jsonb,
+    "requestedUserInfoClaims" jsonb,
+    "scopes" jsonb NOT NULL,
+    "createdAt" timestamp with time zone NOT NULL,
+    "updatedAt" timestamp with time zone NOT NULL
+);
+CREATE INDEX "oauthConsent_clientId_idx" ON auth."oauthConsent" ("clientId");
+CREATE INDEX "oauthConsent_userId_idx" ON auth."oauthConsent" ("userId");
+
+CREATE TABLE auth."oauthClientAssertion" (
+    "id" text PRIMARY KEY,
+    "expiresAt" timestamp with time zone NOT NULL
+);
