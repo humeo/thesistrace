@@ -1,23 +1,38 @@
+# Local workspace and editor state
 .DS_Store
+.idea/
 .local/
 .hosted/
 .test-workspace/
 .worktrees/
-.pytest_cache/
-.ruff_cache/
+
+# Local environment overrides (keep deploy/core/dev.env versioned)
+.env
+.env.local
+.env.*.local
+
+# Python caches and environments
 .venv/
 __pycache__/
 *.py[cod]
-web/dist/
-web/node_modules/
-node_modules/
-auth/dist/
-auth/tsconfig.tsbuildinfo
-auth/tsconfig.build.tsbuildinfo
-agent/dist/
-agent/tsconfig.tsbuildinfo
-agent/tsconfig.build.tsbuildinfo
-.pnpm-store/
-test-results/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
-.idea/
+# JavaScript dependencies and build output
+node_modules/
+.pnpm-store/
+auth/dist/
+agent/dist/
+web/dist/
+*.tsbuildinfo
+coverage/
+
+# Browser test artifacts
+/output/playwright/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
