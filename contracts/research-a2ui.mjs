@@ -1,9 +1,9 @@
 export const RESEARCH_A2UI_ACTIVITY_TYPE = "a2ui-surface";
 export const RESEARCH_A2UI_CATALOG_ID = "urn:thesistrace:a2ui:research:v0.9";
 export const RESEARCH_A2UI_PROTOCOL_VERSION = "v0.9";
-export const RESEARCH_A2UI_MAX_BYTES = 64 * 1024;
+const RESEARCH_A2UI_MAX_BYTES = 64 * 1024;
 export const RESEARCH_A2UI_MAX_COMPONENTS = 64;
-export const RESEARCH_A2UI_MAX_DEPTH = 8;
+const RESEARCH_A2UI_MAX_DEPTH = 8;
 
 const string = (maxLength, description) => ({
   description,

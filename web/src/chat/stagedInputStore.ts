@@ -1,7 +1,7 @@
 import { isUuid } from "../uuid";
 
-export const MAX_STAGED_INPUTS = 20;
-export const MAX_STAGED_INPUT_BYTES = 16 * 1024;
+const MAX_STAGED_INPUTS = 20;
+const MAX_STAGED_INPUT_BYTES = 16 * 1024;
 const DATABASE_NAME = "thesistrace-chat-stage";
 const STORE_NAME = "items";
 const LEASE_MS = 15_000;

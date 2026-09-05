@@ -25,11 +25,6 @@ export async function revealToolActivity(
   return activity;
 }
 
-export async function revealAllToolActivity(page: Page): Promise<void> {
-  const closed = page.locator("details.chat-tool-group:not([open]) > summary");
-  for (const summary of await closed.all()) await summary.click();
-}
-
 async function openModelPicker(page: Page): Promise<Locator> {
   const picker = page.getByRole("dialog", { name: "Model and reasoning for the next Turn" });
   if (await picker.count() === 0) {

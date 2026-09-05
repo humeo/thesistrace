@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 
-export const operatorAssignmentLockKey = "thesistrace:operator-assignment";
+const operatorAssignmentLockKey = "thesistrace:operator-assignment";
 
 export async function lockOperatorAssignment(
   client: PoolClient,

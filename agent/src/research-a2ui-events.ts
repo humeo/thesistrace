@@ -8,7 +8,7 @@ import {
 } from "../../contracts/research-a2ui.mjs";
 import { A2UI_FRAMEWORK_TOOL_NAMES } from "./browser-message-safety.js";
 
-export type PersistableA2UIActivity = Readonly<{
+type PersistableA2UIActivity = Readonly<{
   content: Record<string, unknown>;
   lifecycle: "error" | "loading" | "ready";
   messageId: string;

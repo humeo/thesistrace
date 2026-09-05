@@ -6,7 +6,7 @@ export type StrategyComparisonCurvePoint = {
   net_excess_return: number;
 };
 
-export type AvailableStrategyComparison = {
+type AvailableStrategyComparison = {
   status: "available";
   benchmark: {
     id: "csi300-price-index-open";
@@ -41,7 +41,7 @@ export type AvailableStrategyComparison = {
   curves: StrategyComparisonCurvePoint[];
 };
 
-export type UnavailableStrategyComparison = {
+type UnavailableStrategyComparison = {
   status: "unavailable";
   reason: "benchmark_snapshot_unavailable";
 };

@@ -48,7 +48,7 @@ export type ValidatedPromptRun = Readonly<{
   userMessage: Readonly<{ content: string; id: string; role: "user" }>;
 }>;
 
-export type ValidatedContinueRun = Readonly<{
+type ValidatedContinueRun = Readonly<{
   command: "continue";
   commandId: string;
   input: RunAgentInput;

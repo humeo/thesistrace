@@ -10,7 +10,7 @@ type CorrelationSummary = {
   valid_session_count: number;
 };
 
-export type DailyTrackFactorHorizon = {
+type DailyTrackFactorHorizon = {
   horizon: 1 | 5 | 20;
   summary: {
     ic: CorrelationSummary;
@@ -26,7 +26,7 @@ export type DailyTrackFactorHorizon = {
   };
 };
 
-export type DailyTrackStrategyObservation = {
+type DailyTrackStrategyObservation = {
   session: string;
   gross_nav: string;
   net_nav: string;

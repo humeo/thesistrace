@@ -197,7 +197,6 @@ export const evalRunSchema = z.object({
   error_category: z.custom<AgentFailureCode>(isAgentFailureCode).nullable(),
   step_count: count, duration_ms: count, token_usage: usageSchema,
 }).strict();
-export type EvalRunObservation = z.infer<typeof evalRunSchema>;
 const checksSchema = z.object({
   artifact: z.boolean(), required_tools: z.boolean(), forbidden_tools: z.boolean(),
   ownership: z.boolean(), conversation: z.boolean(), terminal: z.boolean(),

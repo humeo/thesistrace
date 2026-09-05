@@ -725,27 +725,6 @@ code { font-family: var(--mono); }
   white-space: nowrap;
 }
 .chat-tool-group li > span { color: var(--ink-faint); font-size: 11px; }
-.chat-tool-resource {
-  display: flex;
-  min-width: 0;
-  grid-column: 2 / -1;
-  align-items: center;
-  gap: 8px;
-  color: var(--ink-soft);
-  font-size: 12px;
-  text-decoration: none;
-}
-.chat-tool-resource code {
-  color: var(--primary-hover);
-  text-overflow: ellipsis;
-}
-.chat-tool-resource > span:last-child {
-  margin-left: auto;
-  color: var(--ink-soft);
-  font: 12px/1.4 var(--mono);
-}
-.chat-tool-resource:hover code { color: var(--ink); }
-.chat-tool-resource:focus-visible { outline: 2px solid var(--primary-focus); outline-offset: 3px; }
 .chat-a2ui-surface,
 .chat-a2ui-lifecycle,
 .chat-a2ui-error {
@@ -1324,7 +1303,6 @@ h3 { font-size: 14px; font-weight: 500; }
   font-weight: 500;
   letter-spacing: .02em;
 }
-.hero-copy { max-width: 620px; margin: 9px 0 0; color: var(--ink-soft); font-size: 13px; }
 .hero-actions,
 .page-header-actions,
 .research-run-header > div:last-child {
@@ -2457,7 +2435,6 @@ select { color-scheme: dark; }
   font-weight: 500;
 }
 .research-run-list-toolbar p { margin: 0 0 10px; color: var(--ink-soft); font-size: 11px; }
-.research-run-list-toolbar .research-folder-load-failure { margin: 0; }
 .research-run-list-status,
 .research-run-list-empty { margin: 14px 0 0; color: var(--ink-soft); font-size: 11px; }
 
@@ -2778,7 +2755,6 @@ select { color-scheme: dark; }
   .sidebar-toggle,
   .chat-session-dialog button,
   .chat-session-title-field input,
-  .chat-tool-resource,
   .chat-model-picker-trigger,
   .chat-main-action,
   .chat-staged-actions button,
@@ -3101,11 +3077,6 @@ select { color-scheme: dark; }
 @media (max-width: 480px) {
   .chat-empty-state { width: calc(100% - 24px); }
   .chat-empty-state h1 { font-size: 23px; }
-  .chat-tool-resource {
-    grid-column: 1 / -1;
-    padding-top: 5px;
-    border-top: 1px solid var(--line);
-  }
   .chat-a2ui-facts,
   .chat-a2ui-metrics { grid-template-columns: 1fr; }
   .chat-a2ui-facts .chat-a2ui-fact-wide { grid-column: auto; }

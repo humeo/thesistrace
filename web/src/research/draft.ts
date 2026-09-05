@@ -16,7 +16,7 @@ export type ResearchInputs = {
   rebalanceEverySessions: string;
 };
 
-export type PendingResearchRun = {
+type PendingResearchRun = {
   requestId: string;
   folderId: string;
   inputs: ResearchInputs;

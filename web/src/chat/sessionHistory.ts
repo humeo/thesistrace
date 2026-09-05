@@ -273,7 +273,7 @@ export function decodeAgentSessionPage(value: unknown): AgentSessionPage {
   return { next_cursor: value.next_cursor, sessions };
 }
 
-export function decodeAgentSessionSummary(value: unknown): AgentSessionSummary {
+function decodeAgentSessionSummary(value: unknown): AgentSessionSummary {
   if (
     !isExactRecord(value, [
       "activity_at",

@@ -35,7 +35,7 @@ export type ChatPhase =
   | "recovering";
 
 export type DraftValidity = "empty" | "valid" | "invalid";
-export type ChatMainActionKind = "send" | "stage" | "stop" | "answer" | "continue";
+type ChatMainActionKind = "send" | "stage" | "stop" | "answer" | "continue";
 export type ChatMainAction = Readonly<{
   enabled: boolean;
   kind: ChatMainActionKind;

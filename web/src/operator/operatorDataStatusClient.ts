@@ -6,15 +6,15 @@ import { isIsoResearchSession, isMarketRefreshIdempotencyKey } from "./operatorM
 import { decodeFinancialRefreshProgress, type FinancialRefreshProgress } from "./financialRefreshProgress";
 
 export type DataRefreshKind = "market" | "financial" | "industry";
-export type DataRefreshStatus = "accepted" | "running" | "succeeded" | "failed" | "cancelled";
-export type DataRefreshOutcome =
+type DataRefreshStatus = "accepted" | "running" | "succeeded" | "failed" | "cancelled";
+type DataRefreshOutcome =
   | "published"
   | "no_change"
   | "degraded"
   | "business_rejected"
   | "infrastructure_failed";
 
-export type DatasetOperationalHead = Readonly<{
+type DatasetOperationalHead = Readonly<{
   dataIdentity: string | null;
   preparedAt: string | null;
   dataThroughSession: string | null;
@@ -39,7 +39,7 @@ export type DatasetOperationalHead = Readonly<{
   industryLastRefreshAt: string | null;
 }>;
 
-export type DataOperatorWorkerStatus = Readonly<{
+type DataOperatorWorkerStatus = Readonly<{
   available: boolean;
   lastHeartbeatAt: string | null;
 }>;

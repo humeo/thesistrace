@@ -1,9 +1,7 @@
 export const RESEARCH_A2UI_ACTIVITY_TYPE: "a2ui-surface";
 export const RESEARCH_A2UI_CATALOG_ID: "urn:thesistrace:a2ui:research:v0.9";
 export const RESEARCH_A2UI_PROTOCOL_VERSION: "v0.9";
-export const RESEARCH_A2UI_MAX_BYTES: number;
 export const RESEARCH_A2UI_MAX_COMPONENTS: number;
-export const RESEARCH_A2UI_MAX_DEPTH: number;
 
 export const RESEARCH_A2UI_INLINE_CATALOG: Readonly<{
   catalogId: typeof RESEARCH_A2UI_CATALOG_ID;

@@ -53,18 +53,3 @@ def _append_fixture_session_in_place(complete: dict[str, object]) -> dict[str, o
         appended_universes[str(name)] = [copy.deepcopy(new_row)]
     appended["liquidity_universes"] = appended_universes
     return appended
-
-
-def extend_fixture_sessions(
-    canonical: dict[str, object],
-    *,
-    count: int,
-) -> tuple[dict[str, object], list[str]]:
-    complete = copy.deepcopy(canonical)
-    new_sessions: list[str] = []
-    for _ in range(count):
-        appended = _append_fixture_session_in_place(complete)
-        sessions = appended["research_calendar"]
-        assert isinstance(sessions, list)
-        new_sessions.append(str(sessions[0]))
-    return complete, new_sessions

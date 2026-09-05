@@ -32,12 +32,12 @@ Start the complete Development topology with Compose Watch:
 mise exec -- pnpm dev
 ```
 
-Open `http://127.0.0.1:5173`. Caddy Web, Hono and Better Auth, FastAPI Core, the
-fixed-role ordinary Research, Batch Research, and Tracking Workers, PostgreSQL,
-RustFS, and the two one-shot schema initializers all belong to the canonical
+Open `http://127.0.0.1:5173`. Caddy Web, Hono and Better Auth, Agent, FastAPI Core,
+the ordinary Research, Batch Research, Tracking, and Data Operator Workers,
+PostgreSQL, RustFS, and the three one-shot schema initializers belong to the canonical
 Compose project. There is no public signup; Researcher invitation and access
 commands are documented for [local Development](docs/runbook/local-lifecycle.md#local-researcher-access)
-and [single-node Production](docs/runbook/single-node-production.md#researcher-access-operations).
+and [single-node Production](docs/runbook/single-node-production.md#operator-assignment-and-researcher-access).
 For a detached start use `mise exec -- pnpm dev:up`; use
 `mise exec -- pnpm dev:stop` to stop services without deleting data, and
 `mise exec -- pnpm dev:reset` to hard-cut Product State while preserving Canonical

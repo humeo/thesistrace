@@ -1,13 +1,13 @@
 import { coreFetch } from "../auth/coreFetch";
 
-export type SourcePosition = { offset: number; line: number; column: number };
+type SourcePosition = { offset: number; line: number; column: number };
 export type FormulaDiagnostic = {
   code: string;
   message: string;
   severity: "error";
   range: { start: SourcePosition; end: SourcePosition };
 };
-export type FormulaDiagnostics = { valid: boolean; diagnostics: FormulaDiagnostic[] };
+type FormulaDiagnostics = { valid: boolean; diagnostics: FormulaDiagnostic[] };
 export type DiagnosticState =
   | { kind: "idle"; result: null }
   | { kind: "checking"; result: null }
