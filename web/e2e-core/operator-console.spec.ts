@@ -1438,6 +1438,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     }
     await route.fulfill({
       body: JSON.stringify({
+        progress: null,
         accepted_instrument_count: null,
         attempt_count: 0,
         checked_no_structured_change_count: null,

@@ -25,6 +25,7 @@ from thesistrace.data.financial_collection import (
     FinancialDateShard,
     FinancialShardCheckpoint,
 )
+from thesistrace.data.financial_progress import read_financial_progress
 from thesistrace.data.generation_store import HistoricalInstrumentIdentity
 from thesistrace.data.source import RawSourceError, RawSourceResponse
 from thesistrace.entrypoints.runtime import CoreSettings
@@ -41,6 +42,168 @@ FIELDS = (
     "revenue",
     "update_flag",
 )
+
+
+def test_financial_progress_reads_partial_checkpoints_and_preserves_historical_gaps(
+    core_settings: CoreSettings,
+) -> None:
+    database = _database(core_settings)
+    store = FinancialDailyRefreshStore(database)
+    key = "financial-progress-partial"
+    started = datetime(2026, 8, 14, 9, tzinfo=UTC)
+    operation = {
+        "idempotency_key": key,
+        "kind": "financial",
+        "status": "accepted",
+        "started_at": None,
+        "finished_at": None,
+    }
+
+    def inspect():
+        with database.transaction() as transaction:
+            return read_financial_progress(transaction, [operation])[key]
+
+    def begin(operation_key):
+        store.begin(
+            idempotency_key=operation_key,
+            source_generation_manifest_sha256="a" * 64,
+            prior_financial_manifest_sha256="b" * 64,
+            discovery_baseline_session="2026-08-13",
+            prior_attempted_through_session="2026-08-13",
+            prior_complete_through_session="2026-08-13",
+            target_session="2026-08-14",
+            started_at=started,
+        )
+
+    try:
+        queued = inspect()
+        assert queued.phase == "queued"
+        assert queued.elapsed_seconds is None
+        assert queued.processed_company_count is None
+        operation.update(status="running", started_at=started)
+        assert inspect().phase == "preparing"
+        begin(key)
+        discovering = inspect()
+        assert discovering.phase == "discovery"
+        assert discovering.discovered_announcement_count is None
+        assert discovering.discovery_gaps is None
+
+        identities = tuple(
+            HistoricalInstrumentIdentity(f"equity:00000{index}.SZ", f"00000{index}.SZ")
+            for index in (1, 2, 3)
+        )
+        store.record_discovery(
+            idempotency_key=key,
+            discovery=FinancialAnnouncementDiscovery(
+                start_date="2026-08-07",
+                end_date="2026-08-14",
+                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES[:-1],
+                announcements=tuple(
+                    _announcement(str(index) * 64, f"00000{index}.SZ") for index in (1, 2, 3)
+                ),
+                gaps=_gap_discovery(end_date="2026-08-14", lineage="c" * 64).gaps,
+                source_lineage_sha256="c" * 64,
+            ),
+            identities=identities,
+            recorded_at=started,
+        )
+        assert inspect().discovered_announcement_count == 3
+        assert inspect().phase == "collection"
+        store.record_instrument_attempt(
+            idempotency_key=key,
+            instrument_id=identities[0].instrument_id,
+            status="accepted",
+            matched_announcement_ids=("1" * 64,),
+            checkpoints=_accepted_checkpoints(identities[0].instrument_id, identities[0].ts_code),
+            failure_code=None,
+            failure_endpoint=None,
+            attempted_at=started,
+        )
+        partial = inspect()
+        assert partial.processed_company_count == partial.updated_company_count == 1
+        assert partial.unchanged_company_count == partial.failed_company_count == 0
+        # The global single-slot Worker may retry the operation; reads never replay work.
+        assert inspect().processed_company_count == partial.processed_company_count
+        store.record_instrument_attempt(
+            idempotency_key=key,
+            instrument_id=identities[1].instrument_id,
+            status="accepted",
+            matched_announcement_ids=(),
+            checkpoints=_accepted_checkpoints(identities[1].instrument_id, identities[1].ts_code),
+            failure_code=None,
+            failure_endpoint=None,
+            attempted_at=started,
+        )
+        store.record_instrument_attempt(
+            idempotency_key=key,
+            instrument_id=identities[2].instrument_id,
+            status="failed",
+            matched_announcement_ids=(),
+            checkpoints=(),
+            failure_code="SOURCE_FAILURE",
+            failure_endpoint="income",
+            attempted_at=started,
+        )
+        processed = inspect()
+        assert processed.processed_company_count == 3
+        assert processed.updated_company_count == processed.unchanged_company_count == 1
+        assert processed.failed_company_count == 1
+
+        # A later operation resolves the mutable global gap. Old diagnostics stay frozen.
+        begin("financial-progress-later")
+        store.record_discovery(
+            idempotency_key="financial-progress-later",
+            discovery=FinancialAnnouncementDiscovery(
+                start_date="2026-08-07",
+                end_date="2026-08-14",
+                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
+                announcements=(),
+                gaps=(),
+                source_lineage_sha256="d" * 64,
+            ),
+            identities=identities,
+            recorded_at=started,
+        )
+        assert len(inspect().discovery_gaps) == 1
+        with database.transaction() as transaction:
+            assert (
+                read_financial_progress(
+                    transaction,
+                    [
+                        {
+                            **operation,
+                            "idempotency_key": "financial-progress-later",
+                        }
+                    ],
+                )["financial-progress-later"].processed_company_count
+                == 0
+            )
+            transaction.execute(
+                "UPDATE data.financial_daily_refresh_operations "
+                "SET candidate_manifest_sha256 = %s WHERE idempotency_key = %s",
+                ("e" * 64, key),
+            )
+        assert inspect().phase == "publication"
+        operation.update(
+            status="succeeded", finished_at=datetime(2026, 8, 14, 9, 0, 30, tzinfo=UTC)
+        )
+        final = inspect()
+        assert final.phase == "finished" and final.elapsed_seconds == 30
+        serialized = final.model_dump_json()
+        for private in (
+            "checkpoints",
+            "source_lineage",
+            "manifest",
+            "announcement_id",
+            "example.test",
+        ):
+            assert private not in serialized
+        # Retention can remove private checkpoints before public receipt expiry.
+        _delete_operation(database, key)
+        assert inspect().processed_company_count is None
+        assert inspect().elapsed_seconds == 30
+    finally:
+        database.close()
 
 
 def test_running_daily_financial_refresh_fences_garbage_collection(

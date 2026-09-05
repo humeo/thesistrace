@@ -1688,6 +1688,26 @@ select { color-scheme: dark; }
 .operator-refresh-receipt dd { margin: 5px 0 0; color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
 .operator-refresh-receipt code,
 .operator-refresh-receipt time { font-family: var(--mono); }
+
+.operator-financial-telemetry { display: grid; gap: 12px; min-width: 0; }
+.operator-financial-telemetry > header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px; }
+.operator-financial-telemetry > header span { color: var(--ink-soft); font-family: var(--mono); }
+.operator-financial-telemetry dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.operator-financial-telemetry dl > div { padding: 12px; min-width: 0; }
+.operator-financial-telemetry dl > div:nth-child(n + 4) { border-top: 1px solid var(--line); }
+.operator-financial-telemetry dt { font-size: 12px; color: var(--ink-soft); }
+.operator-financial-telemetry dd { margin: 5px 0 0; font-size: 13px; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.operator-financial-telemetry p { margin: 0; font-size: 12px; color: var(--ink-soft); }
+.operator-financial-gaps { display: grid; gap: 8px; padding-left: 12px; border-left: 2px solid var(--warning); font-size: 13px; }
+.operator-financial-gaps ul { display: grid; gap: 12px; list-style: none; padding: 0; margin: 0; }
+.operator-financial-gaps li { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.operator-financial-gaps code { font-size: 11px; color: var(--ink-soft); }
+.operator-data-operation-drawer .operator-financial-telemetry { margin: 20px 22px; }
+@media (max-width: 640px) {
+  .operator-financial-telemetry dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .operator-financial-telemetry dl > div:nth-child(n + 3) { border-top: 1px solid var(--line); }
+  .operator-data-operation-drawer .operator-financial-telemetry { margin-inline: 16px; }
+}
 .operator-refresh-published { border-left-color: var(--success); }
 .operator-refresh-failed { border-left-color: var(--danger); }
 .operator-dataset-status { display: grid; gap: 22px; }

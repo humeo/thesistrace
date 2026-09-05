@@ -1,4 +1,5 @@
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
+import { decodeFinancialRefreshProgress, type FinancialRefreshProgress } from "./financialRefreshProgress";
 
 const pythonBoundaryWhitespace = /^[\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]$/u;
 
@@ -28,6 +29,7 @@ export type FinancialRefreshRequest = Readonly<{
 }>;
 
 export type FinancialRefreshOperation = Readonly<{
+  progress: FinancialRefreshProgress | null;
   acceptedInstrumentCount: number | null;
   attemptCount: number;
   checkedNoStructuredChangeCount: number | null;
@@ -694,6 +696,7 @@ function marketRefreshOperation(value: unknown): MarketRefreshOperation {
 
 function financialRefreshOperation(value: unknown): FinancialRefreshOperation {
   const keys = [
+    "progress",
     "accepted_instrument_count",
     "attempt_count",
     "checked_no_structured_change_count",
@@ -752,6 +755,7 @@ function financialRefreshOperation(value: unknown): FinancialRefreshOperation {
   }
   return {
     acceptedInstrumentCount: value.accepted_instrument_count,
+    progress: financialProgress(value.progress),
     attemptCount: value.attempt_count,
     checkedNoStructuredChangeCount: value.checked_no_structured_change_count,
     dataThroughSession: value.data_through_session,
@@ -769,6 +773,14 @@ function financialRefreshOperation(value: unknown): FinancialRefreshOperation {
     pendingInstrumentCount: value.pending_instrument_count,
     status: value.status,
   };
+}
+
+function financialProgress(value: unknown): FinancialRefreshProgress | null {
+  try {
+    return decodeFinancialRefreshProgress(value);
+  } catch {
+    throw new OperatorMutationError("unavailable");
+  }
 }
 
 function industryRefreshOperation(value: unknown): IndustryRefreshOperation {

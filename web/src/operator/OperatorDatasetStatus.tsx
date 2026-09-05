@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
+import { FinancialRefreshTelemetry } from "./FinancialRefreshTelemetry";
 import {
   OperatorDataRefreshActionDialog,
   type DataRefreshStatusAction,
@@ -565,6 +566,7 @@ export function OperatorDataStatusDrawer({
           </div>
           <button aria-label="Close operation details" onClick={onDismiss} type="button">Close</button>
         </header>
+        <FinancialRefreshTelemetry progress={operation.financialProgress} />
         <dl className="operator-operation-details">
           <Detail label="State" value={operationStateText(operation)} />
           <Detail label="Target" code value={operationTarget(operation)} />

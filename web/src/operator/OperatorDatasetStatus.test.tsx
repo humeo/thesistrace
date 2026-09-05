@@ -382,6 +382,7 @@ function operation(
     financialCompleteThroughSession: financial && status === "succeeded" ? "2026-08-29" : null,
     matchedTriggerCount: financial && status === "succeeded" ? 0 : null,
     checkedNoStructuredChangeCount: financial && status === "succeeded" ? 0 : null,
+    financialProgress: null,
     acceptedInstrumentCount: financial && status === "succeeded" ? 0 : null,
     failedInstrumentCount: financial && status === "succeeded" ? 0 : null,
     pendingInstrumentCount: financial && status === "succeeded" ? 0 : null,

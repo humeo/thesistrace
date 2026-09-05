@@ -11,7 +11,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from thesistrace.data import DataRefreshError, RefreshOutcome
+from thesistrace.data import DataRefreshError, FinancialRefreshProgress, RefreshOutcome
 from thesistrace.entrypoints.authentication import (
     AuthSessionUnavailable,
     InvalidOperatorProof,
@@ -202,6 +202,11 @@ class Refreshes:
 
 
 class FinancialRefreshes(Refreshes):
+    progress: FinancialRefreshProgress | None = None
+
+    def inspect_financial(self, idempotency_key: str):
+        return self.inspect(idempotency_key), self.progress
+
     def __init__(self) -> None:
         super().__init__()
         self.receipt = RefreshOutcome(
@@ -312,6 +317,7 @@ def test_operator_financial_submission_consumes_exact_proof_and_returns_safe_rec
     assert response.status_code == 202
     assert response.json() == {
         "accepted_instrument_count": None,
+        "progress": None,
         "attempt_count": 0,
         "checked_no_structured_change_count": None,
         "data_through_session": None,
@@ -646,6 +652,42 @@ def test_operator_financial_validation_and_proof_failure_have_no_side_effect(
     )
     assert rejected.status_code == 400
     assert rejected.json() == {"code": "OPERATOR_PROOF_INVALID"}
+    assert refreshes.submissions == []
+
+
+def test_operator_financial_inspection_exposes_progress_before_publication() -> None:
+    refreshes = FinancialRefreshes()
+    refreshes.receipt = RefreshOutcome(
+        **{
+            **refreshes.receipt.__dict__,
+            "status": "running",
+            "attempt_count": 1,
+        }
+    )
+    refreshes.progress = FinancialRefreshProgress(
+        phase="publication",
+        elapsed_seconds=12,
+        last_progress_at=datetime(2026, 8, 14, 10, tzinfo=UTC),
+        discovered_announcement_count=10,
+        processed_company_count=3,
+        updated_company_count=1,
+        unchanged_company_count=1,
+        failed_company_count=1,
+        discovery_gaps=(),
+    )
+    response = _client(OperatorAuthorizer(), refreshes).get(
+        "/api/operator/data/refreshes/financial",
+        headers={"cookie": COOKIE},
+        params={
+            "idempotency_key": refreshes.receipt.idempotency_key,
+            "observation_through_session": "2026-08-14",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "running"
+    assert response.json()["outcome"] is None
+    assert response.json()["accepted_instrument_count"] is None
+    assert response.json()["progress"] == refreshes.progress.model_dump(mode="json")
     assert refreshes.submissions == []
 
 

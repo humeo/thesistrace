@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { decodeDatasetOperationalStatus } from "./operatorDataStatusClient";
 
 const operation = {
+  financial_progress: null,
   idempotency_key: "financial-20260830",
   kind: "financial",
   status: "succeeded",
@@ -109,6 +110,7 @@ describe("Operator Dataset operational status decoder", () => {
         financialCompleteThroughSession: "2026-08-28",
         matchedTriggerCount: 9,
         checkedNoStructuredChangeCount: 4,
+        financialProgress: null,
         acceptedInstrumentCount: 3,
         failedInstrumentCount: 1,
         pendingInstrumentCount: 2,

@@ -52,6 +52,7 @@ from thesistrace.data import (
     DatasetOperationalStatus,
     DatasetOperationalStatusService,
     DatasetOverviewService,
+    FinancialRefreshProgress,
     RefreshOutcome,
     validate_financial_refresh_request,
     validate_industry_refresh_request,
@@ -192,6 +193,7 @@ class FinancialRefreshOperation(BaseModel):
         | None
     )
     pending_instrument_count: int | None = Field(default=None, ge=0)
+    progress: FinancialRefreshProgress | None = None
     status: Literal["accepted", "running", "succeeded", "failed"]
 
 
@@ -815,7 +817,7 @@ def create_app(
                 idempotency_key=idempotency_key,
                 observation_through_session=observation_through_session,
             )
-            outcome = _runtime(request).data_refreshes.inspect(normalized_key)
+            outcome, progress = _runtime(request).data_refreshes.inspect_financial(normalized_key)
         except DataRefreshError as error:
             if error.code == "REFRESH_NOT_FOUND":
                 return Response(status_code=status.HTTP_404_NOT_FOUND)
@@ -828,7 +830,9 @@ def create_app(
                 status_code=status.HTTP_409_CONFLICT,
                 content={"code": "IDEMPOTENCY_KEY_CONFLICT"},
             )
-        return _financial_refresh_operation(outcome)
+        return _financial_refresh_operation(outcome).model_copy(update={
+            "progress": progress,
+        })
 
     @app.post(
         "/api/operator/data/refreshes/industry",

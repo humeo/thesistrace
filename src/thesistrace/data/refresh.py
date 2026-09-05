@@ -25,6 +25,7 @@ from thesistrace.data.daily_financial_refresh import (
 )
 from thesistrace.data.financial_announcements import FinancialAnnouncementSource
 from thesistrace.data.financial_collection import FinancialRawSource
+from thesistrace.data.financial_progress import FinancialRefreshProgress, read_financial_progress
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
 from thesistrace.data.head_store import (
     DatasetHeadConflict,
@@ -228,6 +229,19 @@ class DataRefreshService:
         if row is None:
             raise DataRefreshError("REFRESH_NOT_FOUND")
         return _outcome(row)
+
+    def inspect_financial(
+        self, idempotency_key: str,
+    ) -> tuple[RefreshOutcome, FinancialRefreshProgress | None]:
+        key = _identity(idempotency_key)
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                "SELECT * FROM data.refresh_operations WHERE idempotency_key = %s",
+                (key,),
+            ).fetchone()
+            if row is None:
+                raise DataRefreshError("REFRESH_NOT_FOUND")
+            return _outcome(row), read_financial_progress(transaction, [row]).get(key)
 
     def cancel(
         self,

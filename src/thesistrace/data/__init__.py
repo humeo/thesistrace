@@ -41,6 +41,7 @@ from thesistrace.data.financial_collection import (
     FinancialDateShard,
     probe_financial_capability,
 )
+from thesistrace.data.financial_progress import FinancialRefreshProgress
 from thesistrace.data.financial_refresh import (
     FinancialRefreshError,
     FinancialRefreshOutcome,
@@ -111,6 +112,7 @@ from thesistrace.data.source import (
 )
 
 __all__ = [
+    "FinancialRefreshProgress",
     "AlphaFieldCapability",
     "FINANCIAL_FIELDS",
     "FieldDefinition",

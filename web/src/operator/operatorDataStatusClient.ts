@@ -3,6 +3,7 @@ import {
   OperatorPageUnavailableError,
 } from "./operatorDirectoryClient";
 import { isIsoResearchSession, isMarketRefreshIdempotencyKey } from "./operatorMutationClient";
+import { decodeFinancialRefreshProgress, type FinancialRefreshProgress } from "./financialRefreshProgress";
 
 export type DataRefreshKind = "market" | "financial" | "industry";
 export type DataRefreshStatus = "accepted" | "running" | "succeeded" | "failed" | "cancelled";
@@ -44,6 +45,7 @@ export type DataOperatorWorkerStatus = Readonly<{
 }>;
 
 export type DataRefreshOperationalStatus = Readonly<{
+  financialProgress: FinancialRefreshProgress | null;
   idempotencyKey: string;
   kind: DataRefreshKind;
   status: DataRefreshStatus;
@@ -79,6 +81,7 @@ export type DatasetOperationalStatus = Readonly<{
 }>;
 
 const operationKeys = [
+  "financial_progress",
   "idempotency_key",
   "kind",
   "status",
@@ -298,6 +301,7 @@ function decodeOperation(value: unknown): DataRefreshOperationalStatus {
     || !financialFieldsMatchKind(value)
   ) invalid();
   return {
+    financialProgress: decodeFinancialRefreshProgress(value.financial_progress),
     idempotencyKey: value.idempotency_key,
     kind: value.kind,
     status: value.status,
@@ -368,7 +372,9 @@ function financialFieldsMatchKind(value: Record<string, unknown>): boolean {
     value.pending_instrument_count,
     value.discovery_gap_count,
   ];
-  if (value.kind !== "financial") return fields.every((field) => field === null);
+  if (value.kind !== "financial") {
+    return value.financial_progress === null && fields.every((field) => field === null);
+  }
   if (value.status === "succeeded") return fields.every((field) => field !== null);
   if (value.status === "failed") {
     return value.financial_complete_through_session === null

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
+import { FinancialRefreshTelemetry } from "./FinancialRefreshTelemetry";
 import { containDialogKeyboardFocus } from "./operatorDialog";
 import {
   confirmFinancialRefreshProof,
@@ -426,6 +427,7 @@ export function FinancialRefreshReceipt({
         <span className="operator-state">{presentation.label}</span>
       </header>
       <p>{presentation.description}</p>
+      <FinancialRefreshTelemetry progress={operation.progress} />
       <dl>
         <div><dt>Idempotency key</dt><dd><code>{operation.idempotencyKey}</code></dd></div>
         <div><dt>Observation through</dt><dd>{operation.observationThroughSession}</dd></div>
@@ -433,8 +435,6 @@ export function FinancialRefreshReceipt({
         <div><dt>Attempts</dt><dd>{operation.attemptCount}</dd></div>
         <div><dt>Matched triggers</dt><dd>{operation.matchedTriggerCount ?? unknownDiagnostic}</dd></div>
         <div><dt>Checked, no structured change</dt><dd>{operation.checkedNoStructuredChangeCount ?? unknownDiagnostic}</dd></div>
-        <div><dt>Accepted instruments</dt><dd>{operation.acceptedInstrumentCount ?? unknownDiagnostic}</dd></div>
-        <div><dt>Failed instruments</dt><dd>{operation.failedInstrumentCount ?? unknownDiagnostic}</dd></div>
         <div><dt>Pending instruments</dt><dd>{operation.pendingInstrumentCount ?? unknownDiagnostic}</dd></div>
         <div><dt>Discovery gaps</dt><dd>{operation.discoveryGapCount ?? unknownDiagnostic}</dd></div>
         <div><dt>Failure</dt><dd><code>{operation.failureCode ?? operation.lastFailureCode ?? "None"}</code></dd></div>

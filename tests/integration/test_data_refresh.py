@@ -1163,6 +1163,10 @@ def test_operational_status_has_safe_head_latest_kinds_and_stable_fifty_row_page
             "status-050",
         ]
         assert first.latest_by_kind[1].status == "cancelled"
+        assert first.latest_by_kind[0].financial_progress is None
+        assert first.latest_by_kind[1].financial_progress is not None
+        assert first.latest_by_kind[1].financial_progress.phase == "finished"
+        assert first.latest_by_kind[1].financial_progress.processed_company_count is None
         assert len(first.operations) == 50
         assert first.operations[0].idempotency_key == "status-052"
         assert first.operations[-1].idempotency_key == "status-003"

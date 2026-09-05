@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { decodeFinancialRefreshProgress } from "./financialRefreshProgress";
 
 import {
   confirmFinancialRefreshProof,
@@ -22,6 +23,31 @@ import {
 } from "./operatorMutationClient";
 
 const proof = "00000000-0000-4000-8000-000000000001." + "a".repeat(43);
+
+const progress = {
+  phase: "collection", elapsed_seconds: 12, last_progress_at: "2026-08-17T08:00:12Z",
+  discovered_announcement_count: 15, processed_company_count: 3,
+  updated_company_count: 1, unchanged_company_count: 1, failed_company_count: 1,
+  discovery_gaps: [{category: "半年报", start_date: "2026-08-08", end_date: "2026-08-17",
+    failure_code: "CNINFO_DISCOVERY_UNAVAILABLE"}],
+};
+
+it("strictly decodes bounded company progress and rejects impossible or private fields", () => {
+  expect(decodeFinancialRefreshProgress(progress)).toMatchObject({
+    processedCompanyCount: 3, updatedCompanyCount: 1, unchangedCompanyCount: 1,
+    failedCompanyCount: 1, discoveredAnnouncementCount: 15,
+  });
+  for (const invalid of [
+    undefined,
+    {...progress, owner_token: "private"},
+    {...progress, processed_company_count: 4},
+    {...progress, failed_company_count: -1},
+    {...progress, elapsed_seconds: 0.5},
+    {...progress, discovery_gaps: Array(6).fill(progress.discovery_gaps[0])},
+    {...progress, discovery_gaps: [{...progress.discovery_gaps[0], source_url: "private"}]},
+    {...progress, discovery_gaps: [{...progress.discovery_gaps[0], end_date: "2026-02-30"}]},
+  ]) expect(() => decodeFinancialRefreshProgress(invalid)).toThrow();
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -264,6 +290,7 @@ describe("Operator mutation client", () => {
       observationThroughSession: "2026-08-14",
     };
     const degradedReceipt = {
+      progress: null,
       accepted_instrument_count: 1,
       attempt_count: 1,
       checked_no_structured_change_count: 2,

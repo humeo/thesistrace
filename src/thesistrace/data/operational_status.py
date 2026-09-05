@@ -9,6 +9,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from pydantic import BaseModel, ConfigDict, Field
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.data.financial_progress import FinancialRefreshProgress, read_financial_progress
 from thesistrace.data.overview import DatasetOverviewService, DatasetOverviewSnapshot
 
 DATA_REFRESH_OPERATION_PAGE_SIZE = 50
@@ -95,6 +96,7 @@ class DataRefreshOperationalStatus(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     updated_at: datetime
+    financial_progress: FinancialRefreshProgress | None = None
 
 
 class DatasetOperationalStatus(BaseModel):
@@ -171,8 +173,11 @@ class DatasetOperationalStatusService:
                 WHERE singleton = 1
                 """
             ).fetchone()
+            progress = read_financial_progress(
+                transaction, [*latest_rows, *rows[:DATA_REFRESH_OPERATION_PAGE_SIZE]],
+            )
         operations = tuple(
-            _operation_from_row(row)
+            _operation_from_row(row, progress.get(str(row["idempotency_key"])))
             for row in rows[:DATA_REFRESH_OPERATION_PAGE_SIZE]
         )
         return DatasetOperationalStatus(
@@ -183,7 +188,10 @@ class DatasetOperationalStatusService:
                     None if worker_row is None else worker_row["last_heartbeat_at"]
                 ),
             ),
-            latest_by_kind=tuple(_operation_from_row(row) for row in latest_rows),
+            latest_by_kind=tuple(
+                _operation_from_row(row, progress.get(str(row["idempotency_key"])))
+                for row in latest_rows
+            ),
             operations=operations,
             next_cursor=(
                 _encode_cursor(
@@ -242,7 +250,10 @@ def _head_from_snapshot(snapshot: DatasetOverviewSnapshot) -> DatasetOperational
     )
 
 
-def _operation_from_row(row: dict[str, object]) -> DataRefreshOperationalStatus:
+def _operation_from_row(
+    row: dict[str, object],
+    progress: FinancialRefreshProgress | None = None,
+) -> DataRefreshOperationalStatus:
     return DataRefreshOperationalStatus(
         idempotency_key=str(row["idempotency_key"]),
         kind=str(row["kind"]),  # type: ignore[arg-type]
@@ -274,6 +285,7 @@ def _operation_from_row(row: dict[str, object]) -> DataRefreshOperationalStatus:
         started_at=row["started_at"],  # type: ignore[arg-type]
         finished_at=row["finished_at"],  # type: ignore[arg-type]
         updated_at=row["updated_at"],  # type: ignore[arg-type]
+        financial_progress=progress,
     )
 
 

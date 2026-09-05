@@ -84,6 +84,7 @@ def test_operational_status_projects_only_bounded_safe_refresh_fields() -> None:
     operation = _operation_from_row(row)
 
     assert operation.model_dump(mode="json") == {
+        "financial_progress": None,
         "idempotency_key": "financial-20260830",
         "kind": "financial",
         "status": "running",
