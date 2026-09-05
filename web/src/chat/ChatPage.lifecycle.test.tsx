@@ -51,7 +51,7 @@ test("Enter submits textual actions while Shift+Enter and an empty Stop do not",
     phase: "active",
   }));
   const stopTextarea = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')!;
-  expect(document.querySelector(".chat-composer-guidance")?.textContent).toContain("Enter to stage");
+  expect(document.querySelector("#chat-composer-guidance")?.textContent).toContain("Enter to stage");
   await act(async () => stopTextarea.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })));
   expect(execute).toHaveBeenCalledOnce();
 });
@@ -63,6 +63,22 @@ test("keeps the authoritative run status available without restoring the visible
   expect(status?.textContent).toBe("Run complete");
   expect(status?.classList.contains("visually-hidden")).toBe(true);
   expect(document.querySelector(".chat-composer-status-row")).toBeNull();
+});
+
+test.each(["new", "active", "waiting_for_user"] as const)("keeps %s keyboard guidance accessible without a visible footer", async (phase) => {
+  await mount(composerController({ phase, question: phase === "waiting_for_user" ? pendingQuestion : null }));
+  const input = document.querySelector("textarea")!;
+  const description = document.getElementById(input.getAttribute("aria-describedby")!);
+  expect(description?.textContent).toContain("Shift+Enter for newline");
+  expect(description?.classList.contains("visually-hidden")).toBe(true);
+  expect(document.querySelector(".chat-composer-guidance")).toBeNull();
+});
+
+test("keeps answer size warnings visible after removing the guidance footer", async () => {
+  await mount(composerController({ phase: "waiting_for_user", question: pendingQuestion, draftBytes: 16 * 1024 + 1 }));
+  expect(document.querySelector(".chat-byte-count")?.closest(".visually-hidden")).toBeNull();
+  expect(document.querySelector(".chat-byte-count")?.textContent).toContain("bytes");
+  expect(document.querySelector(".chat-composer-validation")?.textContent).toContain("Input exceeds");
 });
 
 const pendingQuestion = {

@@ -46,6 +46,8 @@ for (const mobile of [false, true]) {
     const answer = page.getByRole("textbox", { name: "Answer", exact: true });
     const send = page.getByRole("button", { name: "Send answer", exact: true });
     await expect(answer).toBeEnabled();
+    await expect(answer).toHaveAccessibleDescription(/Enter to answer.*Shift\+Enter for newline/);
+    await expect(page.locator(".chat-composer-guidance")).toHaveCount(0);
     await expect(send).toBeDisabled();
     await answer.press("Enter");
     await expect(page.locator(".chat-question-composer")).toBeVisible();
@@ -121,11 +123,17 @@ for (const mobile of [false, true]) {
     const toolbar = page.locator(".chat-composer-toolbar");
     const model = page.getByRole("button", { name: "Model and reasoning" });
     const send = page.getByRole("button", { name: "Send" });
+    await expect(input).toHaveAccessibleDescription(/Enter to send.*Shift\+Enter for newline/);
+    await expect(page.locator(".chat-composer-guidance")).toHaveCount(0);
+    await expect(page.locator("#chat-composer-guidance")).toHaveCSS("clip", "rect(0px, 0px, 0px, 0px)");
+    const dockBox = (await page.locator(".chat-composer-dock").boundingBox())!;
+    const surfaceBox = (await page.locator(".chat-composer-surface").boundingBox())!;
+    expect(dockBox.height - surfaceBox.height).toBe(mobile ? 10 : 14);
     await expect.poll(async () => (await toolbar.boundingBox())!.height).toBeLessThanOrEqual(48);
     expect((await input.boundingBox())!.height).toBeGreaterThanOrEqual(80);
     expect((await model.boundingBox())!.height).toBe(mobile ? 44 : 36);
-    expect((await send.boundingBox())!.height).toBe(44);
-    expect((await send.boundingBox())!.width).toBe(44);
+    expect((await send.boundingBox())!.height).toBe(mobile ? 44 : 36);
+    expect((await send.boundingBox())!.width).toBe(mobile ? 44 : 36);
     await expect(input).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await expect(toolbar).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await input.fill("Investigate a low-volatility signal.");
@@ -143,6 +151,7 @@ for (const mobile of [false, true]) {
     await expect(send).toBeFocused();
     await expect(send).toHaveCSS("outline-width", "2px");
     expect(await page.locator("body").evaluate((body) => body.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`composer-${mobile ? "mobile" : "desktop"}.png`) });
   });
 
   test(`composer caps multiline drafts at 180px and shrinks after editing on ${mobile ? "mobile" : "desktop"}`, async ({ page }) => {

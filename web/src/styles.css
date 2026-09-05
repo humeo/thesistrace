@@ -1170,10 +1170,10 @@ code { font-family: var(--mono); }
 .chat-byte-count-invalid { color: var(--danger); }
 .chat-composer-toolbar .chat-main-action {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   flex: 0 0 auto;
-  min-height: 44px;
+  min-height: 36px;
   margin-left: 2px;
   padding: 0;
   place-items: center;
@@ -1191,15 +1191,6 @@ code { font-family: var(--mono); }
   color: var(--ink-tertiary);
   background: var(--surface-2);
   border-color: var(--line);
-}
-.chat-composer-guidance {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 6px 2px 0;
-  color: var(--ink-soft);
-  font-family: var(--mono);
-  font-size: 10px;
 }
 .chat-question-composer { display: flex; flex-direction: column; max-height: min(560px, 65dvh); overflow: clip; border-radius: 18px; }
 .chat-question-body { position: relative; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
@@ -2784,6 +2775,11 @@ select { color-scheme: dark; }
   .chat-message-actions { opacity: 1; }
   .chat-run-error > .button { min-height: 44px; min-width: 44px; white-space: normal; }
   .account-menu > summary { min-width: 44px; }
+  .chat-composer-toolbar .chat-main-action {
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
   .mobile-navigation-toggle,
   .mobile-navigation-close { width: 44px; min-height: 44px; }
   .sidebar-toggle { width: 44px; min-height: 44px; }

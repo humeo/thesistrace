@@ -110,12 +110,15 @@ export function ChatComposer({
           </div>
         </div>
       </div>}
-      <div className="chat-composer-guidance" id="chat-composer-guidance">
-        <span>Enter to {question !== null ? "answer" : enterActionLabel(controller.action.kind, controller.phase)} · Shift+Enter for newline</span>
+      {question !== null && controller.draftBytes >= MAX_CHAT_MESSAGE_BYTES * .8 ? (
+        <span className={`chat-byte-count${tooLarge ? " chat-byte-count-invalid" : ""}`}>
+          {controller.draftBytes.toLocaleString()} / {MAX_CHAT_MESSAGE_BYTES.toLocaleString()} bytes
+        </span>
+      ) : null}
+      <div className="visually-hidden" id="chat-composer-guidance">
+        <span>Enter to {question !== null ? "answer" : enterActionLabel(controller.action.kind, controller.phase)} · Shift+Enter for newline. </span>
         <span>{question !== null
-          ? controller.draftBytes >= MAX_CHAT_MESSAGE_BYTES * .8
-            ? `${controller.draftBytes.toLocaleString()} / ${MAX_CHAT_MESSAGE_BYTES.toLocaleString()} bytes`
-            : "Continues this Turn"
+          ? "Continues this Turn"
           : controller.phase === "active"
           ? "Settings apply to the next new Turn"
           : "Text only"}</span>
