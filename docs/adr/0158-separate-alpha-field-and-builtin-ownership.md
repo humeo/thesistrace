@@ -1,3 +1,3 @@
-# Separate Alpha Field and Builtin ownership
+# Keep Alpha field authority in Data and operation authority in the Kernel
 
-Data owns Alpha-authorable Field meaning and access, while the Research Kernel owns Builtin signatures, lookback, missingness, numeric behavior, and evaluation. Alpha Language composes those authorities into one catalog and rejects identifier collisions instead of copying semantics into a central registry or runtime plugin system.
+Data explicitly declares which Canonical Fields are Alpha-authorable and owns their meaning and series access, while the Research Kernel owns mathematical operation signatures and evaluation. Alpha Language combines those declarations and rejects name collisions, avoiding duplicated field allowlists or a second semantic registry.

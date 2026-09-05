@@ -60,13 +60,13 @@ object graph must cease to be the execution representation.
 This synthesis reinforces, rather than replaces, four accepted ThesisTrace
 decisions:
 
-- [ADR-0131](../adr/0131-preserve-complete-liquidity-universes-with-bounded-memory-columnar-execution.md)
+- [ADR-0194](../adr/0194-admit-long-research-by-peak-execution-footprint.md)
   already requires bounded-memory columnar execution for Top 3000.
 - [ADR-0164](../adr/0164-evaluate-alpha-as-a-series-execution-plan.md)
   already requires one transient post-order plan and one-pass rolling builtins.
 - [ADR-0108](../adr/0108-require-canonical-exact-batch-incremental-equivalence.md)
   makes batch/incremental equivalence the correctness target.
-- [ADR-0146](../adr/0146-store-growing-tabular-data-as-partitioned-parquet.md)
+- [ADR-0146](../adr/0146-store-canonical-and-analytical-tables-as-partitioned-parquet.md)
   already chooses partitioned Parquet for growing tables and transient Alpha,
   Label, and daily Factor values.
 

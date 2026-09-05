@@ -1,0 +1,3 @@
+# Share bounded Batch calculation and recover complete tasks
+
+A Research Batch atomically admits ordinary ResearchRuns with a shared scope and Data Generation; Factor Batches share preparation and Strategy Sweeps share Alpha-and-Factor calculation while each item owns its own Result. Execution uses bounded full-Universe slices, but durable recovery preserves only complete Alpha-and-Factor artifacts or complete item Results, accepting recomputation of incomplete tasks to avoid making slice state another research authority. Only classified transient failures retry; resource exhaustion and deterministic failures terminate the unchanged work.

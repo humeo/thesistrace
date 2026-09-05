@@ -320,7 +320,7 @@ session 前进入 blocked，直到完整 Financial Refresh 推进该 cutoff。�
 字段的 Run 和 Track 不受财务刷新进度影响。
 
 按照
-[ADR-0181](../adr/0181-refresh-market-and-financial-families-independently-under-one-head.md)，
+[ADR-0181](../adr/0181-refresh-dataset-families-independently-under-one-head.md)，
 Market Refresh 与 Financial Refresh 是两个独立 operator action，但共同发布到
 一个 Dataset Head。每次只 materialize 目标 family/table partitions，root
 复用未变化的 Manifest digest。若采集期间 Head 已被另一刷新移动，旧 root

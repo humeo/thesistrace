@@ -1,3 +1,3 @@
 # Make one immutable Result Bundle the ResearchRun truth
 
-A successful ResearchRun atomically publishes one immutable Result Bundle bound to its input, Data Generation, calculation contracts, provenance, and checksums. Only bounded Factor or Strategy results are retained; failed Attempts and transient Alpha, Label, and execution details never become partial Results.
+A successful ResearchRun publishes one immutable Result Bundle bound to its accepted input, Data Generation, calculation rules, and verified content. Publication requires complete validated results, so failed or incomplete execution cannot expose a partial report as research truth; transient Alpha, Label, and execution detail remain outside the retained Result.

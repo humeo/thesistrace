@@ -1,3 +1,3 @@
 # Report Gross and Net NAV from one fill path
 
-Strategy Backtest derives Gross and Net NAV from the same holdings and fills, with Net state driving decisions and Gross state serving only cost attribution. It does not run a second hypothetical cost-free portfolio.
+Strategy Backtest uses the Net portfolio after Transaction Costs for every target, affordability, and rebalance decision, and derives Gross NAV from those same holdings and fills. This isolates cost attribution without introducing a second hypothetical portfolio whose different decisions would confound the comparison.

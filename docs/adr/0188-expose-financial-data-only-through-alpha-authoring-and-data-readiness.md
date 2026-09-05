@@ -1,3 +1,3 @@
 # Expose financial data only through Alpha authoring and Data readiness
 
-Financial product exposure is limited to accepted Session-Aligned Fields in the common Alpha catalog plus Coverage and Readiness in Data Overview. Complete statements and source evidence remain behind the Data boundary rather than creating a separate statement browser, arbitrary query surface, or second financial research workflow.
+Financial research uses accepted Session-Aligned Fields in the common Alpha catalog, with Coverage and Readiness exposing the limits of those inputs. Keeping complete source statements behind the Data boundary preserves one governed research meaning at the cost of unrestricted statement exploration.

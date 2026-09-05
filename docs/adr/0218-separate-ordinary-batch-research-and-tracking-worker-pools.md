@@ -1,3 +1,3 @@
-# Separate ordinary Research, Batch Research, and Tracking Worker pools
+# Scale separate Research, Batch, and Tracking pools with single-slot Workers
 
-One Production Image exposes mutually exclusive single-slot ordinary Research, Batch Research, and Tracking roles, each claiming only its own durable work and scaling independently. Supervisors alone own claims, fences, Data Generation protection, recovery, and publication; children share one Research Kernel and never fall back across roles or publish Product State.
+Ordinary Research, Batch Research, and Tracking use independently scaled single-slot Worker roles sharing one calculation kernel. Supervisors own claims, fences, data protection, and publication while children calculate only, trading some capacity flexibility for isolated workloads and one verifiable publication authority.

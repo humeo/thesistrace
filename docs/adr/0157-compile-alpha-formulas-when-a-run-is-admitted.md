@@ -1,3 +1,3 @@
-# Compile Alpha Formulas when a Run is admitted
+# Compile and validate Alpha Formulas at ResearchRun admission
 
-Run admission compiles submitted author source into one canonical Alpha Expression and creates no durable resource when diagnostics exist. An accepted ResearchRun freezes both display source and executable expression so later editor or compiler changes cannot alter it.
+The backend compiler is the authority for Alpha Formula syntax, field meaning, types, lookback, and diagnostics, and admission recompiles before creating a ResearchRun. Freezing both author source and its canonical expression costs another validation at submission but prevents stale editor verdicts or later language changes from changing accepted work.

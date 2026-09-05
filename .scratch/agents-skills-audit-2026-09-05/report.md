@@ -1,6 +1,8 @@
 # 当前可见 Skills 与 AGENTS.md 审阅
 
-日期：2026-09-05。以本轮提供的 **45 个技能入口** 和当前磁盘中的用户级、项目级 AGENTS.md 为准。旧报告里的删除建议、数量和问题状态不再直接沿用；首次完整盘点保留在 [历史快照](/Users/koltenluca/code-github/thesistrace/.scratch/agents-skills-audit-2026-09-05/initial-audit.md)。
+> 本文为有日期的历史审阅记录；下文的“当前”和建议仅对应当时快照，不代表本次领域文档审查的代码事实。失效来源仅保留历史位置文本。
+
+日期：2026-09-05。以本轮提供的 **45 个技能入口** 和当前磁盘中的用户级、项目级 AGENTS.md 为准。旧报告里的删除建议、数量和问题状态不再直接沿用；首次完整盘点保留在 [历史快照](initial-audit.md)。
 
 ## 结论
 
@@ -12,21 +14,21 @@
 
 ### 1. 项目浏览器规则（已修复）
 
-[项目 AGENTS.md:7](/Users/koltenluca/code-github/thesistrace/AGENTS.md:7) 已改为：交互式浏览器检查与验收优先使用当前可用的应用内浏览器工具；可重复的浏览器回归使用仓库 Playwright 测试。
+[项目 AGENTS.md:7](../../AGENTS.md) 已改为：交互式浏览器检查与验收优先使用当前可用的应用内浏览器工具；可重复的浏览器回归使用仓库 Playwright 测试。
 
 规则已去掉失效的技能名称。
 
 ### 2. CopilotKit 指南仍有内容冲突（版本已对齐）
 
-- [runtime:85](/Users/koltenluca/code-github/thesistrace/.agents/skills/runtime/SKILL.md:85) 要求 fetch primitive，并强烈反对 Hono/Express handlers；[develop:28](/Users/koltenluca/code-github/thesistrace/.agents/skills/copilotkit-develop/SKILL.md:28)、[setup:99](/Users/koltenluca/code-github/thesistrace/.agents/skills/copilotkit-setup/SKILL.md:99)、[integrations:121](/Users/koltenluca/code-github/thesistrace/.agents/skills/copilotkit-integrations/SKILL.md:121)、[upgrade:99](/Users/koltenluca/code-github/thesistrace/.agents/skills/copilotkit-upgrade/SKILL.md:99) 却推荐这些 handlers。
-- [react-core:100](/Users/koltenluca/code-github/thesistrace/.agents/skills/react-core/SKILL.md:100) 写 `useAgent` 返回 `{ agent, isReady }`；[integrations:125](/Users/koltenluca/code-github/thesistrace/.agents/skills/copilotkit-integrations/SKILL.md:125) 写 only `{ agent }`。
-- 版本差异已修复：react-core/runtime/a2ui-renderer 的 `library_version` 与 [agent/package.json:26](/Users/koltenluca/code-github/thesistrace/agent/package.json:26)、[web/package.json:21](/Users/koltenluca/code-github/thesistrace/web/package.json:21) 均为 **1.70.0**，与 [官方发布](https://github.com/CopilotKit/CopilotKit/releases/tag/v1.70.0) 对应。项目直接引用的 AG-UI client/core/encoder 同步到新版依赖的 **0.0.59**。
+- [runtime:85](../../.agents/skills/runtime/SKILL.md) 要求 fetch primitive，并强烈反对 Hono/Express handlers；[develop:28](../../.agents/skills/copilotkit-develop/SKILL.md)、[setup:99](../../.agents/skills/copilotkit-setup/SKILL.md)、[integrations:121](../../.agents/skills/copilotkit-integrations/SKILL.md)、[upgrade:99](../../.agents/skills/copilotkit-upgrade/SKILL.md) 却推荐这些 handlers。
+- [react-core:100](../../.agents/skills/react-core/SKILL.md) 写 `useAgent` 返回 `{ agent, isReady }`；[integrations:125](../../.agents/skills/copilotkit-integrations/SKILL.md) 写 only `{ agent }`。
+- 版本差异已修复：react-core/runtime/a2ui-renderer 的 `library_version` 与 [agent/package.json:26](../../agent/package.json)、[web/package.json:21](../../web/package.json) 均为 **1.70.0**，与 [官方发布](https://github.com/CopilotKit/CopilotKit/releases/tag/v1.70.0) 对应。项目直接引用的 AG-UI client/core/encoder 同步到新版依赖的 **0.0.59**。
 
 已核对安装包的类型声明，并验证项目现用的 `createCopilotRuntimeHandler`、`useAgent({ agentId, runtimeAgentId, threadId })` 和 `{ agent, isReady }` 用法。上面的指南内容分歧仍需单独修正。其他技能 frontmatter 中的 `version` 是技能自身版本，不是 CopilotKit 库版本，应保留其原有含义。
 
 ### 3. codebase-design 的辅助文档仍与新测试规则相冲突
 
-[DEEPENING.md:34](/Users/koltenluca/.agents/skills/codebase-design/DEEPENING.md:34) 要求深层接口测试建立后直接删除旧单元测试。项目 [AGENTS.md:47](/Users/koltenluca/code-github/thesistrace/AGENTS.md:47) 则要求覆盖已被等价替代且旧测试无独立价值，后者应作为删除条件。
+[DEEPENING.md:34](/Users/koltenluca/.agents/skills/codebase-design/DEEPENING.md:34) 要求深层接口测试建立后直接删除旧单元测试。项目 [AGENTS.md:47](../../AGENTS.md) 则要求覆盖已被等价替代且旧测试无独立价值，后者应作为删除条件。
 
 同文档 [15 行](/Users/koltenluca/.agents/skills/codebase-design/DEEPENING.md:15)、[19 行](/Users/koltenluca/.agents/skills/codebase-design/DEEPENING.md:19) 把数据库替身、内部服务的内存 adapter 描述成完整测试方案，未区分纯规则测试与真实存储/传输语义。替身可用于纯规则测试，但不能替代所声称验证的事务、权限、交付和 Worker 集成证据。
 
@@ -34,7 +36,7 @@
 
 ### 4. diagnosing-bugs 的硬前置条件阻碍诊断
 
-[diagnosing-bugs:55](/Users/koltenluca/.agents/skills/diagnosing-bugs/SKILL.md:55) 要求没有可运行的失败循环就停止假设分析；[66 行](/Users/koltenluca/.agents/skills/diagnosing-bugs/SKILL.md:66) 甚至禁止在该命令建立前读代码形成解释。这与项目 [AGENTS.md:46](/Users/koltenluca/code-github/thesistrace/AGENTS.md:46) 的“诊断和读代码不必等待测试写完”正面冲突。
+[diagnosing-bugs:55](/Users/koltenluca/.agents/skills/diagnosing-bugs/SKILL.md:55) 要求没有可运行的失败循环就停止假设分析；[66 行](/Users/koltenluca/.agents/skills/diagnosing-bugs/SKILL.md:66) 甚至禁止在该命令建立前读代码形成解释。这与项目 [AGENTS.md:46](../../AGENTS.md) 的“诊断和读代码不必等待测试写完”正面冲突。
 
 很多环境、配置或低复现率问题，需要先看代码、日志和配置才能构造复现。建议允许先做有证据的分析，同时清楚区分待验证假设与已复现结论；修复完成仍应有有效验证。
 
@@ -42,9 +44,9 @@
 
 ### 5. create-auth 有互相打架的问答规则和工具假设
 
-[create-auth:26](/Users/koltenluca/code-github/thesistrace/.agents/skills/create-auth/SKILL.md:26) 要求跳过已经确定的问题；46、64、69、77 行又写 always ask，107 行再要求确认计划。
+[create-auth:26](../../.agents/skills/create-auth/SKILL.md) 要求跳过已经确定的问题；46、64、69、77 行又写 always ask，107 行再要求确认计划。
 
-[30 行](/Users/koltenluca/code-github/thesistrace/.agents/skills/create-auth/SKILL.md:30) 指定 `AskQuestion`，当前没有该同名工具。建议按当前可用的问答能力，仅收集尚未确定且影响实现的选择，并识别用户已给出的授权。
+[30 行](../../.agents/skills/create-auth/SKILL.md) 指定 `AskQuestion`，当前没有该同名工具。建议按当前可用的问答能力，仅收集尚未确定且影响实现的选择，并识别用户已给出的授权。
 
 233 行以后还包含通用迁移示例，不能直接作为当前硬切换项目的操作要求。按照用户决定保留 create-auth，修正适用边界即可，不再建议删除。
 
@@ -56,16 +58,16 @@
 
 ## 次要问题与表述改进
 
-本轮实际执行还发现测试分层没有完全落实到脚本：`pnpm test:image-smoke` 会通过 [production_image_smoke.py:864](/Users/koltenluca/code-github/thesistrace/tests/production_image_smoke.py:864) 调用批量研究性能资格验证，固定执行 1 轮预热和 4 轮测量（[80 行](/Users/koltenluca/code-github/thesistrace/tests/production_image_smoke.py:80)）。因此普通运行依赖升级也会触发完整计算性能矩阵；后续宜将这部分归到性能或发布资格入口，使日常镜像检查聚焦启动、健康与受影响运行链路。
+本轮实际执行还发现测试分层没有完全落实到脚本：`pnpm test:image-smoke` 会通过 [production_image_smoke.py:864](../../tests/production_image_smoke.py) 调用批量研究性能资格验证，固定执行 1 轮预热和 4 轮测量（[80 行](../../tests/production_image_smoke.py)）。因此普通运行依赖升级也会触发完整计算性能矩阵；后续宜将这部分归到性能或发布资格入口，使日常镜像检查聚焦启动、健康与受影响运行链路。
 
 | 对象 | 当前判断 |
 |---|---|
 | [code-review:76](/Users/koltenluca/.agents/skills/code-review/SKILL.md:76)、82 行 | 审阅范围已修复，但完整发现仍被每轴 400 words 限制；大改动宜限制摘要长度，完整 findings 另存。这是输出丢失风险，不是已经漏审的证据 |
-| [项目 AGENTS.md:47](/Users/koltenluca/code-github/thesistrace/AGENTS.md:47) | “不绑定调用次数”宜限定为内部协作调用次数；重复扣费、重复投递等可观察副作用次数仍可能是合法业务不变量 |
+| [项目 AGENTS.md:47](../../AGENTS.md) | “不绑定调用次数”宜限定为内部协作调用次数；重复扣费、重复投递等可观察副作用次数仍可能是合法业务不变量 |
 | [用户 AGENTS.md:14](/Users/koltenluca/.codex/AGENTS.md:14) | `rulers`、`commonfunctionality` 拼写；成熟依赖相关两条可合并。“简单”与“长期维护”不构成硬冲突 |
 | 用户 AGENTS.md 最后一条 | 研究成熟产品适合重要设计决策，不应将小修都变成竞品研究 |
 | 项目 AGENTS.md 开头 | 中英文硬切换禁令重复，合并即可；不擅自放宽禁止兼容/迁移的政策 |
-| [domain.md:7](/Users/koltenluca/code-github/thesistrace/docs/agents/domain.md:7)、[triage-labels.md:15](/Users/koltenluca/code-github/thesistrace/docs/agents/triage-labels.md:15) | single-context 项目仍保留多 context 模板；标签文档还有安装提示。属于文档残留 |
+| [domain.md:7](../../docs/agents/domain.md)、[triage-labels.md:15](../../docs/agents/triage-labels.md) | single-context 项目仍保留多 context 模板；标签文档还有安装提示。属于文档残留 |
 | frontend-design 与 design-taste-frontend | 有功能重叠，但不是必须二删一。后者正文已排除产品工作台，建议把排除范围写进 description；本项目 DESIGN.md 优先 |
 | codebase-design 的术语规则 | 只用于讨论模块设计，避免把“不说 component/service/API”扩散到技术 API 名称或项目领域术语 |
 
@@ -106,24 +108,24 @@
 | [plugin-creator](/Users/koltenluca/.codex/skills/.system/plugin-creator/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
 | [skill-creator](/Users/koltenluca/.codex/skills/.system/skill-creator/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
 | [skill-installer](/Users/koltenluca/.codex/skills/.system/skill-installer/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
-| [a2ui-renderer](/Users/koltenluca/code-github/thesistrace/.agents/skills/a2ui-renderer/SKILL.md) | 保留；库版本与项目依赖已统一为 1.70.0 |
-| [better-auth-best-practices](/Users/koltenluca/code-github/thesistrace/.agents/skills/better-auth-best-practices/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
-| [better-auth-security-best-practices](/Users/koltenluca/code-github/thesistrace/.agents/skills/better-auth-security-best-practices/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
-| [channels-setup](/Users/koltenluca/code-github/thesistrace/.agents/skills/channels-setup/SKILL.md) | 按用户要求保留；Channels 初次接入入口 |
-| [copilotkit-agui](/Users/koltenluca/code-github/thesistrace/.agents/skills/copilotkit-agui/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
-| [copilotkit-channels](/Users/koltenluca/code-github/thesistrace/.agents/skills/copilotkit-channels/SKILL.md) | 按用户要求保留；Channels 代码部分 |
-| [copilotkit-debug](/Users/koltenluca/code-github/thesistrace/.agents/skills/copilotkit-debug/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
-| [copilotkit-develop](/Users/koltenluca/code-github/thesistrace/.agents/skills/copilotkit-develop/SKILL.md) | 保留；统一 handler 指南 |
-| [copilotkit-integrations](/Users/koltenluca/code-github/thesistrace/.agents/skills/copilotkit-integrations/SKILL.md) | 保留；统一 handler 与 useAgent 指南 |
-| [copilotkit-setup](/Users/koltenluca/code-github/thesistrace/.agents/skills/copilotkit-setup/SKILL.md) | 保留；统一 handler 指南 |
-| [copilotkit-upgrade](/Users/koltenluca/code-github/thesistrace/.agents/skills/copilotkit-upgrade/SKILL.md) | 按用户要求保留；统一 handler 指南，仅在升级任务适用 |
-| [create-auth](/Users/koltenluca/code-github/thesistrace/.agents/skills/create-auth/SKILL.md) | 按用户要求保留；修正已知问题仍必问及工具假设 |
-| [email-and-password-best-practices](/Users/koltenluca/code-github/thesistrace/.agents/skills/email-and-password-best-practices/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
-| [organization-best-practices](/Users/koltenluca/code-github/thesistrace/.agents/skills/organization-best-practices/SKILL.md) | 保留；有对应组织权限任务时使用 |
-| [react-core](/Users/koltenluca/code-github/thesistrace/.agents/skills/react-core/SKILL.md) | 保留；库版本已统一为 1.70.0，现用 useAgent 类型与应用验证通过 |
-| [runtime](/Users/koltenluca/code-github/thesistrace/.agents/skills/runtime/SKILL.md) | 保留；库版本已统一为 1.70.0，指南之间的 handler 选择仍需统一 |
-| [setup-slack-channel](/Users/koltenluca/code-github/thesistrace/.agents/skills/setup-slack-channel/SKILL.md) | 按用户要求保留；说明已有 OpenTag 范围，勿误用到任意项目 |
-| [two-factor-authentication-best-practices](/Users/koltenluca/code-github/thesistrace/.agents/skills/two-factor-authentication-best-practices/SKILL.md) | 保留；有 MFA 任务时使用 |
+| [a2ui-renderer](../../.agents/skills/a2ui-renderer/SKILL.md) | 保留；库版本与项目依赖已统一为 1.70.0 |
+| [better-auth-best-practices](../../.agents/skills/better-auth-best-practices/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
+| [better-auth-security-best-practices](../../.agents/skills/better-auth-security-best-practices/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
+| [channels-setup](../../.agents/skills/channels-setup/SKILL.md) | 按用户要求保留；Channels 初次接入入口 |
+| [copilotkit-agui](../../.agents/skills/copilotkit-agui/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
+| [copilotkit-channels](../../.agents/skills/copilotkit-channels/SKILL.md) | 按用户要求保留；Channels 代码部分 |
+| [copilotkit-debug](../../.agents/skills/copilotkit-debug/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
+| [copilotkit-develop](../../.agents/skills/copilotkit-develop/SKILL.md) | 保留；统一 handler 指南 |
+| [copilotkit-integrations](../../.agents/skills/copilotkit-integrations/SKILL.md) | 保留；统一 handler 与 useAgent 指南 |
+| [copilotkit-setup](../../.agents/skills/copilotkit-setup/SKILL.md) | 保留；统一 handler 指南 |
+| [copilotkit-upgrade](../../.agents/skills/copilotkit-upgrade/SKILL.md) | 按用户要求保留；统一 handler 指南，仅在升级任务适用 |
+| [create-auth](../../.agents/skills/create-auth/SKILL.md) | 按用户要求保留；修正已知问题仍必问及工具假设 |
+| [email-and-password-best-practices](../../.agents/skills/email-and-password-best-practices/SKILL.md) | 保留；未发现需要整体删除的规则冲突 |
+| [organization-best-practices](../../.agents/skills/organization-best-practices/SKILL.md) | 保留；有对应组织权限任务时使用 |
+| [react-core](../../.agents/skills/react-core/SKILL.md) | 保留；库版本已统一为 1.70.0，现用 useAgent 类型与应用验证通过 |
+| [runtime](../../.agents/skills/runtime/SKILL.md) | 保留；库版本已统一为 1.70.0，指南之间的 handler 选择仍需统一 |
+| [setup-slack-channel](../../.agents/skills/setup-slack-channel/SKILL.md) | 按用户要求保留；说明已有 OpenTag 范围，勿误用到任意项目 |
+| [two-factor-authentication-best-practices](../../.agents/skills/two-factor-authentication-best-practices/SKILL.md) | 保留；有 MFA 任务时使用 |
 | [code-review](/Users/koltenluca/.agents/skills/code-review/SKILL.md) | 范围问题已修复；调整完整 findings 的字数限制 |
 | [codebase-design](/Users/koltenluca/.agents/skills/codebase-design/SKILL.md) | 修正 DEEPENING 的测试替代/删除规则，收窄术语约束 |
 | [design-taste-frontend](/Users/koltenluca/.agents/skills/design-taste-frontend/SKILL.md) | 保留；在描述中明确排除产品工作台 |
@@ -166,11 +168,11 @@
 
 `pnpm check` 的首次运行在 Python 阶段得到 1076 通过、3 失败。其中一项是本次升级需要同步的版本断言，已更新并通过上述 9 项契约测试。另两项在未修改的 HEAD `b54560efc05c35e22d2cc2eccce8f4defe7e81f9` 源码快照上均可复现：
 
-- [test_core_runtime_boundaries.py:193](/Users/koltenluca/code-github/thesistrace/tests/architecture/test_core_runtime_boundaries.py:193)：adapters 引入 `operational_events`，超出测试声明的允许依赖。
-- [test_core_runtime_boundaries.py:494](/Users/koltenluca/code-github/thesistrace/tests/architecture/test_core_runtime_boundaries.py:494)：资源路由检测连同 import 一起扫描，命中 `handleWorkspaceNavigation` 里的 `workspace`。
+- [test_core_runtime_boundaries.py:193](../../tests/architecture/test_core_runtime_boundaries.py)：adapters 引入 `operational_events`，超出测试声明的允许依赖。
+- [test_core_runtime_boundaries.py:494](../../tests/architecture/test_core_runtime_boundaries.py)：资源路由检测连同 import 一起扫描，命中 `handleWorkspaceNavigation` 里的 `workspace`。
 
 因此不能将本次结果写为完整 `pnpm check` 通过；直接涉及 CopilotKit 的检查已独立执行。原锁文件中已有的 Zod、Vitest、Express 类型 peer 警告在升级前后保持相同依赖组合。
 
-产品镜像失败发生在 `image-smoke-persisted`：读取 ResearchRun 时返回 `503 {"detail":"Authentication unavailable"}`；同一轮 Auth 日志在数据库重启时记录 `AUTH_DATABASE_UNAVAILABLE / 57P01`。Auth 的直接依赖版本未变化；这条恢复链路的失败尚未验证到根因，不能据此声称镜像全套通过。详见 [失败堆栈](/Users/koltenluca/code-github/thesistrace/.local/test-runs/20260905t080914z-44138-eeca6af3/evidence/smoke-persisted.stderr.log) 和 [运行记录](/Users/koltenluca/code-github/thesistrace/.local/test-runs/20260905t080914z-44138-eeca6af3/run.txt)。该轮测试资源与运行密钥已成功清理（`cleanup_status=0`、`runtime_secret_cleanup_status=0`）。
+产品镜像失败发生在 `image-smoke-persisted`：读取 ResearchRun 时返回 `503 {"detail":"Authentication unavailable"}`；同一轮 Auth 日志在数据库重启时记录 `AUTH_DATABASE_UNAVAILABLE / 57P01`。Auth 的直接依赖版本未变化；这条恢复链路的失败尚未验证到根因，不能据此声称镜像全套通过。详见 失败堆栈（历史位置：`.local/test-runs/20260905t080914z-44138-eeca6af3/evidence/smoke-persisted.stderr.log`） 和 运行记录（历史位置：`.local/test-runs/20260905t080914z-44138-eeca6af3/run.txt`）。该轮测试资源与运行密钥已成功清理（`cleanup_status=0`、`runtime_secret_cleanup_status=0`）。
 
-聊天浏览器验收使用现有 `pnpm test:e2e` 入口，并通过 `THESISTRACE_TEST_PLAYWRIGHT_GREP` 选择上述 4 条流程。[运行记录](/Users/koltenluca/code-github/thesistrace/.local/test-runs/20260905t083316z-54565-20ba6009/run.txt) 显示 `e2e-playwright status=0`、整体 `status=0`，测试资源和运行密钥均已清理。组件镜像分别运行 `pnpm --dir agent test:image-smoke`、`pnpm --dir auth test:image-smoke` 和 `pnpm test:caddy-image-smoke`，三条命令均返回 0。
+聊天浏览器验收使用现有 `pnpm test:e2e` 入口，并通过 `THESISTRACE_TEST_PLAYWRIGHT_GREP` 选择上述 4 条流程。运行记录（历史位置：`.local/test-runs/20260905t083316z-54565-20ba6009/run.txt`） 显示 `e2e-playwright status=0`、整体 `status=0`，测试资源和运行密钥均已清理。组件镜像分别运行 `pnpm --dir agent test:image-smoke`、`pnpm --dir auth test:image-smoke` 和 `pnpm test:caddy-image-smoke`，三条命令均返回 0。

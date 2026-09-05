@@ -1,3 +1,3 @@
-# Hard-cut result-changing calculation contracts
+# Execute only the current Alpha and calculation contracts
 
-ThesisTrace executes one current calculation kernel and Numeric Execution Contract, with their identity recorded only for provenance and validation. A result-changing update refuses older Product State; the runtime never migrates, reinterprets, dispatches, or falls back across historical calculation semantics.
+ThesisTrace accepts Alpha Formulae and executes Research under one current language and calculation contract, recording their identities for provenance and validation. Obsolete input or Product State is rejected instead of interpreted under changed semantics, accepting an explicit break to keep one auditable calculation meaning.

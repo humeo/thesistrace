@@ -1,3 +1,3 @@
 # Organize Runs in one-level Research Folders
 
-Every ResearchRun belongs to one non-nesting Research Folder that may organize but never own Formulae, execution state, or Results. Authoring remains browser-local until Run admission, avoiding a server-side Definition or Revision resource between mutable drafts and immutable Research history.
+Research Folders organize accepted ResearchRuns without owning their Alpha Formulae, calculation state, or Results. Keeping authoring proposals outside the durable Research resource model avoids a separate Definition or Revision hierarchy, while browser and Research Agent submissions share ordinary Run admission.

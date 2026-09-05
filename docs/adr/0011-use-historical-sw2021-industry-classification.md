@@ -1,3 +1,3 @@
 # Use historical SW2021 industry classification
 
-ThesisTrace resolves each instrument's point-in-time SW2021 primary industry from retained effective-dated membership and never substitutes its current classification for missing history. Optional industry neutralization uses historical L1 groups, excludes unresolved or undersized groups, and leaves L2 and L3 as Canonical data rather than authoring choices.
+Historical industry comparisons require effective-dated SW2021 membership, resolved as one primary path per instrument in left-closed, right-open intervals. Overlaps are invalid and missing history remains missing; using historical L1 groups for optional neutralization avoids applying today's classification to past research.

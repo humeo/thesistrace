@@ -1,10 +1,3 @@
 # Exchange Login Sessions for short-lived MCP tokens in Auth
 
-The Auth service exchanges one active Login Session for a short-lived OAuth
-access token whose subject is the Researcher ID and whose audience is the one
-canonical `/mcp` resource; the deployment configuration bounds its scopes and
-omits dangerous cancellation and Stop scopes while the Agent Host has no human
-confirmation flow. The Agent Host neither signs nor durably stores the token,
-and Core remains the authority for Tool discovery, Research Ownership, resource
-state, and idempotency, avoiding both an additional OAuth service and identity
-keys inside the Agent runtime.
+Auth exchanges an active Login Session for a short-lived, resource-bound built-in Agent token that grants Researcher-scoped access without cancellation or Stop authority. Keeping issuance in Auth and verification in Core lets the Agent act for its Researcher without owning signing keys, durable credentials, or a second identity service.

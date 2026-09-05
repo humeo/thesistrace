@@ -1,3 +1,3 @@
-# Admit long Research by peak execution footprint
+# Admit complete research by bounded execution footprint
 
-Admission rejects Research only when the smallest semantics-preserving execution slice cannot fit the Worker safety envelope, while total historical work informs progress and duration rather than validity or priority. Long Research remains admissible when each bounded slice is safe, accepting longer execution instead of truncation, sampling, or arbitrary period limits.
+Research admission measures the peak footprint of a complete-Universe execution slice, including required context, rather than treating total history as resident memory. Long research is accepted when a semantics-preserving slice fits, trading elapsed time for bounded memory without truncation, sampling, or an arbitrary historical-period cutoff.
