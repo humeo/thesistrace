@@ -1,7 +1,7 @@
 import type { Agent } from "@mastra/core/agent";
 import { describe, expect, it, vi } from "vitest";
 
-import { ChatControlError, type CommandReceipt, type SteerInput, type StopInput } from "./chat-control.js";
+import type { CommandReceipt, SteerInput, StopInput } from "./chat-control.js";
 import type { DurableResearchAgentRunner } from "./durable-agent-runner.js";
 import { MastraTurnControl } from "./mastra-turn-control.js";
 import type { ResearchSessionRepository } from "./session-repository.js";

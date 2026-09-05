@@ -6,7 +6,7 @@ import { MAX_CHAT_MESSAGE_BYTES, chatCommandFingerprint } from "./chat-request.j
 import { isCanonicalUuid } from "./uuid.js";
 
 export const MAX_CHAT_COMMAND_BODY_BYTES = MAX_CHAT_MESSAGE_BYTES + 2 * 1024;
-export const TIMELINE_PAGE_SIZE = 20;
+const TIMELINE_PAGE_SIZE = 20;
 
 export type TurnKind = "prompt" | "continue";
 export type TurnStatus =
@@ -17,8 +17,8 @@ export type TurnStatus =
   | "stopped"
   | "failed";
 export type CommandKind = "prompt" | "continue" | "steer" | "answer" | "stop";
-export type CommandStatus = "pending" | "accepted" | "rejected";
-export type AssistantItemStatus = "streaming" | "complete" | "stopped" | "failed";
+type CommandStatus = "pending" | "accepted" | "rejected";
+type AssistantItemStatus = "streaming" | "complete" | "stopped" | "failed";
 
 export type QuestionOption = Readonly<{ description?: string; label: string }>;
 export type PendingQuestion = Readonly<{
@@ -92,7 +92,7 @@ export type ChatTimelineEntry =
       turnId: string;
     }>;
 
-export type ChatTimelineTurn = Readonly<{
+type ChatTimelineTurn = Readonly<{
   completedAt: string | null;
   entries: readonly ChatTimelineEntry[];
   id: string;

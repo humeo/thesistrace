@@ -11,7 +11,7 @@ const RESEARCH_RUN_STATUSES = new Set([
   "cancelled",
 ]);
 
-export type SafeResearchRunResource = Readonly<{
+type SafeResearchRunResource = Readonly<{
   id: string;
   kind: "research_run";
   status: string;

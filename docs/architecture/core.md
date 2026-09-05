@@ -1,7 +1,7 @@
 # ThesisTrace Core Architecture
 
 > Status: current module-first product, execution, identity, ownership, and
-> public-entry boundary from ADR-0194 through ADR-0211 and ADR-0233.
+> public-entry boundary.
 
 ## Product boundary
 
@@ -18,8 +18,9 @@ Data Operator prepares the current Dataset Head and CSI 300 Benchmark Snapshot
     -> explicitly Refresh that Track after later market sessions publish
 ```
 
-The browser-visible resources are Data Overview, Research Folders, Research
-(ResearchRuns), and DailyTracks. Research Batches are a backend API resource in
+The browser-visible surfaces include Chat, MCP connections, Data Overview,
+Research Folders, Research (ResearchRuns), and DailyTracks. The Operator Console
+requires the singleton Operator Capability. Research Batches are a backend API resource in
 V1 and their child ResearchRuns appear in the Batch Research Folder; there is no
 Batch browser surface. Browser Draft is local authoring state rather than a
 server resource. Benchmark Store, Data Generation, execution Attempt, Tracking
@@ -34,8 +35,9 @@ mode.
 
 ## Runtime topology
 
-The active Compose topology contains Caddy Web, Auth, API, three fixed-role
-Worker pools, PostgreSQL, RustFS, and two one-shot schema initializers. The
+The active Compose topology contains Caddy Web, Auth, Agent, API, three fixed-role
+Research/Tracking Worker pools, the Data Operator Worker, PostgreSQL, RustFS,
+and three one-shot schema initializers. The
 ordinary Research, Batch Research, and Tracking roles start from the same
 Production Image and executable. Persistent Development, disposable Test, and
 single-node Production use the same product implementation with distinct
@@ -43,7 +45,7 @@ Compose identities, ports, volumes, data mounts, and environment contracts.
 
 The Web image uses Caddy, and a separate Hono and Better Auth service owns
 authentication alongside its schema initializer. Caddy is the only browser
-origin. Production publishes only Caddy on ports 80 and 443; Auth, Core,
+origin. Production publishes only Caddy on ports 80 and 443; Auth, Core, Agent,
 PostgreSQL, RustFS, and Workers remain on the private Compose network.
 Development and Test use the same route graph over loopback HTTP and retain
 explicit loopback-only diagnostic ports where the local lifecycle needs them.
@@ -53,13 +55,17 @@ flowchart LR
     I["Internet"] --> C["Caddy public gateway"]
     C -->|"/*"| W["Vite static files"]
     C -->|"/api/auth/*"| A["Hono + Better Auth"]
+    C -->|"/api/agent/*"| X["Research Agent Host"]
     C -->|"/api/*"| H["FastAPI HTTP adapter"]
+    X -->|"/mcp"| H
+    X --> A
+    X --> J["PostgreSQL agent schema"]
     H -->|"bounded Session verification"| A
     H --> M["Core modules"]
     R["Ordinary Research Worker pool"] --> M
     Q["Batch Research Worker pool"] --> M
     T["Tracking Worker pool"] --> M
-    O["Private Data Operator"] --> D["Data module"]
+    O["Data Operator CLI and Worker"] --> D["Data module"]
     M --> P["PostgreSQL Core schemas"]
     A --> U["PostgreSQL auth schema"]
     O --> B["Benchmark module"]
@@ -69,8 +75,8 @@ flowchart LR
     B --> G["Mounted Benchmark Store"]
 ```
 
-Caddy evaluates mutually exclusive `handle /api/auth/*`, `handle /api/*`, and
-static fallback groups in that order and never strips either API prefix. API and
+Caddy evaluates explicit MCP, Auth, Agent, and Core API handlers before the
+static fallback and preserves their path prefixes. API and
 Auth responses are not cached, the SPA entry and fallback are not cached, and
 hashed static assets are immutable and long-lived. Production Caddy owns
 automatic HTTPS and persists its certificate state; one exact non-secret
@@ -103,8 +109,8 @@ Every Core `/api/*` request, including Researcher bootstrap, carries the
 browser's original Cookie through one bounded private Auth verification call.
 That call forces a database-backed Better Auth lookup without refreshing the
 browser Cookie. Core accepts only the verified Researcher ID and active state;
-it never decodes a JWT, reads Better Auth tables, accepts an API key, or caches
-an identity. An invalid, expired, revoked, or deactivated Session is `401`.
+it never uses a JWT for browser API authentication, reads Better Auth tables,
+accepts an API key, or caches an identity. An invalid, expired, revoked, or deactivated Session is `401`.
 Auth timeout, unavailability, or a malformed verification response is `503`
 with no anonymous fallback.
 
@@ -171,7 +177,10 @@ Researcher active state. A request that passed Session verification before the
 deactivation transaction commits may finish; every verification begun after
 commit fails. Reactivation restores no Session.
 
-Access administration is deployment-private. Separate commands invite,
+Routine access administration is available through the Operator Console.
+Operator Assignment and transfer remain deployment-private; see the
+[Production runbook](../runbook/single-node-production.md#operator-assignment-and-researcher-access).
+Separate private commands also invite,
 reissue, deactivate, reactivate, revoke Sessions, and correct the initial
 display label; each emits one structured stdout result and safe operational
 events on stderr without printing a token or full link. The deactivation
@@ -314,6 +323,8 @@ src/thesistrace/
 ├── benchmark/
 ├── data/
 ├── research_folder/
+├── research_authoring/
+├── research_agent/
 ├── research_run/
 ├── research_batch/
 ├── daily_track/
@@ -407,6 +418,10 @@ seven Core schemas and
 independent reviewed SQL snapshot and fingerprint. Both initializers either
 create their complete current contract in empty scope or verify an exact match.
 They never run a Better Auth migration at service startup.
+
+The Agent Host owns a separate `agent` schema and `agent_runtime` role.
+`agent-initialize` initializes or verifies that independent contract, without
+granting Agent access to Core or Auth tables.
 
 Database roles are explicit: `thesistrace_owner` performs empty-database
 bootstrap and schema verification, `core_runtime` serves FastAPI, Workers, and
@@ -648,12 +663,17 @@ The browser route boundary is:
 /forgot-password
 /reset-password
 
+/chat
 /data
 /research
 /research-runs
 /research-runs/:runId
 /daily-tracks
 /daily-tracks/:trackId
+/connections/mcp
+/connections/mcp/authorize
+/operator/researchers
+/operator/data
 ```
 
 There is no `/signup`. The four Auth routes are the only anonymous product
@@ -666,7 +686,7 @@ fragments can be removed before routing continues.
 One Auth provider and Session gate protect all Research pages. A shared Core
 request client treats `401` as Session loss and stops polling before redirecting
 to login; `503` and network failure render a retryable unavailable state without
-logging out; product `403` and `404` remain resource errors. The context bar
+logging out; product `403` and `404` remain resource errors. The sidebar account menu
 shows canonical email and the initial display label and provides only change
 password and logout. There is no Settings page or self-service email, name, or
 account deletion flow.
@@ -674,8 +694,9 @@ account deletion flow.
 Better Auth endpoints remain under `/api/auth/*`. Core adds authenticated,
 idempotent `POST /api/researcher/bootstrap`; every other `/api/*` route keeps
 its product shape but derives Researcher context from Session verification. The
-HTTP adapter maps typed requests to module interfaces. It does not expose Data
-Operator controls, physical paths, S3 keys, manifests, SQL fields, Attempt
+HTTP adapter maps typed requests to module interfaces. Operator routes require
+the Operator Capability and the relevant mutation proof. It does not expose
+physical paths, S3 keys, manifests, SQL fields, Attempt
 administration, Auth internals, or deployment modes.
 
 ## Workers
@@ -803,11 +824,10 @@ are not Production readiness.
 ## Deliberately absent
 
 - Schema migration, compatibility, fallback, or downgrade paths.
-- User-facing Dataset Release history or Data Refresh controls.
-- Public signup, Web administration, Organizations, roles, workspaces, quotas,
+- User-facing Dataset Release history.
+- Public signup, Organizations, role hierarchies, workspaces, quotas,
   collaboration, or billing.
-- OAuth, MFA, passkeys, magic links, API keys, bearer or JWT authorization, or
-  a Remember Me choice.
+- MFA, passkeys, magic links, API keys, or a Remember Me choice.
 - Self-service email, display-label, or account-deletion flows.
 - Better Auth cookie Session cache, Redis, proxy identity headers, or direct
   Core access to Auth tables.

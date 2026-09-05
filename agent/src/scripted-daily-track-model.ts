@@ -14,7 +14,7 @@ import {
 export const SCRIPTED_START_DAILY_TRACK_PROMPT = "Start daily tracking for the successful Strategy in this Chat.";
 export const SCRIPTED_RELOAD_DAILY_TRACK_PROMPT = "Reload the DailyTrack view in this Chat and explain its current observations.";
 export const SCRIPTED_REFRESH_DAILY_TRACK_PROMPT = "Refresh the active DailyTrack in this Chat if it is eligible.";
-export const SCRIPTED_RETRY_DAILY_TRACK_PROMPT = "Retry the blocked DailyTrack in this Chat if it is eligible.";
+const SCRIPTED_RETRY_DAILY_TRACK_PROMPT = "Retry the blocked DailyTrack in this Chat if it is eligible.";
 export const SCRIPTED_RESUME_DAILY_TRACK_PROMPT = "Resume DailyTrack from this Chat using the same MCP command.";
 export const SCRIPTED_LIST_DAILY_TRACKS_PROMPT = "List my recent DailyTracks.";
 export const SCRIPTED_STOP_DAILY_TRACK_PROMPT = "Stop the DailyTrack in this Chat.";

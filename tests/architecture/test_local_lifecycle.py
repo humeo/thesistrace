@@ -2615,7 +2615,7 @@ def test_current_architecture_documents_only_the_active_data_and_schema_contract
     architecture = (ROOT / "docs" / "architecture" / "core.md").read_text()
 
     for current in (
-        "two one-shot schema initializers",
+        "three one-shot schema initializers",
         "thesistrace_meta.schema_contract",
         "private `thesistrace-data-operator`",
         "one browser-local Draft per Research Folder",

@@ -26,7 +26,7 @@ export class AgentCatalogAuthenticationRequiredError extends Error {
   }
 }
 
-export class AgentCatalogUnavailableError extends Error {
+class AgentCatalogUnavailableError extends Error {
   constructor() {
     super("Agent model catalog is unavailable");
     this.name = "AgentCatalogUnavailableError";

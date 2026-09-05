@@ -32,7 +32,7 @@ export type AuthHttpEvent = Readonly<{
   timestamp: string;
 }>;
 
-export type AuthHttpObservation = Readonly<{
+type AuthHttpObservation = Readonly<{
   requestId: string;
   startedAt: number;
 }>;

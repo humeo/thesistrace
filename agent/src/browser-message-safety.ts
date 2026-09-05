@@ -21,7 +21,6 @@ import {
 import {
   parseSafeToolResult,
   projectSafeToolResult,
-  SAFE_TOOL_COMPLETED,
 } from "./safe-tool-result.js";
 import { isCanonicalUuid } from "./uuid.js";
 
@@ -52,7 +51,7 @@ export const A2UI_FRAMEWORK_TOOL_NAMES = Object.freeze(new Set([
   "render_a2ui",
 ]));
 
-export class BrowserTranscriptError extends Error {
+class BrowserTranscriptError extends Error {
   constructor() {
     super("BROWSER_TRANSCRIPT_PROJECTION_FAILED");
     this.name = "BrowserTranscriptError";
@@ -224,7 +223,7 @@ export function canonicalSubmittedBrowserMessages(
   return canonical;
 }
 
-export function splitAssistantTextParentId(messageId: string): string | null {
+function splitAssistantTextParentId(messageId: string): string | null {
   const suffix = "-agui-text";
   return messageId.endsWith(suffix)
     ? messageId.slice(0, -suffix.length)

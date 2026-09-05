@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
 
-export const authMutationLockKey = "thesistrace:auth-mutation";
+const authMutationLockKey = "thesistrace:auth-mutation";
 
 export async function lockAuthMutationExclusive(
   client: PoolClient,

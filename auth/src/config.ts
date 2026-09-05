@@ -25,9 +25,9 @@ const mcpPrivateJwkSchema = mcpPublicJwkSchema.extend({
   d: base64Url32ByteSchema,
 }).strict();
 
-export type McpGrantScope = z.infer<typeof mcpGrantScopeSchema>;
-export type McpPublicJwk = Readonly<z.infer<typeof mcpPublicJwkSchema>>;
-export type McpPrivateJwk = Readonly<z.infer<typeof mcpPrivateJwkSchema>>;
+type McpGrantScope = z.infer<typeof mcpGrantScopeSchema>;
+type McpPublicJwk = Readonly<z.infer<typeof mcpPublicJwkSchema>>;
+type McpPrivateJwk = Readonly<z.infer<typeof mcpPrivateJwkSchema>>;
 
 export type AuthSettings = Readonly<{
   databaseUrl: string;

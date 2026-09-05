@@ -275,65 +275,6 @@ def _scaled_binary64(value: float) -> int:
     return numerator * (_BINARY64_SCALE // denominator)
 
 
-def _add_centered(
-    count: int,
-    origin: float,
-    offset_sum: float,
-    squared_offset_sum: float,
-    value: float,
-) -> tuple[int, float, float, float]:
-    if count == 0:
-        return 1, value, 0.0, 0.0
-    offset = value - origin
-    return count + 1, origin, offset_sum + offset, squared_offset_sum + offset * offset
-
-
-def _remove_centered(
-    count: int,
-    origin: float,
-    offset_sum: float,
-    squared_offset_sum: float,
-    value: float,
-) -> tuple[int, float, float]:
-    offset = value - origin
-    return count - 1, offset_sum - offset, squared_offset_sum - offset * offset
-
-
-def _recenter(
-    count: int,
-    origin: float,
-    offset_sum: float,
-    squared_offset_sum: float,
-    new_origin: float,
-) -> tuple[float, float, float]:
-    shift = new_origin - origin
-    previous_sum = offset_sum
-    return (
-        new_origin,
-        previous_sum - count * shift,
-        squared_offset_sum - 2.0 * shift * previous_sum + count * shift * shift,
-    )
-
-
-def _centered_state(
-    values: tuple[float | None, ...],
-) -> tuple[int, float, float, float]:
-    finite = tuple(value for value in values if value is not None)
-    if not finite:
-        return 0, 0.0, 0.0, 0.0
-    origin = finite[-1]
-    offsets = tuple(value - origin for value in finite)
-    try:
-        return (
-            len(finite),
-            origin,
-            math.fsum(offsets),
-            math.fsum(offset * offset for offset in offsets),
-        )
-    except OverflowError:
-        return len(finite), origin, math.inf, math.inf
-
-
 def _minimum(arguments: tuple[BuiltinArgument, ...]) -> NumericSeries:
     return _rolling_extreme(arguments, minimum=True)
 

@@ -1981,34 +1981,6 @@ class DailyTrackService:
         )
         return _mapping_value(value.get("factor_summary"), "Checkpoint Factor Summary")
 
-    def _current_strategy_summary(
-        self,
-        origin: TrackingOrigin,
-        snapshot: DailyTrackResultSnapshot,
-    ) -> Mapping[str, object]:
-        assert self._publication is not None
-        if snapshot.current_checkpoint_is_seed:
-            section = self._read_semantic_result_section(
-                self._publication,
-                _seed_result_ref(origin),
-                research_kind="strategy_backtest",
-                section="strategy_summary",
-            )
-            stored = _mapping_value(section.value, "Tracking Strategy Summary")
-            return _mapping_value(stored.get("metrics"), "Tracking Strategy metrics")
-        checkpoint = snapshot.current_checkpoint
-        value = _read_publication_json(
-            self._publication,
-            PublishedRef(
-                manifest_sha256=checkpoint.manifest_sha256,
-                kind="daily-track.checkpoint",
-                provenance=checkpoint.provenance,
-            ),
-            payload_name="checkpoint",
-        )
-        state = _mapping_value(value.get("strategy_state"), "Checkpoint Strategy State")
-        return _mapping_value(state.get("summary"), "Checkpoint Strategy Summary")
-
     def _bounded_strategy_observations(
         self,
         origin: TrackingOrigin,

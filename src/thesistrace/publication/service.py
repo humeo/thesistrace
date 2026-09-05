@@ -272,37 +272,6 @@ class Publication:
             serialization=serialization,
         )
 
-    def stage_bytes(
-        self,
-        content: bytes,
-        *,
-        media_type: str,
-        serialization: Mapping[str, object],
-        staging_authority: StagingAuthority | None = None,
-    ) -> StagedPayload:
-        if not content or not media_type:
-            raise PublicationPreparationError("staged bytes require content and media type")
-        canonical_serialization = _canonical_json_value(
-            serialization,
-            subject="serialization",
-        )
-        if not isinstance(canonical_serialization, dict):
-            raise PublicationPreparationError("staged bytes serialization must be an object")
-        self._ensure_bucket(staging_authority=staging_authority)
-        digest = hashlib.sha256(content).hexdigest()
-        self._put_immutable(
-            digest,
-            content,
-            media_type=media_type,
-            staging_authority=staging_authority,
-        )
-        return StagedPayload(
-            sha256=digest,
-            byte_size=len(content),
-            media_type=media_type,
-            serialization=canonical_serialization,
-        )
-
     def stage_file(
         self,
         path: Path,

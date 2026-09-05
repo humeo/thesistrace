@@ -22,7 +22,7 @@ export class AgentSessionPreferenceInvalidError extends Error {
   }
 }
 
-export class AgentSessionPreferenceUnavailableError extends Error {
+class AgentSessionPreferenceUnavailableError extends Error {
   constructor() {
     super("Agent Chat Session preference is unavailable");
     this.name = "AgentSessionPreferenceUnavailableError";

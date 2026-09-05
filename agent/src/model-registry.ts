@@ -45,8 +45,8 @@ const registrySchema = z
   .strict();
 
 export type ReasoningEffort = z.infer<typeof reasoningEffortSchema>;
-export type ProviderAdapter = (typeof providerAdapters)[number];
-export type SafeModel = Readonly<{
+type ProviderAdapter = (typeof providerAdapters)[number];
+type SafeModel = Readonly<{
   default_reasoning_effort: ReasoningEffort;
   display_name: string;
   key: string;

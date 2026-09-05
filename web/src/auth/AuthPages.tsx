@@ -5,7 +5,7 @@ import { safeReturnTo, type BrowserLocation, type InitialAuthSecret } from "./ro
 
 type Navigate = (path: string, options?: Readonly<{ replace?: boolean }>) => void;
 
-export function LoginPage({ location, navigate }: {
+function LoginPage({ location, navigate }: {
   location: BrowserLocation;
   navigate: Navigate;
 }) {
@@ -62,7 +62,7 @@ export function LoginPage({ location, navigate }: {
   );
 }
 
-export function AcceptInvitationPage({ secret, clearSecret }: {
+function AcceptInvitationPage({ secret, clearSecret }: {
   secret: InitialAuthSecret | null;
   clearSecret: () => void;
 }) {
@@ -156,7 +156,7 @@ export function AcceptInvitationPage({ secret, clearSecret }: {
   );
 }
 
-export function ForgotPasswordPage({ navigate }: { navigate: Navigate }) {
+function ForgotPasswordPage({ navigate }: { navigate: Navigate }) {
   const { requestPasswordReset } = useAuth();
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -204,7 +204,7 @@ export function ForgotPasswordPage({ navigate }: { navigate: Navigate }) {
   );
 }
 
-export function ResetPasswordPage({ secret, clearSecret, navigate }: {
+function ResetPasswordPage({ secret, clearSecret, navigate }: {
   secret: InitialAuthSecret | null;
   clearSecret: () => void;
   navigate: Navigate;

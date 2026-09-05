@@ -14,7 +14,7 @@ import { sha256 } from "./security.js";
 type AuthDelegate = (request: Request) => Promise<Response> | Response;
 type SessionReader = (headers: Headers) => Promise<unknown>;
 
-export class AuthCoordinationUnavailableError extends Error {
+class AuthCoordinationUnavailableError extends Error {
   readonly operationCompleted: boolean;
   readonly operationStarted: boolean;
 

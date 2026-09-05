@@ -293,32 +293,3 @@ def strategy_sweep_private_artifact_capacity_bytes(
         encoded_outcome_cell_count * _STRATEGY_COMPACT_OUTCOME_BYTES_PER_CELL
         + chunk_count * _STRATEGY_COMPACT_OUTCOME_BYTES_PER_CHUNK
     )
-
-
-def strategy_sweep_encoded_outcome_cell_count(
-    *,
-    research_session_counts: Sequence[int],
-    maximum_universe_cardinality: int,
-) -> int:
-    if (
-        not research_session_counts
-        or maximum_universe_cardinality <= 0
-        or any(
-            isinstance(count, bool) or not isinstance(count, int) or count < 0
-            for count in research_session_counts
-        )
-    ):
-        raise ValueError("Strategy Sweep outcome capacity facts are invalid")
-    encoded_session_count = 0
-    completed_research_sessions = 0
-    for research_session_count in research_session_counts:
-        if research_session_count == 0:
-            continue
-        encoded_session_count += research_session_count + min(
-            completed_research_sessions,
-            _MAX_PENDING_ALPHA_SESSIONS,
-        )
-        completed_research_sessions += research_session_count
-    if completed_research_sessions == 0:
-        raise ValueError("Strategy Sweep outcome capacity requires Research Sessions")
-    return encoded_session_count * maximum_universe_cardinality

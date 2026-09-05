@@ -89,10 +89,6 @@ class PrivateAlphaFactorArtifactWriter:
             self.abort()
             raise
 
-    @property
-    def partial_path(self) -> Path:
-        return self._partial_path
-
     def append(self, chunk: PrivateAlphaFactorChunk) -> None:
         if self._closed or self._final_seen:
             raise ValueError("Private Alpha-and-Factor artifact is already complete")

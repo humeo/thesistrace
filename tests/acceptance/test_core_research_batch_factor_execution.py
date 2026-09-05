@@ -620,25 +620,6 @@ def _stored_factor_summary(runtime, stored: dict[str, object]) -> object:
     return read_result_bundle(bundle, research_kind="factor_evaluation")["factor_summary"]
 
 
-def _batch_attempt_status(settings: CoreSettings, batch_id: str) -> str:
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            row = transaction.execute(
-                """
-                SELECT status
-                FROM research_batches.attempts
-                WHERE batch_id = %s
-                """,
-                (batch_id,),
-            ).fetchone()
-        assert row is not None
-        return str(row["status"])
-    finally:
-        database.close()
-
-
 def _batch_pin_state(settings: CoreSettings, batch_id: str) -> tuple[int, int]:
     database = PostgresDatabase(settings.database_url)
     database.open()

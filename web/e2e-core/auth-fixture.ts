@@ -113,7 +113,7 @@ export const test = securityTest.extend<{ researcher: AuthenticatedResearcher }>
 
 export { expect };
 
-export async function openDataOverview(page: Page): Promise<void> {
+async function openDataOverview(page: Page): Promise<void> {
   // Cold navigation includes Auth, capability, and Researcher bootstrap before
   // these requests start. Wait for network readiness before the short UI check.
   const [overview, catalog] = await Promise.all([

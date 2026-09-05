@@ -2,7 +2,7 @@
 
 Development is one persistent canonical Compose project. Each Test command
 creates a new, isolated, disposable Compose project. Both run the same
-Caddy/Auth/Core/Worker route graph used by the single-node Production topology,
+Caddy/Auth/Agent/Core/Worker route graph used by the single-node Production topology,
 with loopback ports and disposable Test mail replacing the external edge.
 Local evidence qualifies code, images, and configuration; it is not a health
 claim about any deployed host. The deployment contract is in the
@@ -21,7 +21,7 @@ mise exec -- pnpm bootstrap
 
 Bootstrap runs frozen Python and pnpm dependency sync, validates the resolved
 Compose configuration, pulls PostgreSQL and RustFS, and builds the Core, Auth,
-and Caddy Web application images. It changes no Development database and
+Agent, and Caddy Web application images. It changes no Development database and
 publishes no Seed data.
 
 The examples below keep `mise exec --` explicit so that the pinned Node.js and
@@ -59,7 +59,7 @@ terminal with:
 mise exec -- pnpm dev:logs
 ```
 
-This streams current Caddy Web, Auth, API, all three Workers, both schema
+This streams current Caddy Web, Auth, Agent, API, all four Workers, all three schema
 initializers, PostgreSQL, and RustFS container output. A Data Operator or
 Auth Operator invocation writes its machine-readable result to that command's
 stdout and operational JSONL to its stderr, so its current output is visible in
@@ -120,7 +120,7 @@ The command prints an Invitation ID but never the token or link. Resend delivers
 the fragment-bearing link, and the Researcher supplies only a password on the
 acceptance page. Reissue and the remaining private access operations use the
 same Auth command contract documented in the
-[Production runbook](single-node-production.md#researcher-access-operations).
+[Production runbook](single-node-production.md#operator-assignment-and-researcher-access).
 
 Inspect authoritative Product State without RustFS or the Dataset Store:
 

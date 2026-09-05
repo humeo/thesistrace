@@ -44,7 +44,7 @@ export class ResearcherNotFoundError extends Error {
   }
 }
 
-export class DisplayLabelInvalidError extends Error {
+class DisplayLabelInvalidError extends Error {
   readonly code = "DISPLAY_LABEL_INVALID";
 
   constructor() {

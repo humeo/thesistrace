@@ -111,7 +111,7 @@ export const researchA2UICatalogDefinitions = {
   },
 } satisfies CatalogDefinitions;
 
-export const researchA2UICatalog = createCatalog(
+const researchA2UICatalog = createCatalog(
   researchA2UICatalogDefinitions,
   {
     Text: ({ props }) => (

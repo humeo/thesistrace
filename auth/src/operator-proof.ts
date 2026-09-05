@@ -53,7 +53,7 @@ export type OperatorInvitationProofOperation =
   | "invitation.issue"
   | "invitation.reissue";
 
-export type OperatorProofOperation =
+type OperatorProofOperation =
   | OperatorInvitationProofOperation
   | "researcher.sessions.revoke"
   | "data.refresh.market.submit"
