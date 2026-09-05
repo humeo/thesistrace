@@ -4,7 +4,7 @@
 
 ## Browser Operations
 
-Prioritize the `browser:control-in-app-browser` skill for browser operations.
+For interactive browser inspection and acceptance, prefer the available in-app browser tools. Use the repository's Playwright tests for repeatable browser regression checks.
 
 ## Frontend Design
 

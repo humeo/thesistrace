@@ -90,15 +90,15 @@ def test_final_images_share_exact_agent_stack_versions() -> None:
             "pg",
         )
     } == {
-        "@ag-ui/client": "0.0.57",
-        "@ag-ui/core": "0.0.57",
-        "@ag-ui/encoder": "0.0.57",
+        "@ag-ui/client": "0.0.59",
+        "@ag-ui/core": "0.0.59",
+        "@ag-ui/encoder": "0.0.59",
         "@ag-ui/mastra": "1.1.1",
         "@ai-sdk/anthropic": "3.0.114",
         "@ai-sdk/google": "3.0.118",
         "@ai-sdk/openai": "3.0.104",
         "@ai-sdk/provider": "3.0.15",
-        "@copilotkit/runtime": "1.69.3",
+        "@copilotkit/runtime": "1.70.0",
         "@mastra/core": "1.63.1",
         "@mastra/mcp": "1.17.2",
         "@mastra/memory": "1.28.1",
@@ -116,10 +116,10 @@ def test_final_images_share_exact_agent_stack_versions() -> None:
             "better-auth",
         )
     } == {
-        "@ag-ui/client": "0.0.57",
-        "@ag-ui/core": "0.0.57",
-        "@copilotkit/a2ui-renderer": "1.69.3",
-        "@copilotkit/react-core": "1.69.3",
+        "@ag-ui/client": "0.0.59",
+        "@ag-ui/core": "0.0.59",
+        "@copilotkit/a2ui-renderer": "1.70.0",
+        "@copilotkit/react-core": "1.70.0",
         "better-auth": "1.7.2",
     }
     assert auth_dependencies["better-auth"] == web_dependencies["better-auth"]
