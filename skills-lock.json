@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "a2ui-renderer": {
+      "source": "CopilotKit/CopilotKit",
+      "sourceType": "github",
+      "skillPath": "skills/a2ui-renderer/SKILL.md",
+      "computedHash": "d0896edccc721ba605184c93780bf0869b89ccc40ea0e22ed9a648f93a13cc3e"
+    },
     "better-auth-best-practices": {
       "source": "better-auth/skills",
       "sourceType": "github",
@@ -13,11 +19,59 @@
       "skillPath": "security/SKILL.md",
       "computedHash": "7a230edf3a24ce18162cb4379f59b6a19b8d24ca04db530609d0f15cede556dc"
     },
+    "channels-setup": {
+      "source": "CopilotKit/CopilotKit",
+      "sourceType": "github",
+      "skillPath": "skills/channels-setup/SKILL.md",
+      "computedHash": "8b08bbd9888f53720eb8d9c5aff796f946c28b640c426965b45315dc4406876d"
+    },
+    "copilotkit-agui": {
+      "source": "CopilotKit/CopilotKit",
+      "sourceType": "github",
+      "skillPath": "skills/copilotkit-agui/SKILL.md",
+      "computedHash": "67f23c8448e4b3b2b467ee9ac3659686b3d8315ed2c73a201810018b06947bd7"
+    },
+    "copilotkit-channels": {
+      "source": "CopilotKit/CopilotKit",
+      "sourceType": "github",
+      "skillPath": "skills/copilotkit-channels/SKILL.md",
+      "computedHash": "8c0a889cd6871cf3c47a6c6b7ccef6c9d8a03fc3e4ecb4ba8cb93839bf622e80"
+    },
+    "copilotkit-debug": {
+      "source": "CopilotKit/CopilotKit",
+      "sourceType": "github",
+      "skillPath": "skills/copilotkit-debug/SKILL.md",
+      "computedHash": "44d003cc893a02d31bd87efe067359bb5ac5294cf86b65f26806e1cbd2da78d5"
+    },
+    "copilotkit-develop": {
+      "source": "CopilotKit/CopilotKit",
+      "sourceType": "github",
+      "skillPath": "skills/copilotkit-develop/SKILL.md",
+      "computedHash": "2ef1ac515ab17171266477c2c131f9956bb32ebfd417c9a3225187d17d9f73ea"
+    },
+    "copilotkit-integrations": {
+      "source": "CopilotKit/CopilotKit",
+      "sourceType": "github",
+      "skillPath": "skills/copilotkit-integrations/SKILL.md",
+      "computedHash": "079c886f5240a76a3d50212042eacfb5bf7947af8a6a4503a1637ec7eae941d1"
+    },
+    "copilotkit-setup": {
+      "source": "CopilotKit/CopilotKit",
+      "sourceType": "github",
+      "skillPath": "skills/copilotkit-setup/SKILL.md",
+      "computedHash": "dedd4e6c60a1e0e5ab2e76c66e2120b7012655d5918091984c8384a18b6bef22"
+    },
+    "copilotkit-upgrade": {
+      "source": "CopilotKit/CopilotKit",
+      "sourceType": "github",
+      "skillPath": "skills/copilotkit-upgrade/SKILL.md",
+      "computedHash": "2e5ad642cd45292425a49f5bcd81061217940dc45a7ecabc04a78222d9c9f243"
+    },
     "create-auth": {
       "source": "better-auth/skills",
       "sourceType": "github",
       "skillPath": "better-auth/create-auth/SKILL.md",
-      "computedHash": "4e261efac2ae9a2321c4495c846ef97cf239818fc8bd2ab7e92ed1f9d25470f7"
+      "computedHash": "9a9b498bc144367b8e237233f89def63fb2bd69e8cafe173eaa58fe3a863cdc4"
     },
     "email-and-password-best-practices": {
       "source": "better-auth/skills",
@@ -30,6 +84,24 @@
       "sourceType": "github",
       "skillPath": "better-auth/organization/SKILL.md",
       "computedHash": "27627eb3a13bd44eff3a5d890f96e7db052b623db90e01684f759abe3e7fe56b"
+    },
+    "react-core": {
+      "source": "CopilotKit/CopilotKit",
+      "sourceType": "github",
+      "skillPath": "skills/react-core/SKILL.md",
+      "computedHash": "a406c8e8c48380c44af11cc9daefa2e2a0465d108d4ac373eeef27f8c41670bd"
+    },
+    "runtime": {
+      "source": "CopilotKit/CopilotKit",
+      "sourceType": "github",
+      "skillPath": "skills/runtime/SKILL.md",
+      "computedHash": "7750b2b1984d35889b4398c48a3e839a30785231e25342620e938b3bf64a9f51"
+    },
+    "setup-slack-channel": {
+      "source": "CopilotKit/CopilotKit",
+      "sourceType": "github",
+      "skillPath": "skills/setup-slack-channel/SKILL.md",
+      "computedHash": "dbac12de444fc1cd8d34d74d48d817dcb43dd6d6f41347d57462e931ee1ca1ca"
     },
     "two-factor-authentication-best-practices": {
       "source": "better-auth/skills",
