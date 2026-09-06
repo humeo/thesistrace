@@ -65,6 +65,17 @@ describe("Chat API decoding", () => {
     })).toThrow(ChatApiError);
   });
 
+  it("decodes recovery links and rejects private recovery fields", () => {
+    const recovery = { status: "succeeded", cause: "OUTPUT_LIMIT", attempts: 1, replacementMessageId: inputId, errorCode: null };
+    const decode = (value: unknown) => decodeTimelinePage({ next_cursor: null, turns: [turn([
+      entry("assistant_message", { content: "Partial", status: "complete", recovery: value }, "assistant:original"),
+      entry("assistant_message", { content: "Complete", status: "complete", supersedes: inputId }, "assistant:replacement"),
+    ])] });
+    expect(decode(recovery).turns[0]?.entries).toHaveLength(2);
+    expect(() => decode({ ...recovery, providerError: "private" })).toThrow(ChatApiError);
+    expect(() => decode({ ...recovery, attempts: 2 })).toThrow(ChatApiError);
+  });
+
   it("rejects unknown fields and invalid command identities", () => {
     expect(() => decodeCommandReceipt({
       command_id: inputId,

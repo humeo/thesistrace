@@ -1,3 +1,5 @@
+import { recoveryImprovesBudget, type ModelRecoveryCause, type ModelStepRecovery } from "./model-step-recovery.js";
+import type { ModelRequestBudget } from "./model-context.js";
 import { canonicalJson } from "./canonical-json.js";
 import { randomUUID } from "node:crypto";
 import { contextSourceMatches, freezeContextSource, sessionContextSnapshotSchema, type SessionContextCheckpoint, type SessionContextCycle, type SessionContextSnapshot } from "./session-context-state.js";
@@ -168,6 +170,90 @@ export class ContextCheckpointConflictError extends Error {
 export class ResearchSessionRepository {
   constructor(private readonly pool: Pool) {}
 
+  async modelStepRecoveries(threadId: string, researcherId: string): Promise<readonly ModelStepRecovery[]> {
+    return withSessionMutation(this.pool, threadId, async (client) => {
+      await loadOwnedThreadForUpdate(client, threadId, researcherId);
+      return (await client.query<ModelStepRecovery>(`SELECT ${modelRecoveryColumns}
+        FROM agent.model_step_recovery WHERE thread_id = $1::uuid ORDER BY created_at, original_message_id`, [threadId])).rows;
+    });
+  }
+
+  /** Claim before generating candidates. Both original and replacement IDs address one allowance. */
+  async recordModelStepStop(input: Readonly<{ threadId: string; researcherId: string; runId: string; messageId: string;
+    cause: ModelRecoveryCause; budget: ModelRequestBudget; allowRecovery: boolean;
+  }>): Promise<Readonly<{ claimed: boolean; recovery: ModelStepRecovery }>> {
+    return withSessionMutation(this.pool, input.threadId, async (client) => {
+      await loadOwnedThreadForUpdate(client, input.threadId, input.researcherId);
+      const run = await loadRunForUpdate(client, input.runId);
+      if (!run || run.threadId !== input.threadId || run.status !== "running") throw new ChatRunConflictError();
+      const existing = await client.query<ModelStepRecovery>(`SELECT ${modelRecoveryColumns} FROM agent.model_step_recovery
+        WHERE thread_id = $1::uuid AND (original_message_id = $2 OR replacement_message_id = $2)`, [input.threadId, input.messageId]);
+      if (existing.rows[0]) {
+        if (existing.rows[0].runId !== input.runId) throw new ChatRunConflictError();
+        if (existing.rows[0].replacementMessageId === input.messageId) {
+          const invalid = await client.query<ModelStepRecovery>(`UPDATE agent.model_step_recovery
+            SET invalid_replacement = true, updated_at = pg_catalog.clock_timestamp()
+            WHERE thread_id = $1::uuid AND replacement_message_id = $2 RETURNING ${modelRecoveryColumns}`, [input.threadId, input.messageId]);
+          return { claimed: false, recovery: invalid.rows[0]! };
+        }
+        return { claimed: false, recovery: existing.rows[0] };
+      }
+      const inserted = await client.query<ModelStepRecovery>(`INSERT INTO agent.model_step_recovery
+        (thread_id, run_id, original_message_id, replacement_message_id, attempts, cause, status, before_budget, error_code)
+        VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8::jsonb, $9) RETURNING ${modelRecoveryColumns}`,
+      [input.threadId, input.runId, input.messageId, input.allowRecovery ? randomUUID() : null, input.allowRecovery ? 1 : 0,
+        input.cause, input.allowRecovery ? "recovering" : "failed", JSON.stringify(input.budget), input.allowRecovery ? null : input.cause]);
+      // A provider rejection can have no text events; keep a visible audit anchor.
+      await client.query(`INSERT INTO agent.chat_timeline_entry (thread_id, entry_id, turn_id, kind, payload)
+        VALUES ($1::uuid, $2, $3::uuid, 'assistant_message', '{"content":"","status":"failed"}'::jsonb)
+        ON CONFLICT (thread_id, entry_id) DO NOTHING`, [input.threadId, `assistant:${input.messageId}`, input.runId]);
+      return { claimed: input.allowRecovery, recovery: inserted.rows[0]! };
+    });
+  }
+
+  async completeModelStepReplacement(threadId: string, researcherId: string, runId: string, messageId: string): Promise<void> {
+    await withSessionMutation(this.pool, threadId, async (client) => {
+      await loadOwnedThreadForUpdate(client, threadId, researcherId);
+      const run = await loadRunForUpdate(client, runId);
+      if (!run || run.threadId !== threadId || run.status !== "running") throw new ChatRunConflictError();
+      const updated = await client.query(`UPDATE agent.model_step_recovery
+        SET invalid_replacement = false, updated_at = pg_catalog.clock_timestamp()
+        WHERE thread_id = $1::uuid AND run_id = $2::uuid AND replacement_message_id = $3
+          AND status = 'recovering' AND after_budget IS NOT NULL`, [threadId, runId, messageId]);
+      if (updated.rowCount !== 1) throw new ChatRunConflictError();
+    });
+  }
+
+  async invalidateModelStepReplacement(threadId: string, researcherId: string, runId: string, messageId: string): Promise<void> {
+    await withSessionMutation(this.pool, threadId, async (client) => {
+      await loadOwnedThreadForUpdate(client, threadId, researcherId);
+      await client.query(`UPDATE agent.model_step_recovery SET invalid_replacement = true, updated_at = pg_catalog.clock_timestamp()
+        WHERE thread_id = $1::uuid AND run_id = $2::uuid AND replacement_message_id = $3`, [threadId, runId, messageId]);
+    });
+  }
+
+  async updateModelStepRecovery(threadId: string, researcherId: string, runId: string, originalMessageId: string,
+    outcome: Readonly<{ status: "recovering"; budget: ModelRequestBudget }> | Readonly<{ status: "failed"; errorCode: AgentFailureCode }>,
+  ): Promise<ModelStepRecovery> {
+    return withSessionMutation(this.pool, threadId, async (client) => {
+      await loadOwnedThreadForUpdate(client, threadId, researcherId);
+      const run = await loadRunForUpdate(client, runId);
+      if (!run || run.threadId !== threadId || (outcome.status !== "failed" && run.status !== "running")) throw new ChatRunConflictError();
+      const result = await client.query<ModelStepRecovery>(`SELECT ${modelRecoveryColumns} FROM agent.model_step_recovery
+        WHERE thread_id = $1::uuid AND run_id = $2::uuid AND original_message_id = $3`, [threadId, runId, originalMessageId]);
+      const current = result.rows[0];
+      if (current?.status === "failed" && outcome.status === "failed") return current;
+      if (!current || current.status !== "recovering") throw new ChatRunConflictError();
+      if (outcome.status !== "failed" && !recoveryImprovesBudget(current.cause, current.beforeBudget, outcome.budget)) throw new ChatRunConflictError();
+      const updated = await client.query<ModelStepRecovery>(`UPDATE agent.model_step_recovery
+        SET status = $4, after_budget = $5::jsonb, error_code = $6, updated_at = pg_catalog.clock_timestamp()
+        WHERE thread_id = $1::uuid AND run_id = $2::uuid AND original_message_id = $3 RETURNING ${modelRecoveryColumns}`,
+      [threadId, runId, originalMessageId, outcome.status, outcome.status !== "failed" ? JSON.stringify(outcome.budget) : current.afterBudget === null ? null : JSON.stringify(current.afterBudget),
+        outcome.status === "failed" ? outcome.errorCode : null]);
+      return updated.rows[0]!;
+    });
+  }
+
   async contextCheckpoint(threadId: string, researcherId: string): Promise<SessionContextCheckpoint | null> {
     return withSessionMutation(this.pool, threadId, async (client) => {
       await loadOwnedThreadForUpdate(client, threadId, researcherId);
@@ -294,6 +380,7 @@ export class ResearchSessionRepository {
       await client.query(`UPDATE agent.session_context_checkpoint SET cycle_id = NULL, cycle_run_id = NULL
         WHERE cycle_run_id IN (SELECT id FROM agent.agent_run WHERE status IN ('failed', 'stopped'))`);
       for (const run of result.rows) {
+        await finalizeModelRecoveries(client, run.thread_id, run.id, run.status, "AGENT_RUN_INTERRUPTED");
         await insertTimelineEntry(client, {
           entryId: `outcome:${run.id}`,
           kind: "turn_outcome",
@@ -1284,7 +1371,13 @@ export class ResearchSessionRepository {
         entry.entry_id,
         entry.sequence::text,
         entry.kind,
-        entry.payload,
+        entry.payload
+          || CASE WHEN recovery.original_message_id IS NOT NULL THEN pg_catalog.jsonb_build_object(
+            'recovery', pg_catalog.jsonb_build_object('status', recovery.status, 'cause', recovery.cause,
+              'attempts', recovery.attempts, 'replacementMessageId', recovery.replacement_message_id,
+              'errorCode', recovery.error_code)) ELSE '{}'::jsonb END
+          || CASE WHEN replacement.original_message_id IS NOT NULL THEN pg_catalog.jsonb_build_object(
+            'supersedes', replacement.original_message_id) ELSE '{}'::jsonb END AS payload,
         CASE WHEN entry.created_at IS NULL THEN NULL ELSE pg_catalog.to_char(
           entry.created_at AT TIME ZONE 'UTC',
           'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
@@ -1296,6 +1389,10 @@ export class ResearchSessionRepository {
       LEFT JOIN agent.chat_timeline_entry AS entry
         ON entry.thread_id = $1::uuid
        AND entry.turn_id = turn.id
+      LEFT JOIN agent.model_step_recovery AS recovery ON recovery.thread_id = $1::uuid
+        AND recovery.run_id = turn.id AND entry.entry_id = 'assistant:' || recovery.original_message_id
+      LEFT JOIN agent.model_step_recovery AS replacement ON replacement.thread_id = $1::uuid
+        AND replacement.run_id = turn.id AND entry.entry_id = 'assistant:' || replacement.replacement_message_id
       ORDER BY turn.started_at ASC, turn.id ASC, entry.sequence ASC NULLS FIRST
     `, parameters);
     const turns: Array<{
@@ -2120,6 +2217,19 @@ async function finalizeOpenTimelineItems(
   `, [threadId, runId, JSON.stringify(toolStatus)]);
 }
 
+async function finalizeModelRecoveries(client: PoolClient, threadId: string, runId: string,
+  status: "completed" | "stopped" | "failed", errorCode?: string): Promise<void> {
+  if (status === "completed") {
+    const unprepared = await client.query(`SELECT 1 FROM agent.model_step_recovery
+      WHERE thread_id = $1::uuid AND run_id = $2::uuid AND status = 'recovering' AND (after_budget IS NULL OR invalid_replacement)`, [threadId, runId]);
+    if (unprepared.rowCount) throw new ChatRunConflictError();
+  }
+  await client.query(`UPDATE agent.model_step_recovery
+    SET status = $3, error_code = $4, updated_at = pg_catalog.clock_timestamp()
+    WHERE thread_id = $1::uuid AND run_id = $2::uuid AND status = 'recovering'`,
+  [threadId, runId, status === "completed" ? "succeeded" : "failed", status === "completed" ? null : errorCode ?? "AGENT_RUN_INTERRUPTED"]);
+}
+
 async function finishTimeline(
   client: PoolClient,
   threadId: string,
@@ -2127,6 +2237,7 @@ async function finishTimeline(
   status: "completed" | "stopped" | "failed",
   errorCode?: string,
 ): Promise<void> {
+  await finalizeModelRecoveries(client, threadId, runId, status, errorCode);
   await finalizeOpenTimelineItems(
     client,
     threadId,
@@ -2682,3 +2793,7 @@ async function loadA2UIActivities(
     };
   });
 }
+
+const modelRecoveryColumns = `run_id::text AS "runId", original_message_id AS "originalMessageId",
+  replacement_message_id AS "replacementMessageId", attempts, invalid_replacement AS "invalidReplacement", cause, status, before_budget AS "beforeBudget",
+  after_budget AS "afterBudget", error_code AS "errorCode"`;

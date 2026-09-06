@@ -1,5 +1,7 @@
 import type { LanguageModelV3, LanguageModelV3CallOptions, LanguageModelV3GenerateResult, LanguageModelV3StreamPart } from "@ai-sdk/provider";
 
+import { recoveryImprovesBudget } from "./model-step-recovery.js";
+
 import type { AgentFailureCode } from "../../contracts/agent-failure.mjs";
 import { AgentRunFailure, providerFailureCode } from "./run-failure.js";
 import { frameworkTokenUsage, RunUsageCapture } from "./usage-capture.js";
@@ -37,6 +39,13 @@ export class RunModelObservation {
     this.steps = initial.steps ?? 0;
   }
 
+  get pendingRequestFailure(): ModelRequestFailure | undefined { return this.requestFailure; }
+
+  terminateRequestFailure(code: AgentFailureCode): AgentRunFailure {
+    this.failure = code;
+    return new AgentRunFailure(code);
+  }
+
   get outputBytes(): number {
     return this.generatedBytes;
   }
@@ -52,7 +61,7 @@ export class RunModelObservation {
 
   begin(options: LanguageModelV3CallOptions, model: ModelCapacity, purpose: "answer" | "memory" = "answer"): LanguageModelV3CallOptions {
     if (this.failure !== undefined) throw new AgentRunFailure(this.failure);
-    if (this.requestFailure !== undefined) throw this.requestFailure;
+    if (purpose === "answer" && this.requestFailure !== undefined) throw this.requestFailure;
     this.budget = modelRequestBudget(options, model, this.tokenCounter);
     const maxOutputTokens = this.budget.outputTokens;
     if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) throw this.fail(purpose === "memory" ? "CONTEXT_COMPACTION_FAILED" : "CONTEXT_TOO_LARGE");
@@ -85,6 +94,15 @@ export class RunModelObservation {
       throw this.fail("PROVIDER_MALFORMED_STREAM");
     }
     if (purpose === "answer") this.hasRunAnswer ||= hasStepAnswer;
+  }
+
+  /** Called only after the runtime has claimed and committed a valid recovery. */
+  acknowledgeRecovery(failure: ModelRequestFailure, replacement: ModelRequestBudget): void {
+    if (this.failure !== undefined || this.requestFailure !== failure
+      || !recoveryImprovesBudget(failure.code, failure.budget, replacement)) {
+      throw new AgentRunFailure("CONTEXT_COMPACTION_FAILED");
+    }
+    this.requestFailure = undefined;
   }
 
   terminalFailure(): AgentFailureCode | undefined {
@@ -127,9 +145,10 @@ export class GuardedLanguageModel implements LanguageModelV3 {
     let finished = false;
     let hasAnswer = false;
     // Mastra can execute collected calls even after a later stream error.
-    // Keep complete calls behind the validated finish; argument deltas may
-    // still stream to the UI, but cannot authorize a business operation.
-    const pendingCalls: LanguageModelV3StreamPart[] = [];
+    // Mastra can reconstruct a complete invocation from argument deltas on
+    // an error path. Hold the entire tool-input sequence, not only tool-call,
+    // until this model response has a validated completion reason.
+    const pendingToolParts: LanguageModelV3StreamPart[] = [];
     return { ...result, stream: new ReadableStream<LanguageModelV3StreamPart>({
       async pull(controller) {
         try {
@@ -154,17 +173,21 @@ export class GuardedLanguageModel implements LanguageModelV3 {
               if (typeof part.input !== "string") throw new AgentRunFailure("PROVIDER_MALFORMED_STREAM");
               observation.output(part.input);
               hasAnswer = true;
-              pendingCalls.push(part);
+              pendingToolParts.push(part);
               continue;
             }
             if (part.type !== "text-delta" && part.type !== "reasoning-delta" && part.type !== "tool-input-delta") {
               observation.output(JSON.stringify(part));
             }
+            if (part.type === "tool-input-start" || part.type === "tool-input-delta" || part.type === "tool-input-end") {
+              pendingToolParts.push(part);
+              continue;
+            }
             if (part.type === "finish") {
               observation.finish(part, hasAnswer, purpose);
               finished = true;
-              for (const call of pendingCalls) controller.enqueue(call);
-              pendingCalls.length = 0;
+              for (const call of pendingToolParts) controller.enqueue(call);
+              pendingToolParts.length = 0;
             }
             controller.enqueue(part.type === "finish" ? { ...part, usage: frameworkTokenUsage(part.usage) } : part);
             return;

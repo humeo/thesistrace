@@ -1,3 +1,4 @@
+import { invalidRecoveryMessageIds, mayRecoverModelStep, recoveryImprovesBudget } from "./model-step-recovery.js";
 import { sessionControlMessageId } from "./session-control-message.js";
 import type { LanguageModelV3CallOptions } from "@ai-sdk/provider";
 import { MessageList, type MastraDBMessage } from "@mastra/core/agent";
@@ -11,13 +12,14 @@ import type { ResearchSessionRepository } from "./session-repository.js";
 import { AgentRunFailure, providerFailureCode } from "./run-failure.js";
 
 type GenerationOptions = Parameters<typeof generateSessionContext>[0];
-type Repository = Pick<ResearchSessionRepository, "contextCheckpoint" | "rawContextMessages" | "beginContextCycle" | "commitContextCycle" | "releaseContextCycle">;
+type Repository = Pick<ResearchSessionRepository, "contextCheckpoint" | "rawContextMessages" | "beginContextCycle" | "commitContextCycle" | "releaseContextCycle" | "modelStepRecoveries">;
 type ControllerOptions = Omit<GenerationOptions, "removed" | "sourceParts" | "turnPrefixMessageIds" | "currentRequest" | "requiredReferences" | "previous"> & Readonly<{
   repository: Repository; threadId: string; researcherId: string; runId: string;
 }>;
 
 /** Owns the publish boundary. The caller supplies the final provider-shaped request. */
 export class SessionContextController {
+  private lastSourceRequest: LanguageModelV3CallOptions | undefined;
   private latestStatistics: SessionContextSnapshot["statistics"] | undefined;
   get compactionStatistics() { return this.latestStatistics; }
   private readonly counter = new ModelInputTokenCounter();
@@ -25,8 +27,20 @@ export class SessionContextController {
     private readonly generate = generateSessionContext) {}
 
   async prepare(request: LanguageModelV3CallOptions, currentRequestId?: string): Promise<LanguageModelV3CallOptions> {
+    const prepared = await this.prepareSafely(request, currentRequestId);
+    this.lastSourceRequest = request;
+    return prepared;
+  }
+
+  async recover(failure: ModelRequestFailure, currentRequestId?: string) {
+    if (!this.lastSourceRequest || !mayRecoverModelStep(this.options.selection.compactionEnabled, failure.code, failure.budget)) throw failure;
+    const request = await this.prepareSafely(this.lastSourceRequest, currentRequestId, failure);
+    return { request, budget: modelRequestBudget(request, this.options.selection.model, this.counter) };
+  }
+
+  private async prepareSafely(request: LanguageModelV3CallOptions, currentRequestId?: string, recovery?: ModelRequestFailure): Promise<LanguageModelV3CallOptions> {
     try {
-      return await this.prepareContext(request, currentRequestId);
+      return await this.prepareContext(request, currentRequestId, recovery);
     } catch (error) {
       this.options.abortSignal.throwIfAborted();
       if (error instanceof AgentRunFailure) throw error;
@@ -36,15 +50,16 @@ export class SessionContextController {
     }
   }
 
-  private async prepareContext(request: LanguageModelV3CallOptions, currentRequestId?: string): Promise<LanguageModelV3CallOptions> {
+  private async prepareContext(request: LanguageModelV3CallOptions, currentRequestId?: string, recovery?: ModelRequestFailure): Promise<LanguageModelV3CallOptions> {
     const { repository, threadId, researcherId, runId, selection, abortSignal } = this.options;
     abortSignal.throwIfAborted();
     const checkpoint = await repository.contextCheckpoint(threadId, researcherId);
     const raw = await repository.rawContextMessages(threadId, researcherId);
-    let effective = checkpoint ? await this.withSnapshot(request, raw, checkpoint.snapshot) : request;
+    const excluded = invalidRecoveryMessageIds(await repository.modelStepRecoveries(threadId, researcherId));
+    let effective = checkpoint || excluded.length ? await this.withContext(request, raw, checkpoint?.snapshot, excluded) : request;
     const before = modelRequestBudget(effective, selection.model, this.counter);
     const threshold = Math.floor(selection.model.contextWindow * 0.9);
-    if (!selection.compactionEnabled || (before.inputTokens < threshold && before.outputTokens > 0)) {
+    if (!recovery && (!selection.compactionEnabled || (before.inputTokens < threshold && before.outputTokens > 0))) {
       if (before.outputTokens <= 0) throw new ModelRequestFailure("CONTEXT_TOO_LARGE", before);
       return effective;
     }
@@ -56,7 +71,8 @@ export class SessionContextController {
         throw new ContextCandidateError();
       }
       const selected = selectContextHistory(raw, { recentTokens: Math.min(20_000, Math.floor(threshold / 2)), currentRequestId,
-        fixedMessageIds: [sessionControlMessageId(runId)], previous: checkpoint?.snapshot }, this.counter);
+        fixedMessageIds: [sessionControlMessageId(runId)], excludedMessageIds: excluded, previous: checkpoint?.snapshot }, this.counter);
+      if (!selected.removed.length) throw new ModelRequestFailure("CONTEXT_TOO_LARGE", before);
       const requestPosition = raw.findIndex((message) => message.id === currentRequestId);
       const turnPrefixMessageIds = requestPosition < 0 ? [] : raw.slice(requestPosition + 1).map((message) => message.id);
       const generated = await this.generate({ ...this.options, removed: selected.removed,
@@ -77,9 +93,10 @@ export class SessionContextController {
       };
       // Include data appended while the auxiliary models were working.
       const latest = await repository.rawContextMessages(threadId, researcherId);
-      effective = await this.withSnapshot(request, latest, snapshot);
+      effective = await this.withContext(request, latest, snapshot, excluded);
       const after = modelRequestBudget(effective, selection.model, this.counter);
       if (after.inputTokens >= threshold || after.outputTokens <= 0) throw new ContextCandidateError();
+      if (recovery && !recoveryImprovesBudget(recovery.code, recovery.budget, after)) throw new ModelRequestFailure("CONTEXT_TOO_LARGE", after);
       snapshot.statistics.inputTokensAfter = after.inputTokens;
       snapshot.statistics.outputTokensAfter = after.outputTokens;
       snapshot.statistics.elapsedMs = performance.now() - started;
@@ -92,13 +109,13 @@ export class SessionContextController {
     }
   }
 
-  private async withSnapshot(request: LanguageModelV3CallOptions, raw: readonly MastraDBMessage[], snapshot: SessionContextSnapshot): Promise<LanguageModelV3CallOptions> {
+  private async withContext(request: LanguageModelV3CallOptions, raw: readonly MastraDBMessage[], snapshot: SessionContextSnapshot | undefined, excluded: readonly string[]): Promise<LanguageModelV3CallOptions> {
     const list = new MessageList({ threadId: this.options.threadId, resourceId: this.options.researcherId, logger: noopLogger });
-    list.add(restoreContextTail(raw, snapshot), "memory");
+    list.add(snapshot ? restoreContextTail(raw, snapshot, excluded) : raw.filter((message) => !excluded.includes(message.id)), "memory");
     const tail = await list.get.all.aiV6.llmPrompt();
     const prefix = request.prompt.filter((message) => message.role === "system");
-    if (snapshot.renderedMemory) prefix.push({ role: "system", content: snapshot.renderedMemory });
-    prefix.push({ role: "system", content: snapshot.renderedSummary });
+    if (snapshot?.renderedMemory) prefix.push({ role: "system", content: snapshot.renderedMemory });
+    if (snapshot) prefix.push({ role: "system", content: snapshot.renderedSummary });
     return { ...request, prompt: [...prefix, ...tail] };
   }
 }

@@ -176,6 +176,220 @@ describe.sequential("durable Research Agent runtime", () => {
     await owner.end();
   });
 
+  it("recovers a crowded length stop once through the public Run and retains its audit body", async () => {
+    const provider = openAIMemoryProvider({ lengthOnAnswers: [2] });
+    vi.stubGlobal("fetch", provider.fetch);
+    const dependencies = { mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false,
+      toolFailure: () => undefined, tools: {} }) };
+    const runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+    const threadId = randomUUID();
+    const prompt = (existing: boolean) => run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+      modelKey: "luna", reasoningEffort: "high", sessionMode: existing ? "existing" : "new", content: "Explain the research." }), primaryResearcher);
+    try {
+      expect((await prompt(false)).at(-1)?.type).toBe("RUN_FINISHED");
+      await seedRecoveryHistory(threadId);
+      const events = await prompt(true);
+      expect(events.at(-1), JSON.stringify(events.at(-1))).toMatchObject({ type: "RUN_FINISHED" });
+      const repository = new ResearchSessionRepository(agentStore);
+      const recoveries = await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id);
+      expect(recoveries).toHaveLength(1);
+      expect(recoveries[0]).toMatchObject({ status: "succeeded", attempts: 1, invalidReplacement: false });
+      expect(provider.requests.filter((request) => request.phase === "answer")).toHaveLength(3);
+      expect(provider.requests.slice(2).filter((request) => request.phase !== "answer").length).toBeGreaterThan(0);
+      const timeline = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
+      const partial = timeline.turns.flatMap((turn) => turn.entries).find((entry) => entry.entryId === `assistant:${recoveries[0]!.originalMessageId}`);
+      expect(partial?.payload).toMatchObject({ content: "TRUNCATED_ANSWER_CANARY", recovery: { status: "succeeded", attempts: 1 } });
+      expect(timeline.turns.flatMap(turn => turn.entries).find(entry => entry.entryId === `assistant:${recoveries[0]!.replacementMessageId}`)?.payload)
+        .toMatchObject({ supersedes: recoveries[0]!.originalMessageId });
+      expect(events.some(event => event.type === "CUSTOM" && event.name === "session_recovery_changed")).toBe(true);
+      expect(provider.requests.slice(2).every((request) => !request.prompt.includes("TRUNCATED_ANSWER_CANARY"))).toBe(true);
+      expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
+      expect(provider.requests.at(-1)?.prompt).not.toContain("TRUNCATED_ANSWER_CANARY");
+    } finally { await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
+  it.each([
+    { name: "full configured output", capacity: 65536, output: 1000, context: false, code: "OUTPUT_LIMIT" },
+    { name: "no compressible history", capacity: 65536, output: 128000, context: false, code: "CONTEXT_TOO_LARGE" },
+    { name: "small-window length", capacity: 32768, output: 128000, context: false, code: "OUTPUT_LIMIT" },
+    { name: "small-window context rejection", capacity: 32768, output: 128000, context: true, code: "CONTEXT_TOO_LARGE" },
+  ])("does not start auxiliary recovery for $name", async (scenario) => {
+    let executions = 0;
+    const provider = openAIMemoryProvider({ tool: "get_research_run", toolOnAnswers: [1], lengthOnAnswers: scenario.context ? [] : [1], contextOnAnswers: scenario.context ? [1] : [] });
+    vi.stubGlobal("fetch", provider.fetch);
+    const configuration = { ...memoryConfiguration, modelRegistry: { ...memoryConfiguration.modelRegistry,
+      models: memoryConfiguration.modelRegistry.models.map(model => ({ ...model, contextWindow: scenario.capacity, maxOutputTokens: scenario.output })) } };
+    const runtime = await createResearchRuntime(configuration, { mcpRunFactory: async () => ({ close: async () => undefined,
+      hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {
+        get_research_run: createTool({ id: "get_research_run", description: "Read research", inputSchema: z.object({}),
+          execute: async () => { executions++; return { status: "succeeded" }; } }),
+      } }) });
+    const threadId = randomUUID();
+    try {
+      const events = await run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(), modelKey: "luna",
+        reasoningEffort: "high", sessionMode: "new", content: "Explain the research." }), primaryResearcher);
+      expect(executions).toBe(0);
+      expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR", code: scenario.code });
+      expect(provider.requests.map(request => request.phase)).toEqual(["answer"]);
+      const repository = new ResearchSessionRepository(agentStore);
+      expect(await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id))
+        .toMatchObject([{ attempts: scenario.name === "no compressible history" ? 1 : 0, status: "failed" }]);
+      expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toBeNull();
+    } finally { await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
+  it.each([
+    { name: "second length stop", lengthOnAnswers: [2, 3], contextOnAnswers: [], failObserver: false, code: "RECOVERY_FAILED", answers: 3 },
+    { name: "length then context rejection", lengthOnAnswers: [2], contextOnAnswers: [3], failObserver: false, code: "RECOVERY_FAILED", answers: 3 },
+    { name: "context rejection then length", lengthOnAnswers: [3], contextOnAnswers: [2], failObserver: false, code: "RECOVERY_FAILED", answers: 3 },
+    { name: "failed Observer", lengthOnAnswers: [2], contextOnAnswers: [], failObserver: true, code: "CONTEXT_COMPACTION_FAILED", answers: 2 },
+  ])("stops recovery without resetting its claim: $name", async (scenario) => {
+    const provider = openAIMemoryProvider({ ...scenario, tool: "get_research_run", toolOnAnswers: [2, 3] });
+    let executions = 0;
+    vi.stubGlobal("fetch", provider.fetch);
+    const runtime = await createResearchRuntime(memoryConfiguration, { mcpRunFactory: async () => ({ close: async () => undefined,
+      hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {
+        get_research_run: createTool({ id: "get_research_run", description: "Read research", inputSchema: z.object({}),
+          execute: async () => { executions++; return { status: "succeeded" }; } }),
+      } }) });
+    const threadId = randomUUID();
+    const prompt = (existing: boolean) => run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+      modelKey: "luna", reasoningEffort: "high", sessionMode: existing ? "existing" : "new", content: "Explain the research." }), primaryResearcher);
+    try {
+      expect((await prompt(false)).at(-1)?.type).toBe("RUN_FINISHED");
+      await seedRecoveryHistory(threadId);
+      const events = await prompt(true);
+      expect(executions).toBe(0);
+      expect(provider.requests.slice(0, 2).map(request => request.phase)).toEqual(["answer", "answer"]);
+      expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR", code: scenario.code });
+      const repository = new ResearchSessionRepository(agentStore);
+      const recoveries = await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id);
+      expect(recoveries).toHaveLength(1);
+      expect(recoveries[0]).toMatchObject({ status: "failed", attempts: 1, invalidReplacement: true });
+      expect(provider.requests.filter(request => request.phase === "answer")).toHaveLength(scenario.answers);
+      expect(JSON.stringify(events)).not.toContain("private-context-canary");
+      if (scenario.failObserver) expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toBeNull();
+    } finally { await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
+  it.each(["stop", "shutdown"] as const)("terminates an in-flight recovery on %s and never resumes it on restart", async (mode) => {
+    const barrier = toolBarrier();
+    let observing = false;
+    const provider = openAIMemoryProvider({ lengthOnAnswers: [2], onObserver: async (signal) => {
+      observing = true;
+      await waitForGateOrAbort(barrier.promise, signal);
+    } });
+    vi.stubGlobal("fetch", provider.fetch);
+    const dependencies = { mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false,
+      toolFailure: () => undefined, tools: {} }) };
+    let runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+    const threadId = randomUUID(), runId = randomUUID();
+    let pending: Promise<AGUIEvent[]> | undefined;
+    try {
+      expect((await run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(), modelKey: "luna",
+        reasoningEffort: "high", content: "Explain the research." }), primaryResearcher)).at(-1)?.type).toBe("RUN_FINISHED");
+      await seedRecoveryHistory(threadId);
+      pending = run(runtime, runInput({ threadId, runId, messageId: randomUUID(), modelKey: "luna", reasoningEffort: "high",
+        sessionMode: "existing", content: "Continue the explanation." }), primaryResearcher);
+      await vi.waitFor(() => expect(observing).toBe(true));
+      const repository = new ResearchSessionRepository(agentStore);
+      expect(await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id)).toMatchObject([{ attempts: 1, status: "recovering" }]);
+      const timeline = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
+      expect(timeline.turns.flatMap(turn => turn.entries).some(entry => entry.kind === "assistant_message" && entry.payload.recovery?.status === "recovering")).toBe(true);
+      if (mode === "stop") await runtime.stop(threadId, primaryResearcher, stopInput(randomUUID(), runId));
+      else await runtime.close();
+      await pending;
+      barrier.resolve();
+      expect(await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id))
+        .toMatchObject([{ attempts: 1, status: "failed", afterBudget: null }]);
+      expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toBeNull();
+      await runtime.close();
+      runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+      await connect(runtime, threadId, primaryResearcher);
+      expect(provider.requests.filter(request => request.phase === "answer")).toHaveLength(2);
+      expect(await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id)).toMatchObject([{ attempts: 1, status: "failed" }]);
+    } finally { barrier.resolve(); await pending; await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
+  it.each(["replacement", "later-step"] as const)("retains only completed replacement evidence when cancelling %s", async (phase) => {
+    const barrier = toolBarrier();
+    let replacing = false; let executions = 0;
+    const interruptedAnswer = phase === "replacement" ? 3 : 4;
+    const provider = openAIMemoryProvider({ lengthOnAnswers: [2], tool: phase === "later-step" ? "get_research_run" : undefined, toolOnAnswers: [3],
+      answerTexts: { [interruptedAnswer]: "INTERRUPTED_REPLACEMENT_CANARY" },
+      onAnswerDelta: async (index, signal) => {
+        if (index !== interruptedAnswer) return;
+        replacing = true;
+        await waitForGateOrAbort(barrier.promise, signal);
+      } });
+    vi.stubGlobal("fetch", provider.fetch);
+    const dependencies = { mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false,
+      toolFailure: () => undefined, tools: {
+        get_research_run: createTool({ id: "get_research_run", description: "Read research", inputSchema: z.object({}),
+          execute: async () => { executions++; return { evidence: "VALID_REPLACEMENT_TOOL_CANARY", request_id: "retained-request" }; } }),
+      } }) };
+    let runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+    const threadId = randomUUID(), runId = randomUUID();
+    const request = (id: string, existing: boolean) => runInput({ threadId, runId: id, messageId: randomUUID(), modelKey: "luna",
+      reasoningEffort: "high", sessionMode: existing ? "existing" : "new", content: "Explain the research." });
+    let pending: Promise<AGUIEvent[]> | undefined;
+    try {
+      expect((await run(runtime, request(randomUUID(), false), primaryResearcher)).at(-1)?.type).toBe("RUN_FINISHED");
+      await seedRecoveryHistory(threadId);
+      pending = run(runtime, request(runId, true), primaryResearcher);
+      await vi.waitFor(() => expect(replacing).toBe(true));
+      const repository = new ResearchSessionRepository(agentStore);
+      await vi.waitFor(async () => {
+        const page = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
+        expect(page.turns.flatMap(turn => turn.entries).some(entry => entry.kind === "assistant_message"
+          && entry.payload.content === "INTERRUPTED_REPLACEMENT_CANARY")).toBe(true);
+      });
+      await runtime.stop(threadId, primaryResearcher, stopInput(randomUUID(), runId));
+      await pending;
+      expect(await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id))
+        .toMatchObject([{ status: "failed", attempts: 1, invalidReplacement: phase === "replacement" }]);
+      await runtime.close();
+      runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+      expect((await run(runtime, request(randomUUID(), true), primaryResearcher)).at(-1)?.type).toBe("RUN_FINISHED");
+      const nextPrompt = provider.requests.filter(request => request.phase === "answer").at(-1)?.prompt;
+      if (phase === "replacement") expect(nextPrompt).not.toContain("INTERRUPTED_REPLACEMENT_CANARY");
+      else expect(nextPrompt).toContain("VALID_REPLACEMENT_TOOL_CANARY");
+      expect(executions).toBe(phase === "replacement" ? 0 : 1);
+      const page = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
+      expect(page.turns.flatMap(turn => turn.entries).some(entry => entry.kind === "assistant_message"
+        && entry.payload.content === "INTERRUPTED_REPLACEMENT_CANARY")).toBe(true);
+    } finally { barrier.resolve(); await pending; await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
+  it("claims one recovery per logical model step across concurrent callers and error types", async () => {
+    const repository = new ResearchSessionRepository(agentStore);
+    const threadId = randomUUID(), runId = randomUUID(), originalMessageId = randomUUID();
+    await prepareA2UIRepositoryRun(repository, threadId, runId, randomUUID());
+    const before = { contextWindow: 258000, inputTokens: 220000, desiredOutputTokens: 128000, outputTokens: 33904, safetyTokens: 4096 };
+    const stop = { threadId, researcherId: primaryResearcher.researcher_id, runId, messageId: originalMessageId,
+      cause: "OUTPUT_LIMIT" as const, budget: before, allowRecovery: true };
+    const claims = await Promise.all([repository.recordModelStepStop(stop),
+      new ResearchSessionRepository(agentStore).recordModelStepStop(stop)]);
+    expect(claims.filter((claim) => claim.claimed)).toHaveLength(1);
+    const record = claims[0]!.recovery;
+    expect(record).toMatchObject({ originalMessageId, attempts: 1, status: "recovering" });
+    expect(record.replacementMessageId).toEqual(expect.any(String));
+    await expect(repository.modelStepRecoveries(threadId, foreignResearcher.researcher_id)).rejects.toBeInstanceOf(SessionNotFoundError);
+    const repeated = await repository.recordModelStepStop({ ...stop, messageId: record.replacementMessageId!, cause: "CONTEXT_TOO_LARGE" });
+    expect(repeated.claimed).toBe(false);
+    expect(repeated.recovery.originalMessageId).toBe(originalMessageId);
+    expect(repeated.recovery.attempts).toBe(1);
+    expect(repeated.recovery.invalidReplacement).toBe(true);
+    await repository.updateModelStepRecovery(threadId, primaryResearcher.researcher_id, runId, originalMessageId,
+      { status: "failed", errorCode: "OUTPUT_LIMIT" });
+    expect((await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id))[0]).toMatchObject({ status: "failed", attempts: 1 });
+    expect((await repository.recordModelStepStop(stop)).claimed).toBe(false);
+    const disabled = await repository.recordModelStepStop({ ...stop, messageId: randomUUID(), allowRecovery: false });
+    expect(disabled).toMatchObject({ claimed: false, recovery: { attempts: 0, replacementMessageId: null, status: "failed" } });
+    await repository.markFailed(runId, undefined, "OUTPUT_LIMIT");
+    await repository.deleteSession(threadId, primaryResearcher.researcher_id);
+  });
+
   it("publishes complete context snapshots with ownership, source and revision checks", async () => {
     const repository = new ResearchSessionRepository(agentStore);
     const threadId = randomUUID(), runId = randomUUID();
@@ -522,7 +736,11 @@ describe.sequential("durable Research Agent runtime", () => {
   }, 30_000);
 
   it.each(Object.entries(SCRIPTED_FAILURE_PROMPTS))("persists one %s terminal event and retries only on a new explicit message", async (code, content) => {
-    const runtime = await createIntegrationRuntime();
+    // This contract verifies an exhausted full allowance, without crowded-context recovery.
+    const runtime = await createResearchRuntime({ ...settings, modelRegistry: { ...settings.modelRegistry,
+      models: settings.modelRegistry.models.map(model => ({ ...model, maxOutputTokens: 1000 })) } }, {
+      mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }),
+    });
     const input = runInput({ content, messageId: fixedUuid(702), runId: fixedUuid(701), threadId: fixedUuid(700) });
     try {
       const events = await run(runtime, input, primaryResearcher);
@@ -3512,6 +3730,22 @@ describe.sequential("durable Research Agent runtime", () => {
     }
   });
 });
+
+function waitForGateOrAbort(gate: Promise<void>, signal: AbortSignal | null | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal?.reason);
+    if (signal?.aborted) { abort(); return; }
+    signal?.addEventListener("abort", abort, { once: true });
+    void gate.then(() => { signal?.removeEventListener("abort", abort); resolve(); });
+  });
+}
+
+async function seedRecoveryHistory(threadId: string): Promise<void> {
+  const memory = new Memory({ storage: new PostgresStore({ id: "recovery-history", pool: agentStore, schemaName: "agent", disableInit: true }), vector: false });
+  await memory.saveMessages({ messages: Array.from({ length: 5 }, (_, index) => ({ id: randomUUID(), threadId,
+    resourceId: primaryResearcher.researcher_id, role: "assistant" as const, createdAt: new Date(Date.now() - 60000 + index),
+    content: { format: 2 as const, parts: [{ type: "text" as const, text: "retained research evidence ".repeat(1700) }] } })) });
+}
 
 function toolBarrier(): Readonly<{ promise: Promise<void>; resolve: () => void }> {
   let resolve = () => undefined as void;

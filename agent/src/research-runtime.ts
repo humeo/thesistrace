@@ -1,3 +1,5 @@
+import { SessionModelRecovery } from "./session-model-recovery.js";
+import { invalidRecoveryMessageIds } from "./model-step-recovery.js";
 import { isSessionControlMessageId, sessionControlMessage, sessionControlMessageId } from "./session-control-message.js";
 import { ContextLanguageModel } from "./context-language-model.js";
 import { SessionContextController } from "./session-context-controller.js";
@@ -182,7 +184,7 @@ export async function createResearchRuntime(
         maxSteps: Number.POSITIVE_INFINITY,
         // The Provider boundary reduces this configured allowance to fit the actual input.
         modelSettings: { maxOutputTokens: selectionFrom(requestContext).model.maxOutputTokens, timeout: { stepMs: AGENT_LIMITS.providerCallMs } },
-        maxProcessorRetries: 0,
+        maxProcessorRetries: 1,
         onError: ({ error }: { error: unknown }) => { observation?.fail(providerFailureCode(error)); },
         providerOptions: selectionFrom(requestContext).providerOptions,
         // Completed tool steps must be durable while a later MCP call is still
@@ -209,7 +211,7 @@ export async function createResearchRuntime(
     },
     inputProcessors: () => [{
       id: "session-context-input",
-      processInputStep: async ({ messageList, requestContext, rotateResponseMessageId }) => {
+      processInputStep: async ({ messageList, requestContext, rotateResponseMessageId, retryCount }) => {
         if (!requestContext) throw new Error("SESSION_CONTEXT_IDENTITY_MISSING");
         const threadId = requestContext.get<string, string>("contextThreadId");
         const researcherId = requestContext.get<string, string>("contextResearcherId");
@@ -218,13 +220,14 @@ export async function createResearchRuntime(
         if (!threadId || !researcherId || !runId || !abortSignal) throw new Error("SESSION_CONTEXT_IDENTITY_MISSING");
         abortSignal.throwIfAborted();
         await assertOwnedThread(repository, threadId, researcherId);
+        messageList.removeByIds(invalidRecoveryMessageIds(await repository.modelStepRecoveries(threadId, researcherId)));
         if (!messageList.get.all.db().some((message) => message.id === sessionControlMessageId(runId))) {
           const lastCreated = Math.max(Date.now(), ...messageList.get.all.db().map((message) => message.createdAt.getTime() + 1));
           messageList.add(sessionControlMessage({ runId, threadId, researcherId, createdAt: new Date(lastCreated),
             continueIntent: requestContext.get("continueIntent") === true }), "context", { merge: false });
-          if (!rotateResponseMessageId) throw new Error("SESSION_CONTEXT_RESPONSE_BOUNDARY_MISSING");
-          rotateResponseMessageId();
         }
+        if (!rotateResponseMessageId) throw new Error("SESSION_CONTEXT_RESPONSE_BOUNDARY_MISSING");
+        const freshResponseId = rotateResponseMessageId();
         const messages = messageList.get.all.db().filter((message) => message.role !== "system" && message.content.parts.length > 0);
         if (messages.some((message) => message.threadId !== threadId || message.resourceId !== researcherId)) {
           throw new Error("SESSION_CONTEXT_SOURCE_IDENTITY_MISMATCH");
@@ -236,8 +239,28 @@ export async function createResearchRuntime(
           repository, threadId, researcherId, runId, selection: selectionFrom(requestContext),
           storage, mastra, requestContext, abortSignal,
         }));
+        let recovery = requestContext.get<string, SessionModelRecovery | undefined>("sessionModelRecovery");
+        if (!recovery) {
+          const observation = requestContext.get<string, RunModelObservation | undefined>("modelObservation");
+          const context = requestContext.get<string, SessionContextController>("sessionContextController");
+          if (!observation || !context) throw new Error("SESSION_CONTEXT_IDENTITY_MISSING");
+          recovery = new SessionModelRecovery({ repository, memory: createResearchMemory(storage), threadId, researcherId, runId,
+            selection: selectionFrom(requestContext), context, observation, abortSignal,
+            notify: () => requestContext.get<string, (() => void) | undefined>("notifyModelRecovery")?.() });
+          requestContext.set("sessionModelRecovery", recovery);
+        }
+        return { messageId: recovery.responseMessageId(freshResponseId, retryCount) };
       },
     }],
+    outputProcessors: [{ id: "session-replacement-completion", processOutputStep: async ({ requestContext, finishReason, messageList }) => {
+      await requestContext?.get<string, SessionModelRecovery | undefined>("sessionModelRecovery")?.completeResponse(finishReason);
+      return messageList;
+    } }],
+    errorProcessors: [{ id: "session-model-recovery", processAPIError: async ({ error, messageList, requestContext }) => {
+      const recovery = requestContext?.get<string, SessionModelRecovery | undefined>("sessionModelRecovery");
+      if (!recovery) throw error;
+      return recovery.handle(error, messageList, requestContext?.get<string, string | undefined>("contextCurrentRequestId"));
+    } }],
     model: ({ requestContext }) => new ContextLanguageModel(selectionFrom(requestContext).languageModel, async (request) => {
       const controller = requestContext.get<string, SessionContextController | undefined>("sessionContextController");
       if (!controller) throw new Error("SESSION_CONTEXT_INPUT_NOT_PREPARED");

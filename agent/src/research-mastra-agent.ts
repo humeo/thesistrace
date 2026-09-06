@@ -309,8 +309,12 @@ export class ResearchMastraAgent extends MastraAgent {
       let settle!: () => void;
       const drained = new Promise<void>((resolve) => { settle = resolve; });
       this.execution.pendingBridges.add(drained);
+      this.execution.requestContext.set("notifyModelRecovery", () => subscriber.next({
+        type: EventType.CUSTOM, name: "session_recovery_changed", value: { runId: input.runId },
+      }));
       const finish = () => {
         completed = true;
+        this.execution.requestContext.set("notifyModelRecovery", undefined);
         this.execution.pendingBridges.delete(drained);
         settle();
       };

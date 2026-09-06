@@ -8,13 +8,13 @@ type Part = Readonly<{ message: MastraDBMessage; reference: ContextPartReference
 /** Select once at compaction; ordinary requests must use restoreContextTail instead. */
 export function selectContextHistory(
   messages: readonly MastraDBMessage[],
-  options: Readonly<{ recentTokens: number; currentRequestId?: string; fixedMessageIds?: readonly string[]; previous?: Boundary }>,
+  options: Readonly<{ recentTokens: number; currentRequestId?: string; fixedMessageIds?: readonly string[]; excludedMessageIds?: readonly string[]; previous?: Boundary }>,
   counter = new ModelInputTokenCounter(),
 ): Readonly<{ retainedParts: ContextPartReference[]; removedParts: ContextPartReference[]; retained: MastraDBMessage[]; removed: MastraDBMessage[] }> {
   if (!Number.isSafeInteger(options.recentTokens) || options.recentTokens < 1) throw new Error("CONTEXT_TAIL_BUDGET_INVALID");
   const active = options.previous ? effectiveReferences(messages, options.previous) : undefined;
   const keys = active ? new Set(active.map(referenceKey)) : undefined;
-  const parts = flatten(messages).filter((item) => !keys || keys.has(referenceKey(item.reference)))
+  const parts = flatten(messages).filter((item) => !options.excludedMessageIds?.includes(item.message.id) && (!keys || keys.has(referenceKey(item.reference))))
     .map((item, index) => ({ ...item, index }));
   if (options.currentRequestId && !parts.some((item) => item.message.id === options.currentRequestId && item.message.role === "user")) {
     throw new Error("CONTEXT_CURRENT_REQUEST_MISSING");
@@ -82,8 +82,8 @@ export function selectContextHistory(
 }
 
 /** R stays fixed; only source parts/messages appended after publication enter N. */
-export function restoreContextTail(messages: readonly MastraDBMessage[], boundary: Boundary): MastraDBMessage[] {
-  return project(messages, effectiveReferences(messages, boundary));
+export function restoreContextTail(messages: readonly MastraDBMessage[], boundary: Boundary, excludedMessageIds: readonly string[] = []): MastraDBMessage[] {
+  return project(messages, effectiveReferences(messages, boundary).filter((part) => !excludedMessageIds.includes(part.messageId)));
 }
 
 /** References always address the immutable source, never a projected message's indices. */

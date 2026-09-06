@@ -310,7 +310,7 @@ function TimelineTurnView({
   const lastTool = assistantEntries.reduce((last, entry, index) => entry.kind === "tool_activity" ? index : last, -1);
   const processEntries = assistantEntries.filter((entry, index) => (
     entry.kind === "tool_activity"
-    || (entry.kind === "assistant_message" && (index < lastTool || (!ended && lastTool >= 0)))
+    || (entry.kind === "assistant_message" && !entry.payload.recovery && (index < lastTool || (!ended && lastTool >= 0)))
     || isProgressSurface(entry)
   ));
   const processIds = new Set(processEntries.map((entry) => entry.entry_id));
@@ -406,7 +406,15 @@ function TimelineItem({
         <div className="chat-message-content">
           <AssistantMarkdown content={entry.payload.content} streaming={entry.payload.status === "streaming"} />
         </div>
-        {entry.payload.status === "stopped" || entry.payload.status === "failed" ? (
+        {entry.payload.recovery ? (
+          <span className="chat-assistant-outcome" role="status">
+            {entry.payload.recovery.status === "recovering" ? "Partial response · preparing a replacement"
+              : entry.payload.recovery.status === "succeeded" ? "Partial response · replaced by the complete answer below"
+              : entry.payload.recovery.attempts === 1 ? "Partial response · recovery failed"
+              : entry.payload.recovery.cause === "OUTPUT_LIMIT" ? "Partial response · output limit reached"
+              : "Response stopped · context is too large"}
+          </span>
+        ) : entry.payload.status === "stopped" || entry.payload.status === "failed" ? (
           <span className={`chat-assistant-outcome chat-assistant-outcome-${entry.payload.status}`}>
             {entry.payload.status === "stopped" ? "Partial response · stopped" : "Partial response · failed"}
           </span>

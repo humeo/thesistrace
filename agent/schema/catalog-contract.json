@@ -1050,6 +1050,110 @@
     },
     {
       "default": null,
+      "name": "thread_id",
+      "notNull": true,
+      "position": 1,
+      "relation": "model_step_recovery",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "run_id",
+      "notNull": true,
+      "position": 2,
+      "relation": "model_step_recovery",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "original_message_id",
+      "notNull": true,
+      "position": 3,
+      "relation": "model_step_recovery",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "replacement_message_id",
+      "notNull": false,
+      "position": 4,
+      "relation": "model_step_recovery",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "attempts",
+      "notNull": true,
+      "position": 5,
+      "relation": "model_step_recovery",
+      "type": "smallint"
+    },
+    {
+      "default": "true",
+      "name": "invalid_replacement",
+      "notNull": true,
+      "position": 6,
+      "relation": "model_step_recovery",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "name": "cause",
+      "notNull": true,
+      "position": 7,
+      "relation": "model_step_recovery",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "status",
+      "notNull": true,
+      "position": 8,
+      "relation": "model_step_recovery",
+      "type": "text"
+    },
+    {
+      "default": null,
+      "name": "before_budget",
+      "notNull": true,
+      "position": 9,
+      "relation": "model_step_recovery",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "after_budget",
+      "notNull": false,
+      "position": 10,
+      "relation": "model_step_recovery",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "error_code",
+      "notNull": false,
+      "position": 11,
+      "relation": "model_step_recovery",
+      "type": "text"
+    },
+    {
+      "default": "clock_timestamp()",
+      "name": "created_at",
+      "notNull": true,
+      "position": 12,
+      "relation": "model_step_recovery",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": "clock_timestamp()",
+      "name": "updated_at",
+      "notNull": true,
+      "position": 13,
+      "relation": "model_step_recovery",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
       "name": "singleton",
       "notNull": true,
       "position": 1,
@@ -1479,6 +1583,84 @@
       "type": "u"
     },
     {
+      "definition": "CHECK ((jsonb_typeof(after_budget) = 'object'::text))",
+      "name": "model_step_recovery_after_budget_check",
+      "relation": "model_step_recovery",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((attempts = ANY (ARRAY[0, 1])))",
+      "name": "model_step_recovery_attempts_check",
+      "relation": "model_step_recovery",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((jsonb_typeof(before_budget) = 'object'::text))",
+      "name": "model_step_recovery_before_budget_check",
+      "relation": "model_step_recovery",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((cause = ANY (ARRAY['OUTPUT_LIMIT'::text, 'CONTEXT_TOO_LARGE'::text])))",
+      "name": "model_step_recovery_cause_check",
+      "relation": "model_step_recovery",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((((attempts = 0) AND (replacement_message_id IS NULL) AND (status = 'failed'::text)) OR ((attempts = 1) AND (replacement_message_id IS NOT NULL) AND (replacement_message_id <> original_message_id))))",
+      "name": "model_step_recovery_check",
+      "relation": "model_step_recovery",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK (((status = 'failed'::text) = (error_code IS NOT NULL)))",
+      "name": "model_step_recovery_check1",
+      "relation": "model_step_recovery",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK (((status <> 'succeeded'::text) OR (after_budget IS NOT NULL)))",
+      "name": "model_step_recovery_check2",
+      "relation": "model_step_recovery",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK (((length(original_message_id) >= 1) AND (length(original_message_id) <= 400)))",
+      "name": "model_step_recovery_original_message_id_check",
+      "relation": "model_step_recovery",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (thread_id, original_message_id)",
+      "name": "model_step_recovery_pkey",
+      "relation": "model_step_recovery",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK (((length(replacement_message_id) >= 1) AND (length(replacement_message_id) <= 400)))",
+      "name": "model_step_recovery_replacement_message_id_check",
+      "relation": "model_step_recovery",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK ((status = ANY (ARRAY['recovering'::text, 'succeeded'::text, 'failed'::text])))",
+      "name": "model_step_recovery_status_check",
+      "relation": "model_step_recovery",
+      "type": "c"
+    },
+    {
+      "definition": "UNIQUE (thread_id, replacement_message_id)",
+      "name": "model_step_recovery_thread_id_replacement_message_id_key",
+      "relation": "model_step_recovery",
+      "type": "u"
+    },
+    {
+      "definition": "FOREIGN KEY (thread_id, run_id) REFERENCES agent.agent_run(thread_id, id) ON DELETE CASCADE",
+      "name": "model_step_recovery_thread_id_run_id_fkey",
+      "relation": "model_step_recovery",
+      "type": "f"
+    },
+    {
       "definition": "PRIMARY KEY (singleton)",
       "name": "schema_contract_pkey",
       "relation": "schema_contract",
@@ -1665,6 +1847,16 @@
       "relation": "mastra_workflow_snapshot"
     },
     {
+      "definition": "CREATE UNIQUE INDEX model_step_recovery_pkey ON agent.model_step_recovery USING btree (thread_id, original_message_id)",
+      "name": "model_step_recovery_pkey",
+      "relation": "model_step_recovery"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX model_step_recovery_thread_id_replacement_message_id_key ON agent.model_step_recovery USING btree (thread_id, replacement_message_id)",
+      "name": "model_step_recovery_thread_id_replacement_message_id_key",
+      "relation": "model_step_recovery"
+    },
+    {
       "definition": "CREATE UNIQUE INDEX schema_contract_pkey ON agent.schema_contract USING btree (singleton)",
       "name": "schema_contract_pkey",
       "relation": "schema_contract"
@@ -1769,6 +1961,14 @@
       "forceRowSecurity": false,
       "kind": "r",
       "name": "mastra_workflow_snapshot",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "model_step_recovery",
       "owner": "thesistrace_owner",
       "persistence": "p",
       "rowSecurity": false

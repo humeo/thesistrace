@@ -35,6 +35,20 @@ test("renders each complete Turn in order with assistant text and right-aligned 
   expect(document.querySelector(".chat-turn-assistant-meta")?.textContent).toContain("Worked for 1m 0s");
 });
 
+test.each([
+  ["recovering", "preparing a replacement"],
+  ["succeeded", "replaced by the complete answer below"],
+  ["failed", "recovery failed"],
+] as const)("preserves partial text with durable %s recovery status", async (status, label) => {
+  await mount(controller({ turns: [timelineTurn([
+    entry("assistant_message", "assistant:original", { content: "Preserved partial answer", status: "complete",
+      recovery: { status, cause: "OUTPUT_LIMIT", attempts: 1, replacementMessageId: INPUT_ID, errorCode: status === "failed" ? "RECOVERY_FAILED" : null } }),
+    ...(status === "succeeded" ? [entry("assistant_message", "assistant:replacement", { content: "Complete replacement answer", status: "complete", supersedes: INPUT_ID })] : []),
+  ])] }));
+  expect(document.querySelector('[data-entry-id="assistant:original"]')?.textContent).toContain("Preserved partial answer");
+  expect(document.querySelector('[role="status"]')?.textContent).toContain(label);
+});
+
 test("shows only a quiet ring before the first assistant text in the active Turn", async () => {
   await mount(controller({
     currentTurnId: TURN_ID,

@@ -3,6 +3,14 @@ import { isUuid } from "../uuid";
 const REQUEST_TIMEOUT_MS = 5_000;
 const TIMELINE_LIMIT = 20;
 
+export type AssistantRecovery = Readonly<{
+  status: "recovering" | "succeeded" | "failed";
+  cause: "OUTPUT_LIMIT" | "CONTEXT_TOO_LARGE";
+  attempts: 0 | 1;
+  replacementMessageId: string | null;
+  errorCode: string | null;
+}>;
+
 export type ChatTurnStatus =
   | "running"
   | "waiting_for_user"
@@ -40,7 +48,7 @@ export type TimelineEntry = Readonly<{
     }>
   | Readonly<{
       kind: "assistant_message";
-      payload: Readonly<{ content: string; status: "streaming" | "complete" | "stopped" | "failed" }>;
+      payload: Readonly<{ content: string; status: "streaming" | "complete" | "stopped" | "failed"; recovery?: AssistantRecovery; supersedes?: string }>;
     }>
   | Readonly<{
       kind: "tool_activity";
@@ -331,8 +339,10 @@ function decodeTimelineEntry(value: unknown, expectedTurnId: string): TimelineEn
   }
   if (value.kind === "assistant_message") {
     if (
-      !isExactRecord(value.payload, ["content", "status"])
+      !isExactRecord(value.payload, ["content", "status", ...(isRecord(value.payload) && value.payload.recovery !== undefined ? ["recovery"] : []), ...(isRecord(value.payload) && value.payload.supersedes !== undefined ? ["supersedes"] : [])])
       || typeof value.payload.content !== "string"
+      || (value.payload.recovery !== undefined && !isAssistantRecovery(value.payload.recovery))
+      || (value.payload.supersedes !== undefined && (typeof value.payload.supersedes !== "string" || !isUuid(value.payload.supersedes)))
       || !["streaming", "complete", "stopped", "failed"].includes(String(value.payload.status))
     ) throw new ChatApiError("INVALID_CHAT_RESPONSE", 500);
     return { ...base, kind: value.kind, payload: value.payload } as TimelineEntry;
@@ -434,6 +444,15 @@ function isDatabaseUtc(value: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isAssistantRecovery(value: unknown): value is AssistantRecovery {
+  return isExactRecord(value, ["status", "cause", "attempts", "replacementMessageId", "errorCode"])
+    && ["recovering", "succeeded", "failed"].includes(String(value.status))
+    && ["OUTPUT_LIMIT", "CONTEXT_TOO_LARGE"].includes(String(value.cause))
+    && (value.attempts === 0 || value.attempts === 1)
+    && (value.replacementMessageId === null || (typeof value.replacementMessageId === "string" && isUuid(value.replacementMessageId)))
+    && (value.errorCode === null || typeof value.errorCode === "string");
 }
 
 function isExactRecord(value: unknown, keys: readonly string[]): value is Record<string, unknown> {

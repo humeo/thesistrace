@@ -357,6 +357,11 @@ export class BrowserEventProjector {
           toolCallId: event.toolCallId,
           type: EventType.TOOL_CALL_RESULT,
         }];
+      case EventType.CUSTOM: {
+        if (event.name !== "session_recovery_changed" || !isRecord(event.value)
+          || typeof event.value.runId !== "string" || !isCanonicalUuid(event.value.runId)) return [];
+        return [{ type: EventType.CUSTOM, name: "session_recovery_changed", value: { runId: event.value.runId } }];
+      }
       case EventType.TEXT_MESSAGE_START: {
         const messageId = safeAssistantMessageId(event.messageId);
         if (event.role !== "assistant" || this.openTextMessages.has(messageId)) {

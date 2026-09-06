@@ -11,6 +11,14 @@ const RUN_ID = "00000000-0000-4000-8000-000000000002";
 afterEach(() => vi.useRealTimers());
 
 describe("browser-safe chat timeline projection", () => {
+  it("preserves the model response identity for durable recovery links", async () => {
+    const persistAssistantMessage = vi.fn(async () => undefined);
+    const projector = new ChatTimelineProjector({ persistAssistantMessage } as unknown as ResearchSessionRepository, THREAD_ID, RUN_ID);
+    await projector.project(event({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: "response-original", delta: "Partial answer" }));
+    await projector.project(event({ type: EventType.TEXT_MESSAGE_END, messageId: "response-original" }));
+    expect(persistAssistantMessage).toHaveBeenLastCalledWith(THREAD_ID, RUN_ID, "response-original", "Partial answer");
+  });
+
   it("keeps reused message IDs separate across tool boundaries", async () => {
     const rows = new Map<string, { kind: string; content: string }>();
     const projector = new ChatTimelineProjector({

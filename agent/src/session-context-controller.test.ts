@@ -1,3 +1,5 @@
+import { ModelRequestFailure } from "./guarded-language-model.js";
+import type { ModelStepRecovery } from "./model-step-recovery.js";
 import { MessageList, type MastraDBMessage } from "@mastra/core/agent";
 import { Mastra } from "@mastra/core/mastra";
 import { noopLogger } from "@mastra/core/logger";
@@ -37,7 +39,9 @@ async function fixture() {
       displayName: "Fixture", enabled: true, key: "fixture", providerAdapter: "scripted", providerModelId: "fixture", reasoningEfforts: ["none"] } };
   let checkpoint: SessionContextCheckpoint | null = null;
   let claimed = false;
+  const recoveries: ModelStepRecovery[] = [];
   const repository = {
+    modelStepRecoveries: async () => recoveries,
     contextCheckpoint: async () => checkpoint,
     rawContextMessages: async () => structuredClone(raw),
     beginContextCycle: async (): Promise<SessionContextCycle> => {
@@ -53,7 +57,7 @@ async function fixture() {
   const abort = new AbortController();
   const options = { repository, threadId: "session", researcherId: "owner", runId: "run", selection, storage: new InMemoryStore(),
     mastra: new Mastra({ logger: noopLogger }), requestContext: new RequestContext(), abortSignal: abort.signal };
-  return { options, request: { prompt, maxOutputTokens: 128_000 }, raw, abort, published: () => checkpoint, claimed: () => claimed };
+  return { options, recoveries, request: { prompt, maxOutputTokens: 128_000 }, raw, abort, published: () => checkpoint, claimed: () => claimed };
 }
 const candidate = { memory: "A stable fact.", summary: "Continue the research using the retained request.", auxiliaryInputTokens: 100, auxiliaryOutputTokens: 20 };
 
@@ -229,4 +233,54 @@ test("no output room permits one protective cycle below 90 percent when the conf
   await expect(controller.prepare(request)).rejects.toThrow("CONTEXT_COMPACTION_FAILED");
   expect(attempts).toBe(1);
   expect(f.published()).toBeNull();
+});
+
+test("forced recovery below 90 percent excludes truncated evidence and requires budget improvement", async () => {
+  const f = await fixture();
+  f.raw[0]!.content.parts = [{ type: "text", text: "historical evidence ".repeat(12000) }];
+  const list = new MessageList(); list.add(f.raw, "memory");
+  const request = { prompt: await list.get.all.aiV6.llmPrompt(), maxOutputTokens: 128000 };
+  const generated: string[] = [];
+  const controller = new SessionContextController(f.options, async (input) => {
+    generated.push(JSON.stringify(input.removed)); return candidate;
+  });
+  const prepared = await controller.prepare(request, "request");
+  const before = modelRequestBudget(prepared, f.options.selection.model);
+  expect(before.inputTokens).toBeLessThan(58982);
+  expect(generated).toEqual([]);
+  f.raw.push({ ...f.raw[0]!, id: "partial", content: { format: 2, parts: [{ type: "text", text: "INVALID_TRUNCATED_FACT" }] } });
+  f.recoveries.push({ runId: "run", originalMessageId: "partial", replacementMessageId: "replacement", attempts: 1, invalidReplacement: false,
+    cause: "OUTPUT_LIMIT", status: "recovering", beforeBudget: before, afterBudget: null, errorCode: null });
+  const after = await controller.recover(new ModelRequestFailure("OUTPUT_LIMIT", before), "request");
+  expect(after.budget.inputTokens).toBeLessThan(before.inputTokens);
+  expect(after.budget.outputTokens).toBeGreaterThan(before.outputTokens);
+  expect(JSON.stringify(after.request.prompt)).not.toContain("INVALID_TRUNCATED_FACT");
+  expect(generated.join("")).not.toContain("INVALID_TRUNCATED_FACT");
+  expect(f.raw.some((message) => message.id === "partial")).toBe(true);
+  expect(f.published()).not.toBeNull();
+});
+
+test("forced recovery does not publish an otherwise affordable snapshot without improvement", async () => {
+  const f = await fixture();
+  const evidence = "historical evidence ".repeat(12000);
+  f.raw[0]!.content.parts = [{ type: "text", text: evidence }];
+  const list = new MessageList(); list.add(f.raw, "memory");
+  const request = { prompt: await list.get.all.aiV6.llmPrompt(), maxOutputTokens: 128000 };
+  const controller = new SessionContextController(f.options, async () => ({ ...candidate, summary: evidence + " extra ".repeat(1000) }));
+  const before = modelRequestBudget(await controller.prepare(request, "request"), f.options.selection.model);
+  await expect(controller.recover(new ModelRequestFailure("OUTPUT_LIMIT", before), "request")).rejects.toThrow();
+  expect(f.published()).toBeNull();
+  expect(f.claimed()).toBe(false);
+});
+
+test.each(["small-window", "full-allowance"] as const)("forced recovery cannot bypass the %s gate", async (mode) => {
+  const f = await fixture();
+  const selection = { ...f.options.selection, compactionEnabled: mode !== "small-window" };
+  const controller = new SessionContextController({ ...f.options, selection }, async () => { throw new Error("Unexpected compression"); });
+  const request = { prompt: [{ role: "user" as const, content: [{ type: "text" as const, text: "Short request" }] }], maxOutputTokens: 1000 };
+  const before = modelRequestBudget(await controller.prepare(request), selection.model);
+  const cause = mode === "small-window" ? "CONTEXT_TOO_LARGE" : "OUTPUT_LIMIT";
+  await expect(controller.recover(new ModelRequestFailure(cause, before))).rejects.toMatchObject({ code: cause });
+  expect(f.published()).toBeNull();
+  expect(f.claimed()).toBe(false);
 });
