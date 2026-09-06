@@ -6,8 +6,8 @@ from pathlib import Path
 from threading import Event
 
 import pytest
+from core_runtime import TEST_RESEARCHER, drop_product_schemas, isolated_core_settings
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas, isolated_core_settings
 from fastapi.testclient import TestClient
 from psycopg.errors import CheckViolation, ForeignKeyViolation
 from psycopg.types.json import Jsonb
@@ -360,6 +360,12 @@ def test_batch_detail_separates_durable_and_live_progress_and_survives_restart(
             assert expired["attempt"]["status"] == "running"
             assert expired["progress"] == durable_progress
             assert expired["live_progress"] is None
+            expired_run = client.get(
+                f"/api/research-runs/{active['items'][0]['research_run_id']}"
+            ).json()
+            assert expired_run["progress"]["phase"] == "recovering"
+            assert expired_run["progress"]["completed_research_sessions"] == 0
+            assert expired_run["progress"]["remaining_duration_estimate_seconds"] is None
             with runtime.database.transaction() as transaction:
                 transaction.execute(
                     """
@@ -454,6 +460,25 @@ def test_incomplete_factor_chunk_estimate_never_advances_durable_task_progress(
             assert 0 < live["estimated_percentage"] < 100
             assert live["remaining_duration_estimate_seconds"] >= 1
             assert live["is_estimate"] is True
+            run_id = active["items"][0]["research_run_id"]
+            run = client.get(f"/api/research-runs/{run_id}").json()
+            assert run["status"] == "running"
+            assert run["progress"]["phase"] == "research"
+            assert run["progress"]["completed_research_sessions"] == live[
+                "completed_research_sessions"
+            ]
+            assert run["progress"]["completed_warmup_sessions"] == 19
+            assert run["execution_timing"]["started_at"] is not None
+            assert run["execution_timing"]["elapsed_seconds"] >= 0
+            polling = runtime.research_runs.get_polling_detail(
+                TEST_RESEARCHER.researcher_id, run_id
+            )
+            assert polling is not None
+            assert polling.progress.model_dump(mode="json")["phase"] == "research"
+            assert polling.progress.completed_research_sessions == live[
+                "completed_research_sessions"
+            ]
+            assert polling.execution_timing.started_at is not None
             release.set()
             assert future.result(timeout=30) is True
 
@@ -463,6 +488,21 @@ def test_incomplete_factor_chunk_estimate_never_advances_durable_task_progress(
             "total_factor_tasks": 1,
         }
         assert completed["live_progress"] is None
+
+        run = client.get(f"/api/research-runs/{run_id}").json()
+        assert run["progress"]["phase"] == "succeeded"
+        assert run["progress"]["completed_warmup_sessions"] == 19
+        assert run["progress"]["total_warmup_sessions"] == 19
+        assert run["progress"]["completed_research_sessions"] == 100
+        assert run["execution_timing"]["is_final"] is True
+        assert run["execution_timing"]["finished_at"] is not None
+        assert run["execution_timing"]["elapsed_seconds"] > 0
+        with runtime.database.transaction() as transaction:
+            stored = transaction.execute(
+                "SELECT completed_warmup_sessions FROM research_runs.progress WHERE run_id = %s",
+                (run_id,),
+            ).fetchone()
+        assert stored["completed_warmup_sessions"] == 19
 
 
 @pytest.mark.skipif(
@@ -518,7 +558,7 @@ def test_strategy_sweep_reports_intermediate_shared_and_item_progress(
                     "formula": " + ".join("ts_mean(close, 20)" for _ in range(4)),
                     "hypothesis": "shared multi-chunk",
                 },
-                "strategies": command["strategies"][:1],
+                "strategies": command["strategies"][:2],
             },
         ).json()
         runtime = client.app.state.core_runtime
@@ -532,7 +572,7 @@ def test_strategy_sweep_reports_intermediate_shared_and_item_progress(
             assert shared_active["progress"] == {
                 "shared_alpha_factor_status": "running",
                 "completed_strategy_tasks": 0,
-                "total_strategy_tasks": 1,
+                "total_strategy_tasks": 2,
             }
             shared_live = shared_active["live_progress"]
             assert shared_live["task_role"] == "shared_alpha_factor"
@@ -543,6 +583,13 @@ def test_strategy_sweep_reports_intermediate_shared_and_item_progress(
                 < shared_live["total_research_sessions"]
             )
             assert shared_live["remaining_duration_estimate_seconds"] >= 1
+            run_id = shared_active["items"][0]["research_run_id"]
+            run = client.get(f"/api/research-runs/{run_id}").json()
+            assert run["progress"]["phase"] == "shared_alpha_factor"
+            assert run["progress"]["completed_research_sessions"] == shared_live[
+                "completed_research_sessions"
+            ]
+            assert run["execution_timing"]["started_at"] is not None
             release_shared.set()
 
             assert strategy_observed.wait(timeout=20)
@@ -550,7 +597,7 @@ def test_strategy_sweep_reports_intermediate_shared_and_item_progress(
             assert strategy_active["progress"] == {
                 "shared_alpha_factor_status": "succeeded",
                 "completed_strategy_tasks": 0,
-                "total_strategy_tasks": 1,
+                "total_strategy_tasks": 2,
             }
             strategy_live = strategy_active["live_progress"]
             assert strategy_live["task_role"] == "strategy"
@@ -561,6 +608,15 @@ def test_strategy_sweep_reports_intermediate_shared_and_item_progress(
                 < strategy_live["total_research_sessions"]
             )
             assert strategy_live["remaining_duration_estimate_seconds"] >= 1
+            run = client.get(f"/api/research-runs/{run_id}").json()
+            assert run["progress"]["phase"] == "strategy"
+            assert run["progress"]["completed_research_sessions"] == strategy_live[
+                "completed_research_sessions"
+            ]
+            waiting_id = strategy_active["items"][1]["research_run_id"]
+            waiting = client.get(f"/api/research-runs/{waiting_id}").json()
+            assert waiting["progress"]["phase"] == "waiting_for_execution"
+            assert waiting["progress"]["completed_research_sessions"] == 0
             release_strategy.set()
             assert future.result(timeout=30) is True
 
@@ -568,8 +624,8 @@ def test_strategy_sweep_reports_intermediate_shared_and_item_progress(
         assert completed["status"] == "succeeded"
         assert completed["progress"] == {
             "shared_alpha_factor_status": "succeeded",
-            "completed_strategy_tasks": 1,
-            "total_strategy_tasks": 1,
+            "completed_strategy_tasks": 2,
+            "total_strategy_tasks": 2,
         }
         assert completed["live_progress"] is None
 

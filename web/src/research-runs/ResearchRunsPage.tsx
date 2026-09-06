@@ -128,7 +128,8 @@ type StrategyBacktestResearchResult = {
 export type ResearchResult = FactorEvaluationResearchResult | StrategyBacktestResearchResult;
 
 export type ResearchRunProgress = {
-  phase: "queued" | "warmup" | "research" | "finalizing" | "succeeded";
+  phase: "queued" | "preparing_data" | "shared_alpha_factor" | "waiting_for_execution"
+    | "warmup" | "research" | "strategy" | "finalizing" | "recovering" | "succeeded";
   completed_warmup_sessions: number;
   total_warmup_sessions: number;
   completed_research_sessions: number;
@@ -833,7 +834,8 @@ export function ResearchRunProgressView({
       <div className="research-run-progress-ledger">
         <dl className="research-run-progress-stats">
           <div>
-            <dt>Research sessions</dt>
+            <dt>{progress.phase === "shared_alpha_factor"
+              ? "Shared calculation sessions" : "Research sessions"}</dt>
             <dd>{progress.completed_research_sessions} / {progress.total_research_sessions}</dd>
           </div>
         </dl>
@@ -910,6 +912,10 @@ function progressLabel(
   if (status === "cancelled") return "Execution cancelled";
   if (status === "failed") return "Execution failed";
   if (status === "succeeded") return "Execution complete";
+  if (phase === "preparing_data") return "Preparing data";
+  if (phase === "shared_alpha_factor") return "Computing shared Alpha and Factor";
+  if (phase === "waiting_for_execution") return "Waiting for earlier research in this batch";
+  if (phase === "recovering") return "Waiting for execution recovery";
   return phase === "finalizing" ? "Finalizing result" : `Running ${phase}`;
 }
 

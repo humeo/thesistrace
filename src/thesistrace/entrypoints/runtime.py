@@ -35,7 +35,11 @@ from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.operational_events import emit_operational_event_data
 from thesistrace.publication import Publication
 from thesistrace.research_authoring import ResearchAuthoringService
-from thesistrace.research_batch import ResearchBatchService, preserve_deleted_run_history
+from thesistrace.research_batch import (
+    ResearchBatchService,
+    preserve_deleted_run_history,
+    project_batch_run_execution,
+)
 from thesistrace.research_batch.execution import SupervisedResearchBatchExecutor
 from thesistrace.research_folder import ResearchFolderService
 from thesistrace.research_run import (
@@ -283,6 +287,7 @@ def _open_runtime(
             current_dataset=dataset_admission.current,
             track_references_result=daily_tracks.references_result_manifest,
             preserve_dependent_run_history=preserve_deleted_run_history,
+            project_batch_run_execution=project_batch_run_execution,
             execution=SupervisedResearchExecutor(
                 settings.data_mount,
                 execution_memory_bytes=settings.research_execution_memory_bytes,

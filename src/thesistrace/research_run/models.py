@@ -767,7 +767,10 @@ type ResearchRunResultSectionResponse = Annotated[
 class ResearchRunProgress(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    phase: Literal["queued", "warmup", "research", "finalizing", "succeeded"]
+    phase: Literal[
+        "queued", "preparing_data", "shared_alpha_factor", "waiting_for_execution",
+        "warmup", "research", "strategy", "finalizing", "recovering", "succeeded",
+    ]
     completed_warmup_sessions: int
     total_warmup_sessions: int
     completed_research_sessions: int

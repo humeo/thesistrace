@@ -114,6 +114,37 @@ describe("ResearchRunFacts", () => {
 });
 
 describe("ResearchRunProgressView", () => {
+  it.each([
+    ["preparing_data", "Preparing data"],
+    ["shared_alpha_factor", "Computing shared Alpha and Factor"],
+    ["waiting_for_execution", "Waiting for earlier research in this batch"],
+    ["strategy", "Running strategy"],
+    ["recovering", "Waiting for execution recovery"],
+  ] as const)("explains the %s execution phase", (phase, label) => {
+    const markup = renderToStaticMarkup(
+      <ResearchRunProgressView
+        status="running"
+        progress={{
+          phase,
+          completed_warmup_sessions: 0,
+          total_warmup_sessions: 120,
+          completed_research_sessions: 0,
+          total_research_sessions: 1362,
+          committed_chunk_count: 0,
+          last_completed_warmup_session: null,
+          last_completed_research_session: null,
+          remaining_duration_estimate_seconds: null,
+          duration_is_estimate: true,
+        }}
+      />,
+    );
+    expect(markup).toContain(label);
+    expect(markup).not.toContain("Running queued");
+    if (phase === "shared_alpha_factor") {
+      expect(markup).toContain("Shared calculation sessions");
+    }
+  });
+
   it("separates committed warm-up and Research progress from in-flight work", () => {
     const markup = renderToStaticMarkup(
       <ResearchRunProgressView
@@ -181,6 +212,7 @@ describe("ResearchRunProgressView", () => {
     );
 
     expect(markup).toContain("Execution time");
+    expect(markup).toContain("100%");
     expect(markup).toContain("2m 46s");
     expect(markup).toContain("2026-08-13 01:00:00 UTC");
     expect(markup).toContain("2026-08-13 01:02:46 UTC");

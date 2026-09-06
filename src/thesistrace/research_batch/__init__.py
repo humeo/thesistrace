@@ -29,6 +29,7 @@ from thesistrace.research_batch.models import (
     research_batch_polling_detail,
     research_batch_retry_after_seconds,
 )
+from thesistrace.research_batch.run_progress import project_batch_run_execution
 from thesistrace.research_batch.service import (
     ResearchBatchAdmissionConflict,
     ResearchBatchAdmissionRejected,
@@ -75,6 +76,7 @@ __all__ = (
     "ResearchBatchTemporarilyUnavailable",
     "ResearchBatchService",
     "preserve_deleted_run_history",
+    "project_batch_run_execution",
     "StrategySweepAlpha",
     "StrategySweepBatchAdmissionCommand",
     "StrategySweepItem",

@@ -168,6 +168,10 @@ CompileFormula = Callable[[str], CompiledAlpha]
 CurrentDataset = Callable[[], DatasetAdmissionSnapshot | None]
 TrackReferencesResult = Callable[[PostgresTransaction, str], bool]
 PreserveDependentRunHistory = Callable[[PostgresTransaction, UUID, str], None]
+ProjectBatchRunExecution = Callable[
+    [PostgresTransaction, UUID, str, str, ResearchRunProgress],
+    tuple[ResearchRunProgress, ResearchRunExecutionTiming],
+]
 BatchExecutionAuthorization = Callable[[PostgresTransaction], None]
 BatchItemCompletion = Callable[[PostgresTransaction, str, str | None], None]
 ActivateTrack = Callable[
@@ -346,6 +350,7 @@ class ResearchRunService:
         current_dataset: CurrentDataset | None = None,
         track_references_result: TrackReferencesResult | None = None,
         preserve_dependent_run_history: PreserveDependentRunHistory | None = None,
+        project_batch_run_execution: ProjectBatchRunExecution | None = None,
         execution: SupervisedResearchExecutor | None = None,
         execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
         lifecycle_event: ExecutionEvent | None = None,
@@ -366,6 +371,7 @@ class ResearchRunService:
         self._current_dataset = current_dataset
         self._track_references_result = track_references_result
         self._preserve_dependent_run_history = preserve_dependent_run_history
+        self._project_batch_run_execution = project_batch_run_execution
         self._execution = execution
         self._execution_memory_bytes = execution_memory_bytes
         self._annualized_excess_calculator = annualized_excess_calculator
@@ -620,7 +626,9 @@ class ResearchRunService:
                 """
                 UPDATE research_runs.progress
                 SET phase = 'succeeded', completed_research_sessions = %s,
+                    completed_warmup_sessions = total_warmup_sessions,
                     committed_chunk_count = %s,
+                    last_completed_warmup_session = %s,
                     last_completed_research_session = %s,
                     remaining_duration_estimate_seconds = NULL,
                     updated_at = now()
@@ -629,6 +637,13 @@ class ResearchRunService:
                 (
                     completed_sessions,
                     len(claim.immutable_input.execution_plan.chunks),
+                    (
+                        claim.immutable_input.execution_plan.calculation_sessions[
+                            claim.immutable_input.execution_plan.research_session_offset - 1
+                        ]
+                        if claim.immutable_input.execution_plan.research_session_offset
+                        else None
+                    ),
                     claim.immutable_input.data_admission.last_research_session,
                     claim.run_id,
                 ),
@@ -2109,13 +2124,15 @@ class ResearchRunService:
         run_id: str,
     ) -> dict[str, object] | None:
         with self._database.transaction() as transaction:
+            # Run state and Batch telemetry must describe the same snapshot.
+            transaction.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             row = transaction.execute(
                 """
                 SELECT run.id, run.name, run.folder_id, run.status,
                        run.requested_start_date, run.requested_end_date,
                        run.created_at, run.immutable_input,
                        run.result_manifest_sha256, run.result_provenance,
-                       run.key_metrics, run.failure_reason,
+                       run.key_metrics, run.failure_reason, run.execution_owner,
                        progress.phase AS progress_phase,
                        progress.completed_warmup_sessions,
                        progress.total_warmup_sessions,
@@ -2140,6 +2157,17 @@ class ResearchRunService:
                 """,
                 (researcher_id, run_id),
             ).fetchone()
+            if row is not None and row["execution_owner"] == "research_batch":
+                if self._project_batch_run_execution is None:
+                    raise RuntimeError("Batch-owned Run execution projection is not configured")
+                progress, timing = self._project_batch_run_execution(
+                    transaction, researcher_id, run_id, str(row["status"]),
+                    _research_progress(row),
+                )
+                row.update(progress.model_dump())
+                row["progress_phase"] = progress.phase
+                row["execution_started_at"] = timing.started_at
+                row["execution_finished_at"] = timing.finished_at
         return row
 
     def get_polling_detail(
@@ -4166,6 +4194,7 @@ def _research_progress(row: Mapping[str, object]) -> ResearchRunProgress:
         last_completed_warmup_session=row.get("last_completed_warmup_session"),
         last_completed_research_session=row.get("last_completed_research_session"),
         remaining_duration_estimate_seconds=row.get("remaining_duration_estimate_seconds"),
+        duration_is_estimate=bool(row.get("duration_is_estimate", True)),
     )
 
 
