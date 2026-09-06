@@ -27,15 +27,11 @@ function invoke(command, overrides = {}) {
   return result;
 }
 
-test("offline configure exposes only the selected candidate and no credential", () => {
+test("offline preflight rejects a finite reserve without a model-call bound", () => {
   const result = invoke("configure");
-  assert.equal(result.status, 0);
-  assert.equal(result.stderr, "");
-  const registry = JSON.parse(result.stdout);
-  assert.equal(registry.default_model_key, "gpt-5.6-luna");
-  assert.equal(registry.models.length, 1);
-  assert.equal(registry.models[0].provider_model_id, "gpt-5.6-luna");
-  assert.deepEqual(registry.models[0].reasoning_efforts, ["high"]);
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr.trim(), "RESEARCH_EVAL_CONFIG_INVALID");
 });
 
 for (const [label, command, overrides] of [

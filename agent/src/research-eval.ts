@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 import { isAgentFailureCode, type AgentFailureCode } from "../../contracts/agent-failure.mjs";
-import { AGENT_LIMITS } from "./guarded-language-model.js";
 import { isProviderModelId, reasoningEfforts } from "./model-registry.js";
 import { RESEARCH_A2UI_TOOL_NAME } from "./research-a2ui-tool.js";
 
@@ -137,12 +136,9 @@ export function usageCostUsd(usage: EvalUsage, pricing: ResearchEvalPricing): nu
     + usage.outputTokens.total * pricing.output_usd_per_million) / 1_000_000;
 }
 
-/** Reserve the full provider input ceiling, not the approximate context tokenizer. */
-export function maximumEvalTurnCostUsd(candidate: ResearchEvalCandidate): number {
-  const pricing = candidate.pricing;
-  const primary = AGENT_LIMITS.steps * (candidate.provider_max_input_tokens * pricing.input_usd_per_million
-    + AGENT_LIMITS.outputTokens * pricing.output_usd_per_million) / 1_000_000;
-  return primary + maximumTitleCostUsd(candidate);
+/** Without a call-count bound, no finite full-Turn spend reserve is known. */
+export function maximumEvalTurnCostUsd(_candidate: ResearchEvalCandidate): number {
+  return Number.POSITIVE_INFINITY;
 }
 export function maximumTitleCostUsd(candidate: ResearchEvalCandidate): number {
   // One separate first-message title invocation; use the provider's full

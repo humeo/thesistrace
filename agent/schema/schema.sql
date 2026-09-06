@@ -166,7 +166,7 @@ CREATE TABLE agent.agent_run (
         )
     ),
     CONSTRAINT agent_run_budget_check CHECK (
-        step_count BETWEEN 0 AND 16
+        step_count >= 0
         AND generated_bytes BETWEEN 0 AND 262144
     ),
     CONSTRAINT agent_run_terminal_check CHECK (

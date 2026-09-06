@@ -321,3 +321,78 @@ const TURN_ID_0 = "00000000-0000-4000-8000-000000000000";
 const TURN_ID = "00000000-0000-4000-8000-000000000001";
 const TURN_ID_2 = "00000000-0000-4000-8000-000000000003";
 const INPUT_ID = "00000000-0000-4000-8000-000000000002";
+
+function researchSurface(id: string, status: string, runId = "run_0123456789abcdef0123"): TimelineEntry {
+  return entry("a2ui", id, { activityType: "a2ui-surface", status: "ready", content: {
+    a2ui_operations: [
+      { version: "v0.9", createSurface: { catalogId: "urn:thesistrace:a2ui:research:v0.9", surfaceId: id } },
+      { version: "v0.9", updateComponents: { surfaceId: id, components: [
+        { id: "root", component: "Column", children: ["run"] },
+        { id: "run", component: "ResearchRunStatus", runId, status, formula: "rank(close)" },
+      ] } },
+    ],
+  } });
+}
+
+test("completed Turns omit progress while keeping distinct final results visible", async () => {
+  await mount(controller({ turns: [timelineTurn([
+    researchSurface("progress", "running"),
+    researchSurface("result", "succeeded"),
+    researchSurface("other-result", "succeeded", "run_abcdef0123456789abcd"),
+    entry("assistant_message", "final", { content: "Both finished.", status: "complete" }),
+  ])] }));
+  expect(document.querySelector('[data-entry-id="progress"]')).toBeNull();
+  expect(document.body.textContent).not.toContain("Last observed progress");
+  expect(document.querySelector('[data-entry-id="result"]')?.closest("details")).toBeNull();
+  expect(document.querySelector('[data-entry-id="other-result"]')?.closest("details")).toBeNull();
+  expect(document.querySelector('[data-entry-id="final"]')?.closest("details")).toBeNull();
+});
+
+test("active Turns replace older progress only for the same research resources", async () => {
+  await mount(controller({ turns: [timelineTurn([
+    researchSurface("older", "queued"), researchSurface("newer", "running"),
+    researchSurface("unrelated", "running", "run_abcdef0123456789abcd"),
+  ], { status: "running", completed_at: null })] }));
+  expect(document.querySelector('[data-entry-id="older"]')).toBeNull();
+  expect(document.querySelector('[data-entry-id="newer"]')?.closest(".chat-progress-history")).toBeNull();
+  expect(document.querySelector('[data-entry-id="unrelated"]')?.closest(".chat-progress-history")).toBeNull();
+});
+
+test("interrupted Turns do not add a stale progress card", async () => {
+  await mount(controller({ turns: [timelineTurn([researchSurface("progress", "running")], { status: "failed" })] }));
+  expect(document.querySelector('[data-entry-id="progress"]')).toBeNull();
+});
+
+test("Worked for folds the complete execution history but leaves the final answer outside", async () => {
+  await mount(controller({ turns: [timelineTurn([
+    entry("assistant_message", "before", { content: "Checking.", status: "complete" }),
+    entry("tool_activity", "call-one", { name: "get_context", status: "complete" }),
+    entry("assistant_message", "between", { content: "Checking results.", status: "complete" }),
+    entry("tool_activity", "call-two", { name: "get_results", status: "complete" }),
+    entry("assistant_message", "final", { content: "Finished.", status: "complete" }),
+  ])] }));
+  const work = document.querySelector<HTMLDetailsElement>(".chat-work-history")!;
+  expect(work).not.toBeNull();
+  expect(work.open).toBe(false);
+  expect(work.querySelector("summary")?.textContent).toContain("Worked for");
+  expect(work.querySelector('[data-entry-id="before"]')).not.toBeNull();
+  expect(work.querySelector('[data-entry-id="between"]')).not.toBeNull();
+  expect(work.querySelector('[data-entry-id="call-two"]')).not.toBeNull();
+  expect(document.querySelector('[data-entry-id="final"]')?.closest(".chat-work-history")).toBeNull();
+});
+
+test("answered questions stay in the tool history with their answer, without a user bubble", async () => {
+  await mount(controller({ turns: [timelineTurn([
+    entry("user_input", "prompt", { source: "prompt", content: "Research", inputId: INPUT_ID }),
+    entry("question", "question:1", { interrupt_id: `${TURN_ID}::ask`, status: "answered", question: "Which approach?", options: null, selection_mode: "free_text" }),
+    entry("user_input", "answer", { source: "answer", content: "Default approach", inputId: INPUT_ID }),
+    entry("assistant_message", "final", { content: "Submitted.", status: "complete" }),
+  ])] }));
+  expect(document.querySelectorAll('.chat-message-user')).toHaveLength(1);
+  const tool = document.querySelector('[data-tool-name="ask_user"]');
+  expect(tool).not.toBeNull();
+  expect(tool?.closest('.chat-work-history')).not.toBeNull();
+  expect(tool?.textContent).toContain("Which approach?");
+  expect(tool?.textContent).toContain("Default approach");
+  expect(document.body.textContent).not.toContain("Question answered");
+});

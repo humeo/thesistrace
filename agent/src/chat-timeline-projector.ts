@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { EventType, type BaseEvent } from "@ag-ui/core";
 
 import { parseSafeToolResult } from "./safe-tool-result.js";
@@ -8,6 +9,7 @@ const FLUSH_BYTES = 512;
 const SAFE_TOOL_NAME = /^[A-Za-z0-9_.:-]{1,128}$/;
 
 type AssistantBuffer = {
+  id: string;
   content: string;
   lastFlushAt: number;
   persistedBytes: number;
@@ -35,6 +37,7 @@ export class ChatTimelineProjector {
     ) {
       if (typeof event.messageId !== "string" || typeof event.delta !== "string") return;
       const buffer = this.assistants.get(event.messageId) ?? {
+        id: randomUUID(),
         content: "",
         lastFlushAt: 0,
         persistedBytes: 0,
@@ -46,7 +49,7 @@ export class ChatTimelineProjector {
         bytes - buffer.persistedBytes >= FLUSH_BYTES
         || Date.now() - buffer.lastFlushAt >= FLUSH_INTERVAL_MS
       ) {
-        await this.flushAssistant(event.messageId, buffer);
+        await this.flushAssistant(buffer);
       }
       return;
     }
@@ -54,12 +57,16 @@ export class ChatTimelineProjector {
     if (event.type === EventType.TEXT_MESSAGE_END) {
       if (typeof event.messageId !== "string") return;
       const buffer = this.assistants.get(event.messageId);
-      if (buffer !== undefined) await this.flushAssistant(event.messageId, buffer);
+      if (buffer !== undefined) await this.flushAssistant(buffer);
+      this.assistants.delete(event.messageId);
       return;
     }
 
     if (event.type === EventType.TOOL_CALL_START) {
       await this.flushAssistants();
+      // Provider IDs can be reused across model steps. The next text must
+      // insert a new timeline segment after this tool, never update old prose.
+      this.assistants.clear();
       if (
         typeof event.toolCallId !== "string"
         || typeof event.toolCallName !== "string"
@@ -110,17 +117,17 @@ export class ChatTimelineProjector {
   }
 
   private async flushAssistants(): Promise<void> {
-    for (const [messageId, buffer] of this.assistants) {
-      await this.flushAssistant(messageId, buffer);
+    for (const buffer of this.assistants.values()) {
+      await this.flushAssistant(buffer);
     }
   }
 
-  private async flushAssistant(messageId: string, buffer: AssistantBuffer): Promise<void> {
+  private async flushAssistant(buffer: AssistantBuffer): Promise<void> {
     if (buffer.content.length === 0) return;
     await this.repository.persistAssistantMessage(
       this.threadId,
       this.runId,
-      messageId,
+      buffer.id,
       buffer.content,
     );
     buffer.lastFlushAt = Date.now();

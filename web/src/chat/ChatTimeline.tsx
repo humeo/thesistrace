@@ -24,14 +24,17 @@ import remarkGfm from "remark-gfm";
 
 import { parseResearchRunHref } from "./toolResult";
 import { ResearchA2UIActivity } from "./researchA2UI";
+import { isProgressSurface, progressHistory } from "./progressHistory";
 import type { ChatQuestion, TimelineEntry, TimelineTurn } from "./chatProtocol";
 import type { ChatConversationController } from "./useChatConversation";
 
 const BOTTOM_THRESHOLD_PX = 24;
+const NEW_TURN_TOP_GAP_PX = 96;
+const SCROLL_TRANSITION_MS = 240;
 const RESEARCH_MARKDOWN_REMARK_PLUGINS = [remarkGfm];
 
 type ScrollAnchor = Readonly<{ top: number; turnId: string }>;
-type ToolEntry = Extract<TimelineEntry, { kind: "tool_activity" }>;
+type ToolEntry = Extract<TimelineEntry, { kind: "tool_activity" }> & { questionDetails?: { question: string; answer?: string } };
 type TurnSegment = TimelineEntry | Readonly<{ entries: readonly ToolEntry[]; kind: "tool_group" }>;
 
 export function ChatTimeline({
@@ -48,11 +51,52 @@ export function ChatTimeline({
   const anchorRef = useRef<ScrollAnchor | null>(null);
   const initialPositionedRef = useRef(false);
   const olderRequestRef = useRef(false);
+  const latestTurnRef = useRef(controller.turns.at(-1)?.id);
+  const pendingTransitionRef = useRef(false);
+  const scrollFrameRef = useRef<number | null>(null);
+  const [positionedTurnId, setPositionedTurnId] = useState<string | null>(null);
+  const [turnMinHeight, setTurnMinHeight] = useState(0);
   const [following, setFollowing] = useState(true);
+  const [latestBelowViewport, setLatestBelowViewport] = useState(false);
+  const empty = controller.turns.length === 0;
+  const latestTurnId = controller.turns.at(-1)?.id;
+
+  useLayoutEffect(() => {
+    const viewport = scrollRef.current;
+    const content = viewport?.querySelector<HTMLElement>(".chat-timeline-content");
+    if (!viewport || !content) return;
+    const measure = () => setTurnMinHeight(Math.max(0,
+      viewport.clientHeight - NEW_TURN_TOP_GAP_PX - parseFloat(getComputedStyle(content).paddingBottom),
+    ));
+    measure();
+    const observer = new ResizeObserver(() => {
+      measure();
+      updateLatestVisibility();
+    });
+    observer.observe(viewport);
+    observer.observe(content);
+    const latestResponse = content.querySelector(".chat-turn:last-child .chat-turn-response");
+    if (latestResponse) observer.observe(latestResponse);
+    return () => observer.disconnect();
+  }, [empty, latestTurnId]);
 
   useLayoutEffect(() => {
     const viewport = scrollRef.current;
     if (viewport === null) return;
+    const latest = controller.turns.at(-1);
+    if (latest && latest.id !== latestTurnRef.current) {
+      const previous = latestTurnRef.current;
+      latestTurnRef.current = latest.id;
+      // Loading an existing history keeps its compact bottom position. A new
+      // Turn gets enough room to place its prompt near the top, even if short.
+      if (previous !== undefined || latest.completed_at === null) {
+        cancelScrollTransition();
+        pendingTransitionRef.current = true;
+        setPositionedTurnId(latest.id);
+        setFollowing(true);
+        return;
+      }
+    }
     const anchor = anchorRef.current;
     if (anchor !== null) {
       const target = [...viewport.querySelectorAll<HTMLElement>("[data-turn-id]")]
@@ -62,12 +106,63 @@ export function ChatTimeline({
       previousScrollTopRef.current = viewport.scrollTop;
       return;
     }
+    if (pendingTransitionRef.current) {
+      pendingTransitionRef.current = false;
+      scrollToLatest();
+      initialPositionedRef.current = true;
+      return;
+    }
+    // Stream updates must not replace an in-flight transition with a jump.
+    if (scrollFrameRef.current !== null) return;
     if (!initialPositionedRef.current || following) {
       viewport.scrollTop = viewport.scrollHeight;
       previousScrollTopRef.current = viewport.scrollTop;
       initialPositionedRef.current = true;
     }
-  }, [controller.turns, following]);
+    updateLatestVisibility();
+  }, [controller.turns, following, positionedTurnId, turnMinHeight]);
+
+  useEffect(() => () => cancelScrollTransition(), []);
+
+  function cancelScrollTransition(): void {
+    if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
+    scrollFrameRef.current = null;
+  }
+
+  function scrollToLatest(): void {
+    const viewport = scrollRef.current;
+    if (viewport === null) return;
+    cancelScrollTransition();
+    const start = viewport.scrollTop;
+    const startedAt = performance.now();
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      viewport.scrollTop = viewport.scrollHeight;
+      previousScrollTopRef.current = viewport.scrollTop;
+      return;
+    }
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / SCROLL_TRANSITION_MS);
+      const target = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+      viewport.scrollTop = start + (target - start) * (1 - (1 - progress) ** 3);
+      previousScrollTopRef.current = viewport.scrollTop;
+      scrollFrameRef.current = progress < 1 ? requestAnimationFrame(step) : null;
+    };
+    scrollFrameRef.current = requestAnimationFrame(step);
+  }
+
+  function stopFollowing(): void {
+    cancelScrollTransition();
+    setFollowing(false);
+  }
+
+  function updateLatestVisibility(): void {
+    const viewport = scrollRef.current;
+    const response = viewport?.querySelector(".chat-turn:last-child .chat-turn-response");
+    // The Turn's minimum height includes empty space for positioning a new
+    // prompt. Only the actual response can contain unread content below us.
+    setLatestBelowViewport(Boolean(viewport && response
+      && response.getBoundingClientRect().bottom > viewport.getBoundingClientRect().bottom + BOTTOM_THRESHOLD_PX));
+  }
 
   async function loadOlder(): Promise<void> {
     const viewport = scrollRef.current;
@@ -110,6 +205,8 @@ export function ChatTimeline({
   function updateFollowing(): void {
     const viewport = scrollRef.current;
     if (viewport === null) return;
+    updateLatestVisibility();
+    if (scrollFrameRef.current !== null) return;
     const atBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= BOTTOM_THRESHOLD_PX;
     if (viewport.scrollTop < previousScrollTopRef.current && !atBottom) setFollowing(false);
     else if (atBottom) setFollowing(true);
@@ -117,20 +214,16 @@ export function ChatTimeline({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
-    if (["ArrowUp", "PageUp", "Home"].includes(event.key)) setFollowing(false);
+    if (["ArrowUp", "PageUp", "Home"].includes(event.key)) stopFollowing();
   }
 
   function backToLatest(): void {
     const viewport = scrollRef.current;
     if (viewport === null) return;
-    viewport.scrollTo({
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-      top: viewport.scrollHeight,
-    });
+    scrollToLatest();
     setFollowing(true);
   }
 
-  const empty = controller.turns.length === 0;
   return (
     <div className="chat-timeline-shell">
       <div
@@ -141,11 +234,14 @@ export function ChatTimeline({
         onScroll={updateFollowing}
         onTouchMove={(event) => {
           const y = event.touches[0]?.clientY;
-          if (y !== undefined && touchYRef.current !== null && y > touchYRef.current) setFollowing(false);
+          if (y !== undefined && touchYRef.current !== null && y > touchYRef.current) stopFollowing();
           touchYRef.current = y ?? null;
         }}
-        onTouchStart={(event) => { touchYRef.current = event.touches[0]?.clientY ?? null; }}
-        onWheel={(event) => { if (event.deltaY < 0) setFollowing(false); }}
+        onTouchStart={(event) => {
+          if (scrollFrameRef.current !== null) stopFollowing();
+          touchYRef.current = event.touches[0]?.clientY ?? null;
+        }}
+        onWheel={(event) => { if (event.deltaY < 0 || scrollFrameRef.current !== null) stopFollowing(); }}
         ref={scrollRef}
         role="log"
         tabIndex={0}
@@ -172,6 +268,7 @@ export function ChatTimeline({
               <TimelineTurnView
                 controller={controller}
                 key={turn.id}
+                minHeight={turn.id === positionedTurnId ? turnMinHeight : undefined}
                 onAnnounce={onAnnounce}
                 turn={turn}
               />
@@ -179,7 +276,7 @@ export function ChatTimeline({
           </div>
         )}
       </div>
-      {!following && !empty ? (
+      {!following && latestBelowViewport && !empty ? (
         <button className="chat-back-to-latest" onClick={backToLatest} type="button">
           <ArrowDown aria-hidden="true" size={14} />
           Back to latest
@@ -191,17 +288,32 @@ export function ChatTimeline({
 
 function TimelineTurnView({
   controller,
+  minHeight,
   onAnnounce,
   turn,
 }: {
   controller: ChatConversationController;
+  minHeight?: number;
   onAnnounce: (message: string) => void;
   turn: TimelineTurn;
 }) {
-  const firstAssistantIndex = turn.entries.findIndex((entry) => entry.kind !== "user_input");
-  const leadingCount = firstAssistantIndex < 0 ? turn.entries.length : firstAssistantIndex;
-  const leading = turn.entries.slice(0, leadingCount);
-  const assistantEntries = turn.entries.slice(leadingCount);
+  const hiddenProgress = progressHistory(turn);
+  const visibleEntries = questionToolEntries(turn.entries).filter((entry) => !hiddenProgress.has(entry.entry_id));
+  const firstAssistantIndex = visibleEntries.findIndex((entry) => entry.kind !== "user_input");
+  const leadingCount = firstAssistantIndex < 0 ? visibleEntries.length : firstAssistantIndex;
+  const leading = visibleEntries.slice(0, leadingCount);
+  const assistantEntries = visibleEntries.slice(leadingCount);
+  const ended = ["completed", "failed", "stopped"].includes(turn.status);
+  const [workOpen, setWorkOpen] = useState(!ended);
+  useEffect(() => { setWorkOpen(!ended); }, [ended]);
+  const lastTool = assistantEntries.reduce((last, entry, index) => entry.kind === "tool_activity" ? index : last, -1);
+  const processEntries = assistantEntries.filter((entry, index) => (
+    entry.kind === "tool_activity"
+    || (entry.kind === "assistant_message" && (index < lastTool || (!ended && lastTool >= 0)))
+    || isProgressSurface(entry)
+  ));
+  const processIds = new Set(processEntries.map((entry) => entry.entry_id));
+  const resultEntries = assistantEntries.filter((entry) => !processIds.has(entry.entry_id));
   const assistantText = turn.entries
     .filter((entry): entry is Extract<TimelineEntry, { kind: "assistant_message" }> => (
       entry.kind === "assistant_message" && entry.payload.content.length > 0
@@ -213,29 +325,43 @@ function TimelineTurnView({
     && !controller.hasFirstAssistantText;
   const showAssistantSection = assistantEntries.length > 0 || activeWithoutText;
 
-  return (
-    <section className="chat-turn" data-turn-id={turn.id}>
-      {leading.map((entry) => (
-        <TimelineItem controller={controller} entry={entry} key={entry.entry_id} onAnnounce={onAnnounce} />
-      ))}
-      {!showAssistantSection ? null : (
-        <div className="chat-turn-assistant-meta">
-          <span><WorkedFor turn={turn} /></span>
-          {assistantText.length === 0 ? null : (
-            <CopyTextButton content={assistantText} label="Copy response" onAnnounce={onAnnounce} />
-          )}
-        </div>
-      )}
-      {segmentTurnEntries(assistantEntries).map((segment) => (
+  const renderEntries = (entries: readonly TimelineEntry[]) => segmentTurnEntries(entries).map((segment) => (
         segment.kind === "tool_group"
           ? <ToolActivityGroup entries={segment.entries} key={`tools:${segment.entries[0]?.entry_id}`} />
           : <TimelineItem controller={controller} entry={segment} key={segment.entry_id} onAnnounce={onAnnounce} />
+      ));
+
+  return (
+    <section className="chat-turn" data-turn-id={turn.id} style={{ minHeight }}>
+      {leading.map((entry) => (
+        <TimelineItem controller={controller} entry={entry} key={entry.entry_id} onAnnounce={onAnnounce} />
       ))}
-      {activeWithoutText ? (
-        <div aria-label="Research Agent is preparing a response" className="chat-response-indicator">
-          <span aria-hidden="true" />
-        </div>
-      ) : null}
+      <div className="chat-turn-response">
+        {!showAssistantSection ? null : (
+          <div className="chat-turn-assistant-meta chat-work-meta">
+            {processEntries.length > 0 ? (
+              <details className="chat-work-history" open={workOpen} onToggle={(event) => setWorkOpen(event.currentTarget.open)}>
+                <summary><WorkedFor turn={turn} /><CaretDown aria-hidden="true" size={14} /></summary>
+                <div className="chat-work-content">{renderEntries(processEntries)}</div>
+              </details>
+            ) : <span><WorkedFor turn={turn} /></span>}
+          </div>
+        )}
+        {renderEntries(resultEntries)}
+        {activeWithoutText ? (
+          <div aria-label="Research Agent is preparing a response" className="chat-response-indicator">
+            <span aria-hidden="true" />
+          </div>
+        ) : null}
+        {assistantText.length > 0 || turn.completed_at !== null ? (
+          <footer className="chat-response-footer">
+            {assistantText.length > 0 ? <CopyTextButton content={assistantText} label="Copy response" onAnnounce={onAnnounce} /> : null}
+            {turn.completed_at !== null ? <time dateTime={turn.completed_at} title={new Date(turn.completed_at).toLocaleString()}>
+              {new Date(turn.completed_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+            </time> : null}
+          </footer>
+        ) : null}
+      </div>
     </section>
   );
 }
@@ -355,6 +481,7 @@ function ToolActivityItem({ entry }: { entry: ToolEntry }) {
       <Icon aria-hidden="true" className={status === "running" ? "chat-spinning" : undefined} size={14} />
       <code>{entry.payload.name}</code>
       <span>{label}</span>
+      {entry.questionDetails ? <details className="chat-tool-question"><summary>Question and answer</summary><p>{entry.questionDetails.question}</p>{entry.questionDetails.answer ? <p>{entry.questionDetails.answer}</p> : null}</details> : null}
     </li>
   );
 }
@@ -406,7 +533,7 @@ function QuestionSurface({
 
 function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_outcome" }> }) {
   if (entry.payload.status === "completed") {
-    return <div aria-hidden="true" data-entry-id={entry.entry_id} data-turn-outcome="completed" />;
+    return <div hidden aria-hidden="true" data-entry-id={entry.entry_id} data-turn-outcome="completed" />;
   }
   return (
     <div
@@ -503,4 +630,25 @@ export function ChatIntroduction({ opening = false }: { opening?: boolean }) {
       {opening ? <p className="chat-history-status">Opening conversation…</p> : null}
     </section>
   );
+}
+
+function questionToolEntries(entries: readonly TimelineEntry[]): TimelineEntry[] {
+  const answers = new Map<string, string>();
+  let questionId: string | undefined;
+  for (const entry of entries) {
+    if (entry.kind === "question") questionId = entry.entry_id;
+    if (entry.kind === "user_input" && entry.payload.source === "answer" && questionId !== undefined) {
+      answers.set(questionId, entry.payload.content);
+    }
+  }
+  return entries.flatMap((entry): TimelineEntry[] => {
+    if (entry.kind === "user_input" && entry.payload.source === "answer") return [];
+    if (entry.kind !== "question" || entry.payload.status === "pending") return [entry];
+    const tool: ToolEntry = {
+      ...entry, kind: "tool_activity",
+      payload: { name: "ask_user", status: entry.payload.status === "answered" ? "complete" : "stopped" },
+      questionDetails: { question: entry.payload.question, answer: answers.get(entry.entry_id) },
+    };
+    return [tool];
+  });
 }

@@ -254,6 +254,18 @@ code { font-family: var(--mono); }
   background: transparent;
   border-color: transparent;
 }
+@media (hover: hover) and (pointer: fine) {
+  .chat-session-menu-trigger {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .chat-session-row:hover .chat-session-menu-trigger,
+  .chat-session-row:focus-within .chat-session-menu-trigger,
+  .chat-session-menu-trigger[aria-expanded="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
 .chat-session-menu-trigger:hover:not(:disabled),
 .chat-session-menu-trigger[aria-expanded="true"] {
   color: var(--ink);
@@ -455,9 +467,9 @@ code { font-family: var(--mono); }
   display: flex;
   width: min(760px, calc(100% - 32px));
   flex-direction: column;
-  gap: 42px;
+  gap: 20px;
   margin: 0 auto;
-  padding: 38px 0 72px;
+  padding: 38px 0 56px;
 }
 .chat-timeline-empty {
   display: grid;
@@ -504,7 +516,7 @@ code { font-family: var(--mono); }
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
 }
 .chat-turn-assistant-meta {
   display: flex;
@@ -517,9 +529,9 @@ code { font-family: var(--mono); }
   font-size: 12px;
 }
 .chat-turn-assistant-meta > span { white-space: nowrap; }
-.chat-turn-assistant-meta button {
+.chat-response-footer button {
   display: inline-flex;
-  min-height: 28px;
+  min-height: 24px;
   align-items: center;
   gap: 5px;
   padding: 0 6px;
@@ -536,7 +548,7 @@ code { font-family: var(--mono); }
 }
 .chat-message:hover .chat-message-actions,
 .chat-message:focus-within .chat-message-actions { opacity: 1; }
-.chat-message-user .chat-message-actions { order: 2; }
+.chat-message-user .chat-message-actions { position: absolute; top: calc(100% + 4px); right: 0; }
 .chat-message-actions button {
   display: inline-flex;
   min-height: 28px;
@@ -918,12 +930,13 @@ code { font-family: var(--mono); }
   gap: 6px;
   padding: 0 11px 0 14px;
   color: var(--ink-soft);
-  background: var(--surface-2);
-  border: 1px solid var(--line-strong);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 999px;
   text-transform: none;
 }
 .chat-model-picker-trigger:hover:not(:disabled),
+.chat-model-picker-trigger:focus-visible,
 .chat-model-picker-open .chat-model-picker-trigger {
   color: var(--ink-muted);
   background: var(--surface-3);
@@ -3138,3 +3151,33 @@ select { color-scheme: dark; }
   .chat-response-indicator > span:first-child,
   .chat-spinning { animation: none !important; }
 }
+
+
+.chat-work-meta { position: relative; display: block; }
+.chat-work-meta > span { display: block; padding: 10px 0; }
+.chat-work-history > summary {
+  display: flex; align-items: center; gap: 6px; min-height: 38px;
+  width: fit-content; max-width: 100%; cursor: pointer; list-style: none;
+}
+.chat-work-history > summary::-webkit-details-marker { display: none; }
+.chat-work-history > summary:hover { color: var(--ink); }
+.chat-work-history > summary:focus-visible { outline: 2px solid var(--primary-focus); outline-offset: 2px; }
+.chat-work-history[open] > summary > svg { transform: rotate(180deg); }
+.chat-work-content { display: flex; flex-direction: column; gap: 20px; padding: 16px 0 20px; color: var(--ink); font-size: 14px; }
+
+.chat-turn-response { display: flex; flex-direction: column; min-width: 0; gap: 8px; }
+.chat-response-footer { display: flex; align-items: center; justify-content: flex-start; gap: 12px; min-height: 24px; color: var(--ink-soft); font-size: 12px; }
+.chat-response-footer button { padding-left: 0; }
+.chat-response-footer time { font-variant-numeric: tabular-nums; }
+@media (hover: hover) and (pointer: fine) {
+  .chat-response-footer { opacity: 0; pointer-events: none; }
+  .chat-turn-response:hover .chat-response-footer,
+  .chat-turn-response:focus-within .chat-response-footer { opacity: 1; pointer-events: auto; }
+}
+@media (pointer: coarse) {
+  .chat-response-footer button { min-height: 44px; min-width: 44px; }
+}
+
+.chat-tool-question { grid-column: 2 / -1; font-size: 12px; }
+.chat-tool-question > summary { cursor: pointer; }
+.chat-tool-question p { margin: 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }

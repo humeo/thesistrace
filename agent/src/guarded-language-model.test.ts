@@ -269,12 +269,12 @@ test("non-streaming generation also permits an empty stop only after output in t
     .rejects.toMatchObject({ code: "PROVIDER_MALFORMED_STREAM" });
 });
 
-test("a bounded loop cannot start a seventeenth model step", async () => {
+test("model calls continue beyond sixteen steps", async () => {
   const observation = new RunModelObservation(new RunUsageCapture());
   const guarded = new GuardedLanguageModel(new ScriptedLanguageModel("fixture"), observation);
-  for (let index = 0; index < AGENT_LIMITS.steps; index++) await drain(await guarded.doStream(options));
-  await expect(guarded.doStream(options)).rejects.toMatchObject({ code: "AGENT_LIMIT" });
-  expect(observation.steps).toBe(AGENT_LIMITS.steps);
+  for (let index = 0; index < 20; index++) await drain(await guarded.doStream(options));
+  expect(observation.steps).toBe(20);
+  expect(observation.terminalFailure()).toBeUndefined();
 });
 
 test("invalid usage stays unreported without failing a completed answer", async () => {

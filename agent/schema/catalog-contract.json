@@ -1151,7 +1151,7 @@
       "type": "c"
     },
     {
-      "definition": "CHECK ((((step_count >= 0) AND (step_count <= 16)) AND ((generated_bytes >= 0) AND (generated_bytes <= 262144))))",
+      "definition": "CHECK (((step_count >= 0) AND ((generated_bytes >= 0) AND (generated_bytes <= 262144))))",
       "name": "agent_run_budget_check",
       "relation": "agent_run",
       "type": "c"

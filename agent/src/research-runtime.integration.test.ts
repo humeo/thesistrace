@@ -62,7 +62,7 @@ import {
 } from "./session-management.js";
 import { parseGeneratedSessionTitle } from "./session-title.js";
 import type { VerifiedResearcher } from "./session-verifier.js";
-import { SCRIPTED_FAILURE_PROMPTS, SCRIPTED_FAILURE_AFTER_TOOL_PROMPT, SCRIPTED_INVALID_USAGE_PROMPT, SCRIPTED_MULTI_STEP_OUTPUT_PROMPT, SCRIPTED_STEP_LIMIT_PROMPT } from "./scripted-failure-model.js";
+import { SCRIPTED_FAILURE_PROMPTS, SCRIPTED_FAILURE_AFTER_TOOL_PROMPT, SCRIPTED_INVALID_USAGE_PROMPT, SCRIPTED_MULTI_STEP_OUTPUT_PROMPT, SCRIPTED_TIMELINE_PROMPT, SCRIPTED_LONG_TOOL_LOOP_PROMPT } from "./scripted-failure-model.js";
 import { AGENT_LIMITS } from "./guarded-language-model.js";
 import { MAX_ACTIVE_AGENT_RUNS } from "./durable-agent-runner.js";
 import { readResearchEvalMemoryFacts } from "./research-eval-memory.js";
@@ -195,7 +195,7 @@ describe.sequential("durable Research Agent runtime", () => {
 
   it.each([
     [SCRIPTED_FAILURE_AFTER_TOOL_PROMPT, "PROVIDER_TIMEOUT", 1],
-    [SCRIPTED_STEP_LIMIT_PROMPT, "AGENT_LIMIT", AGENT_LIMITS.steps],
+    [SCRIPTED_LONG_TOOL_LOOP_PROMPT, null, 20],
   ] as const)("retains completed Tools when bounded model execution ends: %s", async (content, code, expectedCalls) => {
     let calls = 0;
     const runtime = await createResearchRuntime(settings, {
@@ -206,8 +206,8 @@ describe.sequential("durable Research Agent runtime", () => {
     const input = runInput({ content, messageId: fixedUuid(712), runId: fixedUuid(711), threadId: fixedUuid(710) });
     try {
       const events = await run(runtime, input, primaryResearcher);
-      expect(events.filter((event) => event.type === "RUN_ERROR")).toHaveLength(1);
-      expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR", code });
+      expect(events.filter((event) => event.type === "RUN_ERROR"), JSON.stringify({ calls, terminal: events.at(-1) })).toHaveLength(code === null ? 0 : 1);
+      expect(events.at(-1)).toMatchObject(code === null ? { type: "RUN_FINISHED" } : { type: "RUN_ERROR", code });
       expect(calls).toBe(expectedCalls);
       const replay = await connect(runtime, input.threadId, primaryResearcher);
       const tools = snapshotMessages(replay).filter((message) => message.role === "tool");
@@ -248,6 +248,28 @@ describe.sequential("durable Research Agent runtime", () => {
       const tools = messages.filter((message) => message.role === "tool");
       expect(tools).toHaveLength(1);
       expect(parseSafeToolResult(tools[0]?.content)?.outcome).toBe("completed");
+    } finally { await runtime.close(); }
+  });
+
+  it("persists text before, between and after tools in order across restart", async () => {
+    let runtime = await createResearchRuntime(settings, {
+      mcpRunFactory: async () => ({
+        close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
+        tools: { get_research_context: createTool({ id: "get_research_context", description: "Read context", inputSchema: z.object({}).strict(), execute: async () => ({ ready: true }) }) },
+      }),
+    });
+    const input = runInput({ content: SCRIPTED_TIMELINE_PROMPT, messageId: fixedUuid(752), runId: fixedUuid(751), threadId: fixedUuid(750) });
+    try {
+      const events = await run(runtime, input, primaryResearcher);
+      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      const timeline = await runtime.timeline(input.threadId, primaryResearcher, undefined, 20);
+      const entries = timeline.turns[0]!.entries.filter((entry) => entry.kind === "assistant_message" || entry.kind === "tool_activity");
+      expect(entries.map((entry) => entry.kind === "assistant_message" ? entry.payload.content : entry.payload.name)).toEqual([
+        "Checking.", "get_research_context", "Read the context.", "get_research_context", "Finished.",
+      ]);
+      await runtime.close();
+      runtime = await createIntegrationRuntime();
+      expect(await runtime.timeline(input.threadId, primaryResearcher, undefined, 20)).toEqual(timeline);
     } finally { await runtime.close(); }
   });
 

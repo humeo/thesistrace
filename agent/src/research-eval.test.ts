@@ -80,7 +80,7 @@ describe("fixed real-model evaluation contract", () => {
       inputTokens: { total: 300000, noCache: 0, cacheRead: 0, cacheWrite: 300000 },
       outputTokens: { total: 10, text: 5, reasoning: 5 },
     }, candidate.pricing)).toBeCloseTo(0.150018, 8);
-    expect(maximumEvalTurnCostUsd(candidate)).toBeCloseTo(8.0729872, 8);
+    expect(maximumEvalTurnCostUsd(candidate)).toBe(Number.POSITIVE_INFINITY);
   });
   it("pins the measured latency allowance only for the two complex workflows", () => {
     expect(candidate.thresholds.max_p95_duration_ms).toBe(250_000);
@@ -93,7 +93,8 @@ describe("fixed real-model evaluation contract", () => {
       .every((item) => item.max_duration_ms === 180_000)).toBe(true);
   });
   it("requires an explicit operator phase and a bounded complete-case spending reserve", () => {
-    expect(readResearchEvalControls(candidate, "baseline", "20")).toEqual({ phase: "baseline", budget: 20 });
+    // A finite approval cannot reserve an unbounded number of provider calls.
+    expect(() => readResearchEvalControls(candidate, "baseline", "20")).toThrow("CONFIG_INVALID");
     for (const budget of [undefined, "", "NaN", "-1", "1", "101", "1e2", "20-secret-canary"]) {
       expect(() => readResearchEvalControls(candidate, "baseline", budget)).toThrow("CONFIG_INVALID");
     }

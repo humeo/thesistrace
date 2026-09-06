@@ -10,7 +10,6 @@ export const AGENT_LIMITS = Object.freeze({
   outputTokens: 8_192,
   outputBytes: 256 * 1024,
   toolResultBytes: 512 * 1024,
-  steps: 16,
   providerCallMs: 180_000,
 });
 
@@ -18,7 +17,6 @@ export const AGENT_LIMITS = Object.freeze({
 export class RunModelObservation {
   failure: AgentFailureCode | undefined;
   steps = 0;
-  lastFinishReason: string | undefined;
   private generatedBytes = 0;
   private hasRunAnswer = false;
 
@@ -58,7 +56,7 @@ export class RunModelObservation {
       })),
       tools: options.tools,
     });
-    if (estimateTokenCount(context) > AGENT_LIMITS.contextTokens || this.steps >= AGENT_LIMITS.steps) {
+    if (estimateTokenCount(context) > AGENT_LIMITS.contextTokens) {
       throw this.fail("AGENT_LIMIT");
     }
     this.steps++;
@@ -74,7 +72,6 @@ export class RunModelObservation {
   finish(part: Extract<LanguageModelV3StreamPart, { type: "finish" }>, hasStepAnswer: boolean): void {
     this.usage.capture(part.usage);
     const reason = part.finishReason?.unified;
-    this.lastFinishReason = reason;
     const outputTokens = frameworkTokenUsage(part.usage).outputTokens.total;
     if (reason === "length" || (outputTokens !== undefined && outputTokens > AGENT_LIMITS.outputTokens)) {
       throw this.fail("AGENT_LIMIT");
@@ -92,8 +89,7 @@ export class RunModelObservation {
   }
 
   terminalFailure(): AgentFailureCode | undefined {
-    return this.failure ?? (this.steps >= AGENT_LIMITS.steps && this.lastFinishReason === "tool-calls"
-      ? "AGENT_LIMIT" : undefined);
+    return this.failure;
   }
 }
 

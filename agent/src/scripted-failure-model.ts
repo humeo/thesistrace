@@ -12,16 +12,27 @@ export const SCRIPTED_FAILURE_PROMPTS = Object.freeze({
   AGENT_LIMIT: "[scripted-provider-output-limit] Test a bounded provider output.",
   INTERNAL_FAILURE: "[scripted-provider-unexpected] Test an unexpected provider error.",
 });
-export const SCRIPTED_STEP_LIMIT_PROMPT = "[scripted-step-limit] Inspect research context until the Agent step limit.";
+export const SCRIPTED_LONG_TOOL_LOOP_PROMPT = "[scripted-long-tool-loop] Inspect research context twenty times, then finish.";
 export const SCRIPTED_FAILURE_AFTER_TOOL_PROMPT = "[scripted-failure-after-tool] Inspect research context, then test a provider timeout.";
 export const SCRIPTED_INVALID_USAGE_PROMPT = "[scripted-invalid-usage] Complete an answer with invalid accounting.";
 export const SCRIPTED_MULTI_STEP_OUTPUT_PROMPT = "[scripted-multi-step-output] Produce two bounded outputs around a research context inspection.";
+export const SCRIPTED_TIMELINE_PROMPT = "[scripted-timeline] Explain before, between and after two context reads.";
 
 /** Faults and envelope controls exist only in the test-only Scripted Provider. */
 export function scriptedFailureStream(options: LanguageModelV3CallOptions) {
   if (options.prompt.some((message) => message.role === "system" && message.content.includes("[thesistrace-session-title]"))) return undefined;
   const user = latestUserText(options);
   const text = user?.text;
+  if (text === SCRIPTED_TIMELINE_PROMPT && user !== undefined) {
+    const reads = toolObservations(options, user.index).filter((item) => item.name === "get_research_context").length;
+    return parts([
+      textStart,
+      { ...textDelta, delta: ["Checking.", "Read the context.", "Finished."][reads] ?? "Finished." },
+      textEnd,
+      ...(reads < 2 ? [{ type: "tool-call" as const, toolCallId: `timeline-read-${reads}`, toolName: "get_research_context", input: "{}" }] : []),
+      { ...finish, finishReason: { unified: reads < 2 ? "tool-calls" : "stop", raw: "scripted" } },
+    ]);
+  }
   if (text === SCRIPTED_MULTI_STEP_OUTPUT_PROMPT && user !== undefined) {
     const contextInspected = toolObservations(options, user.index).some((item) => item.name === "get_research_context");
     const id = contextInspected ? "scripted-output-after-tool" : "scripted-output-before-tool";
@@ -41,8 +52,9 @@ export function scriptedFailureStream(options: LanguageModelV3CallOptions) {
   if (text === SCRIPTED_FAILURE_AFTER_ADMISSION_PROMPT && toolObservations(options, 0).some((item) => item.name === "submit_research_run" && typeof item.output.run_id === "string")) {
     throw new DOMException("private-after-admission-canary", "TimeoutError");
   }
-  if (text === SCRIPTED_STEP_LIMIT_PROMPT || text === SCRIPTED_FAILURE_AFTER_TOOL_PROMPT) {
+  if (text === SCRIPTED_LONG_TOOL_LOOP_PROMPT || text === SCRIPTED_FAILURE_AFTER_TOOL_PROMPT) {
     const toolResults = options.prompt.filter((message) => message.role === "tool").length;
+    if (text === SCRIPTED_LONG_TOOL_LOOP_PROMPT && toolResults >= 20) return parts([textStart, textDelta, textEnd, finish]);
     if (text === SCRIPTED_FAILURE_AFTER_TOOL_PROMPT && toolResults > 0) throw new DOMException("private-timeout-canary", "TimeoutError");
     return parts([
       { type: "tool-call", toolCallId: `scripted-fault-call-${toolResults + 1}`, toolName: "get_research_context", input: "{}" },
