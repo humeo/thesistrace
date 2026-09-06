@@ -42,3 +42,23 @@ answer idempotency with isolated PostgreSQL and a fake Responses provider.
 
 Retain these contract tests when deliberately upgrading Mastra; remove this
 patch only once the installed replacement passes the same tests unpatched.
+
+# Mastra observational context and child logging
+
+The pinned `@mastra/memory@1.28.1` loads stored history into a live MessageList
+when starting an observation turn. A resumed `ask_user` result can already be
+present there while storage still holds its pending call. Replacing that live
+message loses the answer and makes the model ask the same question again.
+
+The ESM/CommonJS patch hydrates only missing message identities. It preserves
+the current Run's messages while still loading all unobserved history. Observer
+and Reflector agents also inherit the parent Mastra logger, so a Host configured
+with `noopLogger` does not emit native child-model error logs.
+
+`agent/src/research-memory.test.ts` reproduces the stale pending-call overwrite
+with native in-memory storage and a deterministic timestamp boundary. PostgreSQL
+runtime tests cover same-Turn question recovery, both compression levels,
+mid-Tool-loop observation, original-message retention, restart, Session isolation
+and deletion, model settings, usage accounting, and safe compression failures.
+Keep these tests when upgrading; remove the patch only when the replacement
+passes them without it.

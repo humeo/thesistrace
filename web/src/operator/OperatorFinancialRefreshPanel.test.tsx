@@ -74,7 +74,7 @@ test("polls company checkpoints, preserves stale counts, and stops at a terminal
   }
 });
 
-test("renders focused Financial target and key fields", () => {
+test("renders focused Financial target without a key field", () => {
   const markup = renderToStaticMarkup(
     <OperatorFinancialRefreshPanel onAccessNotFound={() => undefined} />,
   );
@@ -84,7 +84,7 @@ test("renders focused Financial target and key fields", () => {
   expect(markup).toContain('for="operator-financial-target"');
   expect(markup).toContain('id="operator-financial-target"');
   expect(markup).toContain('type="date"');
-  expect(markup).toContain("Idempotency key");
+  expect(markup).not.toContain("Idempotency key");
   expect(markup).toContain("Select the observation-through Research Session.");
   expect(markup).not.toContain("exactly as accepted by the CLI");
   expect(markup).not.toContain(
@@ -93,13 +93,13 @@ test("renders focused Financial target and key fields", () => {
   expect(markup).not.toContain("Accepted is queued, not published.");
 });
 
-test("suggests an editable Financial key without selecting a target", () => {
+test("automatically generates a unique Financial key without selecting a target", () => {
   expect(
     suggestFinancialRefreshKey(new Date("2026-08-30T05:06:07.000Z")),
-  ).toBe("financial-20260830T050607Z");
+  ).toEqual(expect.stringMatching(/^financial-20260830T050607Z-[0-9a-f-]{36}$/));
   expect(
     suggestFinancialRefreshKey(new Date("2026-08-30T05:06:07.996Z")),
-  ).toBe("financial-20260830T050607Z");
+  ).toEqual(expect.stringMatching(/^financial-20260830T050607Z-[0-9a-f-]{36}$/));
 });
 
 test("shows checkpoint telemetry while collection is running, without claiming publication", () => {
@@ -278,3 +278,43 @@ function financialOperation(
     ...overrides,
   };
 }
+
+test("automatically keeps a submission key across confirmation retries and changes it for new work", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const proof = vi.spyOn(refreshClient, "confirmFinancialRefreshProof")
+    .mockRejectedValueOnce(new Error("temporary outage"))
+    .mockResolvedValue({expiresAt: "2026-08-14T08:00:00Z", proof: "test-only"});
+  const submit = vi.spyOn(refreshClient, "submitFinancialRefresh")
+    .mockResolvedValue(financialOperation({status: "succeeded", outcome: "published"}));
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const send = async (selector: string) => act(async () => {
+    host.querySelector(selector)!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
+  });
+  const fill = async (selector: string, value: string, event: string) => act(async () => {
+    const input = host.querySelector<HTMLInputElement>(selector)!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event(event, {bubbles: true}));
+  });
+  try {
+    await act(async () => root.render(<OperatorFinancialRefreshPanel onAccessNotFound={() => undefined} />));
+    expect(host.querySelector('input[type="text"]')).toBeNull();
+    await fill('input[type="date"]', "2026-08-14", "change");
+    await send("form");
+    await fill('input[type="password"]', "test-only-password", "input");
+    await send("dialog form");
+    await send("dialog form");
+    expect(proof.mock.calls[0]![0].idempotencyKey).toBe(proof.mock.calls[1]![0].idempotencyKey);
+    const firstKey = submit.mock.calls[0]![0].idempotencyKey;
+    await send("form");
+    await fill('input[type="password"]', "test-only-password", "input");
+    await send("dialog form");
+    expect(submit.mock.calls[1]![0].idempotencyKey).not.toBe(firstKey);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  }
+});

@@ -63,7 +63,7 @@ test("Chat DailyTrack uses the full grant and explains a real Strategy's current
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("link", { name: "Open DailyTrack", exact: true }).last().click();
   await expect(page).toHaveURL(new RegExp(`${href}$`));
-  await expect(page.locator(".research-run-facts").first()).toContainText("Status active");
+  await expect(page.locator(".track-title-row .track-status")).toHaveAttribute("data-status", "active");
   await page.goto(sessionUrl);
   await deleteChat(page);
   expect(await track(page, id)).toEqual(detail);
@@ -133,7 +133,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
     }, { timeout: 90_000 }).toBe("active:2026-08-05");
     expect(trackFacts(researcher.id)).toEqual(retryAccepted);
     await page.goto(`/daily-tracks/${id}`);
-    await expect(page.locator(".research-run-facts").first()).toContainText("Advance phase up_to_date");
+    await expect(page.locator(".track-title-row .track-status")).toHaveText("Up to date");
   } finally {
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     if (paused) controlWorker("unpause", "tracking-worker");

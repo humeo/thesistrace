@@ -125,6 +125,14 @@ _避免混用_: Research Ownership, confirmation of a particular action
 A Researcher-owned conversation that may propose or refer to multiple ResearchRuns while remaining independent of their lifecycles and results.
 _避免混用_: Login Session, Research Session, ResearchRun
 
+**Agent Chat Memory**:
+The still-relevant facts, constraints, and decisions retained within one Agent Chat Session.
+_避免混用_: Cross-conversation recall, current execution status, authoritative Research results
+
+**Agent Chat Summary**:
+The account of the current task's goal, progress, blockers, and next steps used to continue work within one Agent Chat Session.
+_避免混用_: Agent Chat Memory, Result Bundle, completed research without authoritative evidence
+
 **Research Folder**:
 A one-level Researcher-owned grouping of ResearchRuns that organizes research without changing its accepted inputs or results.
 _避免混用_: Research Batch, Alpha definition

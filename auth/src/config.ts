@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 import { z } from "zod";
 
 import { AuthConfigurationError } from "./failure.js";
+import { canonicalizeEmail } from "./identity.js";
 
 const runtimeEnvironmentSchema = z.enum(["development", "test", "production"]);
 const mcpGrantScopeSchema = z.enum([
@@ -52,6 +53,11 @@ export type AuthSettings = Readonly<{
 }>;
 
 export type AuthInitializerSettings = Readonly<{ databaseUrl: string }>;
+export type DevelopmentAccountSettings = Readonly<{
+  email: string;
+  name: string;
+  password: string;
+}>;
 
 type Environment = Readonly<Record<string, string | undefined>>;
 
@@ -312,6 +318,22 @@ export function readAuthInitializerSettings(
       "thesistrace_owner",
     ),
   };
+}
+
+export function readDevelopmentAccountSettings(
+  environment: Environment = process.env,
+): DevelopmentAccountSettings {
+  const parsed = z.object({
+    email: z.email().max(254),
+    name: z.string().trim().min(1).max(128),
+    password: z.string().min(12).max(128),
+  }).safeParse({
+    email: required(environment, "THESISTRACE_DEV_RESEARCHER_EMAIL"),
+    name: required(environment, "THESISTRACE_DEV_RESEARCHER_NAME"),
+    password: required(environment, "THESISTRACE_DEV_RESEARCHER_PASSWORD"),
+  });
+  if (!parsed.success) throw new AuthConfigurationError("Development account configuration is invalid");
+  return { ...parsed.data, email: canonicalizeEmail(parsed.data.email) };
 }
 
 function required(environment: Environment, name: string): string {

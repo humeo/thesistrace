@@ -9,8 +9,14 @@ Bootstrap is explicit and only establishes the first Head of an empty mounted
 Canonical Data Store. Freeze a timezone-aware operator instant and supply an
 idempotency key:
 
+These Compose examples run from the repository root against Development, using
+the private configuration described in [configuration management](configuration.md).
+For Production, use the explicit environment file and topology from the
+[Production runbook](single-node-production.md).
+
 ```sh
-docker compose -f deploy/core/compose.yaml run --rm \
+pnpm config:run docker compose --env-file .env --project-name thesistrace-dev \
+  -f deploy/core/compose.yaml -f deploy/core/compose.dev.yaml run --rm \
   -e THESISTRACE_TUSHARE_TOKEN \
   api thesistrace-data-operator bootstrap \
   --idempotency-key bootstrap-2026-08-09 \
@@ -76,7 +82,8 @@ kinds. Operationally, all three Refresh kinds share one global FIFO and execute
 the selected source and publication path:
 
 ```sh
-docker compose -f deploy/core/compose.yaml run --rm api \
+pnpm config:run docker compose --env-file .env --project-name thesistrace-dev \
+  -f deploy/core/compose.yaml -f deploy/core/compose.dev.yaml run --rm api \
   thesistrace-data-operator refresh \
   --idempotency-key refresh-2026-08-12 \
   --as-of 2026-08-12T18:00:00+08:00
@@ -137,7 +144,8 @@ SHA-256-addressed lineage. It does not run as part of Market bootstrap or
 Market refresh:
 
 ```sh
-docker compose -f deploy/core/compose.yaml run --rm \
+pnpm config:run docker compose --env-file .env --project-name thesistrace-dev \
+  -f deploy/core/compose.yaml -f deploy/core/compose.dev.yaml run --rm \
   api thesistrace-data-operator refresh-industry \
   --idempotency-key industry-2026-08-14 \
   --observation-through-session 2026-08-14
@@ -187,12 +195,12 @@ current backend image:
 
 ```zsh
 mkdir -p .local/operator
-export THESISTRACE_TUSHARE_TOKEN="$TUSHARE_TOKEN"
+# THESISTRACE_TUSHARE_TOKEN is read from the private .env.
 
 tt_compose=(
-  docker compose
+  pnpm config:run docker compose
   --project-name thesistrace-dev
-  --env-file deploy/core/dev.env
+  --env-file .env
   --file deploy/core/compose.yaml
   --file deploy/core/compose.dev.yaml
 )
@@ -328,5 +336,5 @@ operator twice through the shared named mount, and then starts and restarts the
 API and Worker without source credentials:
 
 ```sh
-./scripts/smoke-data-operator-image
+pnpm test:image-smoke
 ```

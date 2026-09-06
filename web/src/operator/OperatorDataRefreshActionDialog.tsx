@@ -35,7 +35,7 @@ export function OperatorDataRefreshActionDialog({
   const dialog = useRef<HTMLDialogElement | null>(null);
   const request = useRef<AbortController | null>(null);
   const [password, setPassword] = useState("");
-  const [newKey, setNewKey] = useState(() => (
+  const [newKey] = useState(() => (
     action.action === "retry"
       ? suggestDataRefreshRetryKey(action.operation.kind, now())
       : ""
@@ -101,7 +101,7 @@ export function OperatorDataRefreshActionDialog({
         if (mutationStarted) markStateUncertain();
       } else if (reason instanceof OperatorMutationError) {
         if (reason.code === "conflict" && action.action === "retry") {
-          setKeyError("This key is already in use. Enter a different new key.");
+          setKeyError("Unable to create this retry. Close this dialog and try again.");
         } else if (
           reason.code === "not-cancellable"
           || reason.code === "not-retryable"
@@ -190,31 +190,7 @@ export function OperatorDataRefreshActionDialog({
               : "The Worker will never claim this queued receipt. No running or terminal operation can be changed, and no Dataset publication is implied."}
           </p>
         </div>
-        {retry ? (
-          <label className="operator-confirmation-field">
-            <span>New idempotency key</span>
-            <input
-              aria-describedby={keyError === null ? undefined : "operator-data-refresh-key-error"}
-              aria-invalid={keyError === null ? undefined : true}
-              autoComplete="off"
-              disabled={submitting || stale}
-              maxLength={512}
-              onChange={(event) => {
-                setNewKey(event.target.value);
-                setKeyError(null);
-              }}
-              required
-              spellCheck={false}
-              type="text"
-              value={newKey}
-            />
-            {keyError === null ? null : (
-              <small className="operator-field-error" id="operator-data-refresh-key-error" role="alert">
-                {keyError}
-              </small>
-            )}
-          </label>
-        ) : null}
+        {keyError === null ? null : <p role="alert">{keyError}</p>}
         <label className="operator-confirmation-field">
           <span>Current password</span>
           <input
@@ -258,7 +234,7 @@ export function suggestDataRefreshRetryKey(
   now: Date,
 ): string {
   const timestamp = now.toISOString().slice(0, 19).replace(/[-:]/g, "") + "Z";
-  return `${kind}-retry-${timestamp}`;
+  return `${kind}-retry-${timestamp}-${crypto.randomUUID()}`;
 }
 
 function dataRefreshActionRequest(

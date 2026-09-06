@@ -4,7 +4,8 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 base_file="$repo_root/deploy/core/compose.yaml"
 production_file="$repo_root/deploy/core/compose.production.yaml"
-environment_file=${THESISTRACE_PRODUCTION_ENV_FILE-}
+environment_file=${THESISTRACE_ENV_FILE-}
+. "$repo_root/scripts/runtime-environment"
 
 fail() {
   printf '{"code":"%s","event":"production_runtime_failed"}\n' "$1" >&2
@@ -35,15 +36,7 @@ metadata=$(stat -c '%u:%a' -- "$environment_file" 2>/dev/null) \
   || fail PRODUCTION_ENV_FILE_PERMISSIONS_INVALID
 test "$metadata" = "0:600" || fail PRODUCTION_ENV_FILE_PERMISSIONS_INVALID
 
-awk '
-  /^[[:space:]]*($|#)/ { next }
-  {
-    separator = index($0, "=")
-    if (separator < 2) exit 1
-    key = substr($0, 1, separator - 1)
-    if (key !~ /^[A-Z][A-Z0-9_]*$/ || seen[key]++) exit 1
-  }
-' "$environment_file" || fail PRODUCTION_ENV_FILE_CONTENT_INVALID
+validate_environment_literals || fail PRODUCTION_ENV_FILE_CONTENT_INVALID
 
 env_value() {
   awk -v target="$1" '
@@ -150,6 +143,19 @@ esac
 resend_url=$(required_value THESISTRACE_RESEND_API_URL)
 test "$resend_url" = https://api.resend.com || fail PRODUCTION_RESEND_URL_INVALID
 
+agent_base_url=$(required_value THESISTRACE_AGENT_OPENAI_BASE_URL)
+printf '%s\n' "$agent_base_url" | grep -Eq '^https://[^/@[:space:]?#]+(/[^[:space:]?#]*)?$' \
+  || fail PRODUCTION_AGENT_BASE_URL_INVALID
+
+for storage_secret_name in THESISTRACE_S3_ACCESS_KEY_ID THESISTRACE_S3_SECRET_ACCESS_KEY; do
+  storage_secret=$(required_value "$storage_secret_name")
+  printf '%s\n' "$storage_secret" | grep -Eq '^[A-Za-z0-9_-]{16,128}$' \
+    || fail PRODUCTION_STORAGE_CREDENTIAL_INVALID
+  case "$storage_secret" in
+    *test* | *development* | *placeholder*) fail PRODUCTION_STORAGE_CREDENTIAL_INVALID ;;
+  esac
+done
+
 validate_database_password() {
   password=$(required_value "$1")
   test "${#password}" -ge 24 || fail PRODUCTION_DATABASE_PASSWORD_INVALID
@@ -226,8 +232,7 @@ agent_provider_secret_present=false
 for agent_provider_secret_name in \
   THESISTRACE_AGENT_ANTHROPIC_API_KEY \
   THESISTRACE_AGENT_GOOGLE_API_KEY \
-  THESISTRACE_AGENT_OPENAI_API_KEY \
-  THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET; do
+  THESISTRACE_AGENT_OPENAI_API_KEY; do
   agent_provider_secret=$(env_value "$agent_provider_secret_name")
   test -n "$agent_provider_secret" || continue
   test "${#agent_provider_secret}" -ge 16 \
@@ -298,41 +303,8 @@ case "$agent_image" in
     ;;
 esac
 
-# Docker Compose gives the ambient shell precedence over --env-file. Remove
-# every security-sensitive value that was validated above so the root-owned
-# file remains the sole source passed to Compose.
-unset \
-  THESISTRACE_ENVIRONMENT \
-  THESISTRACE_PUBLIC_ORIGIN \
-  THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS \
-  THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS \
-  THESISTRACE_MCP_AGENT_SCOPES \
-  THESISTRACE_MCP_ALLOWED_HOSTS \
-  THESISTRACE_MCP_ALLOWED_ORIGINS \
-  THESISTRACE_MCP_CLIENT_ID \
-  THESISTRACE_MCP_CLOCK_SKEW_SECONDS \
-  THESISTRACE_MCP_DEPLOYMENT_TOOLS \
-  THESISTRACE_MCP_ISSUER_URL \
-  THESISTRACE_MCP_RESOURCE_URL \
-  THESISTRACE_MCP_SIGNING_PRIVATE_JWK \
-  THESISTRACE_MCP_VERIFYING_PUBLIC_JWK \
-  THESISTRACE_RESEND_API_URL \
-  THESISTRACE_OWNER_DATABASE_PASSWORD \
-  THESISTRACE_CORE_DATABASE_PASSWORD \
-  THESISTRACE_AUTH_DATABASE_PASSWORD \
-  THESISTRACE_AGENT_DATABASE_PASSWORD \
-  BETTER_AUTH_SECRET \
-  RESEND_API_KEY \
-  RESEND_FROM_EMAIL \
-  THESISTRACE_TUSHARE_TOKEN \
-  THESISTRACE_AUTH_IMAGE \
-  THESISTRACE_AGENT_IMAGE \
-  THESISTRACE_AGENT_MODEL_REGISTRY \
-  THESISTRACE_AGENT_BUILD_REVISION \
-  THESISTRACE_AGENT_ANTHROPIC_API_KEY \
-  THESISTRACE_AGENT_GOOGLE_API_KEY \
-  THESISTRACE_AGENT_OPENAI_API_KEY \
-  THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET
+# Use the validated file as the sole source for Compose interpolation.
+clear_compose_environment
 
 compose() {
   THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" docker compose \

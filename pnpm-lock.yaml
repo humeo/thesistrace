@@ -7,6 +7,7 @@ settings:
 
 patchedDependencies:
   '@ag-ui/mastra@1.1.1': 73d6dc738481caa7ef2764bcffc2bb0b76b2ae62d617b1909ffa2f6a7f8ce18b
+  '@mastra/memory@1.28.1': befbfe4804c4347361dbf1b52a0e44d06d79a0e0ac96cb367e9c411377499335
   '@mastra/schema-compat@1.3.7': eae173177d0e7d5745945343ed62e741f2dc06a9f20c77fbc103d0153940d74a
 
 importers:
@@ -53,7 +54,7 @@ importers:
         version: 1.17.2(@cfworker/json-schema@4.1.1)(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1)(rxjs@7.8.1)(zod@4.4.3))(express@5.2.1)(hono@4.13.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(zod@4.4.3)
       '@mastra/memory':
         specifier: 1.28.1
-        version: 1.28.1(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1)(rxjs@7.8.1)(zod@4.4.3))
+        version: 1.28.1(patch_hash=befbfe4804c4347361dbf1b52a0e44d06d79a0e0ac96cb367e9c411377499335)(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1)(rxjs@7.8.1)(zod@4.4.3))
       '@mastra/pg':
         specifier: 1.22.1
         version: 1.22.1(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1)(rxjs@7.8.1)(zod@4.4.3))
@@ -6138,7 +6139,7 @@ snapshots:
       - supports-color
       - zod
 
-  '@mastra/memory@1.28.1(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1)(rxjs@7.8.1)(zod@4.4.3))':
+  '@mastra/memory@1.28.1(patch_hash=befbfe4804c4347361dbf1b52a0e44d06d79a0e0ac96cb367e9c411377499335)(@mastra/core@1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1)(rxjs@7.8.1)(zod@4.4.3))':
     dependencies:
       '@mastra/core': 1.63.1(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1)(rxjs@7.8.1)(zod@4.4.3)
       '@mastra/schema-compat': 1.3.7(patch_hash=eae173177d0e7d5745945343ed62e741f2dc06a9f20c77fbc103d0153940d74a)(zod@4.4.3)

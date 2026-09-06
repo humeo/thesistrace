@@ -54,8 +54,14 @@ describe.sequential("Auth physical schema", () => {
     for (let reset = 0; reset < 2; reset += 1) {
       await initializeAuthSchema(owner);
       await Promise.all([
-        initializeDevelopmentAccount(owner),
-        initializeDevelopmentAccount(owner),
+        initializeDevelopmentAccount(owner, {
+          email: "operator@fixture.test", name: "Configured Operator",
+          password: "configured-private-password-123",
+        }),
+        initializeDevelopmentAccount(owner, {
+          email: "operator@fixture.test", name: "Configured Operator",
+          password: "configured-private-password-123",
+        }),
       ]);
       const result = await owner.query(
         `SELECT u.email, u.active, u."emailVerified", a.password,
@@ -65,11 +71,11 @@ describe.sequential("Auth physical schema", () => {
       );
       expect(result.rows).toHaveLength(1);
       expect(result.rows[0]).toMatchObject({
-        email: "koltenluca433@gmail.com", active: true, emailVerified: true,
+        email: "operator@fixture.test", active: true, emailVerified: true,
         providerId: "credential", issuer: "local:credential", operator: true,
       });
       expect(await verifyPassword({
-        hash: result.rows[0].password, password: "koltenluca433@gmail.com",
+        hash: result.rows[0].password, password: "configured-private-password-123",
       })).toBe(true);
       await owner.query("DROP SCHEMA auth CASCADE");
     }
@@ -77,11 +83,17 @@ describe.sequential("Auth physical schema", () => {
 
   it("preserves changed credentials and authority on a repeated Development initialization", async () => {
     await initializeAuthSchema(owner);
-    await initializeDevelopmentAccount(owner);
+    await initializeDevelopmentAccount(owner, {
+      email: "operator@fixture.test", name: "Configured Operator",
+      password: "configured-private-password-123",
+    });
     await owner.query(`UPDATE auth."account" SET password = 'changed-password-hash'`);
     await owner.query(`UPDATE auth."user" SET active = FALSE`);
     await owner.query("DELETE FROM auth.operator_assignment");
-    await initializeDevelopmentAccount(owner);
+    await initializeDevelopmentAccount(owner, {
+      email: "operator@fixture.test", name: "Configured Operator",
+      password: "configured-private-password-123",
+    });
     expect((await owner.query(`SELECT password FROM auth."account"`)).rows)
       .toEqual([{ password: "changed-password-hash" }]);
     expect((await owner.query(`SELECT active FROM auth."user"`)).rows)

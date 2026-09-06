@@ -1,0 +1,80 @@
+diff --git a/dist/src-BNtoxIHL.js b/dist/src-BNtoxIHL.js
+index 0db57d681db5f1bd369a02f11909d733c36b3188..ce9add5a2d2ee872595e6c9769ffbe467a0a4a0e 100644
+--- a/dist/src-BNtoxIHL.js
++++ b/dist/src-BNtoxIHL.js
+@@ -19398,7 +19398,10 @@ var ObserverRunner = class {
+ 			model,
+ 			...memory ? { memory } : {}
+ 		});
+-		if (this.mastra) agent.__registerMastra(this.mastra);
++		if (this.mastra) {
++			agent.__registerMastra(this.mastra);
++			agent.__setLogger(this.mastra.getLogger());
++		}
+ 		return agent;
+ 	}
+ 	/**
+@@ -24649,7 +24652,10 @@ async function loadMemoryContextMessages({ memory, messageList, threadId, resour
+ 		resourceId,
+ 		runState
+ 	});
+-	for (const msg of ctx.messages) if (msg.role !== "system") messageList.add(msg, "memory");
++	// Hydration supplies missing history. In-flight messages can already contain
++	// resumed tool results that have not reached storage; never overwrite them.
++	const liveIds = new Set(messageList.get.all.db().map((message) => message.id));
++	for (const msg of ctx.messages) if (msg.role !== "system" && !liveIds.has(msg.id)) messageList.add(msg, "memory");
+ 	return ctx;
+ }
+ //#endregion
+@@ -25640,7 +25646,10 @@ var ReflectorRunner = class {
+ 			model,
+ 			...memory ? { memory } : {}
+ 		});
+-		if (this.mastra) agent.__registerMastra(this.mastra);
++		if (this.mastra) {
++			agent.__registerMastra(this.mastra);
++			agent.__setLogger(this.mastra.getLogger());
++		}
+ 		return agent;
+ 	}
+ 	getObservationMarkerConfig(record) {
+diff --git a/dist/src-Br56ncef.cjs b/dist/src-Br56ncef.cjs
+index 4cb5a17133063ca9138cc3e51ae9e685b72967b3..4de7a97dece4b5ba4a9ae9b795a8c0c75c3869fc 100644
+--- a/dist/src-Br56ncef.cjs
++++ b/dist/src-Br56ncef.cjs
+@@ -19419,7 +19419,10 @@ var ObserverRunner = class {
+ 			model,
+ 			...memory ? { memory } : {}
+ 		});
+-		if (this.mastra) agent.__registerMastra(this.mastra);
++		if (this.mastra) {
++			agent.__registerMastra(this.mastra);
++			agent.__setLogger(this.mastra.getLogger());
++		}
+ 		return agent;
+ 	}
+ 	/**
+@@ -24670,7 +24673,10 @@ async function loadMemoryContextMessages({ memory, messageList, threadId, resour
+ 		resourceId,
+ 		runState
+ 	});
+-	for (const msg of ctx.messages) if (msg.role !== "system") messageList.add(msg, "memory");
++	// Hydration supplies missing history. In-flight messages can already contain
++	// resumed tool results that have not reached storage; never overwrite them.
++	const liveIds = new Set(messageList.get.all.db().map((message) => message.id));
++	for (const msg of ctx.messages) if (msg.role !== "system" && !liveIds.has(msg.id)) messageList.add(msg, "memory");
+ 	return ctx;
+ }
+ //#endregion
+@@ -25661,7 +25667,10 @@ var ReflectorRunner = class {
+ 			model,
+ 			...memory ? { memory } : {}
+ 		});
+-		if (this.mastra) agent.__registerMastra(this.mastra);
++		if (this.mastra) {
++			agent.__registerMastra(this.mastra);
++			agent.__setLogger(this.mastra.getLogger());
++		}
+ 		return agent;
+ 	}
+ 	getObservationMarkerConfig(record) {

@@ -2,6 +2,9 @@ services:
   auth-initialize:
     environment:
       THESISTRACE_ENVIRONMENT: development
+      THESISTRACE_DEV_RESEARCHER_EMAIL: ${THESISTRACE_DEV_RESEARCHER_EMAIL:?THESISTRACE_DEV_RESEARCHER_EMAIL is required}
+      THESISTRACE_DEV_RESEARCHER_NAME: ${THESISTRACE_DEV_RESEARCHER_NAME:?THESISTRACE_DEV_RESEARCHER_NAME is required}
+      THESISTRACE_DEV_RESEARCHER_PASSWORD: ${THESISTRACE_DEV_RESEARCHER_PASSWORD:?THESISTRACE_DEV_RESEARCHER_PASSWORD is required}
 
   postgres:
     ports:
@@ -57,9 +60,6 @@ services:
           action: rebuild
 
   agent:
-    environment:
-      OPENAI_BASE_URL: ${THESISTRACE_AGENT_OPENAI_BASE_URL:?THESISTRACE_AGENT_OPENAI_BASE_URL is required}
-      THESISTRACE_AGENT_OPENAI_API_KEY: ${CLI_API_KEY:?CLI_API_KEY is required for the local Agent}
     develop:
       watch:
         - path: ../../agent

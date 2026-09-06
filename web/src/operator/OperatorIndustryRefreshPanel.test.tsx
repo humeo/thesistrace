@@ -9,7 +9,7 @@ import {
 } from "./OperatorIndustryRefreshPanel";
 import type { IndustryRefreshOperation } from "./operatorMutationClient";
 
-test("renders focused Industry target and key fields", () => {
+test("renders focused Industry target without a key field", () => {
   const markup = renderToStaticMarkup(
     <OperatorIndustryRefreshPanel onAccessNotFound={() => undefined} />,
   );
@@ -19,7 +19,7 @@ test("renders focused Industry target and key fields", () => {
   expect(markup).toContain('for="operator-industry-target"');
   expect(markup).toContain('id="operator-industry-target"');
   expect(markup).toContain('type="date"');
-  expect(markup).toContain("Idempotency key");
+  expect(markup).not.toContain("Idempotency key");
   expect(markup).toContain("Select the observation-through Research Session.");
   expect(markup).not.toContain("exactly as accepted by the CLI");
   expect(markup).not.toContain(
@@ -28,13 +28,13 @@ test("renders focused Industry target and key fields", () => {
   expect(markup).not.toContain("Accepted is queued, not published.");
 });
 
-test("suggests an editable Industry key without selecting a target", () => {
+test("automatically generates a unique Industry key without selecting a target", () => {
   expect(
     suggestIndustryRefreshKey(new Date("2026-08-30T05:06:07.000Z")),
-  ).toBe("industry-20260830T050607Z");
+  ).toEqual(expect.stringMatching(/^industry-20260830T050607Z-[0-9a-f-]{36}$/));
   expect(
     suggestIndustryRefreshKey(new Date("2026-08-30T05:06:07.996Z")),
-  ).toBe("industry-20260830T050607Z");
+  ).toEqual(expect.stringMatching(/^industry-20260830T050607Z-[0-9a-f-]{36}$/));
 });
 
 test("shows no-change separately from published", () => {

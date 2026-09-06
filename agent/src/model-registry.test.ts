@@ -7,6 +7,7 @@ const validRegistry = {
   default_model_key: "openai-primary",
   models: [
     {
+      context_window: 258_000,
       default_reasoning_effort: "medium",
       display_name: "OpenAI Primary",
       enabled: true,
@@ -17,6 +18,7 @@ const validRegistry = {
       secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
     },
     {
+      context_window: 128_000,
       default_reasoning_effort: "high",
       display_name: "Anthropic Analyst",
       enabled: true,
@@ -27,6 +29,7 @@ const validRegistry = {
       secret_env: "THESISTRACE_AGENT_ANTHROPIC_API_KEY",
     },
     {
+      context_window: 32_768,
       default_reasoning_effort: "none",
       display_name: "Disabled Model",
       enabled: false,
@@ -48,6 +51,15 @@ function encoded(overrides: Record<string, unknown> = {}): string {
 }
 
 describe("model Registry", () => {
+  it("reads each model's context capacity and requires a valid explicit budget", () => {
+    const registry = readModelRegistry(encoded(), environment);
+    expect(registry.models.map((model) => model.contextWindow)).toEqual([258_000, 128_000, 32_768]);
+    for (const context_window of [undefined, 0, -1, 8192, 65_536.5]) {
+      expect(() => readModelRegistry(encoded({
+        models: [{ ...validRegistry.models[0], context_window }],
+      }), environment)).toThrow("Agent configuration is invalid");
+    }
+  });
   it("publishes every configured Luna effort from the maintained model file", () => {
     const registry = readModelRegistry(
       readFileSync(new URL("../../config/model-registry.json", import.meta.url), "utf8"),
@@ -58,6 +70,7 @@ describe("model Registry", () => {
       default_reasoning_effort: "high",
       reasoning_efforts: ["none", "low", "medium", "high", "xhigh", "max"],
     });
+    expect(registry.models[0]?.contextWindow).toBe(258_000);
   });
   it("builds one safe multi-provider Catalog and omits disabled models", () => {
     const registry = readModelRegistry(encoded(), environment);

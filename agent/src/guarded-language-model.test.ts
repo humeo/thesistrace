@@ -19,6 +19,34 @@ const finish: LanguageModelV3StreamPart = {
 };
 const textPart: LanguageModelV3StreamPart = { type: "text-delta", id: "text", delta: "An answer." };
 
+test("the same long prompt fits Luna's configured window and fails a smaller model's window", async () => {
+  const prompt = [{ role: "user" as const, content: [{ type: "text" as const, text: "context ".repeat(40_000) }] }];
+  let received: LanguageModelV3CallOptions | undefined;
+  const provider = fake(async (input) => { received = input; return stream([textPart, finish]); });
+  const luna = new GuardedLanguageModel(provider, new RunModelObservation(new RunUsageCapture()), 258_000);
+  await drain(await luna.doStream({ prompt }));
+  expect(received?.prompt).toEqual(prompt);
+  const smaller = new GuardedLanguageModel(provider, new RunModelObservation(new RunUsageCapture()), 65_536);
+  await expect(smaller.doStream({ prompt })).rejects.toMatchObject({ code: "AGENT_LIMIT" });
+});
+
+test("reserves output space inside the configured model context window", async () => {
+  const guarded = new GuardedLanguageModel(fake(async () => stream([textPart, finish])),
+    new RunModelObservation(new RunUsageCapture()), 16_384);
+  await expect(guarded.doStream({ prompt: [{ role: "user", content: [{ type: "text", text: "context ".repeat(5000) }] }] }))
+    .rejects.toMatchObject({ code: "AGENT_LIMIT" });
+});
+
+test("memory compression is metered but cannot substitute for an answer to the user", async () => {
+  const observation = new RunModelObservation(new RunUsageCapture());
+  await drain(await new GuardedLanguageModel(fake(async () => stream([textPart, finish])), observation, 65_536, "memory")
+    .doStream(options));
+  expect(observation.usage.value()?.outputTokens.total).toBe(1);
+  expect(observation.outputBytes).toBeGreaterThan(0);
+  await expect(drain(await new GuardedLanguageModel(fake(async () => stream([finish])), observation, 65_536)
+    .doStream(options))).rejects.toMatchObject({ code: "PROVIDER_MALFORMED_STREAM" });
+});
+
 test("Mastra completes a rendered A2UI answer without requiring a redundant final text", async () => {
   const observation = new RunModelObservation(new RunUsageCapture());
   const model = new GuardedLanguageModel(fake(async (input) => stream(
@@ -27,7 +55,7 @@ test("Mastra completes a rendered A2UI answer without requiring a redundant fina
       : [{ type: "tool-call", toolCallId: "render-result", toolName: "render_a2ui", input: JSON.stringify({
         surfaceId: "research-result", components: [{ id: "root", component: "Text", text: "Research result available" }],
       }) }, { ...finish, finishReason: { unified: "tool-calls", raw: "tool_calls" } }],
-  )), observation);
+  )), observation, 65_536);
   const agent = new Agent({ id: "render-completion", name: "Render completion", instructions: "Show the result.",
     model, maxRetries: 0, tools: { render_a2ui: researchA2UITool } });
   const response = await agent.stream("Show a research result card.", { maxSteps: 2 });
@@ -45,7 +73,7 @@ test("Mastra completes a rendered A2UI answer without requiring a redundant fina
 
 test.each(Object.entries(SCRIPTED_FAILURE_PROMPTS))("scripted provider deterministically produces %s", async (code, prompt) => {
   const observation = new RunModelObservation(new RunUsageCapture());
-  const model = new GuardedLanguageModel(new ScriptedLanguageModel("fixture"), observation);
+  const model = new GuardedLanguageModel(new ScriptedLanguageModel("fixture"), observation, 65_536);
   const run = async () => drain(await model.doStream({ prompt: [{ role: "user", content: [{ type: "text", text: prompt }] }] }));
   await expect(run()).rejects.toMatchObject({ code });
   expect(observation.failure).toBe(code);
@@ -55,7 +83,7 @@ test.each(Object.entries(SCRIPTED_FAILURE_PROMPTS))("scripted provider determini
 test("the model receives an explicit output bound and reported usage stays safe", async () => {
   const observation = new RunModelObservation(new RunUsageCapture());
   let received: LanguageModelV3CallOptions | undefined;
-  const guarded = new GuardedLanguageModel(fake(async (input) => { received = input; return stream([textPart, finish]); }), observation);
+  const guarded = new GuardedLanguageModel(fake(async (input) => { received = input; return stream([textPart, finish]); }), observation, 65_536);
   await drain(await guarded.doStream(options));
   expect(received?.maxOutputTokens).toBe(AGENT_LIMITS.outputTokens);
   expect(observation.steps).toBe(1);
@@ -70,10 +98,10 @@ test("the measured Luna high trajectory has a three-minute Provider call budget"
 test("context including Tool schemas fails before the provider is invoked", async () => {
   let invoked = false;
   const observation = new RunModelObservation(new RunUsageCapture());
-  const guarded = new GuardedLanguageModel(fake(async () => { invoked = true; return stream([finish]); }), observation);
+  const guarded = new GuardedLanguageModel(fake(async () => { invoked = true; return stream([finish]); }), observation, 65_536);
   await expect(guarded.doStream({
     ...options,
-    tools: [{ type: "function", name: "large_tool", inputSchema: { description: "context ".repeat(AGENT_LIMITS.contextTokens + 1) } }],
+    tools: [{ type: "function", name: "large_tool", inputSchema: { description: "context ".repeat(65_536 + 1) } }],
   })).rejects.toMatchObject({ code: "AGENT_LIMIT" });
   expect(invoked).toBe(false);
   expect(observation.steps).toBe(0);
@@ -94,7 +122,7 @@ test("Mastra preserves a bounded model-facing Tool result without counting its i
       { type: "tool-call", toolCallId: "read-known-result", toolName: "read_result", input: "{}" },
       { ...finish, finishReason: { unified: "tool-calls", raw: "tool_calls" } },
     ]);
-  }), observation);
+  }), observation, 65_536);
   const agent = new Agent({
     id: "bounded-tool-result", name: "Bounded Tool result", instructions: "Read the result.", model, maxRetries: 0,
     tools: { read_result: createTool({
@@ -122,7 +150,7 @@ test.each(["input", "output"] as const)("Tool %s fields named like metadata stil
     : [{ role: "tool", content: [{ type: "tool-result", toolName: "read_result", toolCallId: "large-output", output: { type: "json", value: payload } }] }];
   let invoked = false;
   const observation = new RunModelObservation(new RunUsageCapture());
-  const model = new GuardedLanguageModel(fake(async () => { invoked = true; return stream([textPart, finish]); }), observation);
+  const model = new GuardedLanguageModel(fake(async () => { invoked = true; return stream([textPart, finish]); }), observation, 65_536);
   await expect(model.doStream({ prompt })).rejects.toMatchObject({ code: "AGENT_LIMIT" });
   expect(invoked).toBe(false);
   expect(observation.steps).toBe(0);
@@ -140,7 +168,7 @@ test.each([
   [[{ type: "not-a-provider-event", private: "canary" }], "PROVIDER_MALFORMED_STREAM"],
 ])("terminates unsafe provider stream %# without a success finish", async (parts, code) => {
   const observation = new RunModelObservation(new RunUsageCapture());
-  const guarded = new GuardedLanguageModel(fake(async () => stream(parts as LanguageModelV3StreamPart[])), observation);
+  const guarded = new GuardedLanguageModel(fake(async () => stream(parts as LanguageModelV3StreamPart[])), observation, 65_536);
   await expect(drain(await guarded.doStream(options))).rejects.toMatchObject({ code });
   expect(observation.failure).toBe(code);
 });
@@ -155,7 +183,7 @@ test("a timed-out Provider stream that closes without finish remains a timeout",
   const guarded = new GuardedLanguageModel(fake(async () => {
     controller.abort(timeout);
     return stream([]);
-  }), observation);
+  }), observation, 65_536);
 
   const failure = await drain(await guarded.doStream({ ...options, abortSignal: controller.signal }))
     .catch((error: unknown) => error);
@@ -172,7 +200,7 @@ test("never retries provider errors and never exposes their private cause", asyn
   const guarded = new GuardedLanguageModel(fake(async () => {
     invocations++;
     throw new APICallError({ message: "private", requestBodyValues: "private", url: "https://private.invalid", statusCode: 429 });
-  }), observation);
+  }), observation, 65_536);
   const error = await guarded.doStream(options).catch((failure: unknown) => failure);
   expect(error).toMatchObject({ code: "PROVIDER_RATE_LIMIT" });
   expect(error).not.toHaveProperty("cause");
@@ -194,7 +222,7 @@ test("native SDK socket interruption is a Provider failure with unknown final us
       },
     }), { headers: { "content-type": "text/event-stream" } }),
   }).responses("synthetic");
-  const reader = (await new GuardedLanguageModel(native, observation).doStream(options)).stream.getReader();
+  const reader = (await new GuardedLanguageModel(native, observation, 65_536).doStream(options)).stream.getReader();
   expect((await reader.read()).value?.type).toBe("stream-start");
   source!.error(new TypeError("private-stream-canary", {
     cause: Object.assign(new Error("private-socket-canary"), { code: "UND_ERR_SOCKET" }),
@@ -236,7 +264,7 @@ test.each([
       headers: { "content-type": "text/event-stream" },
     }),
   }).responses("synthetic");
-  const failure = await drain(await new GuardedLanguageModel(native, observation).doStream(options))
+  const failure = await drain(await new GuardedLanguageModel(native, observation, 65_536).doStream(options))
     .catch((error: unknown) => error);
   expect(failure).toMatchObject({ code, message: code });
   expect(failure).not.toHaveProperty("cause");
@@ -251,8 +279,8 @@ test.each([
   [[finish, textPart], "PROVIDER_MALFORMED_STREAM"],
 ])("a previous answer does not mask an invalid continuation %#", async (parts, code) => {
   const observation = new RunModelObservation(new RunUsageCapture());
-  await drain(await new GuardedLanguageModel(fake(async () => stream([textPart, finish])), observation).doStream(options));
-  const continuation = new GuardedLanguageModel(fake(async () => stream(parts as LanguageModelV3StreamPart[])), observation);
+  await drain(await new GuardedLanguageModel(fake(async () => stream([textPart, finish])), observation, 65_536).doStream(options));
+  const continuation = new GuardedLanguageModel(fake(async () => stream(parts as LanguageModelV3StreamPart[])), observation, 65_536);
   await expect(drain(await continuation.doStream(options))).rejects.toMatchObject({ code });
 });
 
@@ -262,16 +290,16 @@ test("non-streaming generation also permits an empty stop only after output in t
     ...fake(async () => stream([])),
     doGenerate: async () => ({ content, finishReason: finish.finishReason, usage: finish.usage, warnings: [] }),
   });
-  await new GuardedLanguageModel(generate([{ type: "text", text: "Answer already delivered." }]), observation).doGenerate(options);
-  await expect(new GuardedLanguageModel(generate([]), observation).doGenerate(options)).resolves.toMatchObject({ content: [] });
+  await new GuardedLanguageModel(generate([{ type: "text", text: "Answer already delivered." }]), observation, 65_536).doGenerate(options);
+  await expect(new GuardedLanguageModel(generate([]), observation, 65_536).doGenerate(options)).resolves.toMatchObject({ content: [] });
   expect(observation.usage.value()).toMatchObject({ inputTokens: { total: 10 }, outputTokens: { total: 2 } });
-  await expect(new GuardedLanguageModel(generate([]), new RunModelObservation(new RunUsageCapture())).doGenerate(options))
+  await expect(new GuardedLanguageModel(generate([]), new RunModelObservation(new RunUsageCapture()), 65_536).doGenerate(options))
     .rejects.toMatchObject({ code: "PROVIDER_MALFORMED_STREAM" });
 });
 
 test("model calls continue beyond sixteen steps", async () => {
   const observation = new RunModelObservation(new RunUsageCapture());
-  const guarded = new GuardedLanguageModel(new ScriptedLanguageModel("fixture"), observation);
+  const guarded = new GuardedLanguageModel(new ScriptedLanguageModel("fixture"), observation, 65_536);
   for (let index = 0; index < 20; index++) await drain(await guarded.doStream(options));
   expect(observation.steps).toBe(20);
   expect(observation.terminalFailure()).toBeUndefined();
@@ -281,7 +309,7 @@ test("invalid usage stays unreported without failing a completed answer", async 
   const observation = new RunModelObservation(new RunUsageCapture());
   const guarded = new GuardedLanguageModel(fake(async () => stream([
     textPart, { ...finish, usage: undefined } as unknown as LanguageModelV3StreamPart,
-  ])), observation);
+  ])), observation, 65_536);
   await drain(await guarded.doStream(options));
   expect(observation.failure).toBeUndefined();
   expect(observation.usage.value()).toBeUndefined();
@@ -292,7 +320,7 @@ test.each(["9000", Infinity, NaN, -9000, 9000.5, Number.MAX_SAFE_INTEGER + 1, nu
     const observation = new RunModelObservation(new RunUsageCapture());
     const guarded = new GuardedLanguageModel(fake(async () => stream([
       textPart, { ...finish, usage: { inputTokens: { total: 5 }, outputTokens: { total } } } as unknown as LanguageModelV3StreamPart,
-    ])), observation);
+    ])), observation, 65_536);
     await drain(await guarded.doStream(options));
     expect(observation.failure).toBeUndefined();
     expect(observation.usage.value()?.outputTokens.total).toBeNull();
@@ -303,7 +331,7 @@ test("valid reported output over the bound still terminates the Run", async () =
   const observation = new RunModelObservation(new RunUsageCapture());
   const guarded = new GuardedLanguageModel(fake(async () => stream([
     textPart, { ...finish, usage: { ...finish.usage, outputTokens: { ...finish.usage.outputTokens, total: AGENT_LIMITS.outputTokens + 1 } } },
-  ])), observation);
+  ])), observation, 65_536);
   await expect(drain(await guarded.doStream(options))).rejects.toMatchObject({ code: "AGENT_LIMIT" });
 });
 

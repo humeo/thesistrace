@@ -674,6 +674,41 @@ class DailyTrackProgress(BaseModel):
     next_attempt_eligible_at: str | None
 
 
+class DailyTrackHolding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    instrument_id: str
+    shares: int
+    market_value_cny: str
+    weight: float
+
+
+class DailyTrackObservationPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session: str
+    net_return: float
+
+
+class DailyTrackObservation(BaseModel):
+    """The published account and performance since the immutable Tracking Origin."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session: str
+    net_asset_value_cny: str
+    cash_cny: str
+    net_change_cny: str
+    net_return: float
+    transaction_cost_cny: str
+    session_count: int
+    holdings: list[DailyTrackHolding]
+    rebalance_interval: int
+    pending_signal_session: str | None
+    sessions_until_next_signal: int
+    returns: list[DailyTrackObservationPoint]
+
+
 class DailyTrackDetail(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -685,6 +720,7 @@ class DailyTrackDetail(BaseModel):
     lag_sessions: int
     progress: DailyTrackProgress
     blocked_reason: str | None
+    observation: DailyTrackObservation
     factor: DailyTrackFactorResult
     strategy: DailyTrackStrategyResult
 

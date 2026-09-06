@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 import pytest
+from runtime_configuration_fixtures import development_environment
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -69,6 +70,7 @@ raise SystemExit(0)
     docker.chmod(0o755)
     environment = {
         **os.environ,
+        **development_environment(tmp_path / "development.env"),
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "DEVELOPMENT_COMMAND_LOG": str(command_log),
         "DEVELOPMENT_VOLUME_ROOT": str(volume_root),
@@ -413,11 +415,16 @@ exit 97
         """#!/bin/sh
 set -eu
 output=
+headers=
 write_out=false
 fail=false
 url=
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --dump-header|-D)
+      headers=$2
+      shift 2
+      ;;
     --output|-o)
       output=$2
       shift 2
@@ -443,12 +450,29 @@ case "$url" in
   */health/ready) body='{"status":"ready"}' ;;
   */health/*|*/internal/*) status=404; body='' ;;
   */api/auth/ok) body='{"ok":true}' ;;
-  */api/data) status=401; body='{"detail":"Authentication required"}' ;;
+  */api/auth/sign-in/email*) status=401; body='{}' ;;
+  */api/data|*/api/agent/models) status=401; body='{"detail":"Authentication required"}' ;;
+  */mcp\\?*|*/.well-known/oauth-protected-resource/mcp\\?*) status=400; body='{}' ;;
+  */.well-known/oauth-protected-resource/mcp)
+    origin=${url%/.well-known/oauth-protected-resource/mcp}
+    body=\"{\\\"resource\\\":\\\"$origin/mcp\\\"}\"
+    ;;
+  */mcp) status=401; body='{}' ;;
+  */mcp/|*/mcp/sse) status=404; body='' ;;
 esac
 if [ -f "$FAKE_BACKEND_MARKER" ]; then
   case "$url" in
     */api/auth/*|*/api/*) status=502; body='' ;;
   esac
+fi
+if [ -n "$headers" ]; then
+  cat >"$headers" <<'HEADERS'
+Content-Security-Policy: default-src 'none'; script-src 'self'; """
+        """style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'
+Referrer-Policy: no-referrer
+X-Content-Type-Options: nosniff
+Permissions-Policy: camera=(), microphone=()
+HEADERS
 fi
 if [ -n "$output" ]; then
   if [ "$output" != /dev/null ]; then
@@ -545,6 +569,7 @@ def test_development_start_reads_the_maintained_model_file(tmp_path: Path) -> No
         [ROOT / "scripts" / "dev-runtime", "up"],
         env={
             **os.environ,
+            **development_environment(tmp_path / "development.env"),
             "PATH": f"{tmp_path}:{os.environ['PATH']}",
             "TEST_REGISTRY_OUTPUT": str(registry_output),
             "THESISTRACE_AGENT_MODEL_REGISTRY": "ambient-value-must-not-override-file",
@@ -857,6 +882,7 @@ signal.pause()
     docker.chmod(0o755)
     environment = {
         **os.environ,
+        **development_environment(tmp_path / "development.env"),
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "WATCH_SIGNAL_FILE": str(signal_file),
         "WATCH_STOP_FILE": str(stop_file),
@@ -919,6 +945,7 @@ signal.pause()
     docker.chmod(0o755)
     environment = {
         **os.environ,
+        **development_environment(tmp_path / "development.env"),
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "WATCH_PROCESS_GROUP_FILE": str(process_group_file),
     }
@@ -1419,7 +1446,7 @@ def test_compose_preflight_failure_releases_the_caddy_port_lock(
 
 
 @pytest.mark.parametrize("command", ["agent-eval", "integration"])
-def test_only_explicit_eval_injects_the_cli_credential_and_selected_endpoint(
+def test_only_explicit_eval_injects_the_configured_credential_and_selected_endpoint(
     tmp_path: Path, command: str,
 ) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
@@ -1433,13 +1460,14 @@ def test_only_explicit_eval_injects_the_cli_credential_and_selected_endpoint(
             "provider_model_id": "gpt-5.6-luna",
             "reasoning_efforts": ["high"],
             "default_reasoning_effort": "high",
+            "context_window": 258000,
             "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
             "enabled": True,
         }],
     }
     environment.update({
-        "CLI_API_KEY": "cli-provider-offline-canary",
-        "THESISTRACE_AGENT_OPENAI_API_KEY": "ambient-canonical-key-canary",
+        "CLI_API_KEY": "ambient-alias-must-not-be-used",
+        "THESISTRACE_AGENT_OPENAI_API_KEY": "configured-provider-offline-canary",
         "THESISTRACE_AGENT_OPENAI_BASE_URL": "http://host.docker.internal:8317/v1",
         "OPENAI_BASE_URL": "https://unapproved.example/v1",
         "THESISTRACE_AGENT_EVAL_MODEL_KEY": "gpt-5.6-luna",
@@ -1467,7 +1495,7 @@ def test_only_explicit_eval_injects_the_cli_credential_and_selected_endpoint(
     registry = json.loads(observed["THESISTRACE_AGENT_MODEL_REGISTRY"])
     if command == "agent-eval":
         assert registry == eval_registry
-        assert observed["THESISTRACE_AGENT_OPENAI_API_KEY"] == "cli-provider-offline-canary"
+        assert observed["THESISTRACE_AGENT_OPENAI_API_KEY"] == "configured-provider-offline-canary"
         assert observed["THESISTRACE_AGENT_OPENAI_BASE_URL"] == "http://host.docker.internal:8317/v1"
         assert observed["THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"] == ""
     else:

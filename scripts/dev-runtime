@@ -6,8 +6,9 @@ canonical_project_name=thesistrace-dev
 project_name=${THESISTRACE_DEV_PROJECT_NAME-$canonical_project_name}
 base_file="$repo_root/deploy/core/compose.yaml"
 development_file="$repo_root/deploy/core/compose.dev.yaml"
-environment_file="$repo_root/deploy/core/dev.env"
+environment_file=${THESISTRACE_ENV_FILE-"$repo_root/.env"}
 product_state_volumes="$repo_root/scripts/product-state-volumes"
+. "$repo_root/scripts/runtime-environment"
 
 compose() {
   docker compose \
@@ -36,6 +37,10 @@ validate_project() {
 }
 
 validate_compose() {
+  THESISTRACE_ENV_FILE="$environment_file" node "$repo_root/scripts/configure.mjs" check
+  clear_compose_environment
+  THESISTRACE_AGENT_MODEL_REGISTRY=$(cat "$repo_root/config/model-registry.json")
+  export THESISTRACE_AGENT_MODEL_REGISTRY
   compose config --quiet
 }
 
@@ -120,11 +125,10 @@ watch_runtime() {
 
 validate_project
 
-# Model definitions have one maintained source; JSON is only the Host transport.
-THESISTRACE_AGENT_MODEL_REGISTRY=$(cat "$repo_root/config/model-registry.json")
-export THESISTRACE_AGENT_MODEL_REGISTRY
-
 case "${1:-}" in
+  validate)
+    validate_compose
+    ;;
   bootstrap)
     cd "$repo_root"
     mise install
@@ -156,7 +160,7 @@ case "${1:-}" in
     erase_development_environment
     ;;
   *)
-    echo "usage: $0 {bootstrap|up|watch|stop|reset|erase|logs}" >&2
+    echo "usage: $0 {validate|bootstrap|up|watch|stop|reset|erase|logs}" >&2
     exit 2
     ;;
 esac

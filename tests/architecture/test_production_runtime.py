@@ -14,6 +14,9 @@ VALID_ENVIRONMENT = """\
 THESISTRACE_ENVIRONMENT=production
 THESISTRACE_PUBLIC_ORIGIN=https://research.thesistrace.com
 THESISTRACE_RESEND_API_URL=https://api.resend.com
+THESISTRACE_AGENT_OPENAI_BASE_URL=https://api.openai.com/v1
+THESISTRACE_S3_ACCESS_KEY_ID=StorageAccess_7Qh9tT4Sx2Vk8Lm3
+THESISTRACE_S3_SECRET_ACCESS_KEY=StorageSecret_3Nm8qW6Zp5Jc2Rs7
 THESISTRACE_OWNER_DATABASE_PASSWORD=OwnerRuntime_7Qh9tT4Sx2Vk8Lm3
 THESISTRACE_CORE_DATABASE_PASSWORD=CoreRuntime_3Nm8qW6Zp5Jc2Rs7
 THESISTRACE_AUTH_DATABASE_PASSWORD=AuthRuntime_9Fd4vB7Ky2Hg6Px8
@@ -151,6 +154,14 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
             "PRODUCTION_DATABASE_PASSWORD_INVALID",
         ),
         (
+            "THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin",
+            "PRODUCTION_STORAGE_CREDENTIAL_INVALID",
+        ),
+        (
+            "THESISTRACE_AGENT_OPENAI_BASE_URL=https://user:secret@provider.test/v1",
+            "PRODUCTION_AGENT_BASE_URL_INVALID",
+        ),
+        (
             "BETTER_AUTH_SECRET=development-only-auth-secret-with-at-least-32-characters",
             "PRODUCTION_AUTH_SECRET_INVALID",
         ),
@@ -244,7 +255,7 @@ def test_production_runtime_rejects_relative_in_repository_and_duplicate_files(
     relative = subprocess.run(
         [SCRIPT, "up"],
         cwd=ROOT,
-        env={**os.environ, "THESISTRACE_PRODUCTION_ENV_FILE": "production.env"},
+        env={**os.environ, "THESISTRACE_ENV_FILE": "production.env"},
         capture_output=True,
         text=True,
         check=False,
@@ -306,7 +317,7 @@ def _run(
     environment = {
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
-        "THESISTRACE_PRODUCTION_ENV_FILE": str(environment_file),
+        "THESISTRACE_ENV_FILE": str(environment_file),
     }
     if command_log is not None:
         environment["PRODUCTION_RUNTIME_COMMAND_LOG"] = str(command_log)

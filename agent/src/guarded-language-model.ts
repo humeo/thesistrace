@@ -6,7 +6,6 @@ import { AgentRunFailure, providerFailureCode } from "./run-failure.js";
 import { frameworkTokenUsage, RunUsageCapture } from "./usage-capture.js";
 
 export const AGENT_LIMITS = Object.freeze({
-  contextTokens: 65_536,
   outputTokens: 8_192,
   outputBytes: 256 * 1024,
   toolResultBytes: 512 * 1024,
@@ -37,7 +36,7 @@ export class RunModelObservation {
     return new AgentRunFailure(this.failure);
   }
 
-  begin(options: LanguageModelV3CallOptions): LanguageModelV3CallOptions {
+  begin(options: LanguageModelV3CallOptions, contextWindow: number): LanguageModelV3CallOptions {
     if (this.failure !== undefined) throw new AgentRunFailure(this.failure);
     // Use Mastra's own tokenizer dependency against the complete provider
     // context, including system instructions and the discovered Tool schemas.
@@ -56,12 +55,13 @@ export class RunModelObservation {
       })),
       tools: options.tools,
     });
-    if (estimateTokenCount(context) > AGENT_LIMITS.contextTokens) {
+    const maxOutputTokens = Math.min(options.maxOutputTokens ?? AGENT_LIMITS.outputTokens, AGENT_LIMITS.outputTokens);
+    if (estimateTokenCount(context) + maxOutputTokens > contextWindow) {
       throw this.fail("AGENT_LIMIT");
     }
     this.steps++;
     this.usage.beginStep();
-    return { ...options, maxOutputTokens: Math.min(options.maxOutputTokens ?? AGENT_LIMITS.outputTokens, AGENT_LIMITS.outputTokens) };
+    return { ...options, maxOutputTokens };
   }
 
   output(text: string): void {
@@ -69,7 +69,7 @@ export class RunModelObservation {
     if (this.generatedBytes > AGENT_LIMITS.outputBytes) throw this.fail("AGENT_LIMIT");
   }
 
-  finish(part: Extract<LanguageModelV3StreamPart, { type: "finish" }>, hasStepAnswer: boolean): void {
+  finish(part: Extract<LanguageModelV3StreamPart, { type: "finish" }>, hasStepAnswer: boolean, purpose: "answer" | "memory" = "answer"): void {
     this.usage.capture(part.usage);
     const reason = part.finishReason?.unified;
     const outputTokens = frameworkTokenUsage(part.usage).outputTokens.total;
@@ -82,10 +82,10 @@ export class RunModelObservation {
     // then receive an empty stop; requiring new prose on every model step
     // incorrectly turns a valid multi-step completion into a protocol error.
     // A wholly empty Run or an empty tool-calls step still fails closed.
-    if (!hasStepAnswer && !(reason === "stop" && this.hasRunAnswer)) {
+    if (!hasStepAnswer && !(purpose === "answer" && reason === "stop" && this.hasRunAnswer)) {
       throw this.fail("PROVIDER_MALFORMED_STREAM");
     }
-    this.hasRunAnswer ||= hasStepAnswer;
+    if (purpose === "answer") this.hasRunAnswer ||= hasStepAnswer;
   }
 
   terminalFailure(): AgentFailureCode | undefined {
@@ -102,17 +102,22 @@ function countableProviderOptions(options: SharedV3ProviderOptions | undefined):
 /** Single provider boundary: bound input/output, capture usage, erase raw errors. */
 export class GuardedLanguageModel implements LanguageModelV3 {
   readonly specificationVersion = "v3" as const;
-  constructor(private readonly delegate: LanguageModelV3, private readonly observation: RunModelObservation) {}
+  constructor(
+    private readonly delegate: LanguageModelV3,
+    private readonly observation: RunModelObservation,
+    private readonly contextWindow: number,
+    private readonly purpose: "answer" | "memory" = "answer",
+  ) {}
   get modelId() { return this.delegate.modelId; }
   get provider() { return this.delegate.provider; }
   get supportedUrls() { return this.delegate.supportedUrls; }
 
   async doGenerate(options: LanguageModelV3CallOptions): Promise<LanguageModelV3GenerateResult> {
     try {
-      const result = await this.delegate.doGenerate(this.observation.begin(options));
+      const result = await this.delegate.doGenerate(this.observation.begin(options, this.contextWindow));
       this.observation.output(JSON.stringify(result.content));
       this.observation.finish({ type: "finish", finishReason: result.finishReason, usage: result.usage },
-        result.content.some((part) => part.type === "tool-call" || (part.type === "text" && part.text.trim().length > 0)));
+        result.content.some((part) => part.type === "tool-call" || (part.type === "text" && part.text.trim().length > 0)), this.purpose);
       return { ...result, usage: frameworkTokenUsage(result.usage) };
     } catch (error) { throw this.failure(error, options.abortSignal); }
   }
@@ -120,10 +125,11 @@ export class GuardedLanguageModel implements LanguageModelV3 {
   async doStream(options: LanguageModelV3CallOptions) {
     let result: Awaited<ReturnType<LanguageModelV3["doStream"]>>;
     try {
-      result = await this.delegate.doStream(this.observation.begin(options));
+      result = await this.delegate.doStream(this.observation.begin(options, this.contextWindow));
     } catch (error) { throw this.failure(error, options.abortSignal); }
     const reader = result.stream.getReader();
     const observation = this.observation;
+    const purpose = this.purpose;
     const failure = (error: unknown) => this.failure(error, options.abortSignal);
     let finished = false;
     let hasAnswer = false;
@@ -155,7 +161,7 @@ export class GuardedLanguageModel implements LanguageModelV3 {
             observation.output(JSON.stringify(part));
           }
           if (part.type === "finish") {
-            observation.finish(part, hasAnswer);
+            observation.finish(part, hasAnswer, purpose);
             finished = true;
           }
           controller.enqueue(part.type === "finish" ? { ...part, usage: frameworkTokenUsage(part.usage) } : part);

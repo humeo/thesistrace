@@ -28,6 +28,7 @@ const providerSecretEnvironment = {
 const reasoningEffortSchema = z.enum(reasoningEfforts);
 const registryModelSchema = z
   .object({
+    context_window: z.number().int().min(16_384),
     default_reasoning_effort: reasoningEffortSchema,
     display_name: z.string().min(1).max(80).refine(isCanonicalText),
     enabled: z.boolean(),
@@ -58,6 +59,7 @@ export type SafeModelCatalog = Readonly<{
   models: readonly SafeModel[];
 }>;
 export type RegisteredModel = Readonly<{
+  contextWindow: number;
   credential: string | null;
   defaultReasoningEffort: ReasoningEffort;
   displayName: string;
@@ -120,6 +122,7 @@ export function readModelRegistry(
       throw invalidConfiguration();
     }
     models.push({
+      contextWindow: model.context_window,
       credential: model.enabled ? credential ?? null : null,
       defaultReasoningEffort: model.default_reasoning_effort,
       displayName: model.display_name,

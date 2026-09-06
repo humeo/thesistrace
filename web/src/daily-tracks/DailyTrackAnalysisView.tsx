@@ -66,7 +66,9 @@ export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnaly
   const metrics = analysis.strategy.summary.metrics;
   return (
     <div className="research-result">
-      <section className="research-result-section">
+      <details className="track-factor-details">
+        <summary>Factor analysis</summary>
+        <section className="research-result-section">
         <div className="section-heading">
           <h2>Factor Summary</h2>
         </div>
@@ -75,9 +77,11 @@ export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnaly
             <FactorHorizonView horizon={analysis.factor.horizons[name]} key={name} />
           ))}
         </div>
-      </section>
+        </section>
+      </details>
 
       <section className="research-result-section">
+        <StrategyComparisonPanel comparison={analysis.strategy.comparison} />
         <div className="section-heading">
           <h2>Strategy Summary</h2>
         </div>
@@ -101,7 +105,6 @@ export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnaly
             value={formatCny(metrics.transaction_costs.cumulative_amount)}
           />
         </div>
-        <StrategyComparisonPanel comparison={analysis.strategy.comparison} />
       </section>
     </div>
   );

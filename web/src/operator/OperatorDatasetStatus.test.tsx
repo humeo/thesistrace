@@ -259,19 +259,17 @@ describe("Operator Dataset status", () => {
     expect(markup).not.toContain("New idempotency key");
   });
 
-  it("makes Retry use an editable new key and preserves immutable source copy", () => {
+  it("makes Retry generate a new key automatically and preserves immutable source copy", () => {
     const source = operation({
       idempotencyKey: "industry-failed-source",
       kind: "industry",
       status: "failed",
     });
     const now = new Date("2026-08-30T05:06:07.000Z");
-    expect(suggestDataRefreshRetryKey(source.kind, now)).toBe(
-      "industry-retry-20260830T050607Z",
-    );
+    expect(suggestDataRefreshRetryKey(source.kind, now)).toEqual(expect.stringMatching(/^industry-retry-20260830T050607Z-[0-9a-f-]{36}$/));
     expect(
       suggestDataRefreshRetryKey(source.kind, new Date("2026-08-30T05:06:07.987Z")),
-    ).toBe("industry-retry-20260830T050607Z");
+    ).toEqual(expect.stringMatching(/^industry-retry-20260830T050607Z-[0-9a-f-]{36}$/));
     const markup = renderToStaticMarkup(
       <OperatorDataRefreshActionDialog
         action={{ action: "retry", operation: source }}
@@ -285,13 +283,9 @@ describe("Operator Dataset status", () => {
 
     expect(markup).toContain("Retry failed Refresh?");
     expect(markup).toContain("industry-failed-source");
-    expect(markup).toContain("New idempotency key");
-    expect(markup).toContain('value="industry-retry-20260830T050607Z"');
+    expect(markup).not.toContain("New idempotency key");
     expect(markup).toContain("The original failed receipt remains unchanged and inspectable");
     expect(markup).toContain("accepted into the FIFO as new queued work");
-    expect(markup.indexOf("New idempotency key")).toBeLessThan(
-      markup.indexOf("Current password"),
-    );
   });
 
   it("polls only while latest or visible history contains non-terminal work", () => {

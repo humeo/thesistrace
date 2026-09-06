@@ -110,6 +110,7 @@ export function researchEvalRepetitions(
 export function evalStartupRegistry(candidate: ResearchEvalCandidate, effort: string) {
   if (!candidate.reasoning_efforts.some((value) => value === effort)) throw new ResearchEvalError("CONFIG_INVALID");
   return { default_model_key: candidate.key, models: [{
+    context_window: candidate.provider_max_input_tokens,
     key: candidate.key, display_name: candidate.display_name, provider_adapter: candidate.provider_adapter,
     provider_model_id: candidate.provider_model_id, reasoning_efforts: [effort], default_reasoning_effort: effort,
     secret_env: `THESISTRACE_AGENT_${candidate.provider_adapter.toUpperCase()}_API_KEY`, enabled: true,
