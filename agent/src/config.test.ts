@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { readAgentInitializerSettings, readAgentSettings } from "./config.js";
 
 const registry = JSON.stringify({
-  default_model_key: "scripted",
+  min_compaction_context_window: 65_536, default_model_key: "scripted",
   models: [{
     default_reasoning_effort: "medium",
     display_name: "Scripted Research Model",
@@ -12,7 +12,7 @@ const registry = JSON.stringify({
     provider_adapter: "scripted",
     provider_model_id: "scripted-v1",
     reasoning_efforts: ["low", "medium", "high"],
-    context_window: 65_536, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+    context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
   }],
 });
 const environment = {
@@ -127,7 +127,7 @@ describe("Agent Host configuration", () => {
 
   it("requires HTTPS and a non-loopback hostname in Production", () => {
     const productionRegistry = JSON.stringify({
-      default_model_key: "openai-research",
+      min_compaction_context_window: 65_536, default_model_key: "openai-research",
       models: [{
         default_reasoning_effort: "high",
         display_name: "OpenAI Research",
@@ -136,7 +136,7 @@ describe("Agent Host configuration", () => {
         provider_adapter: "openai",
         provider_model_id: "gpt-research",
         reasoning_efforts: ["high"],
-        context_window: 65_536, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
+        context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
       }],
     });
     const productionEnvironment = {

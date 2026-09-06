@@ -93,6 +93,21 @@ test("announces a failed Turn with its public failure code", async () => {
   expect(alert?.textContent).toContain("Turn failed");
 });
 
+test.each([
+  ["OUTPUT_LIMIT", "Answer was truncated"],
+  ["CONTEXT_TOO_LARGE", "Conversation exceeds model capacity"],
+])("explains %s while retaining partial output and successful tools", async (errorCode, label) => {
+  await mount(controller({ turns: [timelineTurn([
+    entry("assistant_message", "assistant:partial", { content: "Partial answer retained", status: "complete" }),
+    entry("tool_activity", "tool:done", { name: "submit_research_run", status: "complete" }),
+    entry("turn_outcome", "outcome:1", { errorCode, status: "failed" }),
+  ], { status: "failed" })] }));
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain(label);
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("do not resubmit successful operations");
+  expect(document.body.textContent).toContain("Partial answer retained");
+  expect(document.body.textContent).toContain("Completed");
+});
+
 test("keeps a compact question activity and directs answering to the composer", async () => {
   const focusComposer = vi.fn();
   const question = {

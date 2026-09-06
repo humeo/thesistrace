@@ -25,6 +25,8 @@ export function providerFailureCode(error: unknown): AgentFailureCode {
     if (error.statusCode === 401 || error.statusCode === 403) return "PROVIDER_AUTHENTICATION";
     if (error.statusCode === 429) return "PROVIDER_RATE_LIMIT";
     if (error.statusCode === 408 || error.statusCode === 504) return "PROVIDER_TIMEOUT";
+    if (error.statusCode === 400 && isRecord(error.data) && isRecord(error.data.error)
+      && error.data.error.code === "context_length_exceeded") return "CONTEXT_TOO_LARGE";
     return "PROVIDER_UNAVAILABLE";
   }
   // Node fetch rejects an interrupted SSE body with its native TypeError,
@@ -56,6 +58,7 @@ export function providerFailureCode(error: unknown): AgentFailureCode {
     if (isRecord(detail) && typeof detail.message === "string"
       && (typeof detail.code === "string" || detail.code === null || detail.code === undefined)) {
       if (detail.code === "rate_limit_exceeded" || detail.code === "insufficient_quota") return "PROVIDER_RATE_LIMIT";
+      if (detail.code === "context_length_exceeded") return "CONTEXT_TOO_LARGE";
       return "PROVIDER_UNAVAILABLE";
     }
   }

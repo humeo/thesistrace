@@ -1,9 +1,11 @@
 {
+  "min_compaction_context_window": 65536,
   "default_model_key": "gpt-5.6-luna",
   "models": [
     {
       "key": "gpt-5.6-luna",
       "context_window": 258000,
+      "max_output_tokens": 128000,
       "display_name": "GPT-5.6 Luna",
       "enabled": true,
       "provider_adapter": "openai",

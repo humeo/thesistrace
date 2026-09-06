@@ -177,9 +177,8 @@ export async function createResearchRuntime(
         abortSignal: requestContext.get<string, AbortSignal | undefined>("agentAbortSignal"),
         // Override framework defaults without imposing a model-call count limit.
         maxSteps: Number.POSITIVE_INFINITY,
-        // Output tokens are bounded per model call. The guarded model also
-        // enforces the generated-byte budget across the complete Run.
-        modelSettings: { maxOutputTokens: AGENT_LIMITS.outputTokens, timeout: { stepMs: AGENT_LIMITS.providerCallMs } },
+        // The Provider boundary reduces this configured allowance to fit the actual input.
+        modelSettings: { maxOutputTokens: selectionFrom(requestContext).model.maxOutputTokens, timeout: { stepMs: AGENT_LIMITS.providerCallMs } },
         maxProcessorRetries: 0,
         onError: ({ error }: { error: unknown }) => { observation?.fail(providerFailureCode(error)); },
         providerOptions: selectionFrom(requestContext).providerOptions,

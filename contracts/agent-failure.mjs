@@ -11,6 +11,8 @@ const definitions = {
   PROVIDER_REFUSAL: ["Provider declined the request", "The provider declined this request. Revise the message before trying again.", "revise"],
   PROVIDER_MALFORMED_STREAM: ["Invalid provider response", "The provider returned an incomplete or invalid response. You can explicitly retry or choose another model.", "retry"],
   AGENT_LIMIT: ["Execution limit reached", "This run reached an execution limit. Narrow the request or start a new Chat. Admitted research continues independently.", "revise"],
+  CONTEXT_TOO_LARGE: ["Conversation exceeds model capacity", "Choose a model with a larger context window or start a new Chat. Your history and completed research are retained; do not resubmit successful operations.", "select-model"],
+  OUTPUT_LIMIT: ["Answer was truncated", "The model stopped at its output allowance. Split the requested answer or choose a model with more available capacity. Completed research is retained; do not resubmit successful operations.", "revise"],
   MCP_AUTHENTICATION: ["Research access denied", "Research tool authentication or scope validation failed. Sign in again; no alternate access path was used.", "sign-in"],
   MCP_TRANSIENT: ["Research temporarily unavailable", "A research tool is temporarily unavailable. Reopen this Chat to inspect retained research before retrying.", "retry"],
   TOOL_REJECTION: ["Research request rejected", "The research tool rejected this request. Review the explanation and revise the requested research.", "revise"],

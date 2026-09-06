@@ -612,6 +612,8 @@ code { font-family: var(--mono); }
   font: 11px/1.4 var(--mono);
 }
 .chat-turn-outcome-failed { color: var(--danger); }
+.chat-turn-failure-explanation { display: grid; gap: 4px; font: 13px/1.45 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.chat-turn-failure-explanation > span { color: var(--ink-muted); }
 .chat-turn-outcome code { color: inherit; }
 .chat-assistant-markdown {
   display: grid;

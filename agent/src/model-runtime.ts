@@ -19,6 +19,7 @@ import {
 import { GuardedLanguageModel, type RunModelObservation } from "./guarded-language-model.js";
 
 export type ResolvedModelSelection = Readonly<{
+  compactionEnabled: boolean;
   effort: ReasoningEffort;
   languageModel: LanguageModelV3;
   memoryLanguageModel: LanguageModelV3;
@@ -54,13 +55,14 @@ export class RegisteredModelRuntime {
       throw new AgentConfigurationError();
     }
     return {
+      compactionEnabled: model.contextWindow >= this.registry.minCompactionContextWindow,
       effort,
       languageModel: observation === undefined
         ? languageModel
-        : new GuardedLanguageModel(languageModel, observation, model.contextWindow),
+        : new GuardedLanguageModel(languageModel, observation, model),
       memoryLanguageModel: observation === undefined
         ? languageModel
-        : new GuardedLanguageModel(languageModel, observation, model.contextWindow, "memory"),
+        : new GuardedLanguageModel(languageModel, observation, model, "memory"),
       model,
       providerOptions: providerOptionsFor(model, effort),
     };

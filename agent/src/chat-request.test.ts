@@ -14,7 +14,7 @@ const INPUT_ID = "00000000-0000-4000-8000-000000000003";
 const INTERRUPT_ID = `${RUN_ID}::provider-call-1`;
 
 const registry = readModelRegistry(JSON.stringify({
-  default_model_key: "scripted",
+  min_compaction_context_window: 65_536, default_model_key: "scripted",
   models: [{
     default_reasoning_effort: "medium",
     display_name: "Scripted",
@@ -23,7 +23,7 @@ const registry = readModelRegistry(JSON.stringify({
     provider_adapter: "scripted",
     provider_model_id: "scripted-v1",
     reasoning_efforts: ["none", "medium"],
-    context_window: 65_536, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+    context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
   }],
 }), { THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "test-secret" });
 

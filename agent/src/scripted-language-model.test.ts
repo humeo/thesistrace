@@ -36,7 +36,7 @@ test("streams deterministic chunks and captures the provider-reported usage", as
   const model = new GuardedLanguageModel(
     new ScriptedLanguageModel("scripted-v1"),
     new RunModelObservation(capture),
-    65_536,
+    { contextWindow: 65_536, maxOutputTokens: 128_000 },
   );
   const result = await model.doStream(callOptions);
   const parts = [];

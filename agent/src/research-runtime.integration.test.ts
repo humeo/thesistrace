@@ -86,7 +86,7 @@ const agentStore = new Pool({ connectionString: runtimeDatabaseUrl, max: 2 });
 const primaryResearcher = researcher("00000000-0000-4000-8000-000000000101");
 const foreignResearcher = researcher("00000000-0000-4000-8000-000000000102");
 const modelRegistry = readModelRegistry(JSON.stringify({
-  default_model_key: "scripted-research",
+  min_compaction_context_window: 65_536, default_model_key: "scripted-research",
   models: [
     {
       default_reasoning_effort: "medium",
@@ -96,7 +96,7 @@ const modelRegistry = readModelRegistry(JSON.stringify({
       provider_adapter: "scripted",
       provider_model_id: "scripted-v1",
       reasoning_efforts: ["none", "medium", "max"],
-      context_window: 65_536, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     },
     {
       default_reasoning_effort: "medium",
@@ -106,7 +106,7 @@ const modelRegistry = readModelRegistry(JSON.stringify({
       provider_adapter: "scripted",
       provider_model_id: "scripted-failure-v1",
       reasoning_efforts: ["medium"],
-      context_window: 65_536, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     },
   ],
 }), { THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "integration-secret" });
@@ -124,8 +124,8 @@ const settings: AgentSettings = {
   runMaxWallSeconds: 300,
 };
 const memoryConfiguration = { ...settings, modelRegistry: readModelRegistry(JSON.stringify({
-  default_model_key: "luna",
-  models: [{ context_window: 65_536, key: "luna", display_name: "Luna", enabled: true,
+  min_compaction_context_window: 65_536, default_model_key: "luna",
+  models: [{ context_window: 65_536, max_output_tokens: 128_000, key: "luna", display_name: "Luna", enabled: true,
     provider_adapter: "openai", provider_model_id: "gpt-5.6-luna", default_reasoning_effort: "high",
     reasoning_efforts: ["high"], secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY" }],
 }), { THESISTRACE_AGENT_OPENAI_API_KEY: "memory-replay-only" }) };
@@ -174,6 +174,44 @@ describe.sequential("durable Research Agent runtime", () => {
     await owner.query("DROP SCHEMA IF EXISTS agent CASCADE");
     await owner.query("DROP SCHEMA IF EXISTS core CASCADE");
     await owner.end();
+  });
+
+  it("sends complete small-window history across Host restart without auxiliary calls", async () => {
+    const provider = openAIMemoryProvider();
+    vi.stubGlobal("fetch", provider.fetch);
+    const configuration = { ...memoryConfiguration, modelRegistry: readModelRegistry(JSON.stringify({
+      min_compaction_context_window: 65_536, default_model_key: "luna",
+      models: [{ context_window: 32_768, max_output_tokens: 128_000, key: "luna", display_name: "Luna", enabled: true,
+        provider_adapter: "openai", provider_model_id: "gpt-5.6-luna", default_reasoning_effort: "high",
+        reasoning_efforts: ["high"], secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY" }],
+    }), { THESISTRACE_AGENT_OPENAI_API_KEY: "memory-replay-only" }) };
+    const dependencies = { mcpRunFactory: async () => ({ close: async () => undefined,
+      hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }) };
+    let runtime = await createResearchRuntime(configuration, dependencies);
+    const threadId = randomUUID();
+    const prompt = (existing: boolean) => run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+      modelKey: "luna", reasoningEffort: "high", sessionMode: existing ? "existing" : "new", content: "Recall the archived facts." }), primaryResearcher);
+    const storage = new PostgresStore({ id: "small-memory-fixture", pool: agentStore, schemaName: "agent", disableInit: true });
+    const memory = new Memory({ storage, vector: false });
+    try {
+      expect((await prompt(false)).at(-1)?.type).toBe("RUN_FINISHED");
+      const facts = Array.from({ length: 72 }, (_, i) => "Persistent archived fact " + i + ": unique-resource-" + i);
+      await memory.saveMessages({ messages: facts.map((text, i) => ({ id: randomUUID(), threadId,
+        resourceId: primaryResearcher.researcher_id, role: i % 2 === 0 ? "user" as const : "assistant" as const,
+        createdAt: new Date(Date.now() - 120_000 + i * 1000),
+        content: { format: 2 as const, parts: [{ type: "text" as const, text }] } })) });
+      await runtime.close();
+      runtime = await createResearchRuntime(configuration, dependencies);
+      expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
+      const request = provider.requests.at(-1)!;
+      for (const fact of facts) expect(request.prompt).toContain(fact);
+      expect(provider.requests.every((entry) => entry.phase === "answer")).toBe(true);
+      expect(request.body.max_output_tokens).toBeGreaterThan(0);
+      expect(request.body.max_output_tokens).toBeLessThan(32_768 - 4096);
+    } finally {
+      await runtime.close();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("compresses old Session history before answering and retains it across Host restart", async () => {
@@ -395,9 +433,9 @@ describe.sequential("durable Research Agent runtime", () => {
     const runtime = await createIntegrationRuntime();
     const input = runInput({ content: "A research idea", messageId: fixedUuid(732), runId: fixedUuid(731), threadId: fixedUuid(730) });
     try { await run(runtime, input, primaryResearcher); } finally { await runtime.close(); }
-    const nextRegistry = readModelRegistry(JSON.stringify({ default_model_key: "scripted-next", models: [{
+    const nextRegistry = readModelRegistry(JSON.stringify({ min_compaction_context_window: 65_536, default_model_key: "scripted-next", models: [{
       default_reasoning_effort: "high", display_name: "Scripted Next", enabled: true, key: "scripted-next", provider_adapter: "scripted",
-      provider_model_id: "scripted-next-id", reasoning_efforts: ["high"], context_window: 65_536, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      provider_model_id: "scripted-next-id", reasoning_efforts: ["high"], context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     }] }), { THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "fixture-secret" });
     const discover = vi.fn(async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }));
     const restarted = await createResearchRuntime({ ...settings, modelRegistry: nextRegistry }, { mcpRunFactory: discover });
@@ -658,11 +696,11 @@ describe.sequential("durable Research Agent runtime", () => {
       } }]);
       vi.stubGlobal("fetch", provider.fetch);
       const configuration: AgentSettings = { ...settings, modelRegistry: readModelRegistry(JSON.stringify({
-        default_model_key: "gpt-5.6-luna", models: [{
+        min_compaction_context_window: 65_536, default_model_key: "gpt-5.6-luna", models: [{
           key: "gpt-5.6-luna", display_name: "GPT-5.6 Luna", enabled: true,
           provider_adapter: "openai", provider_model_id: "gpt-5.6-luna",
           default_reasoning_effort: "high", reasoning_efforts: ["high"],
-          context_window: 65_536, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
+          context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
         }],
       }), { THESISTRACE_AGENT_OPENAI_API_KEY: "fixture-only" }) };
       const openRuntime = () => createResearchRuntime(configuration, { mcpRunFactory: async () => ({

@@ -21,6 +21,7 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { agentFailure } from "../../../contracts/agent-failure.mjs";
 
 import { parseResearchRunHref } from "./toolResult";
 import { ResearchA2UIActivity } from "./researchA2UI";
@@ -535,6 +536,8 @@ function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_ou
   if (entry.payload.status === "completed") {
     return <div hidden aria-hidden="true" data-entry-id={entry.entry_id} data-turn-outcome="completed" />;
   }
+  const explanation = entry.payload.errorCode === "OUTPUT_LIMIT" || entry.payload.errorCode === "CONTEXT_TOO_LARGE"
+    ? agentFailure(entry.payload.errorCode) : undefined;
   return (
     <div
       className={`chat-turn-outcome chat-turn-outcome-${entry.payload.status}`}
@@ -544,8 +547,13 @@ function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_ou
       role={entry.payload.status === "failed" ? "alert" : "status"}
     >
       {entry.payload.status === "stopped" ? <StopCircle aria-hidden="true" size={14} /> : <WarningCircle aria-hidden="true" size={14} />}
-      <span>{entry.payload.status === "stopped" ? "Turn stopped" : "Turn failed"}</span>
-      {entry.payload.errorCode === undefined ? null : <code>{entry.payload.errorCode}</code>}
+      {explanation === undefined ? <>
+        <span>{entry.payload.status === "stopped" ? "Turn stopped" : "Turn failed"}</span>
+        {entry.payload.errorCode === undefined ? null : <code>{entry.payload.errorCode}</code>}
+      </> : <span className="chat-turn-failure-explanation">
+        <strong>{explanation.label}</strong>
+        <span>{explanation.message}</span>
+      </span>}
     </div>
   );
 }

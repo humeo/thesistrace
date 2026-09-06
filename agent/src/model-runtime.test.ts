@@ -10,7 +10,7 @@ const environment = {
   THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "scripted-test",
 };
 const registry = readModelRegistry(JSON.stringify({
-  default_model_key: "openai",
+  min_compaction_context_window: 65_536, default_model_key: "openai",
   models: [
     model("openai", "openai", "openai-test-model", ["none", "high"]),
     model("anthropic", "anthropic", "anthropic-test-model", ["none", "xhigh"]),
@@ -18,6 +18,17 @@ const registry = readModelRegistry(JSON.stringify({
     model("scripted", "scripted", "scripted-v1", ["medium"]),
   ],
 }), environment);
+
+test.each([
+  [65_535, 65_536, false], [65_536, 65_536, true], [65_537, 65_536, true],
+  [65_536, 100_000, false], [100_000, 100_000, true],
+])("derives compaction eligibility from this model's %s window and %s gate", (window, gate, enabled) => {
+  const configured = readModelRegistry(JSON.stringify({ min_compaction_context_window: gate,
+    default_model_key: "scripted", models: [{ ...model("scripted", "scripted", "fixture", ["medium"]), context_window: window }],
+  }), environment);
+  const selection = new RegisteredModelRuntime(configured).resolve("scripted", "medium");
+  expect(selection.compactionEnabled).toBe(enabled);
+});
 
 test("maps each registered provider's supported reasoning contract", () => {
   const runtime = new RegisteredModelRuntime(registry);
@@ -48,7 +59,7 @@ test("rejects a model or effort not enabled by the startup registry", () => {
 test.each(["none", "low", "medium", "high", "xhigh", "max"] as const)(
   "sends %s reasoning and continues OpenAI tool results without stored items", async (effort) => {
   const lunaRegistry = readModelRegistry(JSON.stringify({
-    default_model_key: "luna",
+    min_compaction_context_window: 65_536, default_model_key: "luna",
     models: [model("luna", "openai", "gpt-5.6-luna", [effort])],
   }), environment);
   const requests: Record<string, unknown>[] = [];
@@ -118,6 +129,6 @@ function model(
     provider_adapter: provider,
     provider_model_id: providerModelId,
     reasoning_efforts: efforts,
-    context_window: 65_536, secret_env: secret,
+    context_window: 65_536, max_output_tokens: 128_000, secret_env: secret,
   };
 }

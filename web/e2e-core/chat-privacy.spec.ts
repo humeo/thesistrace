@@ -59,7 +59,7 @@ test("Chat content-free telemetry survives success faults restart and deletion i
 
     for (const [prompt, code] of [
       ["[scripted-provider-unexpected] Test an unexpected provider error.", "INTERNAL_FAILURE"],
-      ["[scripted-provider-output-limit] Test a bounded provider output.", "AGENT_LIMIT"],
+      ["[scripted-provider-output-limit] Test a bounded provider output.", "OUTPUT_LIMIT"],
     ]) {
       const failed = await run(prompt!);
       expect(failed.events.at(-1)?.type).toBe("RUN_ERROR");

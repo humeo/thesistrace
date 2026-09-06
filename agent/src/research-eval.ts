@@ -53,6 +53,7 @@ const candidatesSchema = z.object({
     provider_model_id: z.string().refine(isProviderModelId),
     reasoning_efforts: z.array(z.enum(reasoningEfforts)).min(1).max(reasoningEfforts.length),
     provider_max_input_tokens: count.min(8192).max(2000000),
+    provider_max_output_tokens: count.positive(),
     pricing: pricingSchema, thresholds: thresholdsSchema,
   }).strict()).min(1).max(16),
 }).strict();
@@ -109,8 +110,9 @@ export function researchEvalRepetitions(
 
 export function evalStartupRegistry(candidate: ResearchEvalCandidate, effort: string) {
   if (!candidate.reasoning_efforts.some((value) => value === effort)) throw new ResearchEvalError("CONFIG_INVALID");
-  return { default_model_key: candidate.key, models: [{
+  return { min_compaction_context_window: 65_536, default_model_key: candidate.key, models: [{
     context_window: candidate.provider_max_input_tokens,
+    max_output_tokens: candidate.provider_max_output_tokens,
     key: candidate.key, display_name: candidate.display_name, provider_adapter: candidate.provider_adapter,
     provider_model_id: candidate.provider_model_id, reasoning_efforts: [effort], default_reasoning_effort: effort,
     secret_env: `THESISTRACE_AGENT_${candidate.provider_adapter.toUpperCase()}_API_KEY`, enabled: true,
