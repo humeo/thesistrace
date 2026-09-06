@@ -242,9 +242,9 @@ export function effectRequestId(
   operation: string,
   revision: number,
 ): string | null {
-  for (const message of options.prompt) {
-    if (message.role !== "system") continue;
-    const match = textContent(message.content).match(/Agent Run identity: ([0-9a-f-]{36})\./);
+  for (const message of [...options.prompt].reverse()) {
+    if (message.role !== "assistant") continue;
+    const match = textContent(message.content).match(/^Agent Run identity: ([0-9a-f-]{36})\./);
     if (match?.[1] !== undefined) {
       return `agent_${match[1].replaceAll("-", "")}_${operation}_v${revision}`;
     }

@@ -1,3 +1,4 @@
+import { isSessionControlMessageId } from "./session-control-message.js";
 import { createHash } from "node:crypto";
 import { runFailureEvent } from "./run-failure.js";
 import { readRunSelection } from "../../contracts/agent-run-selection.mjs";
@@ -69,6 +70,7 @@ export function projectDurableUiMessages(
   const projected: Message[] = [];
   for (const message of messages) {
     if (typeof message.id !== "string") throw new BrowserTranscriptError();
+    if (isSessionControlMessageId(message.id)) continue;
     if (message.role === "user") {
       if (typeof message.content !== "string") throw new BrowserTranscriptError();
       projected.push({ content: message.content, id: message.id, role: "user" });

@@ -62,3 +62,34 @@ mid-Tool-loop observation, original-message retention, restart, Session isolatio
 and deletion, model settings, usage accounting, and safe compression failures.
 Keep these tests when upgrading; remove the patch only when the replacement
 passes them without it.
+
+## Controlled compaction candidates
+
+The same pinned Memory patch exposes `observer.callCandidate` and
+`reflector.callCandidate`. Native `call` formats tool results with a 10k-token
+cutoff and includes extractor/retry orchestration; Reflector can escalate through
+several generation attempts. Those behaviors cannot publish part of a Session's
+atomic M/S checkpoint.
+
+Candidate calls reuse the installed Observer/Reflector prompts, parsers and Agent
+execution, but receive full source JSON (including completed tool arguments and
+results), run one request with no tools/extractors or automatic retries, and return
+finish reason plus usage. They do not set lastExchange, write markers, invoke
+extractor hooks or mutate memory. The Host's checkpoint controller owns candidate
+validation, correction limits, budgets and the final atomic commit. Cancellation
+is checked before and after generation. The ESM and CommonJS distributions and
+public runner declarations are patched together.
+
+`agent/src/compaction-candidates.test.ts` verifies these boundaries with an offline
+model, including long results, empty observations, length stops and cancellation.
+The new entry points alone do not enable the Session checkpoint runtime.
+
+## V3 prompt conversion declaration
+
+The pinned Core 1.63.1 runtime already converts tool result media with
+`aiV5PromptToAIV6Prompt`, used by `MessageList.get.all.aiV6.llmPrompt`. Both public
+return declarations incorrectly name `LanguageModelV2Prompt`. The Core patch
+corrects only these declarations to `LanguageModelV3Prompt`; it changes no runtime
+behavior. The controller regression verifies actual image-data/file-data tool
+results as well as a statically assignable V3 prompt. No local converter or unsafe
+assertion replaces the framework conversion.

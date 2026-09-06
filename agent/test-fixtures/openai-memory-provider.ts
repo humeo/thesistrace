@@ -1,8 +1,8 @@
 export const MEMORY_FACT = "ResearchRun run_memory_alpha failed with INSUFFICIENT_HISTORY; retain the 120-session formula.";
 
 /** Deterministic Responses replay for the native Observer/Reflector protocol. */
-export function openAIMemoryProvider(options: { tool?: string; failObserver?: boolean } = {}) {
-  const requests: Array<{ phase: "answer" | "observer" | "reflector"; prompt: string; body: Record<string, unknown> }> = [];
+export function openAIMemoryProvider(options: { tool?: string; failObserver?: boolean; invalidObserver?: boolean; toolOnAnswer?: number } = {}) {
+  const requests: Array<{ phase: "answer" | "observer" | "reflector" | "summary"; prompt: string; body: Record<string, unknown> }> = [];
   const fetch: typeof globalThis.fetch = async (_url, init) => {
     const body = JSON.parse(String(init?.body));
     if (!body.stream) return Response.json({
@@ -12,19 +12,21 @@ export function openAIMemoryProvider(options: { tool?: string; failObserver?: bo
       usage: { input_tokens: 20, output_tokens: 2 },
     });
     const prompt = JSON.stringify(body.input);
-    const phase = prompt.includes("Your memory observation reflections") ? "reflector"
+    const phase = prompt.includes("Produce a structured handoff summary") ? "summary" : prompt.includes("Your memory observation reflections") ? "reflector"
       : prompt.includes("You are the memory consciousness") ? "observer" : "answer";
     requests.push({ phase, prompt, body });
     if (phase === "observer" && options.failObserver) return Response.json({
       error: { type: "rate_limit_exceeded", code: "rate_limit_exceeded", message: "private-observer-canary" },
     }, { status: 429 });
     const remembers = prompt.includes("run_memory_alpha") && prompt.includes("INSUFFICIENT_HISTORY");
-    const text = phase === "answer"
+    const text = phase === "observer" && options.invalidObserver ? "private-invalid-observer-canary" : phase === "summary"
+      ? ["## Goal", "Explain the research failure.", "## Constraints and preferences", "Keep the original formula.", "## Progress", "Completed: read the failure. In progress: explanation. Blockers: none.", "## Key decisions", "Keep the existing research.", "## Next steps", "1. Explain the recorded error.", "## Critical context", MEMORY_FACT].join("\n")
+      : phase === "answer"
       ? remembers ? "The retained failure is INSUFFICIENT_HISTORY." : "No earlier failure is known."
       : `<observations>\nDate: Sep 6, 2026\n* 🔴 ${remembers ? MEMORY_FACT : "No earlier failure is known."}\n</observations>`;
     const id = `memory_${requests.length}`;
     const item = { type: "message", id: `msg_${id}` };
-    const tool = phase === "answer" && options.tool && requests.filter((request) => request.phase === "answer").length === 1
+    const tool = phase === "answer" && options.tool && requests.filter((request) => request.phase === "answer").length === (options.toolOnAnswer ?? 1)
       ? { type: "function_call", id: `fc_${id}`, call_id: `call_${id}`, name: options.tool, arguments: "{}" } : undefined;
     const frames = [
       { type: "response.created", response: { id: `resp_${id}`, model: "gpt-5.6-luna", created_at: 1 } },

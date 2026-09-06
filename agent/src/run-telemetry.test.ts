@@ -40,7 +40,7 @@ test("emits closed content-free run and tool metadata with stable units and iden
   expect(events[0]?.researcher_correlation).toMatch(/^[a-f0-9]{64}$/);
   expect(JSON.stringify(events)).not.toContain(identity.researcherId);
   expect(Object.keys(events[3]!).sort()).toEqual([
-    "component", "duration_ms", "error_category", "event", "level", "model_key", "provider_model_id", "reasoning_effort",
+    "component", "context_compaction", "duration_ms", "error_category", "event", "input_token_estimate", "level", "model_key", "provider_model_id", "reasoning_effort",
     "researcher_correlation", "retry_classification", "run_id", "status", "step_count", "thread_id", "timestamp", "token_usage", "trace_id",
   ]);
 });
@@ -111,3 +111,25 @@ test("a broken stderr pipe cannot terminate an accepted Run", async () => {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   }
 }, 10_000);
+
+
+test("reports compaction counts and signed estimation error without snapshot content", () => {
+  const events: AgentTelemetryEvent[] = [];
+  const observer = createRunTelemetry(identity, {
+    metrics: () => ({ steps: 1, usage: undefined,
+      inputEstimate: { estimatedTokens: 1000, actualTokens: 900, errorTokens: 999 },
+      compaction: { inputTokensBefore: 232200, inputTokensAfter: 24000, outputTokensAfter: 128000,
+        elapsedMs: 120.5, auxiliaryInputTokens: 210000, auxiliaryOutputTokens: 3000,
+        memory: "private-memory-canary", summary: "private-summary-canary" },
+    }),
+    write: (event) => events.push(event),
+  });
+  observer.accepted();
+  observer.finished(null);
+  expect(events[1]).toMatchObject({
+    input_token_estimate: { estimatedTokens: 1000, actualTokens: 900, errorTokens: -100 },
+    context_compaction: { inputTokensBefore: 232200, inputTokensAfter: 24000, outputTokensAfter: 128000,
+      elapsedMs: 120, auxiliaryInputTokens: 210000, auxiliaryOutputTokens: 3000 },
+  });
+  expect(JSON.stringify(events)).not.toContain("canary");
+});

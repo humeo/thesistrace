@@ -15,7 +15,7 @@ export type ModelRequestBudget = Readonly<{
 export class ModelInputTokenCounter {
   private readonly estimates = new Map<string, number>();
 
-  private count(value: unknown): number {
+  estimateSerialized(value: unknown): number {
     const text = JSON.stringify(value) ?? "";
     const key = createHash("sha256").update(text).digest("hex");
     const cached = this.estimates.get(key);
@@ -29,9 +29,9 @@ export class ModelInputTokenCounter {
   estimate(options: Pick<LanguageModelV3CallOptions, "prompt" | "tools" | "responseFormat" | "toolChoice">): number {
     // Count each immutable message separately so appends reuse previous estimates.
     // Explicit envelope punctuation is conservative at segment boundaries.
-    return this.count({ prompt: [], tools: [], responseFormat: options.responseFormat, toolChoice: options.toolChoice })
-      + (options.tools ?? []).reduce((total, tool) => total + this.count(tool) + 1, 0)
-      + options.prompt.reduce((total, message) => total + this.count({
+    return this.estimateSerialized({ prompt: [], tools: [], responseFormat: options.responseFormat, toolChoice: options.toolChoice })
+      + (options.tools ?? []).reduce((total, tool) => total + this.estimateSerialized(tool) + 1, 0)
+      + options.prompt.reduce((total, message) => total + this.estimateSerialized({
         ...message,
         providerOptions: countableProviderOptions(message.providerOptions),
         content: typeof message.content === "string" ? message.content : message.content.map((part) => ({

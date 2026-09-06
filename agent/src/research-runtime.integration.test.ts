@@ -12,7 +12,6 @@ import {
 import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { estimateTokenCount } from "tokenx";
 
 import { BATCH_ID, BATCH_TOOL_NAMES, CHILD_IDS, batchFixtureOutput } from "../test-fixtures/batch-research.js";
 import { DAILY_TRACK_TOOL_NAMES, ORIGIN_RUN_ID, TRACK_ID, dailyTrackFixtureOutput } from "../test-fixtures/daily-track.js";
@@ -52,6 +51,7 @@ import {
   SCRIPTED_TOOL_PROMPT,
 } from "./scripted-language-model.js";
 import {
+  ContextCheckpointConflictError,
   ResearchSessionRepository,
   SessionActiveRunError,
   SessionNotFoundError,
@@ -176,6 +176,73 @@ describe.sequential("durable Research Agent runtime", () => {
     await owner.end();
   });
 
+  it("publishes complete context snapshots with ownership, source and revision checks", async () => {
+    const repository = new ResearchSessionRepository(agentStore);
+    const threadId = randomUUID(), runId = randomUUID();
+    await prepareA2UIRepositoryRun(repository, threadId, runId, randomUUID());
+    const claims = await Promise.allSettled([
+      repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId),
+      new ResearchSessionRepository(agentStore).beginContextCycle(threadId, primaryResearcher.researcher_id, runId),
+    ]);
+    const winner = claims.find((claim) => claim.status === "fulfilled");
+    expect(claims.filter((claim) => claim.status === "rejected")).toHaveLength(1);
+    if (winner?.status !== "fulfilled") throw new Error("No checkpoint cycle acquired");
+    const cycle = winner.value;
+    const signal = new AbortController().signal;
+    expect(cycle.checkpoint).toBeNull();
+    await expect(repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId))
+      .rejects.toBeInstanceOf(ContextCheckpointConflictError);
+    await expect(repository.contextCheckpoint(threadId, foreignResearcher.researcher_id))
+      .rejects.toBeInstanceOf(SessionNotFoundError);
+    const snapshot = {
+      memory: "", summary: "Continue the research", renderedMemory: "", renderedSummary: "Session summary: Continue the research",
+      retainedParts: [], sourceWatermark: [...cycle.sourceWatermark],
+      statistics: { inputTokensBefore: 59000, inputTokensAfter: 20000, outputTokensAfter: 40000,
+        elapsedMs: 100, auxiliaryInputTokens: 40000, auxiliaryOutputTokens: 1000 },
+    };
+    // A candidate that failed before publication leaves the previous revision untouched.
+    await expect(repository.commitContextCycle(cycle, { ...snapshot, summary: "" }, signal)).rejects.toThrow();
+    expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toBeNull();
+    const appendedId = randomUUID();
+    await seedAssistantMessage(threadId, appendedId);
+    const published = await repository.commitContextCycle(cycle, snapshot, signal);
+    expect(published).toEqual({ revision: 1, snapshot });
+    expect((await repository.rawContextMessages(threadId, primaryResearcher.researcher_id)).some((m) => m.id === appendedId)).toBe(true);
+    await expect(repository.commitContextCycle(cycle, snapshot, signal)).rejects.toBeInstanceOf(ContextCheckpointConflictError);
+    const next = await repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId);
+    await repository.releaseContextCycle(cycle); // A stale cleanup must not release the new claim.
+    await expect(repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId))
+      .rejects.toBeInstanceOf(ContextCheckpointConflictError);
+    await owner.query('UPDATE agent.mastra_messages SET content = $2 WHERE id = $1',
+      [appendedId, JSON.stringify({ format: 2, parts: [{ type: "text", text: "changed source" }] })]);
+    await expect(repository.commitContextCycle(next, { ...snapshot, sourceWatermark: [...next.sourceWatermark] }, signal))
+      .rejects.toBeInstanceOf(ContextCheckpointConflictError);
+    expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(published);
+    await repository.releaseContextCycle(next);
+    const retry = await repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId);
+    expect(retry.revision).toBe(1);
+    const blocker = await holdSessionMutationLock(threadId);
+    const cancellation = new AbortController();
+    const attempt = repository.commitContextCycle(retry, { ...snapshot, sourceWatermark: [...retry.sourceWatermark] }, cancellation.signal)
+      .then(() => null, (error: unknown) => error);
+    try {
+      await waitForAdvisoryLockWaiters(1);
+      cancellation.abort();
+    } finally { await releaseSessionMutationLock(blocker); }
+    expect(await attempt).toBeInstanceOf(DOMException);
+    expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(published);
+    await repository.releaseContextCycle(retry);
+    const interrupted = await repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId);
+    expect(await repository.failInterruptedRunsAfterHostRestart()).toBe(1);
+    expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(published);
+    await expect(repository.commitContextCycle(interrupted, { ...snapshot, sourceWatermark: [...interrupted.sourceWatermark] }, signal))
+      .rejects.toBeInstanceOf(ContextCheckpointConflictError);
+    const claimState = await owner.query("SELECT cycle_id, cycle_run_id FROM agent.session_context_checkpoint WHERE thread_id = $1", [threadId]);
+    expect(claimState.rows).toEqual([{ cycle_id: null, cycle_run_id: null }]);
+    await repository.deleteSession(threadId, primaryResearcher.researcher_id);
+    expect((await owner.query("SELECT 1 FROM agent.session_context_checkpoint WHERE thread_id = $1", [threadId])).rowCount).toBe(0);
+  });
+
   it("sends complete small-window history across Host restart without auxiliary calls", async () => {
     const provider = openAIMemoryProvider();
     vi.stubGlobal("fetch", provider.fetch);
@@ -223,7 +290,9 @@ describe.sequential("durable Research Agent runtime", () => {
     const dependencies = { mcpRunFactory: async () => ({
       close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {},
     }) };
-    let runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+    const configuration = { ...memoryConfiguration, modelRegistry: { ...memoryConfiguration.modelRegistry,
+      models: memoryConfiguration.modelRegistry.models.map((model) => ({ ...model, contextWindow: 258_000 })) } };
+    let runtime = await createResearchRuntime(configuration, dependencies);
     const prompt = async (existing: boolean, targetThread = threadId) => run(runtime, runInput({
       threadId: targetThread, runId: randomUUID(), messageId: randomUUID(), modelKey: "luna", reasoningEffort: "high",
       sessionMode: existing ? "existing" : "new", content: "Explain the earlier research failure.",
@@ -236,14 +305,15 @@ describe.sequential("durable Research Agent runtime", () => {
         role: index % 2 === 0 ? "user" as const : "assistant" as const,
         createdAt: new Date(Date.now() - 120_000 + index * 1000),
         content: { format: 2 as const, parts: [{ type: "text" as const,
-          text: index === 0 ? MEMORY_FACT : `Archived detail ${index}: ${"context ".repeat(320)}` }] },
+          text: index === 0 ? MEMORY_FACT : `Archived detail ${index}: ${"context ".repeat(2000)}` }] },
       })) });
       const events = await prompt(true);
-      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      expect(events.at(-1), JSON.stringify({ phases: provider.requests.map(({ phase, prompt }) => ({ phase, characters: prompt.length })), terminal: events.at(-1) })).toMatchObject({ type: "RUN_FINISHED" });
       const answer = provider.requests.filter((request) => request.phase === "answer").at(-1)!;
       expect(answer.prompt.includes("run_memory_alpha")).toBe(true);
       expect(answer.prompt.includes("INSUFFICIENT_HISTORY")).toBe(true);
-      expect(answer.prompt.length).toBeLessThan(60_000);
+      expect(answer.prompt).toContain("Session handoff");
+      expect(answer.prompt).not.toContain("Archived detail 1:");
       expect(provider.requests.some((request) => request.phase === "observer")).toBe(true);
       expect(provider.requests.every((request) => request.body.model === "gpt-5.6-luna"
         && (request.body.reasoning as { effort: string }).effort === "high" && request.body.store === false)).toBe(true);
@@ -253,16 +323,20 @@ describe.sequential("durable Research Agent runtime", () => {
       const retained = await memory.recall({ threadId, resourceId: primaryResearcher.researcher_id, perPage: false });
       expect(retained.messages.filter((message) => ids.includes(message.id))).toHaveLength(60);
       const memoryStore = (await storage.getStore("memory"))!;
-      const record = (await memoryStore.getObservationalMemory(threadId, primaryResearcher.researcher_id))!;
-      // Exercise the next level of compression with an already-grown observation log.
-      const observations = `${MEMORY_FACT}\n${Array.from({ length: 1800 }, (_, index) => `* Detail ${index}: archived research note.`).join("\n")}`;
-      await memoryStore.updateActiveObservations({ id: record.id, observations,
-        tokenCount: estimateTokenCount(observations), lastObservedAt: record.lastObservedAt! });
+      expect(await memoryStore.getObservationalMemory(threadId, primaryResearcher.researcher_id)).toBeNull();
+      const checkpoint = await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id);
+      expect(checkpoint?.revision).toBe(1);
+      expect(checkpoint?.snapshot.summary).toContain("INSUFFICIENT_HISTORY");
+      const auxiliaryCalls = provider.requests.filter((request) => request.phase !== "answer").length;
       await runtime.close();
-      runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+      runtime = await createResearchRuntime(configuration, dependencies);
       expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
       expect(provider.requests.at(-1)?.prompt).toContain("INSUFFICIENT_HISTORY");
-      expect(provider.requests.some((request) => request.phase === "reflector")).toBe(true);
+      const previousInput = answer.body.input;
+      const resumedInput = provider.requests.at(-1)?.body.input;
+      if (!Array.isArray(previousInput) || !Array.isArray(resumedInput)) throw new Error("Provider input array missing");
+      expect(resumedInput.slice(0, previousInput.length)).toEqual(previousInput);
+      expect(provider.requests.filter((request) => request.phase !== "answer")).toHaveLength(auxiliaryCalls);
       expect((await prompt(false, randomUUID())).at(-1)?.type).toBe("RUN_FINISHED");
       expect(provider.requests.at(-1)?.prompt).not.toContain("run_memory_alpha");
       await runtime.deleteSession(threadId, primaryResearcher);
@@ -273,27 +347,40 @@ describe.sequential("durable Research Agent runtime", () => {
     }
   }, 30_000);
 
-  it.each([false, true])("observes a large Tool result inside the Turn and handles compression failure: %s", async (failObserver) => {
+  it.each(["success", "rate-limit", "invalid"] as const)("observes a large Tool result inside the Turn and handles compression failure: %s", async (failure) => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const provider = openAIMemoryProvider({ tool: "get_research_run", failObserver });
+    const provider = openAIMemoryProvider({ tool: "get_research_run", failObserver: failure === "rate-limit", invalidObserver: failure === "invalid", toolOnAnswer: 2 });
     vi.stubGlobal("fetch", provider.fetch);
-    const runtime = await createResearchRuntime(memoryConfiguration, {
+    const configuration = { ...memoryConfiguration, modelRegistry: { ...memoryConfiguration.modelRegistry,
+      models: memoryConfiguration.modelRegistry.models.map((model) => ({ ...model, contextWindow: 258_000 })) } };
+    const runtime = await createResearchRuntime(configuration, {
       mcpRunFactory: async () => ({
         close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
         tools: { get_research_run: createTool({
           id: "get_research_run", description: "Read the research outcome.", inputSchema: z.object({}), outputSchema: z.object({ text: z.string() }),
           execute: async () => ({ text: `${MEMORY_FACT}\n${"context ".repeat(18_000)}` }),
-          toModelOutput: (result) => ({ type: "text", value: result.text }),
         }) },
       }),
     });
     const threadId = randomUUID();
     try {
-      const events = await run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+      expect((await run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+        modelKey: "luna", reasoningEffort: "high", content: "Prepare the research." }), primaryResearcher)).at(-1)?.type).toBe("RUN_FINISHED");
+      const storage = new PostgresStore({ id: "tool-context-fixture", pool: agentStore, schemaName: "agent", disableInit: true });
+      const memory = new Memory({ storage, vector: false });
+      await memory.saveMessages({ messages: Array.from({ length: 50 }, (_, index) => ({ id: randomUUID(), threadId,
+        resourceId: primaryResearcher.researcher_id, role: index % 2 === 0 ? "user" as const : "assistant" as const,
+        createdAt: new Date(Date.now() - 120_000 + index * 1000), content: { format: 2 as const,
+          parts: [{ type: "text" as const, text: index === 0 ? MEMORY_FACT : "context ".repeat(2000) }] } })) });
+      const events = await run(runtime, runInput({ threadId, sessionMode: "existing", runId: randomUUID(), messageId: randomUUID(),
         modelKey: "luna", reasoningEffort: "high", content: "Read the earlier research failure." }), primaryResearcher);
       expect(provider.requests.some((request) => request.phase === "observer")).toBe(true);
-      if (failObserver) {
-        expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR", code: "PROVIDER_RATE_LIMIT" });
+      if (failure !== "success") {
+        const code = failure === "rate-limit" ? "PROVIDER_RATE_LIMIT" : "CONTEXT_COMPACTION_FAILED";
+        expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR", code });
+        expect((await connect(runtime, threadId, primaryResearcher)).at(-1)).toMatchObject({ type: "RUN_ERROR", code });
+        expect(await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id)).toBeNull();
+        expect(JSON.stringify(events)).not.toContain("private-invalid-observer-canary");
         expect(JSON.stringify(events).includes("private-observer-canary")).toBe(false);
       } else {
         expect(events.at(-1)?.type).toBe("RUN_FINISHED");
@@ -500,7 +587,7 @@ describe.sequential("durable Research Agent runtime", () => {
           (SELECT count(*) FROM agent."mastra_messages" WHERE thread_id = $1::uuid::text) AS messages
       `, [threadId]);
       expect(counts.rows).toEqual([{
-        messages: "2",
+        messages: "3",
         runs: "1",
         sessions: "1",
         threads: "1",

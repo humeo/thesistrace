@@ -76,6 +76,7 @@ const writableTables = [
   "mastra_resources",
   "mastra_threads",
   "mastra_workflow_snapshot",
+  "session_context_checkpoint",
 ] as const;
 
 export function assertExactCatalog(

@@ -1063,6 +1063,46 @@
       "position": 2,
       "relation": "schema_contract",
       "type": "text"
+    },
+    {
+      "default": null,
+      "name": "thread_id",
+      "notNull": true,
+      "position": 1,
+      "relation": "session_context_checkpoint",
+      "type": "uuid"
+    },
+    {
+      "default": "0",
+      "name": "revision",
+      "notNull": true,
+      "position": 2,
+      "relation": "session_context_checkpoint",
+      "type": "integer"
+    },
+    {
+      "default": null,
+      "name": "snapshot",
+      "notNull": false,
+      "position": 3,
+      "relation": "session_context_checkpoint",
+      "type": "jsonb"
+    },
+    {
+      "default": null,
+      "name": "cycle_id",
+      "notNull": false,
+      "position": 4,
+      "relation": "session_context_checkpoint",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "cycle_run_id",
+      "notNull": false,
+      "position": 5,
+      "relation": "session_context_checkpoint",
+      "type": "uuid"
     }
   ],
   "constraints": [
@@ -1455,6 +1495,42 @@
       "name": "schema_contract_singleton_check",
       "relation": "schema_contract",
       "type": "c"
+    },
+    {
+      "definition": "CHECK ((((revision = 0) AND (snapshot IS NULL)) OR ((revision > 0) AND (snapshot IS NOT NULL) AND (jsonb_typeof(snapshot) = 'object'::text))))",
+      "name": "session_context_checkpoint_check",
+      "relation": "session_context_checkpoint",
+      "type": "c"
+    },
+    {
+      "definition": "CHECK (((cycle_id IS NULL) = (cycle_run_id IS NULL)))",
+      "name": "session_context_checkpoint_check1",
+      "relation": "session_context_checkpoint",
+      "type": "c"
+    },
+    {
+      "definition": "FOREIGN KEY (cycle_run_id) REFERENCES agent.agent_run(id)",
+      "name": "session_context_checkpoint_cycle_run_id_fkey",
+      "relation": "session_context_checkpoint",
+      "type": "f"
+    },
+    {
+      "definition": "PRIMARY KEY (thread_id)",
+      "name": "session_context_checkpoint_pkey",
+      "relation": "session_context_checkpoint",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((revision >= 0))",
+      "name": "session_context_checkpoint_revision_check",
+      "relation": "session_context_checkpoint",
+      "type": "c"
+    },
+    {
+      "definition": "FOREIGN KEY (thread_id) REFERENCES agent.chat_session(id) ON DELETE CASCADE",
+      "name": "session_context_checkpoint_thread_id_fkey",
+      "relation": "session_context_checkpoint",
+      "type": "f"
     }
   ],
   "indexes": [
@@ -1592,6 +1668,11 @@
       "definition": "CREATE UNIQUE INDEX schema_contract_pkey ON agent.schema_contract USING btree (singleton)",
       "name": "schema_contract_pkey",
       "relation": "schema_contract"
+    },
+    {
+      "definition": "CREATE UNIQUE INDEX session_context_checkpoint_pkey ON agent.session_context_checkpoint USING btree (thread_id)",
+      "name": "session_context_checkpoint_pkey",
+      "relation": "session_context_checkpoint"
     }
   ],
   "policies": [],
@@ -1696,6 +1777,14 @@
       "forceRowSecurity": false,
       "kind": "r",
       "name": "schema_contract",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "session_context_checkpoint",
       "owner": "thesistrace_owner",
       "persistence": "p",
       "rowSecurity": false

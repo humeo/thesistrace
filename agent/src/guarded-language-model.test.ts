@@ -450,3 +450,11 @@ async function drain(result: { stream: ReadableStream<LanguageModelV3StreamPart>
   const reader = result.stream.getReader();
   while (!(await reader.read()).done) { /* consume the provider stream */ }
 }
+
+test("an auxiliary length stop is a compaction failure, not a truncated user answer", async () => {
+  const observation = new RunModelObservation(new RunUsageCapture());
+  const model = new GuardedLanguageModel(fake(async () => stream([textPart,
+    { ...finish, finishReason: { unified: "length", raw: "length" } }])), observation, capacity(65_536), "memory");
+  await expect(drain(await model.doStream(options))).rejects.toMatchObject({ code: "CONTEXT_COMPACTION_FAILED" });
+  expect(observation.terminalFailure()).toBe("CONTEXT_COMPACTION_FAILED");
+});

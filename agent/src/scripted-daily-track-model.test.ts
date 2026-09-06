@@ -19,7 +19,7 @@ const retryPrompt = `Retry blocked DailyTrack ${TRACK_ID}.`;
 test.each([false, true])("the model verifies the %s Origin and presents current Track facts without private internals", async (fromThread) => {
   const request = options(fromThread ? SCRIPTED_START_DAILY_TRACK_PROMPT : startPrompt);
   if (fromThread) {
-    request.prompt.splice(1, 1);
+    request.prompt.splice(request.prompt.findIndex((message) => message.role === "user"), 1);
     const input = { run_id: ORIGIN_RUN_ID };
     appendExchange(request, "prior-origin", "get_research_run", input, dailyTrackFixtureOutput({ name: "get_research_run", input }));
     followUp(request, SCRIPTED_START_DAILY_TRACK_PROMPT);
@@ -99,7 +99,7 @@ test.each(["start_daily_track", "refresh_daily_track", "retry_daily_track"])("ex
   const interrupted = await runScriptedTrajectory(request, (call) => call.name === action ? { code: "MCP_TRANSIENT" } : resolve(call));
   const original = interrupted.calls.find((call) => call.name === action);
   expect(original).toBeDefined();
-  request.prompt[0] = { role: "system", content: "Agent Run identity: 00000000-0000-4000-8000-000000000099." };
+  request.prompt.push({ role: "assistant", content: [{ type: "text", text: "Agent Run identity: 00000000-0000-4000-8000-000000000099." }] });
   followUp(request, SCRIPTED_RESUME_DAILY_TRACK_PROMPT);
   const resumed = await runScriptedTrajectory(request, dailyTrackFixtureOutput);
   expect(resumed.calls[0]).toEqual(original);

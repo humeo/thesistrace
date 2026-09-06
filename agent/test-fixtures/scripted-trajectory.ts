@@ -57,8 +57,11 @@ export function scriptedCallOptions(
 ): LanguageModelV3CallOptions {
   return {
     prompt: [{
-      content: "ThesisTrace instructions. Agent Run identity: 00000000-0000-4000-8000-000000000041.",
+      content: "ThesisTrace instructions.",
       role: "system",
+    }, {
+      role: "assistant",
+      content: [{ type: "text", text: "Agent Run identity: 00000000-0000-4000-8000-000000000041." }],
     }, {
       content: [{ type: "text", text: prompt }],
       role: "user",

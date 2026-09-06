@@ -536,7 +536,7 @@ function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_ou
   if (entry.payload.status === "completed") {
     return <div hidden aria-hidden="true" data-entry-id={entry.entry_id} data-turn-outcome="completed" />;
   }
-  const explanation = entry.payload.errorCode === "OUTPUT_LIMIT" || entry.payload.errorCode === "CONTEXT_TOO_LARGE"
+  const explanation = entry.payload.errorCode === "OUTPUT_LIMIT" || entry.payload.errorCode === "CONTEXT_TOO_LARGE" || entry.payload.errorCode === "CONTEXT_COMPACTION_FAILED"
     ? agentFailure(entry.payload.errorCode) : undefined;
   return (
     <div

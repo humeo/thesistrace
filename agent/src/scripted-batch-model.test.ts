@@ -122,7 +122,7 @@ test("an explicitly resumed disconnected admission replays its original command 
     ? { code: "MCP_TRANSIENT" } : batchFixtureOutput("factor_evaluation", call));
   const original = interrupted.calls.find((call) => call.name === "submit_research_batch");
   expect(original).toBeDefined();
-  request.prompt[0] = { role: "system", content: "Agent Run identity: 00000000-0000-4000-8000-000000000099." };
+  request.prompt.push({ role: "assistant", content: [{ type: "text", text: "Agent Run identity: 00000000-0000-4000-8000-000000000099." }] });
   followUp(request, SCRIPTED_RESUME_BATCH_PROMPT);
   const resumed = await runScriptedTrajectory(request, (call) => batchFixtureOutput("factor_evaluation", call));
   expect(resumed.calls[0]).toEqual(original);

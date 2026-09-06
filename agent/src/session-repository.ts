@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { contextSourceMatches, freezeContextSource, sessionContextSnapshotSchema, type SessionContextCheckpoint, type SessionContextCycle, type SessionContextSnapshot } from "./session-context-state.js";
 import { convertMessages, type MastraDBMessage } from "@mastra/core/agent";
 import type { Message } from "@ag-ui/core";
 import type { Pool, PoolClient } from "pg";
@@ -158,8 +160,78 @@ export type RunExecution = Readonly<{
   usage: PersistedTokenUsage | undefined;
 }>;
 
+export class ContextCheckpointConflictError extends Error {
+  constructor() { super("SESSION_CONTEXT_CHECKPOINT_CONFLICT"); }
+}
+
 export class ResearchSessionRepository {
   constructor(private readonly pool: Pool) {}
+
+  async contextCheckpoint(threadId: string, researcherId: string): Promise<SessionContextCheckpoint | null> {
+    return withSessionMutation(this.pool, threadId, async (client) => {
+      await loadOwnedThreadForUpdate(client, threadId, researcherId);
+      return loadContextCheckpoint(client, threadId);
+    });
+  }
+
+  async rawContextMessages(threadId: string, researcherId: string): Promise<readonly MastraDBMessage[]> {
+    return withSessionMutation(this.pool, threadId, async (client) => {
+      await loadOwnedThreadForUpdate(client, threadId, researcherId);
+      return loadRawContextMessages(client, threadId, researcherId);
+    });
+  }
+
+  async beginContextCycle(threadId: string, researcherId: string, runId: string): Promise<SessionContextCycle> {
+    return withSessionMutation(this.pool, threadId, async (client) => {
+      await loadOwnedThreadForUpdate(client, threadId, researcherId);
+      const run = await client.query(`SELECT 1 FROM agent.agent_run
+        WHERE id = $1::uuid AND thread_id = $2::uuid AND status = 'running'`,
+      [runId, threadId]);
+      if (run.rowCount !== 1) throw new ContextCheckpointConflictError();
+      await client.query(`INSERT INTO agent.session_context_checkpoint (thread_id) VALUES ($1::uuid)
+        ON CONFLICT (thread_id) DO NOTHING`, [threadId]);
+      const cycleId = randomUUID();
+      const claimed = await client.query<{ revision: number }>(`UPDATE agent.session_context_checkpoint
+        SET cycle_id = $2::uuid, cycle_run_id = $3::uuid
+        WHERE thread_id = $1::uuid AND cycle_id IS NULL RETURNING revision`, [threadId, cycleId, runId]);
+      if (claimed.rowCount !== 1) throw new ContextCheckpointConflictError();
+      return { id: cycleId, threadId, researcherId, runId, revision: claimed.rows[0]!.revision,
+        checkpoint: await loadContextCheckpoint(client, threadId),
+        sourceWatermark: freezeContextSource(await loadRawContextMessages(client, threadId, researcherId)),
+      };
+    });
+  }
+
+  async commitContextCycle(cycle: SessionContextCycle, candidate: SessionContextSnapshot, abortSignal: AbortSignal): Promise<SessionContextCheckpoint> {
+    abortSignal.throwIfAborted();
+    const snapshot = sessionContextSnapshotSchema.parse(candidate);
+    if (JSON.stringify(snapshot.sourceWatermark) !== JSON.stringify(cycle.sourceWatermark)) {
+      throw new ContextCheckpointConflictError();
+    }
+    return withSessionMutation(this.pool, cycle.threadId, async (client) => {
+      await loadOwnedThreadForUpdate(client, cycle.threadId, cycle.researcherId);
+      // Lock existing source rows through publication; newly appended rows remain in N.
+      const current = freezeContextSource(await loadRawContextMessages(client, cycle.threadId, cycle.researcherId, true));
+      if (!contextSourceMatches(cycle.sourceWatermark, current)) throw new ContextCheckpointConflictError();
+      const updated = await client.query<{ revision: number }>(`UPDATE agent.session_context_checkpoint AS checkpoint
+        SET snapshot = $5::jsonb, revision = revision + 1, cycle_id = NULL, cycle_run_id = NULL
+        WHERE checkpoint.thread_id = $1::uuid AND cycle_id = $2::uuid AND revision = $3
+          AND cycle_run_id = $4::uuid AND EXISTS (SELECT 1 FROM agent.agent_run AS run
+            WHERE run.id = $4::uuid AND run.thread_id = $1::uuid AND run.status = 'running')
+        RETURNING revision`, [cycle.threadId, cycle.id, cycle.revision, cycle.runId, JSON.stringify(snapshot)]);
+      if (updated.rowCount !== 1) throw new ContextCheckpointConflictError();
+      return { revision: updated.rows[0]!.revision, snapshot };
+    }, abortSignal);
+  }
+
+  async releaseContextCycle(cycle: SessionContextCycle): Promise<void> {
+    await withSessionMutation(this.pool, cycle.threadId, async (client) => {
+      await loadOwnedThreadForUpdate(client, cycle.threadId, cycle.researcherId);
+      await client.query(`UPDATE agent.session_context_checkpoint SET cycle_id = NULL, cycle_run_id = NULL
+        WHERE thread_id = $1::uuid AND cycle_id = $2::uuid AND cycle_run_id = $3::uuid`,
+      [cycle.threadId, cycle.id, cycle.runId]);
+    });
+  }
 
   async failInterruptedRunsAfterHostRestart(): Promise<number> {
     const client = await this.pool.connect();
@@ -218,6 +290,8 @@ export class ResearchSessionRepository {
         WHERE status = ANY (ARRAY['running', 'stopping'])
         RETURNING id::text, thread_id::text, status
       `);
+      await client.query(`UPDATE agent.session_context_checkpoint SET cycle_id = NULL, cycle_run_id = NULL
+        WHERE cycle_run_id IN (SELECT id FROM agent.agent_run WHERE status IN ('failed', 'stopped'))`);
       for (const run of result.rows) {
         await insertTimelineEntry(client, {
           entryId: `outcome:${run.id}`,
@@ -2353,11 +2427,14 @@ async function withSessionMutation<T>(
   pool: Pool,
   threadId: string,
   operation: (client: PoolClient) => Promise<T>,
+  abortSignal?: AbortSignal,
 ): Promise<T> {
   const client = await pool.connect();
   try {
     await beginSessionMutation(client, threadId);
+    abortSignal?.throwIfAborted();
     const result = await operation(client);
+    abortSignal?.throwIfAborted();
     await client.query("COMMIT");
     return result;
   } catch (error) {
@@ -2465,11 +2542,12 @@ async function waitForDurableCondition(
   }
 }
 
-async function loadDurableMessages(
+async function loadRawContextMessages(
   database: Pick<Pool | PoolClient, "query">,
   threadId: string,
   researcherId: string,
-): Promise<readonly Message[]> {
+  lockRows = false,
+): Promise<readonly MastraDBMessage[]> {
   const thread = await database.query<{ resource_id: string }>(`
     SELECT "resourceId" AS resource_id
     FROM agent."mastra_threads"
@@ -2498,6 +2576,7 @@ async function loadDurableMessages(
     FROM agent."mastra_messages"
     WHERE thread_id = $1
     ORDER BY "createdAtZ" ASC, id ASC
+    ${lockRows ? "FOR SHARE" : ""}
   `, [threadId]);
   const dbMessages = result.rows.map((row): MastraDBMessage => {
     if (row.resource_id !== null && row.resource_id !== researcherId) {
@@ -2521,11 +2600,20 @@ async function loadDurableMessages(
       threadId,
     };
   });
-  try {
-    return projectDurableUiMessages(convertMessages(dbMessages).to("AIV4.UI"));
-  } catch {
-    throw new TranscriptConflictError();
-  }
+  return dbMessages;
+}
+
+async function loadDurableMessages(database: Pick<Pool | PoolClient, "query">, threadId: string, researcherId: string): Promise<readonly Message[]> {
+  const messages = await loadRawContextMessages(database, threadId, researcherId);
+  try { return projectDurableUiMessages(convertMessages([...messages]).to("AIV4.UI")); }
+  catch { throw new TranscriptConflictError(); }
+}
+
+async function loadContextCheckpoint(database: Pick<Pool | PoolClient, "query">, threadId: string): Promise<SessionContextCheckpoint | null> {
+  const result = await database.query<{ revision: number; snapshot: unknown }>(
+    "SELECT revision, snapshot FROM agent.session_context_checkpoint WHERE thread_id = $1::uuid", [threadId]);
+  const row = result.rows[0];
+  return !row || row.revision === 0 ? null : { revision: row.revision, snapshot: sessionContextSnapshotSchema.parse(row.snapshot) };
 }
 
 async function loadA2UIActivities(

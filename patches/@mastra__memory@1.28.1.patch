@@ -1,9 +1,99 @@
+diff --git a/dist/processors/observational-memory/observer-runner.d.ts b/dist/processors/observational-memory/observer-runner.d.ts
+index b5850e97ffd093300c5afdf85ef20ccbb2e4a359..d22316250d33b2ed414d02bf853abc0f265a7faa 100644
+--- a/dist/processors/observational-memory/observer-runner.d.ts
++++ b/dist/processors/observational-memory/observer-runner.d.ts
+@@ -61,6 +61,17 @@ export declare class ObserverRunner {
+         mastra?: Mastra;
+         memory?: Memory;
+     });
++    callCandidate(existingObservations: string | undefined, messagesToObserve: MastraDBMessage[], options: {
++        maxOutputTokens: number;
++        abortSignal?: AbortSignal;
++        requestContext?: RequestContext;
++        instruction?: string;
++    }): Promise<{
++        observations: string;
++        finishReason: string;
++        usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
++        providerMetadata?: ProviderMetadata;
++    }>;
+     __registerMastra(mastra: Mastra): void;
+     private createAgent;
+     /**
+diff --git a/dist/processors/observational-memory/reflector-runner.d.ts b/dist/processors/observational-memory/reflector-runner.d.ts
+index dcc53c0408ac4cd8d8a79f20eea711b454d7f8d4..b274999fc09681bdace515fd5124e2fcaebca513 100644
+--- a/dist/processors/observational-memory/reflector-runner.d.ts
++++ b/dist/processors/observational-memory/reflector-runner.d.ts
+@@ -74,6 +74,17 @@ export declare class ReflectorRunner {
+         memory?: Memory;
+         onReflectionCommitted?: (context: ReflectionCommittedContext) => Promise<void>;
+     });
++    callCandidate(observations: string, options: {
++        maxOutputTokens: number;
++        abortSignal?: AbortSignal;
++        requestContext?: RequestContext;
++        instruction?: string;
++    }): Promise<{
++        observations: string;
++        finishReason: string;
++        usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
++        providerMetadata?: ProviderMetadata;
++    }>;
+     __registerMastra(mastra: Mastra): void;
+     private createAgent;
+     private getObservationMarkerConfig;
 diff --git a/dist/src-BNtoxIHL.js b/dist/src-BNtoxIHL.js
-index 0db57d681db5f1bd369a02f11909d733c36b3188..ce9add5a2d2ee872595e6c9769ffbe467a0a4a0e 100644
+index 0db57d681db5f1bd369a02f11909d733c36b3188..b5ce02041c26ea63e7c7994cfa0b98a6bf6ebb7e 100644
 --- a/dist/src-BNtoxIHL.js
 +++ b/dist/src-BNtoxIHL.js
-@@ -19398,7 +19398,10 @@ var ObserverRunner = class {
+@@ -18909,6 +18909,14 @@ function getStringExtractedValue$1(values, slug) {
+ 	const value = values[slug];
+ 	return typeof value === "string" && value.trim() ? value.trim() : void 0;
+ }
++function parseCandidateObservations(output, parse) {
++	const sections = [...output.matchAll(/<observations>([\s\S]*?)<\/observations>/gi)];
++	if (sections.length !== 1 || (output.match(/<\/?observations\b/gi) ?? []).length !== 2) throw new Error("OM_CANDIDATE_INVALID");
++	const body = sections[0][1].trim();
++	const parsed = parse("<observations>\n" + body + "\n</observations>");
++	if (parsed.degenerate || parsed.observations !== body) throw new Error("OM_CANDIDATE_INVALID");
++	return parsed;
++}
+ function parseObserverOutput(output, extractors = []) {
+ 	if (detectDegenerateRepetition(output)) return {
+ 		observations: "",
+@@ -19390,15 +19398,40 @@ var ObserverRunner = class {
+ 	__registerMastra(mastra) {
+ 		this.mastra = mastra;
+ 	}
+-	createAgent(model, isMultiThread = false, memory, extractors = this.observationConfig.extractors ?? []) {
++	/** Pure candidate: full source, one model request, no extractors or persistence. */
++	async callCandidate(existingObservations, messagesToObserve, options) {
++		const resolved = this.resolveModel(this.tokenCounter.countMessages(messagesToObserve));
++		const agent = this.createAgent(resolved.model, false, void 0, [], true);
++		const result = await this.withAbortCheck(async () => (await agent.stream([{
++			role: "user", content: buildObserverTaskPrompt(existingObservations, {
++				skipContinuationHints: true, includeThreadTitle: false, extractors: []
++			})
++		}, { role: "user", content: "## New Message History to Observe\n\n" + JSON.stringify(messagesToObserve) }], {
++			modelSettings: { ...this.observationConfig.modelSettings, maxOutputTokens: options.maxOutputTokens },
++			providerOptions: this.observationConfig.providerOptions,
++			abortSignal: options.abortSignal,
++			requestContext: withOmInternalThreadId(options.requestContext, agent.id),
++			maxSteps: 1
++		})).getFullOutput(), options.abortSignal);
++		const parsed = parseCandidateObservations(result.text, (text) => parseObserverOutput(text, []));
++		if (parsed.degenerate) throw new Error("OM_CANDIDATE_INVALID");
++		return { observations: parsed.observations, finishReason: result.finishReason,
++			usage: result.totalUsage ?? result.usage, providerMetadata: result.providerMetadata };
++	}
++
++	createAgent(model, isMultiThread = false, memory, extractors = this.observationConfig.extractors ?? [], candidateOnly = false) {
+ 		const agent = new Agent({
+ 			id: isMultiThread ? "multi-thread-observer" : "observational-memory-observer",
+ 			name: isMultiThread ? "multi-thread-observer" : "Observer",
+ 			instructions: buildObserverSystemPrompt(isMultiThread, this.observationConfig.instruction, this.observationConfig.threadTitle, extractors),
  			model,
++			...candidateOnly ? { maxRetries: 0 } : {},
  			...memory ? { memory } : {}
  		});
 -		if (this.mastra) agent.__registerMastra(this.mastra);
@@ -14,7 +104,7 @@ index 0db57d681db5f1bd369a02f11909d733c36b3188..ce9add5a2d2ee872595e6c9769ffbe46
  		return agent;
  	}
  	/**
-@@ -24649,7 +24652,10 @@ async function loadMemoryContextMessages({ memory, messageList, threadId, resour
+@@ -24649,7 +24682,10 @@ async function loadMemoryContextMessages({ memory, messageList, threadId, resour
  		resourceId,
  		runState
  	});
@@ -26,8 +116,36 @@ index 0db57d681db5f1bd369a02f11909d733c36b3188..ce9add5a2d2ee872595e6c9769ffbe46
  	return ctx;
  }
  //#endregion
-@@ -25640,7 +25646,10 @@ var ReflectorRunner = class {
+@@ -25632,15 +25668,37 @@ var ReflectorRunner = class {
+ 	__registerMastra(mastra) {
+ 		this.mastra = mastra;
+ 	}
+-	createAgent(model, memory, extractors = this.reflectionConfig.extractors) {
++	/** Pure candidate: no escalating retries, markers, extractors or storage updates. */
++	async callCandidate(observations, options) {
++		const resolved = this.resolveModel(this.tokenCounter.countObservations(observations));
++		const agent = this.createAgent(resolved.model, void 0, [], true);
++		const result = await withAbortCheck(async () => (await agent.stream(
++			buildReflectorPrompt(observations, options.instruction, 0, true, []), {
++			modelSettings: { ...this.reflectionConfig.modelSettings, maxOutputTokens: options.maxOutputTokens },
++			providerOptions: this.reflectionConfig.providerOptions,
++			abortSignal: options.abortSignal,
++			requestContext: withOmInternalThreadId(options.requestContext, agent.id),
++			maxSteps: 1
++		})).getFullOutput(), options.abortSignal);
++		const parsed = parseCandidateObservations(result.text, (text) => parseReflectorOutput(text, observations, []));
++		if (parsed.degenerate) throw new Error("OM_CANDIDATE_INVALID");
++		return { observations: parsed.observations, finishReason: result.finishReason,
++			usage: result.totalUsage ?? result.usage, providerMetadata: result.providerMetadata };
++	}
++
++	createAgent(model, memory, extractors = this.reflectionConfig.extractors, candidateOnly = false) {
+ 		const agent = new Agent({
+ 			id: "observational-memory-reflector",
+ 			name: "Reflector",
+ 			instructions: buildReflectorSystemPrompt(this.reflectionConfig.instruction, extractors),
  			model,
++			...candidateOnly ? { maxRetries: 0 } : {},
  			...memory ? { memory } : {}
  		});
 -		if (this.mastra) agent.__registerMastra(this.mastra);
@@ -39,11 +157,57 @@ index 0db57d681db5f1bd369a02f11909d733c36b3188..ce9add5a2d2ee872595e6c9769ffbe46
  	}
  	getObservationMarkerConfig(record) {
 diff --git a/dist/src-Br56ncef.cjs b/dist/src-Br56ncef.cjs
-index 4cb5a17133063ca9138cc3e51ae9e685b72967b3..4de7a97dece4b5ba4a9ae9b795a8c0c75c3869fc 100644
+index 4cb5a17133063ca9138cc3e51ae9e685b72967b3..ef9c689438162498b7ee6fd9d710ee966015663b 100644
 --- a/dist/src-Br56ncef.cjs
 +++ b/dist/src-Br56ncef.cjs
-@@ -19419,7 +19419,10 @@ var ObserverRunner = class {
+@@ -18930,6 +18930,14 @@ function getStringExtractedValue$1(values, slug) {
+ 	const value = values[slug];
+ 	return typeof value === "string" && value.trim() ? value.trim() : void 0;
+ }
++function parseCandidateObservations(output, parse) {
++	const sections = [...output.matchAll(/<observations>([\s\S]*?)<\/observations>/gi)];
++	if (sections.length !== 1 || (output.match(/<\/?observations\b/gi) ?? []).length !== 2) throw new Error("OM_CANDIDATE_INVALID");
++	const body = sections[0][1].trim();
++	const parsed = parse("<observations>\n" + body + "\n</observations>");
++	if (parsed.degenerate || parsed.observations !== body) throw new Error("OM_CANDIDATE_INVALID");
++	return parsed;
++}
+ function parseObserverOutput(output, extractors = []) {
+ 	if (detectDegenerateRepetition(output)) return {
+ 		observations: "",
+@@ -19411,15 +19419,40 @@ var ObserverRunner = class {
+ 	__registerMastra(mastra) {
+ 		this.mastra = mastra;
+ 	}
+-	createAgent(model, isMultiThread = false, memory, extractors = this.observationConfig.extractors ?? []) {
++	/** Pure candidate: full source, one model request, no extractors or persistence. */
++	async callCandidate(existingObservations, messagesToObserve, options) {
++		const resolved = this.resolveModel(this.tokenCounter.countMessages(messagesToObserve));
++		const agent = this.createAgent(resolved.model, false, void 0, [], true);
++		const result = await this.withAbortCheck(async () => (await agent.stream([{
++			role: "user", content: buildObserverTaskPrompt(existingObservations, {
++				skipContinuationHints: true, includeThreadTitle: false, extractors: []
++			})
++		}, { role: "user", content: "## New Message History to Observe\n\n" + JSON.stringify(messagesToObserve) }], {
++			modelSettings: { ...this.observationConfig.modelSettings, maxOutputTokens: options.maxOutputTokens },
++			providerOptions: this.observationConfig.providerOptions,
++			abortSignal: options.abortSignal,
++			requestContext: withOmInternalThreadId(options.requestContext, agent.id),
++			maxSteps: 1
++		})).getFullOutput(), options.abortSignal);
++		const parsed = parseCandidateObservations(result.text, (text) => parseObserverOutput(text, []));
++		if (parsed.degenerate) throw new Error("OM_CANDIDATE_INVALID");
++		return { observations: parsed.observations, finishReason: result.finishReason,
++			usage: result.totalUsage ?? result.usage, providerMetadata: result.providerMetadata };
++	}
++
++	createAgent(model, isMultiThread = false, memory, extractors = this.observationConfig.extractors ?? [], candidateOnly = false) {
+ 		const agent = new _mastra_core_agent.Agent({
+ 			id: isMultiThread ? "multi-thread-observer" : "observational-memory-observer",
+ 			name: isMultiThread ? "multi-thread-observer" : "Observer",
+ 			instructions: buildObserverSystemPrompt(isMultiThread, this.observationConfig.instruction, this.observationConfig.threadTitle, extractors),
  			model,
++			...candidateOnly ? { maxRetries: 0 } : {},
  			...memory ? { memory } : {}
  		});
 -		if (this.mastra) agent.__registerMastra(this.mastra);
@@ -54,7 +218,7 @@ index 4cb5a17133063ca9138cc3e51ae9e685b72967b3..4de7a97dece4b5ba4a9ae9b795a8c0c7
  		return agent;
  	}
  	/**
-@@ -24670,7 +24673,10 @@ async function loadMemoryContextMessages({ memory, messageList, threadId, resour
+@@ -24670,7 +24703,10 @@ async function loadMemoryContextMessages({ memory, messageList, threadId, resour
  		resourceId,
  		runState
  	});
@@ -66,8 +230,36 @@ index 4cb5a17133063ca9138cc3e51ae9e685b72967b3..4de7a97dece4b5ba4a9ae9b795a8c0c7
  	return ctx;
  }
  //#endregion
-@@ -25661,7 +25667,10 @@ var ReflectorRunner = class {
+@@ -25653,15 +25689,37 @@ var ReflectorRunner = class {
+ 	__registerMastra(mastra) {
+ 		this.mastra = mastra;
+ 	}
+-	createAgent(model, memory, extractors = this.reflectionConfig.extractors) {
++	/** Pure candidate: no escalating retries, markers, extractors or storage updates. */
++	async callCandidate(observations, options) {
++		const resolved = this.resolveModel(this.tokenCounter.countObservations(observations));
++		const agent = this.createAgent(resolved.model, void 0, [], true);
++		const result = await withAbortCheck(async () => (await agent.stream(
++			buildReflectorPrompt(observations, options.instruction, 0, true, []), {
++			modelSettings: { ...this.reflectionConfig.modelSettings, maxOutputTokens: options.maxOutputTokens },
++			providerOptions: this.reflectionConfig.providerOptions,
++			abortSignal: options.abortSignal,
++			requestContext: withOmInternalThreadId(options.requestContext, agent.id),
++			maxSteps: 1
++		})).getFullOutput(), options.abortSignal);
++		const parsed = parseCandidateObservations(result.text, (text) => parseReflectorOutput(text, observations, []));
++		if (parsed.degenerate) throw new Error("OM_CANDIDATE_INVALID");
++		return { observations: parsed.observations, finishReason: result.finishReason,
++			usage: result.totalUsage ?? result.usage, providerMetadata: result.providerMetadata };
++	}
++
++	createAgent(model, memory, extractors = this.reflectionConfig.extractors, candidateOnly = false) {
+ 		const agent = new _mastra_core_agent.Agent({
+ 			id: "observational-memory-reflector",
+ 			name: "Reflector",
+ 			instructions: buildReflectorSystemPrompt(this.reflectionConfig.instruction, extractors),
  			model,
++			...candidateOnly ? { maxRetries: 0 } : {},
  			...memory ? { memory } : {}
  		});
 -		if (this.mastra) agent.__registerMastra(this.mastra);

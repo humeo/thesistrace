@@ -917,7 +917,8 @@ test("preserves explicit unavailable Factor metrics without inventing values", a
 test("fails closed before admission when the Agent Run identity is absent", async () => {
   const model = new ScriptedLanguageModel("scripted-v1");
   const options = researchOptions(SCRIPTED_FACTOR_IDEA_PROMPT, researchTools());
-  options.prompt[0] = { content: "ThesisTrace instructions.", role: "system" };
+  options.prompt = options.prompt.filter((message) => !(message.role === "assistant"
+    && message.content.some((part) => part.type === "text" && part.text.startsWith("Agent Run identity:"))));
   appendExchange(options, "context", "get_research_context", {}, researchContext());
   appendExchange(options, "catalog", "get_alpha_catalog", {
     identifiers: ["abs", "close", "pct_change", "rank"],

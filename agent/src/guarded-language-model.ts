@@ -16,10 +16,13 @@ export const AGENT_LIMITS = Object.freeze({
   providerCallMs: 180_000,
 });
 
+export type RunInputEstimate = Readonly<{ estimatedTokens: number; actualTokens: number | null; errorTokens: number | null }>;
+
 /** Safe, request-local observations; not a planner or a second run lifecycle. */
 export class RunModelObservation {
   failure: AgentFailureCode | undefined;
   steps = 0;
+  inputEstimate: RunInputEstimate | undefined;
   private readonly tokenCounter = new ModelInputTokenCounter();
   private generatedBytes = 0;
   private hasRunAnswer = false;
@@ -47,12 +50,12 @@ export class RunModelObservation {
     return new AgentRunFailure(this.failure);
   }
 
-  begin(options: LanguageModelV3CallOptions, model: ModelCapacity): LanguageModelV3CallOptions {
+  begin(options: LanguageModelV3CallOptions, model: ModelCapacity, purpose: "answer" | "memory" = "answer"): LanguageModelV3CallOptions {
     if (this.failure !== undefined) throw new AgentRunFailure(this.failure);
     if (this.requestFailure !== undefined) throw this.requestFailure;
     this.budget = modelRequestBudget(options, model, this.tokenCounter);
     const maxOutputTokens = this.budget.outputTokens;
-    if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) throw this.fail("CONTEXT_TOO_LARGE");
+    if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) throw this.fail(purpose === "memory" ? "CONTEXT_COMPACTION_FAILED" : "CONTEXT_TOO_LARGE");
     this.steps++;
     this.usage.beginStep();
     return { ...options, maxOutputTokens };
@@ -64,8 +67,14 @@ export class RunModelObservation {
 
   finish(part: Extract<LanguageModelV3StreamPart, { type: "finish" }>, hasStepAnswer: boolean, purpose: "answer" | "memory" = "answer"): void {
     this.usage.capture(part.usage);
+    if (this.budget) {
+      const reported = part.usage?.inputTokens?.total;
+      const actualTokens = typeof reported === "number" && Number.isSafeInteger(reported) && reported >= 0 ? reported : null;
+      this.inputEstimate = { estimatedTokens: this.budget.inputTokens, actualTokens,
+        errorTokens: actualTokens === null ? null : actualTokens - this.budget.inputTokens };
+    }
     const reason = part.finishReason?.unified;
-    if (reason === "length") throw this.fail("OUTPUT_LIMIT");
+    if (reason === "length") throw this.fail(purpose === "memory" ? "CONTEXT_COMPACTION_FAILED" : "OUTPUT_LIMIT");
     if (reason === "content-filter") throw this.fail("PROVIDER_REFUSAL");
     if (reason !== "stop" && reason !== "tool-calls") throw this.fail("PROVIDER_MALFORMED_STREAM");
     // A tool (including render_a2ui) can already be the answer. Mastra may
@@ -98,7 +107,7 @@ export class GuardedLanguageModel implements LanguageModelV3 {
 
   async doGenerate(options: LanguageModelV3CallOptions): Promise<LanguageModelV3GenerateResult> {
     try {
-      const result = await this.delegate.doGenerate(this.observation.begin(options, this.model));
+      const result = await this.delegate.doGenerate(this.observation.begin(options, this.model, this.purpose));
       this.observation.output(JSON.stringify(result.content));
       this.observation.finish({ type: "finish", finishReason: result.finishReason, usage: result.usage },
         result.content.some((part) => part.type === "tool-call" || (part.type === "text" && part.text.trim().length > 0)), this.purpose);
@@ -109,7 +118,7 @@ export class GuardedLanguageModel implements LanguageModelV3 {
   async doStream(options: LanguageModelV3CallOptions) {
     let result: Awaited<ReturnType<LanguageModelV3["doStream"]>>;
     try {
-      result = await this.delegate.doStream(this.observation.begin(options, this.model));
+      result = await this.delegate.doStream(this.observation.begin(options, this.model, this.purpose));
     } catch (error) { throw this.failure(error, options.abortSignal); }
     const reader = result.stream.getReader();
     const observation = this.observation;

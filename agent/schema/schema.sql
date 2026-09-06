@@ -443,3 +443,13 @@ CREATE INDEX chat_timeline_thread_sequence_idx
     ON agent.chat_timeline_entry USING btree (thread_id, sequence DESC);
 CREATE INDEX a2ui_message_owner_idx
     ON agent.a2ui_message USING btree (thread_id, owner_message_id, sequence, id);
+
+CREATE TABLE agent.session_context_checkpoint (
+    thread_id uuid PRIMARY KEY REFERENCES agent.chat_session(id) ON DELETE CASCADE,
+    revision integer NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    snapshot jsonb,
+    cycle_id uuid,
+    cycle_run_id uuid REFERENCES agent.agent_run(id),
+    CHECK ((revision = 0 AND snapshot IS NULL) OR (revision > 0 AND snapshot IS NOT NULL AND jsonb_typeof(snapshot) = 'object')),
+    CHECK ((cycle_id IS NULL) = (cycle_run_id IS NULL))
+);

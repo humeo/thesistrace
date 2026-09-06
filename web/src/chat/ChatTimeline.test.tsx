@@ -95,6 +95,7 @@ test("announces a failed Turn with its public failure code", async () => {
 
 test.each([
   ["OUTPUT_LIMIT", "Answer was truncated"],
+  ["CONTEXT_COMPACTION_FAILED", "Conversation compression failed"],
   ["CONTEXT_TOO_LARGE", "Conversation exceeds model capacity"],
 ])("explains %s while retaining partial output and successful tools", async (errorCode, label) => {
   await mount(controller({ turns: [timelineTurn([
