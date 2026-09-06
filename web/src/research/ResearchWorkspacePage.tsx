@@ -24,6 +24,7 @@ import {
   finishResearchRun,
   hasUnexecutedChanges,
   isCompleteResearchInputs,
+  MAX_HYPOTHESIS_LENGTH,
   loadResearchDraft,
   persistResearchDraft,
   researchInputs,
@@ -638,12 +639,17 @@ export function ResearchDraftWorkspace({
             <div className="research-notes">
               <label htmlFor="research-notes">Notes</label>
               <textarea
+                aria-describedby="research-notes-limit"
+                aria-invalid={Array.from(draft.hypothesis).length > MAX_HYPOTHESIS_LENGTH}
                 id="research-notes"
                 onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))}
                 placeholder="Optional context for this research"
                 rows={3}
                 value={draft.hypothesis}
               />
+              <p id="research-notes-limit">
+                {Array.from(draft.hypothesis).length} / {MAX_HYPOTHESIS_LENGTH} characters
+              </p>
             </div>
             <footer>
               <button

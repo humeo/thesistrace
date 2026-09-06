@@ -386,10 +386,14 @@ async def _exercise_batches(
                 cancel_arguments,
             )
             assert cancelled.is_error is False
-            assert cancelled.structured_content["batch"]["status"] == "cancelling"
+            assert cancelled.structured_content["status"] == "cancelling"
             assert cancelled.structured_content["replayed"] is False
             assert cancelled.structured_content["retry_after_seconds"] == 2
-            _assert_public_batch_payload(cancelled.structured_content["batch"])
+            assert cancelled.structured_content["next_tool"] == "get_research_batch"
+            confirmed = await client.call_tool(
+                "get_research_batch", {"batch_id": cancel_arguments["batch_id"]}
+            )
+            _assert_public_batch_payload(confirmed.structured_content)
 
             concurrent_replays: list[object] = []
 
@@ -403,7 +407,11 @@ async def _exercise_batches(
                     task_group.start_soon(replay_cancel)
             assert all(not result.is_error for result in concurrent_replays)
             assert all(
-                result.structured_content["batch"] == cancelled.structured_content["batch"]
+                (result.structured_content["batch_id"], result.structured_content["status"])
+                == (
+                    cancelled.structured_content["batch_id"],
+                    cancelled.structured_content["status"],
+                )
                 for result in concurrent_replays
             )
             assert all(
@@ -438,7 +446,8 @@ async def _exercise_batches(
             },
         )
         assert replay.is_error is False
-        assert replay.structured_content["batch"] == cancelled.structured_content["batch"]
+        assert replay.structured_content["batch_id"] == cancelled.structured_content["batch_id"]
+        assert replay.structured_content["status"] == cancelled.structured_content["status"]
         assert replay.structured_content["replayed"] is True
         stable = await client.call_tool(
             "get_research_batch",

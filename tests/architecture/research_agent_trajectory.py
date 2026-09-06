@@ -575,12 +575,6 @@ class DeterministicTrajectoryHarness:
                     )
                 if isinstance(eligibility.get("retry"), bool):
                     self._track_retry_eligibility[resource_id] = bool(eligibility["retry"])
-        batch = outcome.get("batch")
-        if isinstance(batch, Mapping) and isinstance(batch.get("id"), str):
-            batch_id = str(batch["id"])
-            if isinstance(batch.get("status"), str):
-                self._batch_statuses[batch_id] = str(batch["status"])
-            self._observe_batch_items(batch_id, batch)
 
         if tool_name not in {"get_research_run_result", "get_daily_track_result"}:
             return

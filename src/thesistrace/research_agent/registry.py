@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -8,7 +9,12 @@ from uuid import UUID
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from thesistrace.alpha_language.models import AlphaAuthoringCatalog, FormulaDiagnostics
+from thesistrace.alpha_language.models import (
+    AlphaAuthoringCatalog,
+    AlphaBuiltinCatalogEntry,
+    AlphaFieldCatalogEntry,
+    FormulaDiagnostics,
+)
 from thesistrace.daily_track import (
     DailyTrackInvalidCursor,
     DailyTrackList,
@@ -43,6 +49,7 @@ from thesistrace.research_agent.models import (
     CancelResearchBatchInput,
     CancelResearchBatchOutcome,
     CancelResearchRunInput,
+    CancelResearchRunOutcome,
     DiagnoseAlphaFormulaInput,
     FormulaSource,
     GetAlphaCatalogInput,
@@ -60,6 +67,7 @@ from thesistrace.research_agent.models import (
     ResearchAgentScope,
     ResearchAgentToolError,
     ResearchContext,
+    ResearchContextFolders,
     RetryDailyTrackInput,
     RetryDailyTrackOutcome,
     StartDailyTrackInput,
@@ -73,6 +81,7 @@ from thesistrace.research_agent.models import (
     SubmitResearchRunOutcome,
     SubmitResearchRunRejected,
 )
+from thesistrace.research_agent.pagination import InvalidPageCursor, ResearchAgentPagination
 from thesistrace.research_agent.safe_context import safe_tool_call_context
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
 from thesistrace.research_batch import (
@@ -87,7 +96,6 @@ from thesistrace.research_batch import (
     ResearchBatchList,
     ResearchBatchPollingDetail,
     ResearchBatchTemporarilyUnavailable,
-    research_batch_polling_detail,
 )
 from thesistrace.research_batch import (
     ResearchBatchCancelOutcome as DomainResearchBatchCancelOutcome,
@@ -145,7 +153,7 @@ class ResearchRunReader(Protocol):
         folder_id: str | None = None,
         research_kind: ResearchKind | None = None,
         cursor: str | None = None,
-        limit: int = 50,
+        limit: int = 20,
     ) -> ResearchRunList: ...
 
     def get_polling_detail(
@@ -255,6 +263,7 @@ class DailyTrackReader(Protocol):
 
 @dataclass(frozen=True)
 class ResearchAgentModules:
+    pagination: ResearchAgentPagination
     data_overview: DataOverviewReader
     research_folders: ResearchFolderReader
     alpha_language: AlphaAuthoringLanguage
@@ -382,7 +391,9 @@ class ResearchAgentCapabilityRegistry:
             ResearchAgentCapability(
                 name="get_research_context",
                 description=(
-                    "Read the current Data Overview, Research Folders, and authoring constraints."
+                    "Read Data Overview, authoring constraints, and one folder page. "
+                    "Follow folders.next_cursor with folder_cursor; "
+                    "folder_limit defaults to 20, at most 50."
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_READ,
                 input_model=GetResearchContextInput,
@@ -393,7 +404,9 @@ class ResearchAgentCapabilityRegistry:
             ResearchAgentCapability(
                 name="get_alpha_catalog",
                 description=(
-                    "Read authorable Alpha fields and builtins, optionally filtered by identifier."
+                    "Read one page of Alpha fields then builtins in identifier order, "
+                    "optionally filtered. "
+                    "The combined limit defaults to 20, at most 50. Follow next_cursor with cursor."
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_READ,
                 input_model=GetAlphaCatalogInput,
@@ -606,7 +619,7 @@ class ResearchAgentCapabilityRegistry:
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_CANCEL,
                 input_model=CancelResearchRunInput,
-                output_model=ResearchRunCancelOutcome,
+                output_model=CancelResearchRunOutcome,
                 annotations=DESTRUCTIVE_TOOL_ANNOTATIONS,
                 handler=self.cancel_research_run,
             ),
@@ -765,42 +778,81 @@ class ResearchAgentCapabilityRegistry:
             ),
         )
 
-    def get_research_context(self) -> ResearchContext:
+    def get_research_context(
+        self,
+        folder_cursor: str | None = None,
+        folder_limit: int = 20,
+    ) -> ResearchContext:
         self._require(ResearchAgentScope.RESEARCH_READ)
+        request = GetResearchContextInput(folder_cursor=folder_cursor, folder_limit=folder_limit)
         overview = self._modules.data_overview.overview()
-        return ResearchContext(
-            data_overview=overview,
-            folders=self._modules.research_folders.list(self._authority.researcher_id),
-            authoring_constraints=self._modules.research_authoring.constraints(),
+        constraints = self._modules.research_authoring.constraints()
+        folders = sorted(
+            self._modules.research_folders.list(self._authority.researcher_id).items,
+            key=lambda item: (not item.is_default, item.created_at, item.id),
         )
+        try:
+            return self._modules.pagination.page(
+                folders,
+                identity=str(self._authority.researcher_id),
+                query={"tool": "get_research_context"},
+                cursor=request.folder_cursor,
+                limit=request.folder_limit,
+                build=lambda kept, next_cursor: ResearchContext(
+                    data_overview=overview,
+                    authoring_constraints=constraints,
+                    folders=ResearchContextFolders(items=kept, next_cursor=next_cursor),
+                ),
+            )
+        except InvalidPageCursor as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.INVALID_INPUT) from error
 
     def get_alpha_catalog(
         self,
         identifiers: AlphaCatalogIdentifiers | None = None,
+        cursor: str | None = None,
+        limit: int = 20,
     ) -> AlphaCatalogView:
         self._require(ResearchAgentScope.RESEARCH_READ)
-        request = GetAlphaCatalogInput(identifiers=identifiers)
+        request = GetAlphaCatalogInput(identifiers=identifiers, cursor=cursor, limit=limit)
         overview = self._modules.data_overview.overview()
         catalog = self._modules.alpha_language.catalog(
             financial_authoring_ready=(overview.financial_research_readiness != "not_ready")
         )
-        fields = sorted(catalog.fields, key=lambda item: item.identifier)
-        builtins = sorted(catalog.builtins, key=lambda item: item.identifier)
-        if request.identifiers is None:
-            return AlphaCatalogView(
-                fields=fields,
-                builtins=builtins,
-                unknown_identifiers=[],
-            )
-
-        requested = set(request.identifiers)
-        known = {item.identifier for item in fields}
-        known.update(item.identifier for item in builtins)
-        return AlphaCatalogView(
-            fields=[item for item in fields if item.identifier in requested],
-            builtins=[item for item in builtins if item.identifier in requested],
-            unknown_identifiers=sorted(requested - known),
+        entries = [
+            *sorted(catalog.fields, key=lambda item: item.identifier),
+            *sorted(catalog.builtins, key=lambda item: item.identifier),
+        ]
+        known = {item.identifier for item in entries}
+        requested = None if request.identifiers is None else set(request.identifiers)
+        selected = (
+            entries
+            if requested is None
+            else [item for item in entries if item.identifier in requested]
         )
+        unknown = [] if requested is None else sorted(requested - known)
+        try:
+            return self._modules.pagination.page(
+                selected,
+                identity=str(self._authority.researcher_id),
+                query={
+                    "tool": "get_alpha_catalog",
+                    "identifiers": None if requested is None else sorted(requested),
+                    "catalog": hashlib.sha256(
+                        catalog.model_dump_json().encode("utf-8")
+                    ).hexdigest(),
+                },
+                cursor=request.cursor,
+                limit=request.limit,
+                build=lambda kept, next_cursor: AlphaCatalogView(
+                    fields=[item for item in kept if isinstance(item, AlphaFieldCatalogEntry)],
+                    builtins=[item for item in kept if isinstance(item, AlphaBuiltinCatalogEntry)],
+                    unknown_identifiers=unknown,
+                    next_cursor=next_cursor,
+                ),
+            )
+        except InvalidPageCursor as error:
+            raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.INVALID_INPUT) from error
 
     def diagnose_alpha_formula(self, source: FormulaSource) -> FormulaDiagnostics:
         self._require(ResearchAgentScope.RESEARCH_READ)
@@ -1034,7 +1086,7 @@ class ResearchAgentCapabilityRegistry:
         self,
         run_id: str,
         request_id: str,
-    ) -> ResearchRunCancelOutcome:
+    ) -> CancelResearchRunOutcome:
         self._require(ResearchAgentScope.RESEARCH_CANCEL)
         try:
             outcome = self._modules.research_runs.cancel(
@@ -1052,7 +1104,10 @@ class ResearchAgentCapabilityRegistry:
             raise _temporarily_unavailable() from error
         if outcome is None:
             raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
-        return outcome
+        return CancelResearchRunOutcome(
+            run_id=outcome.run.id, status=outcome.run.status,
+            replayed=outcome.replayed, retry_after_seconds=outcome.retry_after_seconds,
+        )
 
     def list_research_batches(
         self,
@@ -1107,7 +1162,7 @@ class ResearchAgentCapabilityRegistry:
         if outcome is None:
             raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.NOT_FOUND)
         return CancelResearchBatchOutcome(
-            batch=research_batch_polling_detail(outcome.batch),
+            batch_id=outcome.batch.id, status=outcome.batch.status,
             replayed=outcome.replayed,
             retry_after_seconds=outcome.retry_after_seconds,
         )

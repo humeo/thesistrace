@@ -355,7 +355,9 @@ def test_authorized_batch_cancel_is_selected_through_public_contract() -> None:
     arguments = {"batch_id": "batch_test", "request_id": "cancel_batch_001"}
     outcome = {
         "outcome": "accepted",
-        "batch": batch_polling_payload(status="cancelled"),
+        "batch_id": "batch_test",
+        "status": "cancelled",
+        "next_tool": "get_research_batch",
         "replayed": False,
         "retry_after_seconds": None,
     }

@@ -18,6 +18,7 @@ from thesistrace.research_run.models import (
     NaturalDate,
     RebalanceInterval,
     RequestId,
+    ResearchHypothesis,
     ResearchName,
     ResearchNeutralization,
     ResearchUniverse,
@@ -73,7 +74,7 @@ class FactorBatchItem(BaseModel):
     item_key: ItemKey
     name: ResearchName | None = None
     formula: Formula
-    hypothesis: str | None = None
+    hypothesis: ResearchHypothesis | None = None
 
 
 class FactorEvaluationBatchAdmissionCommand(_ResearchBatchAdmissionBase):
@@ -88,7 +89,7 @@ class StrategySweepAlpha(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     formula: Formula
-    hypothesis: str | None = None
+    hypothesis: ResearchHypothesis | None = None
 
 
 class StrategySweepItem(BaseModel):

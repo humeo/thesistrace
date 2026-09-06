@@ -48,6 +48,7 @@ PRODUCT_SCHEMAS = {
     "daily_track": "daily_tracks",
     "publication": "publication",
     "research_folder": "research_folders",
+    "research_agent": "research_agent",
     "research_batch": "research_batches",
     "researcher": "researchers",
 }
@@ -95,6 +96,7 @@ def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
 def test_internal_import_graph_is_layered_and_acyclic() -> None:
     allowed = {
         "_postgres": set(),
+        "_paging": set(),
         "benchmark": set(),
         "alpha_language": {"data", "research_kernel"},
         "publication": {"_postgres"},
@@ -112,6 +114,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "research_folder": {"_postgres"},
         "researcher": {"_postgres", "research_folder"},
         "daily_track": {
+            "_paging",
             "_postgres",
             "benchmark",
             "data",
@@ -121,6 +124,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_run": {
+            "_paging",
             "_postgres",
             "alpha_language",
             "benchmark",
@@ -133,6 +137,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_batch": {
+            "_paging",
             "_postgres",
             "alpha_language",
             "data",
@@ -148,6 +153,8 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_run",
         },
         "research_agent": {
+            "_paging",
+            "_postgres",
             "alpha_language",
             "data",
             "daily_track",
@@ -205,6 +212,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
 
 def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
     lifecycle_tables = {
+        "research_agent": ("research_agent.cursor_secrets",),
         "data": (
             "data.current_dataset_state",
             "data.bootstrap_operations",

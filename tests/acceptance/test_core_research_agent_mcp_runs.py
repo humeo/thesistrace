@@ -96,6 +96,7 @@ async def _exercise_research_runs(
         assert strategy.is_error is False
         assert rejected.is_error is False
         assert factor.structured_content == {
+            "next_tool": "get_research_run",
             "outcome": "accepted",
             "run_id": factor.structured_content["run_id"],
             "status": "queued",
@@ -355,12 +356,20 @@ async def _exercise_research_runs(
         assert len(default_page.structured_content["items"]) == 20
         assert isinstance(default_page.structured_content["next_cursor"], str)
 
-        first_fifty = await client.call_tool("list_research_runs", {"limit": 50})
-        assert first_fifty.is_error is False
-        assert len(first_fifty.structured_content["items"]) == 50
-        stable_cursor = first_fifty.structured_content["next_cursor"]
+        large_page = await client.call_tool("list_research_runs", {"limit": 50})
+        assert large_page.is_error is False
+        assert 0 < len(large_page.structured_content["items"]) < 50
+        assert (
+            len(
+                json.dumps(
+                    large_page.structured_content, ensure_ascii=False, separators=(",", ":")
+                ).encode()
+            )
+            <= 32 * 1024
+        )
+        stable_cursor = large_page.structured_content["next_cursor"]
         assert isinstance(stable_cursor, str)
-        first_ids = [item["id"] for item in first_fifty.structured_content["items"]]
+        first_ids = [item["id"] for item in large_page.structured_content["items"]]
         assert first_ids == sorted(first_ids)
         decoded_cursor = urlsafe_b64decode(stable_cursor)
         assert b"created_at" not in decoded_cursor
@@ -385,7 +394,15 @@ async def _exercise_research_runs(
             {"limit": 50, "cursor": stable_cursor},
         )
         assert final_page.is_error is False
-        assert len(final_page.structured_content["items"]) == 1
+        assert len(final_page.structured_content["items"]) == 51 - len(first_ids)
+        assert (
+            len(
+                json.dumps(
+                    final_page.structured_content, ensure_ascii=False, separators=(",", ":")
+                ).encode()
+            )
+            <= 32 * 1024
+        )
         final_ids = [item["id"] for item in final_page.structured_content["items"]]
         assert len(set(first_ids + final_ids)) == 51
         assert first_ids + final_ids == sorted(first_ids + final_ids)
@@ -481,7 +498,7 @@ async def _exercise_research_runs(
             )
             assert cancelled.is_error is False
             assert cancelled.structured_content["outcome"] == "accepted"
-            assert cancelled.structured_content["run"]["status"] == "cancelling"
+            assert cancelled.structured_content["status"] == "cancelling"
             assert cancelled.structured_content["replayed"] is False
             assert cancelled.structured_content["retry_after_seconds"] == 2
 
@@ -493,7 +510,8 @@ async def _exercise_research_runs(
             )
             assert all(not result.is_error for result in concurrent_replays)
             assert all(
-                result.structured_content["run"] == cancelled.structured_content["run"]
+                (result.structured_content["run_id"], result.structured_content["status"])
+                == (cancelled.structured_content["run_id"], cancelled.structured_content["status"])
                 for result in concurrent_replays
             )
             assert all(
@@ -568,7 +586,8 @@ async def _exercise_research_runs(
             },
         )
         assert replay.is_error is False
-        assert replay.structured_content["run"] == cancelled.structured_content["run"]
+        assert replay.structured_content["run_id"] == cancelled.structured_content["run_id"]
+        assert replay.structured_content["status"] == cancelled.structured_content["status"]
         assert replay.structured_content["replayed"] is True
         assert replay.structured_content["retry_after_seconds"] == 2
         stable_cancelled = await client.call_tool(
@@ -846,6 +865,7 @@ def _seed_pagination_runs(settings: CoreSettings, count: int) -> None:
                     f"mcp-pagination-{index}",
                     research_kind="factor_evaluation",
                 )
+                | {"name": "📚" * 200}
             )
             outcome = runtime.research_runs.admit_with_outcome(
                 TEST_RESEARCHER.researcher_id,

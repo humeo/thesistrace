@@ -19,6 +19,7 @@ from psycopg import OperationalError
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
 
+from thesistrace._paging import fit_page
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data import DatasetLifecycle
 from thesistrace.publication import (
@@ -853,6 +854,8 @@ class ResearchBatchService:
         cursor: str | None,
         limit: int,
     ) -> ResearchBatchList:
+        if isinstance(limit, bool) or not 1 <= limit <= 50:
+            raise ValueError("List limit must be between 1 and 50")
         try:
             return self._list(researcher_id, cursor=cursor, limit=limit)
         except (OperationalError, PoolTimeout) as error:
@@ -914,16 +917,15 @@ class ResearchBatchService:
                 ),
             ).fetchall()
             summaries = [_summary_from_row(row) for row in rows[:limit]]
-        return ResearchBatchList(
-            items=summaries,
-            next_cursor=(
-                _encode_cursor(
-                    summaries[-1],
-                    secret=secret,
-                    researcher_id=researcher_id,
-                )
-                if len(rows) > limit
-                else None
+        return fit_page(
+            summaries,
+            lambda kept: ResearchBatchList(
+                items=kept,
+                next_cursor=(
+                    _encode_cursor(kept[-1], secret=secret, researcher_id=researcher_id)
+                    if kept and len(rows) > len(kept)
+                    else None
+                ),
             ),
         )
 

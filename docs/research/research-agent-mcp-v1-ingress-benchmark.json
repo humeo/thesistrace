@@ -1,6 +1,6 @@
 {
   "benchmark_version": "research-agent-mcp-v1",
-  "command": "/usr/bin/time -l uv run pytest -q tests/architecture/test_research_agent_mcp_contract.py -k 'v1_ingress_limits or rate_limits_each_principal or caps_concurrent_calls_per_principal or v1_inventory'",
+  "command": "/usr/bin/time -l uv run --frozen pytest -q tests/architecture/test_research_agent_mcp_contract.py -k 'v1_ingress_limits or rate_limits_each_principal or caps_concurrent_calls_per_principal or v1_inventory'",
   "production_envelope": {
     "cpu_count": 2,
     "container_memory_bytes": 2147483648,
@@ -21,26 +21,26 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "3aeba5c889cc8ed5f367f71083d7ff009bb7aa1cc53208809662c3daf7355d62",
-    "v1_contract_bytes": 151794,
+    "v1_contract_sha256": "e00ef7bf365b978fbe071083e2e09428e64f0309bd2907d547dca0fa09b89979",
+    "v1_contract_bytes": 146969,
     "maximum_factor_batch_call_bytes": 84536
   },
   "observed": {
     "tests_passed": 4,
-    "tests_deselected": 35,
-    "pytest_seconds": 2.08,
-    "wall_seconds": 2.94,
-    "user_cpu_seconds": 2.08,
-    "system_cpu_seconds": 0.32,
-    "maximum_resident_set_bytes": 153223168,
-    "maximum_resident_set_percent_of_container": 7.14,
+    "tests_deselected": 38,
+    "pytest_seconds": 0.91,
+    "wall_seconds": 1.29,
+    "user_cpu_seconds": 1.17,
+    "system_cpu_seconds": 0.1,
+    "maximum_resident_set_bytes": 157057024,
+    "maximum_resident_set_percent_of_container": 7.31,
     "swaps": 0
   },
   "measurement_context": {
-    "date": "2026-08-27",
+    "date": "2026-09-07",
     "transport": "in-process deterministic MCP client",
     "network_access": false,
     "real_model": false,
-    "note": "Peak RSS includes the Python interpreter, pytest, plugins, schemas, and fixtures; it is compared conservatively with the current production container envelope. Transport-specific bounds are verified separately."
+    "note": "Peak RSS includes the Python interpreter, pytest, plugins, schemas, and fixtures; it is compared conservatively with the current production container envelope. Current pagination and receipt contract; transport and business-page bounds are verified separately."
   }
 }
