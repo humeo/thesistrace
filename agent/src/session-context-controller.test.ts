@@ -4,7 +4,8 @@ import { noopLogger } from "@mastra/core/logger";
 import { RequestContext } from "@mastra/core/request-context";
 import { InMemoryStore } from "@mastra/core/storage";
 import type { LanguageModelV3 } from "@ai-sdk/provider";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import { modelRequestBudget } from "./model-context.js";
 import { SessionContextController } from "./session-context-controller.js";
 import { freezeContextSource, type SessionContextCheckpoint, type SessionContextSnapshot, type SessionContextCycle } from "./session-context-state.js";
 import type { ResolvedModelSelection } from "./model-runtime.js";
@@ -72,6 +73,61 @@ test("publishes an affordable complete snapshot and reuses its exact prefix on t
   const repeated = await controller.prepare(f.request, "request");
   expect(repeated.prompt).toEqual(prepared.prompt);
   expect(f.claimed()).toBe(false);
+});
+
+test("a second cycle consumes only effective source and atomically replaces M and S", async () => {
+  const f = await fixture();
+  const generated: Array<Parameters<NonNullable<ConstructorParameters<typeof SessionContextController>[1]>>[0]> = [];
+  const controller = new SessionContextController(f.options, async (options) => {
+    generated.push(options);
+    return { ...candidate, memory: `Memory cycle ${generated.length}`, summary: `Summary cycle ${generated.length}` };
+  });
+  await controller.prepare(f.request, "request");
+  f.raw.push({ ...f.raw[0]!, id: "new-large", content: { format: 2, parts: [{ type: "text", text: "new evidence ".repeat(40_000) }] } });
+  f.raw.push({ ...f.raw[1]!, id: "next-request" });
+  const prepared = await controller.prepare(f.request, "next-request");
+  expect(generated).toHaveLength(2);
+  expect(generated[1]?.previous).toEqual({ memory: "Memory cycle 1", summary: "Summary cycle 1" });
+  expect(generated[1]?.removed.map((message) => message.id)).toEqual(["request", "new-large"]);
+  expect(JSON.stringify(prepared.prompt)).toContain("Memory cycle 2");
+  expect(f.published()?.snapshot.summary).toBe("Summary cycle 2");
+});
+
+test("candidate validation receives exact data versions, batch, track and folder continuation references", async () => {
+  const f = await fixture();
+  f.raw[0]!.content.parts.push({ type: "tool-invocation", toolInvocation: { state: "result", toolCallId: "read",
+    toolName: "get_research_context", args: { folder_cursor: "folder-cursor-exact" },
+    result: { data_generation_id: "generation-exact", research_run_id: "research-exact", batch_id: "batch-exact",
+      track_id: "track-exact", folder_id: "folder-exact" } } });
+  let references: readonly string[] = [];
+  const controller = new SessionContextController(f.options, async (options) => {
+    references = options.requiredReferences;
+    throw new Error("Do not publish fixture");
+  });
+  await expect(controller.prepare(f.request, "request")).rejects.toThrow("CONTEXT_COMPACTION_FAILED");
+  expect(references).toEqual(expect.arrayContaining(["folder-cursor-exact", "generation-exact", "research-exact", "batch-exact", "track-exact", "folder-exact"]));
+});
+
+test("a later date and a small-window model reuse the fixed snapshot even above 90 percent", async () => {
+  const f = await fixture();
+  const original = await new SessionContextController(f.options, async () => candidate).prepare(f.request, "request");
+  const checkpoint = structuredClone(f.published());
+  const smallSelection = { ...f.options.selection, compactionEnabled: false, model: { ...f.options.selection.model, contextWindow: 60_000 } };
+  const controller = new SessionContextController({ ...f.options, selection: smallSelection }, async () => { throw new Error("Unexpected auxiliary request"); });
+  const full = await requestAtTokens({ prompt: original.prompt }, 55_000);
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
+  try {
+    const request = { prompt: [full.prompt[0]!] };
+    const prepared = await controller.prepare(request, "request");
+    expect(prepared.prompt).toEqual(full.prompt);
+    const budget = modelRequestBudget(prepared, smallSelection.model);
+    expect(budget.inputTokens).toBe(55_000);
+    expect(budget.outputTokens).toBeGreaterThan(0);
+    expect(f.published()).toEqual(checkpoint);
+    await expect(controller.prepare({ prompt: [{ role: "system", content: "oversized fixed instructions ".repeat(60_000) }] })).rejects.toMatchObject({ code: "CONTEXT_TOO_LARGE" });
+    expect(f.published()).toEqual(checkpoint);
+  } finally { vi.useRealTimers(); }
 });
 
 test.each(["failure", "cancel", "oversized"] as const)("leaves the previous publication untouched after %s", async (failure) => {

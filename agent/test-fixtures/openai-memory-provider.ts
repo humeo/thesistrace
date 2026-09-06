@@ -1,7 +1,7 @@
 export const MEMORY_FACT = "ResearchRun run_memory_alpha failed with INSUFFICIENT_HISTORY; retain the 120-session formula.";
 
 /** Deterministic Responses replay for the native Observer/Reflector protocol. */
-export function openAIMemoryProvider(options: { tool?: string; failObserver?: boolean; invalidObserver?: boolean; toolOnAnswer?: number } = {}) {
+export function openAIMemoryProvider(options: { tool?: string; toolArguments?: Record<string, unknown>; failObserver?: boolean; invalidObserver?: boolean; invalidSummary?: boolean; toolOnAnswer?: number } = {}) {
   const requests: Array<{ phase: "answer" | "observer" | "reflector" | "summary"; prompt: string; body: Record<string, unknown> }> = [];
   const fetch: typeof globalThis.fetch = async (_url, init) => {
     const body = JSON.parse(String(init?.body));
@@ -19,7 +19,7 @@ export function openAIMemoryProvider(options: { tool?: string; failObserver?: bo
       error: { type: "rate_limit_exceeded", code: "rate_limit_exceeded", message: "private-observer-canary" },
     }, { status: 429 });
     const remembers = prompt.includes("run_memory_alpha") && prompt.includes("INSUFFICIENT_HISTORY");
-    const text = phase === "observer" && options.invalidObserver ? "private-invalid-observer-canary" : phase === "summary"
+    const text = phase === "summary" && options.invalidSummary ? "invalid-summary-fixture" : phase === "observer" && options.invalidObserver ? "private-invalid-observer-canary" : phase === "summary"
       ? ["## Goal", "Explain the research failure.", "## Constraints and preferences", "Keep the original formula.", "## Progress", "Completed: read the failure. In progress: explanation. Blockers: none.", "## Key decisions", "Keep the existing research.", "## Next steps", "1. Explain the recorded error.", "## Critical context", MEMORY_FACT].join("\n")
       : phase === "answer"
       ? remembers ? "The retained failure is INSUFFICIENT_HISTORY." : "No earlier failure is known."
@@ -27,13 +27,13 @@ export function openAIMemoryProvider(options: { tool?: string; failObserver?: bo
     const id = `memory_${requests.length}`;
     const item = { type: "message", id: `msg_${id}` };
     const tool = phase === "answer" && options.tool && requests.filter((request) => request.phase === "answer").length === (options.toolOnAnswer ?? 1)
-      ? { type: "function_call", id: `fc_${id}`, call_id: `call_${id}`, name: options.tool, arguments: "{}" } : undefined;
+      ? { type: "function_call", id: `fc_${id}`, call_id: `call_${id}`, name: options.tool, arguments: JSON.stringify(options.toolArguments ?? {}) } : undefined;
     const frames = [
       { type: "response.created", response: { id: `resp_${id}`, model: "gpt-5.6-luna", created_at: 1 } },
       ...(tool ? [
         { type: "response.output_item.added", output_index: 0, item: { ...tool, arguments: "" } },
-        { type: "response.function_call_arguments.delta", output_index: 0, item_id: tool.id, delta: "{}" },
-        { type: "response.function_call_arguments.done", output_index: 0, item_id: tool.id, arguments: "{}" },
+        { type: "response.function_call_arguments.delta", output_index: 0, item_id: tool.id, delta: tool.arguments },
+        { type: "response.function_call_arguments.done", output_index: 0, item_id: tool.id, arguments: tool.arguments },
         { type: "response.output_item.done", output_index: 0, item: { ...tool, status: "completed" } },
       ] : [
       { type: "response.output_item.added", output_index: 0, item },

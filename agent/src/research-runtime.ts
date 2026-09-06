@@ -221,7 +221,7 @@ export async function createResearchRuntime(
         if (!messageList.get.all.db().some((message) => message.id === sessionControlMessageId(runId))) {
           const lastCreated = Math.max(Date.now(), ...messageList.get.all.db().map((message) => message.createdAt.getTime() + 1));
           messageList.add(sessionControlMessage({ runId, threadId, researcherId, createdAt: new Date(lastCreated),
-            continueIntent: requestContext.get("continueIntent") === true }), "context");
+            continueIntent: requestContext.get("continueIntent") === true }), "context", { merge: false });
           if (!rotateResponseMessageId) throw new Error("SESSION_CONTEXT_RESPONSE_BOUNDARY_MISSING");
           rotateResponseMessageId();
         }

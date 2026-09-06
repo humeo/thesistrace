@@ -5,6 +5,14 @@ import { contextSourceMatches, freezeContextSource, sessionContextSnapshotSchema
 const original: MastraDBMessage = { id: "first", role: "assistant", threadId: "session",
   createdAt: new Date("2026-09-07T00:00:00Z"), content: { format: 2, parts: [{ type: "text", text: "Preserve the exact reference" }] } };
 
+test("JSON object key ordering on resume does not change the frozen source", () => {
+  const frozen = freezeContextSource([original]);
+  const reordered: MastraDBMessage = { ...original, content: { parts: [{ text: "Preserve the exact reference", type: "text" }], format: 2 } };
+  expect(contextSourceMatches(frozen, freezeContextSource([reordered]))).toBe(true);
+  reordered.content.parts = [{ text: "Changed reference", type: "text" }];
+  expect(contextSourceMatches(frozen, freezeContextSource([reordered]))).toBe(false);
+});
+
 test("a frozen source allows appended messages and parts without accepting rewritten history", () => {
   const frozen = freezeContextSource([original]);
   const appended = structuredClone(original);

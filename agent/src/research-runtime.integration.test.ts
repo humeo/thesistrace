@@ -281,29 +281,66 @@ describe.sequential("durable Research Agent runtime", () => {
     }
   });
 
+  it("resumes an ask_user answer after a compacted Session restarts", async () => {
+    const provider = openAIMemoryProvider({ tool: "ask_user", toolOnAnswer: 3,
+      toolArguments: { question: "Choose an objective", selectionMode: "single_select", options: [{ label: "Quality" }, { label: "Risk" }] } });
+    vi.stubGlobal("fetch", provider.fetch);
+    const dependencies = { mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false,
+      toolFailure: () => undefined, tools: {} }) };
+    let runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+    const threadId = randomUUID(), questionRunId = randomUUID();
+    const prompt = (existing: boolean, runId = randomUUID()) => run(runtime, runInput({ threadId, runId, messageId: randomUUID(),
+      modelKey: "luna", reasoningEffort: "high", sessionMode: existing ? "existing" : "new", content: "Continue the research" }), primaryResearcher);
+    try {
+      expect((await prompt(false)).at(-1)?.type).toBe("RUN_FINISHED");
+      const memory = new Memory({ storage: new PostgresStore({ id: "question-context", pool: agentStore, schemaName: "agent", disableInit: true }), vector: false });
+      await memory.saveMessages({ messages: Array.from({ length: 20 }, (_, index) => ({ id: randomUUID(), threadId,
+        resourceId: primaryResearcher.researcher_id, role: "assistant" as const, createdAt: new Date(Date.now() - 60_000 + index),
+        content: { format: 2 as const, parts: [{ type: "text" as const, text: "source evidence ".repeat(2000) }] } })) });
+      expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
+      expect((await prompt(true, questionRunId)).at(-1)?.type).toBe("RUN_FINISHED");
+      const question = (await runtime.session(threadId, primaryResearcher)).currentTurn?.question;
+      if (!question) throw new Error("Expected question");
+      await runtime.close();
+      runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+      const events = await run(runtime, answerInput({ threadId, runId: questionRunId, inputId: randomUUID(), interruptId: question.interruptId,
+        answer: { selections: ["Quality"], text: "" } }), primaryResearcher);
+      expect(events.at(-1), JSON.stringify(events.at(-1))).toMatchObject({ type: "RUN_FINISHED", runId: questionRunId });
+    } finally { await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
   it("compresses old Session history before answering and retains it across Host restart", async () => {
-    const provider = openAIMemoryProvider();
+    const providerOptions: NonNullable<Parameters<typeof openAIMemoryProvider>[0]> = {};
+    const provider = openAIMemoryProvider(providerOptions);
     vi.stubGlobal("fetch", provider.fetch);
     const threadId = randomUUID();
     const storage = new PostgresStore({ id: "memory-fixture", pool: agentStore, schemaName: "agent", disableInit: true });
     const memory = new Memory({ storage, vector: false });
-    const dependencies = { mcpRunFactory: async () => ({
-      close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {},
-    }) };
+    const barrier = toolBarrier();
+    let reads = 0, allowRead = true;
+    const dependencies: ResearchRuntimeDependencies = { mcpRunFactory: async () => {
+      const tools: McpRun["tools"] = {};
+      if (allowRead) tools.get_research_run = createTool({ id: "get_research_run", description: "Read retained research.",
+        inputSchema: z.object({}), outputSchema: z.object({ found: z.boolean() }),
+        execute: async () => { reads++; await barrier.promise; return { found: true }; } });
+      return { close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools };
+    } };
     const configuration = { ...memoryConfiguration, modelRegistry: { ...memoryConfiguration.modelRegistry,
-      models: memoryConfiguration.modelRegistry.models.map((model) => ({ ...model, contextWindow: 258_000 })) } };
+      models: [...memoryConfiguration.modelRegistry.models.map((model) => ({ ...model, contextWindow: 258_000 })),
+        { ...memoryConfiguration.modelRegistry.models[0]!, key: "small", contextWindow: 60_000 },
+        { ...memoryConfiguration.modelRegistry.models[0]!, key: "tiny", contextWindow: 8192 }] } };
     let runtime = await createResearchRuntime(configuration, dependencies);
-    const prompt = async (existing: boolean, targetThread = threadId) => run(runtime, runInput({
-      threadId: targetThread, runId: randomUUID(), messageId: randomUUID(), modelKey: "luna", reasoningEffort: "high",
+    const prompt = async (existing: boolean, targetThread = threadId, modelKey = "luna") => run(runtime, runInput({
+      threadId: targetThread, runId: randomUUID(), messageId: randomUUID(), modelKey, reasoningEffort: "high",
       sessionMode: existing ? "existing" : "new", content: "Explain the earlier research failure.",
     }), primaryResearcher);
     try {
       expect((await prompt(false)).at(-1)?.type).toBe("RUN_FINISHED");
-      const ids: string[] = Array.from({ length: 60 }, () => randomUUID());
+      const ids: string[] = Array.from({ length: 180 }, () => randomUUID());
       await memory.saveMessages({ messages: ids.map((id, index) => ({
         id, threadId, resourceId: primaryResearcher.researcher_id,
         role: index % 2 === 0 ? "user" as const : "assistant" as const,
-        createdAt: new Date(Date.now() - 120_000 + index * 1000),
+        createdAt: new Date(Date.now() - 1_000_000 + index * 1000),
         content: { format: 2 as const, parts: [{ type: "text" as const,
           text: index === 0 ? MEMORY_FACT : `Archived detail ${index}: ${"context ".repeat(2000)}` }] },
       })) });
@@ -314,14 +351,15 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(answer.prompt.includes("INSUFFICIENT_HISTORY")).toBe(true);
       expect(answer.prompt).toContain("Session handoff");
       expect(answer.prompt).not.toContain("Archived detail 1:");
-      expect(provider.requests.some((request) => request.phase === "observer")).toBe(true);
+      expect(provider.requests.filter((request) => request.phase === "observer").length).toBeGreaterThan(1);
+      expect(provider.requests.filter((request) => request.phase === "summary").length).toBeGreaterThan(1);
       expect(provider.requests.every((request) => request.body.model === "gpt-5.6-luna"
         && (request.body.reasoning as { effort: string }).effort === "high" && request.body.store === false)).toBe(true);
       expect(JSON.stringify(events)).not.toContain("<observations>");
       const metered = await owner.query(`SELECT token_usage FROM agent.agent_run WHERE thread_id = $1 ORDER BY started_at DESC LIMIT 1`, [threadId]);
       expect(metered.rows[0].token_usage.outputTokens.total).toBeGreaterThan(30);
       const retained = await memory.recall({ threadId, resourceId: primaryResearcher.researcher_id, perPage: false });
-      expect(retained.messages.filter((message) => ids.includes(message.id))).toHaveLength(60);
+      expect(retained.messages.filter((message) => ids.includes(message.id))).toHaveLength(ids.length);
       const memoryStore = (await storage.getStore("memory"))!;
       expect(await memoryStore.getObservationalMemory(threadId, primaryResearcher.researcher_id)).toBeNull();
       const checkpoint = await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id);
@@ -337,11 +375,95 @@ describe.sequential("durable Research Agent runtime", () => {
       if (!Array.isArray(previousInput) || !Array.isArray(resumedInput)) throw new Error("Provider input array missing");
       expect(resumedInput.slice(0, previousInput.length)).toEqual(previousInput);
       expect(provider.requests.filter((request) => request.phase !== "answer")).toHaveLength(auxiliaryCalls);
+      const beforeIncremental = provider.requests.length;
+      const rawBeforeIncremental = await new ResearchSessionRepository(agentStore).rawContextMessages(threadId, primaryResearcher.researcher_id);
+      const newestTime = Math.max(...rawBeforeIncremental.map((message) => message.createdAt.getTime()));
+      const incrementalIds: string[] = Array.from({ length: 58 }, () => randomUUID());
+      await memory.saveMessages({ messages: incrementalIds.map((id, index) => ({
+        id, threadId, resourceId: primaryResearcher.researcher_id,
+        role: index % 2 === 0 ? "user" as const : "assistant" as const,
+        createdAt: new Date(newestTime + index + 1), content: { format: 2 as const,
+          parts: [{ type: "text" as const, text: `Incremental evidence ${index}: ${"context ".repeat(2000)}` }] },
+      })) });
+      providerOptions.invalidSummary = true;
+      expect((await prompt(true)).at(-1)).toMatchObject({ type: "RUN_ERROR", code: "CONTEXT_COMPACTION_FAILED" });
+      expect(provider.requests.slice(beforeIncremental).some((request) => request.phase === "observer")).toBe(true);
+      expect(await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(checkpoint);
+      expect((await new ResearchSessionRepository(agentStore).rawContextMessages(threadId, primaryResearcher.researcher_id))
+        .filter((message) => incrementalIds.includes(message.id))).toHaveLength(incrementalIds.length);
+      providerOptions.invalidSummary = false;
+      expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
+      const secondCheckpoint = await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id);
+      expect(secondCheckpoint?.revision).toBe(2);
+      const incrementalRequests = provider.requests.slice(beforeIncremental);
+      const observation = incrementalRequests.find((request) => request.phase === "observer")!;
+      expect(observation.prompt).toContain("Incremental evidence 0:");
+      expect(observation.prompt).not.toContain("Archived detail 1:");
+      expect(incrementalRequests.find((request) => request.phase === "summary")?.prompt).toContain("previousSummary");
+      expect(incrementalRequests.at(-1)?.prompt).toContain("Session handoff");
+      const allRaw = await new ResearchSessionRepository(agentStore).rawContextMessages(threadId, primaryResearcher.researcher_id);
+      expect(allRaw.filter((message) => [...ids, ...incrementalIds].includes(message.id))).toHaveLength(ids.length + incrementalIds.length);
+      const callsBeforeSwitch = provider.requests.filter((request) => request.phase !== "answer").length;
+      expect((await prompt(true, threadId, "small")).at(-1)?.type).toBe("RUN_FINISHED");
+      expect((await prompt(true, threadId, "tiny")).at(-1)).toMatchObject({ type: "RUN_ERROR", code: "CONTEXT_TOO_LARGE" });
+      expect((await connect(runtime, threadId, primaryResearcher))[0]).toMatchObject({ selection: { modelKey: "tiny" } });
+      expect(await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(secondCheckpoint);
+      expect(provider.requests.filter((request) => request.phase !== "answer")).toHaveLength(callsBeforeSwitch);
+      expect((await prompt(true, threadId, "luna")).at(-1)?.type).toBe("RUN_FINISHED");
+      providerOptions.tool = "ask_user";
+      providerOptions.toolArguments = { question: "Which objective should lead?", selectionMode: "single_select", options: [{ label: "Quality" }, { label: "Risk" }] };
+      providerOptions.toolOnAnswer = provider.requests.filter((request) => request.phase === "answer").length + 1;
+      const questionRunId = randomUUID();
+      expect((await run(runtime, runInput({ threadId, sessionMode: "existing", runId: questionRunId, messageId: randomUUID(),
+        modelKey: "luna", reasoningEffort: "high", content: "Clarify the next step." }), primaryResearcher)).at(-1)?.type).toBe("RUN_FINISHED");
+      const question = (await runtime.session(threadId, primaryResearcher)).currentTurn?.question;
+      if (!question) throw new Error("Expected a durable question after compaction");
+      const questionInput = provider.requests.at(-1)!.body.input;
+      await runtime.close();
+      runtime = await createResearchRuntime(configuration, dependencies);
+      const answered = await run(runtime, answerInput({ threadId, runId: questionRunId, inputId: randomUUID(),
+        interruptId: question.interruptId, answer: { selections: ["Quality"], text: "Keep risk bounded." } }), primaryResearcher);
+      expect(answered.at(-1), JSON.stringify({ terminal: answered.at(-1), phases: provider.requests.map((request) => request.phase) })).toMatchObject({ type: "RUN_FINISHED", runId: questionRunId });
+      const answeredInput = provider.requests.at(-1)!.body.input;
+      if (!Array.isArray(questionInput) || !Array.isArray(answeredInput)) throw new Error("Expected Provider arrays");
+      expect(answeredInput.slice(0, questionInput.length)).toEqual(questionInput);
+      expect(provider.requests.filter((request) => request.phase !== "answer")).toHaveLength(callsBeforeSwitch);
+      expect(await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(secondCheckpoint);
+      const recoveredRaw = await new ResearchSessionRepository(agentStore).rawContextMessages(threadId, primaryResearcher.researcher_id);
+      expect(recoveredRaw.filter((message) => message.id === `session-run-context:${questionRunId}`)).toHaveLength(1);
+      providerOptions.tool = "get_research_run";
+      providerOptions.toolArguments = {};
+      providerOptions.toolOnAnswer = provider.requests.filter((request) => request.phase === "answer").length + 1;
+      const stoppedId = randomUUID();
+      const pending = run(runtime, runInput({ threadId, sessionMode: "existing", runId: stoppedId, messageId: randomUUID(),
+        modelKey: "luna", reasoningEffort: "high", content: "Read the current research." }), primaryResearcher);
+      await vi.waitFor(() => expect(reads).toBe(1));
+      await runtime.stop(threadId, primaryResearcher, stopInput(randomUUID(), stoppedId));
+      barrier.resolve();
+      await pending;
+      expect((await runtime.session(threadId, primaryResearcher)).latestTurn?.status).toBe("stopped");
+      const beforeContinue = await new ResearchSessionRepository(agentStore).rawContextMessages(threadId, primaryResearcher.researcher_id);
+      const continuedId = randomUUID();
+      const answersBeforeContinue = provider.requests.filter((request) => request.phase === "answer").length;
+      expect((await run(runtime, continueInput({ threadId, runId: continuedId, modelKey: "luna", reasoningEffort: "high" }), primaryResearcher)).at(-1)).toMatchObject({ type: "RUN_FINISHED", runId: continuedId });
+      expect(provider.requests.filter((request) => request.phase === "answer")).toHaveLength(answersBeforeContinue + 1);
+      const afterContinue = await new ResearchSessionRepository(agentStore).rawContextMessages(threadId, primaryResearcher.researcher_id);
+      expect(afterContinue.filter((message) => message.role === "user")).toHaveLength(beforeContinue.filter((message) => message.role === "user").length);
+      expect(afterContinue.filter((message) => message.id === `session-run-context:${continuedId}`)).toHaveLength(1);
+      expect(reads).toBe(1);
+      allowRead = false;
+      expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
+      const available = provider.requests.at(-1)!.body.tools;
+      if (!Array.isArray(available)) throw new Error("Expected Provider tools");
+      expect(available.map((tool) => tool.name)).not.toContain("get_research_run");
+      expect(await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(secondCheckpoint);
+      expect(provider.requests.filter((request) => request.phase !== "answer")).toHaveLength(callsBeforeSwitch);
       expect((await prompt(false, randomUUID())).at(-1)?.type).toBe("RUN_FINISHED");
       expect(provider.requests.at(-1)?.prompt).not.toContain("run_memory_alpha");
       await runtime.deleteSession(threadId, primaryResearcher);
       expect(await memoryStore.getObservationalMemory(threadId, primaryResearcher.researcher_id)).toBeNull();
     } finally {
+      barrier.resolve();
       await runtime.close();
       vi.unstubAllGlobals();
     }
@@ -3815,6 +3937,8 @@ function answerInput(options: Readonly<{
 function continueInput(options: Readonly<{
   runId: string;
   threadId: string;
+  modelKey?: string;
+  reasoningEffort?: string;
 }>): RunAgentInput {
   return {
     threadId: options.threadId,
@@ -3826,8 +3950,8 @@ function continueInput(options: Readonly<{
     forwardedProps: {
       thesistrace: {
         command: "continue",
-        modelKey: "scripted-research",
-        reasoningEffort: "medium",
+        modelKey: options.modelKey ?? "scripted-research",
+        reasoningEffort: options.reasoningEffort ?? "medium",
         sessionMode: "existing",
       },
     },

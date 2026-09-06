@@ -1,11 +1,15 @@
 diff --git a/dist/processors/observational-memory/observer-runner.d.ts b/dist/processors/observational-memory/observer-runner.d.ts
-index b5850e97ffd093300c5afdf85ef20ccbb2e4a359..d22316250d33b2ed414d02bf853abc0f265a7faa 100644
+index b5850e97ffd093300c5afdf85ef20ccbb2e4a359..08e3916c033c68c493515b444ab5b1a671a91ffc 100644
 --- a/dist/processors/observational-memory/observer-runner.d.ts
 +++ b/dist/processors/observational-memory/observer-runner.d.ts
-@@ -61,6 +61,17 @@ export declare class ObserverRunner {
+@@ -61,6 +61,21 @@ export declare class ObserverRunner {
          mastra?: Mastra;
          memory?: Memory;
      });
++    getCandidateInput(existingObservations: string | undefined, messagesToObserve: MastraDBMessage[]): {
++        instructions: string;
++        messages: Array<{ role: "user"; content: string }>;
++    };
 +    callCandidate(existingObservations: string | undefined, messagesToObserve: MastraDBMessage[], options: {
 +        maxOutputTokens: number;
 +        abortSignal?: AbortSignal;
@@ -43,7 +47,7 @@ index dcc53c0408ac4cd8d8a79f20eea711b454d7f8d4..b274999fc09681bdace515fd5124e2fc
      private createAgent;
      private getObservationMarkerConfig;
 diff --git a/dist/src-BNtoxIHL.js b/dist/src-BNtoxIHL.js
-index 0db57d681db5f1bd369a02f11909d733c36b3188..b5ce02041c26ea63e7c7994cfa0b98a6bf6ebb7e 100644
+index 0db57d681db5f1bd369a02f11909d733c36b3188..a4a6615e1b4b3e2eaef7388c274fe3691a310a13 100644
 --- a/dist/src-BNtoxIHL.js
 +++ b/dist/src-BNtoxIHL.js
 @@ -18909,6 +18909,14 @@ function getStringExtractedValue$1(values, slug) {
@@ -61,20 +65,25 @@ index 0db57d681db5f1bd369a02f11909d733c36b3188..b5ce02041c26ea63e7c7994cfa0b98a6
  function parseObserverOutput(output, extractors = []) {
  	if (detectDegenerateRepetition(output)) return {
  		observations: "",
-@@ -19390,15 +19398,40 @@ var ObserverRunner = class {
+@@ -19390,15 +19398,45 @@ var ObserverRunner = class {
  	__registerMastra(mastra) {
  		this.mastra = mastra;
  	}
 -	createAgent(model, isMultiThread = false, memory, extractors = this.observationConfig.extractors ?? []) {
++	getCandidateInput(existingObservations, messagesToObserve) {
++		return {
++			instructions: buildObserverSystemPrompt(false, this.observationConfig.instruction, this.observationConfig.threadTitle, []),
++			messages: [{ role: "user", content: buildObserverTaskPrompt(existingObservations, {
++				skipContinuationHints: true, includeThreadTitle: false, extractors: []
++			}) }, { role: "user", content: "## New Message History to Observe\n\n" + JSON.stringify(messagesToObserve) }]
++		};
++	}
 +	/** Pure candidate: full source, one model request, no extractors or persistence. */
 +	async callCandidate(existingObservations, messagesToObserve, options) {
-+		const resolved = this.resolveModel(this.tokenCounter.countMessages(messagesToObserve));
++		const resolved = this.resolveModel(this.tokenCounter.countMessages(structuredClone(messagesToObserve)));
 +		const agent = this.createAgent(resolved.model, false, void 0, [], true);
-+		const result = await this.withAbortCheck(async () => (await agent.stream([{
-+			role: "user", content: buildObserverTaskPrompt(existingObservations, {
-+				skipContinuationHints: true, includeThreadTitle: false, extractors: []
-+			})
-+		}, { role: "user", content: "## New Message History to Observe\n\n" + JSON.stringify(messagesToObserve) }], {
++		const input = this.getCandidateInput(existingObservations, messagesToObserve);
++		const result = await this.withAbortCheck(async () => (await agent.stream(input.messages, {
 +			modelSettings: { ...this.observationConfig.modelSettings, maxOutputTokens: options.maxOutputTokens },
 +			providerOptions: this.observationConfig.providerOptions,
 +			abortSignal: options.abortSignal,
@@ -104,7 +113,7 @@ index 0db57d681db5f1bd369a02f11909d733c36b3188..b5ce02041c26ea63e7c7994cfa0b98a6
  		return agent;
  	}
  	/**
-@@ -24649,7 +24682,10 @@ async function loadMemoryContextMessages({ memory, messageList, threadId, resour
+@@ -24649,7 +24687,10 @@ async function loadMemoryContextMessages({ memory, messageList, threadId, resour
  		resourceId,
  		runState
  	});
@@ -116,7 +125,7 @@ index 0db57d681db5f1bd369a02f11909d733c36b3188..b5ce02041c26ea63e7c7994cfa0b98a6
  	return ctx;
  }
  //#endregion
-@@ -25632,15 +25668,37 @@ var ReflectorRunner = class {
+@@ -25632,15 +25673,37 @@ var ReflectorRunner = class {
  	__registerMastra(mastra) {
  		this.mastra = mastra;
  	}
@@ -157,7 +166,7 @@ index 0db57d681db5f1bd369a02f11909d733c36b3188..b5ce02041c26ea63e7c7994cfa0b98a6
  	}
  	getObservationMarkerConfig(record) {
 diff --git a/dist/src-Br56ncef.cjs b/dist/src-Br56ncef.cjs
-index 4cb5a17133063ca9138cc3e51ae9e685b72967b3..ef9c689438162498b7ee6fd9d710ee966015663b 100644
+index 4cb5a17133063ca9138cc3e51ae9e685b72967b3..77b8d1779c34fee6b8a9de62c79849d406667b1f 100644
 --- a/dist/src-Br56ncef.cjs
 +++ b/dist/src-Br56ncef.cjs
 @@ -18930,6 +18930,14 @@ function getStringExtractedValue$1(values, slug) {
@@ -175,20 +184,25 @@ index 4cb5a17133063ca9138cc3e51ae9e685b72967b3..ef9c689438162498b7ee6fd9d710ee96
  function parseObserverOutput(output, extractors = []) {
  	if (detectDegenerateRepetition(output)) return {
  		observations: "",
-@@ -19411,15 +19419,40 @@ var ObserverRunner = class {
+@@ -19411,15 +19419,45 @@ var ObserverRunner = class {
  	__registerMastra(mastra) {
  		this.mastra = mastra;
  	}
 -	createAgent(model, isMultiThread = false, memory, extractors = this.observationConfig.extractors ?? []) {
++	getCandidateInput(existingObservations, messagesToObserve) {
++		return {
++			instructions: buildObserverSystemPrompt(false, this.observationConfig.instruction, this.observationConfig.threadTitle, []),
++			messages: [{ role: "user", content: buildObserverTaskPrompt(existingObservations, {
++				skipContinuationHints: true, includeThreadTitle: false, extractors: []
++			}) }, { role: "user", content: "## New Message History to Observe\n\n" + JSON.stringify(messagesToObserve) }]
++		};
++	}
 +	/** Pure candidate: full source, one model request, no extractors or persistence. */
 +	async callCandidate(existingObservations, messagesToObserve, options) {
-+		const resolved = this.resolveModel(this.tokenCounter.countMessages(messagesToObserve));
++		const resolved = this.resolveModel(this.tokenCounter.countMessages(structuredClone(messagesToObserve)));
 +		const agent = this.createAgent(resolved.model, false, void 0, [], true);
-+		const result = await this.withAbortCheck(async () => (await agent.stream([{
-+			role: "user", content: buildObserverTaskPrompt(existingObservations, {
-+				skipContinuationHints: true, includeThreadTitle: false, extractors: []
-+			})
-+		}, { role: "user", content: "## New Message History to Observe\n\n" + JSON.stringify(messagesToObserve) }], {
++		const input = this.getCandidateInput(existingObservations, messagesToObserve);
++		const result = await this.withAbortCheck(async () => (await agent.stream(input.messages, {
 +			modelSettings: { ...this.observationConfig.modelSettings, maxOutputTokens: options.maxOutputTokens },
 +			providerOptions: this.observationConfig.providerOptions,
 +			abortSignal: options.abortSignal,
@@ -218,7 +232,7 @@ index 4cb5a17133063ca9138cc3e51ae9e685b72967b3..ef9c689438162498b7ee6fd9d710ee96
  		return agent;
  	}
  	/**
-@@ -24670,7 +24703,10 @@ async function loadMemoryContextMessages({ memory, messageList, threadId, resour
+@@ -24670,7 +24708,10 @@ async function loadMemoryContextMessages({ memory, messageList, threadId, resour
  		resourceId,
  		runState
  	});
@@ -230,7 +244,7 @@ index 4cb5a17133063ca9138cc3e51ae9e685b72967b3..ef9c689438162498b7ee6fd9d710ee96
  	return ctx;
  }
  //#endregion
-@@ -25653,15 +25689,37 @@ var ReflectorRunner = class {
+@@ -25653,15 +25694,37 @@ var ReflectorRunner = class {
  	__registerMastra(mastra) {
  		this.mastra = mastra;
  	}

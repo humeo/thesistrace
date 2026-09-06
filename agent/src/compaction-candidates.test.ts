@@ -1,9 +1,11 @@
 import { createRequire } from "node:module";
 import type { LanguageModelV3, LanguageModelV3CallOptions, LanguageModelV3StreamPart } from "@ai-sdk/provider";
 import type { MastraDBMessage } from "@mastra/core/agent";
+import { MessageList } from "@mastra/core/agent";
 import { InMemoryStore } from "@mastra/core/storage";
 import { Memory } from "@mastra/memory";
 import { expect, test } from "vitest";
+import { estimateModelInput } from "./model-context.js";
 
 const commonJsMemory: typeof import("@mastra/memory") = createRequire(import.meta.url)("@mastra/memory");
 
@@ -74,6 +76,27 @@ test("Observer candidate covers complete tool arguments and result without persi
   expect(await (await storage.getStore("memory"))!.getObservationalMemory("session", "owner")).toBeNull();
   expect((await memory.recall({ threadId: "session", resourceId: "owner", perPage: false })).messages).toEqual([]);
   expect(requests[0]?.tools ?? []).toEqual([]);
+});
+
+test("Observer exposes the same complete prompt for budgeting as its actual provider request", async () => {
+  const { memory, requests } = fixture();
+  const engine = (await memory.omEngine)!;
+  const source = structuredClone(messages);
+  const tool = source[0]!.content.parts[0]!;
+  if (tool.type !== "tool-invocation" || tool.toolInvocation.state !== "result") throw new Error("Expected source tool result");
+  tool.toolInvocation.result = { content: "Complete tool evidence", next_cursor: "next_exact" };
+  const original = structuredClone(source);
+  const prepared = engine.observer.getCandidateInput("Prior exact fact", source);
+  const list = new MessageList();
+  list.addSystem(prepared.instructions);
+  list.add(prepared.messages, "input");
+  const expectedPrompt = await list.get.all.aiV6.llmPrompt();
+  await engine.observer.callCandidate("Prior exact fact", source, { maxOutputTokens: 2000 });
+  // Mastra stamps a local createdAt on conversion; that metadata is not sent to the Provider.
+  const providerVisible = (prompt: unknown) => JSON.stringify(prompt, (key, value) => key === "mastra" ? undefined : value);
+  expect(providerVisible(requests[0]?.prompt)).toEqual(providerVisible(expectedPrompt));
+  expect(estimateModelInput({ prompt: requests[0]!.prompt })).toBe(estimateModelInput({ prompt: expectedPrompt }));
+  expect(source).toEqual(original);
 });
 
 test.each(["observer", "reflector"] as const)("%s candidate exposes length without a retry or a marker", async (phase) => {

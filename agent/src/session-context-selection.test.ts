@@ -7,6 +7,26 @@ function message(id: string, role: "user" | "assistant", text: string): MastraDB
   return { id, role, createdAt: new Date("2026-09-07T00:00:00Z"), content: { format: 2, parts: [{ type: "text", text }] } };
 }
 
+test("incremental cycles keep original sparse part identities and process a released request only once", () => {
+  const history = [message("processed", "user", "already summarized"), message("prior-request", "user", "previous goal"),
+    message("long-turn", "assistant", "already summarized prefix")];
+  history[2]!.content.parts.push({ type: "text", text: "retained work ".repeat(100) });
+  const previous = { sourceWatermark: freezeContextSource(history), retainedParts: [
+    { messageId: "prior-request", partIndex: 0 }, { messageId: "long-turn", partIndex: 1 },
+  ] };
+  history[2]!.content.parts.push({ type: "text", text: "latest work" });
+  history.push(message("next-request", "user", "new goal"));
+  const second = selectContextHistory(history, { recentTokens: 35, currentRequestId: "next-request", previous });
+  expect(second.retainedParts).toEqual([{ messageId: "long-turn", partIndex: 2 }, { messageId: "next-request", partIndex: 0 }]);
+  expect(second.removed.map((item) => item.id)).toEqual(["prior-request", "long-turn"]);
+  expect(second.removed[1]?.content.parts).toEqual([history[2]!.content.parts[1]]);
+  const published = { retainedParts: second.retainedParts, sourceWatermark: freezeContextSource(history) };
+  expect(restoreContextTail(history, published)).toEqual(second.retained);
+  const third = selectContextHistory(history, { recentTokens: 35, currentRequestId: "next-request", previous: published });
+  expect(third.removed).toEqual([]);
+  expect(third.retainedParts).toEqual(second.retainedParts);
+});
+
 test("keeps the current request and a continuous recent tail while covering all removed parts exactly once", () => {
   const history = [message("old", "user", "archived fact ".repeat(100)), message("request", "user", "Find the exact result"),
     message("long-turn", "assistant", "early work ".repeat(100))];

@@ -1,3 +1,4 @@
+import { canonicalJson } from "./canonical-json.js";
 import { randomUUID } from "node:crypto";
 import { contextSourceMatches, freezeContextSource, sessionContextSnapshotSchema, type SessionContextCheckpoint, type SessionContextCycle, type SessionContextSnapshot } from "./session-context-state.js";
 import { convertMessages, type MastraDBMessage } from "@mastra/core/agent";
@@ -2680,15 +2681,4 @@ async function loadA2UIActivities(
       ownerMessageId: row.owner_message_id,
     };
   });
-}
-
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    return `{${Object.entries(value)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
 }

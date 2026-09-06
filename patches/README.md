@@ -71,6 +71,11 @@ cutoff and includes extractor/retry orchestration; Reflector can escalate throug
 several generation attempts. Those behaviors cannot publish part of a Session's
 atomic M/S checkpoint.
 
+`observer.getCandidateInput` prepares the exact instructions and full-source user
+messages without invoking a model or mutating the source. Candidate execution uses
+the same builder; token-based model resolution counts a clone because the native
+counter annotates message parts. The Host uses this input to plan bounded batches.
+
 Candidate calls reuse the installed Observer/Reflector prompts, parsers and Agent
 execution, but receive full source JSON (including completed tool arguments and
 results), run one request with no tools/extractors or automatic retries, and return

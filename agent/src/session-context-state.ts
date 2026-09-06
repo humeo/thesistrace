@@ -1,3 +1,4 @@
+import { canonicalJson } from "./canonical-json.js";
 import { createHash } from "node:crypto";
 import type { MastraDBMessage } from "@mastra/core/agent";
 import { z } from "zod";
@@ -63,5 +64,5 @@ export function contextSourceMatches(
 }
 
 function hash(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return createHash("sha256").update(canonicalJson(value)).digest("hex");
 }
