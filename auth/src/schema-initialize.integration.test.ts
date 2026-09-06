@@ -1,7 +1,9 @@
 import { Pool } from "pg";
+import { verifyPassword } from "better-auth/crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { initializeAuthSchema } from "./schema-initialize.js";
+import { initializeDevelopmentAccount } from "./development-account.js";
 import { checkAuthReadiness } from "./readiness.js";
 import { createAuthInitializerPool } from "./database.js";
 import {
@@ -46,6 +48,46 @@ describe.sequential("Auth physical schema", () => {
     await owner.query("DROP SCHEMA IF EXISTS auth CASCADE");
     await owner.query("DROP SCHEMA IF EXISTS product_contract_test CASCADE");
     await owner.end();
+  });
+
+  it("seeds a usable Development operator after initialization and reset", async () => {
+    for (let reset = 0; reset < 2; reset += 1) {
+      await initializeAuthSchema(owner);
+      await Promise.all([
+        initializeDevelopmentAccount(owner),
+        initializeDevelopmentAccount(owner),
+      ]);
+      const result = await owner.query(
+        `SELECT u.email, u.active, u."emailVerified", a.password,
+                a."providerId", a.issuer, o.researcher_id = u.id AS operator
+         FROM auth."user" u JOIN auth."account" a ON a."userId" = u.id
+         JOIN auth.operator_assignment o ON o.researcher_id = u.id`,
+      );
+      expect(result.rows).toHaveLength(1);
+      expect(result.rows[0]).toMatchObject({
+        email: "koltenluca433@gmail.com", active: true, emailVerified: true,
+        providerId: "credential", issuer: "local:credential", operator: true,
+      });
+      expect(await verifyPassword({
+        hash: result.rows[0].password, password: "koltenluca433@gmail.com",
+      })).toBe(true);
+      await owner.query("DROP SCHEMA auth CASCADE");
+    }
+  });
+
+  it("preserves changed credentials and authority on a repeated Development initialization", async () => {
+    await initializeAuthSchema(owner);
+    await initializeDevelopmentAccount(owner);
+    await owner.query(`UPDATE auth."account" SET password = 'changed-password-hash'`);
+    await owner.query(`UPDATE auth."user" SET active = FALSE`);
+    await owner.query("DELETE FROM auth.operator_assignment");
+    await initializeDevelopmentAccount(owner);
+    expect((await owner.query(`SELECT password FROM auth."account"`)).rows)
+      .toEqual([{ password: "changed-password-hash" }]);
+    expect((await owner.query(`SELECT active FROM auth."user"`)).rows)
+      .toEqual([{ active: false }]);
+    expect((await owner.query("SELECT * FROM auth.operator_assignment")).rows)
+      .toEqual([]);
   });
 
   it.each(["absent", "empty"])(

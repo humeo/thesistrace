@@ -1,4 +1,8 @@
 services:
+  auth-initialize:
+    environment:
+      THESISTRACE_ENVIRONMENT: development
+
   postgres:
     ports:
       - 127.0.0.1:${THESISTRACE_DEV_POSTGRES_PORT}:5432

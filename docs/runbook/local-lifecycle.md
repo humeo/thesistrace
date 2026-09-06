@@ -169,6 +169,13 @@ Product State, or publish Fixture data. The initialized runtime validates and
 immediately reuses the preserved mounted Canonical Data Store; Benchmark
 readiness is reported independently through Data Overview.
 
+Development Auth initialization creates `koltenluca433@gmail.com` with the same
+string as its password, marks the account active and verified, and assigns it
+as Operator when no Operator exists. `dev:reset` recreates this default account.
+Repeated startup preserves an existing account's password and authority changes.
+This seed is enabled only by the Development Compose overlay; Test and Production
+initialization do not create a default account.
+
 Complete deletion of Product State, downloaded Canonical Data, and the
 Benchmark Snapshot is a separate explicit operation:
 

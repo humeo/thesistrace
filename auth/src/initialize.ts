@@ -2,12 +2,16 @@ import { readAuthInitializerSettings } from "./config.js";
 import { createAuthInitializerPool } from "./database.js";
 import { diagnoseAuthFailure } from "./failure.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
+import { initializeDevelopmentAccount } from "./development-account.js";
 
 async function main(): Promise<void> {
   const settings = readAuthInitializerSettings();
   const pool = createAuthInitializerPool(settings.databaseUrl);
   try {
     await initializeAuthSchema(pool);
+    if (process.env.THESISTRACE_ENVIRONMENT === "development") {
+      await initializeDevelopmentAccount(pool);
+    }
   } finally {
     await pool.end();
   }
