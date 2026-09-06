@@ -207,7 +207,10 @@ if printf '%s\n' "$tushare_token" | grep -Eq '^<[^<>]+>$'; then
   fail PRODUCTION_TUSHARE_TOKEN_INVALID
 fi
 
-agent_model_registry=$(required_value THESISTRACE_AGENT_MODEL_REGISTRY)
+test -z "$(env_value THESISTRACE_AGENT_MODEL_REGISTRY)" \
+  || fail PRODUCTION_AGENT_MODEL_REGISTRY_INLINE_UNSUPPORTED
+agent_model_registry=$(tr -d '\n' < "$repo_root/config/model-registry.json") \
+  || fail PRODUCTION_AGENT_MODEL_REGISTRY_INVALID
 test "${#agent_model_registry}" -le 65536 \
   || fail PRODUCTION_AGENT_MODEL_REGISTRY_INVALID
 
@@ -332,7 +335,7 @@ unset \
   THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET
 
 compose() {
-  docker compose \
+  THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" docker compose \
     --project-name thesistrace \
     --env-file "$environment_file" \
     --file "$base_file" \

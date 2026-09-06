@@ -1,12 +1,16 @@
 // @vitest-environment happy-dom
 
 import { act, useState, type ReactNode } from "react";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { resolveModelSelection } from "./chatState";
 import type { AgentModelCatalog } from "./modelCatalog";
 import { ModelPicker } from "./ModelPicker";
+import { decodeAgentModelCatalog } from "./modelCatalog";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let root: Root | undefined;
@@ -16,6 +20,28 @@ afterEach(async () => {
   root = undefined;
   document.body.replaceChildren();
   vi.restoreAllMocks();
+});
+
+test("shows all configured Luna efforts and selects Max", async () => {
+  const configured = JSON.parse(readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), "../../../config/model-registry.json"), "utf8",
+  ));
+  const current = decodeAgentModelCatalog({
+    default_model_key: configured.default_model_key,
+    models: configured.models.filter((model: { enabled: boolean }) => model.enabled)
+      .map(({ key, display_name, default_reasoning_effort, reasoning_efforts }: AgentModelCatalog["models"][number]) =>
+        ({ key, display_name, default_reasoning_effort, reasoning_efforts })),
+  });
+  const onReasoningChange = vi.fn();
+  await mount(<ModelPicker catalog={current} onModelChange={vi.fn()}
+    onReasoningChange={onReasoningChange}
+    selection={resolveModelSelection(current, current.default_model_key, null)} />);
+  await act(async () => document.querySelector<HTMLButtonElement>(".chat-model-picker-trigger")!.click());
+  const options = [...document.querySelectorAll<HTMLButtonElement>('[data-picker-column="reasoning"]')];
+  expect(options.map((button) => button.textContent)).toEqual(["None", "Low", "Medium", "High", "X-high", "Max"]);
+  await act(async () => options[5].click());
+  expect(onReasoningChange).toHaveBeenCalledWith("max");
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
 
 test("keeps a two-column picker open for Model, then closes and restores focus for Reasoning", async () => {

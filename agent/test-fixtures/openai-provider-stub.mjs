@@ -24,7 +24,7 @@ http.createServer(async (request, response) => {
     body.model !== model
     || body.stream !== true
     || body.store !== false
-    || body.reasoning?.effort !== "high"
+    || body.reasoning?.effort !== "max"
     || !Array.isArray(body.input)
   ) {
     json(response, 400, { error: { message: "invalid_request", type: "invalid_request_error" } });

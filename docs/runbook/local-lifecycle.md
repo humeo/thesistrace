@@ -176,6 +176,18 @@ Repeated startup preserves an existing account's password and authority changes.
 This seed is enabled only by the Development Compose overlay; Test and Production
 initialization do not create a default account.
 
+Model definitions live in [`config/model-registry.json`](../../config/model-registry.json).
+Maintain `default_model_key`, model identity, `enabled`, `default_reasoning_effort`,
+and `reasoning_efforts` there. Development and Production lifecycle commands read
+this file and pass its JSON to the Agent Host at startup; the browser reads the
+Host's validated Catalog. API keys remain in their named environment variables.
+After changing the file, run `mise exec -- pnpm dev:up` and reload Chat. A running
+Turn retains its recorded selection; a subsequent Turn uses the chosen settings.
+Luna exposes `none`, `low`, `medium`, `high`, `xhigh`, and `max`; `none` disables
+reasoning. The project default remains `high`. See the
+[OpenAI Luna model documentation](https://developers.openai.com/api/docs/models/gpt-5.6-luna).
+Invalid JSON, unsupported efforts, or an unavailable default model fail startup.
+
 Complete deletion of Product State, downloaded Canonical Data, and the
 Benchmark Snapshot is a separate explicit operation:
 

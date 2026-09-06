@@ -106,7 +106,7 @@ CREATE TABLE agent.chat_session (
     ),
     CONSTRAINT chat_session_reasoning_effort_check CHECK (
         selected_reasoning_effort = ANY (
-            ARRAY['none'::text, 'minimal'::text, 'low'::text, 'medium'::text, 'high'::text, 'xhigh'::text]
+            ARRAY['none'::text, 'minimal'::text, 'low'::text, 'medium'::text, 'high'::text, 'xhigh'::text, 'max'::text]
         )
     )
 );
@@ -146,7 +146,7 @@ CREATE TABLE agent.agent_run (
     ),
     CONSTRAINT agent_run_reasoning_effort_check CHECK (
         reasoning_effort = ANY (
-            ARRAY['none'::text, 'minimal'::text, 'low'::text, 'medium'::text, 'high'::text, 'xhigh'::text]
+            ARRAY['none'::text, 'minimal'::text, 'low'::text, 'medium'::text, 'high'::text, 'xhigh'::text, 'max'::text]
         )
     ),
     CONSTRAINT agent_run_build_revision_check CHECK (

@@ -8,9 +8,13 @@ high-availability or zero-downtime claim.
 
 ## External environment contract
 
-Production configuration lives in one absolute file outside the repository.
+Production secrets and deployment settings live in one absolute file outside the repository.
 The file must be a regular, non-symlink file owned by root with mode `0600`.
-Create and edit it as root; do not copy it into the checkout:
+Model definitions are maintained in [`config/model-registry.json`](../../config/model-registry.json).
+The Production launcher loads that file on each invocation and rejects inline
+`THESISTRACE_AGENT_MODEL_REGISTRY` entries in the external environment file.
+Apply model edits with the Production `up` command, then reload Chat.
+Create and edit the external environment file as root; do not copy it into the checkout:
 
 ```sh
 sudo install -d -o root -m 0700 /etc/thesistrace
@@ -36,7 +40,6 @@ THESISTRACE_TUSHARE_TOKEN=<production-tushare-token>
 THESISTRACE_AUTH_IMAGE=ghcr.io/<owner>/<image>:<fixed-version>
 THESISTRACE_AGENT_IMAGE=ghcr.io/<owner>/<image>:<fixed-version>
 THESISTRACE_AGENT_BUILD_REVISION=<release-revision>
-THESISTRACE_AGENT_MODEL_REGISTRY={"default_model_key":"openai-research","models":[{"default_reasoning_effort":"medium","display_name":"OpenAI Research","enabled":true,"key":"openai-research","provider_adapter":"openai","provider_model_id":"<provider-model-id>","reasoning_efforts":["low","medium","high"],"secret_env":"THESISTRACE_AGENT_OPENAI_API_KEY"}]}
 THESISTRACE_AGENT_OPENAI_API_KEY=<production-provider-api-key>
 ```
 
@@ -129,7 +132,8 @@ production_compose() (
     THESISTRACE_AGENT_MODEL_REGISTRY THESISTRACE_AGENT_BUILD_REVISION \
     THESISTRACE_AGENT_ANTHROPIC_API_KEY THESISTRACE_AGENT_GOOGLE_API_KEY \
     THESISTRACE_AGENT_OPENAI_API_KEY THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET
-  sudo docker compose \
+  model_registry=$(cat config/model-registry.json)
+  sudo env THESISTRACE_AGENT_MODEL_REGISTRY="$model_registry" docker compose \
     --project-name thesistrace \
     --env-file "$production_env" \
     --file deploy/core/compose.yaml \

@@ -91,7 +91,7 @@ const modelRegistry = readModelRegistry(JSON.stringify({
       key: "scripted-research",
       provider_adapter: "scripted",
       provider_model_id: "scripted-v1",
-      reasoning_efforts: ["none", "medium"],
+      reasoning_efforts: ["none", "medium", "max"],
       secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     },
     {
@@ -1805,7 +1805,7 @@ describe.sequential("durable Research Agent runtime", () => {
     expect(recreated.rows).toEqual([{ count: "0" }]);
   });
 
-  it("keeps transcript order exact and applies a changed selection only to the next run", async () => {
+  it.each(["none", "max"] as const)("keeps transcript order and applies %s only to the next run", async (effort) => {
     const runtime = await createIntegrationRuntime();
     try {
       const threadId = randomUUID();
@@ -1820,12 +1820,12 @@ describe.sequential("durable Research Agent runtime", () => {
       await run(runtime, runInput({
         messageId: secondMessageId,
         messages: [{
-          content: "Now remove reasoning.",
+          content: "Change the reasoning effort for this turn.",
           id: secondMessageId,
           role: "user",
         }],
         modelKey: "scripted-research",
-        reasoningEffort: "none",
+        reasoningEffort: effort,
         runId: secondRunId,
         threadId,
       }), primaryResearcher);
@@ -1841,17 +1841,17 @@ describe.sequential("durable Research Agent runtime", () => {
       `, [threadId]);
       expect(runs.rows).toEqual([
         { id: firstRunId, reasoning_effort: "medium" },
-        { id: secondRunId, reasoning_effort: "none" },
+        { id: secondRunId, reasoning_effort: effort },
       ]);
       const session = await owner.query<{ selected_reasoning_effort: string }>(`
         SELECT selected_reasoning_effort
         FROM agent.chat_session
         WHERE id = $1
       `, [threadId]);
-      expect(session.rows).toEqual([{ selected_reasoning_effort: "none" }]);
+      expect(session.rows).toEqual([{ selected_reasoning_effort: effort }]);
       await expect(runtime.preference(threadId, primaryResearcher)).resolves.toEqual({
         model_key: "scripted-research",
-        reasoning_effort: "none",
+        reasoning_effort: effort,
       });
     } finally {
       await runtime.close();
@@ -3501,7 +3501,7 @@ function runInput(options: Readonly<{
   messageId: string;
   messages?: Message[];
   modelKey?: string;
-  reasoningEffort?: "medium" | "none" | "high";
+  reasoningEffort?: "medium" | "none" | "high" | "max";
   sessionMode?: "new" | "existing";
   runId: string;
   threadId: string;

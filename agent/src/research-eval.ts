@@ -52,7 +52,7 @@ const candidatesSchema = z.object({
     display_name: z.string().min(1).max(80),
     provider_adapter: z.enum(["openai", "anthropic", "google"]),
     provider_model_id: z.string().refine(isProviderModelId),
-    reasoning_efforts: z.array(z.enum(reasoningEfforts)).min(1).max(6),
+    reasoning_efforts: z.array(z.enum(reasoningEfforts)).min(1).max(reasoningEfforts.length),
     provider_max_input_tokens: count.min(8192).max(2000000),
     pricing: pricingSchema, thresholds: thresholdsSchema,
   }).strict()).min(1).max(16),

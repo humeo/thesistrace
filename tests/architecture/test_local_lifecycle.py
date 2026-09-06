@@ -533,6 +533,33 @@ def test_destructive_development_commands_reject_every_noncanonical_project(
     assert "refusing non-canonical Development project" in completed.stderr
 
 
+def test_development_start_reads_the_maintained_model_file(tmp_path: Path) -> None:
+    registry_output = tmp_path / "registry.json"
+    docker = tmp_path / "docker"
+    docker.write_text(
+        '#!/bin/sh\n'
+        'printf "%s" "$THESISTRACE_AGENT_MODEL_REGISTRY" > "$TEST_REGISTRY_OUTPUT"\n'
+    )
+    docker.chmod(0o755)
+    completed = subprocess.run(
+        [ROOT / "scripts" / "dev-runtime", "up"],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "TEST_REGISTRY_OUTPUT": str(registry_output),
+            "THESISTRACE_AGENT_MODEL_REGISTRY": "ambient-value-must-not-override-file",
+            "THESISTRACE_DEV_PROJECT_NAME": "thesistrace-dev",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(registry_output.read_text()) == json.loads(
+        (ROOT / "config" / "model-registry.json").read_text()
+    )
+
+
 def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) -> None:
     command_log, volume_root, environment = _fake_development_docker(tmp_path)
     canonical_head = volume_root / "thesistrace-dev_canonical-data" / "HEAD.json"

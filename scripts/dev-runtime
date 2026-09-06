@@ -120,6 +120,10 @@ watch_runtime() {
 
 validate_project
 
+# Model definitions have one maintained source; JSON is only the Host transport.
+THESISTRACE_AGENT_MODEL_REGISTRY=$(cat "$repo_root/config/model-registry.json")
+export THESISTRACE_AGENT_MODEL_REGISTRY
+
 case "${1:-}" in
   bootstrap)
     cd "$repo_root"

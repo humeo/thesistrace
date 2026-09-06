@@ -1187,7 +1187,7 @@
       "type": "c"
     },
     {
-      "definition": "CHECK ((reasoning_effort = ANY (ARRAY['none'::text, 'minimal'::text, 'low'::text, 'medium'::text, 'high'::text, 'xhigh'::text])))",
+      "definition": "CHECK ((reasoning_effort = ANY (ARRAY['none'::text, 'minimal'::text, 'low'::text, 'medium'::text, 'high'::text, 'xhigh'::text, 'max'::text])))",
       "name": "agent_run_reasoning_effort_check",
       "relation": "agent_run",
       "type": "c"
@@ -1355,7 +1355,7 @@
       "type": "p"
     },
     {
-      "definition": "CHECK ((selected_reasoning_effort = ANY (ARRAY['none'::text, 'minimal'::text, 'low'::text, 'medium'::text, 'high'::text, 'xhigh'::text])))",
+      "definition": "CHECK ((selected_reasoning_effort = ANY (ARRAY['none'::text, 'minimal'::text, 'low'::text, 'medium'::text, 'high'::text, 'xhigh'::text, 'max'::text])))",
       "name": "chat_session_reasoning_effort_check",
       "relation": "chat_session",
       "type": "c"

@@ -9,6 +9,7 @@ export const reasoningEfforts = [
   "medium",
   "high",
   "xhigh",
+  "max",
 ] as const;
 
 const providerAdapters = ["anthropic", "google", "openai", "scripted"] as const;

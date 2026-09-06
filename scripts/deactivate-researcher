@@ -43,7 +43,8 @@ unset \
   THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET
 
 compose_run() {
-  docker compose \
+  THESISTRACE_AGENT_MODEL_REGISTRY=$(cat "$repo_root/config/model-registry.json") \
+    docker compose \
     --project-name thesistrace \
     --env-file "$environment_file" \
     --file "$base_file" \

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -9,16 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "production-runtime"
 
-VALID_AGENT_REGISTRY = (
-    '{"default_model_key":"openai-research","models":['
-    '{"default_reasoning_effort":"medium","display_name":"OpenAI Research",'
-    '"enabled":true,"key":"openai-research","provider_adapter":"openai",'
-    '"provider_model_id":"gpt-research",'
-    '"reasoning_efforts":["low","medium","high"],'
-    '"secret_env":"THESISTRACE_AGENT_OPENAI_API_KEY"}]}'
-)
-
-VALID_ENVIRONMENT = f"""\
+VALID_ENVIRONMENT = """\
 THESISTRACE_ENVIRONMENT=production
 THESISTRACE_PUBLIC_ORIGIN=https://research.thesistrace.com
 THESISTRACE_RESEND_API_URL=https://api.resend.com
@@ -33,7 +25,6 @@ THESISTRACE_TUSHARE_TOKEN=production-tushare-token-7Kp4mN9vQ2sL6xT8
 THESISTRACE_AUTH_IMAGE=ghcr.io/thesistrace/auth:2026-08-29
 THESISTRACE_AGENT_IMAGE=ghcr.io/thesistrace/agent:2026-08-29
 THESISTRACE_AGENT_BUILD_REVISION=2026-08-29.1
-THESISTRACE_AGENT_MODEL_REGISTRY={VALID_AGENT_REGISTRY}
 THESISTRACE_AGENT_OPENAI_API_KEY=sk-production-agent-7Kp4mN9vQ2sL6xT8
 THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS=600
 THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS=660
@@ -45,8 +36,8 @@ THESISTRACE_MCP_CLOCK_SKEW_SECONDS=30
 THESISTRACE_MCP_DEPLOYMENT_TOOLS=["diagnose_alpha_formula","get_alpha_catalog","get_daily_track","get_daily_track_result","get_research_batch","get_research_context","get_research_run","get_research_run_result","list_daily_tracks","list_research_batches","list_research_runs","refresh_daily_track","retry_daily_track","start_daily_track","submit_research_batch","submit_research_run"]
 THESISTRACE_MCP_ISSUER_URL=https://research.thesistrace.com/api/auth
 THESISTRACE_MCP_RESOURCE_URL=https://research.thesistrace.com/mcp
-THESISTRACE_MCP_SIGNING_PRIVATE_JWK={{"alg":"EdDSA","crv":"Ed25519","d":"bL6DuMib1dGbVwuY4HVdhFmqF2DwywXfoNQvOcF9DGQ","kid":"research-agent-signing-2026-08","kty":"OKP","use":"sig","x":"ECcLaOhwYA5_r6Ub4y8ZbuuvOSEwsim7Ttg5DXXG0yc"}}
-THESISTRACE_MCP_VERIFYING_PUBLIC_JWK={{"alg":"EdDSA","crv":"Ed25519","kid":"research-agent-signing-2026-08","kty":"OKP","use":"sig","x":"ECcLaOhwYA5_r6Ub4y8ZbuuvOSEwsim7Ttg5DXXG0yc"}}
+THESISTRACE_MCP_SIGNING_PRIVATE_JWK={"alg":"EdDSA","crv":"Ed25519","d":"bL6DuMib1dGbVwuY4HVdhFmqF2DwywXfoNQvOcF9DGQ","kid":"research-agent-signing-2026-08","kty":"OKP","use":"sig","x":"ECcLaOhwYA5_r6Ub4y8ZbuuvOSEwsim7Ttg5DXXG0yc"}
+THESISTRACE_MCP_VERIFYING_PUBLIC_JWK={"alg":"EdDSA","crv":"Ed25519","kid":"research-agent-signing-2026-08","kty":"OKP","use":"sig","x":"ECcLaOhwYA5_r6Ub4y8ZbuuvOSEwsim7Ttg5DXXG0yc"}
 """
 
 
@@ -101,11 +92,14 @@ def test_production_runtime_prevents_ambient_security_overrides(
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert environment_log.read_text().splitlines() == [
+    lines = environment_log.read_text().splitlines()
+    assert json.loads(lines[3].removeprefix("agent_registry=")) == json.loads(
+        (ROOT / "config" / "model-registry.json").read_text()
+    )
+    assert lines[:3] + lines[4:] == [
         "public_origin=unset",
         "auth_secret=unset",
         "tushare_token=unset",
-        "agent_registry=unset",
         "agent_provider=unset",
         "mcp_private_key=unset",
     ]
@@ -190,7 +184,7 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
         ),
         (
             "THESISTRACE_AGENT_MODEL_REGISTRY=not-json",
-            "PRODUCTION_AGENT_MODEL_REGISTRY_INVALID",
+            "PRODUCTION_AGENT_MODEL_REGISTRY_INLINE_UNSUPPORTED",
         ),
         (
             "THESISTRACE_AGENT_OPENAI_API_KEY=test-provider-key",
@@ -232,6 +226,8 @@ def test_production_runtime_rejects_test_placeholder_and_weak_values(
         replacement if line.startswith(f"{key}=") else line
         for line in VALID_ENVIRONMENT.splitlines()
     ) + "\n"
+    if not any(line.startswith(f"{key}=") for line in VALID_ENVIRONMENT.splitlines()):
+        source += replacement + "\n"
     environment_file = tmp_path / "production.env"
     environment_file.write_text(source)
     environment_file.chmod(0o600)

@@ -45,10 +45,11 @@ test("rejects a model or effort not enabled by the startup registry", () => {
   expect(() => runtime.resolve("anthropic", "minimal")).toThrow();
 });
 
-test("continues OpenAI tool results without relying on provider-side stored items", async () => {
+test.each(["none", "low", "medium", "high", "xhigh", "max"] as const)(
+  "sends %s reasoning and continues OpenAI tool results without stored items", async (effort) => {
   const lunaRegistry = readModelRegistry(JSON.stringify({
     default_model_key: "luna",
-    models: [model("luna", "openai", "gpt-5.6-luna", ["high"])],
+    models: [model("luna", "openai", "gpt-5.6-luna", [effort])],
   }), environment);
   const requests: Record<string, unknown>[] = [];
   vi.stubGlobal("fetch", async (_url: unknown, init: RequestInit) => {
@@ -67,7 +68,7 @@ test("continues OpenAI tool results without relying on provider-side stored item
     });
   });
   try {
-    const selection = new RegisteredModelRuntime(lunaRegistry).resolve("luna", "high");
+    const selection = new RegisteredModelRuntime(lunaRegistry).resolve("luna", effort);
     const result = await selection.languageModel.doGenerate({
       providerOptions: selection.providerOptions,
       prompt: [
@@ -84,7 +85,7 @@ test("continues OpenAI tool results without relying on provider-side stored item
     expect(result.content).toMatchObject([{ type: "text", text: "Value: 17" }]);
     expect(requests).toMatchObject([{
       store: false, include: ["reasoning.encrypted_content"],
-      reasoning: { effort: "high" },
+      reasoning: { effort },
       input: [
         { role: "user" },
         { type: "reasoning", encrypted_content: "encrypted-fixture" },

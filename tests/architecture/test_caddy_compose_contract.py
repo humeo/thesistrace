@@ -413,7 +413,8 @@ def test_development_agent_uses_the_configured_local_luna_provider() -> None:
     assert environment["THESISTRACE_AGENT_OPENAI_BASE_URL"] == (
         "http://host.docker.internal:8317/v1"
     )
-    registry = json.loads(environment["THESISTRACE_AGENT_MODEL_REGISTRY"])
+    assert "THESISTRACE_AGENT_MODEL_REGISTRY" not in environment
+    registry = json.loads((ROOT / "config" / "model-registry.json").read_text())
     assert registry == {
         "default_model_key": "gpt-5.6-luna",
         "models": [{
@@ -423,7 +424,7 @@ def test_development_agent_uses_the_configured_local_luna_provider() -> None:
             "key": "gpt-5.6-luna",
             "provider_adapter": "openai",
             "provider_model_id": "gpt-5.6-luna",
-            "reasoning_efforts": ["high"],
+            "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
             "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
         }],
     }

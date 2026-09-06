@@ -5,6 +5,7 @@ export const supportedReasoningEfforts = [
   "medium",
   "high",
   "xhigh",
+  "max",
 ] as const;
 
 export type ReasoningEffort = (typeof supportedReasoningEfforts)[number];

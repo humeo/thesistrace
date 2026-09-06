@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 
 import { readModelRegistry } from "./model-registry.js";
 
@@ -47,6 +48,17 @@ function encoded(overrides: Record<string, unknown> = {}): string {
 }
 
 describe("model Registry", () => {
+  it("publishes every configured Luna effort from the maintained model file", () => {
+    const registry = readModelRegistry(
+      readFileSync(new URL("../../config/model-registry.json", import.meta.url), "utf8"),
+      environment,
+    );
+    expect(registry.safeCatalog.models[0]).toMatchObject({
+      key: "gpt-5.6-luna",
+      default_reasoning_effort: "high",
+      reasoning_efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+    });
+  });
   it("builds one safe multi-provider Catalog and omits disabled models", () => {
     const registry = readModelRegistry(encoded(), environment);
 
