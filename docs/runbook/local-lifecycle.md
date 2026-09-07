@@ -243,6 +243,8 @@ preflight, Web unit tests, and test-runner checks. The ownership check rejects
 unknown test locations and overlapping same-level suites, and compares the
 Vitest file lists with their configured collection. Web unit tests are discovered
 from `src/**/*.test.ts(x)`; adding a test does not require editing a command.
+Agent unit tests use at most four workers to bound concurrent Mastra loading
+and large-context fixture memory; individual test timeouts remain unchanged.
 
 Run component-only Chromium acceptance without Docker, Auth, or a backend URL:
 
