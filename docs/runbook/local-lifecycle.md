@@ -284,6 +284,10 @@ Filtering preserves Playwright grep semantics and still allocates environments:
 THESISTRACE_TEST_PLAYWRIGHT_GREP='Operator Financial' mise exec -- pnpm test:e2e
 ```
 
+For an order-independence check, set `THESISTRACE_TEST_E2E_GROUP_ORDER=reverse`
+together with the filter. This reverses environment groups; each still starts
+from its own fresh baseline. Normal gates retain the default collection order.
+
 Group results and wall time are written to `.local/e2e-runs/<id>/results.json`.
 Each child `run.txt` records build/reuse, initialization, execution and cleanup
 separately; compare execution time separately from the extra isolation cost.

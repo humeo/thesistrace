@@ -1543,9 +1543,10 @@ test("a connected MCP Tool response disconnect becomes a durable failed Run and 
     .toBeVisible();
   await expect(message).toBeEnabled();
   const acceptedTurn8 = await submitChatPrompt(page, "[scripted-tool-turn] Inspect the available research context.");
+  // Completion collapses execution history; inspect the final Tool after that transition.
+  await waitForChatTurn(page, acceptedTurn8, "completed", 30_000);
   await expect(await revealToolActivity(page, "get_research_context", "complete"))
     .toBeVisible();
-  await waitForChatTurn(page, acceptedTurn8, "completed", 30_000);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
 });
 

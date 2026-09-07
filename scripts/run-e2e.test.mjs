@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-for (const mode of ['success', 'test-failure', 'cleanup-failure']) test(`E2E groups preserve lifecycle evidence after ${mode}`, () => {
+for (const mode of ['success', 'test-failure', 'cleanup-failure', 'reverse']) test(`E2E groups preserve lifecycle evidence after ${mode}`, () => {
   const failing = mode === 'test-failure';
   const cwd = mkdtempSync(join(tmpdir(), 'e2e-runner-'));
   try {
@@ -32,8 +32,8 @@ for (const mode of ['success', 'test-failure', 'cleanup-failure']) test(`E2E gro
       console.log('Compose project: ' + project);
       process.exit(${failing} && previous.length === 1 ? 1 : 0);
     `);
-    const result = spawnSync(process.execPath, ['scripts/run-e2e.mjs'], { cwd, env: { ...process.env, PATH: `${cwd}/bin:${process.env.PATH}`, THESISTRACE_TEST_PLAYWRIGHT_GREP: '' }, encoding: 'utf8', timeout: 15_000 });
-    assert.equal(result.status, mode === "success" ? 0 : 1, result.stderr);
+    const result = spawnSync(process.execPath, ['scripts/run-e2e.mjs'], { cwd, env: { ...process.env, PATH: `${cwd}/bin:${process.env.PATH}`, THESISTRACE_TEST_PLAYWRIGHT_GREP: '', THESISTRACE_TEST_E2E_GROUP_ORDER: mode === 'reverse' ? 'reverse' : undefined }, encoding: 'utf8', timeout: 15_000 });
+    assert.equal(result.status, ["success", "reverse"].includes(mode) ? 0 : 1, result.stderr);
     const runs = JSON.parse(readFileSync(join(cwd, 'runs.json')));
     assert.equal(runs.length, 3);
     assert.equal(new Set(runs.map(run => run.project)).size, 3);
@@ -42,6 +42,9 @@ for (const mode of ['success', 'test-failure', 'cleanup-failure']) test(`E2E gro
     const evidence = readdirSync(join(cwd, '.local/e2e-runs'))[0];
     const results = JSON.parse(readFileSync(join(cwd, '.local/e2e-runs', evidence, 'results.json')));
     assert.deepEqual(results.map(result => result.status), [failing ? 1 : 0, 0, 0]);
+    assert.deepEqual(results.map(result => result.name), mode === 'reverse'
+      ? ['case.spec.ts write B', 'case.spec.ts write A', 'ordinary']
+      : ['ordinary', 'case.spec.ts write A', 'case.spec.ts write B']);
     const cleanup = JSON.parse(readFileSync(join(cwd, '.local/e2e-runs', evidence, 'cleanup.json')));
     if (mode === 'cleanup-failure') assert.deepEqual(cleanup, [{ operation: 'image-list', status: 1 }]);
     else assert.match(readFileSync(join(cwd, 'docker.log'), 'utf8'), new RegExp(`image rm ${runs[0].project}-agent`));

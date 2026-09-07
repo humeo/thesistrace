@@ -5,6 +5,8 @@ import { groupsFromReport } from './e2e-groups.mjs';
 
 if (process.argv.length > 2) throw new Error('Use THESISTRACE_TEST_PLAYWRIGHT_GREP to select E2E cases');
 const filter = process.env.THESISTRACE_TEST_PLAYWRIGHT_GREP;
+const groupOrder = process.env.THESISTRACE_TEST_E2E_GROUP_ORDER;
+if (groupOrder !== undefined && groupOrder !== 'reverse') throw new Error('Unsupported E2E group order');
 const evidence = resolve('.local/e2e-runs', `${Date.now()}-${process.pid}`);
 mkdirSync(evidence, { recursive: true });
 const report = JSON.parse(execFileSync('pnpm', ['--dir', 'web', 'exec', 'playwright', 'test', '--list', '--reporter=json', ...(filter ? ['--grep', filter] : [])], {
@@ -13,6 +15,7 @@ const report = JSON.parse(execFileSync('pnpm', ['--dir', 'web', 'exec', 'playwri
 }));
 if (report.errors?.length) throw new Error('E2E collection failed');
 const groups = groupsFromReport(report);
+if (groupOrder === 'reverse') groups.reverse();
 if (!groups.length) throw new Error('E2E selection matched no tests');
 for (const group of groups) {
   const selected = JSON.parse(execFileSync('pnpm', ['--dir', 'web', 'exec', 'playwright', 'test', '--list', '--reporter=json', '--grep', group.grep], {
