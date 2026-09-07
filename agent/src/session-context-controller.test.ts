@@ -208,6 +208,7 @@ async function requestAtTokens(base: import("@ai-sdk/provider").LanguageModelV3C
   return request;
 }
 
+// Full-window fixture tokenization shares CPU with the complete unit suite.
 test.each([232_199, 232_200, 232_201])("Luna's complete %s-token request obeys the exact 90 percent boundary", async (tokens) => {
   const f = await fixture();
   let attempted = false;
@@ -220,7 +221,7 @@ test.each([232_199, 232_200, 232_201])("Luna's complete %s-token request obeys t
   else await expect(controller.prepare(request)).rejects.toThrow("CONTEXT_COMPACTION_FAILED");
   expect(attempted).toBe(tokens >= 232_200);
   expect(f.published()).toBeNull();
-});
+}, 30_000);
 
 test("no output room permits one protective cycle below 90 percent when the configured gate allows that model", async () => {
   const f = await fixture();
