@@ -4657,24 +4657,6 @@ def _collect_publication_deletions(
         )
 
 
-def research_run_exists(
-    transaction: PostgresTransaction,
-    researcher_id: UUID,
-    run_id: str,
-) -> bool:
-    return (
-        transaction.execute(
-            """
-            SELECT 1
-            FROM research_runs.runs
-            WHERE researcher_id = %s AND id = %s
-            """,
-            (researcher_id, run_id),
-        ).fetchone()
-        is not None
-    )
-
-
 def research_result_manifest_is_referenced(
     transaction: PostgresTransaction,
     manifest_sha256: str,

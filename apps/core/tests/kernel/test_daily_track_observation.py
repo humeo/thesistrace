@@ -5,6 +5,10 @@ import pytest
 
 from thesistrace.daily_track.models import DailyTrackOriginAccount
 from thesistrace.daily_track.observation import project_daily_observation
+from thesistrace.daily_track.observation_state import (
+    advance_tracking_observation_state,
+    initial_tracking_observation_state,
+)
 
 
 def account(
@@ -46,7 +50,7 @@ def account(
 
 def test_observation_starts_at_zero_without_reusing_the_seed_backtest_return() -> None:
     origin = account()
-    result = project_daily_observation(
+    result = observe(
         origin=origin,
         current=origin,
         observations=[
@@ -67,7 +71,7 @@ def test_observation_starts_at_zero_without_reusing_the_seed_backtest_return() -
 
 
 def test_observation_uses_published_holdings_and_adjusted_valuation_coordinates() -> None:
-    result = project_daily_observation(
+    result = observe(
         origin=account(),
         current=account(session="2026-08-18", nav="1100", count=12, cost="12.75", pending=False),
         observations=[{"session": "2026-08-18", "net_nav": "1100"}],
@@ -87,7 +91,7 @@ def test_observation_uses_published_holdings_and_adjusted_valuation_coordinates(
 def test_chart_window_keeps_the_original_denominator_and_account_boundary() -> None:
     origin_date = date(2024, 1, 1)
     sessions = [(origin_date + timedelta(days=offset)).isoformat() for offset in range(507)]
-    result = project_daily_observation(
+    result = observe(
         origin=account(session=sessions[0]),
         current=account(session=sessions[-2], nav="900", count=516, cost="15"),
         observations=[{"session": session, "net_nav": "900"} for session in sessions],
@@ -103,13 +107,13 @@ def test_chart_window_keeps_the_original_denominator_and_account_boundary() -> N
 
 def test_invalid_account_boundary_is_rejected() -> None:
     with pytest.raises(ValueError, match="precedes"):
-        project_daily_observation(
+        observe(
             origin=account(), current=account(session="2026-08-14"), observations=[]
         )
 
 
 def test_maximum_drawdown_uses_tracking_peaks_and_keeps_recovered_losses() -> None:
-    result = project_daily_observation(
+    result = observe(
         origin=account(),
         current=account(session="2026-08-21", nav="1300", count=15, pending=False),
         observations=[
@@ -128,7 +132,7 @@ def test_maximum_drawdown_uses_tracking_peaks_and_keeps_recovered_losses() -> No
 
 def test_maximum_drawdown_retains_losses_before_the_chart_window() -> None:
     sessions = [(date(2024, 1, 1) + timedelta(days=i)).isoformat() for i in range(507)]
-    result = project_daily_observation(
+    result = observe(
         origin=account(session=sessions[0]),
         current=account(session=sessions[-1], nav="1000", count=517),
         observations=[
@@ -139,3 +143,15 @@ def test_maximum_drawdown_retains_losses_before_the_chart_window() -> None:
     assert result.maximum_drawdown == 0.1
     assert len(result.returns) == 504
     assert all(point.net_return == 0 for point in result.returns)
+
+
+def observe(*, origin, current, observations):
+    rows = [row for row in observations if origin.session <= row["session"] <= current.session]
+    if not rows or rows[0]["session"] != origin.session:
+        rows.insert(0, {"session": origin.session, "net_nav": origin.net_nav})
+    state = initial_tracking_observation_state(origin.session, origin.net_nav)
+    if current.session >= origin.session:
+        state = advance_tracking_observation_state(state, rows)
+    return project_daily_observation(
+        origin=origin, current=current, observations=observations, tracking_observation_state=state,
+    )

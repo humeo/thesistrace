@@ -12,12 +12,14 @@ from botocore.exceptions import ClientError, ResponseStreamingError
 
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.publication import (
+    CompressedJsonPayload,
     JsonPayload,
     ParquetRowsPayload,
     Publication,
     PublicationPreparationError,
     PublicationUnavailableError,
     PublicationVerificationError,
+    decode_compressed_json,
 )
 from thesistrace.publication.serialization import (
     ParquetWriterContract,
@@ -767,3 +769,39 @@ def _legal_result() -> dict[str, object]:
             "metric_state": metric_state,
         },
     }
+
+
+def test_compressed_checkpoint_is_verified_persistent_and_released(
+    core_settings: CoreSettings, rustfs_admin: BaseClient,
+):
+    value = {"positions": [{"instrument_id": str(i), "nav": "100.125"} for i in range(50)]}
+    with open_core_runtime(core_settings) as runtime:
+        prepared = runtime.publication.prepare(
+            kind="daily-track.checkpoint",
+            payloads={"checkpoint": CompressedJsonPayload(value)},
+            provenance={"source": "codec-test"},
+        )
+        repeated = runtime.publication.prepare(
+            kind="daily-track.checkpoint",
+            payloads={"checkpoint": CompressedJsonPayload(value)},
+            provenance={"source": "codec-test"},
+        )
+        assert prepared.manifest_sha256 == repeated.manifest_sha256
+        with runtime.database.transaction() as transaction:
+            published = runtime.publication.record(transaction, prepared)
+    with open_core_runtime(core_settings) as runtime:
+        payload = runtime.publication.read(published).payloads["checkpoint"]
+        assert decode_compressed_json(payload) == value
+        assert len(payload.content) < len(canonical_json_bytes(value)) / 2
+        with runtime.database.transaction() as transaction:
+            runtime.publication.release_manifest_in_transaction(
+                transaction, published.manifest_sha256, still_referenced=False,
+            )
+        while runtime.publication.collect_one_pending_deletion():
+            pass
+        with runtime.database.transaction() as transaction:
+            count = transaction.execute(
+                "SELECT count(*) AS count FROM publication.objects"
+            ).fetchone()
+            assert count["count"] == 0
+        assert rustfs_admin.list_objects_v2(Bucket=core_settings.s3_bucket).get("KeyCount", 0) == 0

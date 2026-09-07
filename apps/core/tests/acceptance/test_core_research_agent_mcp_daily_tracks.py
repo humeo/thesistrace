@@ -8,7 +8,6 @@ import subprocess
 import sys
 from base64 import urlsafe_b64decode
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 from pathlib import Path
 from threading import Event
 
@@ -35,7 +34,6 @@ from thesistrace.entrypoints.runtime import (
     open_core_runtime,
 )
 from thesistrace.entrypoints.schema import initialize_core
-from thesistrace.research_run.result import read_result_bundle
 
 pytestmark = pytest.mark.skipif(
     not core_environment_is_configured(),
@@ -1061,10 +1059,6 @@ async def _exercise_live_tracking_stop(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=partial(
-                read_result_bundle,
-                research_kind="strategy_backtest",
-            ),
             progress=progress,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:

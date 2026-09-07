@@ -27,7 +27,9 @@ from thesistrace.publication.serialization import (
     ParquetContractError,
     ParquetWriterContract,
     canonical_json_bytes,
+    compressed_json_bytes,
     parquet_bytes,
+    read_compressed_json_bytes,
 )
 
 MANIFEST_SCHEMA_VERSION = 1
@@ -69,6 +71,11 @@ class JsonPayload:
 
 
 @dataclass(frozen=True)
+class CompressedJsonPayload:
+    value: object
+
+
+@dataclass(frozen=True)
 class ParquetRowsPayload:
     rows: Sequence[Mapping[str, object]]
     contract: ParquetWriterContract
@@ -82,7 +89,7 @@ class StagedPayload:
     serialization: Mapping[str, object]
 
 
-type PublicationPayload = JsonPayload | ParquetRowsPayload | StagedPayload
+type PublicationPayload = CompressedJsonPayload | JsonPayload | ParquetRowsPayload | StagedPayload
 type StagingAuthority = Callable[[], AbstractContextManager[None]]
 
 
@@ -1017,6 +1024,15 @@ class Publication:
 def _serialize_payload(
     payload: PublicationPayload,
 ) -> tuple[bytes, str, dict[str, object]]:
+    if isinstance(payload, CompressedJsonPayload):
+        try:
+            raw = canonical_json_bytes(payload.value)
+            content = compressed_json_bytes(payload.value)
+        except (TypeError, ValueError) as error:
+            raise PublicationPreparationError("Compressed JSON payload is invalid") from error
+        return content, "application/gzip", {
+            "format": "canonical-json-gzip", "version": 1, "uncompressed_bytes": len(raw),
+        }
     if isinstance(payload, JsonPayload):
         try:
             content = canonical_json_bytes(payload.value)
@@ -1145,3 +1161,19 @@ def _client_error_is_transient(error: ClientError) -> bool:
             "SlowDown",
         }
     )
+
+
+def decode_compressed_json(payload: VerifiedPayload) -> object:
+    descriptor = payload.serialization
+    if (
+        payload.media_type != "application/gzip"
+        or set(descriptor) != {"format", "version", "uncompressed_bytes"}
+        or descriptor["format"] != "canonical-json-gzip"
+        or type(descriptor["version"]) is not int
+        or descriptor["version"] != 1
+    ):
+        raise PublicationVerificationError("Compressed JSON encoding is invalid")
+    try:
+        return read_compressed_json_bytes(payload.content, descriptor["uncompressed_bytes"])
+    except (TypeError, ValueError) as error:
+        raise PublicationVerificationError("Compressed JSON payload is invalid") from error

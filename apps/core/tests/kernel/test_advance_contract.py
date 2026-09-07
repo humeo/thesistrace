@@ -10,6 +10,8 @@ from thesistrace.daily_track.checkpoint import (
     project_tracking_checkpoint,
     restore_tracking_checkpoint,
 )
+from thesistrace.daily_track.models import KernelStateCheckpoint
+from thesistrace.daily_track.observation_state import initial_tracking_observation_state
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel import (
     AdvanceInput,
@@ -300,6 +302,9 @@ def test_warm_continuation_keeps_504_factor_sessions_with_a_short_data_slice() -
     ).track_state
     checkpoint = project_tracking_checkpoint(
         prior,
+        prior_observation_state=initial_tracking_observation_state(
+            prior.boundary_session, "10000000",
+        ),
         retained_strategy_sessions=[prior.boundary_session],
     )
     short_prior_data = slice_research_sessions(complete, calendar[-22:-1])
@@ -537,8 +542,15 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
 
     checkpoint = project_tracking_checkpoint(
         advanced,
+        prior_observation_state=initial_tracking_observation_state(
+            prior.boundary_session, "10000000",
+        ),
         retained_strategy_sessions=[prior.boundary_session, advanced.boundary_session],
     )
+    invalid = copy.deepcopy(checkpoint)
+    invalid["tracking_observation_state"]["boundary_session"] = "2099-01-01"
+    with pytest.raises(ValueError, match="Checkpoint observation boundary differs"):
+        KernelStateCheckpoint.model_validate(invalid)
     frozen_input = advanced.run_input_with_research_data(advanced.research_data_snapshot())
     assert checkpoint["run_input"]["alpha_expression"] == frozen_input.alpha_expression_snapshot()
     assert checkpoint["run_input"]["field_bindings"] == frozen_input.field_bindings_snapshot()
