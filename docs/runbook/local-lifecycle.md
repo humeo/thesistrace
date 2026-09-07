@@ -16,6 +16,9 @@ and lock-file sync. Run bootstrap from the repository root:
 
 ```sh
 mise install
+mise exec -- pnpm config:init
+# Fill external credentials in .env.
+mise exec -- pnpm config:check
 mise exec -- pnpm bootstrap
 ```
 
@@ -98,18 +101,18 @@ liveness rather than dependency readiness.
 
 ## Local Researcher access
 
-Development has no public signup. Before `pnpm dev` or `pnpm dev:up`, ensure
-the current shell exports the already-configured `RESEND_API_KEY` and
-`RESEND_FROM_EMAIL`; shell values override the non-Production values in
-`deploy/core/dev.env`. Development sends real invitation and reset mail, while
-all automated tests use the private local fake.
+Development has no public signup. Set `RESEND_API_KEY` and `RESEND_FROM_EMAIL`
+in the private `.env` before startup. The file is authoritative: lifecycle
+commands clear ambient Compose variables before loading it. Development sends
+real invitation and reset mail; automated tests use the private local fake.
+See [configuration management](configuration.md).
 
 Issue the first 48-hour invitation from the canonical Development project:
 
 ```sh
-mise exec -- docker compose \
+mise exec -- pnpm config:run docker compose \
   --project-name thesistrace-dev \
-  --env-file deploy/core/dev.env \
+  --env-file .env \
   --file deploy/core/compose.yaml \
   --file deploy/core/compose.dev.yaml \
   run --rm --no-deps -T auth \
@@ -125,15 +128,15 @@ same Auth command contract documented in the
 Inspect authoritative Product State without RustFS or the Dataset Store:
 
 ```sh
-mise exec -- docker compose --project-name thesistrace-dev \
-  --env-file deploy/core/dev.env \
+mise exec -- pnpm config:run docker compose --project-name thesistrace-dev \
+  --env-file .env \
   --file deploy/core/compose.yaml \
   --file deploy/core/compose.dev.yaml \
   run --rm --no-deps -T initialize \
   thesistrace-core-diagnose research-run RESEARCHER_ID RUN_ID
 
-mise exec -- docker compose --project-name thesistrace-dev \
-  --env-file deploy/core/dev.env \
+mise exec -- pnpm config:run docker compose --project-name thesistrace-dev \
+  --env-file .env \
   --file deploy/core/compose.yaml \
   --file deploy/core/compose.dev.yaml \
   run --rm --no-deps -T initialize \
@@ -169,15 +172,15 @@ Product State, or publish Fixture data. The initialized runtime validates and
 immediately reuses the preserved mounted Canonical Data Store; Benchmark
 readiness is reported independently through Data Overview.
 
-Development Auth initialization creates `koltenluca433@gmail.com` with the same
-string as its password, marks the account active and verified, and assigns it
-as Operator when no Operator exists. `dev:reset` recreates this default account.
-Repeated startup preserves an existing account's password and authority changes.
-This seed is enabled only by the Development Compose overlay; Test and Production
-initialization do not create a default account.
+Development Auth initialization reads `THESISTRACE_DEV_RESEARCHER_EMAIL`,
+`THESISTRACE_DEV_RESEARCHER_NAME`, and `THESISTRACE_DEV_RESEARCHER_PASSWORD` from
+`.env`. It creates that active, verified identity and assigns Operator only when
+no Operator exists. `config:init` generates a random initial password. Repeated
+startup preserves existing credentials and authority. This seed is enabled only
+by the Development Compose overlay; Test and Production never seed an account.
 
 Model definitions live in [`config/model-registry.json`](../../config/model-registry.json).
-Maintain `default_model_key`, model identity, `enabled`, `default_reasoning_effort`,
+Maintain `default_model_key`, model identity, `enabled`, `context_window`, `default_reasoning_effort`,
 and `reasoning_efforts` there. Development and Production lifecycle commands read
 this file and pass its JSON to the Agent Host at startup; the browser reads the
 Host's validated Catalog. API keys remain in their named environment variables.
@@ -187,6 +190,21 @@ Luna exposes `none`, `low`, `medium`, `high`, `xhigh`, and `max`; `none` disable
 reasoning. The project default remains `high`. See the
 [OpenAI Luna model documentation](https://developers.openai.com/api/docs/models/gpt-5.6-luna).
 Invalid JSON, unsupported efforts, or an unavailable default model fail startup.
+
+Every model must declare `context_window` as an integer of at least 16,384 tokens.
+Luna is configured for 258,000 tokens. The Agent reads this capacity at startup and
+checks the complete estimated input, including instructions and Tool schemas,
+with space reserved for the requested output (at most 8,192 tokens).
+
+Mastra Observational Memory owns the Session context. Unobserved messages trigger
+the Observer at half of `context_window - 8192`; accumulated observations trigger
+the Reflector at one eighth of that budget. For Luna these thresholds are 124,904
+and 31,226 tokens. The remaining budget accommodates instructions, Tools, and new
+Tool results. Both phases use the selected model and reasoning effort, complete
+inside the current Turn before the next model call, and share its usage, generated
+byte, cancellation, and timeout accounting. PostgreSQL retains the original
+messages and the compressed observations. Observations are scoped to one Session
+and are deleted with it. Compression activities stay internal to the Host.
 
 Complete deletion of Product State, downloaded Canonical Data, and the
 Benchmark Snapshot is a separate explicit operation:

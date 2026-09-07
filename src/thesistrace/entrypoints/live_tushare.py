@@ -33,9 +33,9 @@ def main(
 ) -> None:
     transport: HttpTushareTransport | None = None
     if provider is None:
-        token = os.environ.get("TUSHARE_TOKEN", "").strip()
+        token = os.environ.get("THESISTRACE_TUSHARE_TOKEN", "").strip()
         if not token:
-            raise SystemExit("TUSHARE_TOKEN is required for the live Tushare gate")
+            raise SystemExit("THESISTRACE_TUSHARE_TOKEN is required for the live Tushare gate")
         transport = HttpTushareTransport()
         provider = TushareAdapter(token=token, transport=transport, progress=_print_progress)
     try:

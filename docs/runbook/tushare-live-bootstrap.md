@@ -8,7 +8,7 @@ To verify a real Tushare credential and the adapter's required provider
 contracts without moving the Dataset Head:
 
 ```sh
-export TUSHARE_TOKEN='...'
+# Set THESISTRACE_TUSHARE_TOKEN in the private .env.
 mise exec -- pnpm check:live-tushare
 ```
 

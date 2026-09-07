@@ -1,11 +1,12 @@
 import { hashPassword } from "better-auth/crypto";
 import type { Pool } from "pg";
-
-const email = "koltenluca433@gmail.com";
+import type { DevelopmentAccountSettings } from "./config.js";
 
 /** Seed only a new Development identity; restarts preserve password and authority changes. */
-export async function initializeDevelopmentAccount(pool: Pool): Promise<void> {
-  const password = await hashPassword(email);
+export async function initializeDevelopmentAccount(
+  pool: Pool, settings: DevelopmentAccountSettings,
+): Promise<void> {
+  const password = await hashPassword(settings.password);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -13,7 +14,7 @@ export async function initializeDevelopmentAccount(pool: Pool): Promise<void> {
       `INSERT INTO auth."user" (name, email, "emailVerified", active)
        VALUES ($1, $2, TRUE, TRUE)
        ON CONFLICT (email) DO NOTHING RETURNING id`,
-      ["koltenluca433", email],
+      [settings.name, settings.email],
     );
     const user = created.rows[0];
     if (user !== undefined) {

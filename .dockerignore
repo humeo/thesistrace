@@ -1,4 +1,10 @@
 .git
+.worktrees
+.env
+.env.*
+**/.env
+**/.env.*
+**/*.env
 .hosted
 .local
 .venv

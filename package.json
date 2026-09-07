@@ -7,6 +7,9 @@
     "pnpm": ">=11 <12"
   },
   "scripts": {
+    "config:init": "node scripts/configure.mjs init",
+    "config:check": "./scripts/dev-runtime validate",
+    "config:run": "node scripts/configure.mjs run",
     "bootstrap": "./scripts/dev-runtime bootstrap",
     "dev": "./scripts/dev-runtime watch",
     "dev:logs": "./scripts/dev-runtime logs",
@@ -25,6 +28,6 @@
     "check": "pnpm test && pnpm test:integration && pnpm test:e2e",
     "check:performance": "./scripts/test-runtime performance",
     "check:release": "./scripts/release-gate",
-    "check:live-tushare": "uv run python scripts/check_live_tushare.py"
+    "check:live-tushare": "node scripts/configure.mjs run uv run python scripts/check_live_tushare.py"
   }
 }

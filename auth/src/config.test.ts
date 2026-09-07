@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readAuthInitializerSettings, readAuthSettings } from "./config.js";
+import { readAuthInitializerSettings, readAuthSettings, readDevelopmentAccountSettings } from "./config.js";
 
 const mcpPrivateJwk = {
   alg: "EdDSA",
@@ -315,5 +315,30 @@ describe("readAuthInitializerSettings", () => {
           "postgresql://auth_runtime:auth-password@postgres:5432/thesistrace",
       }),
     ).toThrow(/thesistrace_owner/);
+  });
+});
+
+describe("readDevelopmentAccountSettings", () => {
+  const account = {
+    THESISTRACE_DEV_RESEARCHER_EMAIL: "Operator@Fixture.test",
+    THESISTRACE_DEV_RESEARCHER_NAME: "Configured Operator",
+    THESISTRACE_DEV_RESEARCHER_PASSWORD: "configured-private-password-123",
+  };
+
+  it("requires an explicit identity and password", () => {
+    expect(readDevelopmentAccountSettings(account)).toEqual({
+      email: "operator@fixture.test", name: "Configured Operator",
+      password: "configured-private-password-123",
+    });
+  });
+
+  it.each(Object.keys(account))("rejects a missing %s", (key) => {
+    expect(() => readDevelopmentAccountSettings({ ...account, [key]: "" })).toThrow(key);
+  });
+
+  it("rejects invalid credentials without exposing their value", () => {
+    expect(() => readDevelopmentAccountSettings({
+      ...account, THESISTRACE_DEV_RESEARCHER_PASSWORD: "short",
+    })).toThrow("Development account configuration is invalid");
   });
 });

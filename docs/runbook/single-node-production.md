@@ -22,13 +22,19 @@ sudo install -o root -m 0600 /dev/null /etc/thesistrace/production.env
 sudoedit /etc/thesistrace/production.env
 ```
 
-The file uses one unquoted `KEY=value` per line. Replace every placeholder below
+Use the complete [configuration template](../../.env.example), including its MCP
+policy and identity fields, and replace the Development values with Production
+values. The file uses one unquoted, literal `KEY=value` per line; shell expansion
+and `$`/`#` characters or inline comments are rejected. Replace every placeholder below
 before validation:
 
 ```dotenv
 THESISTRACE_ENVIRONMENT=production
 THESISTRACE_PUBLIC_ORIGIN=https://<production-hostname>
 THESISTRACE_RESEND_API_URL=https://api.resend.com
+THESISTRACE_AGENT_OPENAI_BASE_URL=https://api.openai.com/v1
+THESISTRACE_S3_ACCESS_KEY_ID=<unique-storage-access-key>
+THESISTRACE_S3_SECRET_ACCESS_KEY=<unique-storage-secret-key>
 THESISTRACE_OWNER_DATABASE_PASSWORD=<unique-url-safe-24-to-128-characters>
 THESISTRACE_CORE_DATABASE_PASSWORD=<unique-url-safe-24-to-128-characters>
 THESISTRACE_AUTH_DATABASE_PASSWORD=<unique-url-safe-24-to-128-characters>
@@ -43,7 +49,9 @@ THESISTRACE_AGENT_BUILD_REVISION=<release-revision>
 THESISTRACE_AGENT_OPENAI_API_KEY=<production-provider-api-key>
 ```
 
-The four database passwords must differ. `openssl rand -hex 24` produces one
+Object-store keys are supplied by this file too; no storage credentials are
+hard-coded in the shared topology. Use distinct generated values of 16–128
+URL-safe characters. The four database passwords must differ. `openssl rand -hex 24` produces one
 accepted password shape; run it independently for each role. `openssl rand
 -hex 32` produces the Auth secret. The public origin must use the default HTTPS
 port, contain only a hostname, and cannot use localhost or a reserved
@@ -59,7 +67,7 @@ services:
 
 ```sh
 sudo env \
-  THESISTRACE_PRODUCTION_ENV_FILE=/etc/thesistrace/production.env \
+  THESISTRACE_ENV_FILE=/etc/thesistrace/production.env \
   ./scripts/production-runtime validate
 ```
 
@@ -75,7 +83,7 @@ service health:
 
 ```sh
 sudo env \
-  THESISTRACE_PRODUCTION_ENV_FILE=/etc/thesistrace/production.env \
+  THESISTRACE_ENV_FILE=/etc/thesistrace/production.env \
   ./scripts/production-runtime up
 ```
 
@@ -87,7 +95,7 @@ inspected through the private topology:
 
 ```sh
 sudo env \
-  THESISTRACE_PRODUCTION_ENV_FILE=/etc/thesistrace/production.env \
+  THESISTRACE_ENV_FILE=/etc/thesistrace/production.env \
   ./scripts/production-runtime status
 ```
 
@@ -96,7 +104,7 @@ volumes with:
 
 ```sh
 sudo env \
-  THESISTRACE_PRODUCTION_ENV_FILE=/etc/thesistrace/production.env \
+  THESISTRACE_ENV_FILE=/etc/thesistrace/production.env \
   ./scripts/production-runtime down
 ```
 
@@ -121,17 +129,9 @@ external environment, and overlays together:
 ```sh
 production_env=/etc/thesistrace/production.env
 production_compose() (
-  unset \
-    THESISTRACE_ENVIRONMENT THESISTRACE_PUBLIC_ORIGIN \
-    THESISTRACE_RESEND_API_URL THESISTRACE_OWNER_DATABASE_PASSWORD \
-    THESISTRACE_CORE_DATABASE_PASSWORD THESISTRACE_AUTH_DATABASE_PASSWORD \
-    THESISTRACE_AGENT_DATABASE_PASSWORD \
-    BETTER_AUTH_SECRET RESEND_API_KEY RESEND_FROM_EMAIL \
-    THESISTRACE_TUSHARE_TOKEN \
-    THESISTRACE_AUTH_IMAGE THESISTRACE_AGENT_IMAGE \
-    THESISTRACE_AGENT_MODEL_REGISTRY THESISTRACE_AGENT_BUILD_REVISION \
-    THESISTRACE_AGENT_ANTHROPIC_API_KEY THESISTRACE_AGENT_GOOGLE_API_KEY \
-    THESISTRACE_AGENT_OPENAI_API_KEY THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET
+  repo_root=$(pwd -P)
+  . "$repo_root/scripts/runtime-environment"
+  clear_compose_environment
   model_registry=$(cat config/model-registry.json)
   sudo env THESISTRACE_AGENT_MODEL_REGISTRY="$model_registry" docker compose \
     --project-name thesistrace \
@@ -202,7 +202,7 @@ reports the count but never Stops a Track:
 
 ```sh
 sudo env \
-  THESISTRACE_PRODUCTION_ENV_FILE=/etc/thesistrace/production.env \
+  THESISTRACE_ENV_FILE=/etc/thesistrace/production.env \
   ./scripts/deactivate-researcher --email researcher@example.com
 ```
 

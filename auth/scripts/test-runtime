@@ -28,6 +28,7 @@ compose() {
     THESISTRACE_AUTH_TEST_IMAGE="$image_name" \
     THESISTRACE_AUTH_TEST_SECRET="$test_secret" \
     docker compose \
+      --env-file /dev/null \
       --project-name "$project_name" \
       --file "$compose_file" \
       "$@"

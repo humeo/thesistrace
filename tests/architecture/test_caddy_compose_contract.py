@@ -367,13 +367,13 @@ def test_single_node_services_have_one_replica_and_restart_unless_stopped() -> N
 
 def test_development_and_test_origins_are_exact_before_compose_rendering() -> None:
     development = (DEPLOY / "compose.dev.yaml").read_text()
-    development_env = (DEPLOY / "dev.env").read_text()
+    development_env = (ROOT / ".env.example").read_text()
     test_overlay = (DEPLOY / "compose.test-run.yaml").read_text()
     runner = (ROOT / "scripts" / "test-runtime").read_text()
 
     assert "THESISTRACE_PUBLIC_ORIGIN=http://127.0.0.1:5173" in development_env
     assert "THESISTRACE_ENVIRONMENT=development" in development_env
-    assert "THESISTRACE_TUSHARE_TOKEN=development-data-operator-token" in development_env
+    assert "THESISTRACE_TUSHARE_TOKEN=\n" in development_env
     assert "THESISTRACE_AGENT_IMAGE=thesistrace-agent-dev" in development_env
     assert "THESISTRACE_MCP_SIGNING_PRIVATE_JWK=" in development_env
     assert "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK=" in development_env
@@ -400,19 +400,18 @@ def test_development_agent_uses_the_configured_local_luna_provider() -> None:
     agent = _service(development, "agent", "research-worker")
     environment = dict(
         line.split("=", maxsplit=1)
-        for line in (DEPLOY / "dev.env").read_text().splitlines()
+        for line in (ROOT / ".env.example").read_text().splitlines()
         if line and not line.startswith("#")
     )
 
-    assert "THESISTRACE_AGENT_OPENAI_API_KEY: ${CLI_API_KEY:?" in agent
-    assert "OPENAI_BASE_URL: ${THESISTRACE_AGENT_OPENAI_BASE_URL:?" in agent
-    assert "CLI_API_KEY" not in development.replace(agent, "")
-    assert "OPENAI_BASE_URL" not in development.replace(agent, "")
-    assert "CLI_API_KEY" not in environment
-    assert "THESISTRACE_AGENT_OPENAI_API_KEY" not in environment
-    assert environment["THESISTRACE_AGENT_OPENAI_BASE_URL"] == (
-        "http://host.docker.internal:8317/v1"
-    )
+    compose = (DEPLOY / "compose.yaml").read_text()
+    shared_agent = _service(compose, "agent", "agent-initialize")
+    assert "THESISTRACE_AGENT_OPENAI_API_KEY: ${THESISTRACE_AGENT_OPENAI_API_KEY:-}" in shared_agent
+    assert "OPENAI_BASE_URL: ${THESISTRACE_AGENT_OPENAI_BASE_URL:?" in shared_agent
+    assert "CLI_API_KEY" not in development
+    assert "OPENAI_BASE_URL" not in agent
+    assert environment["THESISTRACE_AGENT_OPENAI_API_KEY"] == ""
+    assert environment["THESISTRACE_AGENT_OPENAI_BASE_URL"] == "https://api.openai.com/v1"
     assert "THESISTRACE_AGENT_MODEL_REGISTRY" not in environment
     registry = json.loads((ROOT / "config" / "model-registry.json").read_text())
     assert registry == {
@@ -425,6 +424,7 @@ def test_development_agent_uses_the_configured_local_luna_provider() -> None:
             "provider_adapter": "openai",
             "provider_model_id": "gpt-5.6-luna",
             "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+            "context_window": 258000,
             "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
         }],
     }

@@ -584,7 +584,9 @@ def test_default_gate_excludes_deferred_and_credential_dependent_work() -> None:
         "check_live_tushare",
     ):
         assert deferred not in core_gate.lower()
-    assert live_gate == "uv run python scripts/check_live_tushare.py"
+    assert live_gate == (
+        "node scripts/configure.mjs run uv run python scripts/check_live_tushare.py"
+    )
 
 
 def test_fast_host_gate_uses_bounded_parallelism_without_expensive_work() -> None:

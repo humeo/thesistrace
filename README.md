@@ -14,17 +14,24 @@ Install [mise](https://mise.jdx.dev/), [uv](https://docs.astral.sh/uv/), and
 Docker with Compose support. Then install the pinned Node.js and pnpm versions,
 sync host dependencies, validate Compose, and build the local images:
 
-The Development Agent uses `gpt-5.6-luna` with `high` reasoning through the local
-OpenAI-compatible service at `http://localhost:8317/v1`. Export the existing
-`CLI_API_KEY` in the launching shell; Compose injects it only into Agent and
-uses `host.docker.internal:8317` inside the container. No key value is stored in
-the repository. Deterministic Test commands retain their isolated Scripted model.
+Runtime settings and credentials come from the private repository-root `.env`.
+The tracked `.env.example` contains no secrets. Create a local configuration,
+fill its external service credentials, then validate and build:
 
 ```sh
-export CLI_API_KEY
 mise install
+mise exec -- pnpm config:init
+# Edit .env: Resend sender/key, Tushare token, and enabled model provider keys.
+mise exec -- pnpm config:check
 mise exec -- pnpm bootstrap
 ```
+
+`config:init` generates local database, object-store, Auth, and MCP signing
+credentials once and refuses to overwrite an existing file. Model definitions
+remain in `config/model-registry.json`; set the canonical provider key and
+`THESISTRACE_AGENT_OPENAI_BASE_URL` in `.env` for your chosen endpoint.
+See the [configuration guide](docs/runbook/configuration.md) for the complete
+configuration inventory, Production settings, and private CLI commands.
 
 Start the complete Development topology with Compose Watch:
 
