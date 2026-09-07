@@ -403,6 +403,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
     });
   };
   await page.route("**/api/agent/sessions/*", failedDelete);
+  await page.locator(".chat-session-row-current").hover();
   await page.getByRole("button", { name: "Actions for Untitled" }).click();
   await page.getByRole("menuitem", { name: "Delete Chat" }).click();
   const failedDeleteDialog = page.getByRole("dialog", { name: "Delete Chat?" });
@@ -457,6 +458,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   expect(currentIndicator.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
   const collapsedActions = page.getByRole("button", { name: `Actions for ${recoveredTitle}` });
   await expect(collapsedActions).toBeVisible();
+  await page.locator(".chat-session-row-current").hover();
   const collapsedActionTarget = await collapsedActions.boundingBox();
   expect(collapsedActionTarget?.width).toBeGreaterThanOrEqual(36);
   expect(collapsedActionTarget?.height).toBeGreaterThanOrEqual(36);
@@ -483,6 +485,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   expect(runRequests).toHaveLength(1);
 
   const sessionActions = page.getByRole("button", { name: `Actions for ${recoveredTitle}` });
+  await page.locator(".chat-session-row-current").hover();
   await sessionActions.click();
   const renameMenuItem = page.getByRole("menuitem", { name: "Rename" });
   const deleteMenuItem = page.getByRole("menuitem", { name: "Delete Chat" });
@@ -588,6 +591,9 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await openNavigation.click();
   const mobileActions = page.getByRole("button", { name: `Actions for ${renamedTitle}` });
   const mobileSessionLink = page.getByRole("link", { name: renamedTitle, exact: true });
+  // Revealing the menu also waits for the navigation slide to settle before
+  // measuring its hit targets; transformed bounds can round just below 44px.
+  await page.locator(".chat-session-row-current").hover();
   for (const target of [mobileActions, mobileSessionLink]) {
     const bounds = await target.boundingBox();
     expect(bounds?.width).toBeGreaterThanOrEqual(44);
@@ -610,6 +616,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   await expect(page.locator("#primary-navigation")).toHaveAttribute("inert", "");
   await expect(openNavigation).toBeFocused();
   await openNavigation.click();
+  await page.locator(".chat-session-row-current").hover();
   await mobileActions.click();
   await page.keyboard.press("Escape");
   await expect(page.locator(".app-shell")).toHaveClass(/app-shell-navigation-open/);

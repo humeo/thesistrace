@@ -1,6 +1,7 @@
 import type { BrowserContext, Page } from "@playwright/test";
 
 import { expect, sameOriginHeaders, test } from "./auth-fixture";
+import { revealToolActivity } from "./chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 
 const toolPrompt = "[scripted-tool-turn] Inspect the available research context.";
@@ -89,7 +90,10 @@ test("waiting_for_user survives reload and Answer resumes the same Turn", async 
   expect(runs).toHaveLength(2);
   expect(runs[1]).toMatchObject({ command: "answer", messages: [], runId: firstRunId });
   expect(runs[1]?.resume).toMatchObject([{ payload: { selections: ["Quality"], text: "Keep turnover low." }, status: "resolved" }]);
-  await expect(page.locator(".chat-message-user").filter({ hasText: "Quality\n\nKeep turnover low." })).toBeVisible();
+  const questionTool = await revealToolActivity(page, "ask_user", "complete");
+  await questionTool.getByText("Question and answer", { exact: true }).click();
+  await expect(questionTool).toContainText("Quality\n\nKeep turnover low.");
+  await expect(page.locator(".chat-message-user")).toHaveCount(1);
   await expect(page.locator(".chat-question-composer")).toHaveCount(0);
   const sessionId = new URL(sessionUrl).searchParams.get("session")!;
   const response = await page.request.get(`/api/agent/sessions/${sessionId}`, { headers: sameOriginHeaders() });

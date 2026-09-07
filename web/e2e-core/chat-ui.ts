@@ -16,7 +16,8 @@ export async function revealToolActivity(
 ): Promise<Locator> {
   const activity = toolActivity(page, name, status);
   await activity.first().waitFor({ state: "attached" });
-  const groups = activity.locator("xpath=ancestor::details[contains(@class, 'chat-tool-group')]");
+  // Open outer execution history before its nested Tool group, as a user would.
+  const groups = activity.locator("xpath=ancestor::details");
   for (const group of await groups.all()) {
     if (await group.getAttribute("open") === null) {
       await group.locator(":scope > summary").click();
