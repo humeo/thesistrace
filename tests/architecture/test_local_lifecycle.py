@@ -1691,7 +1691,7 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
         "&& pnpm --dir agent test:integration"
     )
     assert scripts["check:performance"] == "./scripts/test-runtime performance"
-    assert scripts["test:benchmark"] == "./scripts/test-runtime benchmark"
+    assert "test:benchmark" not in scripts
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
     assert scripts["test:image-smoke"] == (
         "./scripts/test-runtime image-smoke && pnpm --dir auth test:image-smoke "
@@ -1748,13 +1748,13 @@ def test_product_state_reset_recreates_the_auth_fixture_network_namespace() -> N
     )
 
 
-def test_benchmark_reprovisions_an_authenticated_researcher_after_each_reset(
+def test_performance_reprovisions_an_authenticated_researcher_after_each_reset(
     tmp_path: Path,
 ) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
 
     completed = subprocess.run(
-        [ROOT / "scripts" / "test-runtime", "benchmark"],
+        [ROOT / "scripts" / "test-runtime", "performance"],
         cwd=ROOT,
         env=environment,
         capture_output=True,

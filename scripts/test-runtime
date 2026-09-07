@@ -110,8 +110,7 @@ release_test_origin() {
 compose() {
   validate_test_project
   if [ "${command:-}" = image-smoke ] \
-    || { [ "${command:-}" = performance ] && [ "${use_image_overlay:-false}" = true ]; } \
-    || { [ "${command:-}" = benchmark ] && [ "${use_image_overlay:-false}" = true ]; }; then
+    || { [ "${command:-}" = performance ] && [ "${use_image_overlay:-false}" = true ]; }; then
     COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
       THESISTRACE_TEST_BUCKET="$bucket_name" \
       THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
@@ -1176,9 +1175,9 @@ case "$command" in
     fi
     exit 0
     ;;
-  integration | integration-batch-cancel | codex-mcp | benchmark | performance | e2e | agent-eval | image-smoke) ;;
+  integration | integration-batch-cancel | codex-mcp | performance | e2e | agent-eval | image-smoke) ;;
   *)
-    echo "usage: $0 {identity|cleanup|stop-postgres|restart-postgres|stop-rustfs|restart-rustfs|integration|integration-batch-cancel|codex-mcp|benchmark|performance|e2e|agent-eval|image-smoke [--keep-environment]}" >&2
+    echo "usage: $0 {identity|cleanup|stop-postgres|restart-postgres|stop-rustfs|restart-rustfs|integration|integration-batch-cancel|codex-mcp|performance|e2e|agent-eval|image-smoke [--keep-environment]}" >&2
     exit 2
     ;;
 esac
@@ -1238,7 +1237,6 @@ secret_dir=
 auth_session_file=
 operator_sessions_file=
 if [ "$command" = image-smoke ] \
-  || [ "$command" = benchmark ] \
   || [ "$command" = performance ]; then
   secret_root="$state_root/.runtime-secrets"
   mkdir -p "$secret_root"
@@ -1314,7 +1312,7 @@ case "$command" in
       tests/acceptance/test_core_research_batch_cancel.py::test_cancel_is_terminal_while_object_cleanup_retries_after_rustfs_restart \
       --junitxml="$dependency_restart_report"
     ;;
-  benchmark | performance)
+  performance)
     use_image_overlay=true
     run_phase performance-images build_runtime_images
     run_phase performance-infrastructure compose up --detach --no-build \
