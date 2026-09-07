@@ -68,11 +68,14 @@ services:
 ```sh
 sudo env \
   THESISTRACE_ENV_FILE=/etc/thesistrace/production.env \
-  ./scripts/production-runtime validate
+  pnpm prod validate
 ```
 
-Validation emits no output on success. A failure emits one code without the
+The validator emits no payload on success. A failure emits a code and field names without the
 rejected value and exits non-zero.
+
+Status, logs and down need Docker access but no environment file or provider
+credentials. They use exact project labels; down keeps all named data volumes.
 
 ## Start, inspect, and stop
 
@@ -84,7 +87,7 @@ service health:
 ```sh
 sudo env \
   THESISTRACE_ENV_FILE=/etc/thesistrace/production.env \
-  ./scripts/production-runtime up
+  pnpm prod up
 ```
 
 Caddy obtains and persists its automatic HTTPS state under the Production
@@ -96,7 +99,7 @@ inspected through the private topology:
 ```sh
 sudo env \
   THESISTRACE_ENV_FILE=/etc/thesistrace/production.env \
-  ./scripts/production-runtime status
+  pnpm prod status
 ```
 
 Stop and remove containers and the project network while retaining named data
@@ -105,7 +108,7 @@ volumes with:
 ```sh
 sudo env \
   THESISTRACE_ENV_FILE=/etc/thesistrace/production.env \
-  ./scripts/production-runtime down
+  pnpm prod down
 ```
 
 All long-running single-node services use one replica and
@@ -122,35 +125,19 @@ singleton capability. There is exactly one Operator, and that account remains a
 Researcher account for research work. Assignment and transfer remain private
 Production commands and are never Console operations.
 
-Run Auth Operator commands inside the private Production topology after
-`production-runtime up`. This helper function keeps the canonical project,
-external environment, and overlays together:
-
-```sh
-production_env=/etc/thesistrace/production.env
-production_compose() (
-  repo_root=$(pwd -P)
-  . "$repo_root/scripts/runtime-environment"
-  clear_compose_environment
-  model_registry=$(cat config/model-registry.json)
-  sudo env THESISTRACE_AGENT_MODEL_REGISTRY="$model_registry" docker compose \
-    --project-name thesistrace \
-    --env-file "$production_env" \
-    --file deploy/core/compose.yaml \
-    --file deploy/core/compose.production.yaml \
-    "$@"
-)
-```
+Run private commands through `pnpm prod run` after `pnpm prod up`. It validates
+and loads the same external configuration and uses the canonical project.
+The host needs Node 24 and pnpm, pinned in `.mise.toml`, as well as Docker Compose.
 
 Assign the first active Researcher, or atomically transfer the capability to a
 different active Researcher. Transfer revokes every Login Session of the former
 Operator; the new Operator must already have a Login Session:
 
 ```sh
-production_compose run --rm --no-deps -T auth \
+sudo env THESISTRACE_ENV_FILE=/etc/thesistrace/production.env pnpm prod run auth \
   node dist/operator.js assign-operator --email operator@example.com
 
-production_compose run --rm --no-deps -T auth \
+sudo env THESISTRACE_ENV_FILE=/etc/thesistrace/production.env pnpm prod run auth \
   node dist/operator.js transfer-operator --email next-operator@example.com
 ```
 
@@ -173,10 +160,10 @@ but never its token or email link; Resend must accept the message before the
 Invitation becomes usable:
 
 ```sh
-production_compose run --rm --no-deps -T auth \
+sudo env THESISTRACE_ENV_FILE=/etc/thesistrace/production.env pnpm prod run auth \
   node dist/operator.js invite --email researcher@example.com
 
-production_compose run --rm --no-deps -T auth \
+sudo env THESISTRACE_ENV_FILE=/etc/thesistrace/production.env pnpm prod run auth \
   node dist/operator.js reissue --email researcher@example.com
 ```
 
@@ -184,13 +171,13 @@ Revoke every Login Session, reactivate access without creating a Session, or
 correct the initial display label:
 
 ```sh
-production_compose run --rm --no-deps -T auth \
+sudo env THESISTRACE_ENV_FILE=/etc/thesistrace/production.env pnpm prod run auth \
   node dist/operator.js revoke-sessions --email researcher@example.com
 
-production_compose run --rm --no-deps -T auth \
+sudo env THESISTRACE_ENV_FILE=/etc/thesistrace/production.env pnpm prod run auth \
   node dist/operator.js reactivate --email researcher@example.com
 
-production_compose run --rm --no-deps -T auth \
+sudo env THESISTRACE_ENV_FILE=/etc/thesistrace/production.env pnpm prod run auth \
   node dist/operator.js correct-label --email researcher@example.com \
   --label "Research label"
 ```
@@ -203,7 +190,7 @@ reports the count but never Stops a Track:
 ```sh
 sudo env \
   THESISTRACE_ENV_FILE=/etc/thesistrace/production.env \
-  ./scripts/deactivate-researcher --email researcher@example.com
+  node tooling/dev/deactivate-researcher.mjs --email researcher@example.com
 ```
 
 Every access operation is idempotent. Deactivation revokes Sessions,
@@ -215,7 +202,7 @@ active flag; the Researcher must log in again.
 
 The Auth schema stores a fingerprint of the one current `BETTER_AUTH_SECRET`.
 To rotate it, replace the value in the external environment file and run
-`production-runtime up` again. Auth startup atomically revokes every Session,
+`pnpm prod up` again. Auth startup atomically revokes every Session,
 Invitation, and password-reset record before accepting the new fingerprint.
 There is no old-key ring, compatibility window, or fallback secret.
 
@@ -242,8 +229,8 @@ startup; Auth, Core, Web, and durable submission remain healthy. Inspect the
 Worker and queued operations with:
 
 ```sh
-production_compose ps data-operator-worker
-production_compose logs --no-color --tail 200 data-operator-worker
+sudo pnpm prod status
+sudo pnpm prod logs data-operator-worker
 ```
 
 Logs contain bounded operation and request identifiers, not source responses,

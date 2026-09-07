@@ -7,17 +7,17 @@
     "pnpm": ">=11 <12"
   },
   "scripts": {
-    "config:init": "node scripts/configure.mjs init",
-    "config:check": "./scripts/dev-runtime validate",
-    "config:run": "node scripts/configure.mjs run",
-    "bootstrap": "./scripts/dev-runtime bootstrap",
-    "dev": "./scripts/dev-runtime watch",
-    "dev:logs": "./scripts/dev-runtime logs",
-    "dev:up": "./scripts/dev-runtime up",
-    "dev:reset": "./scripts/dev-runtime reset",
-    "dev:erase": "./scripts/dev-runtime erase",
-    "dev:stop": "./scripts/dev-runtime stop",
-    "test": "node scripts/check-test-ownership.mjs && node --test scripts/*.test.mjs && uv run ruff check src tests && uv run pytest -q -n 4 tests/kernel tests/architecture tests/adapters tests/data tests/entrypoints && pnpm --dir agent typecheck && pnpm --dir agent test && pnpm --dir agent test:eval-preflight && pnpm --dir auth typecheck && pnpm --dir auth test && pnpm --dir web typecheck && pnpm --dir web test:shell",
+    "config:init": "node tooling/config/cli.mjs init",
+    "config:check": "node tooling/dev/runtime.mjs development validate",
+    "config:run": "node tooling/config/cli.mjs run",
+    "bootstrap": "node tooling/dev/runtime.mjs development bootstrap",
+    "dev": "node tooling/dev/runtime.mjs development watch",
+    "dev:logs": "node tooling/dev/runtime.mjs development logs",
+    "dev:up": "node tooling/dev/runtime.mjs development up",
+    "dev:reset": "node tooling/dev/runtime.mjs development reset",
+    "dev:erase": "node tooling/dev/runtime.mjs development erase",
+    "dev:stop": "node tooling/dev/runtime.mjs development stop",
+    "test": "node scripts/check-test-ownership.mjs && node --test scripts/*.test.mjs tooling/**/*.test.mjs && uv run ruff check src tests && uv run pytest -q -n 4 tests/kernel tests/architecture tests/adapters tests/data tests/entrypoints && pnpm --dir agent typecheck && pnpm --dir agent test && pnpm --dir agent test:eval-preflight && pnpm --dir auth typecheck && pnpm --dir auth test && pnpm --dir web typecheck && pnpm --dir web test:shell",
     "test:cleanup": "./scripts/test-runtime cleanup",
     "test:e2e": "node scripts/run-e2e.mjs",
     "test:caddy-image-smoke": "./scripts/test-caddy-production-image",
@@ -27,7 +27,10 @@
     "check": "pnpm test && pnpm test:browser && pnpm test:integration && pnpm test:e2e",
     "check:performance": "./scripts/test-runtime performance",
     "check:release": "./scripts/release-gate",
-    "check:live-tushare": "node scripts/configure.mjs run uv run python scripts/check_live_tushare.py",
-    "test:browser": "pnpm --dir web test:browser"
+    "check:live-tushare": "node tooling/config/cli.mjs run uv run python scripts/check_live_tushare.py",
+    "test:browser": "pnpm --dir web test:browser",
+    "prod": "node tooling/dev/runtime.mjs production",
+    "dev:status": "node tooling/dev/runtime.mjs development status",
+    "config:template": "node tooling/config/cli.mjs template"
   }
 }

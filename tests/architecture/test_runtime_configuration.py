@@ -47,7 +47,7 @@ def test_missing_source_credential_stops_development_before_docker(tmp_path: Pat
     docker.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
     docker.chmod(0o755)
     result = subprocess.run(
-        [ROOT / "scripts/dev-runtime", "up"],
+        ["node", ROOT / "tooling/dev/runtime.mjs", "development", "up"],
         env={
             **environment,
             "PATH": f"{tmp_path}:{environment['PATH']}",
@@ -77,7 +77,7 @@ def test_development_file_is_authoritative_at_compose_boundary(tmp_path: Path) -
     )
     docker.chmod(0o755)
     result = subprocess.run(
-        [ROOT / "scripts/dev-runtime", "validate"],
+        ["node", ROOT / "tooling/dev/runtime.mjs", "development", "validate"],
         env={
             **environment,
             "PATH": f"{tmp_path}:{environment['PATH']}",
@@ -90,9 +90,9 @@ def test_development_file_is_authoritative_at_compose_boundary(tmp_path: Path) -
     )
     assert result.returncode == 0, result.stderr
     observed = json.loads(log.read_text())
-    assert observed["token"] is None
-    assert observed["origin"] is None
-    assert observed["args"][observed["args"].index("--env-file") + 1] == str(path)
+    assert observed["token"] == "fixture-configuration-only-12345"
+    assert observed["origin"] == "http://127.0.0.1:5173"
+    assert observed["args"][observed["args"].index("--env-file") + 1] == "/dev/null"
     assert observed["model"] == json.loads((ROOT / "config/model-registry.json").read_text())
 
 
@@ -151,7 +151,7 @@ def test_private_cli_reads_the_same_file_without_ambient_overrides(tmp_path: Pat
     result = subprocess.run(
         [
             "node",
-            ROOT / "scripts/configure.mjs",
+            ROOT / "tooling/config/cli.mjs",
             "run",
             "node",
             "-e",

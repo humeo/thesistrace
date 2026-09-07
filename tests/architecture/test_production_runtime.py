@@ -6,42 +6,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from production_configuration_fixtures import VALID_ENVIRONMENT, _run
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "production-runtime"
-
-VALID_ENVIRONMENT = """\
-THESISTRACE_ENVIRONMENT=production
-THESISTRACE_PUBLIC_ORIGIN=https://research.thesistrace.com
-THESISTRACE_RESEND_API_URL=https://api.resend.com
-THESISTRACE_AGENT_OPENAI_BASE_URL=https://api.openai.com/v1
-THESISTRACE_S3_ACCESS_KEY_ID=StorageAccess_7Qh9tT4Sx2Vk8Lm3
-THESISTRACE_S3_SECRET_ACCESS_KEY=StorageSecret_3Nm8qW6Zp5Jc2Rs7
-THESISTRACE_OWNER_DATABASE_PASSWORD=OwnerRuntime_7Qh9tT4Sx2Vk8Lm3
-THESISTRACE_CORE_DATABASE_PASSWORD=CoreRuntime_3Nm8qW6Zp5Jc2Rs7
-THESISTRACE_AUTH_DATABASE_PASSWORD=AuthRuntime_9Fd4vB7Ky2Hg6Px8
-THESISTRACE_AGENT_DATABASE_PASSWORD=AgentRuntime_5Jt8mQ3Wx7Lc9Vr4
-BETTER_AUTH_SECRET=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
-RESEND_API_KEY=re_production_7Kp4mN9vQ2sL6xT8
-RESEND_FROM_EMAIL=ThesisTrace <noreply@thesistrace.com>
-THESISTRACE_TUSHARE_TOKEN=production-tushare-token-7Kp4mN9vQ2sL6xT8
-THESISTRACE_AUTH_IMAGE=ghcr.io/thesistrace/auth:2026-08-29
-THESISTRACE_AGENT_IMAGE=ghcr.io/thesistrace/agent:2026-08-29
-THESISTRACE_AGENT_BUILD_REVISION=2026-08-29.1
-THESISTRACE_AGENT_OPENAI_API_KEY=sk-production-agent-7Kp4mN9vQ2sL6xT8
-THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS=600
-THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS=660
-THESISTRACE_MCP_AGENT_SCOPES=["research:read","research:execute","tracking:read","tracking:execute"]
-THESISTRACE_MCP_ALLOWED_HOSTS=["api:8100","research.thesistrace.com"]
-THESISTRACE_MCP_ALLOWED_ORIGINS=["https://research.thesistrace.com"]
-THESISTRACE_MCP_CLIENT_ID=thesistrace-agent
-THESISTRACE_MCP_CLOCK_SKEW_SECONDS=30
-THESISTRACE_MCP_DEPLOYMENT_TOOLS=["diagnose_alpha_formula","get_alpha_catalog","get_daily_track","get_daily_track_result","get_research_batch","get_research_context","get_research_run","get_research_run_result","list_daily_tracks","list_research_batches","list_research_runs","refresh_daily_track","retry_daily_track","start_daily_track","submit_research_batch","submit_research_run"]
-THESISTRACE_MCP_ISSUER_URL=https://research.thesistrace.com/api/auth
-THESISTRACE_MCP_RESOURCE_URL=https://research.thesistrace.com/mcp
-THESISTRACE_MCP_SIGNING_PRIVATE_JWK={"alg":"EdDSA","crv":"Ed25519","d":"bL6DuMib1dGbVwuY4HVdhFmqF2DwywXfoNQvOcF9DGQ","kid":"research-agent-signing-2026-08","kty":"OKP","use":"sig","x":"ECcLaOhwYA5_r6Ub4y8ZbuuvOSEwsim7Ttg5DXXG0yc"}
-THESISTRACE_MCP_VERIFYING_PUBLIC_JWK={"alg":"EdDSA","crv":"Ed25519","kid":"research-agent-signing-2026-08","kty":"OKP","use":"sig","x":"ECcLaOhwYA5_r6Ub4y8ZbuuvOSEwsim7Ttg5DXXG0yc"}
-"""
+SCRIPT = ["node", ROOT / "tooling/dev/runtime.mjs", "production"]
 
 
 def test_production_runtime_validates_before_rendering_or_starting(
@@ -63,7 +31,7 @@ def test_production_runtime_validates_before_rendering_or_starting(
     commands = command_log.read_text().splitlines()
     assert len(commands) == 2
     assert "config --quiet" in commands[0]
-    assert "up --detach --wait --build" in commands[1]
+    assert "up --detach --build --wait --wait-timeout 300" in commands[1]
     assert all("--env-file" in command for command in commands)
     assert "OwnerRuntime" not in command_log.read_text()
     assert completed.stdout == ""
@@ -100,11 +68,16 @@ def test_production_runtime_prevents_ambient_security_overrides(
         (ROOT / "config" / "model-registry.json").read_text()
     )
     assert lines[:3] + lines[4:] == [
-        "public_origin=unset",
-        "auth_secret=unset",
-        "tushare_token=unset",
-        "agent_provider=unset",
-        "mcp_private_key=unset",
+        "public_origin=https://research.thesistrace.com",
+        "auth_secret=9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "tushare_token=production-tushare-token-7Kp4mN9vQ2sL6xT8",
+        "agent_provider=sk-production-agent-7Kp4mN9vQ2sL6xT8",
+        "mcp_private_key="
+        + next(
+            line.split("=", 1)[1]
+            for line in VALID_ENVIRONMENT.splitlines()
+            if line.startswith("THESISTRACE_MCP_SIGNING_PRIVATE_JWK=")
+        ),
     ]
 
 
@@ -120,10 +93,7 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
 
     assert completed.returncode == 2
     assert completed.stdout == ""
-    assert completed.stderr == (
-        '{"code":"PRODUCTION_ENV_FILE_PERMISSIONS_INVALID",'
-        '"event":"production_runtime_failed"}\n'
-    )
+    assert json.loads(completed.stderr)["code"] == "PRODUCTION_ENV_FILE_PERMISSIONS_INVALID"
 
 
 @pytest.mark.parametrize(
@@ -131,7 +101,7 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
     [
         (
             "THESISTRACE_ENVIRONMENT=test",
-            "PRODUCTION_ENVIRONMENT_INVALID",
+            "CONFIG_ENVIRONMENT_INVALID",
         ),
         (
             "THESISTRACE_PUBLIC_ORIGIN=http://127.0.0.1:5173",
@@ -171,11 +141,11 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
         ),
         (
             "THESISTRACE_TUSHARE_TOKEN=development-data-operator-token",
-            "PRODUCTION_TUSHARE_TOKEN_INVALID",
+            "CONFIG_CREDENTIAL_INVALID",
         ),
         (
             "THESISTRACE_TUSHARE_TOKEN=<production-tushare-token>",
-            "PRODUCTION_TUSHARE_TOKEN_INVALID",
+            "CONFIG_CREDENTIAL_INVALID",
         ),
         (
             "THESISTRACE_AUTH_IMAGE=registry.example:5000/thesistrace/auth",
@@ -195,7 +165,7 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
         ),
         (
             "THESISTRACE_AGENT_MODEL_REGISTRY=not-json",
-            "PRODUCTION_AGENT_MODEL_REGISTRY_INLINE_UNSUPPORTED",
+            "CONFIG_VARIABLE_UNKNOWN",
         ),
         (
             "THESISTRACE_AGENT_OPENAI_API_KEY=test-provider-key",
@@ -203,26 +173,26 @@ def test_production_runtime_rejects_non_root_or_non_0600_environment(
         ),
         (
             "THESISTRACE_MCP_RESOURCE_URL=https://research.thesistrace.com/mcp/v1",
-            "PRODUCTION_MCP_IDENTITY_INVALID",
+            "CONFIG_VARIABLE_UNKNOWN",
         ),
         (
-            "THESISTRACE_MCP_AGENT_SCOPES=[\"research:read\"]",
+            'THESISTRACE_MCP_AGENT_SCOPES=["research:read"]',
             "PRODUCTION_MCP_SCOPE_INVALID",
         ),
         (
-            "THESISTRACE_MCP_DEPLOYMENT_TOOLS=[\"get_research_context\"]",
+            'THESISTRACE_MCP_DEPLOYMENT_TOOLS=["get_research_context"]',
             "PRODUCTION_MCP_TOOL_SET_INVALID",
         ),
         (
-            "THESISTRACE_MCP_ALLOWED_HOSTS=[\"api:8100\"]",
-            "PRODUCTION_MCP_TRANSPORT_SECURITY_INVALID",
+            'THESISTRACE_MCP_ALLOWED_HOSTS=["api:8100"]',
+            "CONFIG_VARIABLE_UNKNOWN",
         ),
         (
             "THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS=630",
-            "PRODUCTION_MCP_TIME_BUDGET_INVALID",
+            "CONFIG_MCP_TIME_BUDGET_INVALID",
         ),
         (
-            "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK={\"alg\":\"EdDSA\"}",
+            'THESISTRACE_MCP_VERIFYING_PUBLIC_JWK={"alg":"EdDSA"}',
             "PRODUCTION_MCP_SIGNING_KEY_INVALID",
         ),
     ],
@@ -233,10 +203,13 @@ def test_production_runtime_rejects_test_placeholder_and_weak_values(
     code: str,
 ) -> None:
     key = replacement.split("=", maxsplit=1)[0]
-    source = "\n".join(
-        replacement if line.startswith(f"{key}=") else line
-        for line in VALID_ENVIRONMENT.splitlines()
-    ) + "\n"
+    source = (
+        "\n".join(
+            replacement if line.startswith(f"{key}=") else line
+            for line in VALID_ENVIRONMENT.splitlines()
+        )
+        + "\n"
+    )
     if not any(line.startswith(f"{key}=") for line in VALID_ENVIRONMENT.splitlines()):
         source += replacement + "\n"
     environment_file = tmp_path / "production.env"
@@ -253,7 +226,7 @@ def test_production_runtime_rejects_relative_in_repository_and_duplicate_files(
     tmp_path: Path,
 ) -> None:
     relative = subprocess.run(
-        [SCRIPT, "up"],
+        [*SCRIPT, "up"],
         cwd=ROOT,
         env={**os.environ, "THESISTRACE_ENV_FILE": "production.env"},
         capture_output=True,
@@ -265,7 +238,7 @@ def test_production_runtime_rejects_relative_in_repository_and_duplicate_files(
 
     repository = _run(
         tmp_path,
-        ROOT / "deploy" / "core" / "dev.env",
+        ROOT / ".env.example",
         "up",
         stat_result="0:600",
     )
@@ -277,59 +250,4 @@ def test_production_runtime_rejects_relative_in_repository_and_duplicate_files(
     duplicated.chmod(0o600)
     duplicate = _run(tmp_path, duplicated, "up", stat_result="0:600")
     assert duplicate.returncode == 2
-    assert "PRODUCTION_ENV_FILE_CONTENT_INVALID" in duplicate.stderr
-
-
-def _run(
-    tmp_path: Path,
-    environment_file: Path,
-    action: str,
-    *,
-    stat_result: str,
-    command_log: Path | None = None,
-    environment_log: Path | None = None,
-    ambient_overrides: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(exist_ok=True)
-    stat = bin_dir / "stat"
-    stat.write_text(f"#!/bin/sh\nprintf '%s\\n' '{stat_result}'\n")
-    stat.chmod(0o755)
-    docker = bin_dir / "docker"
-    docker.write_text(
-        "#!/bin/sh\n"
-        "if [ -n \"${PRODUCTION_RUNTIME_ENV_LOG-}\" ]; then\n"
-        "  printf 'public_origin=%s\\nauth_secret=%s\\ntushare_token=%s\\n' "
-        "\"${THESISTRACE_PUBLIC_ORIGIN-unset}\" "
-        "\"${BETTER_AUTH_SECRET-unset}\" "
-        "\"${THESISTRACE_TUSHARE_TOKEN-unset}\" >>\"$PRODUCTION_RUNTIME_ENV_LOG\"\n"
-        "  printf 'agent_registry=%s\\nagent_provider=%s\\n' "
-        "\"${THESISTRACE_AGENT_MODEL_REGISTRY-unset}\" "
-        "\"${THESISTRACE_AGENT_OPENAI_API_KEY-unset}\" >>\"$PRODUCTION_RUNTIME_ENV_LOG\"\n"
-        "  printf 'mcp_private_key=%s\\n' "
-        "\"${THESISTRACE_MCP_SIGNING_PRIVATE_JWK-unset}\" >>\"$PRODUCTION_RUNTIME_ENV_LOG\"\n"
-        "fi\n"
-        "if [ -n \"${PRODUCTION_RUNTIME_COMMAND_LOG-}\" ]; then\n"
-        "  printf '%s\\n' \"docker $*\" >>\"$PRODUCTION_RUNTIME_COMMAND_LOG\"\n"
-        "fi\n"
-    )
-    docker.chmod(0o755)
-    environment = {
-        **os.environ,
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
-        "THESISTRACE_ENV_FILE": str(environment_file),
-    }
-    if command_log is not None:
-        environment["PRODUCTION_RUNTIME_COMMAND_LOG"] = str(command_log)
-    if environment_log is not None:
-        environment["PRODUCTION_RUNTIME_ENV_LOG"] = str(environment_log)
-    if ambient_overrides is not None:
-        environment.update(ambient_overrides)
-    return subprocess.run(
-        [SCRIPT, action],
-        cwd=ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    assert "CONFIG_VARIABLE_DUPLICATED" in duplicate.stderr

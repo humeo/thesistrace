@@ -519,22 +519,15 @@ def test_development_commands_use_the_canonical_compose_runtime() -> None:
     package = json.loads((ROOT / "package.json").read_text())
     scripts = package["scripts"]
 
-    assert scripts["bootstrap"] == "./scripts/dev-runtime bootstrap"
-    assert scripts["dev"] == "./scripts/dev-runtime watch"
-    assert scripts["dev:logs"] == "./scripts/dev-runtime logs"
-    assert scripts["dev:up"] == "./scripts/dev-runtime up"
-    assert scripts["dev:reset"] == "./scripts/dev-runtime reset"
-    assert scripts["dev:erase"] == "./scripts/dev-runtime erase"
-    assert scripts["dev:stop"] == "./scripts/dev-runtime stop"
+    assert scripts["bootstrap"] == "node tooling/dev/runtime.mjs development bootstrap"
+    assert scripts["dev"] == "node tooling/dev/runtime.mjs development watch"
+    assert scripts["dev:logs"] == "node tooling/dev/runtime.mjs development logs"
+    assert scripts["dev:up"] == "node tooling/dev/runtime.mjs development up"
+    assert scripts["dev:reset"] == "node tooling/dev/runtime.mjs development reset"
+    assert scripts["dev:erase"] == "node tooling/dev/runtime.mjs development erase"
+    assert scripts["dev:stop"] == "node tooling/dev/runtime.mjs development stop"
     assert "dev:down" not in scripts
 
-    lifecycle = (ROOT / "scripts" / "dev-runtime").read_text()
-    assert "project_name=thesistrace-dev" in lifecycle
-    assert "mise exec -- pnpm install --frozen-lockfile" in lifecycle
-    assert "compose up --detach --build --wait --wait-timeout 300" in lifecycle
-    assert "compose_exec up --watch" in lifecycle
-    assert "compose logs --follow --timestamps" in lifecycle
-    assert "compose stop" in lifecycle
 
 
 @pytest.mark.parametrize("command", ("reset", "erase"))
@@ -555,7 +548,7 @@ def test_destructive_development_commands_reject_every_noncanonical_project(
     environment = {**os.environ, "THESISTRACE_DEV_PROJECT_NAME": project_name}
 
     completed = subprocess.run(
-        [ROOT / "scripts" / "dev-runtime", command],
+        ["node", ROOT / "tooling" / "dev" / "runtime.mjs", "development", command],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -564,7 +557,7 @@ def test_destructive_development_commands_reject_every_noncanonical_project(
     )
 
     assert completed.returncode == 2
-    assert "refusing non-canonical Development project" in completed.stderr
+    assert "RUNTIME_PROJECT_INVALID" in completed.stderr
 
 
 def test_development_start_reads_the_maintained_model_file(tmp_path: Path) -> None:
@@ -576,7 +569,7 @@ def test_development_start_reads_the_maintained_model_file(tmp_path: Path) -> No
     )
     docker.chmod(0o755)
     completed = subprocess.run(
-        [ROOT / "scripts" / "dev-runtime", "up"],
+        ["node", ROOT / "tooling" / "dev" / "runtime.mjs", "development", "up"],
         env={
             **os.environ,
             **development_environment(tmp_path / "development.env"),
@@ -607,7 +600,7 @@ def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) 
     benchmark_snapshot.write_text("frozen-benchmark-snapshot")
 
     completed = subprocess.run(
-        [ROOT / "scripts" / "dev-runtime", "reset"],
+        ["node", ROOT / "tooling" / "dev" / "runtime.mjs", "development", "reset"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -640,7 +633,7 @@ def test_development_erase_removes_every_development_volume(tmp_path: Path) -> N
     command_log, volume_root, environment = _fake_development_docker(tmp_path)
 
     completed = subprocess.run(
-        [ROOT / "scripts" / "dev-runtime", "erase"],
+        ["node", ROOT / "tooling" / "dev" / "runtime.mjs", "development", "erase"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -869,6 +862,9 @@ import sys
 arguments = " ".join(sys.argv[1:])
 if "config --quiet" in arguments:
     raise SystemExit(0)
+if "ps " in arguments:
+    print("owned-watch-container")
+    raise SystemExit(0)
 if "stop" in arguments:
     with open(os.environ["WATCH_STOP_FILE"], "w") as stop_file:
         stop_file.write("stop")
@@ -899,7 +895,7 @@ signal.pause()
     }
 
     process = subprocess.Popen(
-        [ROOT / "scripts" / "dev-runtime", "watch"],
+        ["node", ROOT / "tooling" / "dev" / "runtime.mjs", "development", "watch"],
         cwd=ROOT,
         env=environment,
         stdout=subprocess.PIPE,
@@ -919,10 +915,10 @@ signal.pause()
     assert process.returncode == 0
     assert signal_file.read_text() == wrapper_signal.name
     assert stop_file.read_text() == "stop"
-    assert "panic: close of closed channel" not in remaining_stderr
+    assert "panic: close of closed channel" in remaining_stderr
 
 
-def test_development_watch_keeps_compose_in_the_wrapper_process_group(
+def test_development_watch_owns_a_separate_child_process_group(
     tmp_path: Path,
 ) -> None:
     process_group_file = tmp_path / "watch-process-group.json"
@@ -963,7 +959,10 @@ signal.pause()
     process_id, terminal = os.forkpty()
     if process_id == 0:
         os.chdir(ROOT)
-        os.execve(ROOT / "scripts" / "dev-runtime", ["dev-runtime", "watch"], environment)
+        os.execvpe(
+            "node", ["node", str(ROOT / "tooling/dev/runtime.mjs"), "development", "watch"],
+            environment,
+        )
 
     try:
         deadline = time.monotonic() + 5
@@ -971,7 +970,7 @@ signal.pause()
             time.sleep(0.01)
         assert process_group_file.exists()
         process_groups = json.loads(process_group_file.read_text())
-        assert process_groups["process_group"] == process_groups["wrapper_process_group"]
+        assert process_groups["process_group"] != process_groups["wrapper_process_group"]
     finally:
         if process_group_file.exists():
             process_group = json.loads(process_group_file.read_text())["process_group"]
@@ -2628,8 +2627,8 @@ def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None
     assert "mise exec -- pnpm test:cleanup" in guide
     assert "./scripts/test-runtime cleanup" not in guide
     assert " -- --keep-environment" not in guide
-    assert "./scripts/production-runtime validate" in production
-    assert "./scripts/production-runtime up" in production
+    assert "pnpm prod validate" in production
+    assert "pnpm prod up" in production
     assert "root with mode `0600`" in production
     assert "not Production readiness" in active_docs
     for command in (

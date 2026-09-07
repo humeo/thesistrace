@@ -378,7 +378,7 @@ def test_development_and_test_origins_are_exact_before_compose_rendering() -> No
     assert "THESISTRACE_MCP_SIGNING_PRIVATE_JWK=" in development_env
     assert "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK=" in development_env
     assert "THESISTRACE_MCP_INTERNAL_URL" not in development_env
-    assert "127.0.0.1:${THESISTRACE_DEV_WEB_PORT}:5173" in development
+    assert "127.0.0.1:${THESISTRACE_DEV_WEB_PORT}:${THESISTRACE_DEV_WEB_PORT}" in development
     assert "127.0.0.1:${THESISTRACE_DEV_API_PORT}:8100" in development
 
     assert (

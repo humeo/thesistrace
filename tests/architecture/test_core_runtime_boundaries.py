@@ -594,7 +594,7 @@ def test_default_gate_excludes_deferred_and_credential_dependent_work() -> None:
     ):
         assert deferred not in core_gate.lower()
     assert live_gate == (
-        "node scripts/configure.mjs run uv run python scripts/check_live_tushare.py"
+        "node tooling/config/cli.mjs run uv run python scripts/check_live_tushare.py"
     )
 
 

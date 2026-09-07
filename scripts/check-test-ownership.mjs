@@ -15,7 +15,7 @@ export const suites = {
   'web-unit': ['web/src/**/*.test.{ts,tsx}'],
   'web-e2e': ['web/e2e-core/**/*.spec.ts'],
   'web-browser': ['web/browser/**/*.spec.ts'],
-  'test-tooling': ['scripts/*.test.mjs'],
+  'test-tooling': ['scripts/*.test.mjs', 'tooling/**/*.test.mjs'],
 };
 
 export function owners(path, rules = suites) {

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _configure(path: Path, action: str, **overrides: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["node", ROOT / "scripts/configure.mjs", action],
+        ["node", ROOT / "tooling/config/cli.mjs", action],
         env={**os.environ, "THESISTRACE_ENV_FILE": str(path), **overrides},
         capture_output=True,
         text=True,
