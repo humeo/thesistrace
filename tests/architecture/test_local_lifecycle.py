@@ -127,6 +127,16 @@ if arguments[:2] == ["image", "tag"]:
     if failing_target and arguments[-1].endswith(f"-{failing_target}"):
         raise SystemExit(6)
     raise SystemExit(0)
+if arguments[:2] == ["image", "ls"]:
+    if os.environ.get("FAKE_IMAGE_LIST_FAILURE"):
+        raise SystemExit(23)
+    project = arguments[-1].removeprefix("reference=").removesuffix("-*")
+    for service in (
+        "api", "research-worker", "batch-research-worker", "tracking-worker",
+        "data-operator-worker", "initialize", "agent", "auth", "web",
+    ):
+        print(f"{project}-{service}")
+    raise SystemExit(0)
 if arguments[:2] == ["image", "inspect"]:
     print("sha256:test-image")
     raise SystemExit(0)
@@ -1577,7 +1587,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     tmp_path: Path,
 ) -> None:
     package = json.loads((ROOT / "package.json").read_text())
-    assert package["scripts"]["test:e2e"] == "./scripts/test-runtime e2e"
+    assert package["scripts"]["test:e2e"] == "node scripts/run-e2e.mjs"
     command_log, environment = _fake_test_runtime_commands(tmp_path)
 
     completed = subprocess.run(
@@ -1692,7 +1702,7 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
     )
     assert scripts["check:performance"] == "./scripts/test-runtime performance"
     assert "test:benchmark" not in scripts
-    assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
+    assert scripts["test:e2e"] == "node scripts/run-e2e.mjs"
     assert scripts["test:image-smoke"] == (
         "./scripts/test-runtime image-smoke && pnpm --dir auth test:image-smoke "
         "&& pnpm --dir agent test:image-smoke && pnpm test:caddy-image-smoke"

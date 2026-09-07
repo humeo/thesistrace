@@ -23,7 +23,7 @@ import {
   type AuthenticatedResearcher,
 } from "./auth-fixture";
 
-test("only the singleton Operator can open and read the Operator Console", async ({ page }) => {
+test("only the singleton Operator can open and read the Operator Console", { tag: "@isolated" }, async ({ page }) => {
   test.setTimeout(240_000);
   const operatorMutationRequests: Array<Readonly<{ path: string; body: string }>> = [];
   const marketStatusRequests: Array<Readonly<{

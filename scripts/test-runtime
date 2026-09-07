@@ -270,12 +270,15 @@ runtime_image_name() {
 }
 
 cleanup_runtime_images() {
+  if [ "${THESISTRACE_TEST_KEEP_IMAGES:-0}" = 1 ]; then return 0; fi
   runtime_images_status=0
+  remaining_image_names=$(docker image ls --format '{{.Repository}}' \
+    --filter "reference=$project_name-*") || return $?
   for image_service in \
     api research-worker batch-research-worker tracking-worker data-operator-worker \
     initialize agent auth web; do
     image_name=$(runtime_image_name "$image_service")
-    if docker image inspect "$image_name" >/dev/null 2>&1; then
+    if printf '%s\n' "$remaining_image_names" | grep -Fxq "$image_name"; then
       docker image rm "$image_name" >/dev/null || runtime_images_status=$?
     fi
   done
@@ -283,6 +286,16 @@ cleanup_runtime_images() {
 }
 
 build_runtime_images() {
+  if [ -n "${THESISTRACE_TEST_IMAGE_SOURCE_PROJECT:-}" ]; then
+    printf 'image_source_project=%s\n' "$THESISTRACE_TEST_IMAGE_SOURCE_PROJECT" >>"$run_metadata"
+    printf '%s\n' "$THESISTRACE_TEST_IMAGE_SOURCE_PROJECT" \
+      | grep -Eq '^thesistrace-test-[0-9]{8}t[0-9]{6}z-[0-9]+-[0-9a-f]{8}$' || return 2
+    for image_service in initialize api research-worker batch-research-worker tracking-worker data-operator-worker auth agent web; do
+      docker image tag "$THESISTRACE_TEST_IMAGE_SOURCE_PROJECT-$image_service" \
+        "$(runtime_image_name "$image_service")" || return $?
+    done
+    return 0
+  fi
   compose build initialize auth-initialize agent web || return $?
   built_backend_image=$(runtime_image_name initialize)
   docker image tag "$built_backend_image" "$(runtime_image_name api)" || return $?

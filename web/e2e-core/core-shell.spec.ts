@@ -531,7 +531,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
   }
 });
 
-test("Financial catalog composes one Formula and starts its DailyTrack", async ({ page }, testInfo) => {
+test("Financial catalog composes one Formula and starts its DailyTrack", { tag: "@isolated" }, async ({ page }, testInfo) => {
   test.setTimeout(180_000);
   const responses: string[] = [];
   let runId: string | undefined;
@@ -1010,7 +1010,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   })).status()).toBe(204);
 });
 
-test("Default and custom Folder Drafts run once, retain edits, reject safely, and publish results", async ({ page, researcher }, testInfo) => {
+test("Default and custom Folder Drafts run once, retain edits, reject safely, and publish results", { tag: "@isolated" }, async ({ page, researcher }, testInfo) => {
   test.setTimeout(120_000);
   const defaultDraftKey = `thesistrace.research-draft.${researcher.id}.folder_default`;
   const responses: string[] = [];
