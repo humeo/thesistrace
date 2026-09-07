@@ -1453,6 +1453,7 @@ def test_only_explicit_eval_injects_the_configured_credential_and_selected_endpo
     observed_path = tmp_path / "agent-environment.json"
     eval_registry = {
         "default_model_key": "gpt-5.6-luna",
+        "min_compaction_context_window": 65536,
         "models": [{
             "key": "gpt-5.6-luna",
             "display_name": "GPT-5.6 Luna",
@@ -1461,6 +1462,7 @@ def test_only_explicit_eval_injects_the_configured_credential_and_selected_endpo
             "reasoning_efforts": ["high"],
             "default_reasoning_effort": "high",
             "context_window": 258000,
+            "max_output_tokens": 128000,
             "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
             "enabled": True,
         }],

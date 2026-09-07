@@ -16,6 +16,7 @@ CORE_SCHEMAS = (
     "publication",
     "data",
     "research_folders",
+    "research_agent",
     "research_runs",
     "research_batches",
     "daily_tracks",

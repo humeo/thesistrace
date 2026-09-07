@@ -12,6 +12,8 @@ import { SCRIPTED_FAILURE_PROMPTS } from "./scripted-failure-model.js";
 import { researchA2UITool } from "./research-a2ui-tool.js";
 import { projectResearchA2UIContent } from "../../contracts/research-a2ui.mjs";
 
+const capacity = (contextWindow: number) => ({ contextWindow, maxOutputTokens: 128_000 });
+
 const options: LanguageModelV3CallOptions = { prompt: [{ role: "user", content: [{ type: "text", text: "Alpha idea" }] }] };
 const finish: LanguageModelV3StreamPart = {
   type: "finish", finishReason: { unified: "stop", raw: "stop" },
@@ -19,31 +21,121 @@ const finish: LanguageModelV3StreamPart = {
 };
 const textPart: LanguageModelV3StreamPart = { type: "text-delta", id: "text", delta: "An answer." };
 
+test.each(["tool-calls", "length"] as const)("consecutive buffered calls reach the %s completion", async (reason) => {
+  const guarded = new GuardedLanguageModel(fake(async () => stream([
+    { type: "tool-call", toolCallId: "first", toolName: "read", input: "{}" },
+    { type: "tool-call", toolCallId: "second", toolName: "read", input: "{}" },
+    { ...finish, finishReason: { unified: reason, raw: reason } },
+  ])), new RunModelObservation(new RunUsageCapture()), capacity(65_536));
+  const output = await guarded.doStream(options);
+  const delivered: string[] = [];
+  const consume = async () => {
+    const reader = output.stream.getReader();
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (next.value.type === "error") throw next.value.error;
+      if (next.value.type === "tool-call") delivered.push(next.value.toolCallId);
+    }
+  };
+  if (reason === "length") {
+    await expect(consume()).rejects.toMatchObject({ code: "OUTPUT_LIMIT" });
+    expect(delivered).toEqual([]);
+  } else {
+    await consume();
+    expect(delivered).toEqual(["first", "second"]);
+  }
+}, 1000);
+
+test("the native Responses HTTP payload receives the dynamic output allowance", async () => {
+  const requests: Record<string, unknown>[] = [];
+  const native = createOpenAI({ apiKey: "synthetic", fetch: async (_url, init) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return Response.json({ id: "response_fixture", created_at: 1, model: "fixture", status: "completed",
+      output: [{ type: "message", id: "message_fixture", role: "assistant", status: "completed",
+        content: [{ type: "output_text", text: "Answer", annotations: [] }] }],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+  } }).responses("fixture");
+  const guarded = new GuardedLanguageModel(native, new RunModelObservation(new RunUsageCapture()), capacity(258_000));
+  await guarded.doGenerate(options);
+  expect(requests[0]?.max_output_tokens).toBe(128_000);
+  const longText = "context ".repeat(80_000);
+  await guarded.doGenerate({ prompt: [{ role: "user", content: [{ type: "text", text: longText }] }] });
+  expect(requests[1]?.max_output_tokens).toBeGreaterThan(0);
+  expect(requests[1]?.max_output_tokens).toBeLessThan(128_000);
+  expect(JSON.stringify(requests[1]?.input)).toContain(longText);
+  await guarded.doGenerate({ ...options, maxOutputTokens: 1000 });
+  expect(requests[2]?.max_output_tokens).toBe(1000);
+});
+
+test("a no-space rejection retains structured budget information without invoking the provider", async () => {
+  let calls = 0;
+  const observation = new RunModelObservation(new RunUsageCapture());
+  const guarded = new GuardedLanguageModel(fake(async () => { calls++; return stream([textPart, finish]); }), observation, capacity(16_384));
+  const failure = await guarded.doStream({ prompt: [{ role: "user", content: [{ type: "text", text: "context ".repeat(20_000) }] }] })
+    .catch((error: unknown) => error);
+  expect(failure).toMatchObject({ code: "CONTEXT_TOO_LARGE", budget: {
+    contextWindow: 16_384, desiredOutputTokens: 128_000, safetyTokens: 4096,
+  } });
+  expect(calls).toBe(0);
+  expect(observation.failure).toBeUndefined();
+  expect(observation.terminalFailure()).toBe("CONTEXT_TOO_LARGE");
+});
+
+test("a configured long output is not capped at 8192 tokens or 256 KiB", async () => {
+  let received: LanguageModelV3CallOptions | undefined;
+  const observation = new RunModelObservation(new RunUsageCapture());
+  const guarded = new GuardedLanguageModel(fake(async (input) => {
+    received = input;
+    return stream([{ ...textPart, delta: "long answer ".repeat(25_000) },
+      { ...finish, usage: { ...finish.usage, outputTokens: { total: 25_000, text: 25_000, reasoning: 0 } } }]);
+  }), observation, capacity(258_000));
+  await drain(await guarded.doStream({ ...options, maxOutputTokens: 128_000 }));
+  expect(received?.maxOutputTokens).toBe(128_000);
+  expect(observation.outputBytes).toBeGreaterThan(256 * 1024);
+});
+
+test("a length stop carrying complete tool arguments never executes that operation", async () => {
+  let executions = 0;
+  const observation = new RunModelObservation(new RunUsageCapture());
+  const guarded = new GuardedLanguageModel(fake(async () => stream([
+    { type: "tool-call", toolCallId: "must-not-execute", toolName: "submit", input: "{}" },
+    { ...finish, finishReason: { unified: "length", raw: "max_output_tokens" } },
+  ])), observation, capacity(65_536));
+  const agent = new Agent({ id: "length-execution-barrier", name: "Length execution barrier", instructions: "Submit once.",
+    model: guarded, maxRetries: 0, tools: { submit: createTool({ id: "submit", description: "Submit research",
+      inputSchema: z.object({}), execute: async () => { executions++; return { accepted: true }; } }) } });
+  const response = await agent.stream("Submit.", { maxSteps: 2 });
+  for await (const _ of response.fullStream) { /* consume failed step */ }
+  expect(executions).toBe(0);
+  expect(observation.terminalFailure()).toBe("OUTPUT_LIMIT");
+});
+
 test("the same long prompt fits Luna's configured window and fails a smaller model's window", async () => {
   const prompt = [{ role: "user" as const, content: [{ type: "text" as const, text: "context ".repeat(40_000) }] }];
   let received: LanguageModelV3CallOptions | undefined;
   const provider = fake(async (input) => { received = input; return stream([textPart, finish]); });
-  const luna = new GuardedLanguageModel(provider, new RunModelObservation(new RunUsageCapture()), 258_000);
+  const luna = new GuardedLanguageModel(provider, new RunModelObservation(new RunUsageCapture()), capacity(258_000));
   await drain(await luna.doStream({ prompt }));
   expect(received?.prompt).toEqual(prompt);
-  const smaller = new GuardedLanguageModel(provider, new RunModelObservation(new RunUsageCapture()), 65_536);
-  await expect(smaller.doStream({ prompt })).rejects.toMatchObject({ code: "AGENT_LIMIT" });
+  const smaller = new GuardedLanguageModel(provider, new RunModelObservation(new RunUsageCapture()), capacity(65_536));
+  await expect(smaller.doStream({ prompt })).rejects.toMatchObject({ code: "CONTEXT_TOO_LARGE" });
 });
 
-test("reserves output space inside the configured model context window", async () => {
+test("rejects an input that leaves no safe output space", async () => {
   const guarded = new GuardedLanguageModel(fake(async () => stream([textPart, finish])),
-    new RunModelObservation(new RunUsageCapture()), 16_384);
-  await expect(guarded.doStream({ prompt: [{ role: "user", content: [{ type: "text", text: "context ".repeat(5000) }] }] }))
-    .rejects.toMatchObject({ code: "AGENT_LIMIT" });
+    new RunModelObservation(new RunUsageCapture()), capacity(16_384));
+  await expect(guarded.doStream({ prompt: [{ role: "user", content: [{ type: "text", text: "context ".repeat(20_000) }] }] }))
+    .rejects.toMatchObject({ code: "CONTEXT_TOO_LARGE" });
 });
 
 test("memory compression is metered but cannot substitute for an answer to the user", async () => {
   const observation = new RunModelObservation(new RunUsageCapture());
-  await drain(await new GuardedLanguageModel(fake(async () => stream([textPart, finish])), observation, 65_536, "memory")
+  await drain(await new GuardedLanguageModel(fake(async () => stream([textPart, finish])), observation, capacity(65_536), "memory")
     .doStream(options));
   expect(observation.usage.value()?.outputTokens.total).toBe(1);
   expect(observation.outputBytes).toBeGreaterThan(0);
-  await expect(drain(await new GuardedLanguageModel(fake(async () => stream([finish])), observation, 65_536)
+  await expect(drain(await new GuardedLanguageModel(fake(async () => stream([finish])), observation, capacity(65_536))
     .doStream(options))).rejects.toMatchObject({ code: "PROVIDER_MALFORMED_STREAM" });
 });
 
@@ -55,7 +147,7 @@ test("Mastra completes a rendered A2UI answer without requiring a redundant fina
       : [{ type: "tool-call", toolCallId: "render-result", toolName: "render_a2ui", input: JSON.stringify({
         surfaceId: "research-result", components: [{ id: "root", component: "Text", text: "Research result available" }],
       }) }, { ...finish, finishReason: { unified: "tool-calls", raw: "tool_calls" } }],
-  )), observation, 65_536);
+  )), observation, capacity(65_536));
   const agent = new Agent({ id: "render-completion", name: "Render completion", instructions: "Show the result.",
     model, maxRetries: 0, tools: { render_a2ui: researchA2UITool } });
   const response = await agent.stream("Show a research result card.", { maxSteps: 2 });
@@ -73,19 +165,20 @@ test("Mastra completes a rendered A2UI answer without requiring a redundant fina
 
 test.each(Object.entries(SCRIPTED_FAILURE_PROMPTS))("scripted provider deterministically produces %s", async (code, prompt) => {
   const observation = new RunModelObservation(new RunUsageCapture());
-  const model = new GuardedLanguageModel(new ScriptedLanguageModel("fixture"), observation, 65_536);
+  const model = new GuardedLanguageModel(new ScriptedLanguageModel("fixture"), observation, capacity(65_536));
   const run = async () => drain(await model.doStream({ prompt: [{ role: "user", content: [{ type: "text", text: prompt }] }] }));
   await expect(run()).rejects.toMatchObject({ code });
-  expect(observation.failure).toBe(code);
+  expect(observation.terminalFailure()).toBe(code);
   expect(observation.steps).toBe(1);
 });
 
 test("the model receives an explicit output bound and reported usage stays safe", async () => {
   const observation = new RunModelObservation(new RunUsageCapture());
   let received: LanguageModelV3CallOptions | undefined;
-  const guarded = new GuardedLanguageModel(fake(async (input) => { received = input; return stream([textPart, finish]); }), observation, 65_536);
+  const guarded = new GuardedLanguageModel(fake(async (input) => { received = input; return stream([textPart, finish]); }), observation, capacity(65_536));
   await drain(await guarded.doStream(options));
-  expect(received?.maxOutputTokens).toBe(AGENT_LIMITS.outputTokens);
+  expect(received?.maxOutputTokens).toBeGreaterThan(8192);
+  expect(received?.maxOutputTokens).toBeLessThan(65_536 - 4096);
   expect(observation.steps).toBe(1);
   expect(observation.failure).toBeUndefined();
   expect(observation.usage.value()?.outputTokens.total).toBe(1);
@@ -98,13 +191,23 @@ test("the measured Luna high trajectory has a three-minute Provider call budget"
 test("context including Tool schemas fails before the provider is invoked", async () => {
   let invoked = false;
   const observation = new RunModelObservation(new RunUsageCapture());
-  const guarded = new GuardedLanguageModel(fake(async () => { invoked = true; return stream([finish]); }), observation, 65_536);
+  const guarded = new GuardedLanguageModel(fake(async () => { invoked = true; return stream([finish]); }), observation, capacity(65_536));
   await expect(guarded.doStream({
     ...options,
     tools: [{ type: "function", name: "large_tool", inputSchema: { description: "context ".repeat(65_536 + 1) } }],
-  })).rejects.toMatchObject({ code: "AGENT_LIMIT" });
+  })).rejects.toMatchObject({ code: "CONTEXT_TOO_LARGE" });
   expect(invoked).toBe(false);
   expect(observation.steps).toBe(0);
+});
+
+test("a structured-output schema is included before allowing a model request", async () => {
+  let invoked = false;
+  const guarded = new GuardedLanguageModel(fake(async () => { invoked = true; return stream([textPart, finish]); }),
+    new RunModelObservation(new RunUsageCapture()), capacity(16_384));
+  await expect(guarded.doStream({ ...options, responseFormat: { type: "json",
+    schema: { type: "object", description: "context ".repeat(20_000) } },
+  })).rejects.toMatchObject({ code: "CONTEXT_TOO_LARGE" });
+  expect(invoked).toBe(false);
 });
 
 test("Mastra preserves a bounded model-facing Tool result without counting its internal copies as context", async () => {
@@ -122,7 +225,7 @@ test("Mastra preserves a bounded model-facing Tool result without counting its i
       { type: "tool-call", toolCallId: "read-known-result", toolName: "read_result", input: "{}" },
       { ...finish, finishReason: { unified: "tool-calls", raw: "tool_calls" } },
     ]);
-  }), observation, 65_536);
+  }), observation, capacity(65_536));
   const agent = new Agent({
     id: "bounded-tool-result", name: "Bounded Tool result", instructions: "Read the result.", model, maxRetries: 0,
     tools: { read_result: createTool({
@@ -150,8 +253,8 @@ test.each(["input", "output"] as const)("Tool %s fields named like metadata stil
     : [{ role: "tool", content: [{ type: "tool-result", toolName: "read_result", toolCallId: "large-output", output: { type: "json", value: payload } }] }];
   let invoked = false;
   const observation = new RunModelObservation(new RunUsageCapture());
-  const model = new GuardedLanguageModel(fake(async () => { invoked = true; return stream([textPart, finish]); }), observation, 65_536);
-  await expect(model.doStream({ prompt })).rejects.toMatchObject({ code: "AGENT_LIMIT" });
+  const model = new GuardedLanguageModel(fake(async () => { invoked = true; return stream([textPart, finish]); }), observation, capacity(65_536));
+  await expect(model.doStream({ prompt })).rejects.toMatchObject({ code: "CONTEXT_TOO_LARGE" });
   expect(invoked).toBe(false);
   expect(observation.steps).toBe(0);
 });
@@ -162,15 +265,13 @@ test.each([
   [[null], "PROVIDER_MALFORMED_STREAM"],
   [[{ type: "text-delta", id: "text", delta: "   " }, finish], "PROVIDER_MALFORMED_STREAM"],
   [[{ ...finish, finishReason: { unified: "content-filter", raw: "private" } }], "PROVIDER_REFUSAL"],
-  [[{ ...finish, finishReason: { unified: "length", raw: "private" } }], "AGENT_LIMIT"],
-  [[{ type: "text-delta", id: "text", delta: "a".repeat(AGENT_LIMITS.outputBytes + 1) }], "AGENT_LIMIT"],
-  [[{ type: "raw", rawValue: "a".repeat(AGENT_LIMITS.outputBytes + 1) }], "AGENT_LIMIT"],
+  [[{ ...finish, finishReason: { unified: "length", raw: "private" } }], "OUTPUT_LIMIT"],
   [[{ type: "not-a-provider-event", private: "canary" }], "PROVIDER_MALFORMED_STREAM"],
 ])("terminates unsafe provider stream %# without a success finish", async (parts, code) => {
   const observation = new RunModelObservation(new RunUsageCapture());
-  const guarded = new GuardedLanguageModel(fake(async () => stream(parts as LanguageModelV3StreamPart[])), observation, 65_536);
+  const guarded = new GuardedLanguageModel(fake(async () => stream(parts as LanguageModelV3StreamPart[])), observation, capacity(65_536));
   await expect(drain(await guarded.doStream(options))).rejects.toMatchObject({ code });
-  expect(observation.failure).toBe(code);
+  expect(observation.terminalFailure()).toBe(code);
 });
 
 test("a timed-out Provider stream that closes without finish remains a timeout", async () => {
@@ -183,7 +284,7 @@ test("a timed-out Provider stream that closes without finish remains a timeout",
   const guarded = new GuardedLanguageModel(fake(async () => {
     controller.abort(timeout);
     return stream([]);
-  }), observation, 65_536);
+  }), observation, capacity(65_536));
 
   const failure = await drain(await guarded.doStream({ ...options, abortSignal: controller.signal }))
     .catch((error: unknown) => error);
@@ -200,7 +301,7 @@ test("never retries provider errors and never exposes their private cause", asyn
   const guarded = new GuardedLanguageModel(fake(async () => {
     invocations++;
     throw new APICallError({ message: "private", requestBodyValues: "private", url: "https://private.invalid", statusCode: 429 });
-  }), observation, 65_536);
+  }), observation, capacity(65_536));
   const error = await guarded.doStream(options).catch((failure: unknown) => failure);
   expect(error).toMatchObject({ code: "PROVIDER_RATE_LIMIT" });
   expect(error).not.toHaveProperty("cause");
@@ -222,13 +323,13 @@ test("native SDK socket interruption is a Provider failure with unknown final us
       },
     }), { headers: { "content-type": "text/event-stream" } }),
   }).responses("synthetic");
-  const reader = (await new GuardedLanguageModel(native, observation, 65_536).doStream(options)).stream.getReader();
+  const reader = (await new GuardedLanguageModel(native, observation, capacity(65_536)).doStream(options)).stream.getReader();
   expect((await reader.read()).value?.type).toBe("stream-start");
   source!.error(new TypeError("private-stream-canary", {
     cause: Object.assign(new Error("private-socket-canary"), { code: "UND_ERR_SOCKET" }),
   }));
   const failure = await (async () => {
-    while (!(await reader.read()).done) { /* consume the interrupted native stream */ }
+    for (;;) { const next = await reader.read(); if (next.done) break; if (next.value.type === "error") throw next.value.error; }
   })().catch((error: unknown) => error);
   expect(failure).toMatchObject({ code: "PROVIDER_UNAVAILABLE", message: "PROVIDER_UNAVAILABLE" });
   expect(failure).not.toHaveProperty("cause");
@@ -264,7 +365,7 @@ test.each([
       headers: { "content-type": "text/event-stream" },
     }),
   }).responses("synthetic");
-  const failure = await drain(await new GuardedLanguageModel(native, observation, 65_536).doStream(options))
+  const failure = await drain(await new GuardedLanguageModel(native, observation, capacity(65_536)).doStream(options))
     .catch((error: unknown) => error);
   expect(failure).toMatchObject({ code, message: code });
   expect(failure).not.toHaveProperty("cause");
@@ -274,13 +375,13 @@ test.each([
 test.each([
   [[], "PROVIDER_MALFORMED_STREAM"],
   [[{ ...finish, finishReason: { unified: "tool-calls", raw: "tool_calls" } }], "PROVIDER_MALFORMED_STREAM"],
-  [[{ ...finish, finishReason: { unified: "length", raw: "length" } }], "AGENT_LIMIT"],
+  [[{ ...finish, finishReason: { unified: "length", raw: "length" } }], "OUTPUT_LIMIT"],
   [[{ ...finish, finishReason: { unified: "content-filter", raw: "content_filter" } }], "PROVIDER_REFUSAL"],
   [[finish, textPart], "PROVIDER_MALFORMED_STREAM"],
 ])("a previous answer does not mask an invalid continuation %#", async (parts, code) => {
   const observation = new RunModelObservation(new RunUsageCapture());
-  await drain(await new GuardedLanguageModel(fake(async () => stream([textPart, finish])), observation, 65_536).doStream(options));
-  const continuation = new GuardedLanguageModel(fake(async () => stream(parts as LanguageModelV3StreamPart[])), observation, 65_536);
+  await drain(await new GuardedLanguageModel(fake(async () => stream([textPart, finish])), observation, capacity(65_536)).doStream(options));
+  const continuation = new GuardedLanguageModel(fake(async () => stream(parts as LanguageModelV3StreamPart[])), observation, capacity(65_536));
   await expect(drain(await continuation.doStream(options))).rejects.toMatchObject({ code });
 });
 
@@ -290,16 +391,16 @@ test("non-streaming generation also permits an empty stop only after output in t
     ...fake(async () => stream([])),
     doGenerate: async () => ({ content, finishReason: finish.finishReason, usage: finish.usage, warnings: [] }),
   });
-  await new GuardedLanguageModel(generate([{ type: "text", text: "Answer already delivered." }]), observation, 65_536).doGenerate(options);
-  await expect(new GuardedLanguageModel(generate([]), observation, 65_536).doGenerate(options)).resolves.toMatchObject({ content: [] });
+  await new GuardedLanguageModel(generate([{ type: "text", text: "Answer already delivered." }]), observation, capacity(65_536)).doGenerate(options);
+  await expect(new GuardedLanguageModel(generate([]), observation, capacity(65_536)).doGenerate(options)).resolves.toMatchObject({ content: [] });
   expect(observation.usage.value()).toMatchObject({ inputTokens: { total: 10 }, outputTokens: { total: 2 } });
-  await expect(new GuardedLanguageModel(generate([]), new RunModelObservation(new RunUsageCapture()), 65_536).doGenerate(options))
+  await expect(new GuardedLanguageModel(generate([]), new RunModelObservation(new RunUsageCapture()), capacity(65_536)).doGenerate(options))
     .rejects.toMatchObject({ code: "PROVIDER_MALFORMED_STREAM" });
 });
 
 test("model calls continue beyond sixteen steps", async () => {
   const observation = new RunModelObservation(new RunUsageCapture());
-  const guarded = new GuardedLanguageModel(new ScriptedLanguageModel("fixture"), observation, 65_536);
+  const guarded = new GuardedLanguageModel(new ScriptedLanguageModel("fixture"), observation, capacity(65_536));
   for (let index = 0; index < 20; index++) await drain(await guarded.doStream(options));
   expect(observation.steps).toBe(20);
   expect(observation.terminalFailure()).toBeUndefined();
@@ -309,7 +410,7 @@ test("invalid usage stays unreported without failing a completed answer", async 
   const observation = new RunModelObservation(new RunUsageCapture());
   const guarded = new GuardedLanguageModel(fake(async () => stream([
     textPart, { ...finish, usage: undefined } as unknown as LanguageModelV3StreamPart,
-  ])), observation, 65_536);
+  ])), observation, capacity(65_536));
   await drain(await guarded.doStream(options));
   expect(observation.failure).toBeUndefined();
   expect(observation.usage.value()).toBeUndefined();
@@ -320,19 +421,20 @@ test.each(["9000", Infinity, NaN, -9000, 9000.5, Number.MAX_SAFE_INTEGER + 1, nu
     const observation = new RunModelObservation(new RunUsageCapture());
     const guarded = new GuardedLanguageModel(fake(async () => stream([
       textPart, { ...finish, usage: { inputTokens: { total: 5 }, outputTokens: { total } } } as unknown as LanguageModelV3StreamPart,
-    ])), observation, 65_536);
+    ])), observation, capacity(65_536));
     await drain(await guarded.doStream(options));
     expect(observation.failure).toBeUndefined();
     expect(observation.usage.value()?.outputTokens.total).toBeNull();
   },
 );
 
-test("valid reported output over the bound still terminates the Run", async () => {
+test("reported usage is not a second hardcoded generation cap", async () => {
   const observation = new RunModelObservation(new RunUsageCapture());
   const guarded = new GuardedLanguageModel(fake(async () => stream([
-    textPart, { ...finish, usage: { ...finish.usage, outputTokens: { ...finish.usage.outputTokens, total: AGENT_LIMITS.outputTokens + 1 } } },
-  ])), observation, 65_536);
-  await expect(drain(await guarded.doStream(options))).rejects.toMatchObject({ code: "AGENT_LIMIT" });
+    textPart, { ...finish, usage: { ...finish.usage, outputTokens: { ...finish.usage.outputTokens, total: 9000 } } },
+  ])), observation, capacity(65_536));
+  await drain(await guarded.doStream(options));
+  expect(observation.terminalFailure()).toBeUndefined();
 });
 
 function fake(doStream: LanguageModelV3["doStream"]): LanguageModelV3 {
@@ -347,5 +449,30 @@ function stream(parts: LanguageModelV3StreamPart[]) {
 }
 async function drain(result: { stream: ReadableStream<LanguageModelV3StreamPart> }) {
   const reader = result.stream.getReader();
-  while (!(await reader.read()).done) { /* consume the provider stream */ }
+  for (;;) { const next = await reader.read(); if (next.done) break; if (next.value.type === "error") throw next.value.error; }
 }
+
+test("an auxiliary length stop is a compaction failure, not a truncated user answer", async () => {
+  const observation = new RunModelObservation(new RunUsageCapture());
+  const model = new GuardedLanguageModel(fake(async () => stream([textPart,
+    { ...finish, finishReason: { unified: "length", raw: "length" } }])), observation, capacity(65_536), "memory");
+  await expect(drain(await model.doStream(options))).rejects.toMatchObject({ code: "CONTEXT_COMPACTION_FAILED" });
+  expect(observation.terminalFailure()).toBe("CONTEXT_COMPACTION_FAILED");
+});
+
+test("individual call observations preserve unknown usage and cannot fail model work", () => {
+  const observation = new RunModelObservation(new RunUsageCapture());
+  const calls: unknown[] = [];
+  observation.onCallFinished = call => { calls.push(call); throw new Error("private-observer-canary"); };
+  const capacity = { contextWindow: 65536, maxOutputTokens: 1000 };
+  observation.begin({ prompt: [{ role: "user", content: [{ type: "text", text: "Private source" }] }] }, capacity, "memory");
+  expect(() => observation.finish({ type: "finish", finishReason: { unified: "stop", raw: "private-reason" },
+    usage: { inputTokens: { total: 10, noCache: 8, cacheRead: 2, cacheWrite: undefined }, outputTokens: { total: 5, text: 5, reasoning: 0 } },
+  }, true, "memory")).not.toThrow();
+  observation.begin({ prompt: [{ role: "user", content: [{ type: "text", text: "Next source" }] }] }, capacity);
+  observation.fail("PROVIDER_TIMEOUT");
+  expect(calls).toHaveLength(2);
+  expect(calls[0]).toMatchObject({ purpose: "memory", finishReason: "stop", usage: { inputTokens: { total: 10, cacheRead: 2 } } });
+  expect(calls[1]).toMatchObject({ purpose: "answer", finishReason: "error", usage: undefined });
+  expect(JSON.stringify(calls)).not.toMatch(/Private source|Next source|private-reason/);
+});

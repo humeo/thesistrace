@@ -304,10 +304,16 @@ def _prepare_main_test(
         "018f6f7e-8342-7c9a-a4df-9a86147d2e01",
     )
     monkeypatch.setattr(research_agent_mcp, "emit_operational_event", events.append)
+    monkeypatch.setattr(
+        research_agent_mcp.ResearchAgentPagination,
+        "from_database",
+        lambda _database: research_agent_mcp.ResearchAgentPagination(bytes(range(32))),
+    )
 
 
 def _runtime_stub() -> SimpleNamespace:
     return SimpleNamespace(
+        database=object(),
         data_overview=object(),
         research_folders=object(),
         research_authoring=object(),

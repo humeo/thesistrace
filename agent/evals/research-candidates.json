@@ -8,6 +8,7 @@
     "provider_model_id": "gpt-5.6-luna",
     "reasoning_efforts": ["high"],
     "provider_max_input_tokens": 922000,
+    "provider_max_output_tokens": 128000,
     "pricing": {
       "basis": "published-standard-upper-bound",
       "input_usd_per_million": 0.5,

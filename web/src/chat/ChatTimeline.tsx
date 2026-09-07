@@ -21,6 +21,7 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { agentFailure } from "../../../contracts/agent-failure.mjs";
 
 import { parseResearchRunHref } from "./toolResult";
 import { ResearchA2UIActivity } from "./researchA2UI";
@@ -309,7 +310,7 @@ function TimelineTurnView({
   const lastTool = assistantEntries.reduce((last, entry, index) => entry.kind === "tool_activity" ? index : last, -1);
   const processEntries = assistantEntries.filter((entry, index) => (
     entry.kind === "tool_activity"
-    || (entry.kind === "assistant_message" && (index < lastTool || (!ended && lastTool >= 0)))
+    || (entry.kind === "assistant_message" && !entry.payload.recovery && (index < lastTool || (!ended && lastTool >= 0)))
     || isProgressSurface(entry)
   ));
   const processIds = new Set(processEntries.map((entry) => entry.entry_id));
@@ -405,7 +406,15 @@ function TimelineItem({
         <div className="chat-message-content">
           <AssistantMarkdown content={entry.payload.content} streaming={entry.payload.status === "streaming"} />
         </div>
-        {entry.payload.status === "stopped" || entry.payload.status === "failed" ? (
+        {entry.payload.recovery ? (
+          <span className="chat-assistant-outcome" role="status">
+            {entry.payload.recovery.status === "recovering" ? "Partial response · preparing a replacement"
+              : entry.payload.recovery.status === "succeeded" ? "Partial response · replaced by the complete answer below"
+              : entry.payload.recovery.attempts === 1 ? "Partial response · recovery failed"
+              : entry.payload.recovery.cause === "OUTPUT_LIMIT" ? "Partial response · output limit reached"
+              : "Response stopped · context is too large"}
+          </span>
+        ) : entry.payload.status === "stopped" || entry.payload.status === "failed" ? (
           <span className={`chat-assistant-outcome chat-assistant-outcome-${entry.payload.status}`}>
             {entry.payload.status === "stopped" ? "Partial response · stopped" : "Partial response · failed"}
           </span>
@@ -535,6 +544,8 @@ function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_ou
   if (entry.payload.status === "completed") {
     return <div hidden aria-hidden="true" data-entry-id={entry.entry_id} data-turn-outcome="completed" />;
   }
+  const explanation = entry.payload.errorCode === "OUTPUT_LIMIT" || entry.payload.errorCode === "CONTEXT_TOO_LARGE" || entry.payload.errorCode === "CONTEXT_COMPACTION_FAILED"
+    ? agentFailure(entry.payload.errorCode) : undefined;
   return (
     <div
       className={`chat-turn-outcome chat-turn-outcome-${entry.payload.status}`}
@@ -544,8 +555,13 @@ function TurnOutcome({ entry }: { entry: Extract<TimelineEntry, { kind: "turn_ou
       role={entry.payload.status === "failed" ? "alert" : "status"}
     >
       {entry.payload.status === "stopped" ? <StopCircle aria-hidden="true" size={14} /> : <WarningCircle aria-hidden="true" size={14} />}
-      <span>{entry.payload.status === "stopped" ? "Turn stopped" : "Turn failed"}</span>
-      {entry.payload.errorCode === undefined ? null : <code>{entry.payload.errorCode}</code>}
+      {explanation === undefined ? <>
+        <span>{entry.payload.status === "stopped" ? "Turn stopped" : "Turn failed"}</span>
+        {entry.payload.errorCode === undefined ? null : <code>{entry.payload.errorCode}</code>}
+      </> : <span className="chat-turn-failure-explanation">
+        <strong>{explanation.label}</strong>
+        <span>{explanation.message}</span>
+      </span>}
     </div>
   );
 }

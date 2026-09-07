@@ -92,6 +92,7 @@ _INTEGER_FIELDS = frozenset(
         "child_peak_rss_bytes",
         "strategy_observation_count",
         "response_bytes",
+        "business_response_bytes",
     }
 )
 _SIGNED_INTEGER_FIELDS = frozenset({"exit_code"})

@@ -1,3 +1,4 @@
+import { scriptedContextStream } from "./scripted-context-model.js";
 import type {
   LanguageModelV3,
   LanguageModelV3CallOptions,
@@ -137,6 +138,8 @@ export class ScriptedLanguageModel implements LanguageModelV3 {
     options: LanguageModelV3CallOptions,
   ): Promise<{ stream: ReadableStream<LanguageModelV3StreamPart> }> {
     this.assertAvailable();
+    const context = scriptedContextStream(options);
+    if (context !== undefined) return context;
     const failure = scriptedFailureStream(options);
     if (failure !== undefined) return failure;
     const modelId = this.modelId;
@@ -460,6 +463,7 @@ function scriptedTool(
   }
   const tool = options.tools?.find((candidate) => (
     candidate.type === "function"
+    && candidate.name === "get_research_context"
     && (!Array.isArray(candidate.inputSchema.required)
       || candidate.inputSchema.required.length === 0)
   ));

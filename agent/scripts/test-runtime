@@ -22,7 +22,7 @@ project_name="thesistrace-agent-test-$run_id"
 image_name="thesistrace-agent-test:$run_id"
 evidence_root=$(mktemp -d "${TMPDIR:-/tmp}/thesistrace-agent-test.XXXXXX")
 openai_secret=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
-model_registry='{"default_model_key":"gpt-5.6-luna","models":[{"default_reasoning_effort":"high","display_name":"GPT-5.6 Luna","enabled":true,"key":"gpt-5.6-luna","provider_adapter":"openai","provider_model_id":"gpt-5.6-luna","reasoning_efforts":["none","low","medium","high","xhigh","max"],"context_window":258000,"secret_env":"THESISTRACE_AGENT_OPENAI_API_KEY"}]}'
+model_registry='{"min_compaction_context_window":65536,"default_model_key":"gpt-5.6-luna","models":[{"default_reasoning_effort":"high","display_name":"GPT-5.6 Luna","enabled":true,"key":"gpt-5.6-luna","provider_adapter":"openai","provider_model_id":"gpt-5.6-luna","reasoning_efforts":["none","low","medium","high","xhigh","max"],"context_window":258000,"max_output_tokens":128000,"secret_env":"THESISTRACE_AGENT_OPENAI_API_KEY"}]}'
 stale_image_canary="$agent_root/dist/stale-image-canary.js"
 
 compose() {

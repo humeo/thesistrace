@@ -507,7 +507,7 @@ async def _exercise_http_contract(
                     },
                 )
                 assert cancelled_batch.is_error is False
-                assert cancelled_batch.structured_content["batch"]["status"] == ("cancelling")
+                assert cancelled_batch.structured_content["status"] == ("cancelling")
                 assert cancelled_batch.structured_content["replayed"] is False
                 assert cancelled_batch.structured_content["retry_after_seconds"] == 2
                 concurrent_batch_replays = await _concurrent_batch_cancel_replays(
@@ -518,8 +518,8 @@ async def _exercise_http_contract(
                 )
                 assert all(not result.is_error for result in concurrent_batch_replays)
                 assert all(
-                    result.structured_content["batch"]
-                    == cancelled_batch.structured_content["batch"]
+                    result.structured_content
+                    == (cancelled_batch.structured_content | {"replayed": True})
                     for result in concurrent_batch_replays
                 )
                 assert all(
@@ -617,7 +617,7 @@ async def _exercise_http_contract(
                     },
                 )
                 assert cancelled.is_error is False
-                assert cancelled.structured_content["run"]["status"] == "cancelling"
+                assert cancelled.structured_content["status"] == "cancelling"
                 assert cancelled.structured_content["replayed"] is False
                 assert cancelled.structured_content["retry_after_seconds"] == 2
 
@@ -629,7 +629,7 @@ async def _exercise_http_contract(
                 )
                 assert all(not result.is_error for result in concurrent_replays)
                 assert all(
-                    result.structured_content["run"] == cancelled.structured_content["run"]
+                    result.structured_content == (cancelled.structured_content | {"replayed": True})
                     for result in concurrent_replays
                 )
                 assert all(
@@ -719,6 +719,7 @@ async def _exercise_http_contract(
             )
             assert daily_track.is_error is False
             assert daily_track.structured_content == {
+                "next_tool": "get_daily_track",
                 "outcome": "accepted",
                 "track_id": daily_track.structured_content["track_id"],
                 "status": "active",
@@ -1064,7 +1065,7 @@ async def _exercise_http_contract(
                 },
             )
             assert replay.is_error is False
-            assert replay.structured_content["run"] == cancelled.structured_content["run"]
+            assert replay.structured_content == (cancelled.structured_content | {"replayed": True})
             assert replay.structured_content["replayed"] is True
             assert replay.structured_content["retry_after_seconds"] == 2
             stable_after_restart = await restarted.call_tool(
@@ -1080,9 +1081,8 @@ async def _exercise_http_contract(
                 },
             )
             assert batch_cancel_replay.is_error is False
-            assert (
-                batch_cancel_replay.structured_content["batch"]
-                == (cancelled_batch.structured_content["batch"])
+            assert batch_cancel_replay.structured_content == (
+                cancelled_batch.structured_content | {"replayed": True}
             )
             assert batch_cancel_replay.structured_content["replayed"] is True
             restarted_batch_submit = await restarted.call_tool(
@@ -1853,6 +1853,7 @@ async def _exercise_http_live_tracking_stop(
             )
             assert stopping.is_error is False
             assert stopping.structured_content == {
+                "next_tool": "get_daily_track",
                 "outcome": "accepted",
                 "track_id": track_id,
                 "status": "stopping",

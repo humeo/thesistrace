@@ -4,10 +4,11 @@ import { readFileSync } from "node:fs";
 import { readModelRegistry } from "./model-registry.js";
 
 const validRegistry = {
+  min_compaction_context_window: 65_536,
   default_model_key: "openai-primary",
   models: [
     {
-      context_window: 258_000,
+      context_window: 258_000, max_output_tokens: 128_000,
       default_reasoning_effort: "medium",
       display_name: "OpenAI Primary",
       enabled: true,
@@ -18,7 +19,7 @@ const validRegistry = {
       secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
     },
     {
-      context_window: 128_000,
+      context_window: 128_000, max_output_tokens: 128_000,
       default_reasoning_effort: "high",
       display_name: "Anthropic Analyst",
       enabled: true,
@@ -29,7 +30,7 @@ const validRegistry = {
       secret_env: "THESISTRACE_AGENT_ANTHROPIC_API_KEY",
     },
     {
-      context_window: 32_768,
+      context_window: 32_768, max_output_tokens: 128_000,
       default_reasoning_effort: "none",
       display_name: "Disabled Model",
       enabled: false,
@@ -51,6 +52,20 @@ function encoded(overrides: Record<string, unknown> = {}): string {
 }
 
 describe("model Registry", () => {
+  it("requires explicit output capacity and a global compaction gate", () => {
+    const configured = { ...validRegistry, min_compaction_context_window: 65_536,
+      models: validRegistry.models.map((model) => ({ ...model, max_output_tokens: 128_000 })) };
+    const registry = readModelRegistry(JSON.stringify(configured), environment);
+    expect(registry).toMatchObject({ minCompactionContextWindow: 65_536,
+      models: [expect.objectContaining({ maxOutputTokens: 128_000 }), expect.anything(), expect.anything()] });
+    for (const invalid of [undefined, 0, -1, 1.5, "65536"]) {
+      expect(() => readModelRegistry(JSON.stringify({ ...configured, min_compaction_context_window: invalid }), environment))
+        .toThrow("Agent configuration is invalid");
+      expect(() => readModelRegistry(JSON.stringify({ ...configured,
+        models: [{ ...configured.models[0], max_output_tokens: invalid }] }), environment))
+        .toThrow("Agent configuration is invalid");
+    }
+  });
   it("reads each model's context capacity and requires a valid explicit budget", () => {
     const registry = readModelRegistry(encoded(), environment);
     expect(registry.models.map((model) => model.contextWindow)).toEqual([258_000, 128_000, 32_768]);

@@ -1,0 +1,37 @@
+diff --git a/dist/agent/message-list/conversion/to-prompt.d.ts b/dist/agent/message-list/conversion/to-prompt.d.ts
+index f347ebdf7575b5e319aad034fe27e4288ff9da50..3aba8fba39d522550608842e57a80d9bfb551a2d 100644
+--- a/dist/agent/message-list/conversion/to-prompt.d.ts
++++ b/dist/agent/message-list/conversion/to-prompt.d.ts
+@@ -1,3 +1,4 @@
++import type { LanguageModelV3Prompt } from "../../../_types/@ai-sdk_provider-v6/dist/index.d.ts";
+ import type { LanguageModelV2Prompt } from '../../../_types/@ai-sdk_provider-v5/dist/index.d.ts';
+ import type { LanguageModelV1Prompt, CoreMessage as CoreMessageV4 } from '../../../_types/@internal_ai-sdk-v4/dist/index.d.ts';
+ import type { AIV5Type } from '../types.js';
+@@ -20,7 +21,7 @@ export declare function aiV5ModelMessageToV2PromptMessage(modelMessage: AIV5Type
+  *
+  * See: https://github.com/mastra-ai/mastra/issues/17876
+  */
+-export declare function aiV5PromptToAIV6Prompt(prompt: LanguageModelV2Prompt): LanguageModelV2Prompt;
++export declare function aiV5PromptToAIV6Prompt(prompt: LanguageModelV2Prompt): LanguageModelV3Prompt;
+ export declare function aiV5PromptToAIV7Prompt(prompt: LanguageModelV2Prompt): LanguageModelV2Prompt;
+ export {};
+ //# sourceMappingURL=to-prompt.d.ts.map
+\ No newline at end of file
+diff --git a/dist/agent/message-list/message-list.d.ts b/dist/agent/message-list/message-list.d.ts
+index 8d645b5579965c91b67532e83156014e3edd77be..1949fa397d60f95bb0ec33dcb0f0c53fd92402d1 100644
+--- a/dist/agent/message-list/message-list.d.ts
++++ b/dist/agent/message-list/message-list.d.ts
+@@ -1,3 +1,4 @@
++import type { LanguageModelV3Prompt } from "../../_types/@ai-sdk_provider-v6/dist/index.d.ts";
+ import type { LanguageModelV2Prompt } from '../../_types/@ai-sdk_provider-v5/dist/index.d.ts';
+ import type { LanguageModelV1Prompt, CoreMessage as CoreMessageV4 } from '../../_types/@internal_ai-sdk-v4/dist/index.d.ts';
+ import type * as AIV4Type from '../../_types/@internal_ai-sdk-v4/dist/index.d.ts';
+@@ -127,7 +128,7 @@ export declare class MessageList {
+                     downloadConcurrency?: number;
+                     downloadRetries?: number;
+                     supportedUrls?: Record<string, RegExp[]>;
+-                }) => Promise<LanguageModelV2Prompt>;
++                }) => Promise<LanguageModelV3Prompt>;
+             };
+             aiV7: {
+                 ui: () => AIV6Type.UIMessage<unknown, AIV6Type.UIDataTypes, AIV6Type.UITools>[];

@@ -17,6 +17,7 @@ from thesistrace.research_agent import (
     create_research_agent_mcp_server,
 )
 from thesistrace.research_agent.models import AlphaCatalogView, ResearchContext
+from thesistrace.research_agent.pagination import ResearchAgentPagination
 from thesistrace.research_batch import research_batch_polling_detail
 from thesistrace.research_batch.models import (
     FactorEvaluationBatchProgress,
@@ -51,6 +52,7 @@ def trajectory_registry(
             scopes=scopes,
         ),
         modules=ResearchAgentModules(
+            pagination=ResearchAgentPagination(b"p" * 32),
             data_overview=unused,
             research_folders=unused,
             alpha_language=unused,
@@ -175,6 +177,7 @@ def alpha_catalog_payload() -> dict[str, object]:
         fields=[item for item in catalog.fields if item.identifier == "close"],
         builtins=[item for item in catalog.builtins if item.identifier == "ts_mean"],
         unknown_identifiers=[],
+        next_cursor=None,
     ).model_dump(mode="json")
 
 

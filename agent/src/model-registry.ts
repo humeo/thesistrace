@@ -29,6 +29,7 @@ const reasoningEffortSchema = z.enum(reasoningEfforts);
 const registryModelSchema = z
   .object({
     context_window: z.number().int().min(16_384),
+    max_output_tokens: z.number().int().positive(),
     default_reasoning_effort: reasoningEffortSchema,
     display_name: z.string().min(1).max(80).refine(isCanonicalText),
     enabled: z.boolean(),
@@ -41,6 +42,7 @@ const registryModelSchema = z
   .strict();
 const registrySchema = z
   .object({
+    min_compaction_context_window: z.number().int().positive(),
     default_model_key: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
     models: z.array(registryModelSchema).min(1).max(64),
   })
@@ -60,6 +62,7 @@ export type SafeModelCatalog = Readonly<{
 }>;
 export type RegisteredModel = Readonly<{
   contextWindow: number;
+  maxOutputTokens: number;
   credential: string | null;
   defaultReasoningEffort: ReasoningEffort;
   displayName: string;
@@ -70,6 +73,7 @@ export type RegisteredModel = Readonly<{
   reasoningEfforts: readonly ReasoningEffort[];
 }>;
 export type ModelRegistry = Readonly<{
+  minCompactionContextWindow: number;
   defaultModelKey: string;
   models: readonly RegisteredModel[];
   safeCatalog: SafeModelCatalog;
@@ -123,6 +127,7 @@ export function readModelRegistry(
     }
     models.push({
       contextWindow: model.context_window,
+      maxOutputTokens: model.max_output_tokens,
       credential: model.enabled ? credential ?? null : null,
       defaultReasoningEffort: model.default_reasoning_effort,
       displayName: model.display_name,
@@ -142,6 +147,7 @@ export function readModelRegistry(
   if (enabledModels.length === 0) throw invalidConfiguration();
 
   return {
+    minCompactionContextWindow: parsed.data.min_compaction_context_window,
     defaultModelKey: defaultModel.key,
     models,
     safeCatalog: {

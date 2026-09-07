@@ -1,0 +1,314 @@
+{
+  "modelKey": "gpt-5.6-luna",
+  "effort": "high",
+  "contextWindow": 258000,
+  "maxOutputTokens": 128000,
+  "referencePricing": {
+    "input": 0.5,
+    "output": 1.8,
+    "cachedInput": 0.04,
+    "basis": "repository published-standard-upper-bound snapshot 2026-08-31; not proxy invoice"
+  },
+  "spendLimitUsd": 1,
+  "costUsd": 0.0382596,
+  "unknownUsage": false,
+  "cases": [
+    {
+      "id": "first",
+      "sourceBytes": 1349,
+      "assertions": {
+        "generated": true,
+        "references": true,
+        "facts": true,
+        "accounting": true
+      },
+      "semantics": {
+        "holdings": true,
+        "rebalance": false,
+        "pointInTime": true,
+        "noResubmission": true,
+        "qualityPending": true,
+        "cursorBinding": true
+      },
+      "succeeded": false,
+      "durationMs": 43433,
+      "errorCode": null
+    },
+    {
+      "id": "incremental",
+      "sourceBytes": 814,
+      "assertions": {
+        "generated": true,
+        "references": true,
+        "facts": true,
+        "accounting": true
+      },
+      "semantics": {
+        "holdings": true,
+        "rebalance": false,
+        "pointInTime": true,
+        "noResubmission": true,
+        "obsoletePendingCleared": true,
+        "bothResultsAvailable": true
+      },
+      "succeeded": false,
+      "durationMs": 57234,
+      "errorCode": null
+    },
+    {
+      "id": "long-turn",
+      "sourceBytes": 33579,
+      "assertions": {
+        "generated": true,
+        "references": true,
+        "facts": true,
+        "accounting": true
+      },
+      "semantics": {
+        "noResubmission": true,
+        "blocked": true,
+        "blockingError": true,
+        "incompletePages": true,
+        "inspectVersion": true
+      },
+      "succeeded": true,
+      "durationMs": 96503,
+      "errorCode": null
+    }
+  ],
+  "calls": [
+    {
+      "caseId": "first",
+      "inputEstimate": 5576,
+      "maxOutputTokens": 128000,
+      "usage": {
+        "reported": true,
+        "inputTokens": {
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "noCache": 4720,
+          "total": 4720
+        },
+        "outputTokens": {
+          "reasoning": 137,
+          "text": 191,
+          "total": 328
+        }
+      },
+      "costUsd": 0.0029504,
+      "durationMs": 10674
+    },
+    {
+      "caseId": "first",
+      "inputEstimate": 1149,
+      "maxOutputTokens": 128000,
+      "usage": {
+        "reported": true,
+        "inputTokens": {
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "noCache": 1091,
+          "total": 1091
+        },
+        "outputTokens": {
+          "reasoning": 181,
+          "text": 815,
+          "total": 996
+        }
+      },
+      "costUsd": 0.0023383,
+      "durationMs": 20895
+    },
+    {
+      "caseId": "first",
+      "inputEstimate": 1548,
+      "maxOutputTokens": 8192,
+      "usage": {
+        "reported": true,
+        "inputTokens": {
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "noCache": 1515,
+          "total": 1515
+        },
+        "outputTokens": {
+          "reasoning": 317,
+          "text": 96,
+          "total": 413
+        }
+      },
+      "costUsd": 0.0015009,
+      "durationMs": 11769
+    },
+    {
+      "caseId": "incremental",
+      "inputEstimate": 5617,
+      "maxOutputTokens": 128000,
+      "usage": {
+        "reported": true,
+        "inputTokens": {
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "noCache": 4777,
+          "total": 4777
+        },
+        "outputTokens": {
+          "reasoning": 175,
+          "text": 146,
+          "total": 321
+        }
+      },
+      "costUsd": 0.0029663000000000003,
+      "durationMs": 9215
+    },
+    {
+      "caseId": "incremental",
+      "inputEstimate": 2248,
+      "maxOutputTokens": 128000,
+      "usage": {
+        "reported": true,
+        "inputTokens": {
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "noCache": 2002,
+          "total": 2002
+        },
+        "outputTokens": {
+          "reasoning": 495,
+          "text": 1024,
+          "total": 1519
+        }
+      },
+      "costUsd": 0.0037352,
+      "durationMs": 31566
+    },
+    {
+      "caseId": "incremental",
+      "inputEstimate": 2022,
+      "maxOutputTokens": 8192,
+      "usage": {
+        "reported": true,
+        "inputTokens": {
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "noCache": 1874,
+          "total": 1874
+        },
+        "outputTokens": {
+          "reasoning": 516,
+          "text": 97,
+          "total": 613
+        }
+      },
+      "costUsd": 0.0020404,
+      "durationMs": 16409
+    },
+    {
+      "caseId": "long-turn",
+      "inputEstimate": 23198,
+      "maxOutputTokens": 128000,
+      "usage": {
+        "reported": true,
+        "inputTokens": {
+          "cacheRead": 3840,
+          "cacheWrite": 0,
+          "noCache": 12083,
+          "total": 15923
+        },
+        "outputTokens": {
+          "reasoning": 178,
+          "text": 256,
+          "total": 434
+        }
+      },
+      "costUsd": 0.0069763,
+      "durationMs": 12213
+    },
+    {
+      "caseId": "long-turn",
+      "inputEstimate": 913,
+      "maxOutputTokens": 128000,
+      "usage": {
+        "reported": true,
+        "inputTokens": {
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "noCache": 961,
+          "total": 961
+        },
+        "outputTokens": {
+          "reasoning": 258,
+          "text": 567,
+          "total": 825
+        }
+      },
+      "costUsd": 0.0019655,
+      "durationMs": 17945
+    },
+    {
+      "caseId": "long-turn",
+      "inputEstimate": 18653,
+      "maxOutputTokens": 128000,
+      "usage": {
+        "reported": true,
+        "inputTokens": {
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "noCache": 12235,
+          "total": 12235
+        },
+        "outputTokens": {
+          "reasoning": 448,
+          "text": 825,
+          "total": 1273
+        }
+      },
+      "costUsd": 0.0084089,
+      "durationMs": 26488
+    },
+    {
+      "caseId": "long-turn",
+      "inputEstimate": 2603,
+      "maxOutputTokens": 128000,
+      "usage": {
+        "reported": true,
+        "inputTokens": {
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "noCache": 2338,
+          "total": 2338
+        },
+        "outputTokens": {
+          "reasoning": 302,
+          "text": 1098,
+          "total": 1400
+        }
+      },
+      "costUsd": 0.003689,
+      "durationMs": 28360
+    },
+    {
+      "caseId": "long-turn",
+      "inputEstimate": 2009,
+      "maxOutputTokens": 8192,
+      "usage": {
+        "reported": true,
+        "inputTokens": {
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "noCache": 1890,
+          "total": 1890
+        },
+        "outputTokens": {
+          "reasoning": 317,
+          "text": 96,
+          "total": 413
+        }
+      },
+      "costUsd": 0.0016884,
+      "durationMs": 11364
+    }
+  ],
+  "complete": false,
+  "scope": "Synthetic fixed-source candidate retention only; no whole-agent qualification or real financial data"
+}

@@ -106,6 +106,8 @@ describe("browser Research Draft", () => {
 
     expect(draft.researchKind).toBe("factor_evaluation");
     expect(isCompleteResearchInputs(draft)).toBe(true);
+    expect(isCompleteResearchInputs({ ...draft, hypothesis: "📚".repeat(1024) })).toBe(true);
+    expect(isCompleteResearchInputs({ ...draft, hypothesis: "📚".repeat(1025) })).toBe(false);
     const begun = beginResearchRun(draft, folder.id, () => "factor-request");
     expect(begun.command).toEqual({
       request_id: "factor-request",

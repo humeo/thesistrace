@@ -67,6 +67,7 @@ export type ResearchDraft = ResearchInputs & {
 
 const MAX_DRAFT_BYTES = 64 * 1024;
 const MAX_FORMULA_LENGTH = 4_096;
+export const MAX_HYPOTHESIS_LENGTH = 1_024;
 const MAX_TEXT_LENGTH = 10_000;
 
 export function emptyResearchDraft(): ResearchDraft {
@@ -217,6 +218,7 @@ export function isCompleteResearchInputs(inputs: ResearchInputs): boolean {
   const holdingsCount = Number(inputs.holdingsCount);
   const rebalanceEverySessions = Number(inputs.rebalanceEverySessions);
   const commonComplete = inputs.formula.trim() !== "" &&
+    Array.from(inputs.hypothesis).length <= MAX_HYPOTHESIS_LENGTH &&
     /^\d{4}-\d{2}-\d{2}$/.test(inputs.startDate) &&
     /^\d{4}-\d{2}-\d{2}$/.test(inputs.endDate) &&
     inputs.startDate <= inputs.endDate &&

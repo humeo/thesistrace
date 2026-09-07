@@ -1,3 +1,8 @@
+import { SessionModelRecovery } from "./session-model-recovery.js";
+import { invalidRecoveryMessageIds } from "./model-step-recovery.js";
+import { isSessionControlMessageId, sessionControlMessage, sessionControlMessageId } from "./session-control-message.js";
+import { ContextLanguageModel } from "./context-language-model.js";
+import { SessionContextController } from "./session-context-controller.js";
 import { Agent } from "@mastra/core/agent";
 import { noopLogger } from "@mastra/core/logger";
 import { Mastra } from "@mastra/core/mastra";
@@ -177,10 +182,9 @@ export async function createResearchRuntime(
         abortSignal: requestContext.get<string, AbortSignal | undefined>("agentAbortSignal"),
         // Override framework defaults without imposing a model-call count limit.
         maxSteps: Number.POSITIVE_INFINITY,
-        // Output tokens are bounded per model call. The guarded model also
-        // enforces the generated-byte budget across the complete Run.
-        modelSettings: { maxOutputTokens: AGENT_LIMITS.outputTokens, timeout: { stepMs: AGENT_LIMITS.providerCallMs } },
-        maxProcessorRetries: 0,
+        // The Provider boundary reduces this configured allowance to fit the actual input.
+        modelSettings: { maxOutputTokens: selectionFrom(requestContext).model.maxOutputTokens, timeout: { stepMs: AGENT_LIMITS.providerCallMs } },
+        maxProcessorRetries: 1,
         onError: ({ error }: { error: unknown }) => { observation?.fail(providerFailureCode(error)); },
         providerOptions: selectionFrom(requestContext).providerOptions,
         // Completed tool steps must be durable while a later MCP call is still
@@ -200,12 +204,72 @@ export async function createResearchRuntime(
       const key = `${selection.model.key}:${selection.effort}`;
       let memory = memories.get(key);
       if (memory === undefined) {
-        memory = createResearchMemory(storage, selection);
+        memory = createResearchMemory(storage);
         memories.set(key, memory);
       }
       return memory;
     },
-    model: ({ requestContext }) => selectionFrom(requestContext).languageModel,
+    inputProcessors: () => [{
+      id: "session-context-input",
+      processInputStep: async ({ messageList, requestContext, rotateResponseMessageId, retryCount }) => {
+        if (!requestContext) throw new Error("SESSION_CONTEXT_IDENTITY_MISSING");
+        const threadId = requestContext.get<string, string>("contextThreadId");
+        const researcherId = requestContext.get<string, string>("contextResearcherId");
+        const runId = requestContext.get<string, string>("agentRunId");
+        const abortSignal = requestContext.get<string, AbortSignal>("agentAbortSignal");
+        if (!threadId || !researcherId || !runId || !abortSignal) throw new Error("SESSION_CONTEXT_IDENTITY_MISSING");
+        abortSignal.throwIfAborted();
+        await assertOwnedThread(repository, threadId, researcherId);
+        const recoveries = await repository.modelStepRecoveries(threadId, researcherId);
+        messageList.removeByIds(invalidRecoveryMessageIds(recoveries));
+        const runObservation = requestContext.get<string, RunModelObservation | undefined>("modelObservation");
+        if (runObservation) runObservation.recoveryAttempts = recoveries.filter(record => record.runId === runId)
+          .reduce((total, record) => total + record.attempts, 0);
+        if (!messageList.get.all.db().some((message) => message.id === sessionControlMessageId(runId))) {
+          const lastCreated = Math.max(Date.now(), ...messageList.get.all.db().map((message) => message.createdAt.getTime() + 1));
+          messageList.add(sessionControlMessage({ runId, threadId, researcherId, createdAt: new Date(lastCreated),
+            continueIntent: requestContext.get("continueIntent") === true }), "context", { merge: false });
+        }
+        if (!rotateResponseMessageId) throw new Error("SESSION_CONTEXT_RESPONSE_BOUNDARY_MISSING");
+        const freshResponseId = rotateResponseMessageId();
+        const messages = messageList.get.all.db().filter((message) => message.role !== "system" && message.content.parts.length > 0);
+        if (messages.some((message) => message.threadId !== threadId || message.resourceId !== researcherId)) {
+          throw new Error("SESSION_CONTEXT_SOURCE_IDENTITY_MISMATCH");
+        }
+        // Persist the complete current tool batch before freezing its source watermark.
+        await createResearchMemory(storage).saveMessages({ messages });
+        requestContext.set("contextCurrentRequestId", [...messages].reverse().find((message) => message.role === "user" && !isSessionControlMessageId(message.id))?.id);
+        if (!requestContext.get("sessionContextController")) requestContext.set("sessionContextController", new SessionContextController({
+          repository, threadId, researcherId, runId, selection: selectionFrom(requestContext),
+          storage, mastra, requestContext, abortSignal,
+        }));
+        let recovery = requestContext.get<string, SessionModelRecovery | undefined>("sessionModelRecovery");
+        if (!recovery) {
+          const observation = requestContext.get<string, RunModelObservation | undefined>("modelObservation");
+          const context = requestContext.get<string, SessionContextController>("sessionContextController");
+          if (!observation || !context) throw new Error("SESSION_CONTEXT_IDENTITY_MISSING");
+          recovery = new SessionModelRecovery({ repository, memory: createResearchMemory(storage), threadId, researcherId, runId,
+            selection: selectionFrom(requestContext), context, observation, abortSignal,
+            notify: claimed => requestContext.get<string, ((claimed: boolean) => void) | undefined>("notifyModelRecovery")?.(claimed) });
+          requestContext.set("sessionModelRecovery", recovery);
+        }
+        return { messageId: recovery.responseMessageId(freshResponseId, retryCount) };
+      },
+    }],
+    outputProcessors: [{ id: "session-replacement-completion", processOutputStep: async ({ requestContext, finishReason, messageList }) => {
+      await requestContext?.get<string, SessionModelRecovery | undefined>("sessionModelRecovery")?.completeResponse(finishReason);
+      return messageList;
+    } }],
+    errorProcessors: [{ id: "session-model-recovery", processAPIError: async ({ error, messageList, requestContext }) => {
+      const recovery = requestContext?.get<string, SessionModelRecovery | undefined>("sessionModelRecovery");
+      if (!recovery) throw error;
+      return recovery.handle(error, messageList, requestContext?.get<string, string | undefined>("contextCurrentRequestId"));
+    } }],
+    model: ({ requestContext }) => new ContextLanguageModel(selectionFrom(requestContext).languageModel, async (request) => {
+      const controller = requestContext.get<string, SessionContextController | undefined>("sessionContextController");
+      if (!controller) throw new Error("SESSION_CONTEXT_INPUT_NOT_PREPARED");
+      return controller.prepare(request, requestContext.get<string, string | undefined>("contextCurrentRequestId"));
+    }),
     name: "ThesisTrace Research Agent",
     tools: ({ requestContext }) => researchToolsFrom(requestContext),
   });
@@ -450,6 +514,24 @@ function createRunAgent(options: Readonly<{
   const agent = options.mastra.getAgent(RESEARCH_AGENT_ID);
   if (agent === undefined) throw new Error("RESEARCH_AGENT_NOT_REGISTERED");
   options.requestContext.set("agentRunId", options.run.input.runId);
+  options.requestContext.set("contextThreadId", options.run.input.threadId);
+  options.requestContext.set("contextResearcherId", options.researcherId);
+  const telemetry = createRunTelemetry({
+    modelKey: options.selection.model.key,
+    providerModelId: options.providerModelId,
+    reasoningEffort: options.selection.effort,
+    researcherId: options.researcherId,
+    runId: options.run.input.runId,
+    threadId: options.run.input.threadId,
+    traceId: options.traceId,
+  }, {
+    metrics: () => ({ steps: options.modelObservation.steps, usage: options.usageCapture.value(),
+      recoveryAttempts: options.modelObservation.recoveryAttempts,
+      inputEstimate: options.modelObservation.inputEstimate,
+      compaction: options.requestContext.get<string, SessionContextController | undefined>("sessionContextController")?.compactionStatistics }),
+    write: options.telemetry,
+  });
+  options.modelObservation.onCallFinished = call => telemetry.modelCallFinished(call);
   return new ResearchMastraAgent({
     agent,
     agentId: RESEARCH_AGENT_ID,
@@ -479,18 +561,7 @@ function createRunAgent(options: Readonly<{
       providerModelId: options.providerModelId,
       reasoningEffort: options.selection.effort,
     },
-    telemetry: createRunTelemetry({
-      modelKey: options.selection.model.key,
-      providerModelId: options.providerModelId,
-      reasoningEffort: options.selection.effort,
-      researcherId: options.researcherId,
-      runId: options.run.input.runId,
-      threadId: options.run.input.threadId,
-      traceId: options.traceId,
-    }, {
-      metrics: () => ({ steps: options.modelObservation.steps, usage: options.usageCapture.value() }),
-      write: options.telemetry,
-    }),
+    telemetry,
     scheduleTitle: options.run.command === "prompt" && options.titleSelection !== undefined
       ? () => options.titleGenerator.schedule({
           languageModel: options.titleSelection!.languageModel,
@@ -661,11 +732,8 @@ function researchToolsFrom(context: RequestContext): DiscoveredMcpTools {
   if (Object.hasOwn(mcpTools, RESEARCH_A2UI_TOOL_NAME) || Object.hasOwn(mcpTools, "ask_user")) {
     throw new Error("MCP_TOOL_NAME_RESERVED");
   }
-  return {
-    ...mcpTools,
-    ask_user: askUserTool,
-    [RESEARCH_A2UI_TOOL_NAME]: researchA2UITool,
-  };
+  return Object.fromEntries(Object.entries({ ...mcpTools, ask_user: askUserTool,
+    [RESEARCH_A2UI_TOOL_NAME]: researchA2UITool }).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0));
 }
 
 function mcpRunFrom(context: RequestContext): import("./mcp-run.js").McpRun | undefined {
@@ -673,16 +741,9 @@ function mcpRunFrom(context: RequestContext): import("./mcp-run.js").McpRun | un
 }
 
 function researchAgentInstructions(context: RequestContext): string {
-  const agentRunId = context.get<string, string | undefined>("agentRunId");
-  const instructions = selectionFrom(context).model.providerAdapter === "scripted"
+  return selectionFrom(context).model.providerAdapter === "scripted"
     ? `${RESEARCH_AGENT_INSTRUCTIONS}\nDeterministic privacy fixture: ${PRIVACY_CANARIES.system}.`
     : RESEARCH_AGENT_INSTRUCTIONS;
-  const identified = agentRunId === undefined
-    ? instructions
-    : `${instructions}\nAgent Run identity: ${agentRunId}.`;
-  return context.get<string, boolean | undefined>("continueIntent") === true
-    ? `${identified}\nContinue the work the user explicitly stopped. Reconstruct the next useful step from authoritative memory; do not invent a new user message.`
-    : identified;
 }
 
 function safeJsonResponse(code: string, status: number): Response {

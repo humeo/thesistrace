@@ -4,6 +4,14 @@ import { expect, test } from "vitest";
 import { agentFailure, AGENT_FAILURE_CODES, runFailureEvent } from "../../contracts/agent-failure.mjs";
 import { AgentRunFailure, providerFailureCode } from "./run-failure.js";
 
+test("classifies an explicit provider context rejection without reading private text", () => {
+  const error = new APICallError({ message: "private", url: "https://private.invalid", statusCode: 400,
+    requestBodyValues: {}, data: { error: { code: "context_length_exceeded", message: "private" } } });
+  expect(providerFailureCode(error)).toBe("CONTEXT_TOO_LARGE");
+  expect(providerFailureCode(new APICallError({ message: "context_length_exceeded", url: "https://private.invalid",
+    statusCode: 400, requestBodyValues: {} }))).toBe("PROVIDER_UNAVAILABLE");
+});
+
 test.each([
   [401, "PROVIDER_AUTHENTICATION"], [403, "PROVIDER_AUTHENTICATION"],
   [429, "PROVIDER_RATE_LIMIT"], [408, "PROVIDER_TIMEOUT"],

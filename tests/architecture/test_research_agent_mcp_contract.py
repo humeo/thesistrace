@@ -65,9 +65,11 @@ from thesistrace.research_agent.mcp_server import (
     _wire_response_bytes,
 )
 from thesistrace.research_agent.models import ResearchAgentToolError
+from thesistrace.research_agent.pagination import ResearchAgentPagination
 from thesistrace.research_agent.registry import (
     RESEARCH_AGENT_TOOL_NAMES,
     AlphaAuthoringLanguage,
+    ResearchAgentExpectedFailure,
     ResearchAgentForbidden,
 )
 from thesistrace.research_authoring import ResearchAuthoringService
@@ -716,6 +718,7 @@ def _registry(
     allowed_tools: frozenset[str] | None = None,
     data_overview: _DataOverviewReader | None = None,
     selected_alpha_language: AlphaAuthoringLanguage = alpha_language,
+    research_folders: _ResearchFolderReader | None = None,
     research_runs: _ResearchRunReader | None = None,
     research_batches: _ResearchBatchReader | None = None,
     daily_tracks: _DailyTrackReader | None = None,
@@ -725,8 +728,9 @@ def _registry(
             researcher_id=TEST_RESEARCHER_ID
         ),
         modules=ResearchAgentModules(
+            pagination=ResearchAgentPagination(b"p" * 32),
             data_overview=data_overview or _DataOverviewReader(),
-            research_folders=_ResearchFolderReader(),
+            research_folders=research_folders or _ResearchFolderReader(),
             alpha_language=selected_alpha_language,
             research_authoring=ResearchAuthoringService(),
             research_runs=research_runs or _ResearchRunReader(),
@@ -841,6 +845,54 @@ def test_registry_catalog_filter_is_bounded_sorted_and_reports_unknowns() -> Non
         _registry().get_alpha_catalog(identifiers=["close"] * 51)
 
 
+def test_registry_catalog_paginates_fields_and_builtins_as_one_collection() -> None:
+    registry = _registry()
+    names = ["close", "rank", "ts_mean"]
+    first = registry.get_alpha_catalog(identifiers=names, limit=2)
+    assert [item.identifier for item in [*first.fields, *first.builtins]] == ["close", "rank"]
+    assert first.next_cursor is not None
+    second = registry.get_alpha_catalog(identifiers=names, limit=2, cursor=first.next_cursor)
+    assert [item.identifier for item in [*second.fields, *second.builtins]] == ["ts_mean"]
+    assert second.next_cursor is None
+    default = registry.get_alpha_catalog()
+    assert len(default.fields) + len(default.builtins) <= 20
+    assert default.next_cursor is not None
+    with pytest.raises(ResearchAgentExpectedFailure):
+        registry.get_alpha_catalog(identifiers=["close"], cursor=first.next_cursor)
+
+
+def test_registry_context_paginates_folders_and_invalidates_changed_collections() -> None:
+    folders = [
+        ResearchFolderSummary(
+            id=f"folder_{i:03}",
+            name="研究" * 60,
+            is_default=False,
+            created_at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        for i in range(55)
+    ]
+
+    class FolderReader(_ResearchFolderReader):
+        def list(self, researcher_id: UUID) -> ResearchFolderList:
+            return ResearchFolderList(items=folders)
+
+    registry = _registry(research_folders=FolderReader())
+    first = registry.get_research_context()
+    assert len(first.folders.items) == 20
+    assert first.folders.next_cursor
+    seen = list(first.folders.items)
+    cursor = first.folders.next_cursor
+    while cursor is not None:
+        page = registry.get_research_context(folder_cursor=cursor)
+        assert len(page.model_dump_json().encode("utf-8")) <= 32 * 1024
+        seen.extend(page.folders.items)
+        cursor = page.folders.next_cursor
+    assert seen == folders
+    folders[0] = folders[0].model_copy(update={"name": "Changed"})
+    with pytest.raises(ResearchAgentExpectedFailure):
+        registry.get_research_context(folder_cursor=first.folders.next_cursor)
+
+
 def test_registry_formula_diagnostics_are_structured_and_source_ranged() -> None:
     valid = _registry().diagnose_alpha_formula("close")
     invalid = _registry().diagnose_alpha_formula("unknown_alpha + close")
@@ -902,6 +954,7 @@ def test_registry_projects_research_run_outcomes_and_expected_errors() -> None:
     assert accepted.result is not None
     assert accepted.result.model_dump(mode="json") == {
         "outcome": "accepted",
+        "next_tool": "get_research_run",
         "run_id": "run_test",
         "status": "queued",
         "replayed": False,
@@ -1020,6 +1073,28 @@ def test_registry_projects_research_run_outcomes_and_expected_errors() -> None:
     assert "private-object-key-canary" not in read_failure.error.message
 
 
+def test_cancel_receipt_is_independent_of_oversized_attached_run_detail() -> None:
+    reader = _ResearchRunReader()
+    assert reader.cancel_outcome is not None
+    reader.cancel_outcome = reader.cancel_outcome.model_copy(update={
+        "run": reader.cancel_outcome.run.model_copy(update={"name": "研究" * 100_000}),
+    })
+    registry = _registry(local_operator_authority(
+        researcher_id=TEST_RESEARCHER_ID, enable_research_cancel=True,
+    ), research_runs=reader)
+    result = registry.invoke("cancel_research_run", {
+        "run_id": "run_test", "request_id": "stable-cancel",
+    }, trace_id="bounded-cancel")
+    assert result.error is None
+    assert result.result is not None
+    payload = result.result.model_dump(mode="json")
+    assert payload["status"] == "cancelled"
+    assert payload["run_id"] == "run_test"
+    assert payload["next_tool"] == "get_research_run"
+    assert len(result.result.model_dump_json().encode("utf-8")) < 1024
+    assert len(reader.cancel_commands) == 1
+
+
 def test_registry_maps_cancel_outcomes_authority_and_conflicts() -> None:
     reader = _ResearchRunReader()
     default_registry = _registry(research_runs=reader)
@@ -1045,10 +1120,9 @@ def test_registry_maps_cancel_outcomes_authority_and_conflicts() -> None:
     assert accepted.result is not None
     assert accepted.result.model_dump(mode="json") == {
         "outcome": "accepted",
-        "run": {
-            **_run_summary().model_dump(mode="json"),
-            "status": "cancelled",
-        },
+        "run_id": "run_test",
+        "status": "cancelled",
+        "next_tool": "get_research_run",
         "replayed": False,
         "retry_after_seconds": None,
     }
@@ -1127,6 +1201,7 @@ def test_registry_projects_research_batch_outcomes_and_expected_errors() -> None
     assert accepted.result is not None
     assert accepted.result.model_dump(mode="json") == {
         "outcome": "accepted",
+        "next_tool": "get_research_batch",
         "batch_id": "batch_test",
         "status": "queued",
         "replayed": False,
@@ -1266,7 +1341,7 @@ def test_registry_maps_research_batch_cancel_authority_and_conflicts() -> None:
         trace_id="trace_batch_cancel",
     )
     assert accepted.result is not None
-    assert accepted.result.model_dump(mode="json")["batch"]["status"] == "cancelled"
+    assert accepted.result.model_dump(mode="json")["status"] == "cancelled"
     assert reader.cancel_commands == [
         ("batch_test", ResearchBatchCancelCommand(request_id="cancel_batch_request"))
     ]
@@ -1325,6 +1400,7 @@ def test_registry_projects_daily_track_history_detail_start_and_expected_errors(
     assert started.result is not None
     assert started.result.model_dump(mode="json") == {
         "outcome": "accepted",
+        "next_tool": "get_daily_track",
         "track_id": "track_test",
         "status": "active",
         "replayed": False,
@@ -1437,6 +1513,7 @@ def test_registry_maps_daily_track_refresh_retry_stop_outcomes_authority_and_err
     assert refreshed.result is not None
     assert refreshed.result.model_dump(mode="json") == {
         "outcome": "accepted",
+        "next_tool": "get_daily_track",
         "track_id": "track_test",
         "status": "active",
         "replayed": False,
@@ -1454,6 +1531,7 @@ def test_registry_maps_daily_track_refresh_retry_stop_outcomes_authority_and_err
     assert retried.result is not None
     assert retried.result.model_dump(mode="json") == {
         "outcome": "accepted",
+        "next_tool": "get_daily_track",
         "track_id": "track_test",
         "status": "active",
         "replayed": False,
@@ -1487,6 +1565,7 @@ def test_registry_maps_daily_track_refresh_retry_stop_outcomes_authority_and_err
     assert stopped.result is not None
     assert stopped.result.model_dump(mode="json") == {
         "outcome": "accepted",
+        "next_tool": "get_daily_track",
         "track_id": "track_test",
         "status": "stopped",
         "replayed": False,
@@ -1711,9 +1790,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "3aeba5c889cc8ed5f367f71083d7ff009bb7aa1cc53208809662c3daf7355d62"
+        "e00ef7bf365b978fbe071083e2e09428e64f0309bd2907d547dca0fa09b89979"
     )
-    assert len(canonical) == 151794
+    assert len(canonical) == 146969
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -2051,7 +2130,10 @@ async def _exercise_in_memory_protocol() -> None:
             else:
                 assert tool.annotations.read_only_hint is True
                 assert tool.input_schema["additionalProperties"] is False
-        assert tools["get_research_context"].input_schema["properties"] == {}
+        assert set(tools["get_research_context"].input_schema["properties"]) == {
+            "folder_cursor",
+            "folder_limit",
+        }
         assert (
             tools["get_alpha_catalog"].input_schema["properties"]["identifiers"]["anyOf"][0][
                 "maxItems"
@@ -2338,7 +2420,7 @@ async def _exercise_destructive_cancel_protocol() -> None:
         )
         assert result.is_error is False
         validate(result.structured_content, cancel.output_schema)
-        assert result.structured_content["run"]["status"] == "cancelled"
+        assert result.structured_content["status"] == "cancelled"
 
         rejected_confirmation = await client.call_tool(
             "cancel_research_run",
@@ -2368,7 +2450,8 @@ async def _exercise_destructive_cancel_protocol() -> None:
         assert "ResearchBatchLiveProgress" not in batch_cancel_output_schema
         assert "task_attempt_count" not in batch_cancel_output_schema
         assert "attempt_number" not in batch_cancel_output_schema
-        assert "diagnostic" in batch_cancel_output_schema
+        assert "diagnostic" not in batch_cancel_output_schema
+        assert "next_tool" in batch_cancel_output_schema
 
         batch_result = await client.call_tool(
             "cancel_research_batch",
@@ -2376,7 +2459,7 @@ async def _exercise_destructive_cancel_protocol() -> None:
         )
         assert batch_result.is_error is False
         validate(batch_result.structured_content, batch_cancel.output_schema)
-        assert batch_result.structured_content["batch"]["status"] == "cancelled"
+        assert batch_result.structured_content["status"] == "cancelled"
 
     assert [event.context["outcome"] for event in events] == [
         "succeeded",

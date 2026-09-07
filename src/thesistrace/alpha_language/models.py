@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ValueType(StrEnum):
@@ -64,45 +64,47 @@ class FormulaDiagnostics(BaseModel):
 class AlphaFieldCatalogEntry(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    identifier: str
-    field_id: str
+    identifier: Annotated[str, Field(max_length=100)]
+    field_id: Annotated[str, Field(max_length=200)]
     value_type: Literal[ValueType.NUMERIC_SERIES] = ValueType.NUMERIC_SERIES
-    description: str
-    unit: str
-    family_id: str
-    availability: str
-    report_period_selection: str
-    applicable_company_types: list[str]
-    missingness: str
-    example: str
+    description: Annotated[str, Field(max_length=384)]
+    unit: Annotated[str, Field(max_length=384)]
+    family_id: Annotated[str, Field(max_length=384)]
+    availability: Annotated[str, Field(max_length=384)]
+    report_period_selection: Annotated[str, Field(max_length=384)]
+    applicable_company_types: Annotated[
+        list[Annotated[str, Field(max_length=64)]], Field(max_length=16)
+    ]
+    missingness: Annotated[str, Field(max_length=384)]
+    example: Annotated[str, Field(max_length=384)]
 
 
 class BuiltinParameter(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    name: str
+    name: Annotated[str, Field(max_length=100)]
     value_type: Literal["numeric", "numeric_series", "window"]
-    minimum: int | None = None
-    maximum: int | None = None
+    minimum: Annotated[int, Field(ge=-(2**63), lt=2**63)] | None = None
+    maximum: Annotated[int, Field(ge=-(2**63), lt=2**63)] | None = None
 
 
 class BuiltinWorkEstimate(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    base_operations: int
-    per_window_operations: int
+    base_operations: Annotated[int, Field(ge=0, lt=2**63)]
+    per_window_operations: Annotated[int, Field(ge=0, lt=2**63)]
 
 
 class AlphaBuiltinCatalogEntry(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    identifier: str
-    parameters: list[BuiltinParameter]
+    identifier: Annotated[str, Field(max_length=100)]
+    parameters: Annotated[list[BuiltinParameter], Field(max_length=8)]
     result_type: Literal["same_as_first", "numeric_series"]
-    description: str
-    examples: list[str]
-    missing_value_behavior: str
-    numeric_behavior: str
+    description: Annotated[str, Field(max_length=384)]
+    examples: Annotated[list[Annotated[str, Field(max_length=384)]], Field(max_length=4)]
+    missing_value_behavior: Annotated[str, Field(max_length=384)]
+    numeric_behavior: Annotated[str, Field(max_length=384)]
     work_estimate: BuiltinWorkEstimate
 
 

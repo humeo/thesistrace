@@ -43,22 +43,57 @@ answer idempotency with isolated PostgreSQL and a fake Responses provider.
 Retain these contract tests when deliberately upgrading Mastra; remove this
 patch only once the installed replacement passes the same tests unpatched.
 
-# Mastra observational context and child logging
+# Mastra child logging and controlled Session context
 
-The pinned `@mastra/memory@1.28.1` loads stored history into a live MessageList
-when starting an observation turn. A resumed `ask_user` result can already be
-present there while storage still holds its pending call. Replacing that live
-message loses the answer and makes the model ask the same question again.
+The pinned `@mastra/memory@1.28.1` Observer and Reflector agents inherit the
+parent Mastra logger so a Host using `noopLogger` does not leak child-model errors.
+The retained native hydration correction only adds missing message identities;
+it never overwrites a live answered Tool with an older pending storage copy.
+The production Session path disables native observational scheduling entirely:
+`createResearchMemory` loads raw history with `lastMessages: false`, semantic
+recall and working memory disabled. The Host controller owns fixed M/S snapshots.
 
-The ESM/CommonJS patch hydrates only missing message identities. It preserves
-the current Run's messages while still loading all unobserved history. Observer
-and Reflector agents also inherit the parent Mastra logger, so a Host configured
-with `noopLogger` does not emit native child-model error logs.
+PostgreSQL runtime tests cover same-Turn question recovery, mid-Tool-loop
+compression, raw-history retention, restart, Session isolation/deletion, usage and
+safe failures. Candidate tests exercise the patched entry points below. See
+[Session context](../docs/runbook/session-context.md) for current scheduling and
+[Issue 06 evidence](../.scratch/session-context-compaction/evidence-06.md) for final
+acceptance status.
 
-`agent/src/research-memory.test.ts` reproduces the stale pending-call overwrite
-with native in-memory storage and a deterministic timestamp boundary. PostgreSQL
-runtime tests cover same-Turn question recovery, both compression levels,
-mid-Tool-loop observation, original-message retention, restart, Session isolation
-and deletion, model settings, usage accounting, and safe compression failures.
-Keep these tests when upgrading; remove the patch only when the replacement
-passes them without it.
+## Controlled compaction candidates
+
+The same pinned Memory patch exposes `observer.callCandidate` and
+`reflector.callCandidate`. Native `call` formats tool results with a 10k-token
+cutoff and includes extractor/retry orchestration; Reflector can escalate through
+several generation attempts. Those behaviors cannot publish part of a Session's
+atomic M/S checkpoint.
+
+`observer.getCandidateInput` prepares the exact instructions and full-source user
+messages without invoking a model or mutating the source. Candidate execution uses
+the same builder; token-based model resolution counts a clone because the native
+counter annotates message parts. The Host uses this input to plan bounded batches.
+
+Candidate calls reuse the installed Observer/Reflector prompts, parsers and Agent
+execution, but receive full source JSON (including completed tool arguments and
+results), run one request with no tools/extractors or automatic retries, and return
+finish reason plus usage. They do not set lastExchange, write markers, invoke
+extractor hooks or mutate memory. The Host's checkpoint controller owns candidate
+validation, correction limits, budgets and the final atomic commit. Cancellation
+is checked before and after generation. The ESM and CommonJS distributions and
+public runner declarations are patched together.
+
+`agent/src/compaction-candidates.test.ts` verifies these boundaries with an offline
+model, including long results, empty observations, length stops and cancellation.
+`session-context-generation.ts` calls these entries to generate unpublished M
+candidates; `session-context-controller.ts` coordinates M/S validation and atomic
+publication. Native automatic OM scheduling and buffering remain disabled.
+
+## V3 prompt conversion declaration
+
+The pinned Core 1.63.1 runtime already converts tool result media with
+`aiV5PromptToAIV6Prompt`, used by `MessageList.get.all.aiV6.llmPrompt`. Both public
+return declarations incorrectly name `LanguageModelV2Prompt`. The Core patch
+corrects only these declarations to `LanguageModelV3Prompt`; it changes no runtime
+behavior. The controller regression verifies actual image-data/file-data tool
+results as well as a statically assignable V3 prompt. No local converter or unsafe
+assertion replaces the framework conversion.

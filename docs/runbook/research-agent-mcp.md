@@ -154,8 +154,8 @@ it is never truncated or partially returned.
 The inventory test serializes each tool name, required scope, description,
 annotations, input Schema, and output Schema with sorted JSON keys. Its current
 V1 SHA-256 is
-`b011d1801f2dc5040f15519cfbef609c6dfdaaca3827732bb33f43d1e18ee32e` and
-the canonical inventory is 151,707 bytes. A maximum 20-item Factor Evaluation
+`e00ef7bf365b978fbe071083e2e09428e64f0309bd2907d547dca0fa09b89979` and
+the canonical inventory is 146,969 bytes. A maximum 20-item Factor Evaluation
 Batch with a 4,096-character Formula in every item serializes to 84,536 bytes,
 so it fits the request ceiling without weakening either collection bound.
 
@@ -166,9 +166,54 @@ budget. The reproducible command, envelope, and observed CPU/RSS evidence are
 recorded in
 [`research-agent-mcp-v1-ingress-benchmark.json`](../research/research-agent-mcp-v1-ingress-benchmark.json).
 That probe completed the inventory, 120-call window, and four-call concurrency
-tests in 2.08 seconds of pytest time, with 153,223,168 bytes maximum RSS (7.14
+tests in 0.91 seconds of pytest time, with 157,057,024 bytes maximum RSS (7.31
 percent of the 2-GiB container envelope) and no swap. Tests pin the constants,
 inventory fingerprint, observed byte sizes, oversized single-item behavior,
 rate isolation, and concurrent-call admission. Any contract change is a hard
 cut that must update this evidence and the exact inventory test together; V1
 has no alias, compatibility dispatcher, or fallback path.
+
+## Read bounded pages and operation receipts
+
+List and collection pages default to 20 records, at most 50. Each model-facing
+business JSON page, including metadata and its continuation cursor, is at most
+32 KiB in UTF-8. A page can contain fewer than the requested number of records;
+follow `next_cursor` until it is null. Fields and financial numbers in each
+returned record remain complete. This is separate from the 256 KiB MCP wire
+response and 512 KiB Agent decoded-response guards.
+
+`get_alpha_catalog` counts fields and builtins together, ordered by category
+(fields first) and then identifier. For example:
+
+```json
+{"identifiers":["close","rank","ts_mean"],"limit":2}
+```
+
+Pass the returned cursor as `cursor` with the same identifier filter for the next
+page. Omitting `identifiers` traverses the whole catalog. Catalog text and array
+length limits are declared in the tool's JSON Schema; unknown identifiers are
+reported explicitly.
+
+`get_research_context` returns one folder page alongside Data Overview and
+authoring constraints. Continue with `folder_cursor` from `folders.next_cursor`,
+and use `folder_limit` to choose the page size. Folder names retain the declared
+120-character domain limit. Do not interpret the first folder page as all folders.
+
+Catalog and folder cursors are authenticated and bind the Researcher, query and
+collection version. If the collection changes, start a new traversal. Result
+cursors retain their identity, query and immutable Result/snapshot binding.
+ResearchRun and DailyTrack collection sections continue through
+`get_research_run_result` and `get_daily_track_result`; summary metrics are returned
+in full and never paraphrased into numeric substitutes.
+
+Accepted writes return small receipts containing the durable resource ID, status,
+replay flag, retry interval where applicable, and `next_tool`. Cancellation does
+not embed the Run or Batch detail. Call the indicated read tool to inspect the
+resource. A later read or Agent failure does not reverse a successful operation;
+keep the existing resource/request identity rather than submitting it again.
+
+Research notes (`hypothesis`) accept at most 1,024 Unicode characters for both
+single-run and batch admission. The same bound is declared on frozen inputs and
+Result provenance; formulas remain limited to 4,096 characters. Longer notes are
+rejected before admission rather than silently shortened. The authoring form
+shows the notes count and prevents submission above the limit.

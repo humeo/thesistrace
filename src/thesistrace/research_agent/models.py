@@ -15,10 +15,9 @@ from thesistrace.data.models import DataOverview
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
 from thesistrace.research_batch.models import (
     ResearchBatchAdmissionIssue,
-    ResearchBatchPollingDetail,
     ResearchBatchStatus,
 )
-from thesistrace.research_folder.models import ResearchFolderList
+from thesistrace.research_folder.models import ResearchFolderSummary
 from thesistrace.research_run.models import (
     RequestId,
     ResearchKind,
@@ -96,11 +95,18 @@ class ResearchAgentAuthority(BaseModel):
         return scope in self.scopes
 
 
+class ResearchContextFolders(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    items: list[ResearchFolderSummary]
+    next_cursor: str | None
+
+
 class ResearchContext(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     data_overview: DataOverview
-    folders: ResearchFolderList
+    folders: ResearchContextFolders
     authoring_constraints: ResearchAuthoringConstraints
 
 
@@ -118,11 +124,16 @@ FormulaSource = Annotated[str, Field(strict=True, max_length=MAX_FORMULA_LENGTH)
 class GetResearchContextInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
+    folder_cursor: Annotated[str, Field(strict=True, min_length=1, max_length=1024)] | None = None
+    folder_limit: Annotated[int, Field(strict=True, ge=1, le=50)] = 20
+
 
 class GetAlphaCatalogInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     identifiers: AlphaCatalogIdentifiers | None = None
+    cursor: Annotated[str, Field(strict=True, min_length=1, max_length=1024)] | None = None
+    limit: Annotated[int, Field(strict=True, ge=1, le=50)] = 20
 
 
 class DiagnoseAlphaFormulaInput(BaseModel):
@@ -137,6 +148,7 @@ class AlphaCatalogView(BaseModel):
     fields: list[AlphaFieldCatalogEntry]
     builtins: list[AlphaBuiltinCatalogEntry]
     unknown_identifiers: list[str]
+    next_cursor: str | None
 
 
 ResearchRunId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
@@ -189,11 +201,24 @@ class CancelResearchBatchInput(BaseModel):
     request_id: RequestId
 
 
+class CancelResearchRunOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    outcome: Literal["accepted"] = "accepted"
+    run_id: ResearchRunId
+    status: ResearchRunStatus
+    replayed: bool
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+    next_tool: Literal["get_research_run"] = "get_research_run"
+
+
 class CancelResearchBatchOutcome(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     outcome: Literal["accepted"] = "accepted"
-    batch: ResearchBatchPollingDetail
+    batch_id: ResearchBatchId
+    status: ResearchBatchStatus
+    next_tool: Literal["get_research_batch"] = "get_research_batch"
     replayed: bool
     retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
 
@@ -226,6 +251,7 @@ class StartDailyTrackOutcome(BaseModel):
     status: Literal["active"]
     replayed: bool
     retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)]
+    next_tool: Literal["get_daily_track"] = "get_daily_track"
 
 
 class RetryDailyTrackInput(BaseModel):
@@ -250,6 +276,7 @@ class RefreshDailyTrackOutcome(BaseModel):
     status: Literal["active"]
     replayed: bool
     retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)]
+    next_tool: Literal["get_daily_track"] = "get_daily_track"
 
 
 class RetryDailyTrackOutcome(BaseModel):
@@ -260,6 +287,7 @@ class RetryDailyTrackOutcome(BaseModel):
     status: Literal["active", "blocked"]
     replayed: bool
     retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+    next_tool: Literal["get_daily_track"] = "get_daily_track"
 
 
 class StopDailyTrackInput(BaseModel):
@@ -277,6 +305,7 @@ class StopDailyTrackOutcome(BaseModel):
     status: Literal["stopping", "stopped"]
     replayed: bool
     retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+    next_tool: Literal["get_daily_track"] = "get_daily_track"
 
 
 class SubmitResearchBatchAccepted(BaseModel):
@@ -287,6 +316,7 @@ class SubmitResearchBatchAccepted(BaseModel):
     status: ResearchBatchStatus
     replayed: bool
     retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+    next_tool: Literal["get_research_batch"] = "get_research_batch"
 
 
 class SubmitResearchBatchRejected(BaseModel):
@@ -311,6 +341,7 @@ class SubmitResearchRunAccepted(BaseModel):
     status: ResearchRunStatus
     replayed: bool
     retry_after_seconds: Annotated[int, Field(strict=True, ge=1, le=60)] | None
+    next_tool: Literal["get_research_run"] = "get_research_run"
 
 
 class SubmitResearchRunRejected(BaseModel):

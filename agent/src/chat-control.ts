@@ -8,6 +8,14 @@ import { isCanonicalUuid } from "./uuid.js";
 export const MAX_CHAT_COMMAND_BODY_BYTES = MAX_CHAT_MESSAGE_BYTES + 2 * 1024;
 const TIMELINE_PAGE_SIZE = 20;
 
+export type AssistantRecovery = Readonly<{
+  status: "recovering" | "succeeded" | "failed";
+  cause: "OUTPUT_LIMIT" | "CONTEXT_TOO_LARGE";
+  attempts: 0 | 1;
+  replacementMessageId: string | null;
+  errorCode: string | null;
+}>;
+
 export type TurnKind = "prompt" | "continue";
 export type TurnStatus =
   | "running"
@@ -60,7 +68,7 @@ export type ChatTimelineEntry =
       createdAt: string;
       entryId: string;
       kind: "assistant_message";
-      payload: Readonly<{ content: string; status: AssistantItemStatus }>;
+      payload: Readonly<{ content: string; status: AssistantItemStatus; recovery?: AssistantRecovery; supersedes?: string }>;
       turnId: string;
     }>
   | Readonly<{

@@ -9,7 +9,7 @@ export const SCRIPTED_FAILURE_PROMPTS = Object.freeze({
   PROVIDER_AUTHENTICATION: "[scripted-provider-authentication] Test a rejected provider credential.",
   PROVIDER_REFUSAL: "[scripted-provider-refusal] Test a provider refusal.",
   PROVIDER_MALFORMED_STREAM: "[scripted-provider-malformed] Test an invalid provider stream.",
-  AGENT_LIMIT: "[scripted-provider-output-limit] Test a bounded provider output.",
+  OUTPUT_LIMIT: "[scripted-provider-output-limit] Test a bounded provider output.",
   INTERNAL_FAILURE: "[scripted-provider-unexpected] Test an unexpected provider error.",
 });
 export const SCRIPTED_LONG_TOOL_LOOP_PROMPT = "[scripted-long-tool-loop] Inspect research context twenty times, then finish.";
@@ -73,7 +73,7 @@ export function scriptedFailureStream(options: LanguageModelV3CallOptions) {
   if (code === "INTERNAL_FAILURE") throw new Error(`${PRIVACY_CANARIES.provider_error} ${PRIVACY_CANARIES.path}`);
   if (code === "PROVIDER_MALFORMED_STREAM") return parts([{ type: "malformed", private: "private-stream-canary" } as unknown as LanguageModelV3StreamPart]);
   return parts([textStart, textDelta, textEnd, {
-    ...finish, finishReason: { unified: code === "AGENT_LIMIT" ? "length" : "content-filter", raw: "scripted" },
+    ...finish, finishReason: { unified: code === "OUTPUT_LIMIT" ? "length" : "content-filter", raw: "scripted" },
   }]);
 }
 

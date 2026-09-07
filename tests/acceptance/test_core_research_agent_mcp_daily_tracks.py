@@ -234,6 +234,7 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         assert started.is_error is False
         track_id = str(started.structured_content["track_id"])
         assert started.structured_content == {
+            "next_tool": "get_daily_track",
             "outcome": "accepted",
             "track_id": track_id,
             "status": "active",
@@ -480,6 +481,7 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         )
         assert unchanged_retry.is_error is False
         assert unchanged_retry.structured_content == {
+            "next_tool": "get_daily_track",
             "outcome": "accepted",
             "track_id": concurrent_track_id,
             "status": "blocked",
@@ -1089,6 +1091,7 @@ async def _exercise_live_tracking_stop(
                 )
                 assert stopping.is_error is False
                 assert stopping.structured_content == {
+                    "next_tool": "get_daily_track",
                     "outcome": "accepted",
                     "track_id": track_id,
                     "status": "stopping",

@@ -13,7 +13,7 @@ class ResearchFolderSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
-    name: str
+    name: FolderName
     is_default: bool
     created_at: datetime
 

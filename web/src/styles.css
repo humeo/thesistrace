@@ -612,6 +612,8 @@ code { font-family: var(--mono); }
   font: 11px/1.4 var(--mono);
 }
 .chat-turn-outcome-failed { color: var(--danger); }
+.chat-turn-failure-explanation { display: grid; gap: 4px; font: 13px/1.45 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.chat-turn-failure-explanation > span { color: var(--ink-muted); }
 .chat-turn-outcome code { color: inherit; }
 .chat-assistant-markdown {
   display: grid;
@@ -2783,7 +2785,8 @@ select { color-scheme: dark; }
   }
   .chat-message-actions { opacity: 1; }
   .chat-run-error > .button { min-height: 44px; min-width: 44px; white-space: normal; }
-  .account-menu > summary { min-width: 44px; }
+  .account-menu > summary,
+  .sidebar-account-area .account-menu > summary { min-width: 44px; min-height: 44px; }
   .chat-composer-toolbar .chat-main-action {
     width: 44px;
     height: 44px;

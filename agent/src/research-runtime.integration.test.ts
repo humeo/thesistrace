@@ -1,3 +1,4 @@
+import type { AgentTelemetryEvent } from "./run-telemetry.js";
 import { randomUUID } from "node:crypto";
 
 import type { AGUIEvent, Message, RunAgentInput } from "@ag-ui/core";
@@ -12,7 +13,6 @@ import {
 import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { estimateTokenCount } from "tokenx";
 
 import { BATCH_ID, BATCH_TOOL_NAMES, CHILD_IDS, batchFixtureOutput } from "../test-fixtures/batch-research.js";
 import { DAILY_TRACK_TOOL_NAMES, ORIGIN_RUN_ID, TRACK_ID, dailyTrackFixtureOutput } from "../test-fixtures/daily-track.js";
@@ -52,6 +52,7 @@ import {
   SCRIPTED_TOOL_PROMPT,
 } from "./scripted-language-model.js";
 import {
+  ContextCheckpointConflictError,
   ResearchSessionRepository,
   SessionActiveRunError,
   SessionNotFoundError,
@@ -86,7 +87,7 @@ const agentStore = new Pool({ connectionString: runtimeDatabaseUrl, max: 2 });
 const primaryResearcher = researcher("00000000-0000-4000-8000-000000000101");
 const foreignResearcher = researcher("00000000-0000-4000-8000-000000000102");
 const modelRegistry = readModelRegistry(JSON.stringify({
-  default_model_key: "scripted-research",
+  min_compaction_context_window: 65_536, default_model_key: "scripted-research",
   models: [
     {
       default_reasoning_effort: "medium",
@@ -96,7 +97,7 @@ const modelRegistry = readModelRegistry(JSON.stringify({
       provider_adapter: "scripted",
       provider_model_id: "scripted-v1",
       reasoning_efforts: ["none", "medium", "max"],
-      context_window: 65_536, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     },
     {
       default_reasoning_effort: "medium",
@@ -106,7 +107,7 @@ const modelRegistry = readModelRegistry(JSON.stringify({
       provider_adapter: "scripted",
       provider_model_id: "scripted-failure-v1",
       reasoning_efforts: ["medium"],
-      context_window: 65_536, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     },
   ],
 }), { THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "integration-secret" });
@@ -124,8 +125,8 @@ const settings: AgentSettings = {
   runMaxWallSeconds: 300,
 };
 const memoryConfiguration = { ...settings, modelRegistry: readModelRegistry(JSON.stringify({
-  default_model_key: "luna",
-  models: [{ context_window: 65_536, key: "luna", display_name: "Luna", enabled: true,
+  min_compaction_context_window: 65_536, default_model_key: "luna",
+  models: [{ context_window: 65_536, max_output_tokens: 128_000, key: "luna", display_name: "Luna", enabled: true,
     provider_adapter: "openai", provider_model_id: "gpt-5.6-luna", default_reasoning_effort: "high",
     reasoning_efforts: ["high"], secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY" }],
 }), { THESISTRACE_AGENT_OPENAI_API_KEY: "memory-replay-only" }) };
@@ -176,86 +177,574 @@ describe.sequential("durable Research Agent runtime", () => {
     await owner.end();
   });
 
-  it("compresses old Session history before answering and retains it across Host restart", async () => {
+  it("retains burst-stream partial text through durable recovery", async () => {
+    const runtime = await createIntegrationRuntime();
+    const threadId = randomUUID();
+    const invoke = (existing: boolean) => run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+      sessionMode: existing ? "existing" : "new", content: existing ? "[scripted-context-recovery] Continue." : "Prepare research." }), primaryResearcher);
+    try {
+      expect((await invoke(false)).at(-1)?.type).toBe("RUN_FINISHED");
+      await seedRecoveryHistory(threadId);
+      const events = await invoke(true);
+      expect(events.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
+      const repository = new ResearchSessionRepository(agentStore);
+      const [recovery] = await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id);
+      expect(recovery).toMatchObject({ status: "succeeded", attempts: 1 });
+      const timeline = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
+      const partial = timeline.turns.flatMap(turn => turn.entries).find(entry => entry.entryId === `assistant:${recovery!.originalMessageId}`);
+      expect(partial?.payload).toMatchObject({ content: "This is the retained partial answer." });
+      expect(events.some(event => event.type === "TOOL_CALL_START")).toBe(false);
+    } finally { await runtime.close(); }
+  });
+
+  it("recovers a crowded length stop once through the public Run and retains its audit body", async () => {
+    const telemetry: AgentTelemetryEvent[] = [];
+    const provider = openAIMemoryProvider({ lengthOnAnswers: [2] });
+    vi.stubGlobal("fetch", provider.fetch);
+    const dependencies = { mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false,
+      toolFailure: () => undefined, tools: {} }) };
+    const runtime = await createResearchRuntime(memoryConfiguration, { ...dependencies, telemetry: event => telemetry.push(event) });
+    const threadId = randomUUID();
+    const prompt = (existing: boolean) => run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+      modelKey: "luna", reasoningEffort: "high", sessionMode: existing ? "existing" : "new", content: "Explain the research." }), primaryResearcher);
+    try {
+      expect((await prompt(false)).at(-1)?.type).toBe("RUN_FINISHED");
+      await seedRecoveryHistory(threadId);
+      const events = await prompt(true);
+      expect(events.at(-1), JSON.stringify(events.at(-1))).toMatchObject({ type: "RUN_FINISHED" });
+      const repository = new ResearchSessionRepository(agentStore);
+      const recoveries = await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id);
+      expect(recoveries).toHaveLength(1);
+      expect(recoveries[0]).toMatchObject({ status: "succeeded", attempts: 1, invalidReplacement: false });
+      const observed = telemetry.filter(event => event.run_id === recoveries[0]!.runId);
+      expect(observed.find(event => event.event === "agent_recovery_claimed")).toMatchObject({ recovery_attempts: 1 });
+      expect(observed.at(-1)).toMatchObject({ event: "agent_run_finished", recovery_attempts: 1 });
+      expect(observed.some(event => event.model_call?.purpose === "memory" && event.model_call.token_usage.reported)).toBe(true);
+      expect(observed.some(event => event.model_call?.finish_reason === "length")).toBe(true);
+      expect(JSON.stringify(telemetry)).not.toContain("TRUNCATED_ANSWER_CANARY");
+      expect(provider.requests.filter((request) => request.phase === "answer")).toHaveLength(3);
+      expect(provider.requests.slice(2).filter((request) => request.phase !== "answer").length).toBeGreaterThan(0);
+      const timeline = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
+      const partial = timeline.turns.flatMap((turn) => turn.entries).find((entry) => entry.entryId === `assistant:${recoveries[0]!.originalMessageId}`);
+      expect(partial?.payload).toMatchObject({ content: "TRUNCATED_ANSWER_CANARY", recovery: { status: "succeeded", attempts: 1 } });
+      expect(timeline.turns.flatMap(turn => turn.entries).find(entry => entry.entryId === `assistant:${recoveries[0]!.replacementMessageId}`)?.payload)
+        .toMatchObject({ supersedes: recoveries[0]!.originalMessageId });
+      expect(events.some(event => event.type === "CUSTOM" && event.name === "session_recovery_changed")).toBe(true);
+      expect(provider.requests.slice(2).every((request) => !request.prompt.includes("TRUNCATED_ANSWER_CANARY"))).toBe(true);
+      expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
+      expect(provider.requests.at(-1)?.prompt).not.toContain("TRUNCATED_ANSWER_CANARY");
+    } finally { await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
+  it.each([
+    { name: "full configured output", capacity: 65536, output: 1000, context: false, code: "OUTPUT_LIMIT" },
+    { name: "no compressible history", capacity: 65536, output: 128000, context: false, code: "CONTEXT_TOO_LARGE" },
+    { name: "small-window length", capacity: 32768, output: 128000, context: false, code: "OUTPUT_LIMIT" },
+    { name: "small-window context rejection", capacity: 32768, output: 128000, context: true, code: "CONTEXT_TOO_LARGE" },
+  ])("does not start auxiliary recovery for $name", async (scenario) => {
+    let executions = 0;
+    const provider = openAIMemoryProvider({ tool: "get_research_run", toolOnAnswers: [1], lengthOnAnswers: scenario.context ? [] : [1], contextOnAnswers: scenario.context ? [1] : [] });
+    vi.stubGlobal("fetch", provider.fetch);
+    const configuration = { ...memoryConfiguration, modelRegistry: { ...memoryConfiguration.modelRegistry,
+      models: memoryConfiguration.modelRegistry.models.map(model => ({ ...model, contextWindow: scenario.capacity, maxOutputTokens: scenario.output })) } };
+    const runtime = await createResearchRuntime(configuration, { mcpRunFactory: async () => ({ close: async () => undefined,
+      hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {
+        get_research_run: createTool({ id: "get_research_run", description: "Read research", inputSchema: z.object({}),
+          execute: async () => { executions++; return { status: "succeeded" }; } }),
+      } }) });
+    const threadId = randomUUID();
+    try {
+      const events = await run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(), modelKey: "luna",
+        reasoningEffort: "high", sessionMode: "new", content: "Explain the research." }), primaryResearcher);
+      expect(executions).toBe(0);
+      expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR", code: scenario.code });
+      expect(provider.requests.map(request => request.phase)).toEqual(["answer"]);
+      const repository = new ResearchSessionRepository(agentStore);
+      expect(await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id))
+        .toMatchObject([{ attempts: scenario.name === "no compressible history" ? 1 : 0, status: "failed" }]);
+      expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toBeNull();
+    } finally { await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
+  it.each([
+    { name: "second length stop", lengthOnAnswers: [2, 3], contextOnAnswers: [], failObserver: false, code: "RECOVERY_FAILED", answers: 3 },
+    { name: "length then context rejection", lengthOnAnswers: [2], contextOnAnswers: [3], failObserver: false, code: "RECOVERY_FAILED", answers: 3 },
+    { name: "context rejection then length", lengthOnAnswers: [3], contextOnAnswers: [2], failObserver: false, code: "RECOVERY_FAILED", answers: 3 },
+    { name: "failed Observer", lengthOnAnswers: [2], contextOnAnswers: [], failObserver: true, code: "CONTEXT_COMPACTION_FAILED", answers: 2 },
+  ])("stops recovery without resetting its claim: $name", async (scenario) => {
+    const provider = openAIMemoryProvider({ ...scenario, tool: "get_research_run", toolOnAnswers: [2, 3] });
+    let executions = 0;
+    vi.stubGlobal("fetch", provider.fetch);
+    const runtime = await createResearchRuntime(memoryConfiguration, { mcpRunFactory: async () => ({ close: async () => undefined,
+      hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {
+        get_research_run: createTool({ id: "get_research_run", description: "Read research", inputSchema: z.object({}),
+          execute: async () => { executions++; return { status: "succeeded" }; } }),
+      } }) });
+    const threadId = randomUUID();
+    const prompt = (existing: boolean) => run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+      modelKey: "luna", reasoningEffort: "high", sessionMode: existing ? "existing" : "new", content: "Explain the research." }), primaryResearcher);
+    try {
+      expect((await prompt(false)).at(-1)?.type).toBe("RUN_FINISHED");
+      await seedRecoveryHistory(threadId);
+      const events = await prompt(true);
+      expect(executions).toBe(0);
+      expect(provider.requests.slice(0, 2).map(request => request.phase)).toEqual(["answer", "answer"]);
+      expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR", code: scenario.code });
+      const repository = new ResearchSessionRepository(agentStore);
+      const recoveries = await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id);
+      expect(recoveries).toHaveLength(1);
+      expect(recoveries[0]).toMatchObject({ status: "failed", attempts: 1, invalidReplacement: true });
+      expect(provider.requests.filter(request => request.phase === "answer")).toHaveLength(scenario.answers);
+      expect(JSON.stringify(events)).not.toContain("private-context-canary");
+      if (scenario.failObserver) expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toBeNull();
+    } finally { await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
+  it.each(["stop", "shutdown"] as const)("terminates an in-flight recovery on %s and never resumes it on restart", async (mode) => {
+    const barrier = toolBarrier();
+    let observing = false;
+    const provider = openAIMemoryProvider({ lengthOnAnswers: [2], onObserver: async (signal) => {
+      observing = true;
+      await waitForGateOrAbort(barrier.promise, signal);
+    } });
+    vi.stubGlobal("fetch", provider.fetch);
+    const dependencies = { mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false,
+      toolFailure: () => undefined, tools: {} }) };
+    let runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+    const threadId = randomUUID(), runId = randomUUID();
+    let pending: Promise<AGUIEvent[]> | undefined;
+    try {
+      expect((await run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(), modelKey: "luna",
+        reasoningEffort: "high", content: "Explain the research." }), primaryResearcher)).at(-1)?.type).toBe("RUN_FINISHED");
+      await seedRecoveryHistory(threadId);
+      pending = run(runtime, runInput({ threadId, runId, messageId: randomUUID(), modelKey: "luna", reasoningEffort: "high",
+        sessionMode: "existing", content: "Continue the explanation." }), primaryResearcher);
+      await vi.waitFor(() => expect(observing).toBe(true), { timeout: 10_000 });
+      const repository = new ResearchSessionRepository(agentStore);
+      expect(await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id)).toMatchObject([{ attempts: 1, status: "recovering" }]);
+      const timeline = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
+      expect(timeline.turns.flatMap(turn => turn.entries).some(entry => entry.kind === "assistant_message" && entry.payload.recovery?.status === "recovering")).toBe(true);
+      if (mode === "stop") await runtime.stop(threadId, primaryResearcher, stopInput(randomUUID(), runId));
+      else await runtime.close();
+      await pending;
+      barrier.resolve();
+      expect(await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id))
+        .toMatchObject([{ attempts: 1, status: "failed", afterBudget: null }]);
+      expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toBeNull();
+      await runtime.close();
+      runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+      await connect(runtime, threadId, primaryResearcher);
+      expect(provider.requests.filter(request => request.phase === "answer")).toHaveLength(2);
+      expect(await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id)).toMatchObject([{ attempts: 1, status: "failed" }]);
+    } finally { barrier.resolve(); await pending; await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
+  it.each(["replacement", "later-step"] as const)("retains only completed replacement evidence when cancelling %s", async (phase) => {
+    const barrier = toolBarrier();
+    let replacing = false; let executions = 0;
+    const interruptedAnswer = phase === "replacement" ? 3 : 4;
+    const provider = openAIMemoryProvider({ lengthOnAnswers: [2], tool: phase === "later-step" ? "get_research_run" : undefined, toolOnAnswers: [3],
+      answerTexts: { [interruptedAnswer]: "INTERRUPTED_REPLACEMENT_CANARY" },
+      onAnswerDelta: async (index, signal) => {
+        if (index !== interruptedAnswer) return;
+        replacing = true;
+        await waitForGateOrAbort(barrier.promise, signal);
+      } });
+    vi.stubGlobal("fetch", provider.fetch);
+    const dependencies = { mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false,
+      toolFailure: () => undefined, tools: {
+        get_research_run: createTool({ id: "get_research_run", description: "Read research", inputSchema: z.object({}),
+          execute: async () => { executions++; return { evidence: "VALID_REPLACEMENT_TOOL_CANARY", request_id: "retained-request" }; } }),
+      } }) };
+    let runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+    const threadId = randomUUID(), runId = randomUUID();
+    const request = (id: string, existing: boolean) => runInput({ threadId, runId: id, messageId: randomUUID(), modelKey: "luna",
+      reasoningEffort: "high", sessionMode: existing ? "existing" : "new", content: "Explain the research." });
+    let pending: Promise<AGUIEvent[]> | undefined;
+    try {
+      expect((await run(runtime, request(randomUUID(), false), primaryResearcher)).at(-1)?.type).toBe("RUN_FINISHED");
+      await seedRecoveryHistory(threadId);
+      pending = run(runtime, request(runId, true), primaryResearcher);
+      await vi.waitFor(() => expect(replacing).toBe(true), { timeout: 10_000 });
+      const repository = new ResearchSessionRepository(agentStore);
+      await vi.waitFor(async () => {
+        const page = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
+        expect(page.turns.flatMap(turn => turn.entries).some(entry => entry.kind === "assistant_message"
+          && entry.payload.content === "INTERRUPTED_REPLACEMENT_CANARY")).toBe(true);
+      }, { timeout: 10_000 });
+      await runtime.stop(threadId, primaryResearcher, stopInput(randomUUID(), runId));
+      await pending;
+      expect(await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id))
+        .toMatchObject([{ status: "failed", attempts: 1, invalidReplacement: phase === "replacement" }]);
+      await runtime.close();
+      runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+      expect((await run(runtime, request(randomUUID(), true), primaryResearcher)).at(-1)?.type).toBe("RUN_FINISHED");
+      const nextPrompt = provider.requests.filter(request => request.phase === "answer").at(-1)?.prompt;
+      if (phase === "replacement") expect(nextPrompt).not.toContain("INTERRUPTED_REPLACEMENT_CANARY");
+      else expect(nextPrompt).toContain("VALID_REPLACEMENT_TOOL_CANARY");
+      expect(executions).toBe(phase === "replacement" ? 0 : 1);
+      const page = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
+      expect(page.turns.flatMap(turn => turn.entries).some(entry => entry.kind === "assistant_message"
+        && entry.payload.content === "INTERRUPTED_REPLACEMENT_CANARY")).toBe(true);
+    } finally { barrier.resolve(); await pending; await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
+  it("claims one recovery per logical model step across concurrent callers and error types", async () => {
+    const repository = new ResearchSessionRepository(agentStore);
+    const threadId = randomUUID(), runId = randomUUID(), originalMessageId = randomUUID();
+    await prepareA2UIRepositoryRun(repository, threadId, runId, randomUUID());
+    const before = { contextWindow: 258000, inputTokens: 220000, desiredOutputTokens: 128000, outputTokens: 33904, safetyTokens: 4096 };
+    const stop = { threadId, researcherId: primaryResearcher.researcher_id, runId, messageId: originalMessageId,
+      cause: "OUTPUT_LIMIT" as const, budget: before, allowRecovery: true };
+    const claims = await Promise.all([repository.recordModelStepStop(stop),
+      new ResearchSessionRepository(agentStore).recordModelStepStop(stop)]);
+    expect(claims.filter((claim) => claim.claimed)).toHaveLength(1);
+    const record = claims[0]!.recovery;
+    expect(record).toMatchObject({ originalMessageId, attempts: 1, status: "recovering" });
+    expect(record.replacementMessageId).toEqual(expect.any(String));
+    await expect(repository.modelStepRecoveries(threadId, foreignResearcher.researcher_id)).rejects.toBeInstanceOf(SessionNotFoundError);
+    const repeated = await repository.recordModelStepStop({ ...stop, messageId: record.replacementMessageId!, cause: "CONTEXT_TOO_LARGE" });
+    expect(repeated.claimed).toBe(false);
+    expect(repeated.recovery.originalMessageId).toBe(originalMessageId);
+    expect(repeated.recovery.attempts).toBe(1);
+    expect(repeated.recovery.invalidReplacement).toBe(true);
+    await repository.updateModelStepRecovery(threadId, primaryResearcher.researcher_id, runId, originalMessageId,
+      { status: "failed", errorCode: "OUTPUT_LIMIT" });
+    expect((await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id))[0]).toMatchObject({ status: "failed", attempts: 1 });
+    expect((await repository.recordModelStepStop(stop)).claimed).toBe(false);
+    const disabled = await repository.recordModelStepStop({ ...stop, messageId: randomUUID(), allowRecovery: false });
+    expect(disabled).toMatchObject({ claimed: false, recovery: { attempts: 0, replacementMessageId: null, status: "failed" } });
+    await repository.markFailed(runId, undefined, "OUTPUT_LIMIT");
+    await repository.deleteSession(threadId, primaryResearcher.researcher_id);
+  });
+
+  it("publishes complete context snapshots with ownership, source and revision checks", async () => {
+    const repository = new ResearchSessionRepository(agentStore);
+    const threadId = randomUUID(), runId = randomUUID();
+    await prepareA2UIRepositoryRun(repository, threadId, runId, randomUUID());
+    const claims = await Promise.allSettled([
+      repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId),
+      new ResearchSessionRepository(agentStore).beginContextCycle(threadId, primaryResearcher.researcher_id, runId),
+    ]);
+    const winner = claims.find((claim) => claim.status === "fulfilled");
+    expect(claims.filter((claim) => claim.status === "rejected")).toHaveLength(1);
+    if (winner?.status !== "fulfilled") throw new Error("No checkpoint cycle acquired");
+    const cycle = winner.value;
+    const signal = new AbortController().signal;
+    expect(cycle.checkpoint).toBeNull();
+    await expect(repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId))
+      .rejects.toBeInstanceOf(ContextCheckpointConflictError);
+    await expect(repository.contextCheckpoint(threadId, foreignResearcher.researcher_id))
+      .rejects.toBeInstanceOf(SessionNotFoundError);
+    const snapshot = {
+      memory: "", summary: "Continue the research", renderedMemory: "", renderedSummary: "Session summary: Continue the research",
+      retainedParts: [], sourceWatermark: [...cycle.sourceWatermark],
+      statistics: { inputTokensBefore: 59000, inputTokensAfter: 20000, outputTokensAfter: 40000,
+        elapsedMs: 100, auxiliaryInputTokens: 40000, auxiliaryOutputTokens: 1000 },
+    };
+    // A candidate that failed before publication leaves the previous revision untouched.
+    await expect(repository.commitContextCycle(cycle, { ...snapshot, summary: "" }, signal)).rejects.toThrow();
+    expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toBeNull();
+    const appendedId = randomUUID();
+    await seedAssistantMessage(threadId, appendedId);
+    const published = await repository.commitContextCycle(cycle, snapshot, signal);
+    expect(published).toEqual({ revision: 1, snapshot });
+    expect((await repository.rawContextMessages(threadId, primaryResearcher.researcher_id)).some((m) => m.id === appendedId)).toBe(true);
+    await expect(repository.commitContextCycle(cycle, snapshot, signal)).rejects.toBeInstanceOf(ContextCheckpointConflictError);
+    const next = await repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId);
+    await repository.releaseContextCycle(cycle); // A stale cleanup must not release the new claim.
+    await expect(repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId))
+      .rejects.toBeInstanceOf(ContextCheckpointConflictError);
+    await owner.query('UPDATE agent.mastra_messages SET content = $2 WHERE id = $1',
+      [appendedId, JSON.stringify({ format: 2, parts: [{ type: "text", text: "changed source" }] })]);
+    await expect(repository.commitContextCycle(next, { ...snapshot, sourceWatermark: [...next.sourceWatermark] }, signal))
+      .rejects.toBeInstanceOf(ContextCheckpointConflictError);
+    expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(published);
+    await repository.releaseContextCycle(next);
+    const retry = await repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId);
+    expect(retry.revision).toBe(1);
+    const blocker = await holdSessionMutationLock(threadId);
+    const cancellation = new AbortController();
+    const attempt = repository.commitContextCycle(retry, { ...snapshot, sourceWatermark: [...retry.sourceWatermark] }, cancellation.signal)
+      .then(() => null, (error: unknown) => error);
+    try {
+      await waitForAdvisoryLockWaiters(1);
+      cancellation.abort();
+    } finally { await releaseSessionMutationLock(blocker); }
+    expect(await attempt).toBeInstanceOf(DOMException);
+    expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(published);
+    await repository.releaseContextCycle(retry);
+    const interrupted = await repository.beginContextCycle(threadId, primaryResearcher.researcher_id, runId);
+    expect(await repository.failInterruptedRunsAfterHostRestart()).toBe(1);
+    expect(await repository.contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(published);
+    await expect(repository.commitContextCycle(interrupted, { ...snapshot, sourceWatermark: [...interrupted.sourceWatermark] }, signal))
+      .rejects.toBeInstanceOf(ContextCheckpointConflictError);
+    const claimState = await owner.query("SELECT cycle_id, cycle_run_id FROM agent.session_context_checkpoint WHERE thread_id = $1", [threadId]);
+    expect(claimState.rows).toEqual([{ cycle_id: null, cycle_run_id: null }]);
+    await repository.deleteSession(threadId, primaryResearcher.researcher_id);
+    expect((await owner.query("SELECT 1 FROM agent.session_context_checkpoint WHERE thread_id = $1", [threadId])).rowCount).toBe(0);
+  });
+
+  it("sends complete small-window history across Host restart without auxiliary calls", async () => {
     const provider = openAIMemoryProvider();
+    vi.stubGlobal("fetch", provider.fetch);
+    const configuration = { ...memoryConfiguration, modelRegistry: readModelRegistry(JSON.stringify({
+      min_compaction_context_window: 65_536, default_model_key: "luna",
+      models: [{ context_window: 32_768, max_output_tokens: 128_000, key: "luna", display_name: "Luna", enabled: true,
+        provider_adapter: "openai", provider_model_id: "gpt-5.6-luna", default_reasoning_effort: "high",
+        reasoning_efforts: ["high"], secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY" }],
+    }), { THESISTRACE_AGENT_OPENAI_API_KEY: "memory-replay-only" }) };
+    const dependencies = { mcpRunFactory: async () => ({ close: async () => undefined,
+      hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }) };
+    let runtime = await createResearchRuntime(configuration, dependencies);
+    const threadId = randomUUID();
+    const prompt = (existing: boolean) => run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+      modelKey: "luna", reasoningEffort: "high", sessionMode: existing ? "existing" : "new", content: "Recall the archived facts." }), primaryResearcher);
+    const storage = new PostgresStore({ id: "small-memory-fixture", pool: agentStore, schemaName: "agent", disableInit: true });
+    const memory = new Memory({ storage, vector: false });
+    try {
+      expect((await prompt(false)).at(-1)?.type).toBe("RUN_FINISHED");
+      const facts = Array.from({ length: 72 }, (_, i) => "Persistent archived fact " + i + ": unique-resource-" + i);
+      await memory.saveMessages({ messages: facts.map((text, i) => ({ id: randomUUID(), threadId,
+        resourceId: primaryResearcher.researcher_id, role: i % 2 === 0 ? "user" as const : "assistant" as const,
+        createdAt: new Date(Date.now() - 120_000 + i * 1000),
+        content: { format: 2 as const, parts: [{ type: "text" as const, text }] } })) });
+      await runtime.close();
+      runtime = await createResearchRuntime(configuration, dependencies);
+      expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
+      const request = provider.requests.at(-1)!;
+      for (const fact of facts) expect(request.prompt).toContain(fact);
+      expect(provider.requests.every((entry) => entry.phase === "answer")).toBe(true);
+      expect(request.body.max_output_tokens).toBeGreaterThan(0);
+      expect(request.body.max_output_tokens).toBeLessThan(32_768 - 4096);
+    } finally {
+      await runtime.close();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("resumes an ask_user answer after a compacted Session restarts", async () => {
+    const provider = openAIMemoryProvider({ tool: "ask_user", toolOnAnswer: 3,
+      toolArguments: { question: "Choose an objective", selectionMode: "single_select", options: [{ label: "Quality" }, { label: "Risk" }] } });
+    vi.stubGlobal("fetch", provider.fetch);
+    const dependencies = { mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false,
+      toolFailure: () => undefined, tools: {} }) };
+    let runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+    const threadId = randomUUID(), questionRunId = randomUUID();
+    const prompt = (existing: boolean, runId = randomUUID()) => run(runtime, runInput({ threadId, runId, messageId: randomUUID(),
+      modelKey: "luna", reasoningEffort: "high", sessionMode: existing ? "existing" : "new", content: "Continue the research" }), primaryResearcher);
+    try {
+      expect((await prompt(false)).at(-1)?.type).toBe("RUN_FINISHED");
+      const memory = new Memory({ storage: new PostgresStore({ id: "question-context", pool: agentStore, schemaName: "agent", disableInit: true }), vector: false });
+      await memory.saveMessages({ messages: Array.from({ length: 20 }, (_, index) => ({ id: randomUUID(), threadId,
+        resourceId: primaryResearcher.researcher_id, role: "assistant" as const, createdAt: new Date(Date.now() - 60_000 + index),
+        content: { format: 2 as const, parts: [{ type: "text" as const, text: "source evidence ".repeat(2000) }] } })) });
+      expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
+      expect((await prompt(true, questionRunId)).at(-1)?.type).toBe("RUN_FINISHED");
+      const question = (await runtime.session(threadId, primaryResearcher)).currentTurn?.question;
+      if (!question) throw new Error("Expected question");
+      await runtime.close();
+      runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+      const events = await run(runtime, answerInput({ threadId, runId: questionRunId, inputId: randomUUID(), interruptId: question.interruptId,
+        answer: { selections: ["Quality"], text: "" } }), primaryResearcher);
+      expect(events.at(-1), JSON.stringify(events.at(-1))).toMatchObject({ type: "RUN_FINISHED", runId: questionRunId });
+    } finally { await runtime.close(); vi.unstubAllGlobals(); }
+  });
+
+  it("compresses old Session history before answering and retains it across Host restart", async () => {
+    const providerOptions: NonNullable<Parameters<typeof openAIMemoryProvider>[0]> = {};
+    const provider = openAIMemoryProvider(providerOptions);
     vi.stubGlobal("fetch", provider.fetch);
     const threadId = randomUUID();
     const storage = new PostgresStore({ id: "memory-fixture", pool: agentStore, schemaName: "agent", disableInit: true });
     const memory = new Memory({ storage, vector: false });
-    const dependencies = { mcpRunFactory: async () => ({
-      close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {},
-    }) };
-    let runtime = await createResearchRuntime(memoryConfiguration, dependencies);
-    const prompt = async (existing: boolean, targetThread = threadId) => run(runtime, runInput({
-      threadId: targetThread, runId: randomUUID(), messageId: randomUUID(), modelKey: "luna", reasoningEffort: "high",
+    const barrier = toolBarrier();
+    let reads = 0, allowRead = true;
+    const dependencies: ResearchRuntimeDependencies = { mcpRunFactory: async () => {
+      const tools: McpRun["tools"] = {};
+      if (allowRead) tools.get_research_run = createTool({ id: "get_research_run", description: "Read retained research.",
+        inputSchema: z.object({}), outputSchema: z.object({ found: z.boolean() }),
+        execute: async () => { reads++; await barrier.promise; return { found: true }; } });
+      return { close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools };
+    } };
+    const configuration = { ...memoryConfiguration, modelRegistry: { ...memoryConfiguration.modelRegistry,
+      models: [...memoryConfiguration.modelRegistry.models.map((model) => ({ ...model, contextWindow: 258_000 })),
+        { ...memoryConfiguration.modelRegistry.models[0]!, key: "small", contextWindow: 60_000 },
+        { ...memoryConfiguration.modelRegistry.models[0]!, key: "tiny", contextWindow: 8192 }] } };
+    let runtime = await createResearchRuntime(configuration, dependencies);
+    const prompt = async (existing: boolean, targetThread = threadId, modelKey = "luna") => run(runtime, runInput({
+      threadId: targetThread, runId: randomUUID(), messageId: randomUUID(), modelKey, reasoningEffort: "high",
       sessionMode: existing ? "existing" : "new", content: "Explain the earlier research failure.",
     }), primaryResearcher);
     try {
       expect((await prompt(false)).at(-1)?.type).toBe("RUN_FINISHED");
-      const ids: string[] = Array.from({ length: 60 }, () => randomUUID());
+      const ids: string[] = Array.from({ length: 180 }, () => randomUUID());
       await memory.saveMessages({ messages: ids.map((id, index) => ({
         id, threadId, resourceId: primaryResearcher.researcher_id,
         role: index % 2 === 0 ? "user" as const : "assistant" as const,
-        createdAt: new Date(Date.now() - 120_000 + index * 1000),
+        createdAt: new Date(Date.now() - 1_000_000 + index * 1000),
         content: { format: 2 as const, parts: [{ type: "text" as const,
-          text: index === 0 ? MEMORY_FACT : `Archived detail ${index}: ${"context ".repeat(320)}` }] },
+          text: index === 0 ? MEMORY_FACT : `Archived detail ${index}: ${"context ".repeat(2000)}` }] },
       })) });
       const events = await prompt(true);
-      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      expect(events.at(-1), JSON.stringify({ phases: provider.requests.map(({ phase, prompt }) => ({ phase, characters: prompt.length })), terminal: events.at(-1) })).toMatchObject({ type: "RUN_FINISHED" });
       const answer = provider.requests.filter((request) => request.phase === "answer").at(-1)!;
       expect(answer.prompt.includes("run_memory_alpha")).toBe(true);
       expect(answer.prompt.includes("INSUFFICIENT_HISTORY")).toBe(true);
-      expect(answer.prompt.length).toBeLessThan(60_000);
-      expect(provider.requests.some((request) => request.phase === "observer")).toBe(true);
+      expect(answer.prompt).toContain("Session handoff");
+      expect(answer.prompt).not.toContain("Archived detail 1:");
+      expect(provider.requests.filter((request) => request.phase === "observer").length).toBeGreaterThan(1);
+      expect(provider.requests.filter((request) => request.phase === "summary").length).toBeGreaterThan(1);
       expect(provider.requests.every((request) => request.body.model === "gpt-5.6-luna"
         && (request.body.reasoning as { effort: string }).effort === "high" && request.body.store === false)).toBe(true);
       expect(JSON.stringify(events)).not.toContain("<observations>");
       const metered = await owner.query(`SELECT token_usage FROM agent.agent_run WHERE thread_id = $1 ORDER BY started_at DESC LIMIT 1`, [threadId]);
       expect(metered.rows[0].token_usage.outputTokens.total).toBeGreaterThan(30);
       const retained = await memory.recall({ threadId, resourceId: primaryResearcher.researcher_id, perPage: false });
-      expect(retained.messages.filter((message) => ids.includes(message.id))).toHaveLength(60);
+      expect(retained.messages.filter((message) => ids.includes(message.id))).toHaveLength(ids.length);
       const memoryStore = (await storage.getStore("memory"))!;
-      const record = (await memoryStore.getObservationalMemory(threadId, primaryResearcher.researcher_id))!;
-      // Exercise the next level of compression with an already-grown observation log.
-      const observations = `${MEMORY_FACT}\n${Array.from({ length: 1800 }, (_, index) => `* Detail ${index}: archived research note.`).join("\n")}`;
-      await memoryStore.updateActiveObservations({ id: record.id, observations,
-        tokenCount: estimateTokenCount(observations), lastObservedAt: record.lastObservedAt! });
+      expect(await memoryStore.getObservationalMemory(threadId, primaryResearcher.researcher_id)).toBeNull();
+      const checkpoint = await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id);
+      expect(checkpoint?.revision).toBe(1);
+      expect(checkpoint?.snapshot.summary).toContain("INSUFFICIENT_HISTORY");
+      const auxiliaryCalls = provider.requests.filter((request) => request.phase !== "answer").length;
       await runtime.close();
-      runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+      runtime = await createResearchRuntime(configuration, dependencies);
       expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
       expect(provider.requests.at(-1)?.prompt).toContain("INSUFFICIENT_HISTORY");
-      expect(provider.requests.some((request) => request.phase === "reflector")).toBe(true);
+      const previousInput = answer.body.input;
+      const resumedInput = provider.requests.at(-1)?.body.input;
+      if (!Array.isArray(previousInput) || !Array.isArray(resumedInput)) throw new Error("Provider input array missing");
+      expect(resumedInput.slice(0, previousInput.length)).toEqual(previousInput);
+      expect(provider.requests.filter((request) => request.phase !== "answer")).toHaveLength(auxiliaryCalls);
+      const beforeIncremental = provider.requests.length;
+      const rawBeforeIncremental = await new ResearchSessionRepository(agentStore).rawContextMessages(threadId, primaryResearcher.researcher_id);
+      const newestTime = Math.max(...rawBeforeIncremental.map((message) => message.createdAt.getTime()));
+      const incrementalIds: string[] = Array.from({ length: 58 }, () => randomUUID());
+      await memory.saveMessages({ messages: incrementalIds.map((id, index) => ({
+        id, threadId, resourceId: primaryResearcher.researcher_id,
+        role: index % 2 === 0 ? "user" as const : "assistant" as const,
+        createdAt: new Date(newestTime + index + 1), content: { format: 2 as const,
+          parts: [{ type: "text" as const, text: `Incremental evidence ${index}: ${"context ".repeat(2000)}` }] },
+      })) });
+      providerOptions.invalidSummary = true;
+      expect((await prompt(true)).at(-1)).toMatchObject({ type: "RUN_ERROR", code: "CONTEXT_COMPACTION_FAILED" });
+      expect(provider.requests.slice(beforeIncremental).some((request) => request.phase === "observer")).toBe(true);
+      expect(await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(checkpoint);
+      expect((await new ResearchSessionRepository(agentStore).rawContextMessages(threadId, primaryResearcher.researcher_id))
+        .filter((message) => incrementalIds.includes(message.id))).toHaveLength(incrementalIds.length);
+      providerOptions.invalidSummary = false;
+      expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
+      const secondCheckpoint = await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id);
+      expect(secondCheckpoint?.revision).toBe(2);
+      const incrementalRequests = provider.requests.slice(beforeIncremental);
+      const observation = incrementalRequests.find((request) => request.phase === "observer")!;
+      expect(observation.prompt).toContain("Incremental evidence 0:");
+      expect(observation.prompt).not.toContain("Archived detail 1:");
+      expect(incrementalRequests.find((request) => request.phase === "summary")?.prompt).toContain("previousSummary");
+      expect(incrementalRequests.at(-1)?.prompt).toContain("Session handoff");
+      const allRaw = await new ResearchSessionRepository(agentStore).rawContextMessages(threadId, primaryResearcher.researcher_id);
+      expect(allRaw.filter((message) => [...ids, ...incrementalIds].includes(message.id))).toHaveLength(ids.length + incrementalIds.length);
+      const callsBeforeSwitch = provider.requests.filter((request) => request.phase !== "answer").length;
+      expect((await prompt(true, threadId, "small")).at(-1)?.type).toBe("RUN_FINISHED");
+      expect((await prompt(true, threadId, "tiny")).at(-1)).toMatchObject({ type: "RUN_ERROR", code: "CONTEXT_TOO_LARGE" });
+      expect((await connect(runtime, threadId, primaryResearcher))[0]).toMatchObject({ selection: { modelKey: "tiny" } });
+      expect(await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(secondCheckpoint);
+      expect(provider.requests.filter((request) => request.phase !== "answer")).toHaveLength(callsBeforeSwitch);
+      expect((await prompt(true, threadId, "luna")).at(-1)?.type).toBe("RUN_FINISHED");
+      providerOptions.tool = "ask_user";
+      providerOptions.toolArguments = { question: "Which objective should lead?", selectionMode: "single_select", options: [{ label: "Quality" }, { label: "Risk" }] };
+      providerOptions.toolOnAnswer = provider.requests.filter((request) => request.phase === "answer").length + 1;
+      const questionRunId = randomUUID();
+      expect((await run(runtime, runInput({ threadId, sessionMode: "existing", runId: questionRunId, messageId: randomUUID(),
+        modelKey: "luna", reasoningEffort: "high", content: "Clarify the next step." }), primaryResearcher)).at(-1)?.type).toBe("RUN_FINISHED");
+      const question = (await runtime.session(threadId, primaryResearcher)).currentTurn?.question;
+      if (!question) throw new Error("Expected a durable question after compaction");
+      const questionInput = provider.requests.at(-1)!.body.input;
+      await runtime.close();
+      runtime = await createResearchRuntime(configuration, dependencies);
+      const answered = await run(runtime, answerInput({ threadId, runId: questionRunId, inputId: randomUUID(),
+        interruptId: question.interruptId, answer: { selections: ["Quality"], text: "Keep risk bounded." } }), primaryResearcher);
+      expect(answered.at(-1), JSON.stringify({ terminal: answered.at(-1), phases: provider.requests.map((request) => request.phase) })).toMatchObject({ type: "RUN_FINISHED", runId: questionRunId });
+      const answeredInput = provider.requests.at(-1)!.body.input;
+      if (!Array.isArray(questionInput) || !Array.isArray(answeredInput)) throw new Error("Expected Provider arrays");
+      expect(answeredInput.slice(0, questionInput.length)).toEqual(questionInput);
+      expect(provider.requests.filter((request) => request.phase !== "answer")).toHaveLength(callsBeforeSwitch);
+      expect(await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(secondCheckpoint);
+      const recoveredRaw = await new ResearchSessionRepository(agentStore).rawContextMessages(threadId, primaryResearcher.researcher_id);
+      expect(recoveredRaw.filter((message) => message.id === `session-run-context:${questionRunId}`)).toHaveLength(1);
+      providerOptions.tool = "get_research_run";
+      providerOptions.toolArguments = {};
+      providerOptions.toolOnAnswer = provider.requests.filter((request) => request.phase === "answer").length + 1;
+      const stoppedId = randomUUID();
+      const pending = run(runtime, runInput({ threadId, sessionMode: "existing", runId: stoppedId, messageId: randomUUID(),
+        modelKey: "luna", reasoningEffort: "high", content: "Read the current research." }), primaryResearcher);
+      await vi.waitFor(() => expect(reads).toBe(1), { timeout: 10_000 });
+      await runtime.stop(threadId, primaryResearcher, stopInput(randomUUID(), stoppedId));
+      barrier.resolve();
+      await pending;
+      expect((await runtime.session(threadId, primaryResearcher)).latestTurn?.status).toBe("stopped");
+      const beforeContinue = await new ResearchSessionRepository(agentStore).rawContextMessages(threadId, primaryResearcher.researcher_id);
+      const continuedId = randomUUID();
+      const answersBeforeContinue = provider.requests.filter((request) => request.phase === "answer").length;
+      expect((await run(runtime, continueInput({ threadId, runId: continuedId, modelKey: "luna", reasoningEffort: "high" }), primaryResearcher)).at(-1)).toMatchObject({ type: "RUN_FINISHED", runId: continuedId });
+      expect(provider.requests.filter((request) => request.phase === "answer")).toHaveLength(answersBeforeContinue + 1);
+      const afterContinue = await new ResearchSessionRepository(agentStore).rawContextMessages(threadId, primaryResearcher.researcher_id);
+      expect(afterContinue.filter((message) => message.role === "user")).toHaveLength(beforeContinue.filter((message) => message.role === "user").length);
+      expect(afterContinue.filter((message) => message.id === `session-run-context:${continuedId}`)).toHaveLength(1);
+      expect(reads).toBe(1);
+      allowRead = false;
+      expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
+      const available = provider.requests.at(-1)!.body.tools;
+      if (!Array.isArray(available)) throw new Error("Expected Provider tools");
+      expect(available.map((tool) => tool.name)).not.toContain("get_research_run");
+      expect(await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id)).toEqual(secondCheckpoint);
+      expect(provider.requests.filter((request) => request.phase !== "answer")).toHaveLength(callsBeforeSwitch);
       expect((await prompt(false, randomUUID())).at(-1)?.type).toBe("RUN_FINISHED");
       expect(provider.requests.at(-1)?.prompt).not.toContain("run_memory_alpha");
       await runtime.deleteSession(threadId, primaryResearcher);
       expect(await memoryStore.getObservationalMemory(threadId, primaryResearcher.researcher_id)).toBeNull();
     } finally {
+      barrier.resolve();
       await runtime.close();
       vi.unstubAllGlobals();
     }
-  }, 30_000);
+  }, 90_000);
 
-  it.each([false, true])("observes a large Tool result inside the Turn and handles compression failure: %s", async (failObserver) => {
+  it.each(["success", "rate-limit", "invalid"] as const)("observes a large Tool result inside the Turn and handles compression failure: %s", async (failure) => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const provider = openAIMemoryProvider({ tool: "get_research_run", failObserver });
+    const provider = openAIMemoryProvider({ tool: "get_research_run", failObserver: failure === "rate-limit", invalidObserver: failure === "invalid", toolOnAnswer: 2 });
     vi.stubGlobal("fetch", provider.fetch);
-    const runtime = await createResearchRuntime(memoryConfiguration, {
+    const configuration = { ...memoryConfiguration, modelRegistry: { ...memoryConfiguration.modelRegistry,
+      models: memoryConfiguration.modelRegistry.models.map((model) => ({ ...model, contextWindow: 258_000 })) } };
+    const runtime = await createResearchRuntime(configuration, {
       mcpRunFactory: async () => ({
         close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
         tools: { get_research_run: createTool({
           id: "get_research_run", description: "Read the research outcome.", inputSchema: z.object({}), outputSchema: z.object({ text: z.string() }),
           execute: async () => ({ text: `${MEMORY_FACT}\n${"context ".repeat(18_000)}` }),
-          toModelOutput: (result) => ({ type: "text", value: result.text }),
         }) },
       }),
     });
     const threadId = randomUUID();
     try {
-      const events = await run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+      expect((await run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+        modelKey: "luna", reasoningEffort: "high", content: "Prepare the research." }), primaryResearcher)).at(-1)?.type).toBe("RUN_FINISHED");
+      const storage = new PostgresStore({ id: "tool-context-fixture", pool: agentStore, schemaName: "agent", disableInit: true });
+      const memory = new Memory({ storage, vector: false });
+      await memory.saveMessages({ messages: Array.from({ length: 50 }, (_, index) => ({ id: randomUUID(), threadId,
+        resourceId: primaryResearcher.researcher_id, role: index % 2 === 0 ? "user" as const : "assistant" as const,
+        createdAt: new Date(Date.now() - 120_000 + index * 1000), content: { format: 2 as const,
+          parts: [{ type: "text" as const, text: index === 0 ? MEMORY_FACT : "context ".repeat(2000) }] } })) });
+      const events = await run(runtime, runInput({ threadId, sessionMode: "existing", runId: randomUUID(), messageId: randomUUID(),
         modelKey: "luna", reasoningEffort: "high", content: "Read the earlier research failure." }), primaryResearcher);
       expect(provider.requests.some((request) => request.phase === "observer")).toBe(true);
-      if (failObserver) {
-        expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR", code: "PROVIDER_RATE_LIMIT" });
+      if (failure !== "success") {
+        const code = failure === "rate-limit" ? "PROVIDER_RATE_LIMIT" : "CONTEXT_COMPACTION_FAILED";
+        expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR", code });
+        expect((await connect(runtime, threadId, primaryResearcher)).at(-1)).toMatchObject({ type: "RUN_ERROR", code });
+        expect(await new ResearchSessionRepository(agentStore).contextCheckpoint(threadId, primaryResearcher.researcher_id)).toBeNull();
+        expect(JSON.stringify(events)).not.toContain("private-invalid-observer-canary");
         expect(JSON.stringify(events).includes("private-observer-canary")).toBe(false);
       } else {
         expect(events.at(-1)?.type).toBe("RUN_FINISHED");
@@ -275,7 +764,11 @@ describe.sequential("durable Research Agent runtime", () => {
   }, 30_000);
 
   it.each(Object.entries(SCRIPTED_FAILURE_PROMPTS))("persists one %s terminal event and retries only on a new explicit message", async (code, content) => {
-    const runtime = await createIntegrationRuntime();
+    // This contract verifies an exhausted full allowance, without crowded-context recovery.
+    const runtime = await createResearchRuntime({ ...settings, modelRegistry: { ...settings.modelRegistry,
+      models: settings.modelRegistry.models.map(model => ({ ...model, maxOutputTokens: 1000 })) } }, {
+      mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }),
+    });
     const input = runInput({ content, messageId: fixedUuid(702), runId: fixedUuid(701), threadId: fixedUuid(700) });
     try {
       const events = await run(runtime, input, primaryResearcher);
@@ -395,9 +888,9 @@ describe.sequential("durable Research Agent runtime", () => {
     const runtime = await createIntegrationRuntime();
     const input = runInput({ content: "A research idea", messageId: fixedUuid(732), runId: fixedUuid(731), threadId: fixedUuid(730) });
     try { await run(runtime, input, primaryResearcher); } finally { await runtime.close(); }
-    const nextRegistry = readModelRegistry(JSON.stringify({ default_model_key: "scripted-next", models: [{
+    const nextRegistry = readModelRegistry(JSON.stringify({ min_compaction_context_window: 65_536, default_model_key: "scripted-next", models: [{
       default_reasoning_effort: "high", display_name: "Scripted Next", enabled: true, key: "scripted-next", provider_adapter: "scripted",
-      provider_model_id: "scripted-next-id", reasoning_efforts: ["high"], context_window: 65_536, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      provider_model_id: "scripted-next-id", reasoning_efforts: ["high"], context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     }] }), { THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "fixture-secret" });
     const discover = vi.fn(async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }));
     const restarted = await createResearchRuntime({ ...settings, modelRegistry: nextRegistry }, { mcpRunFactory: discover });
@@ -462,7 +955,7 @@ describe.sequential("durable Research Agent runtime", () => {
           (SELECT count(*) FROM agent."mastra_messages" WHERE thread_id = $1::uuid::text) AS messages
       `, [threadId]);
       expect(counts.rows).toEqual([{
-        messages: "2",
+        messages: "3",
         runs: "1",
         sessions: "1",
         threads: "1",
@@ -658,11 +1151,11 @@ describe.sequential("durable Research Agent runtime", () => {
       } }]);
       vi.stubGlobal("fetch", provider.fetch);
       const configuration: AgentSettings = { ...settings, modelRegistry: readModelRegistry(JSON.stringify({
-        default_model_key: "gpt-5.6-luna", models: [{
+        min_compaction_context_window: 65_536, default_model_key: "gpt-5.6-luna", models: [{
           key: "gpt-5.6-luna", display_name: "GPT-5.6 Luna", enabled: true,
           provider_adapter: "openai", provider_model_id: "gpt-5.6-luna",
           default_reasoning_effort: "high", reasoning_efforts: ["high"],
-          context_window: 65_536, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
+          context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
         }],
       }), { THESISTRACE_AGENT_OPENAI_API_KEY: "fixture-only" }) };
       const openRuntime = () => createResearchRuntime(configuration, { mcpRunFactory: async () => ({
@@ -1989,10 +2482,12 @@ describe.sequential("durable Research Agent runtime", () => {
   });
 
   it("executes a discovered Tool while exposing only safe Tool lifecycle events", async () => {
+    const telemetry: AgentTelemetryEvent[] = [];
     let closes = 0;
     let discoveries = 0;
     let executions = 0;
     const runtime = await createResearchRuntime(settings, {
+      telemetry: event => telemetry.push(event),
       mcpRunFactory: async (headers) => {
         discoveries += 1;
         expect(headers.get("cookie")).toBe("test-session-cookie=browser-only");
@@ -2055,6 +2550,11 @@ describe.sequential("durable Research Agent runtime", () => {
         content: SAFE_TOOL_COMPLETED,
       });
       expect(JSON.stringify(events)).not.toContain("server-only-sensitive-result");
+      expect(telemetry.find(event => event.event === "agent_tool_finished")).toMatchObject({
+        tool_result_bytes: Buffer.byteLength(JSON.stringify({ dataset: "server-only-sensitive-result", throughSession: "2026-08-28" }), "utf8"),
+      });
+      expect(telemetry.filter(event => event.event === "agent_model_call_finished")).toHaveLength(2);
+      expect(JSON.stringify(telemetry)).not.toContain("server-only-sensitive-result");
       expect({ closes, discoveries, executions }).toEqual({
         closes: 1,
         discoveries: 1,
@@ -3266,6 +3766,22 @@ describe.sequential("durable Research Agent runtime", () => {
   });
 });
 
+function waitForGateOrAbort(gate: Promise<void>, signal: AbortSignal | null | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal?.reason);
+    if (signal?.aborted) { abort(); return; }
+    signal?.addEventListener("abort", abort, { once: true });
+    void gate.then(() => { signal?.removeEventListener("abort", abort); resolve(); });
+  });
+}
+
+async function seedRecoveryHistory(threadId: string): Promise<void> {
+  const memory = new Memory({ storage: new PostgresStore({ id: "recovery-history", pool: agentStore, schemaName: "agent", disableInit: true }), vector: false });
+  await memory.saveMessages({ messages: Array.from({ length: 5 }, (_, index) => ({ id: randomUUID(), threadId,
+    resourceId: primaryResearcher.researcher_id, role: "assistant" as const, createdAt: new Date(Date.now() - 60000 + index),
+    content: { format: 2 as const, parts: [{ type: "text" as const, text: "retained research evidence ".repeat(1700) }] } })) });
+}
+
 function toolBarrier(): Readonly<{ promise: Promise<void>; resolve: () => void }> {
   let resolve = () => undefined as void;
   const promise = new Promise<void>((release) => { resolve = release; });
@@ -3690,6 +4206,8 @@ function answerInput(options: Readonly<{
 function continueInput(options: Readonly<{
   runId: string;
   threadId: string;
+  modelKey?: string;
+  reasoningEffort?: string;
 }>): RunAgentInput {
   return {
     threadId: options.threadId,
@@ -3701,8 +4219,8 @@ function continueInput(options: Readonly<{
     forwardedProps: {
       thesistrace: {
         command: "continue",
-        modelKey: "scripted-research",
-        reasoningEffort: "medium",
+        modelKey: options.modelKey ?? "scripted-research",
+        reasoningEffort: options.reasoningEffort ?? "medium",
         sessionMode: "existing",
       },
     },

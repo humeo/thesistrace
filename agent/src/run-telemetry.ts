@@ -1,3 +1,5 @@
+import type { ModelCallObservation, RunInputEstimate } from "./guarded-language-model.js";
+import type { SessionContextSnapshot } from "./session-context-state.js";
 import { createHash, randomUUID } from "node:crypto";
 import { write } from "node:fs";
 
@@ -18,7 +20,7 @@ type RunIdentity = Readonly<{
 
 export type AgentTelemetryEvent = Readonly<{
   component: "agent";
-  event: "agent_run_accepted" | "agent_tool_finished" | "agent_run_waiting" | "agent_run_finished";
+  event: "agent_run_accepted" | "agent_tool_finished" | "agent_run_waiting" | "agent_run_finished" | "agent_model_call_finished" | "agent_recovery_claimed";
   level: "INFO" | "WARN";
   timestamp: string;
   researcher_correlation: string | null;
@@ -29,6 +31,14 @@ export type AgentTelemetryEvent = Readonly<{
   provider_model_id: string | null;
   reasoning_effort: string | null;
   token_usage: PersistedTokenUsage | Readonly<{ reported: false }>;
+  input_token_estimate: RunInputEstimate | null;
+  context_compaction: Readonly<Record<keyof SessionContextSnapshot["statistics"], number | null>> | null;
+  model_call: Readonly<{ purpose: "answer" | "memory" | null; finish_reason: ModelCallObservation["finishReason"] | null;
+    duration_ms: number | null; input_tokens: number | null; output_allowance: number | null;
+    context_window: number | null; desired_output_tokens: number | null; safety_tokens: number | null;
+    token_usage: PersistedTokenUsage | Readonly<{ reported: false }> }> | null;
+  tool_result_bytes: number | null;
+  recovery_attempts: number | null;
   step_count: number | null;
   duration_ms: number | null;
   status: "running" | "waiting_for_user" | "completed" | "stopped" | "failed";
@@ -46,7 +56,7 @@ export function agentTraceId(headers: Headers): string {
 
 /** Observation only: no content, persistent state, replay or execution control. */
 export function createRunTelemetry(identity: RunIdentity, options: Readonly<{
-  metrics: () => Readonly<{ steps: number; usage: PersistedTokenUsage | undefined }>;
+  metrics: () => Readonly<{ steps: number; usage: PersistedTokenUsage | undefined; recoveryAttempts?: number; inputEstimate?: RunInputEstimate; compaction?: SessionContextSnapshot["statistics"] }>;
   clock?: () => Date;
   monotonicMilliseconds?: () => number;
   write?: AgentTelemetryWriter;
@@ -58,7 +68,7 @@ export function createRunTelemetry(identity: RunIdentity, options: Readonly<{
   let accepted = false;
   let terminal = false;
 
-  function emit(event: AgentTelemetryEvent["event"], status: AgentTelemetryEvent["status"], failure: AgentFailureCode | null) {
+  function emit(event: AgentTelemetryEvent["event"], status: AgentTelemetryEvent["status"], failure: AgentFailureCode | null, extra: { call?: ModelCallObservation; toolBytes?: number } = {}) {
     try {
       const metrics = options.metrics();
       const safeFailure = failure === null ? null : agentFailure(failure);
@@ -73,6 +83,9 @@ export function createRunTelemetry(identity: RunIdentity, options: Readonly<{
         provider_model_id: isProviderModelId(identity.providerModelId) ? identity.providerModelId : null,
         reasoning_effort: reasoningEfforts.some((effort) => effort === identity.reasoningEffort) ? identity.reasoningEffort : null,
         token_usage: safeUsage(metrics.usage), step_count: safeCount(metrics.steps),
+        model_call: safeModelCall(extra.call), tool_result_bytes: safeCount(extra.toolBytes),
+        recovery_attempts: safeCount(metrics.recoveryAttempts),
+        input_token_estimate: safeInputEstimate(metrics.inputEstimate), context_compaction: safeCompaction(metrics.compaction),
         duration_ms: safeCount(Math.max(0, Math.floor(monotonic() - startedAt))),
         retry_classification: safeFailure?.action ?? "none", error_category: safeFailure?.code ?? null,
       });
@@ -92,8 +105,14 @@ export function createRunTelemetry(identity: RunIdentity, options: Readonly<{
       if (accepted || terminal) return;
       accepted = true;
     },
-    toolFinished(failure: AgentFailureCode | null) {
-      if (accepted && !terminal) emit("agent_tool_finished", failure === null ? "completed" : "failed", failure);
+    toolFinished(failure: AgentFailureCode | null, bytes?: number) {
+      if (accepted && !terminal) emit("agent_tool_finished", failure === null ? "completed" : "failed", failure, { toolBytes: bytes });
+    },
+    modelCallFinished(call: ModelCallObservation) {
+      if (accepted && !terminal) emit("agent_model_call_finished", "running", null, { call });
+    },
+    recoveryClaimed() {
+      if (accepted && !terminal) emit("agent_recovery_claimed", "running", null);
     },
     finished(failure: AgentFailureCode | null) {
       if (!accepted || terminal) return;
@@ -130,4 +149,29 @@ function writeAgentTelemetry(event: AgentTelemetryEvent): void {
   // fs.write reports pipe/descriptor failures through this callback instead
   // of emitting an unhandled error on the process-wide stderr stream.
   write(2, `${JSON.stringify(event)}\n`, () => undefined);
+}
+
+function safeInputEstimate(value: RunInputEstimate | undefined): RunInputEstimate | null {
+  if (!value || safeCount(value.estimatedTokens) === null) return null;
+  const actualTokens = safeCount(value.actualTokens);
+  return { estimatedTokens: value.estimatedTokens, actualTokens,
+    errorTokens: actualTokens === null ? null : actualTokens - value.estimatedTokens };
+}
+
+function safeCompaction(value: SessionContextSnapshot["statistics"] | undefined): AgentTelemetryEvent["context_compaction"] {
+  if (!value) return null;
+  return { inputTokensBefore: safeCount(value.inputTokensBefore), inputTokensAfter: safeCount(value.inputTokensAfter),
+    outputTokensAfter: safeCount(value.outputTokensAfter), elapsedMs: safeCount(Math.floor(value.elapsedMs)),
+    auxiliaryInputTokens: safeCount(value.auxiliaryInputTokens), auxiliaryOutputTokens: safeCount(value.auxiliaryOutputTokens) };
+}
+
+function safeModelCall(call: ModelCallObservation | undefined): AgentTelemetryEvent["model_call"] {
+  if (!call) return null;
+  const reasons: readonly string[] = ["stop", "tool-calls", "length", "content-filter", "error", "other", "cancelled"];
+  return { purpose: call.purpose === "answer" || call.purpose === "memory" ? call.purpose : null,
+    finish_reason: reasons.includes(call.finishReason) ? call.finishReason : null,
+    duration_ms: safeCount(call.durationMs), input_tokens: safeCount(call.budget.inputTokens),
+    output_allowance: safeCount(call.budget.outputTokens), context_window: safeCount(call.budget.contextWindow),
+    desired_output_tokens: safeCount(call.budget.desiredOutputTokens), safety_tokens: safeCount(call.budget.safetyTokens),
+    token_usage: safeUsage(call.usage) };
 }

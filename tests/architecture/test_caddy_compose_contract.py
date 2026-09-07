@@ -416,6 +416,7 @@ def test_development_agent_uses_the_configured_local_luna_provider() -> None:
     registry = json.loads((ROOT / "config" / "model-registry.json").read_text())
     assert registry == {
         "default_model_key": "gpt-5.6-luna",
+        "min_compaction_context_window": 65536,
         "models": [{
             "default_reasoning_effort": "high",
             "display_name": "GPT-5.6 Luna",
@@ -425,6 +426,7 @@ def test_development_agent_uses_the_configured_local_luna_provider() -> None:
             "provider_model_id": "gpt-5.6-luna",
             "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
             "context_window": 258000,
+            "max_output_tokens": 128000,
             "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
         }],
     }

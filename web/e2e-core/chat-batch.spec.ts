@@ -108,6 +108,7 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
   await page.setViewportSize({ width: 1280, height: 900 });
 
   const currentTitle = (await currentChatTitle(page).innerText()).trim();
+  await page.locator(".chat-session-row").filter({ has: page.getByRole("button", { name: `Actions for ${currentTitle}`, exact: true }) }).hover();
   await page.getByRole("button", { name: `Actions for ${currentTitle}` }).click();
   await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
   const rename = page.getByRole("dialog", { name: "Rename Chat" });
@@ -124,6 +125,7 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
   await expect(page).toHaveURL(new RegExp(`/research-runs/${complete.items[0]!.research_run_id}$`));
   await expect(page.getByRole("heading", { name: mode === "factor_evaluation" ? "Factor Summary" : "Strategy Summary" })).toBeVisible();
   await page.goto(durableUrl);
+  await page.locator(".chat-session-row").filter({ has: page.getByRole("button", { name: `Actions for ${renamedTitle}`, exact: true }) }).hover();
   await page.getByRole("button", { name: `Actions for ${renamedTitle}` }).click();
   await page.getByRole("menuitem", { name: "Delete Chat" }).click();
   await page.getByRole("dialog", { name: "Delete Chat?" }).getByRole("button", { name: "Delete Chat" }).click();
@@ -165,7 +167,10 @@ test("Chat Batch response loss replays the same admission and child identities",
 function runStatus(page: Page) { return page.locator("[data-chat-status]"); }
 
 async function send(page: Page, prompt: string): Promise<void> {
-  await submitChatPrompt(page, prompt);
+  const turnId = await submitChatPrompt(page, prompt);
+  const turn = page.locator(`.chat-turn[data-turn-id="${turnId}"]`);
+  await expect(turn.locator(".chat-response-footer time")).toBeVisible({ timeout: 90_000 });
+  await expect(turn.locator("details.chat-work-history[open]")).toHaveCount(0);
   await expect(runStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
 }
 

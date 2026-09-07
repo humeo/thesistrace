@@ -40,8 +40,8 @@ test("emits closed content-free run and tool metadata with stable units and iden
   expect(events[0]?.researcher_correlation).toMatch(/^[a-f0-9]{64}$/);
   expect(JSON.stringify(events)).not.toContain(identity.researcherId);
   expect(Object.keys(events[3]!).sort()).toEqual([
-    "component", "duration_ms", "error_category", "event", "level", "model_key", "provider_model_id", "reasoning_effort",
-    "researcher_correlation", "retry_classification", "run_id", "status", "step_count", "thread_id", "timestamp", "token_usage", "trace_id",
+    "component", "context_compaction", "duration_ms", "error_category", "event", "input_token_estimate", "level", "model_call", "model_key", "provider_model_id", "reasoning_effort", "recovery_attempts",
+    "researcher_correlation", "retry_classification", "run_id", "status", "step_count", "thread_id", "timestamp", "token_usage", "tool_result_bytes", "trace_id",
   ]);
 });
 
@@ -111,3 +111,49 @@ test("a broken stderr pipe cannot terminate an accepted Run", async () => {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   }
 }, 10_000);
+
+
+test("reports compaction counts and signed estimation error without snapshot content", () => {
+  const events: AgentTelemetryEvent[] = [];
+  const observer = createRunTelemetry(identity, {
+    metrics: () => ({ steps: 1, usage: undefined,
+      inputEstimate: { estimatedTokens: 1000, actualTokens: 900, errorTokens: 999 },
+      compaction: { inputTokensBefore: 232200, inputTokensAfter: 24000, outputTokensAfter: 128000,
+        elapsedMs: 120.5, auxiliaryInputTokens: 210000, auxiliaryOutputTokens: 3000,
+        memory: "private-memory-canary", summary: "private-summary-canary" },
+    }),
+    write: (event) => events.push(event),
+  });
+  observer.accepted();
+  observer.finished(null);
+  expect(events[1]).toMatchObject({
+    input_token_estimate: { estimatedTokens: 1000, actualTokens: 900, errorTokens: -100 },
+    context_compaction: { inputTokensBefore: 232200, inputTokensAfter: 24000, outputTokensAfter: 128000,
+      elapsedMs: 120, auxiliaryInputTokens: 210000, auxiliaryOutputTokens: 3000 },
+  });
+  expect(JSON.stringify(events)).not.toContain("canary");
+});
+
+test("emits individual model usage, tool bytes and durable recovery counts without content", () => {
+  const events: AgentTelemetryEvent[] = [];
+  const observer = createRunTelemetry(identity, {
+    metrics: () => ({ steps: 3, usage: undefined, recoveryAttempts: 1 }),
+    write: event => events.push(event),
+  });
+  observer.accepted();
+  observer.modelCallFinished({ purpose: "memory", finishReason: "stop", durationMs: 25,
+    budget: { inputTokens: 100, desiredOutputTokens: 500, outputTokens: 500, contextWindow: 65536, safetyTokens: 4096 },
+    usage: { reported: true, inputTokens: { total: 110, noCache: 100, cacheRead: 10, cacheWrite: null },
+      outputTokens: { total: 20, text: 12, reasoning: 8 } },
+    raw: "private-call-canary",
+  } as never);
+  observer.toolFinished(null, 32760);
+  observer.recoveryClaimed();
+  expect(events[1]).toMatchObject({ event: "agent_model_call_finished", model_call: {
+    purpose: "memory", finish_reason: "stop", duration_ms: 25, input_tokens: 100,
+    output_allowance: 500, token_usage: { inputTokens: { total: 110, cacheRead: 10 }, outputTokens: { total: 20 } },
+  } });
+  expect(events[2]).toMatchObject({ event: "agent_tool_finished", tool_result_bytes: 32760 });
+  expect(events[3]).toMatchObject({ event: "agent_recovery_claimed", recovery_attempts: 1 });
+  expect(JSON.stringify(events)).not.toContain("private-call-canary");
+});

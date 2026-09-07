@@ -36,7 +36,7 @@ test("streams deterministic chunks and captures the provider-reported usage", as
   const model = new GuardedLanguageModel(
     new ScriptedLanguageModel("scripted-v1"),
     new RunModelObservation(capture),
-    65_536,
+    { contextWindow: 65_536, maxOutputTokens: 128_000 },
   );
   const result = await model.doStream(callOptions);
   const parts = [];
@@ -76,7 +76,7 @@ test("calls a discovered no-argument Tool and then explains its result", async (
       content: [{ type: "text" as const, text: SCRIPTED_TOOL_PROMPT }],
       role: "user" as const,
     }],
-    tools: [{
+    tools: [{ type: "function", name: "get_alpha_catalog", inputSchema: { type: "object", properties: {} } }, {
       description: "Read the research context",
       inputSchema: { additionalProperties: false, properties: {}, type: "object" },
       name: "get_research_context",
@@ -917,7 +917,8 @@ test("preserves explicit unavailable Factor metrics without inventing values", a
 test("fails closed before admission when the Agent Run identity is absent", async () => {
   const model = new ScriptedLanguageModel("scripted-v1");
   const options = researchOptions(SCRIPTED_FACTOR_IDEA_PROMPT, researchTools());
-  options.prompt[0] = { content: "ThesisTrace instructions.", role: "system" };
+  options.prompt = options.prompt.filter((message) => !(message.role === "assistant"
+    && message.content.some((part) => part.type === "text" && part.text.startsWith("Agent Run identity:"))));
   appendExchange(options, "context", "get_research_context", {}, researchContext());
   appendExchange(options, "catalog", "get_alpha_catalog", {
     identifiers: ["abs", "close", "pct_change", "rank"],

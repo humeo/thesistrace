@@ -35,6 +35,20 @@ test("renders each complete Turn in order with assistant text and right-aligned 
   expect(document.querySelector(".chat-turn-assistant-meta")?.textContent).toContain("Worked for 1m 0s");
 });
 
+test.each([
+  ["recovering", "preparing a replacement"],
+  ["succeeded", "replaced by the complete answer below"],
+  ["failed", "recovery failed"],
+] as const)("preserves partial text with durable %s recovery status", async (status, label) => {
+  await mount(controller({ turns: [timelineTurn([
+    entry("assistant_message", "assistant:original", { content: "Preserved partial answer", status: "complete",
+      recovery: { status, cause: "OUTPUT_LIMIT", attempts: 1, replacementMessageId: INPUT_ID, errorCode: status === "failed" ? "RECOVERY_FAILED" : null } }),
+    ...(status === "succeeded" ? [entry("assistant_message", "assistant:replacement", { content: "Complete replacement answer", status: "complete", supersedes: INPUT_ID })] : []),
+  ])] }));
+  expect(document.querySelector('[data-entry-id="assistant:original"]')?.textContent).toContain("Preserved partial answer");
+  expect(document.querySelector('[role="status"]')?.textContent).toContain(label);
+});
+
 test("shows only a quiet ring before the first assistant text in the active Turn", async () => {
   await mount(controller({
     currentTurnId: TURN_ID,
@@ -91,6 +105,22 @@ test("announces a failed Turn with its public failure code", async () => {
   const alert = document.querySelector<HTMLElement>('[role="alert"]');
   expect(alert?.getAttribute("data-failure-code")).toBe("MCP_TRANSIENT");
   expect(alert?.textContent).toContain("Turn failed");
+});
+
+test.each([
+  ["OUTPUT_LIMIT", "Answer was truncated"],
+  ["CONTEXT_COMPACTION_FAILED", "Conversation compression failed"],
+  ["CONTEXT_TOO_LARGE", "Conversation exceeds model capacity"],
+])("explains %s while retaining partial output and successful tools", async (errorCode, label) => {
+  await mount(controller({ turns: [timelineTurn([
+    entry("assistant_message", "assistant:partial", { content: "Partial answer retained", status: "complete" }),
+    entry("tool_activity", "tool:done", { name: "submit_research_run", status: "complete" }),
+    entry("turn_outcome", "outcome:1", { errorCode, status: "failed" }),
+  ], { status: "failed" })] }));
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain(label);
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain("do not resubmit successful operations");
+  expect(document.body.textContent).toContain("Partial answer retained");
+  expect(document.body.textContent).toContain("Completed");
 });
 
 test("keeps a compact question activity and directs answering to the composer", async () => {

@@ -763,13 +763,28 @@ def _assert_no_mcp_persistence() -> None:
             ).fetchall()
     finally:
         database.close()
-    forbidden_exact = {"users", "sessions", "audit_logs", "idempotency_keys"}
     for row in rows:
-        schema = str(row["table_schema"]).lower()
-        table = str(row["table_name"]).lower()
-        _require("mcp" not in schema and "oauth" not in schema, "mcp_persistence_contract")
-        _require("mcp" not in table and "oauth" not in table, "mcp_persistence_contract")
-        _require(table not in forbidden_exact, "mcp_persistence_contract")
+        _assert_persistence_table(str(row["table_schema"]), str(row["table_name"]))
+
+
+def _assert_persistence_table(schema: str, table: str) -> None:
+    # The Auth authorization server owns these tables; Core MCP remains stateless.
+    auth_oauth_tables = {
+        "oauthClient",
+        "oauthResource",
+        "oauthClientResource",
+        "oauthRefreshToken",
+        "oauthAccessToken",
+        "oauthConsent",
+        "oauthClientAssertion",
+    }
+    if schema == "auth" and table in auth_oauth_tables:
+        return
+    schema, table = schema.lower(), table.lower()
+    forbidden_exact = {"users", "sessions", "audit_logs", "idempotency_keys"}
+    _require("mcp" not in schema and "oauth" not in schema, "mcp_persistence_contract")
+    _require("mcp" not in table and "oauth" not in table, "mcp_persistence_contract")
+    _require(table not in forbidden_exact, "mcp_persistence_contract")
 
 
 def _assert_no_generic_tools(names: set[str]) -> None:

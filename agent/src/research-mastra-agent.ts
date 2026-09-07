@@ -231,7 +231,7 @@ export class ResearchMastraAgent extends MastraAgent {
                   const failure = observedTools.get(toolCallId) === "a2ui"
                     ? a2uiFailure(event.content) : toolFailure?.code ?? null;
                   observedTools.delete(toolCallId);
-                  this.execution.telemetry.toolFinished(failure);
+                  this.execution.telemetry.toolFinished(failure, typeof event.content === "string" ? Buffer.byteLength(event.content, "utf8") : undefined);
                 }
                 if (toolFailure?.fatal === true) {
                   this.terminalStarted = true;
@@ -309,8 +309,13 @@ export class ResearchMastraAgent extends MastraAgent {
       let settle!: () => void;
       const drained = new Promise<void>((resolve) => { settle = resolve; });
       this.execution.pendingBridges.add(drained);
+      this.execution.requestContext.set("notifyModelRecovery", (claimed: boolean) => {
+        if (claimed) this.execution.telemetry.recoveryClaimed();
+        subscriber.next({ type: EventType.CUSTOM, name: "session_recovery_changed", value: { runId: input.runId } });
+      });
       const finish = () => {
         completed = true;
+        this.execution.requestContext.set("notifyModelRecovery", undefined);
         this.execution.pendingBridges.delete(drained);
         settle();
       };

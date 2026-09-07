@@ -226,6 +226,21 @@ def test_mcp_image_smoke_rejects_private_evidence_and_generic_tools() -> None:
         smoke._assert_no_generic_tools({"execute_sql"})
 
 
+def test_mcp_persistence_check_allows_auth_owned_oauth_tables() -> None:
+    smoke = _load_mcp_smoke_module()
+    smoke._assert_persistence_table("auth", "oauthClient")
+    smoke._assert_persistence_table("core", "research_runs")
+    for schema, table in (
+        ("core", "oauthClient"),
+        ("public", "oauthClient"),
+        ("auth", "mcp_sessions"),
+        ("core", "sessions"),
+        ("mcp", "requests"),
+    ):
+        with pytest.raises(smoke._SmokeFailure):
+            smoke._assert_persistence_table(schema, table)
+
+
 def test_mcp_image_smoke_reports_only_bounded_exception_types() -> None:
     smoke = _load_mcp_smoke_module()
     nested = ExceptionGroup(

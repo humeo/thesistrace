@@ -10,6 +10,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE
              agent.chat_command,
              agent.chat_interrupt,
              agent.chat_session,
+             agent.session_context_checkpoint,
+             agent.model_step_recovery,
              agent.chat_timeline_entry,
              agent."mastra_messages",
              agent."mastra_observational_memory",

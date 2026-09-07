@@ -13,7 +13,7 @@ const SCRIPTED_FAILURE_PROMPTS = {
   PROVIDER_AUTHENTICATION: "[scripted-provider-authentication] Test a rejected provider credential.",
   PROVIDER_REFUSAL: "[scripted-provider-refusal] Test a provider refusal.",
   PROVIDER_MALFORMED_STREAM: "[scripted-provider-malformed] Test an invalid provider stream.",
-  AGENT_LIMIT: "[scripted-provider-output-limit] Test a bounded provider output.",
+  OUTPUT_LIMIT: "[scripted-provider-output-limit] Test a bounded provider output.",
   INTERNAL_FAILURE: "[scripted-provider-unexpected] Test an unexpected provider error.",
 } as const;
 const SCRIPTED_FAILURE_AFTER_ADMISSION_PROMPT = "[scripted-failure-after-admission] Submit a low-volatility Factor Evaluation, then test provider failure.";

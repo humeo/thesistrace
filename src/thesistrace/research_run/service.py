@@ -20,6 +20,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
 from pydantic import ValidationError
 
+from thesistrace._paging import fit_page
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.alpha_language import CompiledAlpha, FormulaCompilationError, alpha_language
 from thesistrace.benchmark import (
@@ -1407,8 +1408,10 @@ class ResearchRunService:
         folder_id: str | None = None,
         research_kind: ResearchKind | None = None,
         cursor: str | None = None,
-        limit: int = 50,
+        limit: int = 20,
     ) -> ResearchRunList:
+        if isinstance(limit, bool) or not 1 <= limit <= 50:
+            raise ValueError("List limit must be between 1 and 50")
         try:
             return self._list(
                 researcher_id,
@@ -1429,7 +1432,7 @@ class ResearchRunService:
         folder_id: str | None = None,
         research_kind: ResearchKind | None = None,
         cursor: str | None = None,
-        limit: int = 50,
+        limit: int = 20,
     ) -> ResearchRunList:
         with self._database.transaction() as transaction:
             cursor_secret = _cursor_secret(transaction)
@@ -1470,22 +1473,23 @@ class ResearchRunService:
                     limit + 1,
                 ),
             ).fetchall()
-        has_more = len(rows) > limit
-        selected = rows[:limit]
-        next_cursor = (
-            _encode_list_cursor(
-                selected[-1],
-                secret=cursor_secret,
-                researcher_id=researcher_id,
-                folder_id=folder_id,
-                research_kind=research_kind,
-            )
-            if has_more
-            else None
-        )
-        return ResearchRunList(
-            items=[_summary(row) for row in selected],
-            next_cursor=next_cursor,
+        summaries = [_summary(row) for row in rows[:limit]]
+        return fit_page(
+            summaries,
+            lambda kept: ResearchRunList(
+                items=kept,
+                next_cursor=(
+                    _encode_list_cursor(
+                        rows[len(kept) - 1],
+                        secret=cursor_secret,
+                        researcher_id=researcher_id,
+                        folder_id=folder_id,
+                        research_kind=research_kind,
+                    )
+                    if kept and len(rows) > len(kept)
+                    else None
+                ),
+            ),
         )
 
     def get(self, researcher_id: UUID, run_id: str) -> ResearchRunSummary | None:
@@ -4407,25 +4411,27 @@ def _result_section_response(
             }
         )
     if isinstance(query, StrategyObservationsResultSectionInput):
-        next_cursor = (
-            _encode_result_cursor(
-                section_read.next_after,
-                secret=cursor_secret,
-                researcher_id=researcher_id,
-                run_id=run_id,
-                section=query.section,
-                order="session_asc",
-                manifest_sha256=manifest_sha256,
-            )
-            if section_read.next_after is not None
-            else None
+        page = StrategyObservationsResultSection.model_validate(
+            {"run_id": run_id, "items": section_read.value, "next_cursor": None}
         )
-        return StrategyObservationsResultSection.model_validate(
-            {
-                "run_id": run_id,
-                "items": section_read.value,
-                "next_cursor": next_cursor,
-            }
+        return fit_page(
+            page.items,
+            lambda kept: page.model_copy(
+                update={
+                    "items": kept,
+                    "next_cursor": _encode_result_cursor(
+                        str(kept[-1].session),
+                        secret=cursor_secret,
+                        researcher_id=researcher_id,
+                        run_id=run_id,
+                        section=query.section,
+                        order="session_asc",
+                        manifest_sha256=manifest_sha256,
+                    )
+                    if kept and (len(kept) < len(page.items) or section_read.next_after is not None)
+                    else None,
+                }
+            ),
         )
     if isinstance(query, TerminalStrategyStateResultSectionInput):
         if not isinstance(section_read.value, Mapping):
@@ -4434,25 +4440,27 @@ def _result_section_response(
             {"run_id": run_id, **section_read.value}
         )
     if isinstance(query, TerminalPositionsResultSectionInput):
-        next_cursor = (
-            _encode_result_cursor(
-                section_read.next_after,
-                secret=cursor_secret,
-                researcher_id=researcher_id,
-                run_id=run_id,
-                section=query.section,
-                order="instrument_asc",
-                manifest_sha256=manifest_sha256,
-            )
-            if section_read.next_after is not None
-            else None
+        page = TerminalPositionsResultSection.model_validate(
+            {"run_id": run_id, "items": section_read.value, "next_cursor": None}
         )
-        return TerminalPositionsResultSection.model_validate(
-            {
-                "run_id": run_id,
-                "items": section_read.value,
-                "next_cursor": next_cursor,
-            }
+        return fit_page(
+            page.items,
+            lambda kept: page.model_copy(
+                update={
+                    "items": kept,
+                    "next_cursor": _encode_result_cursor(
+                        str(kept[-1].instrument_id),
+                        secret=cursor_secret,
+                        researcher_id=researcher_id,
+                        run_id=run_id,
+                        section=query.section,
+                        order="instrument_asc",
+                        manifest_sha256=manifest_sha256,
+                    )
+                    if kept and (len(kept) < len(page.items) or section_read.next_after is not None)
+                    else None,
+                }
+            ),
         )
     raise ResearchRunResultSectionIncompatible("Unsupported ResearchRun Result section")
 

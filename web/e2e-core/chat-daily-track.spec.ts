@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
 
 import { expect, sameOriginHeaders, test, testProjectName } from "./auth-fixture";
-import { revealToolActivity } from "./chat-ui";
+import { revealToolActivity, submitChatPrompt } from "./chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 import { controlWorker } from "./research-run-control";
 
@@ -166,8 +166,10 @@ async function assertCurrentObservation(page: Page, detail: Track): Promise<void
 }
 
 async function send(page: Page, prompt: string, status = "Run complete"): Promise<void> {
-  await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-  await page.getByRole("button", { name: "Send" }).click();
+  const turnId = await submitChatPrompt(page, prompt);
+  const turn = page.locator(`.chat-turn[data-turn-id="${turnId}"]`);
+  await expect(turn.locator(".chat-response-footer time")).toBeVisible({ timeout: 90_000 });
+  await expect(turn.locator("details.chat-work-history[open]")).toHaveCount(0);
   await expect(page.locator("[data-chat-status]")).toHaveText(status, { timeout: 90_000 });
 }
 
@@ -178,6 +180,7 @@ async function deleteChat(page: Page): Promise<void> {
     `a[href="/chat?session=${id}"][aria-current="page"]`,
   );
   await expect(currentSession).toBeVisible();
+  await currentSession.locator("..").hover();
   await currentSession.locator("..").getByRole("button", {
     name: /^Actions for /,
   }).click();

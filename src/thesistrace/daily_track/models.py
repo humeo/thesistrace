@@ -609,8 +609,8 @@ class DailyTrackOriginResultSection(BaseModel):
 class DailyTrackFrozenResearchInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    formula: str
-    hypothesis: str | None
+    formula: Annotated[str, Field(max_length=4096)]
+    hypothesis: Annotated[str, Field(max_length=1024)] | None
     start_date: date
     end_date: date
     universe: str

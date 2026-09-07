@@ -74,7 +74,7 @@ export function CoreApp({ location, navigate, isOperator, researcherId }: {
         {currentPath === "/connections/mcp" ? <McpPage /> : null}
         {currentPath === "/connections/mcp/authorize" ? <McpAuthorizePage search={location.search} /> : null}
         {currentPath === "/research" ? (
-          <ResearchWorkspacePage researcherId={researcherId} />
+          <ResearchWorkspacePage location={location} researcherId={researcherId} />
         ) : null}
         {currentPath === "/research-runs" || researchRunMatch ? (
           <ResearchRunsPage researcherId={researcherId} runId={researchRunMatch?.[1]} />

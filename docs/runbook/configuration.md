@@ -13,7 +13,7 @@ selected file. They never execute the file as shell code.
 | --- | --- | --- |
 | `.env.example` | Complete Development template and deployment settings | No; credential fields are empty |
 | `.env` or explicit `THESISTRACE_ENV_FILE` | One deployment's settings and credentials | Yes; private, mode `0600`, excluded from Git and Docker builds |
-| `config/model-registry.json` | Model identity, context window, reasoning choices, provider credential variable names | No |
+| `config/model-registry.json` | Model identity, context/output capacities, compression minimum, reasoning choices, provider credential variable names | No |
 | `deploy/core/compose.yaml` and environment overlays | Service graph, internal addresses, mounts, resource limits and credential delivery | No live credentials |
 | `.mise.toml`, lockfiles and Dockerfiles | Toolchain and dependency versions | No |
 | `scripts/test-runtime`, `auth/compose.test.yaml`, `agent/compose.test.yaml` | Isolated test identities, fixed fixtures and fake services | Disposable test credentials only |
@@ -128,3 +128,8 @@ Production operations use the same ambient-variable clearing helper.
 This follows Docker Compose's [explicit env-file loading and interpolation
 rules](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/),
 with an application rule that the selected file is authoritative.
+
+The model registry requires `max_output_tokens` independently from `context_window`.
+`min_compaction_context_window` controls whether a selection can compress; it is
+not the normal trigger. See [Session context and recovery](session-context.md)
+for the exact budgets, 90% trigger and model-switch behavior.

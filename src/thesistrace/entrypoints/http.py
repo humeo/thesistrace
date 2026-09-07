@@ -83,6 +83,7 @@ from thesistrace.research_agent import (
     ResearchAgentProductionSettings,
     create_research_agent_http_transport,
 )
+from thesistrace.research_agent.pagination import ResearchAgentPagination
 from thesistrace.research_batch import (
     ResearchBatchAdmissionCommand,
     ResearchBatchAdmissionConflict,
@@ -386,6 +387,7 @@ def create_app(
         def research_agent_modules() -> ResearchAgentModules:
             runtime = app.state.core_runtime
             return ResearchAgentModules(
+                pagination=ResearchAgentPagination.from_database(runtime.database),
                 data_overview=runtime.data_overview,
                 research_folders=runtime.research_folders,
                 alpha_language=alpha_language,

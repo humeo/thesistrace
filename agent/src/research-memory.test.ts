@@ -2,6 +2,12 @@ import { MessageList, type MastraDBMessage } from "@mastra/core/agent";
 import { InMemoryStore } from "@mastra/core/storage";
 import { Memory } from "@mastra/memory";
 import { expect, test } from "vitest";
+import { createResearchMemory } from "./research-memory.js";
+
+test("raw Session history never starts a native observation engine", async () => {
+  const memory = createResearchMemory(new InMemoryStore());
+  expect(await memory.omEngine).toBeNull();
+});
 
 test("native observation context preserves a resumed Tool result over its stored pending call", async () => {
   const storage = new InMemoryStore();
@@ -32,4 +38,25 @@ test("native observation context preserves a resumed Tool result over its stored
   } }]);
   await turn.end();
   await memory.settled();
+});
+
+test("small-window input retains more than fifty messages and the latest resumed result", async () => {
+  const memory = createResearchMemory(new InMemoryStore());
+  await memory.createThread({ threadId: "long-session", resourceId: "owner" });
+  const history: MastraDBMessage[] = Array.from({ length: 72 }, (_, i) => ({
+    id: `message-${i}`, threadId: "long-session", resourceId: "owner", role: i % 2 === 0 ? "user" : "assistant",
+    createdAt: new Date(Date.UTC(2026, 8, 7, 0, 0, i)), content: { format: 2, parts: [{ type: "text", text: `Fact ${i}` }] },
+  }));
+  await memory.saveMessages({ messages: structuredClone(history) });
+  const current = structuredClone(history[71]!);
+  current.content.parts = [{ type: "text", text: "Most recent resolved response" }];
+  const list = new MessageList({ threadId: "long-session", resourceId: "owner" }).add(current, "response");
+  for (const processor of await memory.getInputProcessors()) {
+    if ("processInput" in processor && processor.processInput) await processor.processInput({
+      messageList: list, messages: list.get.all.db(), systemMessages: [], state: {}, retryCount: 0, abort: () => { throw new Error("unexpected abort"); },
+    });
+  }
+  expect(list.get.all.db().map((message) => message.id)).toEqual(history.map((message) => message.id));
+  expect(list.get.all.db().at(-1)?.content.parts).toEqual(current.content.parts);
+  expect(await memory.omEngine).toBeNull();
 });

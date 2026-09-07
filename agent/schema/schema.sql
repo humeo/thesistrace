@@ -443,3 +443,36 @@ CREATE INDEX chat_timeline_thread_sequence_idx
     ON agent.chat_timeline_entry USING btree (thread_id, sequence DESC);
 CREATE INDEX a2ui_message_owner_idx
     ON agent.a2ui_message USING btree (thread_id, owner_message_id, sequence, id);
+
+CREATE TABLE agent.session_context_checkpoint (
+    thread_id uuid PRIMARY KEY REFERENCES agent.chat_session(id) ON DELETE CASCADE,
+    revision integer NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    snapshot jsonb,
+    cycle_id uuid,
+    cycle_run_id uuid REFERENCES agent.agent_run(id),
+    CHECK ((revision = 0 AND snapshot IS NULL) OR (revision > 0 AND snapshot IS NOT NULL AND jsonb_typeof(snapshot) = 'object')),
+    CHECK ((cycle_id IS NULL) = (cycle_run_id IS NULL))
+);
+
+CREATE TABLE agent.model_step_recovery (
+    thread_id uuid NOT NULL,
+    run_id uuid NOT NULL,
+    original_message_id text NOT NULL CHECK (length(original_message_id) BETWEEN 1 AND 400),
+    replacement_message_id text CHECK (length(replacement_message_id) BETWEEN 1 AND 400),
+    attempts smallint NOT NULL CHECK (attempts IN (0, 1)),
+    invalid_replacement boolean NOT NULL DEFAULT true,
+    cause text NOT NULL CHECK (cause IN ('OUTPUT_LIMIT', 'CONTEXT_TOO_LARGE')),
+    status text NOT NULL CHECK (status IN ('recovering', 'succeeded', 'failed')),
+    before_budget jsonb NOT NULL CHECK (jsonb_typeof(before_budget) = 'object'),
+    after_budget jsonb CHECK (jsonb_typeof(after_budget) = 'object'),
+    error_code text,
+    created_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
+    updated_at timestamptz NOT NULL DEFAULT pg_catalog.clock_timestamp(),
+    PRIMARY KEY (thread_id, original_message_id),
+    UNIQUE (thread_id, replacement_message_id),
+    FOREIGN KEY (thread_id, run_id) REFERENCES agent.agent_run(thread_id, id) ON DELETE CASCADE,
+    CHECK ((attempts = 0 AND replacement_message_id IS NULL AND status = 'failed')
+        OR (attempts = 1 AND replacement_message_id IS NOT NULL AND replacement_message_id <> original_message_id)),
+    CHECK ((status = 'failed') = (error_code IS NOT NULL)),
+    CHECK (status <> 'succeeded' OR after_budget IS NOT NULL)
+);

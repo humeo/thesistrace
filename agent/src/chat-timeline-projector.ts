@@ -22,6 +22,7 @@ type AssistantBuffer = {
  */
 export class ChatTimelineProjector {
   private readonly assistants = new Map<string, AssistantBuffer>();
+  private readonly persistedMessageIds = new Set<string>();
   private readonly tools = new Map<string, string>();
 
   constructor(
@@ -37,11 +38,12 @@ export class ChatTimelineProjector {
     ) {
       if (typeof event.messageId !== "string" || typeof event.delta !== "string") return;
       const buffer = this.assistants.get(event.messageId) ?? {
-        id: randomUUID(),
+        id: this.persistedMessageIds.has(event.messageId) ? randomUUID() : event.messageId,
         content: "",
         lastFlushAt: 0,
         persistedBytes: 0,
       };
+      this.persistedMessageIds.add(event.messageId);
       buffer.content += event.delta;
       this.assistants.set(event.messageId, buffer);
       const bytes = Buffer.byteLength(buffer.content, "utf8");

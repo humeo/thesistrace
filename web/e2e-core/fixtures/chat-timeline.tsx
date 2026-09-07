@@ -69,4 +69,28 @@ function TimelineFixture() {
     <ChatTimeline controller={controller} onAnnounce={() => undefined} />
   </main>;
 }
-createRoot(document.getElementById("root")!).render(<TimelineFixture />);
+function RecoveryFixture() {
+  const initial = new URLSearchParams(location.search).get("status");
+  const [status, setStatus] = useState<"recovering" | "succeeded" | "failed">(initial === "succeeded" || initial === "failed" ? initial : "recovering");
+  const replacementId = "00000000-0000-4000-8000-000000000003";
+  const originalId = "00000000-0000-4000-8000-000000000002";
+  const entries: TimelineEntry[] = [tool("successful-operation"), { entry_id: `assistant:${originalId}`, turn_id: turnId, created_at: time,
+    kind: "assistant_message", payload: { content: "This is the retained partial answer.", status: "complete", recovery: {
+      status, cause: "OUTPUT_LIMIT", attempts: 1, replacementMessageId: replacementId, errorCode: status === "failed" ? "RECOVERY_FAILED" : null,
+    } } }];
+  if (status === "succeeded") entries.push({ entry_id: `assistant:${replacementId}`, turn_id: turnId, created_at: time,
+    kind: "assistant_message", payload: { content: "This is the complete replacement answer.", status: "complete", supersedes: originalId } });
+  const turn: TimelineTurn = { id: turnId, started_at: time, completed_at: status === "recovering" ? null : time,
+    status: status === "recovering" ? "running" : status === "succeeded" ? "completed" : "failed", entries };
+  const controller = { turns: [turn], phase: status === "recovering" ? "active" : "idle", currentTurnId: turnId,
+    hasFirstAssistantText: true, nextCursor: null, loadingOlder: false, timelineError: false, question: null,
+    loadOlder: async () => false, retryTimeline: async () => undefined } as unknown as ChatConversationController;
+  const change = (value: typeof status) => { history.replaceState(null, "", `?mode=recovery&status=${value}`); setStatus(value); };
+  return <main style={{ height: "100vh", maxWidth: 900, margin: "auto", display: "grid", gridTemplateRows: "auto minmax(0, 1fr)" }}>
+    <nav aria-label="Recovery fixture state">
+      <button onClick={() => change("recovering")}>Recovering</button><button onClick={() => change("succeeded")}>Recovery succeeded</button>
+      <button onClick={() => change("failed")}>Recovery failed</button>
+    </nav><ChatTimeline controller={controller} onAnnounce={() => undefined} />
+  </main>;
+}
+createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).get("mode") === "recovery" ? <RecoveryFixture /> : <TimelineFixture />);

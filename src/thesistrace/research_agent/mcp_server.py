@@ -451,6 +451,15 @@ def _emit_completion(
         context: dict[str, object] = {
             "duration_ms": duration_ms,
             "outcome": outcome,
+            "business_response_bytes": (
+                0
+                if response is None or response.structured_content is None
+                else len(
+                    json.dumps(
+                        response.structured_content, ensure_ascii=False, separators=(",", ":")
+                    ).encode("utf-8", errors="surrogatepass")
+                )
+            ),
             "response_bytes": (
                 0
                 if response is None

@@ -27,6 +27,7 @@ from thesistrace.research_agent import (
     local_operator_authority,
 )
 from thesistrace.research_agent.mcp_server import RESEARCH_AGENT_MAX_WIRE_REQUEST_BYTES
+from thesistrace.research_agent.pagination import ResearchAgentPagination
 
 RESEARCH_CANCEL_ENABLE_ENVIRONMENT = "THESISTRACE_RESEARCH_AGENT_ENABLE_RESEARCH_CANCEL"
 TRACKING_STOP_ENABLE_ENVIRONMENT = "THESISTRACE_RESEARCH_AGENT_ENABLE_TRACKING_STOP"
@@ -47,6 +48,7 @@ def main() -> None:
     try:
         with open_core_runtime(settings) as runtime:
             modules = ResearchAgentModules(
+                pagination=ResearchAgentPagination.from_database(runtime.database),
                 data_overview=runtime.data_overview,
                 research_folders=runtime.research_folders,
                 alpha_language=alpha_language,

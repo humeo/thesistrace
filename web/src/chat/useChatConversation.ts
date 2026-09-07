@@ -567,6 +567,7 @@ export function useChatConversation(options: Readonly<{
       },
       onRunFailed: () => { void loadLatestTimeline(); },
       onRunFinishedEvent: () => { void refresh(); },
+      onCustomEvent: ({ event }) => { if (event.name === "session_recovery_changed") void loadLatestTimeline(); },
       onTextMessageContentEvent: () => { void loadLatestTimeline(); },
       onToolCallStartEvent: () => { void loadLatestTimeline(); },
       onToolCallResultEvent: () => { void loadLatestTimeline(); },
@@ -631,6 +632,7 @@ export function useChatConversation(options: Readonly<{
         },
         onRunFinishedEvent: () => { void refresh(); },
         onRunErrorEvent: () => { if (!accepted) authoritativeRejection = true; void refresh(); },
+        onCustomEvent: ({ event }) => { if (event.name === "session_recovery_changed") void loadLatestTimeline(); },
         onTextMessageContentEvent: () => { void loadLatestTimeline(); },
       });
     } catch {
@@ -686,6 +688,7 @@ export function useChatConversation(options: Readonly<{
         onRunStartedEvent: () => { reconcileOnce(); },
         onRunFinishedEvent: () => { reconcileOnce(true); void refresh(); },
         onRunErrorEvent: () => { reconcileOnce(true); void refresh(); },
+        onCustomEvent: ({ event }) => { if (event.name === "session_recovery_changed") void loadLatestTimeline(); },
         onTextMessageContentEvent: () => { reconcileOnce(); void loadLatestTimeline(); },
         onToolCallStartEvent: () => { reconcileOnce(); void loadLatestTimeline(); },
       });

@@ -17,6 +17,7 @@ from psycopg import OperationalError
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
 
+from thesistrace._paging import fit_page
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.benchmark import (
     StrategyComparisonFacts,
@@ -841,16 +842,19 @@ class DailyTrackService:
                     ),
                 ).fetchall()
                 summaries = [_summary(row) for row in rows[:limit]]
-                next_cursor = (
-                    _encode_cursor(
-                        rows[limit - 1],
-                        secret=secret,
-                        researcher_id=researcher_id,
-                    )
-                    if len(rows) > limit
-                    else None
-                )
-            return DailyTrackList(items=summaries, next_cursor=next_cursor)
+            return fit_page(
+                summaries,
+                lambda kept: DailyTrackList(
+                    items=kept,
+                    next_cursor=(
+                        _encode_cursor(
+                            rows[len(kept) - 1], secret=secret, researcher_id=researcher_id
+                        )
+                        if kept and len(rows) > len(kept)
+                        else None
+                    ),
+                ),
+            )
         except (OperationalError, PoolTimeout) as error:
             raise DailyTrackTemporarilyUnavailable(
                 "DailyTrack listing is temporarily unavailable"
@@ -1859,20 +1863,27 @@ class DailyTrackService:
                 after=after,
                 limit=limit,
             )
-            return DailyTrackStrategyObservationsResultSection.model_validate(
-                {
-                    "track_id": query.track_id,
-                    "items": rows,
-                    "next_cursor": _next_daily_track_result_cursor(
-                        next_after,
-                        secret=cursor_secret,
-                        researcher_id=researcher_id,
-                        track_id=query.track_id,
-                        section=query.section,
-                        order=order,
-                        snapshot_identity=current_manifest,
-                    ),
-                }
+            page = DailyTrackStrategyObservationsResultSection.model_validate(
+                {"track_id": query.track_id, "items": rows, "next_cursor": None}
+            )
+            return fit_page(
+                page.items,
+                lambda kept: page.model_copy(
+                    update={
+                        "items": kept,
+                        "next_cursor": _next_daily_track_result_cursor(
+                            str(kept[-1].session)
+                            if kept and (len(kept) < len(page.items) or next_after is not None)
+                            else None,
+                            secret=cursor_secret,
+                            researcher_id=researcher_id,
+                            track_id=query.track_id,
+                            section=query.section,
+                            order=order,
+                            snapshot_identity=current_manifest,
+                        ),
+                    }
+                ),
             )
         if isinstance(query, DailyTrackOriginResultSectionInput):
             positions = sorted(
@@ -1887,7 +1898,7 @@ class DailyTrackService:
             selected = remaining[:limit]
             next_after = str(selected[-1]["instrument_id"]) if len(remaining) > limit else None
             account = origin.initial_strategy_state
-            return DailyTrackOriginResultSection.model_validate(
+            page = DailyTrackOriginResultSection.model_validate(
                 {
                     "track_id": query.track_id,
                     "seed_run_id": origin.seed_run_id,
@@ -1907,16 +1918,27 @@ class DailyTrackService:
                         )
                     },
                     "positions": selected,
-                    "next_cursor": _next_daily_track_result_cursor(
-                        next_after,
-                        secret=cursor_secret,
-                        researcher_id=researcher_id,
-                        track_id=query.track_id,
-                        section=query.section,
-                        order=order,
-                        snapshot_identity=_origin_cursor_identity(origin),
-                    ),
+                    "next_cursor": None,
                 }
+            )
+            return fit_page(
+                page.positions,
+                lambda kept: page.model_copy(
+                    update={
+                        "positions": kept,
+                        "next_cursor": _next_daily_track_result_cursor(
+                            str(kept[-1].instrument_id)
+                            if kept and (len(kept) < len(page.positions) or next_after is not None)
+                            else None,
+                            secret=cursor_secret,
+                            researcher_id=researcher_id,
+                            track_id=query.track_id,
+                            section=query.section,
+                            order=order,
+                            snapshot_identity=_origin_cursor_identity(origin),
+                        ),
+                    }
+                ),
             )
         if isinstance(query, DailyTrackProvenanceResultSectionInput):
             immutable = origin.immutable_input

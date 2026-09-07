@@ -37,6 +37,7 @@ RequestId = Annotated[
 ]
 FolderId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 ResearchName = Annotated[str, Field(strict=True, max_length=200)]
+ResearchHypothesis = Annotated[str, Field(strict=True, max_length=1024)]
 Formula = Annotated[str, Field(strict=True, max_length=MAX_FORMULA_LENGTH)]
 MIN_HOLDINGS_COUNT = 1
 MAX_HOLDINGS_COUNT = 100
@@ -133,7 +134,7 @@ class _ResearchRunAdmissionBase(BaseModel):
     folder_id: FolderId
     name: ResearchName | None = None
     formula: Formula
-    hypothesis: str | None = None
+    hypothesis: ResearchHypothesis | None = None
     start_date: NaturalDate
     end_date: NaturalDate
     universe: ResearchUniverse
@@ -268,7 +269,7 @@ class ImmutableRunInput(BaseModel):
 
     formula_source: str
     alpha_expression: dict[str, object]
-    hypothesis: str | None
+    hypothesis: ResearchHypothesis | None
     requested_start_date: date
     requested_end_date: date
     field_bindings: dict[str, str]
@@ -332,20 +333,20 @@ type ResearchRunKeyMetrics = Annotated[
 class ResearchRunSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    id: str
+    id: Annotated[str, Field(max_length=200)]
     status: ResearchRunStatus
-    name: str
-    folder_id: str
+    name: ResearchName
+    folder_id: FolderId
     created_at: datetime
     start_date: date
     end_date: date
-    formula_summary: str
+    formula_summary: Annotated[str, Field(max_length=120)]
     research_kind: ResearchKind
     key_metrics: ResearchRunKeyMetrics | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
-    failure_reason: str | None = Field(
+    failure_reason: Annotated[str, Field(max_length=512)] | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
@@ -392,8 +393,8 @@ type ResearchRunAdmissionOutcome = Annotated[
 class ResearchRunAuthorableInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    formula: str
-    hypothesis: str | None
+    formula: Formula
+    hypothesis: ResearchHypothesis | None
     start_date: date
     end_date: date
     universe: ResearchUniverse
