@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import { expect, test, testProjectName } from "./auth-fixture";
-import { revealToolActivity } from "./chat-ui";
+import { revealToolActivity, submitChatPrompt, waitForChatTurn } from "./chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 
 test("Chat saturation rejects an unaccepted Session and preserves an explicit browser retry", async ({ page, researcher }, testInfo) => {
@@ -58,7 +58,8 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
 
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     expect(await Promise.all(pending)).toEqual(Array.from({ length: 4 }, () => ({ ok: true, finished: true })));
-    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const acceptedTurn = await submitChatPrompt(page, prompt);
+    await waitForChatTurn(page, acceptedTurn);
     await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 30_000 });
     await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText(prompt);
     await expect((await revealToolActivity(page, "get_research_context", "complete")).last()).toBeVisible();

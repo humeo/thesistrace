@@ -25,6 +25,7 @@ import {
   selectModel,
   selectReasoning,
   submitChatPrompt,
+  waitForChatTurn,
   toolActivity,
 } from "./chat-ui";
 
@@ -195,7 +196,8 @@ for (const mobile of [false, true]) {
   test(`shared sidebar keeps Chat available across resources on ${mobile ? "mobile" : "desktop"}`, async ({ page }) => {
     await page.setViewportSize(mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 });
     await page.goto("/chat");
-    await submitChatPrompt(page, "Build a low volatility Alpha.");
+    const completedTurn1 = await submitChatPrompt(page, "Build a low volatility Alpha.");
+    await waitForChatTurn(page, completedTurn1);
     await expect(agentRunStatus(page)).toHaveText("Run complete");
     await expect(page.locator(".context-bar")).toHaveCount(0);
     const sessionUrl = page.url();
@@ -243,7 +245,8 @@ for (const mobile of [false, true]) {
 
 test("shared sidebar observes an active Chat finishing while viewing Data", async ({ page }) => {
   await page.goto("/chat");
-  await submitChatPrompt(page, "Build a low volatility Alpha.");
+  const completedTurn2 = await submitChatPrompt(page, "Build a low volatility Alpha.");
+  await waitForChatTurn(page, completedTurn2);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   const sessionId = new URL(page.url()).searchParams.get("session")!;
   setAgentSessionActiveRun(sessionId, true);
@@ -296,8 +299,8 @@ for (const viewport of [
     await page.goto("/chat");
     const message = page.getByRole("textbox", { name: "Message", exact: true });
     await expect(message).toBeEnabled();
-    await message.fill("Build a low volatility Alpha.");
-    await page.getByRole("button", { name: "Send" }).click();
+    const turnId = await submitChatPrompt(page, "Build a low volatility Alpha.");
+    await waitForChatTurn(page, turnId);
     await expect(agentRunStatus(page)).toHaveText("Run complete");
     const sessionUrl = page.url();
     expect(new URL(sessionUrl).searchParams.get("session")).not.toBeNull();
@@ -353,8 +356,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
     headers: response.headers(),
     status: response.status(),
   }));
-  await message.fill("Build a low volatility Alpha.");
-  await page.getByRole("button", { name: "Send" }).click();
+  const acceptedTurn1 = await submitChatPrompt(page, "Build a low volatility Alpha.");
 
   await expect.poll(() => new URL(page.url()).searchParams.get("session")).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
@@ -364,6 +366,7 @@ test("first Chat turn streams through Caddy and reload replays without another r
   );
   const assistant = page.locator(".chat-message-assistant .chat-message-content");
   await expect(assistant).toBeVisible();
+  await waitForChatTurn(page, acceptedTurn1, "completed", 30_000);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   const assistantText = await assistant.textContent();
   if (assistantText === null) throw new Error("Expected one assistant response");
@@ -669,8 +672,8 @@ test("Chat preserves bounded multi-step output across reload and a subsequent me
   });
   await page.goto("/chat");
   const message = page.getByRole("textbox", { name: "Message", exact: true });
-  await message.fill("[scripted-multi-step-output] Produce two bounded outputs around a research context inspection.");
-  await page.getByRole("button", { name: "Send" }).click();
+  const acceptedTurn2 = await submitChatPrompt(page, "[scripted-multi-step-output] Produce two bounded outputs around a research context inspection.");
+  await waitForChatTurn(page, acceptedTurn2, "completed", 30_000);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   const assistant = page.locator(".chat-message-assistant .chat-assistant-markdown");
   const outputCounts = async () => {
@@ -695,9 +698,9 @@ test("Chat preserves bounded multi-step output across reload and a subsequent me
   expect(submittedRuns).toBe(1);
 
   await expect(message).toBeEnabled();
-  await message.fill("Continue this research.");
-  await page.getByRole("button", { name: "Send" }).click();
+  const acceptedTurn3 = await submitChatPrompt(page, "Continue this research.");
   await expect(page.locator(".chat-message-user")).toHaveCount(2);
+  await waitForChatTurn(page, acceptedTurn3, "completed", 30_000);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   await expect(message).toBeEnabled();
   tool = await revealToolActivity(page, "get_research_context", "complete");
@@ -711,11 +714,11 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
   );
   await page.goto("/chat");
   const prompt = "[scripted-tool-turn] Inspect the available research context.";
-  await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-  await page.getByRole("button", { name: "Send" }).click();
+  const toolTurnId = await submitChatPrompt(page, prompt);
 
   await toolActivity(page, "get_research_context", "complete").first()
     .waitFor({ state: "attached" });
+  await waitForChatTurn(page, toolTurnId);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   await expect(page.locator("details.chat-work-history")).not.toHaveAttribute("open", "");
   const toolGroup = page.locator("details.chat-tool-group").last();
@@ -791,11 +794,11 @@ test(`Chat rejects an invalid model-authored A2UI surface and remains usable: ${
     }).observe(document.body, { characterData: true, childList: true, subtree: true });
   }, unsafeA2uiCanary);
   const message = page.getByRole("textbox", { name: "Message", exact: true });
-  await message.fill(prompt);
-  await page.getByRole("button", { name: "Send" }).click();
+  const acceptedTurn4 = await submitChatPrompt(page, prompt);
 
   // This assertion spans admission, native Tool validation and persisted
   // completion in the resource-bounded image, not just a synchronous UI update.
+  await waitForChatTurn(page, acceptedTurn4, "completed", 30_000);
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
   expect(await page.evaluate(() => (
     window as Window & { a2uiRejectionEvidence?: { sawUnsafeSurface: boolean } }
@@ -832,10 +835,10 @@ test(`Chat rejects an invalid model-authored A2UI surface and remains usable: ${
   const continuationResponse = page.waitForResponse((response) => (
     new URL(response.url()).pathname.endsWith("/agent/research/run")
   ));
-  await message.fill("Continue after rejecting that unsafe surface.");
-  await page.getByRole("button", { name: "Send" }).click();
+  const acceptedTurn5 = await submitChatPrompt(page, "Continue after rejecting that unsafe surface.");
   expect((await continuationResponse).status()).toBe(200);
   await expect(assistantMessages).toHaveCount(assistantCount + 1, { timeout: 30_000 });
+  await waitForChatTurn(page, acceptedTurn5, "completed", 30_000);
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
   await expect(assistantMessages.last())
     .toContainText("testable Alpha");
@@ -850,8 +853,7 @@ test("A2UI shows real running state and supports keyboard and narrow-screen resu
   controlWorker("pause");
   try {
     await page.goto("/chat");
-    await page.getByRole("textbox", { name: "Message", exact: true }).fill(scriptedFactorIdeaPrompt);
-    await page.getByRole("button", { name: "Send" }).click();
+    const activeTurnId = await submitChatPrompt(page, scriptedFactorIdeaPrompt);
     const admitted = await revealToolActivity(page, "submit_research_run", "complete");
     await expect(admitted).toBeVisible({ timeout: 30_000 });
     const runSurface = page.locator(".chat-a2ui-run").last();
@@ -876,6 +878,7 @@ test("A2UI shows real running state and supports keyboard and narrow-screen resu
     worker.stdin?.end("1");
     await controlledWorkerExit(worker);
     worker = undefined;
+    await waitForChatTurn(page, activeTurnId, "completed", 90_000);
     await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
     await expect(page.getByRole("article", { name: "Research surface" })).toHaveCount(2);
     await expect(page.getByRole("region", { name: `ResearchRun ${runId}: succeeded` })).toBeVisible();
@@ -937,10 +940,9 @@ test("A2UI shows real running state and supports keyboard and narrow-screen resu
 
 test("an A2UI-only answer completes, replays and preserves large table layout on a narrow screen", async ({ page }, testInfo) => {
   await page.goto("/chat");
-  await page.getByRole("textbox", { name: "Message", exact: true }).fill(scriptedLargeA2UITablePrompt);
   const admission = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/agent/copilotkit/agent/research/run"
     && response.request().method() === "POST");
-  await page.getByRole("button", { name: "Send" }).click();
+  const tableTurnId = await submitChatPrompt(page, scriptedLargeA2UITablePrompt);
   const admitted = await admission;
   if (admitted.status() !== 200) {
     const body: unknown = await admitted.json().catch(() => null);
@@ -950,6 +952,7 @@ test("an A2UI-only answer completes, replays and preserves large table layout on
       body: Buffer.from(JSON.stringify({ status: admitted.status(), code })) });
   }
   expect(admitted.status(), "Chat must be admitted before testing A2UI completion").toBe(200);
+  await waitForChatTurn(page, tableTurnId);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   const disclosure = page.getByRole("button", { name: "Inspect 100 sample rows" });
   await keyboardFocus(page, disclosure);
@@ -1344,8 +1347,8 @@ test("a lost admission response replays the same effect and resumes the one Core
       return ((await response.json()) as { status: string }).status;
     }, { timeout: 90_000 }).toBe("succeeded");
 
-    await message.fill(scriptedResumeResearchPrompt);
-    await page.getByRole("button", { name: "Send" }).click();
+    const replayTurnId = await submitChatPrompt(page, scriptedResumeResearchPrompt);
+    await waitForChatTurn(page, replayTurnId, "completed", 60_000);
     await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 60_000 });
     await expect(await revealToolActivity(page, "submit_research_run", "complete"))
       .toBeVisible();
@@ -1378,9 +1381,9 @@ test("the same Chat entry runs and explains a real Strategy Backtest", async ({
   test.setTimeout(240_000);
   await page.goto("/chat");
   const message = page.getByRole("textbox", { name: "Message", exact: true });
-  await message.fill(scriptedStrategyPrompt);
-  await page.getByRole("button", { name: "Send" }).click();
+  const acceptedTurn6 = await submitChatPrompt(page, scriptedStrategyPrompt);
 
+  await waitForChatTurn(page, acceptedTurn6, "completed", 90_000);
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
   await expect(await revealToolActivity(page, "submit_research_run", "complete"))
     .toBeVisible();
@@ -1482,8 +1485,8 @@ test("Chat fails closed on a real Auth exchange timeout and recovers", async ({ 
   expect(proxyState("auth-exchange-proxy", 8250)).toMatchObject({
     exchange_requests: exchangeRequestsBeforeReload,
   });
-  await message.fill("Build a testable quality Alpha idea.");
-  await page.getByRole("button", { name: "Send" }).click();
+  const acceptedTurn7 = await submitChatPrompt(page, "Build a testable quality Alpha idea.");
+  await waitForChatTurn(page, acceptedTurn7, "completed", 30_000);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   await expect(page.locator(".chat-message-assistant .chat-message-content")).toBeVisible();
 });
@@ -1539,10 +1542,10 @@ test("a connected MCP Tool response disconnect becomes a durable failed Run and 
   await expect(await revealToolActivity(page, "get_research_context", "failed"))
     .toBeVisible();
   await expect(message).toBeEnabled();
-  await message.fill("[scripted-tool-turn] Inspect the available research context.");
-  await page.getByRole("button", { name: "Send" }).click();
+  const acceptedTurn8 = await submitChatPrompt(page, "[scripted-tool-turn] Inspect the available research context.");
   await expect(await revealToolActivity(page, "get_research_context", "complete"))
     .toBeVisible();
+  await waitForChatTurn(page, acceptedTurn8, "completed", 30_000);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
 });
 

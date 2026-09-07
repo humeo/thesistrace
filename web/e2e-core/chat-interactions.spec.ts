@@ -1,7 +1,7 @@
 import type { BrowserContext, Page } from "@playwright/test";
 
 import { expect, sameOriginHeaders, test } from "./auth-fixture";
-import { revealToolActivity } from "./chat-ui";
+import { revealToolActivity, submitChatPrompt, waitForChatTurn } from "./chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 
 const toolPrompt = "[scripted-tool-turn] Inspect the available research context.";
@@ -44,7 +44,7 @@ test("Staged FIFO survives reload, Steer stays in the active Turn, and two tabs 
     await expect.poll(() => runs.length, { timeout: 30_000 }).toBe(2);
     await expect(page.locator(".chat-staged-queue")).toHaveCount(0);
     await expect(secondPage.locator(".chat-staged-queue")).toHaveCount(0);
-    await expect.poll(async () => latestOutcome(page), { timeout: 30_000 }).toBe("completed");
+    await waitForChatTurn(page, runs[1]!.runId);
 
     expect(runs.map((run) => run.command)).toEqual(["prompt", "prompt"]);
     expect(runs[0]?.messages).toHaveLength(1);
@@ -85,7 +85,7 @@ test("waiting_for_user survives reload and Answer resumes the same Turn", async 
   await page.getByRole("button", { name: "Send answer", exact: true }).click();
   await expect(page.getByText("I will lead with quality and keep risk as a constraint.", { exact: true }))
     .toBeVisible({ timeout: 30_000 });
-  await expect.poll(async () => latestOutcome(page)).toBe("completed");
+  await waitForChatTurn(page, firstRunId!);
 
   expect(runs).toHaveLength(2);
   expect(runs[1]).toMatchObject({ command: "answer", messages: [], runId: firstRunId });
@@ -125,7 +125,7 @@ test("Stop preserves a partial Turn and Continue starts a new zero-message Turn"
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     await page.getByRole("button", { name: "Continue", exact: true }).click();
     await expect.poll(() => runs.length, { timeout: 15_000 }).toBe(2);
-    await expect.poll(async () => latestOutcome(page), { timeout: 30_000 }).toBe("completed");
+    await waitForChatTurn(page, runs[1]!.runId);
     expect(runs[1]).toMatchObject({ command: "continue", messages: [] });
     expect(runs[1]?.runId).not.toBe(runs[0]?.runId);
     await expect(page.locator('[data-turn-outcome="stopped"]')).toHaveCount(1);
@@ -184,8 +184,7 @@ function status(page: Page) {
 }
 
 async function send(page: Page, content: string): Promise<void> {
-  await page.getByRole("textbox", { name: "Message", exact: true }).fill(content);
-  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await submitChatPrompt(page, content);
 }
 
 async function stage(page: Page, content: string): Promise<void> {
@@ -194,11 +193,6 @@ async function stage(page: Page, content: string): Promise<void> {
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(content);
   await page.getByRole("button", { name: "Stage", exact: true }).click();
   await expect(rows).toHaveCount(previousCount + 1);
-}
-
-async function latestOutcome(page: Page): Promise<string | null> {
-  const outcome = page.locator("[data-turn-outcome]").last();
-  return await outcome.count() === 0 ? null : await outcome.getAttribute("data-turn-outcome");
 }
 
 async function timelineEntries(page: Page, sessionId: string): Promise<TimelineEntry[]> {

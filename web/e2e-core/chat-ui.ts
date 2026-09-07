@@ -103,6 +103,42 @@ async function latestAuthoritativeTurnId(page: Page): Promise<string | null> {
   return value.latest_turn.id;
 }
 
+export async function waitForChatTurn(
+  page: Page,
+  turnId: string,
+  expectedStatus: "completed" | "failed" | "stopped" | "waiting_for_user" = "completed",
+  timeoutMs = 30_000,
+): Promise<void> {
+  if (!CANONICAL_UUID.test(turnId)) throw new Error("CHAT_TURN_ID_INVALID");
+  const started = Date.now();
+  let lastStatus = "not_observed";
+  let phase = "model";
+  try {
+    await expect.poll(async () => {
+      const sessionId = new URL(page.url()).searchParams.get("session");
+      if (!sessionId || !CANONICAL_UUID.test(sessionId)) return "not_observed";
+      const response = await page.request.get(`/api/agent/sessions/${sessionId}`, {
+        headers: { origin: new URL(page.url()).origin },
+        timeout: Math.max(1, timeoutMs - (Date.now() - started)),
+      });
+      if (!response.ok()) {
+        lastStatus = `http_${response.status()}`;
+        throw new Error(`CHAT_SESSION_READ_FAILED_${response.status()}`);
+      }
+      const value = await response.json();
+      const turn = value.current_turn?.id === turnId ? value.current_turn : value.latest_turn;
+      lastStatus = turn?.id === turnId ? turn.status : "not_observed";
+      return lastStatus;
+    }, { timeout: timeoutMs, message: `Turn ${turnId} reaches ${expectedStatus}` }).toBe(expectedStatus);
+    if (expectedStatus !== "waiting_for_user") {
+      phase = "presentation";
+      await expect(page.locator(`[data-turn-id="${turnId}"] .chat-response-footer time`)).toBeVisible({ timeout: 5000 });
+    }
+  } catch {
+    throw new Error(`CHAT_TURN_WAIT_FAILED turn=${turnId} expected=${expectedStatus} last=${lastStatus} phase=${phase} elapsed_ms=${Date.now() - started}`);
+  }
+}
+
 function safeToolName(name: string): string {
   if (!/^[a-z0-9_]+$/u.test(name)) throw new Error("Tool assertions require a canonical tool name");
   return name;

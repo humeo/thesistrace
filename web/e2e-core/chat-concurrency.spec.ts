@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
 
 import { expect, restoreResearcherSession, sameOriginHeaders, test, testProjectName } from "./auth-fixture";
-import { revealToolActivity } from "./chat-ui";
+import { revealToolActivity, submitChatPrompt, waitForChatTurn } from "./chat-ui";
 import { proxyState, setProxyMode } from "./fault-proxy";
 import { controlWorker } from "./research-run-control";
 
@@ -62,7 +62,11 @@ test("Chat shared Session binds two contexts to one Run while another Session ru
       () => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses,
       { timeout: 30_000 },
     ).toBe(2);
+    await expect(parallel).toHaveURL((url) => uuid.test(url.searchParams.get("session") ?? ""));
     expect(sessionId(parallel)).not.toBe(threadId);
+    await expect(parallel.locator(".chat-main")).toHaveAttribute("data-agent-run-id", uuid);
+    const parallelRunId = await parallel.locator(".chat-main").getAttribute("data-agent-run-id");
+    if (!parallelRunId || !uuid.test(parallelRunId)) throw new Error("Parallel Run identity missing");
     expect(databaseFacts(researcher.id)).toMatchObject({ active_runs: 2, agent_runs: 3, user_messages: 3 });
 
     // Reload tears down the HTTP stream, not the accepted model invocation.
@@ -76,6 +80,9 @@ test("Chat shared Session binds two contexts to one Run while another Session ru
 
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     for (const client of [page, other, parallel]) {
+      // A completed Tool and an enabled composer do not mean the Run has finished.
+      await waitForChatTurn(client, client === parallel ? parallelRunId : runId);
+      await expect(status(client)).toHaveText("Run complete", { timeout: 30_000 });
       await expect(client.getByRole("textbox", { name: "Message", exact: true })).toBeEnabled({ timeout: 15_000 });
       await expect((await revealToolActivity(client, "get_research_context", "complete")).last()).toBeVisible();
     }
@@ -162,8 +169,7 @@ test("Chat Host restart retains completed Tools and Core work without replaying 
 });
 
 async function send(page: Page, prompt: string): Promise<void> {
-  await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-  await page.getByRole("button", { name: "Send" }).click();
+  await submitChatPrompt(page, prompt);
 }
 
 function status(page: Page) { return page.locator("[data-chat-status]"); }

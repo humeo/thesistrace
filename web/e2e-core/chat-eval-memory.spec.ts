@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import { expect, sameOriginHeaders, test, testProjectName } from "./auth-fixture";
-import { submitChatPrompt } from "./chat-ui";
+import { submitChatPrompt, waitForChatTurn } from "./chat-ui";
 import { controlWorker } from "./research-run-control";
 
 test("Eval correction fixture produces a real warmup rejection and one accepted fixed-window Run", async ({ page }) => {
@@ -33,8 +33,8 @@ for (const kind of ["formula", "admission"] as const) {
       ? "Develop a low-volatility Alpha, repair any Formula issue you discover, and evaluate it."
       : "Evaluate a low-volatility Alpha and correct one structured admission issue if needed.";
     await page.goto("/chat");
-    await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
-    await page.getByRole("button", { name: "Send" }).click();
+    const turnId = await submitChatPrompt(page, prompt);
+    await waitForChatTurn(page, turnId, "completed", 90_000);
     await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 90_000 });
     const threadId = new URL(page.url()).searchParams.get("session");
     expect(threadId).toMatch(/^[a-f0-9-]{36}$/);
@@ -63,8 +63,8 @@ test("Eval Memory oracle does not confuse completed Batch artifacts with inspect
   await page.goto("/chat");
   controlWorker("pause", "batch-research-worker");
   try {
-    await page.getByRole("textbox", { name: "Message", exact: true }).fill("Compare positive and negative price-rank Alpha signals as Factor Evaluations.");
-    await page.getByRole("button", { name: "Send" }).click();
+    const turnId = await submitChatPrompt(page, "Compare positive and negative price-rank Alpha signals as Factor Evaluations.");
+    await waitForChatTurn(page, turnId, "completed", 60_000);
     await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 60_000 });
   } finally { controlWorker("unpause", "batch-research-worker"); }
   const threadId = new URL(page.url()).searchParams.get("session");
@@ -82,7 +82,8 @@ test("Eval Memory oracle does not confuse completed Batch artifacts with inspect
   }
   const input = { thread_id: threadId, researcher_id: researcher.id, expectation: { kind: "batch-results", run_ids: runIds } };
   expect(oracle(input)).toMatchObject({ batch_results_inspected: false });
-  await submitChatPrompt(page, "Resume the Research Batch from this Chat and explain each authoritative Child Result.");
+  const resumedTurn = await submitChatPrompt(page, "Resume the Research Batch from this Chat and explain each authoritative Child Result.");
+  await waitForChatTurn(page, resumedTurn, "completed", 60_000);
   await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 60_000 });
   const facts = oracle(input);
   expect(facts).toEqual({ formula_corrected: false, admission_corrected: false, unresolved_admission_rejection: false, batch_results_inspected: true });
