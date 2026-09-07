@@ -5,6 +5,7 @@ import errno
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -412,7 +413,14 @@ exit "${FAKE_PLAYWRIGHT_STATUS:-0}"
         """#!/bin/sh
 set -eu
 printf 'node %s\\n' "$*" >> "$TEST_COMMAND_LOG"
+case "${1##*/}" in
+  cli.mjs|product-state-volumes.mjs) exec "$TEST_REAL_NODE" "$@" ;;
+esac
 if [ "${2:-}" = configure ] && [ -n "${FAKE_AGENT_EVAL_CONFIGURE_OUTPUT:-}" ]; then
+  test "${THESISTRACE_AGENT_EVAL_MODEL_KEY:-}" = gpt-5.6-luna || exit 96
+  test "${THESISTRACE_AGENT_EVAL_REASONING_EFFORT:-}" = high || exit 96
+  test "${THESISTRACE_AGENT_EVAL_PHASE:-}" = baseline || exit 96
+  test "${THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD:-}" = 20 || exit 96
   printf '%s\\n' "$FAKE_AGENT_EVAL_CONFIGURE_OUTPUT"
   exit 0
 fi
@@ -457,7 +465,14 @@ done
 status=200
 body='<html><div id="root"></div></html>'
 case "$url" in
-  */health/ready) body='{"status":"ready"}' ;;
+  */health/ready)
+    if [ "$url" = "$THESISTRACE_PUBLIC_ORIGIN/health/ready" ] \
+      && [ "${FAKE_PUBLIC_HEALTH_EXPOSED:-0}" != 1 ]; then
+      status=404; body=''
+    else
+      body='{"status":"ready"}'
+    fi
+    ;;
   */health/*|*/internal/*) status=404; body='' ;;
   */api/auth/ok) body='{"ok":true}' ;;
   */api/auth/sign-in/email*) status=401; body='{}' ;;
@@ -508,6 +523,7 @@ fi
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "FAKE_BACKEND_MARKER": str(tmp_path / "backends-stopped"),
         "TEST_COMMAND_LOG": str(command_log),
+        "TEST_REAL_NODE": shutil.which("node"),
         "TEST_PORT_MAP": str(tmp_path / "ports.json"),
         "THESISTRACE_TEST_STATE_ROOT": str(tmp_path / "runs"),
         "THESISTRACE_TEST_PORT_LOCK_ROOT": str(tmp_path / "port-locks"),
@@ -848,6 +864,7 @@ def test_development_watch_streams_stderr_and_forwards_termination(
         """#!/usr/bin/env python3
 import os
 import signal
+import shutil
 import sys
 
 arguments = " ".join(sys.argv[1:])
@@ -920,6 +937,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import sys
 
 arguments = " ".join(sys.argv[1:])
@@ -976,13 +994,13 @@ signal.pause()
 def test_integration_command_generates_unique_test_identities() -> None:
     package = json.loads((ROOT / "package.json").read_text())
     assert package["scripts"]["test:integration"] == (
-        "./tooling/test/runtime integration && pnpm --dir apps/auth test:integration "
+        "./tooling/test/cli.mjs integration && pnpm --dir apps/auth test:integration "
         "&& pnpm --dir apps/agent test:integration"
     )
 
     projects = {
         subprocess.run(
-            [ROOT / "tooling" / "test" / "runtime", "identity"],
+            [ROOT / "tooling" / "test" / "cli.mjs", "identity"],
             cwd=ROOT,
             check=True,
             capture_output=True,
@@ -1021,7 +1039,7 @@ def test_parallel_worktrees_share_one_caddy_port_lock_namespace(
 
     processes = [
         subprocess.Popen(
-            [ROOT / "tooling" / "test" / "runtime", "integration"],
+            [ROOT / "tooling" / "test" / "cli.mjs", "integration"],
             cwd=ROOT,
             env=environment,
             stdout=subprocess.PIPE,
@@ -1069,56 +1087,45 @@ def test_parallel_worktrees_share_one_caddy_port_lock_namespace(
 
 
 def test_rustfs_startup_and_restart_wait_for_the_writable_s3_api() -> None:
-    runtime = (ROOT / "tooling" / "test" / "runtime").read_text()
-    probe = (ROOT / "tooling" / "test" / "probe-rustfs-ready").read_text()
-
-    assert 'uv run python "$rustfs_readiness_probe"' in runtime
-    assert "RustFS S3 API did not become writable" in runtime
-    assert "RustFS S3 API did not become ready after restart" in runtime
-    health_probe = runtime.index("curl -fsS http://127.0.0.1:9000/health")
-    assert health_probe < runtime.index(
-        "wait_for_rustfs_s3 probe_rustfs_s3_from_host rustfsadmin rustfsadmin",
-        health_probe,
+    runtime = (ROOT / "tooling/test/cli.mjs").read_text()
+    resources = (ROOT / "tooling/test/resources.mjs").read_text()
+    probe = (ROOT / "tooling/test/probe-rustfs-ready").read_text()
+    assert runtime.index("curl -fsS http://127.0.0.1:9000/health") < runtime.index(
+        "await run.waitForS3()"
     )
+    assert "RustFS S3 API did not become ready after restart" in runtime
+    assert "RustFS S3 API did not become writable" in resources
+    assert "error.status !== 75" in resources
+    assert "Date.now() + 180000" in resources
     assert "client.list_buckets()" in probe
     assert "client.create_bucket(Bucket=arguments.ensure_bucket)" in probe
     assert "client.head_bucket(Bucket=arguments.ensure_bucket)" in probe
     assert 'retries={"max_attempts": 0, "mode": "standard"}' in probe
     assert "is_transient_s3_error" in probe
-    assert "transient_probe_exit=75" in runtime
-    assert "rustfs_readiness_deadline_seconds=180" in runtime
-    assert "date +%s" in runtime
-    assert "probe_rustfs_s3_from_host" in runtime
-    assert "probe_rustfs_s3_from_image" in runtime
-    assert "python /smoke/tooling/test/probe-rustfs-ready" in runtime
-
     for mode, next_phase in (
         ("integration", "integration-auth-initialization"),
         ("e2e", "e2e-initializers"),
         ("image-smoke", "image-smoke-initializers"),
     ):
-        readiness = f"run_phase {mode}-rustfs-s3-ready"
-        assert readiness in runtime
-        assert runtime.index(readiness) < runtime.index(f"run_phase {next_phase}")
-
-    image_smoke_infrastructure = runtime.index("run_phase image-smoke-infrastructure")
-    image_smoke_initializers = runtime.index("run_phase image-smoke-initializers")
-    image_smoke_startup = runtime[image_smoke_infrastructure:image_smoke_initializers]
-    assert "wait_for_rustfs_s3 probe_rustfs_s3_from_image" in " ".join(
-        image_smoke_startup.replace("\\", "").split()
-    )
-    assert "mapped_port rustfs 9000" not in image_smoke_startup
+        phase = (ROOT / f"tooling/test/phases/{mode}.mjs").read_text()
+        assert phase.index(f"{mode}-rustfs-s3-ready") < phase.index(next_phase)
+    image = (ROOT / "tooling/test/phases/image-smoke.mjs").read_text()
+    startup = image[
+        image.index("image-smoke-infrastructure") : image.index("image-smoke-initializers")
+    ]
+    assert "run.waitForS3(true)" in startup
+    assert "mappedPort" not in startup
 
 
 def test_real_codex_mcp_runtime_is_explicit_isolated_and_evidence_backed(
     tmp_path: Path,
 ) -> None:
     package = json.loads((ROOT / "package.json").read_text())
-    assert package["scripts"]["test:codex-mcp"] == "./tooling/test/runtime codex-mcp"
+    assert package["scripts"]["test:codex-mcp"] == "./tooling/test/cli.mjs codex-mcp"
     command_log, environment = _fake_test_runtime_commands(tmp_path)
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "codex-mcp"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "codex-mcp"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1137,11 +1144,7 @@ def test_real_codex_mcp_runtime_is_explicit_isolated_and_evidence_backed(
     )
     assert "--junitxml=" not in commands
     assert not (tmp_path / "runs" / run_id / "evidence" / "pytest.xml").exists()
-    runtime = (ROOT / "tooling" / "test" / "runtime").read_text()
-    assert (
-        'THESISTRACE_REAL_CODEX_EVIDENCE_PATH="$evidence_dir/'
-        'codex-stdio-acceptance.json"' in runtime
-    )
+    assert (tmp_path / "runs" / run_id / "evidence" / "codex-stdio-acceptance.json").exists()
     metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
     assert "test_kind=codex-mcp\n" in metadata
     assert "phase=codex-mcp-host-preflight " in metadata
@@ -1160,7 +1163,7 @@ def test_real_codex_mcp_runtime_fails_closed_without_host_or_evidence(
     environment["PATH"] = f"{tmp_path}:/usr/bin:/bin"
 
     missing_host = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "codex-mcp"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "codex-mcp"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1176,7 +1179,7 @@ def test_real_codex_mcp_runtime_fails_closed_without_host_or_evidence(
     _, unsupported_environment = _fake_test_runtime_commands(unsupported_root)
     unsupported_environment["FAKE_CODEX_STATUS"] = "2"
     unsupported_contract = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "codex-mcp"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "codex-mcp"],
         cwd=ROOT,
         env=unsupported_environment,
         capture_output=True,
@@ -1192,7 +1195,7 @@ def test_real_codex_mcp_runtime_fails_closed_without_host_or_evidence(
     _, evidence_environment = _fake_test_runtime_commands(evidence_root)
     evidence_environment["FAKE_SKIP_CODEX_EVIDENCE"] = "1"
     missing_evidence = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "codex-mcp"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "codex-mcp"],
         cwd=ROOT,
         env=evidence_environment,
         capture_output=True,
@@ -1213,7 +1216,7 @@ def test_real_codex_mcp_runtime_fails_closed_without_host_or_evidence(
     _, invalid_environment = _fake_test_runtime_commands(invalid_root)
     invalid_environment["FAKE_INVALID_CODEX_EVIDENCE"] = "1"
     invalid_evidence = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "codex-mcp"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "codex-mcp"],
         cwd=ROOT,
         env=invalid_environment,
         capture_output=True,
@@ -1249,7 +1252,9 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
 
 def test_shared_browser_control_fixtures_do_not_depend_on_docker_exec() -> None:
     overlay = (ROOT / "deploy" / "compose.test-run.yaml").read_text()
-    runner = (ROOT / "tooling" / "test" / "runtime").read_text()
+    runner = "\n".join(
+        (ROOT / "tooling/test" / name).read_text() for name in ("resources.mjs", "environment.mjs")
+    )
     fault_proxy = (ROOT / "tests" / "e2e" / "fault-proxy.ts").read_text()
     auth_fixture = (ROOT / "tests" / "e2e" / "auth-fixture.ts").read_text()
     auth_control = (ROOT / "apps/auth" / "test-fixtures" / "auth-control.mjs").read_text()
@@ -1273,9 +1278,9 @@ def test_shared_browser_control_fixtures_do_not_depend_on_docker_exec() -> None:
     assert "THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN" in runner
     assert "THESISTRACE_TEST_AUTH_PROXY_ORIGIN" in runner
     assert "THESISTRACE_TEST_MCP_PROXY_ORIGIN" in runner
-    assert "auth_fixture_port=$(mapped_port auth-fixture-control 8260)" in runner
-    assert "auth_proxy_port=$(mapped_port auth-exchange-proxy 8250)" in runner
-    assert "mcp_proxy_port=$(mapped_port mcp-fault-proxy 8150)" in runner
+    assert "'auth-fixture-control': ['auth_fixture_port', 8260]" in runner
+    assert "'auth-exchange-proxy': ['auth_proxy_port', 8250]" in runner
+    assert "'mcp-fault-proxy': ['mcp_proxy_port', 8150]" in runner
 
     shared_auth_fixture = auth_fixture.split("export function stopDataOperatorWorker", maxsplit=1)[
         0
@@ -1296,8 +1301,8 @@ def test_shared_browser_control_fixtures_do_not_depend_on_docker_exec() -> None:
     assert 'SELECT 1 FROM auth."rateLimit" LIMIT 0' in auth_control
     assert "process.env.THESISTRACE_AUTH_FIXTURE_AUTH_ORIGIN" in session_provisioner
     assert 'const authOrigin = "http://127.0.0.1:8200"' not in session_provisioner
-    assert "wait_for_auth_fixture_control" in runner
-    assert '"$auth_fixture_origin/health/ready"' in runner
+    assert "waitForAuthFixture" in runner
+    assert "${this.auth_fixture_origin}/health/ready" in runner
     assert "Auth fixture control did not become ready" in runner
     assert "fetch('http://127.0.0.1:8260/health/ready')" in overlay
     assert "`${testProjectName()}-data-operator-worker-1`" in auth_fixture
@@ -1332,7 +1337,7 @@ def test_test_cleanup_rejects_unsafe_project_identities(
     }
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "cleanup"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "cleanup"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1388,7 +1393,7 @@ def test_test_cleanup_accepts_only_an_identity_with_matching_run_metadata(
     }
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "cleanup"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "cleanup"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1410,7 +1415,7 @@ def test_compose_preflight_failure_releases_the_caddy_port_lock(
     environment["FAKE_CONFIG_STATUS"] = "11"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "integration"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "integration"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1474,7 +1479,7 @@ def test_only_explicit_eval_injects_the_configured_credential_and_selected_endpo
     )
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", command],
+        [ROOT / "tooling" / "test" / "cli.mjs", command],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1514,7 +1519,7 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     command_log, environment = _fake_test_runtime_commands(tmp_path)
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "integration"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "integration"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1574,7 +1579,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     command_log, environment = _fake_test_runtime_commands(tmp_path)
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "e2e"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "e2e"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1641,7 +1646,7 @@ def test_e2e_secret_scope_fails_closed_when_container_inspection_fails(
     environment["FAKE_ENV_INSPECT_FAILURE_TARGET"] = "api"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "e2e"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "e2e"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1674,63 +1679,79 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
         "pnpm test:integration",
         "pnpm test:e2e",
     ]
-    assert scripts["check:release"] == "./tooling/test/release-gate"
+    assert scripts["check:release"] == "./tooling/test/release-gate.mjs"
     assert scripts["test:integration"] == (
-        "./tooling/test/runtime integration && pnpm --dir apps/auth test:integration "
+        "./tooling/test/cli.mjs integration && pnpm --dir apps/auth test:integration "
         "&& pnpm --dir apps/agent test:integration"
     )
-    assert scripts["check:performance"] == "./tooling/test/runtime performance"
+    assert scripts["check:performance"] == "./tooling/test/cli.mjs performance"
     assert "test:benchmark" not in scripts
     assert scripts["test:e2e"] == "node tooling/test/run-e2e.mjs"
     assert scripts["test:image-smoke"] == (
-        "./tooling/test/runtime image-smoke && pnpm --dir apps/auth test:image-smoke "
+        "./tooling/test/cli.mjs image-smoke && pnpm --dir apps/auth test:image-smoke "
         "&& pnpm --dir apps/agent test:image-smoke && pnpm test:caddy-image-smoke"
     )
-    assert scripts["test:caddy-image-smoke"] == "./tooling/test/caddy-image"
-    assert scripts["test:cleanup"] == "./tooling/test/runtime cleanup"
+    assert scripts["test:caddy-image-smoke"] == "./tooling/test/caddy-image.mjs"
+    assert scripts["test:cleanup"] == "./tooling/test/cli.mjs cleanup"
 
 
 def test_test_runtime_managed_phases_cannot_read_from_the_controlling_terminal() -> None:
-    runtime = (ROOT / "tooling" / "test" / "runtime").read_text()
-    managed_phase = runtime.split("run_managed() {", maxsplit=1)[1].split(
-        "\n}\n\nrun_phase()", maxsplit=1
-    )[0]
-
-    assert '"$@" </dev/null' in managed_phase
-
-
-def test_image_smoke_provisions_auth_inside_the_private_compose_network() -> None:
-    runtime = (ROOT / "tooling" / "test" / "runtime").read_text()
-    image_smoke = runtime.split("  image-smoke)\n", maxsplit=1)[1]
-    provisioner = (
-        ROOT / "apps/core" / "tests" / "acceptance" / "provision_image_smoke_auth.py"
-    ).read_text()
-    overlay = (ROOT / "deploy" / "compose.image-smoke.yaml").read_text()
-    browser_fixture = (ROOT / "tests" / "e2e" / "auth-fixture.ts").read_text()
-
-    assert "auth_port=$(mapped_port auth 8200)" not in image_smoke
-    assert "resend_port=$(mapped_port resend-fake 8300)" not in image_smoke
-    assert "THESISTRACE_TEST_RESEND_ORIGIN" not in image_smoke
-    assert 'authFixtureRequest("/__test/resend-emails"' in browser_fixture
-    assert "auth auth-fixture-control api research-worker" in " ".join(
-        image_smoke.replace("\\", "").split()
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "import {execute} from './tooling/test/commands.mjs'; "
+                "await execute(process.execPath, ['-e', "
+                "\"process.stdin.on('data', () => process.exitCode=9); process.stdin.resume()\"]);"
+            ),
+        ],
+        cwd=ROOT,
+        input="parent terminal input",
+        capture_output=True,
+        text=True,
+        timeout=5,
     )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_image_smoke_provisions_auth_inside_the_private_compose_network(tmp_path: Path) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    completed = subprocess.run(
+        [ROOT / "tooling/test/cli.mjs", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    commands = command_log.read_text()
+    assert "port auth 8200" not in commands
+    assert "port resend-fake 8300" not in commands
+    assert "auth auth-fixture-control api research-worker" in commands
+    provisioner = (ROOT / "apps/core/tests/acceptance/provision_image_smoke_auth.py").read_text()
+    overlay = (ROOT / "deploy/compose.image-smoke.yaml").read_text()
+    browser_fixture = (ROOT / "tests/e2e/auth-fixture.ts").read_text()
+    assert 'authFixtureRequest("/__test/resend-emails"' in browser_fixture
     assert "auth-fixture-control:\n    networks:\n      - default\n      - edge" in overlay
-    assert 'THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN="$auth_fixture_origin"' in runtime
     assert "create_private_compose_login_session" in provisioner
     assert "../apps/auth/test-fixtures:/test-fixtures:ro" in overlay
 
 
-def test_product_state_reset_recreates_the_auth_fixture_network_namespace() -> None:
-    runtime = (ROOT / "tooling" / "test" / "runtime").read_text()
-    reset = runtime.split("reset_product_state() {", maxsplit=1)[1].split(
-        "\n}\n\nprovision_image_smoke_auth()", maxsplit=1
-    )[0]
-
-    assert "compose stop auth auth-fixture-control" in " ".join(reset.replace("\\", "").split())
-    assert "compose rm --force auth auth-fixture-control" in " ".join(
-        reset.replace("\\", "").split()
+def test_product_state_reset_recreates_the_auth_fixture_network_namespace(tmp_path: Path) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    completed = subprocess.run(
+        [ROOT / "tooling/test/cli.mjs", "performance"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
     )
+    assert completed.returncode == 0, completed.stderr
+    commands = command_log.read_text()
+    assert "stop auth auth-fixture-control" in commands
+    assert "rm --force auth auth-fixture-control" in commands
 
 
 def test_performance_reprovisions_an_authenticated_researcher_after_each_reset(
@@ -1739,7 +1760,7 @@ def test_performance_reprovisions_an_authenticated_researcher_after_each_reset(
     command_log, environment = _fake_test_runtime_commands(tmp_path)
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "performance"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "performance"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1784,7 +1805,7 @@ def test_long_research_performance_stops_after_the_first_failed_sample(
     environment["FAKE_LONG_RESEARCH_SAMPLE_FAILURE"] = "factor_evaluation:warm:1"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "performance"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "performance"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1803,20 +1824,23 @@ def test_long_research_performance_stops_after_the_first_failed_sample(
     assert "status=7" in metadata
 
 
-def test_managed_compose_run_phases_never_read_from_the_parent_terminal() -> None:
-    runtime = (ROOT / "tooling" / "test" / "runtime").read_text()
-    normalized_runtime = re.sub(r"\\\s*\n\s*", " ", runtime)
-    raw_compose_runs = re.findall(
-        r"(?<![A-Za-z0-9_])(?:base_)?compose\s+run\b",
-        normalized_runtime,
+def test_managed_compose_run_phases_never_read_from_the_parent_terminal(tmp_path: Path) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    completed = subprocess.run(
+        [ROOT / "tooling/test/cli.mjs", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
     )
-
-    assert raw_compose_runs == ["compose run", "base_compose run"]
-    for invocation in (
-        'compose run --rm --no-deps -T --interactive=false "$@"',
-        'base_compose run --rm --no-deps -T --interactive=false "$@"',
-    ):
-        assert invocation in normalized_runtime
+    assert completed.returncode == 0, completed.stderr
+    invocations = [
+        line
+        for line in command_log.read_text().splitlines()
+        if "compose " in line and " run " in line
+    ]
+    assert invocations
+    assert all("run --rm --no-deps -T --interactive=false" in line for line in invocations)
 
 
 def test_production_image_smoke_builds_once_and_reuses_the_images(
@@ -1825,7 +1849,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     command_log, environment = _fake_test_runtime_commands(tmp_path)
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1892,8 +1916,19 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert "--build" not in commands
 
 
-def test_operator_console_release_qualification_runs_inside_final_images() -> None:
-    runtime = (ROOT / "tooling" / "test" / "runtime").read_text()
+def test_operator_console_release_qualification_runs_inside_final_images(tmp_path: Path) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    completed = subprocess.run(
+        [ROOT / "tooling/test/cli.mjs", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
+    runtime = command_log.read_text()
     smoke = (ROOT / "tests" / "production_image_smoke.py").read_text()
     fixture = (
         ROOT / "apps/core" / "tests" / "acceptance" / "qualify_operator_image_smoke.py"
@@ -1910,32 +1945,28 @@ def test_operator_console_release_qualification_runs_inside_final_images() -> No
     ):
         assert f'"{phase}"' in smoke
         assert f"production_image_smoke.py {phase}" in runtime
-    assert "verify_data_operator_worker_secret_rejection" in runtime
-    assert "verify_single_data_operator_worker" in runtime
+    assert "phase=image-smoke-data-operator-secret-rejection " in metadata
+    assert "phase=image-smoke-single-data-operator-worker " in metadata
     assert "qualify_operator_image_smoke.py provision" in runtime
     assert "qualify_operator_image_smoke.py transfer" in runtime
     assert "age_operator_image_smoke_receipt.py" in runtime
     assert "thesistrace-data-operator collect" in runtime
-    assert "image-smoke-operator-browser-reset reset_product_state" in runtime
-    assert 'operator_browser_state_root="$run_root/operator-browser-state"' in runtime
-    assert "image-smoke-operator-browser-bootstrap compose_run initialize" in runtime
+    assert "phase=image-smoke-operator-browser-reset " in metadata
+    assert "/operator-browser-state" in metadata
+    assert "phase=image-smoke-operator-browser-bootstrap " in metadata
     assert "python /smoke/tests/e2e/support/prepare_current_data.py" in runtime
-    assert "image-smoke-operator-browser-worker compose up" in runtime
+    assert "phase=image-smoke-operator-browser-worker " in metadata
     assert "python /smoke/tests/e2e/support/publish_financial_track_head.py lagged" in runtime
     assert "python /smoke/tests/e2e/support/publish_financial_track_head.py recovered" in runtime
-    ready = runtime.index(
-        "image-smoke-operator-browser-auth-fixture-ready wait_for_auth_fixture_control"
-    )
-    browser = runtime.index(
-        "playwright test --config tests/playwright.config.ts operator-console.spec.ts"
-    )
-    assert ready < browser
+    assert metadata.index(
+        "phase=image-smoke-operator-browser-auth-fixture-ready "
+    ) < metadata.index("phase=image-smoke-operator-browser ")
     assert "playwright test --config tests/playwright.config.ts operator-console.spec.ts" in runtime
     assert "create_private_compose_login_session" in fixture
     assert "run_auth_operator" in fixture
     assert "operator-sessions.json" in runtime
     assert "UPDATE data.refresh_operations" in retention
-    assert "WORKER_TUSHARE_TOKEN_INVALID" in runtime
+    assert "WORKER_TUSHARE_TOKEN_INVALID" in (ROOT / "tests/image-checks.sh").read_text()
 
 
 def test_operator_console_runbooks_define_the_supported_production_boundary() -> None:
@@ -1996,7 +2027,7 @@ def test_failed_image_build_stops_smoke_before_runtime_phases(tmp_path: Path) ->
     environment["FAKE_BUILD_STATUS"] = "7"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2029,7 +2060,7 @@ def test_failed_backend_image_tag_stops_smoke_before_runtime_phases(
     environment["FAKE_IMAGE_TAG_FAILURE_TARGET"] = target
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2051,7 +2082,7 @@ def test_failed_image_smoke_persists_runner_diagnostics_before_cleanup(
     environment["FAKE_IMAGE_SMOKE_STATUS"] = "9"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2082,7 +2113,7 @@ def test_failed_image_build_stops_before_infrastructure_and_preserves_status(
     environment["FAKE_BUILD_STATUS"] = "12"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2122,7 +2153,7 @@ def test_failed_mcp_image_smoke_sanitizes_preserved_protocol_evidence(
     )
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2163,7 +2194,7 @@ def test_failed_evidence_sanitization_discards_all_text_evidence(
     )
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2183,7 +2214,7 @@ def test_failed_evidence_sanitization_discards_all_text_evidence(
 
 def test_active_lifecycle_rejects_legacy_and_hybrid_entrypoints() -> None:
     package = json.loads((ROOT / "package.json").read_text())
-    test_runtime = (ROOT / "tooling" / "test" / "runtime").read_text()
+    test_runtime = (ROOT / "tooling" / "test" / "cli.mjs").read_text()
     active_sources = "\n".join(
         (
             package["scripts"]["test"],
@@ -2226,7 +2257,7 @@ def test_failed_e2e_groups_playwright_and_compose_evidence_before_cleanup(
     environment["FAKE_PLAYWRIGHT_STATUS"] = "6"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "e2e"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "e2e"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2259,7 +2290,7 @@ def test_failed_integration_captures_evidence_before_default_cleanup(
     environment["FAKE_PYTEST_STATUS"] = "7"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "integration"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "integration"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2286,7 +2317,7 @@ def test_failed_runtime_detects_original_leak_before_sanitizing_evidence(
     environment["FAKE_COMPOSE_LOGS"] = "observability-secret-canary"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "integration"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "integration"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2311,7 +2342,7 @@ def test_successful_runtime_is_failed_by_a_raw_log_canary(tmp_path: Path) -> Non
     _, environment = _fake_test_runtime_commands(tmp_path)
     environment["FAKE_COMPOSE_LOGS"] = "agent-provider-error-private-6c19b77e"
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "integration"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "integration"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2340,7 +2371,7 @@ def test_cleanup_failure_is_reported_without_masking_the_test_failure(
     environment["FAKE_CLEANUP_STATUS"] = "5"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "runtime", "integration"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "integration"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2364,7 +2395,7 @@ def test_keep_environment_preserves_only_a_failing_test_project(
 
     completed = subprocess.run(
         [
-            ROOT / "tooling" / "test" / "runtime",
+            ROOT / "tooling" / "test" / "cli.mjs",
             "integration",
             "--keep-environment",
         ],
@@ -2391,7 +2422,7 @@ def test_test_runtime_forwards_termination_before_evidence_and_cleanup(
     environment["FAKE_PYTEST_RELEASE_DIR"] = str(release_dir)
     environment["TEST_SIGNAL_FILE"] = str(signal_file)
     process = subprocess.Popen(
-        [ROOT / "tooling" / "test" / "runtime", "integration"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "integration"],
         cwd=ROOT,
         env=environment,
         stdout=subprocess.PIPE,
@@ -2429,7 +2460,7 @@ def test_two_concurrent_test_runs_have_disjoint_resources_and_state(
     environment["FAKE_PYTEST_RELEASE_DIR"] = str(release_dir)
     processes = [
         subprocess.Popen(
-            [ROOT / "tooling" / "test" / "runtime", "integration"],
+            [ROOT / "tooling" / "test" / "cli.mjs", "integration"],
             cwd=ROOT,
             env=environment,
             stdout=subprocess.PIPE,
@@ -2574,9 +2605,9 @@ def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None
     assert ".local/test-runs/<run-id>/" in guide
     assert "--keep-environment" in guide
     assert "mise exec -- pnpm test:integration --keep-environment" in guide
-    assert "mise exec -- ./tooling/test/runtime e2e --keep-environment" in guide
+    assert "mise exec -- ./tooling/test/cli.mjs e2e --keep-environment" in guide
     assert "mise exec -- pnpm test:cleanup" in guide
-    assert "./tooling/test/runtime cleanup" not in guide
+    assert "./tooling/test/cli.mjs cleanup" not in guide
     assert " -- --keep-environment" not in guide
     assert "pnpm prod validate" in production
     assert "pnpm prod up" in production
@@ -2656,3 +2687,22 @@ def test_current_architecture_documents_only_the_active_data_and_schema_contract
         "Rerun always creates a new ResearchRun ID using exactly",
     ):
         assert obsolete not in architecture
+
+
+def test_e2e_gateway_rejects_exposed_private_readiness(tmp_path: Path) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_PUBLIC_HEALTH_EXPOSED"] = "1"
+    completed = subprocess.run(
+        [ROOT / "tooling/test/cli.mjs", "e2e"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 1
+    assert "pnpm exec playwright test" not in command_log.read_text()
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
+    assert re.search(r"phase=e2e-caddy-single-origin seconds=\d+ status=1", metadata)
+    assert "cleanup_status=0" in metadata

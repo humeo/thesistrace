@@ -23,8 +23,8 @@ for (const mode of ['success', 'test-failure', 'cleanup-failure', 'reverse']) te
       if (process.argv[3] === 'ls') console.log(['initialize','api','research-worker','batch-research-worker','tracking-worker','data-operator-worker','auth','agent','web'].map(name => 'thesistrace-test-20260907t000000z-1-aaaaaaaa-' + name).join('\\n'));
       require('node:fs').appendFileSync('docker.log', process.argv.slice(2).join(' ') + '\\n');
     `);
-    executable('tooling/test/runtime', `
-      const fs = require('node:fs');
+    executable('tooling/test/cli.mjs', `
+      const fs = await import('node:fs');
       const previous = fs.existsSync('runs.json') ? JSON.parse(fs.readFileSync('runs.json')) : [];
       const project = 'thesistrace-test-20260907t000000z-' + (previous.length + 1) + '-aaaaaaaa';
       previous.push({ project, source: process.env.THESISTRACE_TEST_IMAGE_SOURCE_PROJECT, keep: process.env.THESISTRACE_TEST_KEEP_IMAGES });

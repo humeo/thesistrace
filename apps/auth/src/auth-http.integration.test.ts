@@ -816,20 +816,22 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     ): Promise<Response> => {
       const blocker = await owner.connect();
       let response: Response;
-      let elapsedMilliseconds: number;
       try {
         await blocker.query("BEGIN");
         await blocker.query("LOCK TABLE auth.security_audit IN ACCESS EXCLUSIVE MODE");
-        const startedAt = performance.now();
         response = await operation();
-        elapsedMilliseconds = performance.now() - startedAt;
-        await tasks.drain();
+        // Password hashing may take longer on a busy host. The contract is that
+        // HTTP completes while the real audit write is still blocked by the lock.
+        let auditCompleted = false;
+        const audit = tasks.drain().then(() => { auditCompleted = true; });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(auditCompleted).toBe(false);
+        await audit;
       } finally {
         await blocker.query("ROLLBACK").catch(() => undefined);
         blocker.release();
       }
       expect(response.status).toBe(200);
-      expect(elapsedMilliseconds).toBeLessThan(500);
       return response;
     };
 

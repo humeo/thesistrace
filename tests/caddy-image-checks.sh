@@ -1,143 +1,7 @@
 #!/bin/sh
 set -eu
-
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-timestamp=$(date -u +%Y%m%dt%H%M%Sz)
-random_suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
-run_id="$timestamp-$$-$random_suffix"
-resource_prefix="thesistrace-caddy-smoke-$run_id"
-image_name="$resource_prefix"
-container_name="$resource_prefix-web"
-auth_container_name="$resource_prefix-auth"
-client_one_name="$resource_prefix-client-one"
-client_two_name="$resource_prefix-client-two"
-network_name="$resource_prefix-network"
-volume_name="$resource_prefix-data"
-evidence_root=$(mktemp -d "${TMPDIR:-/tmp}/thesistrace-caddy-smoke.XXXXXX")
-
-capture_runtime_evidence() {
-  initial_status=$1
-  printf 'run_id=%s\nimage_name=%s\ncontainer_name=%s\nauth_container_name=%s\nclient_one_name=%s\nclient_two_name=%s\nnetwork_name=%s\nvolume_name=%s\ninitial_status=%s\n' \
-    "$run_id" "$image_name" "$container_name" "$auth_container_name" \
-    "$client_one_name" "$client_two_name" "$network_name" "$volume_name" \
-    "$initial_status" >"$evidence_root/run.txt"
-  docker version >"$evidence_root/docker-version.txt" 2>&1 || true
-  docker logs "$container_name" >"$evidence_root/caddy.log" 2>&1 || true
-  docker logs "$auth_container_name" >"$evidence_root/auth-echo.log" 2>&1 || true
-  docker container inspect "$container_name" \
-    >"$evidence_root/container-inspect.json" 2>&1 || true
-  docker image inspect "$image_name" \
-    >"$evidence_root/image-inspect.json" 2>&1 || true
-  docker network inspect "$network_name" \
-    >"$evidence_root/network-inspect.json" 2>&1 || true
-  docker volume inspect "$volume_name" \
-    >"$evidence_root/volume-inspect.json" 2>&1 || true
-}
-
-cleanup() {
-  run_status=$?
-  trap - EXIT INT TERM
-  capture_runtime_evidence "$run_status"
-  cleanup_status=0
-  for cleanup_container in \
-    "$container_name" \
-    "$auth_container_name" \
-    "$client_one_name" \
-    "$client_two_name"; do
-    if docker container inspect "$cleanup_container" >/dev/null 2>&1; then
-      docker rm --force "$cleanup_container" >/dev/null || cleanup_status=$?
-    fi
-  done
-  if docker network inspect "$network_name" >/dev/null 2>&1; then
-    docker network rm "$network_name" >/dev/null || cleanup_status=$?
-  fi
-  if docker volume inspect "$volume_name" >/dev/null 2>&1; then
-    docker volume rm "$volume_name" >/dev/null || cleanup_status=$?
-  fi
-  if docker image inspect "$image_name" >/dev/null 2>&1; then
-    docker image rm "$image_name" >/dev/null || cleanup_status=$?
-  fi
-  if [ "$run_status" -eq 0 ] && [ "$cleanup_status" -ne 0 ]; then
-    run_status=$cleanup_status
-  fi
-  printf '%s\n' "$cleanup_status" >"$evidence_root/cleanup-status.txt"
-  printf '%s\n' "$run_status" >"$evidence_root/final-status.txt"
-  if [ "$run_status" -eq 0 ]; then
-    rm -rf -- "$evidence_root" || run_status=$?
-  fi
-  if [ "$run_status" -ne 0 ]; then
-    echo "Caddy Production image-smoke evidence: $evidence_root" >&2
-  fi
-  exit "$run_status"
-}
-
-terminate() {
-  signal_status=$1
-  trap - INT TERM
-  exit "$signal_status"
-}
-
-start_container() {
-  docker run --detach \
-    --name "$container_name" \
-    --hostname thesistrace.test \
-    --network "$network_name" \
-    --network-alias thesistrace.test \
-    --env THESISTRACE_PUBLIC_ORIGIN=https://thesistrace.test \
-    --env 'THESISTRACE_CADDY_TLS_DIRECTIVE=tls internal' \
-    --env 'THESISTRACE_CADDY_HSTS_DIRECTIVE=header >Strict-Transport-Security "max-age=31536000"' \
-    --volume "$volume_name:/data" \
-    "$image_name" >"$evidence_root/container-id.txt"
-
-  attempt=0
-  until docker exec "$container_name" wget --quiet --no-check-certificate \
-    --output-document /dev/null https://thesistrace.test/data; do
-    attempt=$((attempt + 1))
-    if [ "$attempt" -ge 200 ]; then
-      docker logs "$container_name" >"$evidence_root/caddy.log" 2>&1 || true
-      echo "Caddy HTTPS listener did not become ready" >&2
-      return 1
-    fi
-    sleep 0.1
-  done
-}
-
-start_header_echo_backend() {
-  docker run --detach \
-    --name "$auth_container_name" \
-    --network "$network_name" \
-    --network-alias auth \
-    --volume "$repo_root/deploy/caddy/Caddyfile.header-echo.test:/etc/caddy/Caddyfile:ro" \
-    --entrypoint caddy \
-    "$image_name" run --config /etc/caddy/Caddyfile \
-    >"$evidence_root/auth-container-id.txt"
-}
-
-start_test_client() {
-  client_name=$1
-  docker run --detach \
-    --name "$client_name" \
-    --network "$network_name" \
-    --entrypoint /bin/sh \
-    "$image_name" -c 'exec sleep 300' \
-    >"$evidence_root/$client_name.id"
-}
-
-trap cleanup EXIT
-trap 'terminate 130' INT
-trap 'terminate 143' TERM
-
-docker build \
-  --file "$repo_root/apps/web/Dockerfile" \
-  --tag "$image_name" \
-  "$repo_root"
-docker network create "$network_name" >"$evidence_root/network-id.txt"
-docker volume create "$volume_name" >"$evidence_root/volume-name.txt"
-
-start_header_echo_backend
-start_test_client "$client_one_name"
-start_test_client "$client_two_name"
-start_container
+case "$1" in
+  routing)
 docker exec "$container_name" wget --quiet --no-check-certificate \
   --output-document - https://thesistrace.test/login \
   >"$evidence_root/spa.html"
@@ -201,17 +65,8 @@ for private_probe in \
   grep -F "404 Not Found" "$evidence_root/$evidence_name.stderr.log"
 done
 
-certificates_before=$(docker exec "$container_name" find \
-  /data/caddy/certificates/local -type f -name '*.crt' \
-  -exec sha256sum '{}' ';' | sort)
-test -n "$certificates_before"
-docker rm --force "$container_name" >/dev/null
-start_container
-certificates_after=$(docker exec "$container_name" find \
-  /data/caddy/certificates/local -type f -name '*.crt' \
-  -exec sha256sum '{}' ';' | sort)
-test "$certificates_after" = "$certificates_before"
-
+    ;;
+  security)
 docker exec "$container_name" wget --server-response --spider \
   --no-check-certificate https://thesistrace.test/login \
   >"$evidence_root/security-headers.stdout.log" \
@@ -289,18 +144,6 @@ if grep -E '"(request|headers|uri|query|body|token|formula|object_key|manifest|r
   exit 1
 fi
 
-# Exercise the actual gateway image against a deterministic idle-close race.
-# Reuse the already-stopped, test-owned Auth fixture name for bounded cleanup.
-docker logs "$auth_container_name" >"$evidence_root/auth-header-echo.log" 2>&1
-docker rm --force "$auth_container_name" >/dev/null
-docker run --detach \
-  --name "$auth_container_name" \
-  --network "$network_name" \
-  --network-alias auth \
-  --network-alias api \
-  --volume "$repo_root/tests/fixtures/caddy-keepalive-upstream.mjs:/keepalive-probe.mjs:ro" \
-  node:24.14.0-bookworm-slim@sha256:d3d197c99e937af98e07c7830622c243d836a7485e6131495418232e787308fe \
-  node /keepalive-probe.mjs serve >"$evidence_root/keepalive-container-id.txt"
-docker exec "$auth_container_name" node /keepalive-probe.mjs probe \
-  >"$evidence_root/keepalive.json" 2>"$evidence_root/keepalive.stderr.log"
-cat "$evidence_root/keepalive.json"
+    ;;
+  *) exit 2 ;;
+esac

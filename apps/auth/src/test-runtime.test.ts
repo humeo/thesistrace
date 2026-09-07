@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-const runner = fileURLToPath(new URL("../scripts/test-runtime", import.meta.url));
+const runner = fileURLToPath(new URL("../../../tooling/test/app.mjs", import.meta.url));
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
@@ -28,7 +28,7 @@ describe("Auth test runner process contract", () => {
   ])("preserves the %s signal status through cleanup", (signal, status) => {
     const fixture = createFixture();
 
-    const completed = spawnSync(runner, ["runner-contract-self-check", signal], {
+    const completed = spawnSync(runner, ["auth", "runner-contract-self-check", signal], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -52,7 +52,7 @@ describe("Auth test runner process contract", () => {
 
     const completed = spawnSync(
       runner,
-      ["runner-contract-self-check", "success"],
+      ["auth", "runner-contract-self-check", "success"],
       {
         encoding: "utf8",
         env: {
@@ -76,7 +76,7 @@ describe("Auth test runner process contract", () => {
   it("does not let ambient state bypass a formal integration run", () => {
     const fixture = createFixture();
 
-    const completed = spawnSync(runner, ["integration"], {
+    const completed = spawnSync(runner, ["auth", "integration"], {
       encoding: "utf8",
       env: {
         ...process.env,

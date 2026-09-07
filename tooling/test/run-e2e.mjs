@@ -27,8 +27,8 @@ for (const group of groups) {
 }
 let sourceProject;
 let child;
-let cancelled = false;
-for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { cancelled = true; child?.kill(signal); });
+let cancelled = 0;
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { cancelled = signal === 'SIGINT' ? 130 : 143; child?.kill(signal); });
 const results = [];
 let cleanupFailed = false;
 try {
@@ -38,11 +38,11 @@ try {
     let project;
     let pending = '';
     const status = await new Promise((resolveStatus, reject) => {
-      child = spawn('./tooling/test/runtime', ['e2e'], {
+      child = spawn('./tooling/test/cli.mjs', ['e2e'], {
         env: { ...process.env, THESISTRACE_TEST_PLAYWRIGHT_GREP: group.grep,
           THESISTRACE_TEST_IMAGE_SOURCE_PROJECT: sourceProject ?? '',
           THESISTRACE_TEST_KEEP_IMAGES: sourceProject ? '0' : '1' },
-        stdio: ['inherit', 'pipe', 'inherit'],
+        stdio: ['ignore', 'pipe', 'inherit'],
       });
       child.stdout.on('data', data => {
         process.stdout.write(data);
@@ -54,7 +54,7 @@ try {
         }
       });
       child.on('error', reject);
-      child.on('exit', code => resolveStatus(code ?? 130));
+      child.on('close', (code, signal) => resolveStatus(code ?? (signal === 'SIGTERM' ? 143 : 130)));
     });
     sourceProject ??= project;
     results.push({ name: group.name, project, status, elapsed_ms: Date.now() - started });
@@ -85,4 +85,4 @@ try {
   }
 }
 console.log(`E2E group results: ${evidence}/results.json`);
-process.exitCode = cancelled ? 130 : cleanupFailed || results.length !== groups.length || results.some(result => result.status !== 0) ? 1 : 0;
+process.exitCode = cancelled || (cleanupFailed || results.length !== groups.length || results.some(result => result.status !== 0) ? 1 : 0);

@@ -27,7 +27,7 @@ try {
     else if (action === 'run') await compose('run', '--rm', '--no-deps', '-T', ...args);
     else if (action === 'reset' || action === 'erase') {
       await compose('down', '--remove-orphans');
-      await run(`${root}/tooling/dev/product-state-volumes`, [action, project]);
+      await run(`${root}/tooling/dev/product-state-volumes.mjs`, [action, project]);
       if (action === 'reset') await start();
     } else if (action === 'watch') {
       try { await compose('up', '--watch'); }

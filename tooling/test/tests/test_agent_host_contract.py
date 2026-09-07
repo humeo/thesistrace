@@ -9,9 +9,7 @@ DEPLOY = ROOT / "deploy"
 
 
 def _service(source: str, name: str, next_name: str) -> str:
-    return source.split(f"\n  {name}:\n", maxsplit=1)[1].split(
-        f"\n  {next_name}:\n", maxsplit=1
-    )[0]
+    return source.split(f"\n  {name}:\n", maxsplit=1)[1].split(f"\n  {next_name}:\n", maxsplit=1)[0]
 
 
 def test_agent_host_is_a_private_node_package_without_research_authority() -> None:
@@ -61,15 +59,11 @@ def test_agent_host_is_a_private_node_package_without_research_authority() -> No
 
 
 def test_final_images_share_exact_agent_stack_versions() -> None:
-    agent_dependencies = json.loads((AGENT / "package.json").read_text())[
-        "dependencies"
-    ]
+    agent_dependencies = json.loads((AGENT / "package.json").read_text())["dependencies"]
     auth_dependencies = json.loads((ROOT / "apps/auth" / "package.json").read_text())[
         "dependencies"
     ]
-    web_dependencies = json.loads((ROOT / "apps/web" / "package.json").read_text())[
-        "dependencies"
-    ]
+    web_dependencies = json.loads((ROOT / "apps/web" / "package.json").read_text())["dependencies"]
 
     assert {
         name: agent_dependencies[name]
@@ -210,30 +204,28 @@ def test_agent_fault_proxies_are_test_only_compose_boundaries() -> None:
     assert "THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth:8200" in production
     assert "THESISTRACE_MCP_INTERNAL_URL: http://api:8100/mcp" in production
 
-    assert (
-        "THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth-exchange-proxy:8250"
-        in test_overlay
-    )
-    assert (
-        "THESISTRACE_MCP_INTERNAL_URL: http://mcp-fault-proxy:8150/mcp"
-        in test_overlay
-    )
+    assert "THESISTRACE_AUTH_INTERNAL_ORIGIN: http://auth-exchange-proxy:8250" in test_overlay
+    assert "THESISTRACE_MCP_INTERNAL_URL: http://mcp-fault-proxy:8150/mcp" in test_overlay
     assert "../apps/auth/test-fixtures:/test-fixtures:ro" in test_overlay
     assert "../apps/agent/test-fixtures:/test-fixtures:ro" in test_overlay
 
 
 def test_agent_image_smoke_uses_the_production_openai_adapter() -> None:
     compose = (AGENT / "compose.test.yaml").read_text()
-    runner = (AGENT / "scripts" / "test-runtime").read_text()
+    runner = (AGENT / "test-fixtures/image-checks.sh").read_text()
+    registry = json.dumps(
+        json.loads((AGENT / "fixtures/image-model-registry.json").read_text()),
+        separators=(",", ":"),
+    )
 
     assert "provider-stub:" in compose
     assert "OPENAI_BASE_URL: http://provider-stub:8600/v1" in compose
     assert "openai-provider-stub.mjs" in compose
     assert "THESISTRACE_AGENT_OPENAI_API_KEY" in compose
     assert "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET" not in compose
-    assert '"provider_adapter":"openai"' in runner
-    assert '"provider_model_id":"gpt-5.6-luna"' in runner
-    assert '"provider_adapter":"scripted"' not in runner
+    assert '"provider_adapter":"openai"' in registry
+    assert '"provider_model_id":"gpt-5.6-luna"' in registry
+    assert '"provider_adapter":"scripted"' not in registry
     assert "-e THESISTRACE_AGENT_OPENAI_API_KEY=" in runner
 
 
@@ -258,12 +250,8 @@ def test_browser_bundle_source_has_no_provider_or_mcp_credential_contract() -> N
 
 def test_research_chat_uses_copilotkit_public_headless_boundary() -> None:
     chat_page = (ROOT / "apps/web" / "src" / "chat" / "ChatPage.tsx").read_text()
-    conversation = (
-        ROOT / "apps/web" / "src" / "chat" / "ChatConversation.tsx"
-    ).read_text()
-    provider = (
-        ROOT / "apps/web" / "src" / "chat" / "ResearchChatCopilotProvider.tsx"
-    ).read_text()
+    conversation = (ROOT / "apps/web" / "src" / "chat" / "ChatConversation.tsx").read_text()
+    provider = (ROOT / "apps/web" / "src" / "chat" / "ResearchChatCopilotProvider.tsx").read_text()
 
     assert 'from "./ChatConversation"' in chat_page
     assert 'from "@copilotkit/react-core/v2/headless"' in conversation
@@ -271,7 +259,7 @@ def test_research_chat_uses_copilotkit_public_headless_boundary() -> None:
     assert 'from "@copilotkit/react-core/v2/context"' in provider
     assert 'from "@copilotkit/react-core/v2"' not in provider
     assert 'runtimeTransport: "rest"' in provider
-    assert 'runtimeUrl: RESEARCH_CHAT_RUNTIME_URL' in provider
+    assert "runtimeUrl: RESEARCH_CHAT_RUNTIME_URL" in provider
 
 
 def test_agent_startup_logging_cannot_serialize_configuration_details() -> None:

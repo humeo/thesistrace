@@ -291,7 +291,7 @@ from its own fresh baseline. Normal gates retain the default collection order.
 Group results and wall time are written to `.local/e2e-runs/<id>/results.json`.
 Each child `run.txt` records build/reuse, initialization, execution and cleanup
 separately; compare execution time separately from the extra isolation cost.
-The low-level `tooling/test/runtime e2e` is a single-environment diagnostic
+The low-level `tooling/test/cli.mjs e2e` is a single-environment diagnostic
 entry, not the complete E2E gate; use it only with a single explicit case filter.
 
 The browser gate sends every request through Caddy and uses two Researchers to
@@ -389,7 +389,7 @@ for interactive inspection, append the diagnostic escape hatch:
 ```sh
 mise exec -- pnpm test:integration --keep-environment
 THESISTRACE_TEST_PLAYWRIGHT_GREP='Operator Market submission and response recovery' \
-  mise exec -- ./tooling/test/runtime e2e --keep-environment
+  mise exec -- ./tooling/test/cli.mjs e2e --keep-environment
 ```
 
 The command prints the exact Test project name. After inspection, clean that

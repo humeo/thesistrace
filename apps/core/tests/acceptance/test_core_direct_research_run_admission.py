@@ -1043,7 +1043,7 @@ def _restart_isolated_postgres() -> int:
     if not os.environ.get("THESISTRACE_TEST_PROJECT_NAME"):
         pytest.skip("an isolated Core Compose project is required for database restart")
     restarted = subprocess.run(
-        ["./tooling/test/runtime", "restart-postgres"],
+        ["./tooling/test/cli.mjs", "restart-postgres"],
         check=False,
         capture_output=True,
         text=True,

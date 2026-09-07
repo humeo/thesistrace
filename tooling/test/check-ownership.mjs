@@ -1,22 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { matchesGlob, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const suites = {
-  'core-quick': ['apps/core/tests/{kernel,architecture,adapters,data,entrypoints}/**/test_*.py'],
-  'core-integration': ['apps/core/tests/{integration,acceptance}/**/test_*.py'],
-  'core-codex': ['apps/core/tests/acceptance/test_real_codex_research_agent_mcp.py'],
-  'agent-unit': ['apps/agent/src/**/*.test.ts'],
-  'agent-integration': ['apps/agent/src/**/*.integration.test.ts'],
-  'agent-preflight': ['apps/agent/scripts/*.test.mjs'],
-  'auth-unit': ['apps/auth/src/**/*.test.ts'],
-  'auth-integration': ['apps/auth/src/**/*.integration.test.ts'],
-  'web-unit': ['apps/web/src/**/*.test.{ts,tsx}'],
-  'web-e2e': ['tests/e2e/**/*.spec.ts'],
-  'web-browser': ['apps/web/browser/**/*.spec.ts'],
-  'test-tooling': ['tooling/**/*.test.mjs', 'tooling/test/tests/test_*.py'],
-};
+import { suites, quickCommands } from './suites.mjs';
+export { suites };
 
 export function owners(path, rules = suites) {
   return Object.entries(rules).filter(([name, patterns]) =>
@@ -37,9 +25,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const paths = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { encoding: 'utf8' })
     .split('\0').filter(path => !path.startsWith('.scratch/') && existsSync(path));
   const failures = checkFiles([...new Set(paths)]);
-  const root = JSON.parse(readFileSync('package.json', 'utf8'));
   for (const dir of ['kernel', 'architecture', 'adapters', 'data', 'entrypoints']) {
-    if (!root.scripts.test.includes(`tests/${dir}`)) failures.push(`core-quick directory not invoked: ${dir}`);
+    if (!quickCommands.some(([, args]) => args.includes(`apps/core/tests/${dir}`))) failures.push(`core-quick directory not invoked: ${dir}`);
   }
   for (const [directory, suite, config] of [
     ['apps/agent', 'agent-unit', 'vitest.config.ts'],

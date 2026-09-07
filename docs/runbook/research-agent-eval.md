@@ -50,7 +50,7 @@ THESISTRACE_AGENT_EVAL_MODEL_KEY=gpt-5.6-luna \
 THESISTRACE_AGENT_EVAL_REASONING_EFFORT=high \
 THESISTRACE_AGENT_EVAL_PHASE=baseline \
 THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD="${THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD:?set the approved ceiling first}" \
-  mise exec -- ./tooling/test/runtime agent-eval
+  mise exec -- ./tooling/test/cli.mjs agent-eval
 ```
 
 The credential must already be in the Operator environment. This example is

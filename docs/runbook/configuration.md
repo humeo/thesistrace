@@ -17,7 +17,7 @@ selected file. They never execute the file as shell code.
 | `apps/agent/config/model-registry.json` | Model identity, context/output capacities, compression minimum, reasoning choices, provider credential variable names | No |
 | `deploy/compose.yaml` and environment overlays | Service graph, internal addresses, mounts, resource limits and credential delivery | No live credentials |
 | `.mise.toml`, lockfiles and Dockerfiles | Toolchain and dependency versions | No |
-| `tooling/test/runtime`, `apps/auth/compose.test.yaml`, `apps/agent/compose.test.yaml` | Isolated test identities, fixed fixtures and fake services | Disposable test credentials only |
+| `tooling/test/cli.mjs`, `apps/auth/compose.test.yaml`, `apps/agent/compose.test.yaml` | Isolated test identities, fixed fixtures and fake services | Disposable test credentials only |
 | `apps/auth/src/config.ts`, `apps/agent/src/config.ts`, Core settings | Service-owned runtime validation | Read process environment; no independent dotenv loading |
 
 Keep internal service addresses and invariant contracts in Compose/code. Add an

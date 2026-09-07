@@ -7,8 +7,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run",
-    "test:integration": "./scripts/test-runtime integration",
-    "test:image-smoke": "./scripts/test-runtime image-smoke",
+    "test:integration": "node ../../tooling/test/app.mjs auth integration",
+    "test:image-smoke": "node ../../tooling/test/app.mjs auth image-smoke",
     "start": "node dist/server.js",
     "initialize": "node dist/initialize.js",
     "operator": "node dist/operator.js"

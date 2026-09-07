@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-GATE = ROOT / "tooling" / "test" / "release-gate"
+GATE = ROOT / "tooling" / "test" / "release-gate.mjs"
 
 
 def _environment(tmp_path: Path, *, dirty: bool = False) -> tuple[dict[str, str], Path]:
@@ -60,7 +60,7 @@ def test_release_gate_runs_only_deterministic_gates_from_a_clean_commit(
     tmp_path: Path,
 ) -> None:
     package = json.loads((ROOT / "package.json").read_text())
-    assert package["scripts"]["check:release"] == "./tooling/test/release-gate"
+    assert package["scripts"]["check:release"] == "./tooling/test/release-gate.mjs"
     environment, command_log = _environment(tmp_path)
 
     completed = subprocess.run(

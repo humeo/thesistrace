@@ -145,7 +145,25 @@ def test_default_gate_excludes_deferred_and_credential_dependent_work() -> None:
 
 
 def test_fast_host_gate_uses_bounded_parallelism_without_expensive_work() -> None:
-    fast_gate = _package_script("test")
+    assert _package_script("test") == "node tooling/test/quick.mjs"
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "import {quickCommands} from './tooling/test/suites.mjs'; "
+                "console.log(JSON.stringify(quickCommands))"
+            ),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    fast_gate = "\n".join(
+        " ".join([command, *args]) for command, args in json.loads(completed.stdout)
+    )
 
     for command in (
         "uv run --project apps/core ruff check --config apps/core/pyproject.toml",

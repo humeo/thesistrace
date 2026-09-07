@@ -23,8 +23,7 @@ def test_caddy_is_the_only_web_runtime_and_preserves_api_paths() -> None:
 
     assert (
         "FROM caddy:2.11.4-alpine@sha256:"
-        "5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648"
-        in dockerfile
+        "5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648" in dockerfile
     )
     assert "nginx" not in dockerfile.lower()
     assert "COPY --from=build /app/apps/web/dist /srv" in dockerfile
@@ -35,9 +34,7 @@ def test_caddy_is_the_only_web_runtime_and_preserves_api_paths() -> None:
     mcp_query = caddyfile.index("handle @mcp_query")
     mcp_noncanonical = caddyfile.index("handle @mcp_noncanonical")
     mcp = caddyfile.index("handle /mcp {")
-    mcp_metadata = caddyfile.index(
-        "handle /.well-known/oauth-protected-resource/mcp"
-    )
+    mcp_metadata = caddyfile.index("handle /.well-known/oauth-protected-resource/mcp")
     auth = caddyfile.index("handle /api/auth/*")
     agent = caddyfile.index("handle /api/agent/*")
     core = caddyfile.index("handle /api/*")
@@ -62,9 +59,7 @@ def test_caddy_is_the_only_web_runtime_and_preserves_api_paths() -> None:
     assert "reverse_proxy agent:8400" in caddyfile
     assert "reverse_proxy api:8100" in caddyfile
     assert caddyfile.count("reverse_proxy api:8100") == 3
-    assert caddyfile.count(
-        "header_up X-ThesisTrace-Client-IP {remote_host}"
-    ) == 6
+    assert caddyfile.count("header_up X-ThesisTrace-Client-IP {remote_host}") == 6
     assert caddyfile.count("header_up X-Request-ID {http.request.uuid}") == 6
     assert "@operator_pages path /operator /operator/*" in caddyfile
     assert "forward_auth auth:8200" in caddyfile
@@ -74,7 +69,7 @@ def test_caddy_is_the_only_web_runtime_and_preserves_api_paths() -> None:
     assert "path /mcp /.well-known/oauth-protected-resource/mcp" in caddyfile
     assert 'not query ""' in caddyfile
     assert "path /mcp/* /.well-known/oauth-protected-resource/mcp/*" in caddyfile
-    assert 'respond 404' in caddyfile
+    assert "respond 404" in caddyfile
     assert 'Cache-Control "no-store"' in caddyfile
     assert 'Cache-Control "public, max-age=31536000, immutable"' in caddyfile
     assert "try_files {path} /index.html" in caddyfile
@@ -104,9 +99,9 @@ def test_caddy_applies_the_exact_security_and_sanitized_logging_contract() -> No
         "base-uri 'none'; object-src 'none'; frame-src 'none'; "
         "frame-ancestors 'none'"
     ) in caddyfile
-    assert ">Referrer-Policy \"no-referrer\"" in caddyfile
-    assert ">X-Content-Type-Options \"nosniff\"" in caddyfile
-    assert ">X-Frame-Options \"DENY\"" in caddyfile
+    assert '>Referrer-Policy "no-referrer"' in caddyfile
+    assert '>X-Content-Type-Options "nosniff"' in caddyfile
+    assert '>X-Frame-Options "DENY"' in caddyfile
     assert ">Permissions-Policy" in caddyfile
     assert "{$THESISTRACE_CADDY_HSTS_DIRECTIVE}" in caddyfile
     assert "includeSubDomains" not in caddyfile
@@ -171,9 +166,7 @@ def test_auth_image_reuses_the_package_store_for_production_deploy() -> None:
     dockerfile = (ROOT / "apps/auth" / "Dockerfile").read_text()
 
     assert dockerfile.count("node:24.14.0-bookworm-slim@sha256:") == 2
-    assert dockerfile.count(
-        "--mount=type=cache,target=/root/.local/share/pnpm/store"
-    ) == 2
+    assert dockerfile.count("--mount=type=cache,target=/root/.local/share/pnpm/store") == 2
     assert "pnpm --filter thesistrace-auth deploy --prod /auth-runtime" in dockerfile
 
 
@@ -181,18 +174,14 @@ def test_agent_image_is_a_private_pinned_node_runtime() -> None:
     dockerfile = (ROOT / "apps/agent" / "Dockerfile").read_text()
 
     assert dockerfile.count("node:24.14.0-bookworm-slim@sha256:") == 2
-    assert dockerfile.count(
-        "--mount=type=cache,target=/root/.local/share/pnpm/store"
-    ) == 2
+    assert dockerfile.count("--mount=type=cache,target=/root/.local/share/pnpm/store") == 2
     assert "pnpm --filter thesistrace-agent-host deploy --prod /agent-runtime" in dockerfile
     assert "USER node" in dockerfile
 
 
 def test_base_compose_has_independent_agent_auth_and_core_identities() -> None:
     compose = (DEPLOY / "compose.yaml").read_text()
-    core_environment = compose.split("x-core-environment:", 1)[1].split(
-        "\nx-backend:", 1
-    )[0]
+    core_environment = compose.split("x-core-environment:", 1)[1].split("\nx-backend:", 1)[0]
 
     for service in ("auth-initialize", "auth", "agent-initialize", "agent", "web"):
         assert f"  {service}:\n" in compose
@@ -212,12 +201,8 @@ def test_base_compose_has_independent_agent_auth_and_core_identities() -> None:
     agent = _service(compose, "agent", "agent-initialize")
     agent_initializer = _service(compose, "agent-initialize", "initialize")
     api = _service(compose, "api", "research-worker")
-    research_worker = _service(
-        compose, "research-worker", "batch-research-worker"
-    )
-    batch_worker = _service(
-        compose, "batch-research-worker", "tracking-worker"
-    )
+    research_worker = _service(compose, "research-worker", "batch-research-worker")
+    batch_worker = _service(compose, "batch-research-worker", "tracking-worker")
     tracking_worker = _service(compose, "tracking-worker", "web")
     web = _service(compose, "web")
     assert "THESISTRACE_OWNER_DATABASE_URL" in auth_initializer
@@ -251,8 +236,7 @@ def test_base_compose_has_independent_agent_auth_and_core_identities() -> None:
     assert "THESISTRACE_MCP_SIGNING_PRIVATE_JWK" not in api
     assert "THESISTRACE_MCP_AGENT_SCOPES" not in api
     assert all(
-        "THESISTRACE_AUTH_INTERNAL_ORIGIN" not in worker
-        and "THESISTRACE_MCP_" not in worker
+        "THESISTRACE_AUTH_INTERNAL_ORIGIN" not in worker and "THESISTRACE_MCP_" not in worker
         for worker in (research_worker, batch_worker, tracking_worker)
     )
     assert "condition: service_completed_successfully" in auth
@@ -263,11 +247,18 @@ def test_base_compose_has_independent_agent_auth_and_core_identities() -> None:
 def test_base_compose_has_one_single_slot_data_refresh_runtime() -> None:
     compose = (DEPLOY / "compose.yaml").read_text()
     test_overlay = (DEPLOY / "compose.test-run.yaml").read_text()
-    runner = (ROOT / "tooling" / "test" / "runtime").read_text()
+    runner = "\n".join(
+        (ROOT / "tooling/test" / name).read_text()
+        for name in (
+            "cli.mjs",
+            "environment.mjs",
+            "resources.mjs",
+            "phases/e2e.mjs",
+            "phases/image-smoke.mjs",
+        )
+    )
     worker = _service(compose, "data-operator-worker", "web")
-    core_environment = compose.split("x-core-environment:", 1)[1].split(
-        "\nx-backend:", 1
-    )[0]
+    core_environment = compose.split("x-core-environment:", 1)[1].split("\nx-backend:", 1)[0]
     api = _service(compose, "api", "research-worker")
     auth = _service(compose, "auth", "initialize")
 
@@ -280,9 +271,7 @@ def test_base_compose_has_one_single_slot_data_refresh_runtime() -> None:
     assert "industry-refresh-worker:" not in compose
     assert "canonical-data:/var/lib/thesistrace/canonical-data" in worker
     assert "benchmark-data:/var/lib/thesistrace/benchmark-data" in worker
-    assert ":ro" not in "\n".join(
-        line for line in worker.splitlines() if "thesistrace/" in line
-    )
+    assert ":ro" not in "\n".join(line for line in worker.splitlines() if "thesistrace/" in line)
     assert "THESISTRACE_TUSHARE_TOKEN:" in worker
     assert "THESISTRACE_TUSHARE_TOKEN" not in core_environment
     assert "THESISTRACE_TUSHARE_TOKEN" not in api
@@ -294,22 +283,22 @@ def test_base_compose_has_one_single_slot_data_refresh_runtime() -> None:
     assert "tushare-financial-market-refresh-replay.json" in test_overlay
     assert "tushare-operator-console-market-refresh-replay.json" in test_overlay
     assert "tushare-image-smoke-market-refresh-replay.json" in test_overlay
-    assert 'THESISTRACE_TUSHARE_TOKEN="$tushare_test_token"' in runner
-    assert "verify_tushare_secret_scope()" in runner
-    assert "image-smoke-tushare-secret-scope verify_tushare_secret_scope" in runner
-    assert "e2e-tushare-secret-scope verify_tushare_secret_scope" in runner
-    normalized_runner = " ".join(runner.replace("\\", "").split())
-    assert "auth auth-fixture-control agent api research-worker " \
-        "batch-research-worker tracking-worker data-operator-worker web" \
-        in normalized_runner
+    assert '"THESISTRACE_TUSHARE_TOKEN": "tushare_test_token"' in runner
+    assert "verify_tushare_secret_scope" in runner
+    assert "image-smoke-tushare-secret-scope" in runner
+    assert "e2e-tushare-secret-scope" in runner
+    normalized_runner = " ".join(re.sub(r"[\"',]", "", runner).split())
+    assert (
+        "auth auth-fixture-control agent api research-worker "
+        "batch-research-worker tracking-worker data-operator-worker web" in normalized_runner
+    )
 
 
 def test_financial_submission_runbook_keeps_live_source_secret_worker_only() -> None:
     runbook = (ROOT / "docs" / "runbook" / "data-operator.md").read_text()
 
     assert (
-        '"${tt_compose[@]}" run --rm -T \\\n'
-        "  api thesistrace-data-operator refresh-financial \\\n"
+        '"${tt_compose[@]}" run --rm -T \\\n  api thesistrace-data-operator refresh-financial \\\n'
     ) in runbook
     assert (
         '"${tt_compose[@]}" run --rm -T \\\n'
@@ -326,8 +315,7 @@ def test_production_overlay_publishes_only_caddy_and_persists_certificates() -> 
     assert '      - "443:443"' in web
     assert "      - caddy-data:/data" in web
     assert (
-        "THESISTRACE_CADDY_HSTS_DIRECTIVE: "
-        "'header >Strict-Transport-Security \"max-age=31536000\"'"
+        "THESISTRACE_CADDY_HSTS_DIRECTIVE: 'header >Strict-Transport-Security \"max-age=31536000\"'"
     ) in web
     assert production.count("    ports:\n") == 1
     assert production.count(":80") == 1
@@ -353,7 +341,7 @@ def test_single_node_services_have_one_replica_and_restart_unless_stopped() -> N
     )
     for service, next_service in ordered_services:
         section = _service(compose, service, next_service)
-        assert 'restart: unless-stopped' in section, service
+        assert "restart: unless-stopped" in section, service
         assert "deploy:\n      replicas: 1" in section, service
 
     for initializer, next_service in (
@@ -369,7 +357,16 @@ def test_development_and_test_origins_are_exact_before_compose_rendering() -> No
     development = (DEPLOY / "compose.dev.yaml").read_text()
     development_env = (ROOT / ".env.example").read_text()
     test_overlay = (DEPLOY / "compose.test-run.yaml").read_text()
-    runner = (ROOT / "tooling" / "test" / "runtime").read_text()
+    runner = "\n".join(
+        (ROOT / "tooling/test" / name).read_text()
+        for name in (
+            "cli.mjs",
+            "environment.mjs",
+            "resources.mjs",
+            "phases/e2e.mjs",
+            "phases/image-smoke.mjs",
+        )
+    )
 
     assert "THESISTRACE_PUBLIC_ORIGIN=http://127.0.0.1:5173" in development_env
     assert "THESISTRACE_ENVIRONMENT=development" in development_env
@@ -381,18 +378,34 @@ def test_development_and_test_origins_are_exact_before_compose_rendering() -> No
     assert "127.0.0.1:${THESISTRACE_DEV_WEB_PORT}:${THESISTRACE_DEV_WEB_PORT}" in development
     assert "127.0.0.1:${THESISTRACE_DEV_API_PORT}:8100" in development
 
-    assert (
-        "127.0.0.1:${THESISTRACE_TEST_CADDY_PORT}:"
-        "${THESISTRACE_TEST_CADDY_PORT}" in test_overlay
-    )
+    assert "127.0.0.1:${THESISTRACE_TEST_CADDY_PORT}:${THESISTRACE_TEST_CADDY_PORT}" in test_overlay
     assert "127.0.0.1::8100" not in test_overlay
     assert "127.0.0.1::5173" not in test_overlay
     assert "locked-loopback-port" in runner
-    assert "THESISTRACE_TEST_CADDY_PORT=\"$caddy_port\"" in runner
-    assert "THESISTRACE_PUBLIC_ORIGIN=\"$public_origin\"" in runner
-    assert 'THESISTRACE_AGENT_IMAGE="$project_name-agent"' in runner
-    assert 'THESISTRACE_MCP_SIGNING_PRIVATE_JWK="$mcp_signing_private_jwk"' in runner
-    assert runner.index("caddy_port=") < runner.index("compose config --quiet")
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "import {TestRun} from './tooling/test/resources.mjs'; "
+                "import {composeEnvironment} from './tooling/test/environment.mjs'; "
+                "const run=new TestRun('e2e'); run.setOrigin(5180); "
+                "console.log(JSON.stringify(composeEnvironment(run)));"
+            ),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    values = json.loads(completed.stdout)
+    assert values["THESISTRACE_TEST_CADDY_PORT"] == "5180"
+    assert values["THESISTRACE_PUBLIC_ORIGIN"] == "http://127.0.0.1:5180"
+    assert values["THESISTRACE_MCP_ISSUER_URL"] == "http://127.0.0.1:5180/api/auth"
+    assert values["THESISTRACE_MCP_RESOURCE_URL"] == "http://127.0.0.1:5180/mcp"
+    assert values["THESISTRACE_AGENT_IMAGE"].endswith("-agent")
+    assert json.loads(values["THESISTRACE_MCP_SIGNING_PRIVATE_JWK"])["kty"] == "OKP"
 
 
 def test_development_agent_uses_the_configured_local_luna_provider() -> None:
@@ -417,18 +430,20 @@ def test_development_agent_uses_the_configured_local_luna_provider() -> None:
     assert registry == {
         "default_model_key": "gpt-5.6-luna",
         "min_compaction_context_window": 65536,
-        "models": [{
-            "default_reasoning_effort": "high",
-            "display_name": "GPT-5.6 Luna",
-            "enabled": True,
-            "key": "gpt-5.6-luna",
-            "provider_adapter": "openai",
-            "provider_model_id": "gpt-5.6-luna",
-            "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
-            "context_window": 258000,
-            "max_output_tokens": 128000,
-            "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
-        }],
+        "models": [
+            {
+                "default_reasoning_effort": "high",
+                "display_name": "GPT-5.6 Luna",
+                "enabled": True,
+                "key": "gpt-5.6-luna",
+                "provider_adapter": "openai",
+                "provider_model_id": "gpt-5.6-luna",
+                "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
+                "context_window": 258000,
+                "max_output_tokens": 128000,
+                "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
+            }
+        ],
     }
     assert "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET" not in environment
 
@@ -436,34 +451,42 @@ def test_development_agent_uses_the_configured_local_luna_provider() -> None:
 def test_eval_endpoint_is_explicit_and_deterministic_test_endpoint_is_inert() -> None:
     overlay = (DEPLOY / "compose.test-run.yaml").read_text()
     agent = _service(overlay, "agent", "postgres")
-    runner = (ROOT / "tooling" / "test" / "runtime").read_text()
+    runner = "\n".join(
+        (ROOT / "tooling/test" / name).read_text()
+        for name in (
+            "cli.mjs",
+            "environment.mjs",
+            "resources.mjs",
+            "phases/e2e.mjs",
+            "phases/image-smoke.mjs",
+        )
+    )
 
     assert "OPENAI_BASE_URL: ${THESISTRACE_AGENT_OPENAI_BASE_URL:?" in agent
     assert "OPENAI_BASE_URL" not in overlay.replace(agent, "")
-    assert "agent_openai_base_url=http://provider.invalid/v1" in runner
-    assert 'THESISTRACE_AGENT_OPENAI_BASE_URL="$agent_openai_base_url"' in runner
+    assert '"agent_openai_base_url": "http://provider.invalid/v1"' in runner
+    assert '"THESISTRACE_AGENT_OPENAI_BASE_URL": "agent_openai_base_url"' in runner
 
 
 def test_active_deployment_contains_no_nginx_contract() -> None:
     active = "\n".join(
-        path.read_text(errors="ignore")
-        for path in DEPLOY.rglob("*")
-        if path.is_file()
+        path.read_text(errors="ignore") for path in DEPLOY.rglob("*") if path.is_file()
     ).lower()
     assert "nginx" not in active
 
 
 def test_release_image_gate_uses_the_same_caddyfile_with_an_internal_test_ca() -> None:
     package = (ROOT / "package.json").read_text()
-    smoke = (ROOT / "tooling" / "test" / "caddy-image").read_text()
+    smoke = (ROOT / "tooling/test/caddy-image.mjs").read_text() + (
+        ROOT / "tests/caddy-image-checks.sh"
+    ).read_text()
 
-    assert '"test:caddy-image-smoke": "./tooling/test/caddy-image"' in package
+    assert '"test:caddy-image-smoke": "./tooling/test/caddy-image.mjs"' in package
     assert "pnpm test:caddy-image-smoke" in package
     assert "THESISTRACE_PUBLIC_ORIGIN=https://thesistrace.test" in smoke
     assert "THESISTRACE_CADDY_TLS_DIRECTIVE=tls internal" in smoke
     assert (
-        "THESISTRACE_CADDY_HSTS_DIRECTIVE=header >Strict-Transport-Security "
-        "\"max-age=31536000\""
+        'THESISTRACE_CADDY_HSTS_DIRECTIVE=header >Strict-Transport-Security "max-age=31536000"'
     ) in smoke
     assert "308 Permanent Redirect" in smoke
     assert "internal/session/verify private-internal" in smoke
@@ -477,9 +500,7 @@ def test_release_image_gate_uses_the_same_caddyfile_with_an_internal_test_ca() -
     assert "client_ip_two" in smoke
     assert "forged_request_id" in smoke
     assert "Content-Security-Policy" in smoke
-    assert (
-        "style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'" in smoke
-    )
+    assert "style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'" in smoke
     assert "Strict-Transport-Security" in smoke
     assert "includeSubDomains" in smoke
     assert "preload" in smoke
@@ -578,7 +599,7 @@ raise SystemExit(2)
     }
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "caddy-image"],
+        [ROOT / "tooling" / "test" / "caddy-image.mjs"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -593,9 +614,7 @@ raise SystemExit(2)
     assert (evidence / "caddy.log").read_text().strip() == "fake caddy log"
     assert "running" in (evidence / "container-inspect.json").read_text()
     assert "sha256:caddy-smoke" in (evidence / "image-inspect.json").read_text()
-    assert (evidence / "docker-version.txt").read_text().strip() == (
-        "fake docker version"
-    )
+    assert (evidence / "docker-version.txt").read_text().strip() == ("fake docker version")
     assert (evidence / "cleanup-status.txt").read_text() == "0\n"
     assert (evidence / "final-status.txt").read_text() == "1\n"
     commands = command_log.read_text()

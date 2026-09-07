@@ -578,7 +578,7 @@ def _run_dependency_command(command: str) -> int | None:
     if not os.environ.get("THESISTRACE_TEST_PROJECT_NAME"):
         pytest.skip("an isolated Core Compose project is required for dependency restart")
     completed = subprocess.run(
-        ["./tooling/test/runtime", command],
+        ["./tooling/test/cli.mjs", command],
         check=True,
         capture_output=True,
         text=True,
