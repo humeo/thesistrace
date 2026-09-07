@@ -1,6 +1,7 @@
 # Test assertion migration
 
-Status: implementation and acceptance in progress. No full gate success claimed.
+Status: complete. Full product and image gates passed on `3e3e723`.
+See [verification](verification.md) for commands, evidence and limitations.
 
 | Original coverage | Current owner | Preservation |
 | --- | --- | --- |
@@ -25,7 +26,7 @@ instead of inheriting Market/Financial/Industry receipts from preceding sections
 The access-control case uses its own issued invitation token when proving that
 an unauthorized request is rejected. Unknown or unproven redundant tests remain.
 
-Validation evidence will be recorded separately after each command exits.
+Validation evidence is recorded in [verification](verification.md).
 
 Review follow-up: terminal polling retains the same operation while changing
 accepted to succeeded and verifies Published; image-list and deletion failures
