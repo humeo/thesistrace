@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from thesistrace.publication.service import (
+        CompressedJsonPayload,
         JsonPayload,
         ParquetRowsPayload,
         PreparedPublication,
@@ -14,11 +15,14 @@ if TYPE_CHECKING:
         StagedPayload,
         VerifiedBundle,
         VerifiedPayload,
+        decode_compressed_json,
         lock_publication_mutation,
         s3_storage_is_available,
     )
 
 __all__ = [
+    "CompressedJsonPayload",
+    "decode_compressed_json",
     "JsonPayload",
     "lock_publication_mutation",
     "ParquetRowsPayload",

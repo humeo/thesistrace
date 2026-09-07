@@ -88,7 +88,7 @@ from thesistrace.data.dependencies import DataDependencies, resolve_data_depende
 from thesistrace.data.models import FinancialResearchReadiness
 from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication import (
-    JsonPayload,
+    CompressedJsonPayload,
     PreparedPublication,
     Publication,
     PublicationNotFoundError,
@@ -97,6 +97,7 @@ from thesistrace.publication import (
     PublicationVerificationError,
     PublishedRef,
     VerifiedBundle,
+    decode_compressed_json,
     lock_publication_mutation,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
@@ -493,7 +494,7 @@ class DailyTrackService:
         prepared = self._publication.prepare(
             kind="daily-track.checkpoint",
             payloads={
-                "checkpoint": JsonPayload(
+                "checkpoint": CompressedJsonPayload(
                     {
                         "schema_version": "daily-track-activation-checkpoint-v2",
                         "terminal_strategy_state": (
@@ -3319,7 +3320,7 @@ class DailyTrackService:
         }
         prepared = self._publication.prepare(
             kind="daily-track.checkpoint",
-            payloads={"checkpoint": JsonPayload(checkpoint.model_dump(mode="json"))},
+            payloads={"checkpoint": CompressedJsonPayload(checkpoint.model_dump(mode="json"))},
             provenance=provenance,
         )
         return prepared, provenance
@@ -4028,9 +4029,9 @@ def _read_publication_json(
 ) -> Mapping[str, object]:
     bundle = publication.read(published_ref)
     payload = bundle.payloads.get(payload_name)
-    if payload is None or payload.media_type != "application/json":
+    if payload is None:
         raise RuntimeError("DailyTrack product payload is missing")
-    value = json.loads(payload.content)
+    value = decode_compressed_json(payload)
     return _mapping_value(value, "DailyTrack product payload")
 
 
