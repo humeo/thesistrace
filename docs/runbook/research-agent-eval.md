@@ -18,7 +18,7 @@ Set `THESISTRACE_AGENT_OPENAI_API_KEY` in the private `.env`. Run the explicit
 paid evaluation through `pnpm config:run` so it uses the same configuration.
 Never put the key in shell arguments or a checked-in file.
 
-Set `THESISTRACE_AGENT_OPENAI_BASE_URL` explicitly. Containers reach the local
+Set `THESISTRACE_AGENT_OPENAI_BASE_URL` explicitly in the same private `.env`. Containers reach the local
 service through `http://host.docker.internal:8317/v1`, not their own localhost.
 The CLI refuses a missing, credential-bearing or noncanonical endpoint and
 plain HTTP outside loopback/host access. It does not fall back to a generic
@@ -45,16 +45,20 @@ credentials and use the Scripted Provider. Offline preflight tests run during
 After approval, an example baseline command is:
 
 ```sh
-THESISTRACE_AGENT_OPENAI_BASE_URL=http://host.docker.internal:8317/v1 \
-THESISTRACE_AGENT_EVAL_MODEL_KEY=gpt-5.6-luna \
-THESISTRACE_AGENT_EVAL_REASONING_EFFORT=high \
-THESISTRACE_AGENT_EVAL_PHASE=baseline \
-THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD="${THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD:?set the approved ceiling first}" \
-  mise exec -- ./tooling/test/cli.mjs agent-eval
+mise exec -- pnpm config:run env \
+  THESISTRACE_AGENT_EVAL_MODEL_KEY=gpt-5.6-luna \
+  THESISTRACE_AGENT_EVAL_REASONING_EFFORT=high \
+  THESISTRACE_AGENT_EVAL_PHASE=baseline \
+  THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD="${THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD:?set the approved ceiling first}" \
+  ./tooling/test/cli.mjs agent-eval
 ```
 
-The credential must already be in the Operator environment. This example is
-not evidence that a paid evaluation has run or authorization to run one.
+Provider credentials and the endpoint come from the private file. The explicit
+`env` command applies the four evaluation controls after configuration loading;
+these controls are not deployment-file inputs and are cleared from ambient state
+by `config:run`. This example documents the invocation and is neither evidence of
+a paid run nor authorization to run one. The finite-budget preflight restriction
+at the end of this guide still applies.
 
 ## Fixed inputs and automatic outcomes
 

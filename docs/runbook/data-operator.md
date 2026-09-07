@@ -15,7 +15,7 @@ For Production, use the explicit environment file and topology from the
 [Production runbook](single-node-production.md).
 
 ```sh
-pnpm config:run docker compose --env-file .env --project-name thesistrace-dev \
+pnpm config:run docker compose --env-file /dev/null --project-name thesistrace-dev \
   -f deploy/compose.yaml -f deploy/compose.dev.yaml run --rm \
   -e THESISTRACE_TUSHARE_TOKEN \
   api thesistrace-data-operator bootstrap \
@@ -82,7 +82,7 @@ kinds. Operationally, all three Refresh kinds share one global FIFO and execute
 the selected source and publication path:
 
 ```sh
-pnpm config:run docker compose --env-file .env --project-name thesistrace-dev \
+pnpm config:run docker compose --env-file /dev/null --project-name thesistrace-dev \
   -f deploy/compose.yaml -f deploy/compose.dev.yaml run --rm api \
   thesistrace-data-operator refresh \
   --idempotency-key refresh-2026-08-12 \
@@ -144,7 +144,7 @@ SHA-256-addressed lineage. It does not run as part of Market bootstrap or
 Market refresh:
 
 ```sh
-pnpm config:run docker compose --env-file .env --project-name thesistrace-dev \
+pnpm config:run docker compose --env-file /dev/null --project-name thesistrace-dev \
   -f deploy/compose.yaml -f deploy/compose.dev.yaml run --rm \
   api thesistrace-data-operator refresh-industry \
   --idempotency-key industry-2026-08-14 \
@@ -200,7 +200,7 @@ mkdir -p .local/operator
 tt_compose=(
   pnpm config:run docker compose
   --project-name thesistrace-dev
-  --env-file .env
+  --env-file /dev/null
   --file deploy/compose.yaml
   --file deploy/compose.dev.yaml
 )

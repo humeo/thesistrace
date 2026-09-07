@@ -3,6 +3,8 @@ import { mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { captureEvidence, captureLogs, scanCanaries } from '../evidence.mjs';
 
 export async function imageSmoke(run) {
+  // The mounted production_mcp_image_api.py harness owns this test-only identity.
+  const mcpResource = 'https://core.test/mcp';
   run.smoke_state = "/smoke-evidence/image-smoke-state.json";
   run.bootstrap_replay = "/smoke-evidence/tushare-financial-product-full-replay.json";
   await run.phase("image-smoke-images", () => run.buildImages());
@@ -24,8 +26,8 @@ export async function imageSmoke(run) {
   run.s3_port = await run.mappedPort("rustfs", "9000");
   await run.phase("image-smoke-auth-session", () => run.provisionAuth());
   await run.phase("image-smoke-health", () => run.check("verify_image_health", ["initial"]));
-  await run.phase("image-smoke-caddy-single-origin", () => run.check("verify_caddy_single_origin", []));
-  await run.phase("image-smoke-caddy-backend-independence", () => run.check("verify_caddy_backend_independence", []));
+  await run.phase("image-smoke-caddy-single-origin", () => run.check("verify_caddy_single_origin", [mcpResource]));
+  await run.phase("image-smoke-caddy-backend-independence", () => run.check("verify_caddy_backend_independence", [mcpResource]));
   await run.phase("image-smoke-postgresql-readiness", () => run.check("verify_service_readiness_outage", ["postgres", "postgresql"]));
   await run.phase("image-smoke-rustfs-readiness", () => run.check("verify_service_readiness_outage", ["rustfs", "rustfs"]));
   await run.phase("image-smoke-auth-readiness", () => run.check("verify_service_readiness_outage", ["auth", "auth"]));

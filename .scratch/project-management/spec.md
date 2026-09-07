@@ -1,5 +1,5 @@
 # 工程结构与运行管理重构
-Status: ready-for-agent
+Status: complete
 
 经用户批准，在独立工作树完成以下四个单元，每个单元验证、双轴审查、单独提交。最后运行 pnpm check 和 pnpm test:image-smoke，并使用隔离环境做浏览器验收。
 
@@ -21,3 +21,7 @@ apps/{core,web,auth,agent} 各自拥有源码、配置、测试和 Dockerfile；
 
 ## 04 部署与验收
 Compose 运行与构建分层，最终 Dockerfile 位于应用。5180 等非默认端口发布到 Caddy 实际监听端口。Watch 覆盖共享包、patches、Caddy 以及构建输入；配置和模型变更由 dev:up 应用。现有本机构建模式不变，镜像证据记录实际 image ID。完善入口、目录、环境变量和部署运行说明。跑完整 pnpm check、pnpm test:image-smoke 及隔离浏览器验收；无实测不得声称通过。
+
+## 交付
+
+四个实施单元均已验证、复审并分别提交。最终验收、失败修复、实际镜像 ID、浏览器证据和开发环境保护结果见 [review-04.md](review-04.md)。完整 pnpm check 曾因 E2E 时序问题退出 1；保留该事实，修复后受影响场景经全新隔离环境通过，未将失败命令改记为成功。完整 pnpm test:image-smoke 和 5180 浏览器环境最终退出 0。代码保留在隔离分支 codex/project-management，未合并或推送。

@@ -38,9 +38,15 @@ The foreground edit loop uses Compose Watch:
 mise exec -- pnpm dev
 ```
 
-Web and Auth changes rebuild their image, API changes reload Uvicorn, changes
-under `apps/core/src/` restart the fixed-role Workers, and dependency manifest
-changes rebuild the affected image. Pressing Ctrl-C exits the foreground command
+Web, Auth, and Agent changes rebuild their image; API changes reload Uvicorn,
+and changes under `apps/core/src/` restart the fixed-role Workers. Watch also
+covers every application manifest used by the workspace install, the shared
+contracts package, dependency patches, the Caddyfile, and Core build metadata.
+Build artifacts and private local files are excluded by `.dockerignore`.
+The model registry is explicitly excluded from Agent Watch: changing `.env`,
+model definitions, or Compose topology requires `pnpm config:check` followed by
+`pnpm dev:up`, which reloads configuration before recreating services.
+See the [Compose Watch file rules](https://docs.docker.com/compose/how-tos/file-watch/). Pressing Ctrl-C exits the foreground command
 without deleting Development volumes.
 
 Development runs one `research-worker`, one `batch-research-worker`, and one
@@ -55,7 +61,9 @@ For a background runtime that waits for health:
 mise exec -- pnpm dev:up
 ```
 
-Open the product at `http://127.0.0.1:5173`. Follow all service logs in another
+Open the configured `THESISTRACE_PUBLIC_ORIGIN` (default `http://127.0.0.1:5173`).
+For port 5180, set only `THESISTRACE_PUBLIC_ORIGIN=http://127.0.0.1:5180` in `.env`,
+then run `pnpm dev:up`; the published and Caddy listener ports are derived together. Follow all service logs in another
 terminal with:
 
 ```sh
@@ -112,7 +120,7 @@ Issue the first 48-hour invitation from the canonical Development project:
 ```sh
 mise exec -- pnpm config:run docker compose \
   --project-name thesistrace-dev \
-  --env-file .env \
+  --env-file /dev/null \
   --file deploy/compose.yaml \
   --file deploy/compose.dev.yaml \
   run --rm --no-deps -T auth \
@@ -129,14 +137,14 @@ Inspect authoritative Product State without RustFS or the Dataset Store:
 
 ```sh
 mise exec -- pnpm config:run docker compose --project-name thesistrace-dev \
-  --env-file .env \
+  --env-file /dev/null \
   --file deploy/compose.yaml \
   --file deploy/compose.dev.yaml \
   run --rm --no-deps -T initialize \
   thesistrace-core-diagnose research-run RESEARCHER_ID RUN_ID
 
 mise exec -- pnpm config:run docker compose --project-name thesistrace-dev \
-  --env-file .env \
+  --env-file /dev/null \
   --file deploy/compose.yaml \
   --file deploy/compose.dev.yaml \
   run --rm --no-deps -T initialize \
@@ -238,6 +246,22 @@ Run the inexpensive host checks first during ordinary edits:
 mise exec -- pnpm test
 ```
 
+The root manifest exposes commands; `tooling/test/suites.mjs` owns the fast
+command collection and test ownership rules. `tooling/test/cli.mjs` dispatches
+isolated product runs. `resources.mjs`, `phase.mjs`, `evidence.mjs`, and
+`cleanup.mjs` separate allocation, bounded execution, diagnostics, and teardown.
+`app.mjs` shares the Auth/Agent lifecycle; application-specific final-image
+assertions stay under each application's `test-fixtures/`. `caddy-image.mjs`
+owns the HTTPS test resources, with gateway assertions under `tests/`.
+All management entrypoints use the pinned Node runtime. Python probes remain
+small resource-specific helpers.
+
+The image-test overlay keeps Core, Auth, Agent, and Workers on the internal network.
+PostgreSQL and RustFS also join the test `edge` network so host qualification
+can use their random loopback-only ports. Host S3 clients use the same canary
+credentials as the image-test RustFS service; ordinary tests use their own
+fixture credentials.
+
 `pnpm test` includes Python quick suites, Agent/Auth unit suites, Agent Eval
 preflight, Web unit tests, and test-runner checks. The ownership check rejects
 unknown test locations and overlapping same-level suites, and compares the
@@ -300,7 +324,7 @@ change, Session revocation, deactivate/reactivate, bootstrap retry, Auth
 unavailability, CSP compatibility, and Folder/Run/Batch/Track/receipt/cursor/
 Draft isolation.
 
-Qualify the built Core, Auth, and Caddy Web images against a prepared Canonical
+Qualify the built Core, Auth, Agent, and Caddy Web images against a prepared Canonical
 Data mount on an internal-only Compose network:
 
 ```sh
@@ -380,14 +404,18 @@ Compose project and records the Git revision/dirty state, ports, each named
 phase's elapsed seconds and status, cleanup status, and final status. Available
 evidence includes JUnit XML or the Playwright HTML report and failure artifacts.
 When a Test fails, the runner also captures Compose status, timestamped logs,
-and container inspection before cleanup.
+and container inspection before cleanup. A diagnostic or metadata write failure
+still attempts resource cleanup; a cleanup failure cannot turn a failed run into
+a success. Phase timeouts and signals terminate the owned process group before
+teardown. Auth/Agent/Caddy standalone checks preserve failure evidence in the
+printed temporary directory and remove successful temporary evidence.
 
 Success always removes the Test containers, network, and volumes. Failure does
 the same by default after evidence capture. To keep only a failing environment
 for interactive inspection, append the diagnostic escape hatch:
 
 ```sh
-mise exec -- pnpm test:integration --keep-environment
+mise exec -- ./tooling/test/cli.mjs integration --keep-environment
 THESISTRACE_TEST_PLAYWRIGHT_GREP='Operator Market submission and response recovery' \
   mise exec -- ./tooling/test/cli.mjs e2e --keep-environment
 ```

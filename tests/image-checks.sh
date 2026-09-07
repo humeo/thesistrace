@@ -28,6 +28,7 @@ verify_image_health() {
 }
 
 verify_caddy_single_origin() {
+  expected_mcp_resource=$1
   curl --fail --silent --show-error --dump-header "$evidence_dir/caddy-security-headers.txt" \
     "$public_origin/data" \
     >"$evidence_dir/caddy-spa.html"
@@ -67,7 +68,7 @@ verify_caddy_single_origin() {
   curl --fail --silent --show-error --max-time 10 \
     "$public_origin/.well-known/oauth-protected-resource/mcp" \
     >"$evidence_dir/caddy-mcp-metadata.json"
-  grep -F "\"resource\":\"$mcp_resource_url\"" \
+  grep -F "\"resource\":\"$expected_mcp_resource\"" \
     "$evidence_dir/caddy-mcp-metadata.json"
   mcp_unauthorized_status=$(curl --silent --show-error --max-time 10 \
     --header 'Content-Type: application/json' \
@@ -134,7 +135,7 @@ verify_caddy_backend_independence() {
   test "$auth_status" = 502
   test "$core_status" = 502
   compose up --detach --no-build --wait --wait-timeout 120 auth api
-  verify_caddy_single_origin
+  verify_caddy_single_origin "$1"
 }
 
 run_mcp_image_smoke() {

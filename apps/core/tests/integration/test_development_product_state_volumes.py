@@ -107,7 +107,7 @@ def _docker(
 
 def _product_state_volumes(command: str, project_name: str) -> None:
     subprocess.run(
-        (ROOT / "tooling" / "dev" / "product-state-volumes", command, project_name),
+        (ROOT / "tooling" / "dev" / "product-state-volumes.mjs", command, project_name),
         capture_output=True,
         check=True,
         text=True,

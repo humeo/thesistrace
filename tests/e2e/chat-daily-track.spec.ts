@@ -65,6 +65,7 @@ test("Chat DailyTrack uses the full grant and explains a real Strategy's current
   await expect(page).toHaveURL(new RegExp(`${href}$`));
   await expect(page.locator(".track-title-row .track-status")).toHaveAttribute("data-status", "active");
   await page.goto(sessionUrl);
+  await expect(page.locator(".chat-response-footer time").last()).toBeInViewport();
   await deleteChat(page);
   expect(await track(page, id)).toEqual(detail);
   expect(trackFacts(researcher.id)).toMatchObject({ tracks: 1, starts: 1, refreshes: 0, retries: 0, stops: 0 });

@@ -480,6 +480,7 @@ case "$url" in
   */mcp\\?*|*/.well-known/oauth-protected-resource/mcp\\?*) status=400; body='{}' ;;
   */.well-known/oauth-protected-resource/mcp)
     origin=${url%/.well-known/oauth-protected-resource/mcp}
+    if [ "$use_image_overlay" = true ]; then origin=https://core.test; fi
     body=\"{\\\"resource\\\":\\\"$origin/mcp\\\"}\"
     ;;
   */mcp) status=401; body='{}' ;;
@@ -837,7 +838,6 @@ def test_development_watch_assigns_service_appropriate_actions() -> None:
     assert "action: rebuild" in development
     assert "target: /app/src" in development
     assert "path: ../apps/auth" in development
-    assert "path: ../apps/auth/Dockerfile" in development
     for service, next_service in (
         ("research-worker", "batch-research-worker"),
         ("batch-research-worker", "tracking-worker"),
@@ -2604,7 +2604,7 @@ def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None
     assert "uv" in guide
     assert ".local/test-runs/<run-id>/" in guide
     assert "--keep-environment" in guide
-    assert "mise exec -- pnpm test:integration --keep-environment" in guide
+    assert "mise exec -- ./tooling/test/cli.mjs integration --keep-environment" in guide
     assert "mise exec -- ./tooling/test/cli.mjs e2e --keep-environment" in guide
     assert "mise exec -- pnpm test:cleanup" in guide
     assert "./tooling/test/cli.mjs cleanup" not in guide
@@ -2706,3 +2706,49 @@ def test_e2e_gateway_rejects_exposed_private_readiness(tmp_path: Path) -> None:
     metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
     assert re.search(r"phase=e2e-caddy-single-origin seconds=\d+ status=1", metadata)
     assert "cleanup_status=0" in metadata
+
+
+def test_development_watch_covers_application_and_shared_build_inputs() -> None:
+    development = (ROOT / "deploy/compose.dev.yaml").read_text()
+    services = dict(re.findall(r"^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:|\Z)", development, re.M | re.S))
+    for service in (
+        "api",
+        "research-worker",
+        "batch-research-worker",
+        "tracking-worker",
+        "data-operator-worker",
+        "auth",
+        "agent",
+        "web",
+    ):
+        app = "core" if service not in ("auth", "agent", "web") else service
+        watched = [
+            Path(value).as_posix().removeprefix("../")
+            for value in re.findall(r"- path: (.+)", services[service])
+        ]
+        required = [".dockerignore", f"apps/{app}/Dockerfile"]
+        if app == "core":
+            required += [
+                "apps/core/src",
+                "apps/core/README.md",
+                "apps/core/pyproject.toml",
+                "apps/core/uv.lock",
+            ]
+        else:
+            required += [
+                "package.json",
+                "pnpm-lock.yaml",
+                "pnpm-workspace.yaml",
+                "tooling/patches",
+                "packages/contracts",
+            ]
+            required += [f"apps/{name}/package.json" for name in ("auth", "agent", "web")]
+        if app == "web":
+            required.append("deploy/caddy/Caddyfile")
+        for source in required:
+            assert any(source == path or source.startswith(path + "/") for path in watched), (
+                service,
+                source,
+            )
+    assert "ignore:\n            - config/model-registry.json" in services["agent"]
+    assert ".env" not in "\n".join(re.findall(r"- path: (.+)", development))

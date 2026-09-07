@@ -4,7 +4,16 @@ networks:
   edge:
 
 services:
+  # Host qualification uses the loopback-only ports from compose.test-run.yaml.
+  postgres:
+    networks:
+      - default
+      - edge
+
   rustfs:
+    networks:
+      - default
+      - edge
     environment:
       RUSTFS_ACCESS_KEY: observability-access-canary
       RUSTFS_SECRET_KEY: observability-secret-canary

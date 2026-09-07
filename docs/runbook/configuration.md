@@ -92,7 +92,7 @@ execution memory cannot exceed three quarters of the container budget.
 | Market/Financial/Industry source | `THESISTRACE_TUSHARE_TOKEN` | Data Operator Worker only |
 | Model providers | `THESISTRACE_AGENT_OPENAI_API_KEY`, `THESISTRACE_AGENT_ANTHROPIC_API_KEY`, `THESISTRACE_AGENT_GOOGLE_API_KEY`, `THESISTRACE_AGENT_OPENAI_BASE_URL` | Agent only; enabled registry entries require their named credential |
 | Image identity | `THESISTRACE_AUTH_IMAGE`, `THESISTRACE_AGENT_IMAGE`, `THESISTRACE_AGENT_BUILD_REVISION` | Compose and Agent diagnostics |
-| Execution budgets | `THESISTRACE_RESEARCH_WORKER_EXECUTION_MEMORY_BYTES`, `THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES`, `THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS` | Corresponding Workers/Agent |
+| Execution budgets | For each `RESEARCH`, `BATCH_RESEARCH`, and `TRACKING` role: `THESISTRACE_<ROLE>_WORKER_CPU_COUNT`, `_MEMORY_BYTES`, `_EXECUTION_MEMORY_BYTES`, `_CALCULATION_THREADS`; also `THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS` | Corresponding Workers/Agent |
 | MCP identity | `THESISTRACE_MCP_CLIENT_ID` | Auth/Core |
 | MCP signing | `THESISTRACE_MCP_SIGNING_PRIVATE_JWK`, `THESISTRACE_MCP_VERIFYING_PUBLIC_JWK` | Private key only to Auth; public key to verification consumers |
 | MCP policy | `THESISTRACE_MCP_AGENT_SCOPES`, `THESISTRACE_MCP_DEPLOYMENT_TOOLS` | Auth/Core |

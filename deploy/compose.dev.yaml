@@ -44,6 +44,10 @@ services:
           action: rebuild
         - path: ../apps/core/Dockerfile
           action: rebuild
+        - path: ../apps/core/README.md
+          action: rebuild
+        - path: ../.dockerignore
+          action: rebuild
 
   auth:
     develop:
@@ -56,7 +60,15 @@ services:
           action: rebuild
         - path: ../pnpm-workspace.yaml
           action: rebuild
-        - path: ../apps/auth/Dockerfile
+        - path: ../packages/contracts
+          action: rebuild
+        - path: ../tooling/patches
+          action: rebuild
+        - path: ../.dockerignore
+          action: rebuild
+        - path: ../apps/agent/package.json
+          action: rebuild
+        - path: ../apps/web/package.json
           action: rebuild
 
   agent:
@@ -64,13 +76,23 @@ services:
       watch:
         - path: ../apps/agent
           action: rebuild
+          ignore:
+            - config/model-registry.json
         - path: ../package.json
           action: rebuild
         - path: ../pnpm-lock.yaml
           action: rebuild
         - path: ../pnpm-workspace.yaml
           action: rebuild
-        - path: ../apps/agent/Dockerfile
+        - path: ../packages/contracts
+          action: rebuild
+        - path: ../tooling/patches
+          action: rebuild
+        - path: ../.dockerignore
+          action: rebuild
+        - path: ../apps/auth/package.json
+          action: rebuild
+        - path: ../apps/web/package.json
           action: rebuild
 
   research-worker:
@@ -89,6 +111,10 @@ services:
           action: rebuild
         - path: ../apps/core/Dockerfile
           action: rebuild
+        - path: ../apps/core/README.md
+          action: rebuild
+        - path: ../.dockerignore
+          action: rebuild
 
   batch-research-worker:
     develop:
@@ -105,6 +131,10 @@ services:
         - path: ../apps/core/uv.lock
           action: rebuild
         - path: ../apps/core/Dockerfile
+          action: rebuild
+        - path: ../apps/core/README.md
+          action: rebuild
+        - path: ../.dockerignore
           action: rebuild
 
   tracking-worker:
@@ -123,6 +153,10 @@ services:
           action: rebuild
         - path: ../apps/core/Dockerfile
           action: rebuild
+        - path: ../apps/core/README.md
+          action: rebuild
+        - path: ../.dockerignore
+          action: rebuild
 
   data-operator-worker:
     develop:
@@ -140,6 +174,10 @@ services:
           action: rebuild
         - path: ../apps/core/Dockerfile
           action: rebuild
+        - path: ../apps/core/README.md
+          action: rebuild
+        - path: ../.dockerignore
+          action: rebuild
 
   web:
     ports:
@@ -154,7 +192,15 @@ services:
           action: rebuild
         - path: ../pnpm-workspace.yaml
           action: rebuild
-        - path: ../apps/web/package.json
+        - path: ../packages/contracts
           action: rebuild
-        - path: ../apps/web/Dockerfile
+        - path: ../tooling/patches
+          action: rebuild
+        - path: ../.dockerignore
+          action: rebuild
+        - path: ../apps/auth/package.json
+          action: rebuild
+        - path: ../apps/agent/package.json
+          action: rebuild
+        - path: ../deploy/caddy/Caddyfile
           action: rebuild

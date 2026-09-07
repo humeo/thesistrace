@@ -90,6 +90,8 @@ export function hostEnvironment(context) {
     THESISTRACE_DATABASE_URL: 'postgresql://thesistrace_owner:' + context.owner_database_password + '@127.0.0.1:' + context.postgres_port + '/thesistrace',
     THESISTRACE_AUTH_INTERNAL_ORIGIN: context.auth_internal_origin ?? '',
     THESISTRACE_S3_ENDPOINT_URL: 'http://127.0.0.1:' + context.s3_port,
+    THESISTRACE_S3_ACCESS_KEY_ID: context.use_image_overlay ? 'observability-access-canary' : 'rustfsadmin',
+    THESISTRACE_S3_SECRET_ACCESS_KEY: context.use_image_overlay ? 'observability-secret-canary' : 'rustfsadmin',
     THESISTRACE_S3_BUCKET: context.bucket_name, THESISTRACE_S3_REGION: 'us-east-1',
     THESISTRACE_DATA_MOUNT: context.data_mount, THESISTRACE_BENCHMARK_MOUNT: context.benchmark_mount,
     THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY: context.batch_attempt_control_directory,

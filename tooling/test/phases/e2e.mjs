@@ -14,7 +14,7 @@ export async function e2e(run) {
   for (const [origin, port] of [['resend_test_origin', 'resend_port'], ['auth_fixture_origin', 'auth_fixture_port'], ['auth_proxy_origin', 'auth_proxy_port'], ['mcp_proxy_origin', 'mcp_proxy_port']]) run[origin] = `http://127.0.0.1:${run[port]}`;
   run.record(Object.fromEntries(['postgres_port', 's3_port', 'resend_port', 'auth_fixture_port', 'auth_proxy_port', 'mcp_proxy_port'].map(key => [key, run[key]])));
   await run.phase('e2e-auth-fixture-ready', () => run.waitForAuthFixture());
-  await run.phase('e2e-caddy-single-origin', () => run.check('verify_caddy_single_origin'));
+  await run.phase('e2e-caddy-single-origin', () => run.check('verify_caddy_single_origin', [run.mcp_resource_url]));
   if (run.command === 'agent-eval') await run.phase('agent-eval-real-provider', () => run.host(['node', `${run.repo_root}/apps/agent/scripts/eval-research.mjs`, 'run']));
   else await run.phase('e2e-playwright', () => run.host(['pnpm', 'exec', 'playwright', 'test', '--config', 'tests/playwright.config.ts', ...(run.playwright_grep ? ['--grep', run.playwright_grep] : [])]));
 }

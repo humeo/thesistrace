@@ -77,12 +77,28 @@ rejected value and exits non-zero.
 Status, logs and down need Docker access but no environment file or provider
 credentials. They use exact project labels; down keeps all named data volumes.
 
+## Build and runtime ownership
+
+`deploy/compose.yaml` defines the shared service graph, image builds, storage,
+health checks, and bounded logs. `compose.dev.yaml`, `compose.test-run.yaml`,
+`compose.production.yaml`, and `compose.image-smoke.yaml` supply the environment
+and verification differences. Dockerfiles belong to `apps/<application>/` and
+use the repository root as their build context. API and all Core Workers share
+one Core image. The pnpm and uv lockfiles and existing base-image versions remain
+authoritative; dependency changes require their normal reviewed lockfile update.
+
+For deployment evidence, record the actual image ID from `docker inspect` for
+each running container, together with the Git revision. A configured tag is a
+name and can be rebuilt; it is not proof of the container's image content.
+
 ## Start, inspect, and stop
 
 Ensure the Production hostname resolves to the host and inbound 80/443 reach
-Caddy. Then build the repository-owned Core and Web images, start the pinned
-Auth image and infrastructure, run the exact-schema initializers, and wait for
-service health:
+Caddy. `prod up` builds the repository-owned Core, Auth, Agent, and Web images
+locally from their application Dockerfiles, applies the configured Auth/Agent
+tags, starts infrastructure, runs the exact-schema initializers, and waits for
+service health. A registry-shaped tag does not imply a pull-only release mode;
+this deployment continues to use local builds:
 
 ```sh
 sudo env \
@@ -97,18 +113,14 @@ Public `/health/*` and `/internal/*` paths return `404`; container health is
 inspected through the private topology:
 
 ```sh
-sudo env \
-  THESISTRACE_ENV_FILE=/etc/thesistrace/production.env \
-  pnpm prod status
+sudo pnpm prod status
 ```
 
 Stop and remove containers and the project network while retaining named data
 volumes with:
 
 ```sh
-sudo env \
-  THESISTRACE_ENV_FILE=/etc/thesistrace/production.env \
-  pnpm prod down
+sudo pnpm prod down
 ```
 
 All long-running single-node services use one replica and
@@ -224,9 +236,10 @@ a claim. Retry copies a failed or cancelled target to a new immutable receipt.
 
 `THESISTRACE_TUSHARE_TOKEN` is the Worker-only Tushare Secret. Compose does not
 place it in Auth, Core API, Web, PostgreSQL, RustFS, browser state, responses, or
-logs. A missing, placeholder, or test-shaped value makes only the Worker fail
-startup; Auth, Core, Web, and durable submission remain healthy. Inspect the
-Worker and queued operations with:
+logs. The launcher rejects a missing, placeholder, or test-shaped value before
+starting or reapplying Compose. If the Worker becomes unavailable after a valid
+deployment, the other services can remain healthy and accept durable submissions;
+those receipts wait for Worker recovery. Inspect the Worker and queued operations with:
 
 ```sh
 sudo pnpm prod status

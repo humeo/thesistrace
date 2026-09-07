@@ -94,8 +94,7 @@ test("Invitation, login, account password, reset, refresh, and access lifecycle 
   expect(returnTo).toBe("/research?folder=folder_default#formula");
   await loginThroughUi(page, email, browserPassword);
   await expect(page.getByRole("alert")).toContainText("Email or password is incorrect.");
-  await fillPasswordInput(page.getByLabel("Password"), changedPassword);
-  await page.getByRole("button", { name: "Log in" }).click();
+  await loginThroughUi(page, email, changedPassword);
   await expect(page).toHaveURL(/\/research\?folder=folder_default#formula$/);
 
   await refreshSessionOnBrowserEvent(page, "focus");
@@ -381,7 +380,12 @@ async function loginThroughUi(page: Page, email: string, password: string): Prom
   await expectTouchTargets(emailInput, passwordInput, logIn);
   await emailInput.fill(email);
   await fillPasswordInput(passwordInput, password);
+  const signIn = page.waitForResponse(
+    (response) => response.request().method() === "POST"
+      && new URL(response.url()).pathname === "/api/auth/sign-in/email",
+  );
   await logIn.click();
+  await signIn;
 }
 
 async function refreshSessionOnBrowserEvent(

@@ -125,6 +125,7 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
   await expect(page).toHaveURL(new RegExp(`/research-runs/${complete.items[0]!.research_run_id}$`));
   await expect(page.getByRole("heading", { name: mode === "factor_evaluation" ? "Factor Summary" : "Strategy Summary" })).toBeVisible();
   await page.goto(durableUrl);
+  await expect(page.locator(".chat-response-footer time").last()).toBeInViewport();
   await page.locator(".chat-session-row").filter({ has: page.getByRole("button", { name: `Actions for ${renamedTitle}`, exact: true }) }).hover();
   await page.getByRole("button", { name: `Actions for ${renamedTitle}` }).click();
   await page.getByRole("menuitem", { name: "Delete Chat" }).click();
