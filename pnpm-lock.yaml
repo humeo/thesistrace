@@ -13,9 +13,19 @@ patchedDependencies:
 
 importers:
 
-  .: {}
+  .:
+    devDependencies:
+      '@playwright/test':
+        specifier: ^1.54.2
+        version: 1.62.1
+      '@types/node':
+        specifier: ^24.1.0
+        version: 24.13.3
+      typescript:
+        specifier: ~5.7.2
+        version: 5.7.3
 
-  agent:
+  apps/agent:
     dependencies:
       '@ag-ui/client':
         specifier: 0.0.59
@@ -59,6 +69,9 @@ importers:
       '@mastra/pg':
         specifier: 1.22.1
         version: 1.22.1(@mastra/core@1.63.1(patch_hash=03e74412bbf297817c12920e13b44ef2dbeff4b90be2ce01c850a170ae232999)(@bufbuild/protobuf@2.14.0)(ai@6.0.271(zod@4.4.3))(express@5.2.1)(rxjs@7.8.1)(zod@4.4.3))
+      '@thesistrace/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       ai:
         specifier: 6.0.271
         version: 6.0.271(zod@4.4.3)
@@ -100,7 +113,7 @@ importers:
         specifier: 3.2.7
         version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(happy-dom@20.12.0)
 
-  auth:
+  apps/auth:
     dependencies:
       '@better-auth/oauth-provider':
         specifier: 1.7.2
@@ -134,7 +147,7 @@ importers:
         specifier: 3.2.7
         version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(happy-dom@20.12.0)
 
-  web:
+  apps/web:
     dependencies:
       '@ag-ui/client':
         specifier: 0.0.59
@@ -175,6 +188,9 @@ importers:
       '@phosphor-icons/react':
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@thesistrace/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       better-auth:
         specifier: 1.7.2
         version: 1.7.2(@opentelemetry/api@1.9.1)(pg@8.23.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vitest@3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(happy-dom@20.12.0))
@@ -227,6 +243,8 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(happy-dom@20.12.0)
+
+  packages/contracts: {}
 
 packages:
 

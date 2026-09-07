@@ -82,7 +82,7 @@ function publicIdentity(values, mode) {
 function modelRegistry(values) {
   let registry;
   try {
-    const source = readFileSync(resolve(root, 'config/model-registry.json'), 'utf8');
+    const source = readFileSync(resolve(root, 'apps/agent/config/model-registry.json'), 'utf8');
     if (Buffer.byteLength(source, 'utf8') > 65_536) fail('CONFIG_MODEL_REGISTRY_INVALID');
     registry = JSON.parse(source);
   } catch { fail('CONFIG_MODEL_REGISTRY_INVALID'); }

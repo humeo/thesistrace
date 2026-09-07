@@ -50,7 +50,7 @@ THESISTRACE_AGENT_EVAL_MODEL_KEY=gpt-5.6-luna \
 THESISTRACE_AGENT_EVAL_REASONING_EFFORT=high \
 THESISTRACE_AGENT_EVAL_PHASE=baseline \
 THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD="${THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD:?set the approved ceiling first}" \
-  mise exec -- ./scripts/test-runtime agent-eval
+  mise exec -- ./tooling/test/runtime agent-eval
 ```
 
 The credential must already be in the Operator environment. This example is
@@ -58,9 +58,9 @@ not evidence that a paid evaluation has run or authorization to run one.
 
 ## Fixed inputs and automatic outcomes
 
-`agent/evals/research-candidates.json` declares the candidate snapshot,
+`apps/agent/evals/research-candidates.json` declares the candidate snapshot,
 supported efforts, input ceiling, published-price upper bounds and thresholds.
-`agent/evals/research-corpus.json` contains eleven cases. Baseline runs each
+`apps/agent/evals/research-corpus.json` contains eleven cases. Baseline runs each
 case once: 11 case attempts and 12 primary Agent Turns. Qualification repeats
 each case three times: 33 attempts and 36 primary Turns. Clarification has
 exactly two turns. The small fixed replay dataset and July 20–August 4, 2026 research

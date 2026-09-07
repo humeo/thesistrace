@@ -39,7 +39,7 @@ mise exec -- pnpm dev
 ```
 
 Web and Auth changes rebuild their image, API changes reload Uvicorn, changes
-under `src/` restart all three fixed-role Workers, and dependency manifest
+under `apps/core/src/` restart the fixed-role Workers, and dependency manifest
 changes rebuild the affected image. Pressing Ctrl-C exits the foreground command
 without deleting Development volumes.
 
@@ -113,8 +113,8 @@ Issue the first 48-hour invitation from the canonical Development project:
 mise exec -- pnpm config:run docker compose \
   --project-name thesistrace-dev \
   --env-file .env \
-  --file deploy/core/compose.yaml \
-  --file deploy/core/compose.dev.yaml \
+  --file deploy/compose.yaml \
+  --file deploy/compose.dev.yaml \
   run --rm --no-deps -T auth \
   node dist/operator.js invite --email researcher@example.com
 ```
@@ -130,15 +130,15 @@ Inspect authoritative Product State without RustFS or the Dataset Store:
 ```sh
 mise exec -- pnpm config:run docker compose --project-name thesistrace-dev \
   --env-file .env \
-  --file deploy/core/compose.yaml \
-  --file deploy/core/compose.dev.yaml \
+  --file deploy/compose.yaml \
+  --file deploy/compose.dev.yaml \
   run --rm --no-deps -T initialize \
   thesistrace-core-diagnose research-run RESEARCHER_ID RUN_ID
 
 mise exec -- pnpm config:run docker compose --project-name thesistrace-dev \
   --env-file .env \
-  --file deploy/core/compose.yaml \
-  --file deploy/core/compose.dev.yaml \
+  --file deploy/compose.yaml \
+  --file deploy/compose.dev.yaml \
   run --rm --no-deps -T initialize \
   thesistrace-core-diagnose daily-track RESEARCHER_ID TRACK_ID
 ```
@@ -179,7 +179,7 @@ no Operator exists. `config:init` generates a random initial password. Repeated
 startup preserves existing credentials and authority. This seed is enabled only
 by the Development Compose overlay; Test and Production never seed an account.
 
-Model definitions live in [`config/model-registry.json`](../../config/model-registry.json).
+Model definitions live in [`apps/agent/config/model-registry.json`](../../apps/agent/config/model-registry.json).
 Maintain `min_compaction_context_window`, `default_model_key`, model identity,
 `enabled`, `context_window`, `max_output_tokens`, `default_reasoning_effort`,
 and `reasoning_efforts` there. Development and Production lifecycle commands read
@@ -291,7 +291,7 @@ from its own fresh baseline. Normal gates retain the default collection order.
 Group results and wall time are written to `.local/e2e-runs/<id>/results.json`.
 Each child `run.txt` records build/reuse, initialization, execution and cleanup
 separately; compare execution time separately from the extra isolation cost.
-The low-level `scripts/test-runtime e2e` is a single-environment diagnostic
+The low-level `tooling/test/runtime e2e` is a single-environment diagnostic
 entry, not the complete E2E gate; use it only with a single explicit case filter.
 
 The browser gate sends every request through Caddy and uses two Researchers to
@@ -389,7 +389,7 @@ for interactive inspection, append the diagnostic escape hatch:
 ```sh
 mise exec -- pnpm test:integration --keep-environment
 THESISTRACE_TEST_PLAYWRIGHT_GREP='Operator Market submission and response recovery' \
-  mise exec -- ./scripts/test-runtime e2e --keep-environment
+  mise exec -- ./tooling/test/runtime e2e --keep-environment
 ```
 
 The command prints the exact Test project name. After inspection, clean that

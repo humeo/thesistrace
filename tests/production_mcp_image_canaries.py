@@ -4,7 +4,12 @@ import json
 from pathlib import Path
 
 AGENT_CANARIES = json.loads(
-    (Path(__file__).parent / "fixtures" / "agent-privacy-canaries.json").read_text()
+    (
+        Path(__file__).resolve().parents[1]
+        / "apps/agent"
+        / "fixtures"
+        / "agent-privacy-canaries.json"
+    ).read_text()
 )
 
 READ_TOKEN = "mcp-image-read-token-canary"

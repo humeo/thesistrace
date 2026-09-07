@@ -1,0 +1,34 @@
+{
+  "name": "@thesistrace/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./agent-failure": {
+      "types": "./agent-failure.d.mts",
+      "import": "./agent-failure.mjs"
+    },
+    "./agent-run-selection": {
+      "types": "./agent-run-selection.d.mts",
+      "import": "./agent-run-selection.mjs"
+    },
+    "./chat-answer": {
+      "types": "./chat-answer.d.mts",
+      "import": "./chat-answer.mjs"
+    },
+    "./research-a2ui": {
+      "types": "./research-a2ui.d.mts",
+      "import": "./research-a2ui.mjs"
+    }
+  },
+  "files": [
+    "agent-failure.mjs",
+    "agent-failure.d.mts",
+    "agent-run-selection.mjs",
+    "agent-run-selection.d.mts",
+    "chat-answer.mjs",
+    "chat-answer.d.mts",
+    "research-a2ui.mjs",
+    "research-a2ui.d.mts"
+  ]
+}

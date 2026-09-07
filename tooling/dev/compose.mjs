@@ -7,6 +7,6 @@ export function deployment(mode) {
   return (...command) => {
     const options = typeof command.at(-1) === 'object' ? command.pop() : {};
     return run('docker', ['compose', '--project-name', project, '--env-file', '/dev/null',
-      '--file', `${root}/deploy/core/compose.yaml`, '--file', `${root}/deploy/core/compose.${mode === 'development' ? 'dev' : 'production'}.yaml`, ...command], { ...options, env });
+      '--file', `${root}/deploy/compose.yaml`, '--file', `${root}/deploy/compose.${mode === 'development' ? 'dev' : 'production'}.yaml`, ...command], { ...options, env });
   };
 }

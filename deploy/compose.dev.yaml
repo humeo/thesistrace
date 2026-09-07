@@ -1,0 +1,160 @@
+services:
+  auth-initialize:
+    environment:
+      THESISTRACE_ENVIRONMENT: development
+      THESISTRACE_DEV_RESEARCHER_EMAIL: ${THESISTRACE_DEV_RESEARCHER_EMAIL:?THESISTRACE_DEV_RESEARCHER_EMAIL is required}
+      THESISTRACE_DEV_RESEARCHER_NAME: ${THESISTRACE_DEV_RESEARCHER_NAME:?THESISTRACE_DEV_RESEARCHER_NAME is required}
+      THESISTRACE_DEV_RESEARCHER_PASSWORD: ${THESISTRACE_DEV_RESEARCHER_PASSWORD:?THESISTRACE_DEV_RESEARCHER_PASSWORD is required}
+
+  postgres:
+    ports:
+      - 127.0.0.1:${THESISTRACE_DEV_POSTGRES_PORT}:5432
+
+  rustfs:
+    ports:
+      - 127.0.0.1:${THESISTRACE_DEV_S3_PORT}:9000
+      - 127.0.0.1:${THESISTRACE_DEV_S3_CONSOLE_PORT}:9001
+
+  api:
+    command:
+      - uvicorn
+      - --factory
+      - thesistrace.entrypoints.http:create_production_app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8100"
+      - --no-access-log
+      - --reload
+      - --reload-dir
+      - /app/src
+    ports:
+      - 127.0.0.1:${THESISTRACE_DEV_API_PORT}:8100
+    develop:
+      watch:
+        - path: ../apps/core/src
+          action: sync
+          target: /app/src
+          initial_sync: true
+          ignore:
+            - thesistrace/entrypoints/worker.py
+        - path: ../apps/core/pyproject.toml
+          action: rebuild
+        - path: ../apps/core/uv.lock
+          action: rebuild
+        - path: ../apps/core/Dockerfile
+          action: rebuild
+
+  auth:
+    develop:
+      watch:
+        - path: ../apps/auth
+          action: rebuild
+        - path: ../package.json
+          action: rebuild
+        - path: ../pnpm-lock.yaml
+          action: rebuild
+        - path: ../pnpm-workspace.yaml
+          action: rebuild
+        - path: ../apps/auth/Dockerfile
+          action: rebuild
+
+  agent:
+    develop:
+      watch:
+        - path: ../apps/agent
+          action: rebuild
+        - path: ../package.json
+          action: rebuild
+        - path: ../pnpm-lock.yaml
+          action: rebuild
+        - path: ../pnpm-workspace.yaml
+          action: rebuild
+        - path: ../apps/agent/Dockerfile
+          action: rebuild
+
+  research-worker:
+    develop:
+      watch:
+        - path: ../apps/core/src
+          action: sync+restart
+          target: /app/src
+          initial_sync: true
+          ignore:
+            - thesistrace/entrypoints/http.py
+            - thesistrace/entrypoints/initialize.py
+        - path: ../apps/core/pyproject.toml
+          action: rebuild
+        - path: ../apps/core/uv.lock
+          action: rebuild
+        - path: ../apps/core/Dockerfile
+          action: rebuild
+
+  batch-research-worker:
+    develop:
+      watch:
+        - path: ../apps/core/src
+          action: sync+restart
+          target: /app/src
+          initial_sync: true
+          ignore:
+            - thesistrace/entrypoints/http.py
+            - thesistrace/entrypoints/initialize.py
+        - path: ../apps/core/pyproject.toml
+          action: rebuild
+        - path: ../apps/core/uv.lock
+          action: rebuild
+        - path: ../apps/core/Dockerfile
+          action: rebuild
+
+  tracking-worker:
+    develop:
+      watch:
+        - path: ../apps/core/src
+          action: sync+restart
+          target: /app/src
+          initial_sync: true
+          ignore:
+            - thesistrace/entrypoints/http.py
+            - thesistrace/entrypoints/initialize.py
+        - path: ../apps/core/pyproject.toml
+          action: rebuild
+        - path: ../apps/core/uv.lock
+          action: rebuild
+        - path: ../apps/core/Dockerfile
+          action: rebuild
+
+  data-operator-worker:
+    develop:
+      watch:
+        - path: ../apps/core/src
+          action: sync+restart
+          target: /app/src
+          initial_sync: true
+          ignore:
+            - thesistrace/entrypoints/http.py
+            - thesistrace/entrypoints/initialize.py
+        - path: ../apps/core/pyproject.toml
+          action: rebuild
+        - path: ../apps/core/uv.lock
+          action: rebuild
+        - path: ../apps/core/Dockerfile
+          action: rebuild
+
+  web:
+    ports:
+      - 127.0.0.1:${THESISTRACE_DEV_WEB_PORT}:${THESISTRACE_DEV_WEB_PORT}
+    develop:
+      watch:
+        - path: ../apps/web
+          action: rebuild
+        - path: ../package.json
+          action: rebuild
+        - path: ../pnpm-lock.yaml
+          action: rebuild
+        - path: ../pnpm-workspace.yaml
+          action: rebuild
+        - path: ../apps/web/package.json
+          action: rebuild
+        - path: ../apps/web/Dockerfile
+          action: rebuild

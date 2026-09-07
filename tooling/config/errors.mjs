@@ -3,9 +3,9 @@ export class ConfigurationError extends Error {
 }
 export function fail(code, ...variables) { throw new ConfigurationError(code, variables); }
 export function report(error) {
-  process.stderr.write(JSON.stringify({    
+  process.stderr.write(JSON.stringify({
 code: error instanceof ConfigurationError ? error.code : 'CONFIG_INVALID',
-    variables: error instanceof ConfigurationError ? error.variables : []  
+    variables: error instanceof ConfigurationError ? error.variables : []
 }) + '\n');
   process.exitCode = 2;
 }

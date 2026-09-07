@@ -1,7 +1,6 @@
 packages:
-  - agent
-  - auth
-  - web
+  - apps/*
+  - packages/*
 
 injectWorkspacePackages: true
 
@@ -12,7 +11,7 @@ allowBuilds:
 minimumReleaseAge: 1440
 
 patchedDependencies:
-  '@ag-ui/mastra@1.1.1': patches/@ag-ui__mastra@1.1.1.patch
-  '@mastra/core@1.63.1': patches/@mastra__core@1.63.1.patch
-  '@mastra/memory@1.28.1': patches/@mastra__memory@1.28.1.patch
-  '@mastra/schema-compat@1.3.7': patches/@mastra__schema-compat@1.3.7.patch
+  '@ag-ui/mastra@1.1.1': tooling/patches/@ag-ui__mastra@1.1.1.patch
+  '@mastra/core@1.63.1': tooling/patches/@mastra__core@1.63.1.patch
+  '@mastra/memory@1.28.1': tooling/patches/@mastra__memory@1.28.1.patch
+  '@mastra/schema-compat@1.3.7': tooling/patches/@mastra__schema-compat@1.3.7.patch

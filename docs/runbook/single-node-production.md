@@ -10,7 +10,7 @@ high-availability or zero-downtime claim.
 
 Production secrets and deployment settings live in one absolute file outside the repository.
 The file must be a regular, non-symlink file owned by root with mode `0600`.
-Model definitions are maintained in [`config/model-registry.json`](../../config/model-registry.json).
+Model definitions are maintained in [`apps/agent/config/model-registry.json`](../../apps/agent/config/model-registry.json).
 The Production launcher loads that file on each invocation and rejects inline
 `THESISTRACE_AGENT_MODEL_REGISTRY` entries in the external environment file.
 Apply model edits with the Production `up` command, then reload Chat.

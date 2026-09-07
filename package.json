@@ -17,20 +17,26 @@
     "dev:reset": "node tooling/dev/runtime.mjs development reset",
     "dev:erase": "node tooling/dev/runtime.mjs development erase",
     "dev:stop": "node tooling/dev/runtime.mjs development stop",
-    "test": "node scripts/check-test-ownership.mjs && node --test scripts/*.test.mjs tooling/**/*.test.mjs && uv run ruff check src tests && uv run pytest -q -n 4 tests/kernel tests/architecture tests/adapters tests/data tests/entrypoints && pnpm --dir agent typecheck && pnpm --dir agent test && pnpm --dir agent test:eval-preflight && pnpm --dir auth typecheck && pnpm --dir auth test && pnpm --dir web typecheck && pnpm --dir web test:shell",
-    "test:cleanup": "./scripts/test-runtime cleanup",
-    "test:e2e": "node scripts/run-e2e.mjs",
-    "test:caddy-image-smoke": "./scripts/test-caddy-production-image",
-    "test:image-smoke": "./scripts/test-runtime image-smoke && pnpm --dir auth test:image-smoke && pnpm --dir agent test:image-smoke && pnpm test:caddy-image-smoke",
-    "test:integration": "./scripts/test-runtime integration && pnpm --dir auth test:integration && pnpm --dir agent test:integration",
-    "test:codex-mcp": "./scripts/test-runtime codex-mcp",
+    "test": "node tooling/test/check-ownership.mjs && node --test tooling/**/*.test.mjs && uv run --project apps/core ruff check --config apps/core/pyproject.toml apps/core/src apps/core/tests tooling/test/tests tests && uv run --project apps/core pytest -c apps/core/pyproject.toml --rootdir . -q -n 4 apps/core/tests/kernel apps/core/tests/architecture apps/core/tests/adapters apps/core/tests/data apps/core/tests/entrypoints tooling/test/tests && pnpm --dir apps/agent typecheck && pnpm --dir apps/agent test && pnpm --dir apps/agent test:eval-preflight && pnpm --dir apps/auth typecheck && pnpm --dir apps/auth test && tsc -p tests/tsconfig.json && pnpm --dir apps/web typecheck && pnpm --dir apps/web test:shell",
+    "test:cleanup": "./tooling/test/runtime cleanup",
+    "test:e2e": "node tooling/test/run-e2e.mjs",
+    "test:caddy-image-smoke": "./tooling/test/caddy-image",
+    "test:image-smoke": "./tooling/test/runtime image-smoke && pnpm --dir apps/auth test:image-smoke && pnpm --dir apps/agent test:image-smoke && pnpm test:caddy-image-smoke",
+    "test:integration": "./tooling/test/runtime integration && pnpm --dir apps/auth test:integration && pnpm --dir apps/agent test:integration",
+    "test:codex-mcp": "./tooling/test/runtime codex-mcp",
     "check": "pnpm test && pnpm test:browser && pnpm test:integration && pnpm test:e2e",
-    "check:performance": "./scripts/test-runtime performance",
-    "check:release": "./scripts/release-gate",
-    "check:live-tushare": "node tooling/config/cli.mjs run uv run python scripts/check_live_tushare.py",
-    "test:browser": "pnpm --dir web test:browser",
+    "check:performance": "./tooling/test/runtime performance",
+    "check:release": "./tooling/test/release-gate",
+    "check:live-tushare": "node tooling/config/cli.mjs run uv run --project apps/core python apps/core/tools/check_live_tushare.py",
+    "test:browser": "pnpm --dir apps/web test:browser",
     "prod": "node tooling/dev/runtime.mjs production",
     "dev:status": "node tooling/dev/runtime.mjs development status",
     "config:template": "node tooling/config/cli.mjs template"
-  }
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.2",
+    "@types/node": "^24.1.0",
+    "typescript": "~5.7.2"
+  },
+  "type": "module"
 }

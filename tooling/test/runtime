@@ -1,0 +1,1809 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+export UV_PROJECT="$repo_root/apps/core"
+base_file="$repo_root/deploy/compose.yaml"
+test_file="$repo_root/deploy/compose.test-run.yaml"
+image_smoke_file="$repo_root/deploy/compose.image-smoke.yaml"
+state_root=${THESISTRACE_TEST_STATE_ROOT:-"$repo_root/.local/test-runs"}
+canonical_prefix=thesistrace-test-
+locked_port_allocator="$repo_root/tooling/test/locked-loopback-port"
+rustfs_readiness_probe="$repo_root/tooling/test/probe-rustfs-ready"
+runtime_root=${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}
+port_lock_root=${THESISTRACE_TEST_PORT_LOCK_ROOT:-"$runtime_root/thesistrace-$(id -u)/caddy-port-locks"}
+owner_database_password=owner-test-password
+core_database_password=core-test-password
+auth_database_password=auth-test-password
+agent_database_password=agent-test-password
+resend_api_key=resend-test-key
+resend_from_email='ThesisTrace <noreply@thesistrace.test>'
+resend_api_url=http://resend-fake:8300
+tushare_test_token=0f3d7a91c4e6482b8d5f106a79c2e4b3
+agent_model_registry='{"min_compaction_context_window":65536,"default_model_key":"scripted-research","models":[{"default_reasoning_effort":"medium","display_name":"Scripted Research","enabled":true,"key":"scripted-research","provider_adapter":"scripted","provider_model_id":"scripted-v1","reasoning_efforts":["low","medium","high"],"context_window":258000,"max_output_tokens":128000,"secret_env":"THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"},{"default_reasoning_effort":"high","display_name":"Scripted Deep Research","enabled":true,"key":"scripted-deep-research","provider_adapter":"scripted","provider_model_id":"scripted-v2","reasoning_efforts":["high"],"context_window":258000,"max_output_tokens":128000,"secret_env":"THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"},{"default_reasoning_effort":"medium","display_name":"Scripted Small Window","enabled":true,"key":"scripted-small-window","provider_adapter":"scripted","provider_model_id":"scripted-v1","reasoning_efforts":["low","medium","high"],"context_window":65535,"max_output_tokens":128000,"secret_env":"THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"}]}'
+agent_scripted_model_secret=agent-provider-key-private-2529dabd
+agent_openai_api_key=
+agent_openai_base_url=http://provider.invalid/v1
+agent_anthropic_api_key=
+agent_google_api_key=
+agent_build_revision=test-build-revision
+agent_run_max_wall_seconds=600
+mcp_access_token_ttl_seconds=660
+mcp_agent_scopes='["research:read","research:execute","tracking:read","tracking:execute"]'
+mcp_client_id=thesistrace-agent
+mcp_clock_skew_seconds=30
+mcp_deployment_tools='["diagnose_alpha_formula","get_alpha_catalog","get_daily_track","get_daily_track_result","get_research_batch","get_research_context","get_research_run","get_research_run_result","list_daily_tracks","list_research_batches","list_research_runs","refresh_daily_track","retry_daily_track","start_daily_track","submit_research_batch","submit_research_run"]'
+mcp_issuer_url=
+mcp_resource_url=
+mcp_signing_private_jwk='{"alg":"EdDSA","crv":"Ed25519","d":"2SCCVM_DYKEJvq18KV1M4UNFhxTHLKtdXxQFXLGlEBs","kid":"test-signing-key-01","kty":"OKP","use":"sig","x":"3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8"}'
+mcp_verifying_public_jwk='{"alg":"EdDSA","crv":"Ed25519","kid":"test-signing-key-01","kty":"OKP","use":"sig","x":"3d8K_V0qubfzURRlfRFt44Yk4LeNW6HkQMaeiPIhJA8"}'
+compose_cleanup_required=true
+
+new_run_id() {
+  timestamp=$(date -u +%Y%m%dt%H%M%Sz)
+  random_suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
+  printf '%s-%s-%s\n' "$timestamp" "$$" "$random_suffix"
+}
+
+refuse_project() {
+  shown_name=${project_name:-<empty>}
+  echo "refusing non-canonical Test project: $shown_name" >&2
+  exit 2
+}
+
+validate_test_project() {
+  case "$project_name" in
+    "$canonical_prefix"*) ;;
+    *) refuse_project ;;
+  esac
+  run_id=${project_name#"$canonical_prefix"}
+  printf '%s\n' "$run_id" \
+    | grep -Eq '^[0-9]{8}t[0-9]{6}z-[0-9]+-[0-9a-f]{8}$' \
+    || refuse_project
+  test "$project_name" != "thesistrace-dev" || refuse_project
+}
+
+validate_cleanup_target() {
+  validate_test_project
+  target_metadata="$state_root/$run_id/run.txt"
+  if [ ! -f "$target_metadata" ] \
+    || ! grep -Fqx "project_name=$project_name" "$target_metadata"; then
+    echo "refusing Test cleanup without matching run metadata: $project_name" >&2
+    exit 2
+  fi
+}
+
+set_test_origin() {
+  case "${caddy_port:-}" in
+    '' | *[!0-9]*)
+      echo "invalid Test Caddy port" >&2
+      exit 2
+      ;;
+  esac
+  public_origin="http://127.0.0.1:$caddy_port"
+  mcp_issuer_url="$public_origin/api/auth"
+  mcp_resource_url="$public_origin/mcp"
+  auth_secret="test-only-$run_id-auth-secret-with-at-least-32-characters"
+  mcp_allowed_hosts="[\"api:8100\",\"127.0.0.1:$caddy_port\"]"
+  mcp_allowed_origins="[\"$public_origin\"]"
+}
+
+load_test_origin() {
+  caddy_port=$(sed -n 's/^caddy_port=//p' "$target_metadata")
+  test -n "$caddy_port" || {
+    echo "missing Test Caddy port metadata: $project_name" >&2
+    exit 2
+  }
+  set_test_origin
+}
+
+acquire_test_origin() {
+  caddy_port=$(uv run python "$locked_port_allocator" acquire \
+    --lock-root "$port_lock_root" --owner "$project_name")
+  set_test_origin
+}
+
+release_test_origin() {
+  uv run python "$locked_port_allocator" release \
+    --lock-root "$port_lock_root" --owner "$project_name" --port "$caddy_port"
+}
+
+compose() {
+  validate_test_project
+  if [ "${command:-}" = image-smoke ] \
+    || { [ "${command:-}" = performance ] && [ "${use_image_overlay:-false}" = true ]; }; then
+    COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
+      THESISTRACE_TEST_BUCKET="$bucket_name" \
+      THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
+      THESISTRACE_TEST_BENCHMARK_MOUNT="$benchmark_mount" \
+      THESISTRACE_TEST_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
+      THESISTRACE_TEST_RUN_ROOT="$run_root" \
+      THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
+      THESISTRACE_TEST_SECRET_DIR="$secret_dir" \
+      THESISTRACE_TEST_CADDY_PORT="$caddy_port" \
+      THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
+      THESISTRACE_ENVIRONMENT=test \
+      THESISTRACE_OWNER_DATABASE_PASSWORD="$owner_database_password" \
+      THESISTRACE_CORE_DATABASE_PASSWORD="$core_database_password" \
+      THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
+      THESISTRACE_AGENT_DATABASE_PASSWORD="$agent_database_password" \
+      THESISTRACE_AUTH_IMAGE="$project_name-auth" \
+      THESISTRACE_AGENT_IMAGE="$project_name-agent" \
+      THESISTRACE_AGENT_BUILD_REVISION="$agent_build_revision" \
+      THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
+      THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS="$agent_run_max_wall_seconds" \
+      THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET="$agent_scripted_model_secret" \
+      THESISTRACE_AGENT_OPENAI_API_KEY="$agent_openai_api_key" \
+      THESISTRACE_AGENT_OPENAI_BASE_URL="$agent_openai_base_url" \
+      THESISTRACE_AGENT_ANTHROPIC_API_KEY="$agent_anthropic_api_key" \
+      THESISTRACE_AGENT_GOOGLE_API_KEY="$agent_google_api_key" \
+      THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS="$mcp_access_token_ttl_seconds" \
+      THESISTRACE_MCP_AGENT_SCOPES="$mcp_agent_scopes" \
+      THESISTRACE_MCP_ALLOWED_HOSTS="$mcp_allowed_hosts" \
+      THESISTRACE_MCP_ALLOWED_ORIGINS="$mcp_allowed_origins" \
+      THESISTRACE_MCP_CLIENT_ID="$mcp_client_id" \
+      THESISTRACE_MCP_CLOCK_SKEW_SECONDS="$mcp_clock_skew_seconds" \
+      THESISTRACE_MCP_DEPLOYMENT_TOOLS="$mcp_deployment_tools" \
+      THESISTRACE_MCP_ISSUER_URL="$mcp_issuer_url" \
+      THESISTRACE_MCP_RESOURCE_URL="$mcp_resource_url" \
+      THESISTRACE_MCP_SIGNING_PRIVATE_JWK="$mcp_signing_private_jwk" \
+      THESISTRACE_MCP_VERIFYING_PUBLIC_JWK="$mcp_verifying_public_jwk" \
+      BETTER_AUTH_SECRET="$auth_secret" \
+      THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
+      THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
+      RESEND_API_KEY="$resend_api_key" \
+      RESEND_FROM_EMAIL="$resend_from_email" \
+      THESISTRACE_RESEND_API_URL="$resend_api_url" \
+      THESISTRACE_TUSHARE_TOKEN="$tushare_test_token" \
+      docker compose \
+      --env-file /dev/null \
+      --project-name "$project_name" \
+      --file "$base_file" \
+      --file "$test_file" \
+      --file "$image_smoke_file" \
+      "$@"
+  else
+    COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
+      THESISTRACE_TEST_BUCKET="$bucket_name" \
+      THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
+      THESISTRACE_TEST_BENCHMARK_MOUNT="$benchmark_mount" \
+      THESISTRACE_TEST_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
+      THESISTRACE_TEST_CADDY_PORT="$caddy_port" \
+      THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
+      THESISTRACE_ENVIRONMENT=test \
+      THESISTRACE_OWNER_DATABASE_PASSWORD="$owner_database_password" \
+      THESISTRACE_CORE_DATABASE_PASSWORD="$core_database_password" \
+      THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
+      THESISTRACE_AGENT_DATABASE_PASSWORD="$agent_database_password" \
+      THESISTRACE_AUTH_IMAGE="$project_name-auth" \
+      THESISTRACE_AGENT_IMAGE="$project_name-agent" \
+      THESISTRACE_AGENT_BUILD_REVISION="$agent_build_revision" \
+      THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
+      THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS="$agent_run_max_wall_seconds" \
+      THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET="$agent_scripted_model_secret" \
+      THESISTRACE_AGENT_OPENAI_API_KEY="$agent_openai_api_key" \
+      THESISTRACE_AGENT_OPENAI_BASE_URL="$agent_openai_base_url" \
+      THESISTRACE_AGENT_ANTHROPIC_API_KEY="$agent_anthropic_api_key" \
+      THESISTRACE_AGENT_GOOGLE_API_KEY="$agent_google_api_key" \
+      THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS="$mcp_access_token_ttl_seconds" \
+      THESISTRACE_MCP_AGENT_SCOPES="$mcp_agent_scopes" \
+      THESISTRACE_MCP_ALLOWED_HOSTS="$mcp_allowed_hosts" \
+      THESISTRACE_MCP_ALLOWED_ORIGINS="$mcp_allowed_origins" \
+      THESISTRACE_MCP_CLIENT_ID="$mcp_client_id" \
+      THESISTRACE_MCP_CLOCK_SKEW_SECONDS="$mcp_clock_skew_seconds" \
+      THESISTRACE_MCP_DEPLOYMENT_TOOLS="$mcp_deployment_tools" \
+      THESISTRACE_MCP_ISSUER_URL="$mcp_issuer_url" \
+      THESISTRACE_MCP_RESOURCE_URL="$mcp_resource_url" \
+      THESISTRACE_MCP_SIGNING_PRIVATE_JWK="$mcp_signing_private_jwk" \
+      THESISTRACE_MCP_VERIFYING_PUBLIC_JWK="$mcp_verifying_public_jwk" \
+      BETTER_AUTH_SECRET="$auth_secret" \
+      THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
+      THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
+      RESEND_API_KEY="$resend_api_key" \
+      RESEND_FROM_EMAIL="$resend_from_email" \
+      THESISTRACE_RESEND_API_URL="$resend_api_url" \
+      THESISTRACE_TUSHARE_TOKEN="$tushare_test_token" \
+      docker compose \
+      --env-file /dev/null \
+      --project-name "$project_name" \
+      --file "$base_file" \
+      --file "$test_file" \
+      "$@"
+  fi
+}
+
+base_compose() {
+  validate_test_project
+  COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
+    THESISTRACE_TEST_CADDY_PORT="$caddy_port" \
+    THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
+    THESISTRACE_ENVIRONMENT=test \
+    THESISTRACE_OWNER_DATABASE_PASSWORD="$owner_database_password" \
+    THESISTRACE_CORE_DATABASE_PASSWORD="$core_database_password" \
+    THESISTRACE_AUTH_DATABASE_PASSWORD="$auth_database_password" \
+    THESISTRACE_AGENT_DATABASE_PASSWORD="$agent_database_password" \
+    THESISTRACE_AUTH_IMAGE="$project_name-auth" \
+    THESISTRACE_AGENT_IMAGE="$project_name-agent" \
+    THESISTRACE_AGENT_BUILD_REVISION="$agent_build_revision" \
+    THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
+    THESISTRACE_AGENT_RUN_MAX_WALL_SECONDS="$agent_run_max_wall_seconds" \
+    THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET="$agent_scripted_model_secret" \
+    THESISTRACE_AGENT_OPENAI_API_KEY="$agent_openai_api_key" \
+    THESISTRACE_AGENT_OPENAI_BASE_URL="$agent_openai_base_url" \
+    THESISTRACE_AGENT_ANTHROPIC_API_KEY="$agent_anthropic_api_key" \
+    THESISTRACE_AGENT_GOOGLE_API_KEY="$agent_google_api_key" \
+    THESISTRACE_MCP_ACCESS_TOKEN_TTL_SECONDS="$mcp_access_token_ttl_seconds" \
+    THESISTRACE_MCP_AGENT_SCOPES="$mcp_agent_scopes" \
+    THESISTRACE_MCP_ALLOWED_HOSTS="$mcp_allowed_hosts" \
+    THESISTRACE_MCP_ALLOWED_ORIGINS="$mcp_allowed_origins" \
+    THESISTRACE_MCP_CLIENT_ID="$mcp_client_id" \
+    THESISTRACE_MCP_CLOCK_SKEW_SECONDS="$mcp_clock_skew_seconds" \
+    THESISTRACE_MCP_DEPLOYMENT_TOOLS="$mcp_deployment_tools" \
+    THESISTRACE_MCP_ISSUER_URL="$mcp_issuer_url" \
+    THESISTRACE_MCP_RESOURCE_URL="$mcp_resource_url" \
+    THESISTRACE_MCP_SIGNING_PRIVATE_JWK="$mcp_signing_private_jwk" \
+    THESISTRACE_MCP_VERIFYING_PUBLIC_JWK="$mcp_verifying_public_jwk" \
+    BETTER_AUTH_SECRET="$auth_secret" \
+    THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
+    THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
+    RESEND_API_KEY="$resend_api_key" \
+    RESEND_FROM_EMAIL="$resend_from_email" \
+    THESISTRACE_RESEND_API_URL="$resend_api_url" \
+    THESISTRACE_TUSHARE_TOKEN="$tushare_test_token" \
+    docker compose \
+      --env-file /dev/null \
+    --project-name "$project_name" \
+    --file "$base_file" \
+    "$@"
+}
+
+compose_run() {
+  compose run --rm --no-deps -T --interactive=false "$@"
+}
+
+base_compose_run() {
+  base_compose run --rm --no-deps -T --interactive=false "$@"
+}
+
+runtime_image_name() {
+  image_service=$1
+  printf '%s-%s\n' "$project_name" "$image_service"
+}
+
+cleanup_runtime_images() {
+  if [ "${THESISTRACE_TEST_KEEP_IMAGES:-0}" = 1 ]; then return 0; fi
+  runtime_images_status=0
+  remaining_image_names=$(docker image ls --format '{{.Repository}}' \
+    --filter "reference=$project_name-*") || return $?
+  for image_service in \
+    api research-worker batch-research-worker tracking-worker data-operator-worker \
+    initialize agent auth web; do
+    image_name=$(runtime_image_name "$image_service")
+    if printf '%s\n' "$remaining_image_names" | grep -Fxq "$image_name"; then
+      docker image rm "$image_name" >/dev/null || runtime_images_status=$?
+    fi
+  done
+  return "$runtime_images_status"
+}
+
+build_runtime_images() {
+  if [ -n "${THESISTRACE_TEST_IMAGE_SOURCE_PROJECT:-}" ]; then
+    printf 'image_source_project=%s\n' "$THESISTRACE_TEST_IMAGE_SOURCE_PROJECT" >>"$run_metadata"
+    printf '%s\n' "$THESISTRACE_TEST_IMAGE_SOURCE_PROJECT" \
+      | grep -Eq '^thesistrace-test-[0-9]{8}t[0-9]{6}z-[0-9]+-[0-9a-f]{8}$' || return 2
+    for image_service in initialize api research-worker batch-research-worker tracking-worker data-operator-worker auth agent web; do
+      docker image tag "$THESISTRACE_TEST_IMAGE_SOURCE_PROJECT-$image_service" \
+        "$(runtime_image_name "$image_service")" || return $?
+    done
+    return 0
+  fi
+  compose build initialize auth-initialize agent web || return $?
+  built_backend_image=$(runtime_image_name initialize)
+  docker image tag "$built_backend_image" "$(runtime_image_name api)" || return $?
+  docker image tag "$built_backend_image" "$(runtime_image_name research-worker)" \
+    || return $?
+  docker image tag "$built_backend_image" "$(runtime_image_name batch-research-worker)" \
+    || return $?
+  docker image tag "$built_backend_image" "$(runtime_image_name tracking-worker)" \
+    || return $?
+  docker image tag "$built_backend_image" "$(runtime_image_name data-operator-worker)" \
+    || return $?
+}
+
+mapped_port() {
+  service=$1
+  container_port=$2
+  address=$(compose port "$service" "$container_port")
+  port=${address##*:}
+  case "$port" in
+    '' | *[!0-9]*)
+      echo "could not resolve $service port from: $address" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$port"
+}
+
+run_with_environment() {
+  THESISTRACE_DATABASE_URL="postgresql://thesistrace_owner:$owner_database_password@127.0.0.1:$postgres_port/thesistrace" \
+  THESISTRACE_AUTH_INTERNAL_ORIGIN="${auth_internal_origin-}" \
+  THESISTRACE_ENVIRONMENT=test \
+  THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
+  THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
+  THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
+  THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
+  THESISTRACE_S3_BUCKET="$bucket_name" \
+  THESISTRACE_S3_REGION=us-east-1 \
+  THESISTRACE_DATA_MOUNT="$data_mount" \
+  THESISTRACE_BENCHMARK_MOUNT="$benchmark_mount" \
+  THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
+  THESISTRACE_TEST_PROJECT_NAME="$project_name" \
+  THESISTRACE_TEST_RESEND_ORIGIN="${resend_test_origin-}" \
+    "$@"
+}
+
+run_playwright() {
+  THESISTRACE_ENVIRONMENT=test \
+  THESISTRACE_TEST_WEB_ORIGIN="$public_origin" \
+  THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
+  THESISTRACE_TEST_PROJECT_NAME="$project_name" \
+  THESISTRACE_TEST_RESEND_ORIGIN="$resend_test_origin" \
+  THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN="$auth_fixture_origin" \
+  THESISTRACE_TEST_AUTH_PROXY_ORIGIN="$auth_proxy_origin" \
+  THESISTRACE_TEST_MCP_PROXY_ORIGIN="$mcp_proxy_origin" \
+  THESISTRACE_DATABASE_URL="postgresql://thesistrace_owner:$owner_database_password@127.0.0.1:$postgres_port/thesistrace" \
+  THESISTRACE_PUBLIC_ORIGIN="$public_origin" \
+  THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
+  THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
+  THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
+  THESISTRACE_S3_BUCKET="$bucket_name" \
+  THESISTRACE_S3_REGION=us-east-1 \
+  THESISTRACE_DATA_MOUNT="$data_mount" \
+  THESISTRACE_BENCHMARK_MOUNT="$benchmark_mount" \
+  THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY="$batch_attempt_control_directory" \
+    "$@"
+}
+
+run_operator_playwright() {
+  THESISTRACE_ENVIRONMENT=test \
+  THESISTRACE_TEST_WEB_ORIGIN="$public_origin" \
+  THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
+  THESISTRACE_TEST_PROJECT_NAME="$project_name" \
+  THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN="$auth_fixture_origin" \
+    "$@"
+}
+
+run_agent_eval() {
+  THESISTRACE_TEST_WEB_ORIGIN="$public_origin" \
+  THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
+  THESISTRACE_TEST_PROJECT_NAME="$project_name" \
+  THESISTRACE_AGENT_MODEL_REGISTRY="$agent_model_registry" \
+  THESISTRACE_AGENT_OPENAI_API_KEY="$agent_openai_api_key" \
+  THESISTRACE_AGENT_OPENAI_BASE_URL="$agent_openai_base_url" \
+  THESISTRACE_MCP_DEPLOYMENT_TOOLS="$mcp_deployment_tools" \
+    node "$repo_root/apps/agent/scripts/eval-research.mjs" run
+}
+
+probe_rustfs_s3_from_host() {
+  access_key_id=$1
+  secret_access_key=$2
+  THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
+    THESISTRACE_S3_ACCESS_KEY_ID="$access_key_id" \
+    THESISTRACE_S3_SECRET_ACCESS_KEY="$secret_access_key" \
+    uv run python "$rustfs_readiness_probe" --ensure-bucket "$bucket_name"
+}
+
+probe_rustfs_s3_from_image() {
+  compose_run initialize python /smoke/tooling/test/probe-rustfs-ready \
+    --ensure-bucket "$bucket_name"
+}
+
+wait_for_rustfs_s3() {
+  probe_function=$1
+  shift
+  transient_probe_exit=75
+  rustfs_readiness_deadline_seconds=180
+  rustfs_readiness_started_at=$(date +%s)
+  while :; do
+    probe_status=0
+    "$probe_function" "$@" >/dev/null 2>&1 || probe_status=$?
+    if [ "$probe_status" -eq 0 ]; then
+      return 0
+    fi
+    if [ "$probe_status" -ne "$transient_probe_exit" ]; then
+      echo "RustFS S3 readiness probe rejected configuration" >&2
+      return "$probe_status"
+    fi
+    rustfs_readiness_now=$(date +%s)
+    if [ $((rustfs_readiness_now - rustfs_readiness_started_at)) \
+      -ge "$rustfs_readiness_deadline_seconds" ]; then
+      echo "RustFS S3 API did not become writable" >&2
+      return 1
+    fi
+    sleep 0.25
+  done
+}
+
+wait_for_auth_fixture_control() {
+  auth_fixture_readiness_deadline_seconds=30
+  auth_fixture_readiness_started_at=$(date +%s)
+  while :; do
+    if curl --fail --silent --show-error \
+      --connect-timeout 2 --max-time 5 \
+      "$auth_fixture_origin/health/ready" >/dev/null 2>&1; then
+      return 0
+    fi
+    auth_fixture_readiness_now=$(date +%s)
+    if [ $((auth_fixture_readiness_now - auth_fixture_readiness_started_at)) \
+      -ge "$auth_fixture_readiness_deadline_seconds" ]; then
+      echo "Auth fixture control did not become ready" >&2
+      return 1
+    fi
+    sleep 0.25
+  done
+}
+
+capture_evidence() {
+  mkdir -p "$evidence_dir"
+  compose ps --all >"$evidence_dir/compose-ps.txt" 2>&1 || true
+  compose logs --no-color --timestamps >"$evidence_dir/compose-logs.txt" 2>&1 || true
+  compose ps --all --quiet | while IFS= read -r container_id; do
+    test -n "$container_id" || continue
+    docker inspect --format \
+      'id={{.Id}} name={{.Name}} image={{.Image}} status={{.State.Status}} running={{.State.Running}} exit_code={{.State.ExitCode}} oom_killed={{.State.OOMKilled}} health={{with index .State "Health"}}{{.Status}}{{else}}none{{end}} log_driver={{.HostConfig.LogConfig.Type}} log_max_size={{index .HostConfig.LogConfig.Config "max-size"}} log_max_file={{index .HostConfig.LogConfig.Config "max-file"}}' \
+      "$container_id" || true
+  done >"$evidence_dir/container-inspect.txt" 2>&1
+}
+
+capture_worker_log_evidence() {
+  worker_log="$evidence_dir/worker-events.jsonl"
+  compose logs --no-color research-worker batch-research-worker tracking-worker \
+    data-operator-worker >"$worker_log"
+}
+
+capture_api_log_evidence() {
+  api_log="$evidence_dir/api-events.jsonl"
+  compose logs --no-color api >"$api_log"
+}
+
+capture_gateway_auth_log_evidence() {
+  compose logs --no-color web >"$evidence_dir/caddy-events.jsonl"
+  compose logs --no-color auth >"$evidence_dir/auth-events.jsonl"
+}
+
+scan_secret_canaries() {
+  scan_result="$evidence_dir/secret-canary-scan.txt"
+  : >"$scan_result"
+  if uv run python "$repo_root/tests/sanitize_production_mcp_evidence.py" \
+    verify "$evidence_dir"; then
+    printf 'passed\n' >"$scan_result"
+    return 0
+  fi
+  printf 'failed\n' >"$scan_result"
+  return 1
+}
+
+sanitize_mcp_failure_evidence() {
+  uv run python "$repo_root/tests/sanitize_production_mcp_evidence.py" \
+    sanitize "$evidence_dir"
+}
+
+discard_unsanitized_failure_evidence() {
+  uv run python "$repo_root/tests/sanitize_production_mcp_evidence.py" \
+    discard "$evidence_dir"
+}
+
+verify_image_health() {
+  suffix=$1
+  compose_run \
+    -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+    -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+    -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
+    initialize python /smoke/tests/production_image_smoke.py health \
+    >"$evidence_dir/health-$suffix.json" \
+    2>"$evidence_dir/health-$suffix.stderr.log"
+}
+
+verify_caddy_single_origin() {
+  curl --fail --silent --show-error --dump-header "$evidence_dir/caddy-security-headers.txt" \
+    "$public_origin/data" \
+    >"$evidence_dir/caddy-spa.html"
+  curl --fail --silent --show-error "$public_origin/login" \
+    >"$evidence_dir/caddy-spa-fallback.html"
+  cmp "$evidence_dir/caddy-spa.html" "$evidence_dir/caddy-spa-fallback.html"
+  curl --fail --silent --show-error "$public_origin/chat" \
+    >"$evidence_dir/caddy-chat-spa-fallback.html"
+  cmp "$evidence_dir/caddy-spa.html" "$evidence_dir/caddy-chat-spa-fallback.html"
+  grep -Fi "Content-Security-Policy: default-src 'none'; script-src 'self';" \
+    "$evidence_dir/caddy-security-headers.txt"
+  grep -Fi "style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'" \
+    "$evidence_dir/caddy-security-headers.txt"
+  grep -Fi "Referrer-Policy: no-referrer" \
+    "$evidence_dir/caddy-security-headers.txt"
+  grep -Fi "X-Content-Type-Options: nosniff" \
+    "$evidence_dir/caddy-security-headers.txt"
+  grep -Fi "Permissions-Policy:" "$evidence_dir/caddy-security-headers.txt"
+  if grep -Fi "Strict-Transport-Security:" \
+    "$evidence_dir/caddy-security-headers.txt"; then
+    echo "Test Caddy unexpectedly emitted Production HSTS" >&2
+    return 1
+  fi
+  curl --fail --silent --show-error "$public_origin/api/auth/ok" \
+    >"$evidence_dir/caddy-auth.json"
+  grep -Fqx '{"ok":true}' "$evidence_dir/caddy-auth.json"
+  core_status=$(curl --silent --show-error \
+    --output "$evidence_dir/caddy-core.json" --write-out '%{http_code}' \
+    "$public_origin/api/data")
+  test "$core_status" = 401
+  agent_status=$(curl --silent --show-error \
+    --header "Origin: $public_origin" \
+    --output "$evidence_dir/caddy-agent.json" --write-out '%{http_code}' \
+    "$public_origin/api/agent/models")
+  test "$agent_status" = 401
+
+  curl --fail --silent --show-error --max-time 10 \
+    "$public_origin/.well-known/oauth-protected-resource/mcp" \
+    >"$evidence_dir/caddy-mcp-metadata.json"
+  grep -F "\"resource\":\"$mcp_resource_url\"" \
+    "$evidence_dir/caddy-mcp-metadata.json"
+  mcp_unauthorized_status=$(curl --silent --show-error --max-time 10 \
+    --header 'Content-Type: application/json' \
+    --request POST --data '{}' \
+    --output "$evidence_dir/caddy-mcp-unauthorized.json" \
+    --write-out '%{http_code}' "$public_origin/mcp")
+  test "$mcp_unauthorized_status" = 401
+  mcp_query_token_status=$(curl --silent --show-error --max-time 10 \
+    --header 'Authorization: Bearer caddy-query-token-canary' \
+    --header 'Content-Type: application/json' \
+    --request POST --data '{}' \
+    --output /dev/null --write-out '%{http_code}' \
+    "$public_origin/mcp?access_token=caddy-query-token-canary")
+  test "$mcp_query_token_status" = 400
+  mcp_arbitrary_query_status=$(curl --silent --show-error --max-time 10 \
+    --header 'Content-Type: application/json' \
+    --request POST --data '{}' \
+    --output /dev/null --write-out '%{http_code}' \
+    "$public_origin/mcp?probe=caddy-query-canary")
+  test "$mcp_arbitrary_query_status" = 400
+  mcp_metadata_query_status=$(curl --silent --show-error --max-time 10 \
+    --output /dev/null --write-out '%{http_code}' \
+    "$public_origin/.well-known/oauth-protected-resource/mcp?probe=caddy-query-canary")
+  test "$mcp_metadata_query_status" = 400
+  for noncanonical_mcp_path in \
+    /mcp/ /mcp/sse /.well-known/oauth-protected-resource/mcp/; do
+    noncanonical_mcp_status=$(curl --silent --show-error --max-time 10 \
+      --output /dev/null --write-out '%{http_code}' \
+      "$public_origin$noncanonical_mcp_path")
+    test "$noncanonical_mcp_status" = 404
+  done
+
+  auth_canary_status=$(curl --silent --show-error \
+    --header "Origin: $public_origin" \
+    --header 'Content-Type: application/json' \
+    --header 'Cookie: observability=observability-request-canary' \
+    --request POST \
+    --data '{"email":"observability-request-canary@example.test","password":"observability-request-canary"}' \
+    --output /dev/null --write-out '%{http_code}' \
+    "$public_origin/api/auth/sign-in/email?token=observability-request-canary")
+  test "$auth_canary_status" = 400 || test "$auth_canary_status" = 401
+
+  for private_path in \
+    /health/live /health/ready \
+    /internal/session/verify /internal/session/exchange; do
+    private_status=$(curl --silent --show-error \
+      --output /dev/null --write-out '%{http_code}' \
+      "$public_origin$private_path")
+    test "$private_status" = 404
+  done
+}
+
+verify_caddy_backend_independence() {
+  compose stop auth api >/dev/null
+  curl --fail --silent --show-error "$public_origin/data" \
+    >"$evidence_dir/caddy-backends-unavailable.html"
+  auth_status=$(curl --silent --show-error \
+    --header 'Authorization: Bearer observability-outage-canary' \
+    --header 'Cookie: session=observability-outage-canary' \
+    --output /dev/null --write-out '%{http_code}' \
+    "$public_origin/api/auth/ok?token=observability-outage-canary")
+  core_status=$(curl --silent --show-error \
+    --output /dev/null --write-out '%{http_code}' "$public_origin/api/data")
+  test "$auth_status" = 502
+  test "$core_status" = 502
+  compose up --detach --no-build --wait --wait-timeout 120 auth api
+  verify_caddy_single_origin
+}
+
+run_mcp_image_smoke() {
+  phase=$1
+  compose_run \
+    -e THESISTRACE_MCP_ALLOWED_HOSTS="$mcp_allowed_hosts" \
+    -e THESISTRACE_MCP_ALLOWED_ORIGINS="$mcp_allowed_origins" \
+    -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+    -e THESISTRACE_TEST_EVIDENCE_DIR=/smoke-evidence \
+    -e THESISTRACE_TEST_IMAGE_ID="$image_revision" \
+    -e THESISTRACE_TEST_RANDOM_SEED=1401 \
+    initialize python /smoke/tests/production_mcp_image_smoke.py "$phase"
+}
+
+capture_stopped_api_state() {
+  container_id=$(compose ps --all --quiet api)
+  test -n "$container_id" || return 1
+  docker inspect --format \
+    '{"status":"{{.State.Status}}","exit_code":{{.State.ExitCode}},"oom_killed":{{.State.OOMKilled}}}' \
+    "$container_id" >"$evidence_dir/mcp-api-stopped.json"
+}
+
+verify_service_readiness_outage() {
+  service=$1
+  dependency=$2
+  outage_status=0
+  recovery_status=0
+  compose stop "$service" >/dev/null
+  compose_run \
+    -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+    -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+    -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
+    -e THESISTRACE_TEST_UNAVAILABLE_DEPENDENCY="$dependency" \
+    initialize python /smoke/tests/production_image_smoke.py readiness-outage \
+    >"$evidence_dir/readiness-$dependency-unavailable.json" \
+    2>"$evidence_dir/readiness-$dependency-unavailable.stderr.log" \
+    || outage_status=$?
+  compose logs --no-color "$service" \
+    >"$evidence_dir/stopped-$service.log" 2>&1 || true
+  test -s "$evidence_dir/stopped-$service.log" || outage_status=1
+  compose up --detach --no-build --wait --wait-timeout 120 "$service" \
+    || recovery_status=$?
+  if [ "$recovery_status" -eq 0 ]; then
+    verify_image_health "$dependency-recovered" || recovery_status=$?
+  fi
+  if [ "$outage_status" -ne 0 ]; then
+    return "$outage_status"
+  fi
+  return "$recovery_status"
+}
+
+verify_dataset_readiness_outage() {
+  outage_container="dataset-store-outage-$run_id"
+  outage_parent="$run_root/dataset-store-outage"
+  outage_root="$outage_parent/current"
+  outage_status=0
+  recovery_status=0
+  mkdir -p "$outage_parent"
+  ln -s ../canonical-data "$outage_root"
+  compose_run --detach \
+    --name "$outage_container" \
+    --volume "$outage_parent:/smoke-data/dataset-store-outage:ro" \
+    -e THESISTRACE_DATA_MOUNT=/smoke-data/dataset-store-outage/current \
+    api >/dev/null || outage_status=$?
+  if [ "$outage_status" -eq 0 ]; then
+    compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN="http://$outage_container:8100" \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
+      initialize python /smoke/tests/production_image_smoke.py health \
+      >"$evidence_dir/readiness-dataset_store-before-outage.json" \
+      2>"$evidence_dir/readiness-dataset_store-before-outage.stderr.log" \
+      || outage_status=$?
+  fi
+  if [ "$outage_status" -eq 0 ]; then
+    unlink "$outage_root" || outage_status=$?
+  fi
+  if [ "$outage_status" -eq 0 ]; then
+    compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN="http://$outage_container:8100" \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE=/smoke-evidence/image-smoke-state.json \
+      -e THESISTRACE_TEST_UNAVAILABLE_DEPENDENCY=dataset_store \
+      initialize python /smoke/tests/production_image_smoke.py readiness-outage \
+      >"$evidence_dir/readiness-dataset_store-unavailable.json" \
+      2>"$evidence_dir/readiness-dataset_store-unavailable.stderr.log" \
+      || outage_status=$?
+  fi
+  docker logs "$outage_container" \
+    >"$evidence_dir/readiness-dataset_store-api.log" 2>&1 || true
+  docker stop "$outage_container" >/dev/null || recovery_status=$?
+  if [ "$recovery_status" -eq 0 ]; then
+    verify_image_health dataset_store-recovered || recovery_status=$?
+  fi
+  if [ "$outage_status" -ne 0 ]; then
+    return "$outage_status"
+  fi
+  return "$recovery_status"
+}
+
+verify_worker_capacity_rejection() {
+  for role in research batch-research tracking; do
+    if [ "$role" = batch-research ]; then
+      service=batch-research-worker
+    else
+      service="${role}-worker"
+    fi
+    stdout="$evidence_dir/${role}-worker-cpu-capacity.stdout.log"
+    stderr="$evidence_dir/${role}-worker-cpu-capacity.stderr.log"
+    if compose_run "$service" \
+      thesistrace-core-worker --role "$role" --once --cpu-count 3 \
+      >"$stdout" 2>"$stderr"; then
+      echo "$role Worker accepted a CPU declaration above its cgroup limit" >&2
+      return 1
+    fi
+    grep -F '"event":"worker_startup_failed"' "$stderr" >/dev/null
+    grep -F '"failure_code":"WORKER_CAPACITY_INVALID"' "$stderr" >/dev/null
+
+    stdout="$evidence_dir/${role}-worker-memory-capacity.stdout.log"
+    stderr="$evidence_dir/${role}-worker-memory-capacity.stderr.log"
+    if compose_run "$service" \
+      thesistrace-core-worker --role "$role" --once \
+      --memory-bytes 3221225472 \
+      >"$stdout" 2>"$stderr"; then
+      echo "$role Worker accepted a memory declaration above its cgroup limit" >&2
+      return 1
+    fi
+    grep -F '"event":"worker_startup_failed"' "$stderr" >/dev/null
+    grep -F '"failure_code":"WORKER_CAPACITY_INVALID"' "$stderr" >/dev/null
+  done
+}
+
+verify_tushare_secret_scope() {
+  for service in \
+    postgres rustfs initialize auth-initialize auth api research-worker \
+    batch-research-worker tracking-worker web; do
+    container_id="$project_name-$service-1"
+    container_environment=$(docker inspect \
+      --format '{{range .Config.Env}}{{println .}}{{end}}' "$container_id") \
+      || return 1
+    if printf '%s\n' "$container_environment" \
+      | grep -q '^THESISTRACE_TUSHARE_TOKEN='; then
+      echo "Tushare Secret escaped into $service" >&2
+      return 1
+    fi
+  done
+  worker_id="$project_name-data-operator-worker-1"
+  worker_environment=$(docker inspect \
+    --format '{{range .Config.Env}}{{println .}}{{end}}' "$worker_id") \
+    || return 1
+  printf '%s\n' "$worker_environment" \
+    | grep -q '^THESISTRACE_TUSHARE_TOKEN=' \
+    || return 1
+  browser_html=$(curl --fail --silent --show-error "$public_origin/data") \
+    || return 1
+  if printf '%s' "$browser_html" | grep -Fq "$tushare_test_token"; then
+    echo "Tushare Secret escaped into browser state" >&2
+    return 1
+  fi
+}
+
+verify_data_operator_worker_secret_rejection() {
+  for scenario in missing placeholder; do
+    case "$scenario" in
+      missing) token= ;;
+      placeholder) token=placeholder-image-smoke-token ;;
+    esac
+    stdout="$evidence_dir/data-operator-worker-$scenario-token.stdout.json"
+    stderr="$evidence_dir/data-operator-worker-$scenario-token.stderr.log"
+    if compose_run \
+      -e "THESISTRACE_TUSHARE_TOKEN=$token" \
+      data-operator-worker thesistrace-data-operator worker \
+      >"$stdout" 2>"$stderr"; then
+      echo "Data Operator Worker accepted a $scenario Tushare credential" >&2
+      return 1
+    fi
+    if ! grep -E '"code"[[:space:]]*:[[:space:]]*"WORKER_TUSHARE_TOKEN_INVALID"' \
+      "$stdout" "$stderr" >/dev/null; then
+      echo "Data Operator Worker did not report the $scenario credential failure" >&2
+      return 1
+    fi
+  done
+  verify_image_health data-operator-secret-rejected
+}
+
+verify_single_data_operator_worker() {
+  worker_ids=$(compose ps --status running --quiet data-operator-worker)
+  worker_count=$(printf '%s\n' "$worker_ids" | sed '/^$/d' | wc -l | tr -d ' ')
+  test "$worker_count" = 1 || {
+    echo "expected exactly one running Data Operator Worker, found $worker_count" >&2
+    return 1
+  }
+  worker_id=$(printf '%s\n' "$worker_ids" | sed -n '1p')
+  docker inspect --format '{{json .Config.Cmd}}' "$worker_id" \
+    >"$evidence_dir/data-operator-worker-command.json"
+  grep -F 'thesistrace-data-operator' \
+    "$evidence_dir/data-operator-worker-command.json" >/dev/null
+  grep -F 'worker' "$evidence_dir/data-operator-worker-command.json" >/dev/null
+  if grep -F -- '--once' "$evidence_dir/data-operator-worker-command.json" >/dev/null; then
+    echo "Production Data Operator Worker is running as a one-shot command" >&2
+    return 1
+  fi
+}
+
+verify_research_child_cgroup_oom_detection() {
+  backend_image=$(runtime_image_name initialize)
+  output="$evidence_dir/research-child-cgroup-oom.json"
+  docker run --rm \
+    --memory 201326592 \
+    --memory-swap 201326592 \
+    --entrypoint python \
+    "$backend_image" -c '
+import json
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+from thesistrace.research_run.execution import (
+    ResearchExecutionResourceExhausted,
+    SupervisedResearchExecution,
+)
+from thesistrace.research_run.supervised_child import SupervisedChildTransport
+
+def oom_kill_count():
+    for path in (
+        Path("/sys/fs/cgroup/memory.events.local"),
+        Path("/sys/fs/cgroup/memory.events"),
+    ):
+        if not path.exists():
+            continue
+        values = dict(line.split(maxsplit=1) for line in path.read_text().splitlines())
+        if "oom_kill" in values:
+            return int(values["oom_kill"])
+    return None
+
+before = oom_kill_count()
+if before is None:
+    raise SystemExit("cgroup v2 oom_kill evidence is unavailable")
+child = subprocess.Popen(
+    [
+        sys.executable,
+        "-c",
+        "values=[]\nwhile True: values.append(bytearray(16 * 1024 * 1024))",
+    ],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
+events = []
+execution = SupervisedResearchExecution(
+    SupervisedChildTransport(child, before),
+    SimpleNamespace(
+        run_id="image-smoke-oom",
+        attempt_id="attempt-1",
+        immutable_input=SimpleNamespace(research_kind="factor_evaluation"),
+    ),
+    {"final": False},
+    events.append,
+    1536 * 1024 * 1024,
+)
+classified = False
+try:
+    execution.advance(cancel_requested=lambda: False)
+except ResearchExecutionResourceExhausted:
+    classified = True
+finally:
+    execution.close()
+after = oom_kill_count()
+if not classified:
+    raise SystemExit(
+        f"child OOM was not classified: returncode={child.returncode}, "
+        f"before={before}, after={after}"
+    )
+if child.poll() is None:
+    raise SystemExit("OOM child was not reaped by the production supervisor")
+if not any(event["event"] == "research_execution_child_exited" for event in events):
+    raise SystemExit("production supervisor emitted no child-exit evidence")
+print(json.dumps({
+    "after_oom_kill": after,
+    "before_oom_kill": before,
+    "classified": True,
+    "child_returncode": child.returncode,
+    "child_exit_emitted": True,
+}, sort_keys=True, separators=(",", ":")))
+' >"$output"
+  grep -F '"classified":true' "$output" >/dev/null
+  grep -F '"child_returncode":-9' "$output" >/dev/null
+}
+
+reset_product_state() {
+  compose stop auth auth-fixture-control api research-worker batch-research-worker tracking-worker \
+    data-operator-worker postgres rustfs \
+    >/dev/null 2>&1 || true
+  compose rm --force auth auth-fixture-control auth-initialize api research-worker batch-research-worker \
+    tracking-worker data-operator-worker initialize postgres rustfs \
+    >/dev/null 2>&1 || true
+  "$repo_root/tooling/dev/product-state-volumes" reset "$project_name"
+  compose up --detach --no-build --wait --wait-timeout 300 postgres rustfs
+  compose up --detach --no-build initialize auth-initialize
+  compose wait initialize auth-initialize
+}
+
+provision_image_smoke_auth() {
+  test -n "$auth_session_file" || return 2
+  rm -f -- "$auth_session_file"
+  run_with_environment uv run python \
+    apps/core/tests/acceptance/provision_image_smoke_auth.py "$auth_session_file"
+}
+
+prepare_benchmark_api() {
+  compose up --detach --no-build --wait --wait-timeout 120 auth api
+  postgres_port=$(mapped_port postgres 5432)
+  s3_port=$(mapped_port rustfs 9000)
+  provision_image_smoke_auth
+}
+
+cleanup_runtime_secrets() {
+  test -n "${secret_dir:-}" || return 0
+  if [ -n "${auth_session_file:-}" ]; then
+    rm -f -- "$auth_session_file" || return $?
+  fi
+  if [ -n "${operator_sessions_file:-}" ]; then
+    rm -f -- "$operator_sessions_file" || return $?
+  fi
+  rmdir "$secret_dir"
+}
+
+cleanup_project() {
+  validate_cleanup_target
+  load_test_origin
+  compose_status=0
+  product_state_status=0
+  image_status=0
+  if [ "$compose_cleanup_required" = true ]; then
+    compose down --volumes --remove-orphans || compose_status=$?
+    "$repo_root/tooling/dev/product-state-volumes" erase "$project_name" \
+      || product_state_status=$?
+    if [ "$compose_status" -eq 0 ]; then
+      cleanup_runtime_images || image_status=$?
+    fi
+  fi
+  mount_status=0
+  rm -rf -- "$state_root/$run_id/canonical-data" || mount_status=$?
+  rm -rf -- "$state_root/$run_id/benchmark-data" || mount_status=$?
+  rm -rf -- "$state_root/$run_id/batch-attempt-control" || mount_status=$?
+  port_lock_status=0
+  if [ "$compose_status" -eq 0 ]; then
+    release_test_origin || port_lock_status=$?
+  fi
+  if [ "$compose_status" -ne 0 ]; then
+    return "$compose_status"
+  fi
+  if [ "$product_state_status" -ne 0 ]; then
+    return "$product_state_status"
+  fi
+  if [ "$image_status" -ne 0 ]; then
+    return "$image_status"
+  fi
+  if [ "$port_lock_status" -ne 0 ]; then
+    return "$port_lock_status"
+  fi
+  return "$mount_status"
+}
+
+handle_signal() {
+  requested_status=$1
+  interrupted_status=$requested_status
+  if [ -n "$active_pid" ]; then
+    kill -TERM "-$active_pid" 2>/dev/null \
+      || kill -TERM "$active_pid" 2>/dev/null \
+      || true
+  else
+    exit "$requested_status"
+  fi
+}
+
+run_managed() {
+  active_pid=
+  set -m
+  (
+    trap '' INT
+    "$@" </dev/null
+  ) &
+  active_pid=$!
+  set +m
+
+  set +e
+  wait "$active_pid" 2>/dev/null
+  child_status=$?
+  set -e
+  active_pid=
+  if [ -n "$interrupted_status" ]; then
+    return "$interrupted_status"
+  fi
+  return "$child_status"
+}
+
+run_phase() {
+  phase_name=$1
+  shift
+  phase_started=$(date +%s)
+  if run_managed "$@"; then
+    phase_status=0
+  else
+    phase_status=$?
+  fi
+  phase_finished=$(date +%s)
+  phase_seconds=$((phase_finished - phase_started))
+  printf 'phase=%s seconds=%s status=%s\n' \
+    "$phase_name" "$phase_seconds" "$phase_status" >>"$run_metadata"
+  return "$phase_status"
+}
+
+require_codex_host() {
+  if ! command -v codex >/dev/null 2>&1; then
+    echo "real Codex acceptance requires the Codex CLI" >&2
+    return 1
+  fi
+  if ! codex --ask-for-approval never exec --help >/dev/null; then
+    echo "real Codex acceptance requires the supported noninteractive CLI contract" >&2
+    return 1
+  fi
+}
+
+verify_codex_evidence() {
+  target=$1
+  test -s "$target" || return 1
+  uv run python -c \
+    'import json, pathlib, sys; value=json.loads(pathlib.Path(sys.argv[1]).read_text()); raise SystemExit(0 if isinstance(value, dict) and value.get("status") == "passed" else 1)' \
+    "$target" || return 1
+}
+
+finish() {
+  status=$?
+  trap - EXIT
+  trap '' INT TERM
+  set +e
+  secret_cleanup_status=0
+  cleanup_runtime_secrets || secret_cleanup_status=$?
+  printf 'runtime_secret_cleanup_status=%s\n' \
+    "$secret_cleanup_status" >>"$run_metadata"
+  if [ "$secret_cleanup_status" -ne 0 ]; then
+    echo "runtime secret cleanup failed" >&2
+    if [ "$status" -eq 0 ]; then
+      status=$secret_cleanup_status
+    fi
+  fi
+  # Scan original logs and diagnostics on success as well as failure. A later
+  # redaction protects evidence but must never turn a leak into a passing run.
+  capture_evidence
+  compose logs --no-color agent >"$evidence_dir/agent-events.jsonl" 2>&1 || true
+  capture_worker_log_evidence
+  capture_api_log_evidence
+  capture_gateway_auth_log_evidence
+  if uv run python "$repo_root/tests/sanitize_production_mcp_evidence.py" \
+    scan "$evidence_dir" >"$evidence_dir/raw-canary-scan.json"; then
+    raw_canary_scan_status=0
+  else
+    raw_canary_scan_status=1
+    echo "content canary detected in original diagnostics; see sanitized categories" >&2
+    if [ "$status" -eq 0 ]; then status=1; fi
+  fi
+  printf 'raw_canary_scan_status=%s\n' "$raw_canary_scan_status" >>"$run_metadata"
+  if [ "$status" -ne 0 ]; then
+    if sanitize_mcp_failure_evidence; then
+      failure_evidence_sanitization_status=0
+    else
+      failure_evidence_sanitization_status=1
+      echo "failed to sanitize MCP failure evidence" >&2
+      if discard_unsanitized_failure_evidence; then
+        failure_evidence_discard_status=0
+      else
+        failure_evidence_discard_status=1
+        echo "failed to discard unsanitized MCP evidence" >&2
+      fi
+      printf 'failure_evidence_discard_status=%s\n' \
+        "$failure_evidence_discard_status" >>"$run_metadata"
+    fi
+    printf 'failure_evidence_sanitization_status=%s\n' \
+      "$failure_evidence_sanitization_status" >>"$run_metadata"
+    if scan_secret_canaries; then
+      failure_canary_scan_status=0
+    else
+      failure_canary_scan_status=1
+      echo "secret canary detected in failure evidence" >&2
+    fi
+    printf 'failure_canary_scan_status=%s\n' \
+      "$failure_canary_scan_status" >>"$run_metadata"
+  fi
+  if [ "$status" -ne 0 ] \
+    && [ "$keep_environment" = true ] \
+    && [ "$compose_cleanup_required" = true ]; then
+    echo "preserved failing Test project $project_name" >&2
+    printf 'cleanup_status=kept\n' >>"$run_metadata"
+  else
+    cleanup_started=$(date +%s)
+    cleanup_project
+    cleanup_status=$?
+    cleanup_finished=$(date +%s)
+    printf 'cleanup_seconds=%s\n' "$((cleanup_finished - cleanup_started))" >>"$run_metadata"
+    printf 'cleanup_status=%s\n' "$cleanup_status" >>"$run_metadata"
+    if [ "$cleanup_status" -ne 0 ]; then
+      echo "cleanup failed for Test project $project_name (status $cleanup_status)" >&2
+    fi
+    if [ "$status" -eq 0 ] && [ "$cleanup_status" -ne 0 ]; then
+      status=$cleanup_status
+    fi
+  fi
+  printf 'status=%s\n' "$status" >>"$run_metadata"
+  exit "$status"
+}
+
+command=${1:-}
+case "$command" in
+  identity)
+    printf '%s%s\n' "$canonical_prefix" "$(new_run_id)"
+    exit 0
+    ;;
+  cleanup)
+    project_name=${THESISTRACE_TEST_PROJECT_NAME-}
+    bucket_name=${project_name#"$canonical_prefix"}
+    run_id=${project_name#"$canonical_prefix"}
+    data_mount="$state_root/$run_id/canonical-data"
+    benchmark_mount="$state_root/$run_id/benchmark-data"
+    batch_attempt_control_directory="$state_root/$run_id/batch-attempt-control/.batch-attempts"
+    cleanup_project
+    exit 0
+    ;;
+  stop-postgres | restart-postgres | stop-rustfs | restart-rustfs)
+    project_name=${THESISTRACE_TEST_PROJECT_NAME-}
+    bucket_name=${project_name#"$canonical_prefix"}
+    run_id=${project_name#"$canonical_prefix"}
+    data_mount="$state_root/$run_id/canonical-data"
+    benchmark_mount="$state_root/$run_id/benchmark-data"
+    batch_attempt_control_directory="$state_root/$run_id/batch-attempt-control/.batch-attempts"
+    validate_cleanup_target
+    load_test_origin
+    service=postgres
+    if [ "$command" = stop-rustfs ] || [ "$command" = restart-rustfs ]; then
+      service=rustfs
+    fi
+    if [ "$command" = stop-postgres ] || [ "$command" = stop-rustfs ]; then
+      compose stop "$service" >&2
+      exit 0
+    fi
+    compose restart "$service" >&2
+    readiness_attempt=0
+    until {
+      if [ "$service" = postgres ]; then
+        compose exec -T postgres pg_isready -U thesistrace_owner -d thesistrace \
+          >/dev/null 2>&1
+      else
+        compose exec -T rustfs sh -c \
+          'curl -fsS http://127.0.0.1:9000/health' >/dev/null 2>&1
+      fi
+    }; do
+      readiness_attempt=$((readiness_attempt + 1))
+      if [ "$readiness_attempt" -ge 60 ]; then
+        echo "$service did not become ready after restart" >&2
+        exit 1
+      fi
+      sleep 1
+    done
+    if [ "$service" = postgres ]; then
+      mapped_port postgres 5432
+    else
+      s3_port=$(mapped_port rustfs 9000)
+      s3_readiness_status=0
+      wait_for_rustfs_s3 probe_rustfs_s3_from_host rustfsadmin rustfsadmin \
+        || s3_readiness_status=$?
+      if [ "$s3_readiness_status" -ne 0 ]; then
+        echo "RustFS S3 API did not become ready after restart" >&2
+        exit "$s3_readiness_status"
+      fi
+      printf '%s\n' "$s3_port"
+    fi
+    exit 0
+    ;;
+  integration | integration-batch-cancel | codex-mcp | performance | e2e | agent-eval | image-smoke) ;;
+  *)
+    echo "usage: $0 {identity|cleanup|stop-postgres|restart-postgres|stop-rustfs|restart-rustfs|integration|integration-batch-cancel|codex-mcp|performance|e2e|agent-eval|image-smoke [--keep-environment]}" >&2
+    exit 2
+    ;;
+esac
+shift
+
+keep_environment=false
+case "${1:-}" in
+  '') ;;
+  --keep-environment)
+    keep_environment=true
+    shift
+    ;;
+  *)
+    echo "unknown $command option: $1" >&2
+    exit 2
+    ;;
+esac
+test "$#" -eq 0 || {
+  echo "$command accepts only --keep-environment" >&2
+  exit 2
+}
+
+if [ "$command" = agent-eval ]; then
+  test "$keep_environment" = false || {
+    echo 'agent-eval cannot retain a credential-bearing environment' >&2
+    exit 2
+  }
+  # Paid execution is never selected by any deterministic command. All three
+  # credentials are explicitly empty above until this Operator-only branch.
+  pnpm --dir "$repo_root/apps/agent" build
+  agent_openai_base_url=${THESISTRACE_AGENT_OPENAI_BASE_URL:-}
+  agent_openai_api_key=${THESISTRACE_AGENT_OPENAI_API_KEY:-}
+  agent_model_registry=$(THESISTRACE_AGENT_OPENAI_API_KEY="$agent_openai_api_key" \
+    THESISTRACE_AGENT_OPENAI_BASE_URL="$agent_openai_base_url" \
+    node "$repo_root/apps/agent/scripts/eval-research.mjs" configure)
+  agent_scripted_model_secret=
+  agent_anthropic_api_key=${THESISTRACE_AGENT_ANTHROPIC_API_KEY:-}
+  agent_google_api_key=${THESISTRACE_AGENT_GOOGLE_API_KEY:-}
+  agent_build_revision=$(git -C "$repo_root" rev-parse HEAD)
+fi
+
+run_id=$(new_run_id)
+project_name="$canonical_prefix$run_id"
+bucket_name="$canonical_prefix$run_id"
+run_root="$state_root/$run_id"
+data_mount="$run_root/canonical-data"
+benchmark_mount="$run_root/benchmark-data"
+batch_attempt_control_directory="$run_root/batch-attempt-control/.batch-attempts"
+evidence_dir="$run_root/evidence"
+pytest_report="$evidence_dir/pytest.xml"
+database_restart_report="$evidence_dir/pytest-database-restart.xml"
+dependency_restart_report="$evidence_dir/pytest-dependency-restart.xml"
+run_metadata="$run_root/run.txt"
+validate_test_project
+mkdir -p "$evidence_dir" "$data_mount" "$benchmark_mount" "$batch_attempt_control_directory"
+secret_dir=
+auth_session_file=
+operator_sessions_file=
+if [ "$command" = image-smoke ] \
+  || [ "$command" = performance ]; then
+  secret_root="$state_root/.runtime-secrets"
+  mkdir -p "$secret_root"
+  chmod 700 "$secret_root"
+  secret_dir=$(mktemp -d "$secret_root/$run_id.XXXXXX")
+  auth_session_file="$secret_dir/auth-session.json"
+  if [ "$command" = image-smoke ]; then
+    operator_sessions_file="$secret_dir/operator-sessions.json"
+  fi
+fi
+git_revision=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || printf unknown)
+git_worktree_dirty=false
+if [ -n "$(git -C "$repo_root" status --short 2>/dev/null)" ]; then
+  git_worktree_dirty=true
+fi
+printf 'run_id=%s\nproject_name=%s\ngit_revision=%s\ngit_worktree_dirty=%s\n' \
+  "$run_id" "$project_name" "$git_revision" "$git_worktree_dirty" >"$run_metadata"
+printf 'test_kind=%s\n' "$command" >>"$run_metadata"
+compose_cleanup_required=false
+acquire_test_origin
+trap release_test_origin EXIT
+printf 'caddy_port=%s\npublic_origin=%s\n' \
+  "$caddy_port" "$public_origin" >>"$run_metadata"
+echo "Test run: $run_id"
+echo "Compose project: $project_name"
+
+trap finish EXIT
+active_pid=
+interrupted_status=
+trap 'handle_signal 130' INT
+trap 'handle_signal 143' TERM
+
+compose config --quiet
+compose_cleanup_required=true
+case "$command" in
+  codex-mcp)
+    run_phase codex-mcp-host-preflight require_codex_host
+    run_phase codex-mcp-infrastructure compose up --detach \
+      --wait --wait-timeout 300 postgres rustfs
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    printf 'postgres_port=%s\ns3_port=%s\n' "$postgres_port" "$s3_port" >>"$run_metadata"
+    run_phase codex-mcp-initialization run_with_environment uv run thesistrace-initialize
+    run_phase codex-mcp-acceptance run_with_environment env \
+      THESISTRACE_REAL_CODEX_EVIDENCE_PATH="$evidence_dir/codex-stdio-acceptance.json" \
+      uv run pytest -c "$repo_root/apps/core/pyproject.toml" --rootdir "$repo_root" -q \
+      apps/core/tests/acceptance/test_real_codex_research_agent_mcp.py \
+      -m real_codex
+    run_phase codex-mcp-evidence verify_codex_evidence \
+      "$evidence_dir/codex-stdio-acceptance.json"
+    ;;
+  integration-batch-cancel)
+    run_phase integration-batch-cancel-infrastructure compose up --detach \
+      --wait --wait-timeout 300 postgres rustfs
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    printf 'postgres_port=%s\ns3_port=%s\n' "$postgres_port" "$s3_port" >>"$run_metadata"
+    run_phase integration-batch-cancel-initialization \
+      run_with_environment uv run thesistrace-initialize
+    run_phase integration-batch-cancel-pytest run_with_environment uv run pytest -c "$repo_root/apps/core/pyproject.toml" --rootdir "$repo_root" -q \
+      apps/core/tests/acceptance/test_core_research_batch_cancel.py \
+      -m "not database_restart and not dependency_restart" --junitxml="$pytest_report"
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-batch-cancel-postgres-restart run_with_environment env \
+      THESISTRACE_DATABASE_RESTART_PHASE=1 uv run pytest -c "$repo_root/apps/core/pyproject.toml" --rootdir "$repo_root" -q \
+      apps/core/tests/acceptance/test_core_research_batch_cancel.py::test_cancel_check_fails_closed_during_postgres_outage_and_reconciles_after_restart \
+      --junitxml="$database_restart_report"
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-batch-cancel-rustfs-restart run_with_environment env \
+      THESISTRACE_DATABASE_RESTART_PHASE=1 uv run pytest -c "$repo_root/apps/core/pyproject.toml" --rootdir "$repo_root" -q \
+      apps/core/tests/acceptance/test_core_research_batch_cancel.py::test_cancel_is_terminal_while_object_cleanup_retries_after_rustfs_restart \
+      --junitxml="$dependency_restart_report"
+    ;;
+  performance)
+    use_image_overlay=true
+    run_phase performance-images build_runtime_images
+    run_phase performance-infrastructure compose up --detach --no-build \
+      --wait --wait-timeout 300 postgres rustfs initialize
+    run_phase performance-initialization compose wait initialize
+    qualification_dir="$evidence_dir/long-research"
+    mkdir -p "$qualification_dir"
+    run_phase performance-prepare compose_run initialize \
+      python /qualification/long_research_qualification.py prepare \
+      --output /smoke-evidence/long-research/preparation.json
+    for research_kind in factor_evaluation strategy_backtest; do
+      sample_index=0
+      while [ "$sample_index" -lt 5 ]; do
+        run_phase "performance-$research_kind-cold-$sample_index-product-state-reset" \
+          reset_product_state
+        run_phase "performance-$research_kind-cold-$sample_index-api" \
+          prepare_benchmark_api
+        run_phase "performance-$research_kind-cold-$sample_index" \
+          compose_run \
+          -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+          research-worker python /qualification/long_research_qualification.py sample \
+          --research-kind "$research_kind" \
+          --phase cold --index "$sample_index" --require-fresh-product-state \
+          --log "/qualification-evidence/long-research/$research_kind-cold-$sample_index.log" \
+          --output "/qualification-evidence/long-research/$research_kind-cold-$sample_index.json"
+        sample_index=$((sample_index + 1))
+      done
+    done
+    run_phase performance-warm-preload-product-state-reset reset_product_state
+    run_phase performance-warm-preload compose_run \
+      research-worker python /qualification/long_research_qualification.py preload \
+      --output /qualification-evidence/long-research/preload.json
+    for research_kind in factor_evaluation strategy_backtest; do
+      sample_index=0
+      while [ "$sample_index" -lt 5 ]; do
+        run_phase "performance-$research_kind-warm-$sample_index-product-state-reset" \
+          reset_product_state
+        run_phase "performance-$research_kind-warm-$sample_index-api" \
+          prepare_benchmark_api
+        run_phase "performance-$research_kind-warm-$sample_index" \
+          compose_run \
+          -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+          research-worker python /qualification/long_research_qualification.py sample \
+          --research-kind "$research_kind" \
+          --phase warm --index "$sample_index" --require-fresh-product-state \
+          --log "/qualification-evidence/long-research/$research_kind-warm-$sample_index.log" \
+          --output "/qualification-evidence/long-research/$research_kind-warm-$sample_index.json"
+        sample_index=$((sample_index + 1))
+      done
+    done
+    for research_kind in factor_evaluation strategy_backtest; do
+      run_phase "performance-$research_kind-cancellation-product-state-reset" \
+        reset_product_state
+      run_phase "performance-$research_kind-cancellation-api" \
+        prepare_benchmark_api
+      run_phase "performance-$research_kind-cancellation" compose_run \
+        -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+        research-worker python /qualification/long_research_qualification.py cancel \
+        --research-kind "$research_kind" \
+        --log "/qualification-evidence/long-research/$research_kind-cancellation.log" \
+        --output "/qualification-evidence/long-research/$research_kind-cancellation.json"
+    done
+    backend_image=$(runtime_image_name initialize)
+    image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
+    run_phase performance-qualification compose_run initialize \
+      python /qualification/long_research_qualification.py assemble \
+      --samples /smoke-evidence/long-research \
+      --image-revision "$image_revision" \
+      --output /smoke-evidence/long-research-qualification.json
+    compose logs --no-color api >"$evidence_dir/long-research/api.log"
+    compose ps --all >"$evidence_dir/long-research/compose-ps.txt"
+    compose images --format json >"$evidence_dir/long-research/images.jsonl"
+    ;;
+  integration)
+    run_phase integration-infrastructure compose up --detach \
+      --wait --wait-timeout 300 postgres rustfs resend-fake
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-rustfs-s3-ready \
+      wait_for_rustfs_s3 probe_rustfs_s3_from_host rustfsadmin rustfsadmin
+    run_phase integration-auth-initialization compose up --detach auth-initialize
+    run_phase integration-auth-initializer-exit compose wait auth-initialize
+    run_phase integration-auth compose up --detach --wait --wait-timeout 120 auth
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    auth_port=$(mapped_port auth 8200)
+    resend_port=$(mapped_port resend-fake 8300)
+    auth_internal_origin="http://127.0.0.1:$auth_port"
+    resend_test_origin="http://127.0.0.1:$resend_port"
+    printf 'postgres_port=%s\ns3_port=%s\nauth_port=%s\nresend_port=%s\n' \
+      "$postgres_port" "$s3_port" "$auth_port" "$resend_port" >>"$run_metadata"
+    run_phase integration-initialization run_with_environment uv run thesistrace-initialize
+    run_phase integration-pytest run_with_environment uv run pytest -c "$repo_root/apps/core/pyproject.toml" --rootdir "$repo_root" -q \
+      apps/core/tests/integration apps/core/tests/acceptance \
+      -m "not database_restart and not dependency_restart and not real_codex" \
+      --junitxml="$pytest_report"
+    postgres_port=$(mapped_port postgres 5432)
+    run_phase integration-database-restart run_with_environment env \
+      THESISTRACE_DATABASE_RESTART_PHASE=1 \
+      uv run pytest -c "$repo_root/apps/core/pyproject.toml" --rootdir "$repo_root" -q apps/core/tests/acceptance/test_core_direct_research_run_admission.py \
+      -m database_restart --junitxml="$database_restart_report"
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-rustfs-restart run_with_environment env \
+      THESISTRACE_DATABASE_RESTART_PHASE=1 uv run pytest -c "$repo_root/apps/core/pyproject.toml" --rootdir "$repo_root" -q \
+      apps/core/tests/acceptance/test_core_research_batch_factor_recovery.py::test_real_rustfs_loss_retries_the_complete_factor_task \
+      --junitxml="$dependency_restart_report"
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-rustfs-strategy-restart run_with_environment env \
+      THESISTRACE_DATABASE_RESTART_PHASE=1 uv run pytest -c "$repo_root/apps/core/pyproject.toml" --rootdir "$repo_root" -q \
+      apps/core/tests/acceptance/test_core_research_batch_strategy_execution.py::test_real_rustfs_loss_retries_shared_strategy_prerequisite \
+      --junitxml="$evidence_dir/pytest-rustfs-strategy-restart.xml"
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-rustfs-batch-cancel-restart run_with_environment env \
+      THESISTRACE_DATABASE_RESTART_PHASE=1 uv run pytest -c "$repo_root/apps/core/pyproject.toml" --rootdir "$repo_root" -q \
+      apps/core/tests/acceptance/test_core_research_batch_cancel.py::test_cancel_is_terminal_while_object_cleanup_retries_after_rustfs_restart \
+      --junitxml="$evidence_dir/pytest-rustfs-batch-cancel-restart.xml"
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-postgres-batch-restart run_with_environment env \
+      THESISTRACE_DATABASE_RESTART_PHASE=1 uv run pytest -c "$repo_root/apps/core/pyproject.toml" --rootdir "$repo_root" -q \
+      apps/core/tests/acceptance/test_core_research_batch_factor_recovery.py::test_real_postgres_loss_recovers_after_child_exit \
+      --junitxml="$evidence_dir/pytest-postgres-batch-restart.xml"
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase integration-postgres-strategy-restart run_with_environment env \
+      THESISTRACE_DATABASE_RESTART_PHASE=1 uv run pytest -c "$repo_root/apps/core/pyproject.toml" --rootdir "$repo_root" -q \
+      apps/core/tests/acceptance/test_core_research_batch_strategy_execution.py::test_real_postgres_loss_reuses_acknowledged_private_artifact \
+      --junitxml="$evidence_dir/pytest-postgres-strategy-restart.xml"
+    ;;
+  e2e | agent-eval)
+    run_phase e2e-images build_runtime_images
+    run_phase e2e-infrastructure compose up --detach --no-build \
+      --wait --wait-timeout 300 postgres rustfs
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase e2e-rustfs-s3-ready \
+      wait_for_rustfs_s3 probe_rustfs_s3_from_host rustfsadmin rustfsadmin
+    run_phase e2e-initializers compose up --detach --no-build \
+      initialize auth-initialize
+    run_phase e2e-initialization compose wait initialize auth-initialize
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase e2e-operator-bootstrap run_with_environment uv run \
+      thesistrace-data-operator bootstrap \
+      --idempotency-key financial-release-bootstrap \
+      --as-of 2026-08-05T18:00:00+08:00 \
+      --start-date 2010-01-04 \
+      --replay tests/fixtures/tushare-financial-product-replay.json
+    run_phase e2e-prepare-data run_with_environment uv run python \
+      tests/e2e/support/prepare_current_data.py
+    run_phase e2e-application compose up --detach --no-build \
+      --wait --wait-timeout 300 \
+      auth auth-fixture-control agent api research-worker batch-research-worker \
+      tracking-worker data-operator-worker web
+    run_phase e2e-tushare-secret-scope verify_tushare_secret_scope
+    resend_port=$(mapped_port resend-fake 8300)
+    auth_fixture_port=$(mapped_port auth-fixture-control 8260)
+    auth_proxy_port=$(mapped_port auth-exchange-proxy 8250)
+    mcp_proxy_port=$(mapped_port mcp-fault-proxy 8150)
+    resend_test_origin="http://127.0.0.1:$resend_port"
+    auth_fixture_origin="http://127.0.0.1:$auth_fixture_port"
+    auth_proxy_origin="http://127.0.0.1:$auth_proxy_port"
+    mcp_proxy_origin="http://127.0.0.1:$mcp_proxy_port"
+    printf 'postgres_port=%s\ns3_port=%s\nresend_port=%s\nauth_fixture_port=%s\nauth_proxy_port=%s\nmcp_proxy_port=%s\n' \
+      "$postgres_port" "$s3_port" "$resend_port" "$auth_fixture_port" \
+      "$auth_proxy_port" "$mcp_proxy_port" >>"$run_metadata"
+    run_phase e2e-auth-fixture-ready wait_for_auth_fixture_control
+    run_phase e2e-caddy-single-origin verify_caddy_single_origin
+    if [ "$command" = agent-eval ]; then
+      run_phase agent-eval-real-provider run_agent_eval
+    elif [ -n "${THESISTRACE_TEST_PLAYWRIGHT_GREP:-}" ]; then
+      run_phase e2e-playwright run_playwright pnpm exec playwright test --config tests/playwright.config.ts \
+        --grep "$THESISTRACE_TEST_PLAYWRIGHT_GREP"
+    else
+      run_phase e2e-playwright run_playwright pnpm exec playwright test --config tests/playwright.config.ts
+    fi
+    ;;
+  image-smoke)
+    smoke_state=/smoke-evidence/image-smoke-state.json
+    bootstrap_replay=/smoke-evidence/tushare-financial-product-full-replay.json
+    run_phase image-smoke-images build_runtime_images
+    backend_image=$(runtime_image_name initialize)
+    image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
+    run_phase image-smoke-fresh-named-volume-mount \
+      base_compose_run \
+      --entrypoint /bin/true batch-research-worker
+    run_phase image-smoke-worker-capacity-rejection verify_worker_capacity_rejection
+    run_phase image-smoke-research-child-cgroup-oom \
+      verify_research_child_cgroup_oom_detection
+    run_phase image-smoke-infrastructure compose up --detach --no-build \
+      --wait --wait-timeout 300 postgres rustfs
+    run_phase image-smoke-rustfs-s3-ready wait_for_rustfs_s3 \
+      probe_rustfs_s3_from_image
+    run_phase image-smoke-initializers compose up --detach --no-build \
+      initialize auth-initialize
+    run_phase image-smoke-initialization compose wait initialize auth-initialize
+    run_phase image-smoke-bootstrap-replay compose_run initialize \
+      python /smoke/tests/e2e/support/prepare_image_smoke_bootstrap_replay.py \
+      --input /smoke/tests/fixtures/tushare-financial-product-replay.json \
+      --output "$bootstrap_replay"
+    run_phase image-smoke-operator-bootstrap compose_run initialize \
+      thesistrace-data-operator bootstrap \
+      --idempotency-key financial-release-bootstrap \
+      --as-of 2026-08-05T18:00:00+08:00 \
+      --start-date 2010-01-04 \
+      --replay "$bootstrap_replay"
+    run_phase image-smoke-prepare-data compose_run initialize \
+      python /smoke/tests/e2e/support/prepare_image_smoke_data.py
+    run_phase image-smoke-mcp-preflight run_mcp_image_smoke preflight \
+      >"$evidence_dir/mcp-preflight.json" \
+      2>"$evidence_dir/mcp-preflight.stderr.log"
+    run_phase image-smoke-application compose up --detach --no-build \
+      --wait --wait-timeout 300 \
+      auth agent api web
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    run_phase image-smoke-auth-session provision_image_smoke_auth
+    run_phase image-smoke-health verify_image_health initial
+    run_phase image-smoke-caddy-single-origin verify_caddy_single_origin
+    run_phase image-smoke-caddy-backend-independence \
+      verify_caddy_backend_independence
+    run_phase image-smoke-postgresql-readiness \
+      verify_service_readiness_outage postgres postgresql
+    run_phase image-smoke-rustfs-readiness \
+      verify_service_readiness_outage rustfs rustfs
+    run_phase image-smoke-auth-readiness \
+      verify_service_readiness_outage auth auth
+    run_phase image-smoke-dataset-readiness verify_dataset_readiness_outage
+    run_phase image-smoke-operator-fixture run_with_environment uv run python \
+      apps/core/tests/acceptance/qualify_operator_image_smoke.py provision \
+      "$operator_sessions_file" \
+      >"$evidence_dir/operator-provision.json" \
+      2>"$evidence_dir/operator-provision.stderr.log"
+    run_phase image-smoke-operator-worker-unavailable compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_OPERATOR_SESSION_FILE=/smoke-secrets/operator-sessions.json \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/tests/production_image_smoke.py operator-unavailable \
+      >"$evidence_dir/operator-unavailable.json" \
+      2>"$evidence_dir/operator-unavailable.stderr.log"
+    run_phase image-smoke-data-operator-secret-rejection \
+      verify_data_operator_worker_secret_rejection
+    run_phase image-smoke-workers compose up --detach --no-build \
+      --wait --wait-timeout 120 \
+      research-worker batch-research-worker tracking-worker data-operator-worker
+    run_phase image-smoke-single-data-operator-worker \
+      verify_single_data_operator_worker
+    run_phase image-smoke-tushare-secret-scope verify_tushare_secret_scope
+    run_phase image-smoke-operator-processed compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_OPERATOR_SESSION_FILE=/smoke-secrets/operator-sessions.json \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/tests/production_image_smoke.py operator-processed \
+      >"$evidence_dir/operator-processed.json" \
+      2>"$evidence_dir/operator-processed.stderr.log"
+    run_phase image-smoke-operator-transfer run_with_environment uv run python \
+      apps/core/tests/acceptance/qualify_operator_image_smoke.py transfer \
+      "$operator_sessions_file" \
+      >"$evidence_dir/operator-transfer.json" \
+      2>"$evidence_dir/operator-transfer.stderr.log"
+    run_phase image-smoke-operator-transferred compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_OPERATOR_SESSION_FILE=/smoke-secrets/operator-sessions.json \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/tests/production_image_smoke.py operator-transferred \
+      >"$evidence_dir/operator-transferred.json" \
+      2>"$evidence_dir/operator-transferred.stderr.log"
+    run_phase image-smoke-receipt-age compose_run initialize \
+      python /smoke/apps/core/tests/acceptance/age_operator_image_smoke_receipt.py \
+      image-smoke-operator-market-refresh \
+      >"$evidence_dir/operator-receipt-aged.json" \
+      2>"$evidence_dir/operator-receipt-aged.stderr.log"
+    run_phase image-smoke-receipt-collection compose_run initialize \
+      thesistrace-data-operator collect \
+      --idempotency-key image-smoke-operator-receipt-retention \
+      >"$evidence_dir/operator-receipt-collection.json" \
+      2>"$evidence_dir/operator-receipt-collection.stderr.log"
+    run_phase image-smoke-receipt-collection-count grep -F \
+      '"deleted_receipt_count":1' \
+      "$evidence_dir/operator-receipt-collection.json"
+    run_phase image-smoke-operator-receipt-cleaned compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_OPERATOR_SESSION_FILE=/smoke-secrets/operator-sessions.json \
+      -e THESISTRACE_TEST_OPERATOR_STATE=/smoke-evidence/operator-processed.json \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/tests/production_image_smoke.py operator-receipt-cleaned \
+      >"$evidence_dir/operator-receipt-cleaned.json" \
+      2>"$evidence_dir/operator-receipt-cleaned.stderr.log"
+    run_phase image-smoke-receipt-worker-stop compose stop data-operator-worker
+    run_phase image-smoke-receipt-worker-reopen compose up --detach --no-build \
+      --wait --wait-timeout 120 data-operator-worker
+    network_internal=$(docker network inspect "${project_name}_default" \
+      --format '{{.Internal}}')
+    test "$network_internal" = true
+    printf 'internal=%s\n' "$network_internal" >"$evidence_dir/network.txt"
+    compose images --format json >"$evidence_dir/images.jsonl"
+    compose ps --all >"$evidence_dir/compose-ps-before-restart.txt"
+    run_phase image-smoke-before compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      -e THESISTRACE_TEST_IMAGE_ID="$image_revision" \
+      initialize python /smoke/tests/production_image_smoke.py before \
+      >"$evidence_dir/smoke-before.json" \
+      2>"$evidence_dir/smoke-before.stderr.log"
+    run_phase image-smoke-worker-loss compose kill research-worker
+    run_phase image-smoke-expire-worker-loss compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/tests/production_image_smoke.py expire-worker-loss \
+      >"$evidence_dir/smoke-expire-worker-loss.json" \
+      2>"$evidence_dir/smoke-expire-worker-loss.stderr.log"
+    run_phase image-smoke-checkpointed-application-restart \
+      compose restart api tracking-worker
+    run_phase image-smoke-checkpointed-database-restart compose restart postgres
+    run_phase image-smoke-checkpointed-post-database-restart \
+      compose restart api tracking-worker
+    run_phase image-smoke-checkpointed-reopen compose up --detach --no-build \
+      --wait --wait-timeout 120 api tracking-worker
+    run_phase image-smoke-checkpointed compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/tests/production_image_smoke.py checkpointed \
+      >"$evidence_dir/smoke-checkpointed.json" \
+      2>"$evidence_dir/smoke-checkpointed.stderr.log"
+    run_phase image-smoke-worker-reopen compose up --detach --no-build \
+      --wait --wait-timeout 120 research-worker
+    run_phase image-smoke-recovered compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/tests/production_image_smoke.py recovered \
+      >"$evidence_dir/smoke-recovered.json" \
+      2>"$evidence_dir/smoke-recovered.stderr.log"
+    run_phase image-smoke-application-restart \
+      compose restart api research-worker batch-research-worker tracking-worker \
+        data-operator-worker
+    run_phase image-smoke-database-restart compose restart postgres
+    run_phase image-smoke-post-database-restart \
+      compose restart api research-worker batch-research-worker tracking-worker \
+        data-operator-worker
+    run_phase image-smoke-reopen compose up --detach --no-build \
+      --wait --wait-timeout 120 api research-worker batch-research-worker \
+      tracking-worker data-operator-worker
+    run_phase image-smoke-persisted compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/tests/production_image_smoke.py persisted \
+      >"$evidence_dir/smoke-persisted.json" \
+      2>"$evidence_dir/smoke-persisted.stderr.log"
+    run_phase image-smoke-rustfs-outage compose stop rustfs
+    run_phase image-smoke-publish-transient-target compose_run \
+      initialize python /smoke/tests/e2e/support/prepare_image_smoke_data.py lagged \
+      >"$evidence_dir/transient-target.json" \
+      2>"$evidence_dir/transient-target.stderr.log"
+    run_phase image-smoke-transient-failed compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/tests/production_image_smoke.py transient-failed \
+      >"$evidence_dir/smoke-transient-failed.json" \
+      2>"$evidence_dir/smoke-transient-failed.stderr.log"
+    run_phase image-smoke-rustfs-reopen compose up --detach --no-build \
+      --wait --wait-timeout 120 rustfs
+    run_phase image-smoke-after compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/tests/production_image_smoke.py after \
+      >"$evidence_dir/smoke-after.json" \
+      2>"$evidence_dir/smoke-after.stderr.log"
+    run_phase image-smoke-reset-worker-stop compose stop research-worker batch-research-worker
+    run_phase image-smoke-reset-ready compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/tests/production_image_smoke.py reset-ready \
+      >"$evidence_dir/smoke-reset-ready.json" \
+      2>"$evidence_dir/smoke-reset-ready.stderr.log"
+    run_phase image-smoke-worker-logs capture_worker_log_evidence
+    run_phase image-smoke-api-logs capture_api_log_evidence
+    run_phase image-smoke-gateway-auth-logs capture_gateway_auth_log_evidence
+    run_phase image-smoke-worker-event-contract compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      -e THESISTRACE_TEST_WORKER_EVENTS=/smoke-evidence/worker-events.jsonl \
+      initialize python /smoke/tests/production_image_smoke.py worker-events \
+      >"$evidence_dir/smoke-worker-events.json" \
+      2>"$evidence_dir/smoke-worker-events.stderr.log"
+    run_phase image-smoke-product-state-reset reset_product_state
+    run_phase image-smoke-reset-api compose up --detach --no-build \
+      --wait --wait-timeout 120 auth api
+    run_phase image-smoke-reset-auth-session provision_image_smoke_auth
+    run_phase image-smoke-reset-verified compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/tests/production_image_smoke.py reset \
+      >"$evidence_dir/smoke-reset.json" \
+      2>"$evidence_dir/smoke-reset.stderr.log"
+    compose ps --all >"$evidence_dir/compose-ps-after-restart.txt"
+    run_phase image-smoke-bounded-evidence capture_evidence
+    run_phase image-smoke-observability compose_run \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:$caddy_port \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      -e THESISTRACE_TEST_API_EVENTS=/smoke-evidence/api-events.jsonl \
+      -e THESISTRACE_TEST_WORKER_EVENTS=/smoke-evidence/worker-events.jsonl \
+      -e THESISTRACE_TEST_CADDY_EVENTS=/smoke-evidence/caddy-events.jsonl \
+      -e THESISTRACE_TEST_AUTH_EVENTS=/smoke-evidence/auth-events.jsonl \
+      initialize python /smoke/tests/production_image_smoke.py observability \
+      >"$evidence_dir/smoke-observability.json" \
+      2>"$evidence_dir/smoke-observability.stderr.log"
+    run_phase image-smoke-mcp-http-before run_mcp_image_smoke http-before \
+      >"$evidence_dir/mcp-http-before.json" \
+      2>"$evidence_dir/mcp-http-before.stderr.log"
+    run_phase image-smoke-mcp-api-stop compose stop --timeout 30 api
+    run_phase image-smoke-mcp-api-stopped capture_stopped_api_state
+    run_phase image-smoke-mcp-api-reopen compose up --detach --no-build \
+      --wait --wait-timeout 120 api
+    run_phase image-smoke-mcp-workers compose up --detach --no-build \
+      --wait --wait-timeout 120 \
+      research-worker batch-research-worker tracking-worker data-operator-worker
+    run_phase image-smoke-mcp-http-after run_mcp_image_smoke http-after \
+      >"$evidence_dir/mcp-http-after.json" \
+      2>"$evidence_dir/mcp-http-after.stderr.log"
+    run_phase image-smoke-mcp-stdio run_mcp_image_smoke stdio \
+      >"$evidence_dir/mcp-stdio.json" \
+      2>"$evidence_dir/mcp-stdio.stderr.log"
+    run_phase image-smoke-mcp-api-logs capture_api_log_evidence
+    run_phase image-smoke-mcp-evidence run_mcp_image_smoke evidence \
+      >"$evidence_dir/mcp-image-evidence.json" \
+      2>"$evidence_dir/mcp-image-evidence.stderr.log"
+    operator_browser_state_root="$run_root/operator-browser-state"
+    data_mount="$operator_browser_state_root/canonical-data"
+    benchmark_mount="$operator_browser_state_root/benchmark-data"
+    batch_attempt_control_directory="$operator_browser_state_root/batch-attempt-control/.batch-attempts"
+    mkdir -p "$data_mount" "$benchmark_mount" "$batch_attempt_control_directory"
+    printf 'operator_browser_state_root=%s\n' \
+      "$operator_browser_state_root" >>"$run_metadata"
+    run_phase image-smoke-operator-browser-reset reset_product_state
+    run_phase image-smoke-operator-browser-bootstrap compose_run initialize \
+      thesistrace-data-operator bootstrap \
+      --idempotency-key financial-release-bootstrap \
+      --as-of 2026-08-05T18:00:00+08:00 \
+      --start-date 2010-01-04 \
+      --replay /smoke/tests/fixtures/tushare-financial-product-replay.json
+    run_phase image-smoke-operator-browser-prepare-data compose_run initialize \
+      python /smoke/tests/e2e/support/prepare_current_data.py
+    run_phase image-smoke-operator-browser-worker compose up --detach --no-build \
+      --wait --wait-timeout 120 data-operator-worker
+    run_phase image-smoke-operator-browser-market-baseline compose_run initialize \
+      python /smoke/tests/e2e/support/publish_financial_track_head.py lagged
+    run_phase image-smoke-operator-browser-financial-baseline compose_run initialize \
+      python /smoke/tests/e2e/support/publish_financial_track_head.py recovered
+    run_phase image-smoke-operator-browser-application compose up --detach --no-build \
+      --wait --wait-timeout 300 \
+      auth auth-fixture-control api research-worker batch-research-worker tracking-worker \
+      data-operator-worker web
+    auth_fixture_port=$(mapped_port auth-fixture-control 8260)
+    auth_fixture_origin="http://127.0.0.1:$auth_fixture_port"
+    run_phase image-smoke-operator-browser-auth-fixture-ready wait_for_auth_fixture_control
+    run_phase image-smoke-operator-browser run_operator_playwright \
+      pnpm exec playwright test --config tests/playwright.config.ts operator-console.spec.ts --grep "Operator Market submission and response recovery"
+    run_phase image-smoke-final-evidence capture_evidence
+    run_phase image-smoke-final-secret-scan scan_secret_canaries
+    ;;
+esac

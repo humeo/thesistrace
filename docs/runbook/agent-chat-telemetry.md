@@ -35,7 +35,7 @@ broken pipes) without terminating product execution or logging its own error.
 
 Native Mastra/MCP loggers stay silent, CopilotKit telemetry is disabled, and
 the pinned AG-UI bridge's direct raw warnings are removed by the reproducible
-pnpm patch documented in `patches/README.md`. Never turn on framework payload
+pnpm patch documented in `tooling/patches/README.md`. Never turn on framework payload
 tracing or print raw exceptions for diagnosis.
 
 `pnpm test:e2e` includes the final-image privacy scenario. Thirteen distinct

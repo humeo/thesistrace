@@ -1763,7 +1763,7 @@ def _after_restart(
     subprocess.run(
         [
             sys.executable,
-            "/smoke/browser/prepare_image_smoke_data.py",
+            "/smoke/tests/e2e/support/prepare_image_smoke_data.py",
             "recovered",
         ],
         check=True,

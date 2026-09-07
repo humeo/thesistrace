@@ -8,6 +8,26 @@ The active implementation is the module-first Core described in
 Current product language is defined in [`CONTEXT.md`](CONTEXT.md), and accepted
 decisions are grouped in the [ADR index](docs/adr/README.md).
 
+## Repository layout
+
+- `apps/core`: Python Core, module tests, benchmarks, `pyproject.toml`, `uv.lock`,
+  and the shared API/Worker Dockerfile.
+- `apps/web`, `apps/auth`, `apps/agent`: each application's source, tests,
+  configuration, package manifest, and Dockerfile.
+- `packages/contracts`: the explicit `@thesistrace/contracts` workspace package
+  used by Web and Agent.
+- `deploy`: Compose topology and overlays, Caddy configuration, and PostgreSQL
+  initialization.
+- `tooling`: configuration, development lifecycle, test orchestration, and
+  dependency patches.
+- `tests`: cross-application E2E, final-image checks, and shared fixtures.
+- `docs`: architecture, decisions, and operating instructions.
+
+The root `package.json` provides the supported project commands. Application
+dependencies belong in their own manifests; the root owns cross-application test
+tools. Install JavaScript dependencies once from the root with the shared pnpm
+lockfile. Python dependencies use `uv sync --project apps/core --frozen`.
+
 ## Local development
 
 Install [mise](https://mise.jdx.dev/), [uv](https://docs.astral.sh/uv/), and
@@ -28,7 +48,7 @@ mise exec -- pnpm bootstrap
 
 `config:init` generates local database, object-store, Auth, and MCP signing
 credentials once and refuses to overwrite an existing file. Model definitions
-remain in `config/model-registry.json`; set the canonical provider key and
+remain in `apps/agent/config/model-registry.json`; set the canonical provider key and
 `THESISTRACE_AGENT_OPENAI_BASE_URL` in `.env` for your chosen endpoint.
 See the [configuration guide](docs/runbook/configuration.md) for the complete
 configuration inventory, Production settings, and private CLI commands.

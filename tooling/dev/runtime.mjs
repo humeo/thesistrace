@@ -16,7 +16,7 @@ try {
       || (action === 'run' && !args.length) || (mode === 'production' && !['validate', 'up', 'run'].includes(action))) fail('RUNTIME_USAGE_INVALID');
     if (action === 'bootstrap') {
       await run('mise', ['install'], { cwd: root });
-      await run('uv', ['sync', '--frozen'], { cwd: root });
+      await run('uv', ['sync', '--project', 'apps/core', '--frozen'], { cwd: root });
       await run('mise', ['exec', '--', 'pnpm', 'install', '--frozen-lockfile'], { cwd: root });
     }
     const compose = deployment(mode);
@@ -27,7 +27,7 @@ try {
     else if (action === 'run') await compose('run', '--rm', '--no-deps', '-T', ...args);
     else if (action === 'reset' || action === 'erase') {
       await compose('down', '--remove-orphans');
-      await run(`${root}/scripts/product-state-volumes`, [action, project]);
+      await run(`${root}/tooling/dev/product-state-volumes`, [action, project]);
       if (action === 'reset') await start();
     } else if (action === 'watch') {
       try { await compose('up', '--watch'); }

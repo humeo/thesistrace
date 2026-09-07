@@ -26,9 +26,9 @@ htmlcov/
 # JavaScript dependencies and build output
 node_modules/
 .pnpm-store/
-auth/dist/
-agent/dist/
-web/dist/
+apps/auth/dist/
+apps/agent/dist/
+apps/web/dist/
 *.tsbuildinfo
 coverage/
 

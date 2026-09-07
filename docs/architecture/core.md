@@ -317,7 +317,7 @@ permanent retention.
 ## Modules and dependency direction
 
 ```text
-src/thesistrace/
+apps/core/src/thesistrace/
 ├── researcher/
 ├── alpha_language/
 ├── benchmark/

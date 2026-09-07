@@ -16,7 +16,7 @@ For Production, use the explicit environment file and topology from the
 
 ```sh
 pnpm config:run docker compose --env-file .env --project-name thesistrace-dev \
-  -f deploy/core/compose.yaml -f deploy/core/compose.dev.yaml run --rm \
+  -f deploy/compose.yaml -f deploy/compose.dev.yaml run --rm \
   -e THESISTRACE_TUSHARE_TOKEN \
   api thesistrace-data-operator bootstrap \
   --idempotency-key bootstrap-2026-08-09 \
@@ -83,7 +83,7 @@ the selected source and publication path:
 
 ```sh
 pnpm config:run docker compose --env-file .env --project-name thesistrace-dev \
-  -f deploy/core/compose.yaml -f deploy/core/compose.dev.yaml run --rm api \
+  -f deploy/compose.yaml -f deploy/compose.dev.yaml run --rm api \
   thesistrace-data-operator refresh \
   --idempotency-key refresh-2026-08-12 \
   --as-of 2026-08-12T18:00:00+08:00
@@ -145,7 +145,7 @@ Market refresh:
 
 ```sh
 pnpm config:run docker compose --env-file .env --project-name thesistrace-dev \
-  -f deploy/core/compose.yaml -f deploy/core/compose.dev.yaml run --rm \
+  -f deploy/compose.yaml -f deploy/compose.dev.yaml run --rm \
   api thesistrace-data-operator refresh-industry \
   --idempotency-key industry-2026-08-14 \
   --observation-through-session 2026-08-14
@@ -201,8 +201,8 @@ tt_compose=(
   pnpm config:run docker compose
   --project-name thesistrace-dev
   --env-file .env
-  --file deploy/core/compose.yaml
-  --file deploy/core/compose.dev.yaml
+  --file deploy/compose.yaml
+  --file deploy/compose.dev.yaml
 )
 
 financial_probe_args=()

@@ -46,7 +46,7 @@ test('one public origin determines browser port and every MCP address', t => {
   assert.deepEqual(JSON.parse(result.stdout), {
     THESISTRACE_DEV_WEB_PORT: '5180', THESISTRACE_MCP_ISSUER_URL: 'http://127.0.0.1:5180/api/auth',
     THESISTRACE_MCP_RESOURCE_URL: 'http://127.0.0.1:5180/mcp', THESISTRACE_MCP_ALLOWED_HOSTS: '["api:8100","127.0.0.1:5180"]',
-    THESISTRACE_MCP_ALLOWED_ORIGINS: '["http://127.0.0.1:5180"]'  
+    THESISTRACE_MCP_ALLOWED_ORIGINS: '["http://127.0.0.1:5180"]'
 });
   for (const name of ['THESISTRACE_DEV_WEB_PORT', 'THESISTRACE_MCP_ISSUER_URL', 'THESISTRACE_MCP_RESOURCE_URL', 'THESISTRACE_MCP_ALLOWED_HOSTS', 'THESISTRACE_MCP_ALLOWED_ORIGINS']) assert.equal(name in f.values, false);
 });
@@ -124,8 +124,8 @@ test('oversized model configuration is rejected before spawning private commands
   const { cpSync } = await import('node:fs');
   const f = fixture(t);
   cpSync(resolve(root, 'tooling'), resolve(f.dir, 'tooling'), { recursive: true });
-  cpSync(resolve(root, 'config'), resolve(f.dir, 'config'), { recursive: true });
-  const registryPath = resolve(f.dir, 'config/model-registry.json');
+  cpSync(resolve(root, 'apps/agent/config'), resolve(f.dir, 'apps/agent/config'), { recursive: true });
+  const registryPath = resolve(f.dir, 'apps/agent/config/model-registry.json');
   const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
   registry.padding = 'private-model-configuration'.repeat(3000);
   writeFileSync(registryPath, JSON.stringify(registry));
