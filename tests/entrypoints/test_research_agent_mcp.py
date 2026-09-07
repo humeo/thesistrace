@@ -166,7 +166,8 @@ def test_packaged_stdio_entrypoint_fails_cleanly_without_core_context() -> None:
         check=False,
         capture_output=True,
         text=True,
-        timeout=10,
+        # Includes cold imports and interpreter shutdown, matching the packaged startup test.
+        timeout=20,
         env=environment,
     )
 

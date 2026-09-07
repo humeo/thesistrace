@@ -35,7 +35,7 @@ export function checkFiles(paths, rules = suites) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const paths = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { encoding: 'utf8' })
-    .split('\0').filter(path => ['tests', 'agent', 'auth', 'web', 'scripts'].includes(path.split('/')[0]) && existsSync(path));
+    .split('\0').filter(path => !path.startsWith('.scratch/') && existsSync(path));
   const failures = checkFiles([...new Set(paths)]);
   const root = JSON.parse(readFileSync('package.json', 'utf8'));
   for (const dir of ['kernel', 'architecture', 'adapters', 'data', 'entrypoints']) {

@@ -9,6 +9,7 @@ test('new unit and integration tests have distinct owners', () => {
 });
 test('unknown directories and overlapping suites fail closed', () => {
   assert.equal(checkFiles(['tests/unknown/test_new.py']).length, 1);
+  assert.equal(checkFiles(['new-tests/test_new.py']).length, 1);
   assert.equal(checkFiles(['web/src/new.test.ts'], { a: ['web/**'], b: ['web/**'] }).length, 1);
   assert.deepEqual(checkFiles(['tests/browser/prepare_data.py', 'web/e2e-core/fixtures/page.tsx']), []);
 });
