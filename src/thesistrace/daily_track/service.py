@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 from threading import Event, Thread
 from typing import Protocol
@@ -74,6 +75,10 @@ from thesistrace.daily_track.models import (
     daily_track_polling_retry_after_seconds,
 )
 from thesistrace.daily_track.observation import project_daily_observation
+from thesistrace.daily_track.observation_state import (
+    TrackingObservationState,
+    initial_tracking_observation_state,
+)
 from thesistrace.daily_track.planning import (
     DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES,
     MAX_CHUNK_SESSION_COUNT,
@@ -485,7 +490,7 @@ class DailyTrackService:
         track_id = f"track_{uuid4().hex[:20]}"
         boundary = origin.initial_strategy_state.session
         provenance = {
-            "schema_version": "daily-track-activation-checkpoint-v2",
+            "schema_version": "daily-track-activation-checkpoint-v3",
             "daily_track_id": track_id,
             "seed_run_id": origin.seed_run_id,
             "boundary_session": boundary,
@@ -496,7 +501,10 @@ class DailyTrackService:
             payloads={
                 "checkpoint": CompressedJsonPayload(
                     {
-                        "schema_version": "daily-track-activation-checkpoint-v2",
+                        "schema_version": "daily-track-activation-checkpoint-v3",
+                        "tracking_observation_state": initial_tracking_observation_state(
+                            boundary, origin.initial_strategy_state.net_nav,
+                        ).model_dump(mode="json"),
                         "terminal_strategy_state": (
                             origin.initial_strategy_state.model_dump(mode="json")
                         ),
@@ -2166,6 +2174,9 @@ class DailyTrackService:
                 str(item["session"]): dict(item) for item in seed_observations
             }
             projected_strategy_summary: Mapping[str, object] = dict(strategy_summary)
+            tracking_observation_state = initial_tracking_observation_state(
+                origin.initial_strategy_state.session, origin.initial_strategy_state.net_nav,
+            )
             for checkpoint in snapshot.checkpoints[1:]:
                 value = _read_publication_json(
                     self._publication,
@@ -2175,6 +2186,9 @@ class DailyTrackService:
                         provenance=checkpoint.provenance,
                     ),
                     payload_name="checkpoint",
+                )
+                tracking_observation_state = TrackingObservationState.model_validate(
+                    value["tracking_observation_state"],
                 )
                 factor_value = _mapping_value(
                     value.get("factor_summary"),
@@ -2286,6 +2300,7 @@ class DailyTrackService:
                     },
                     "blocked_reason": row["blocked_reason"],
                     "observation": project_daily_observation(
+                        tracking_observation_state=tracking_observation_state,
                         origin=DailyTrackOriginAccount.model_validate({
                             name: getattr(origin.initial_strategy_state, name)
                             for name in DailyTrackOriginAccount.model_fields
@@ -3283,7 +3298,7 @@ class DailyTrackService:
     ) -> Mapping[str, object] | None:
         if (
             self._working_cache is None
-            or predecessor.get("schema_version") != "daily-track-checkpoint-v2"
+            or predecessor.get("schema_version") != "daily-track-checkpoint-v3"
         ):
             return None
         try:
@@ -3309,7 +3324,7 @@ class DailyTrackService:
         if checkpoint.boundary_session != claim.target_sessions[-1]:
             raise RuntimeError("Tracking child returned an invalid Target boundary")
         provenance = {
-            "schema_version": "daily-track-checkpoint-v2",
+            "schema_version": "daily-track-checkpoint-v3",
             "daily_track_id": claim.track_id,
             "predecessor_manifest_sha256": claim.predecessor_manifest_sha256,
             "boundary_session": checkpoint.boundary_session,
@@ -4032,7 +4047,26 @@ def _read_publication_json(
     if payload is None:
         raise RuntimeError("DailyTrack product payload is missing")
     value = decode_compressed_json(payload)
-    return _mapping_value(value, "DailyTrack product payload")
+    value = _mapping_value(value, "DailyTrack product payload")
+    schema = value.get("schema_version")
+    if schema == "daily-track-checkpoint-v3":
+        KernelStateCheckpoint.model_validate(value)
+    elif schema == "daily-track-activation-checkpoint-v3":
+        expected = {"schema_version", "terminal_strategy_state", "tracking_observation_state"}
+        if set(value) != expected:
+            raise RuntimeError("Activation checkpoint fields are invalid")
+        state = TrackingObservationState.model_validate(value["tracking_observation_state"])
+        terminal = _mapping_value(value["terminal_strategy_state"], "Activation terminal state")
+        if (
+            state.boundary_session != terminal["session"]
+            or state.prefix_session is not None
+            or Decimal(state.peak_net_nav) != Decimal(str(terminal["net_nav"]))
+            or Decimal(state.maximum_drawdown) != 0
+        ):
+            raise RuntimeError("Activation observation state differs from Tracking Origin")
+    else:
+        raise RuntimeError("Unsupported DailyTrack checkpoint contract")
+    return value
 
 
 def _mapping_value(value: object, name: str) -> Mapping[str, object]:

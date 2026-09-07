@@ -42,6 +42,7 @@ from thesistrace.daily_track.checkpoint import (
     restore_tracking_origin,
     terminal_strategy_state,
 )
+from thesistrace.daily_track.observation_state import initial_tracking_observation_state
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.data.financial_candidate import (
@@ -59,7 +60,7 @@ from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_co
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_fixture, build_minimal_canonical_fixture
 from thesistrace.operational_events import OperationalEvent, OperationalEventSink
-from thesistrace.publication import Publication, PublishedRef
+from thesistrace.publication import Publication, PublishedRef, decode_compressed_json
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
     AdvanceInput,
@@ -2769,6 +2770,9 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         )
         checkpoint_c = project_tracking_checkpoint(
             reference_c,
+            prior_observation_state=initial_tracking_observation_state(
+                sessions[-1], "10000000",
+            ),
             retained_strategy_sessions=[sessions[-1], *extended_sessions[len(sessions) :]],
         )
         canonical_d = open_complete_refresh_basis(store, head_d)
@@ -6169,7 +6173,7 @@ def _checkpoint_payload(
         )
     )
     payload = bundle.payloads["checkpoint"]
-    value = json.loads(payload.content)
+    value = decode_compressed_json(payload)
     assert isinstance(value, dict)
     return value
 

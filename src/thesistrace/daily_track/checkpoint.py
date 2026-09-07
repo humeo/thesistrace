@@ -9,6 +9,10 @@ from collections.abc import Mapping, Sequence
 from decimal import Decimal
 
 from thesistrace.daily_track.models import TrackingOrigin
+from thesistrace.daily_track.observation_state import (
+    TrackingObservationState,
+    advance_tracking_observation_state,
+)
 from thesistrace.research_kernel.kernel_advance import continuation_snapshot
 from thesistrace.research_kernel.kernel_run import (
     KernelRunError,
@@ -32,6 +36,7 @@ def project_tracking_checkpoint(
     state: KernelState,
     *,
     retained_strategy_sessions: Sequence[str],
+    prior_observation_state: TrackingObservationState,
 ) -> dict[str, object]:
     """Project transient Kernel internals into bounded immutable product truth."""
     run_input = state.run_input_with_research_data(state.research_data_snapshot())
@@ -42,8 +47,15 @@ def project_tracking_checkpoint(
     strategy = _mapping(output.get("strategy_backtest"), "Strategy Backtest")
     continuation = continuation_snapshot(state)
     continuation_bytes = canonical_json_bytes(continuation)
+    strategy_state = _strategy_state(
+        state, strategy, retained_strategy_sessions=retained_strategy_sessions,
+    )
+    observation_state = advance_tracking_observation_state(
+        prior_observation_state, strategy_state["retained_delta"],
+    )
     return {
-        "schema_version": "daily-track-checkpoint-v2",
+        "schema_version": "daily-track-checkpoint-v3",
+        "tracking_observation_state": observation_state.model_dump(mode="json"),
         "origin_session": state.origin_session,
         "boundary_session": state.boundary_session,
         "run_input": {
@@ -67,11 +79,7 @@ def project_tracking_checkpoint(
             "neutralization": alpha["neutralization"],
         },
         "factor_summary": _factor_summary(factor),
-        "strategy_state": _strategy_state(
-            state,
-            strategy,
-            retained_strategy_sessions=retained_strategy_sessions,
-        ),
+        "strategy_state": strategy_state,
         "continuation_sha256": hashlib.sha256(continuation_bytes).hexdigest(),
         "pending_alpha_sessions": len(continuation["pending_alpha"]),
         "rolling_factor_rows": len(continuation["rolling_factor"]),

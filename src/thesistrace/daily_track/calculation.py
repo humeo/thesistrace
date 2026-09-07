@@ -10,6 +10,7 @@ from thesistrace.daily_track.checkpoint import (
     terminal_strategy_state,
 )
 from thesistrace.daily_track.models import KernelStateCheckpoint, TrackingOrigin
+from thesistrace.daily_track.observation_state import TrackingObservationState
 from thesistrace.data import MountedGenerationStore
 from thesistrace.research_kernel import (
     AdvanceInput,
@@ -77,11 +78,13 @@ def state_payload(
     state: KernelState,
     *,
     retained_strategy_sessions: list[str],
+    prior_observation_state: TrackingObservationState,
 ) -> dict[str, object]:
     return KernelStateCheckpoint.model_validate(
         project_tracking_checkpoint(
             state,
             retained_strategy_sessions=retained_strategy_sessions,
+            prior_observation_state=prior_observation_state,
         )
     ).model_dump(mode="json")
 
@@ -143,7 +146,7 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
     prior_research_data = slice_research_sessions(
         research_data, calendar[: local_current_index + 1]
     )
-    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v2":
+    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v3":
         prior = restore_tracking_origin(
             origin,
             _mapping_value(
@@ -184,6 +187,9 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
         "checkpoint": state_payload(
             state,
             retained_strategy_sessions=[current_session, *target_sessions],
+            prior_observation_state=TrackingObservationState.model_validate(
+                predecessor["tracking_observation_state"],
+            ),
         ),
         "terminal_strategy_state": terminal_strategy_state(state),
         "continuation": continuation_snapshot(state),
@@ -243,7 +249,7 @@ def _mapping_value(value: object, name: str) -> Mapping[str, object]:
 
 
 def _predecessor_instrument_ids(predecessor: Mapping[str, object]) -> frozenset[str]:
-    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v2":
+    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v3":
         terminal = _mapping_value(
             predecessor.get("terminal_strategy_state"),
             "Activation Terminal Strategy State",
