@@ -51,7 +51,6 @@ from thesistrace.research_run.service import (
     ResearchRunTrackingTemporarilyUnavailable,
     ResearchRunTrackingUnavailable,
     research_result_manifest_is_referenced,
-    research_run_exists,
 )
 
 __all__ = [
@@ -103,5 +102,4 @@ __all__ = [
     "ResearchRunTrackingTemporarilyUnavailable",
     "ResearchRunTemporarilyUnavailable",
     "research_result_manifest_is_referenced",
-    "research_run_exists",
 ]

@@ -4,7 +4,6 @@ import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -45,11 +44,10 @@ from thesistrace.research_folder import ResearchFolderService
 from thesistrace.research_run import (
     ResearchRunService,
     research_result_manifest_is_referenced,
-    research_run_exists,
 )
 from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.planning import DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES
-from thesistrace.research_run.result import read_result_bundle, read_semantic_result_section
+from thesistrace.research_run.result import read_semantic_result_section
 from thesistrace.researcher import ResearcherService
 
 CORE_ENVIRONMENT_NAMES = (
@@ -265,13 +263,8 @@ def _open_runtime(
             publication=publication,
             dataset_lifecycle=dataset_lifecycle,
             generation_store=generation_store,
-            read_result_bundle=partial(
-                read_result_bundle,
-                research_kind="strategy_backtest",
-            ),
             read_semantic_result_section=read_semantic_result_section,
             working_cache_root=Path(working_cache.name) / "daily-tracks",
-            seed_research_exists=research_run_exists,
             research_references_result=research_result_manifest_is_referenced,
             execution_memory_bytes=settings.tracking_execution_memory_bytes,
             lifecycle_event=emit_operational_event_data,

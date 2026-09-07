@@ -1,0 +1,35 @@
+[
+  {
+    "advances": 10,
+    "full_snapshot_bytes": 47268,
+    "bounded_snapshot_bytes": 17623,
+    "full_checkpoint_bytes": 17084,
+    "detail_object_bytes": 21700,
+    "full_read_ms": 168.07,
+    "snapshot_ms": 9.51,
+    "detail_ms": 135.47,
+    "checkpoint_refs": 10
+  },
+  {
+    "advances": 250,
+    "full_snapshot_bytes": 1033868,
+    "bounded_snapshot_bytes": 237464,
+    "full_checkpoint_bytes": 427553,
+    "detail_object_bytes": 432169,
+    "full_read_ms": 1549.99,
+    "snapshot_ms": 27.38,
+    "detail_ms": 2861.22,
+    "checkpoint_refs": 250
+  },
+  {
+    "advances": 1000,
+    "full_snapshot_bytes": 4118638,
+    "bounded_snapshot_bytes": 470129,
+    "full_checkpoint_bytes": 1712074,
+    "detail_object_bytes": 863241,
+    "full_read_ms": 29173.49,
+    "snapshot_ms": 36.17,
+    "detail_ms": 10825.47,
+    "checkpoint_refs": 504
+  }
+]

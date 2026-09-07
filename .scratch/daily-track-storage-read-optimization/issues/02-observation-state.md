@@ -1,6 +1,6 @@
 # 02 — observation-state
 
-Status: done
+Status: complete
 
 Implement item 02 of ../spec.md and its relevant acceptance requirements.
 

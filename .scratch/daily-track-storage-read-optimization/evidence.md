@@ -1,0 +1,41 @@
+# Isolated validation evidence
+
+Synthetic histories reuse one real solver checkpoint and append valid immutable checkpoints through Publication and SessionCoordinateRepository with deterministic account values. This measures persistence and read cost, not solver performance or production capacity.
+
+| Advances | Full-chain DB bytes | Detail snapshot bytes | Full checkpoint content bytes | Detail object content bytes | Selected checkpoints | Full read ms | Detail ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 47268 | 17623 | 17084 | 21700 | 10 | 168.07 | 135.47 |
+| 250 | 1033868 | 237464 | 427553 | 432169 | 250 | 1549.99 | 2861.22 |
+| 1000 | 4118638 | 470129 | 1712074 | 863241 | 504 | 29173.49 | 10825.47 |
+
+DB bytes are serialized returned values, not PostgreSQL disk allocation. Full read includes the full relational chain and every advance checkpoint; it excludes the seed result and projection, so it is a conservative baseline rather than a reconstruction of total old HTTP latency. Detail includes seed sections when needed and the current projection. Timings came from one run alongside other verification workloads and are not a latency guarantee.
+
+At 1000 advances, the detail read set equals exactly the 504 selected checkpoint manifests, with no historical seed read. The test asserts corrected NAV at a page end and at the first day of the 504-session window. Full history remains persisted.
+
+Compression physical probe: 50 synthetic positions, canonical JSON 5355 content bytes / 12288 RustFS allocated bytes; gzip 265 content bytes / 8192 allocated bytes. Content saving and allocated-space saving are different measures; both exclude shared deployment volumes and unrelated data.
+
+Focused PostgreSQL/RustFS verification: 3 passed in 125.86s (malformed child publication/retry, concurrent calendar and Head capture, 10/250/1000 cost). Filtered runner later selected no unrelated restart tests; this is only a focused-test pass. Full unfiltered gates are recorded in issue03.
+
+Initial complete-check attempt used host Node 26 (outside the project's Node 24 requirement): 2 ResearchWorkspacePage happy-dom tests failed because localStorage was undefined. Both passed under installed Node 24.14.0; the complete check was restarted with that runtime.
+
+Initial image-smoke attempt built the earlier issue03 snapshot and reached research batch qualification. The cancellation-fixture admission POST exceeded the HTTP request timeout; the API eventually returned 202 after 22403 ms (request b1512d4f-325c-460f-9e31-0170d4442292 at 2026-09-07T04:18:38Z). Evidence is in .local/test-runs/20260907t040234z-92413-ee3abe62/evidence/{smoke-before.stderr.log,compose-logs.txt}. It ran alongside other checks. This is a failed validation attempt, not a successful image qualification; rerunning serially will not be presented as fixing concurrent-load flakiness. Final code needs a fresh image build after the calendar snapshot fix.
+
+Final Core integration: isolated run `20260907t043453z-49397-7b488deb` exited 0, with 426 passed / 8 deselected plus six independently executed restart cases, each passed. After the final missing-Head calendar predicate, isolated run `20260907t045329z-59417-cfd0440e` exited 0: 16 selected tests passed plus all six restart cases. Both environments were removed by their runner.
+
+Complete-check history: the Node 24 run first exposed an ownership test fixture that supplied an object instead of DatasetLifecycle. The fixture now uses the real lifecycle and passed in the complete Core suite. The next `pnpm check` passed Python 1141, Agent 638, Auth 196 and Web 340 tests, typechecks and evaluation preflight, but exited 2 before integration tests because the RustFS readiness probe rejected configuration. Its precise cause was not established; the subsequent isolated Core run started and passed, which does not prove that startup incident fixed. Remaining check stages are executed separately and reported by actual outcome, not as a monolithic exit-0 check.
+
+Auth integration (`pnpm --dir auth test:integration`): 132 passed, 6 failed in 272.21s. All failures were 10-second beforeEach timeouts in auth-http.integration.test.ts, before business assertions. PostgreSQL evidence was retained at /var/folders/py/j9ws8lpn57g_syngj3b58b6h0000gn/T/thesistrace-auth-test.QtHeKg. A temporary copy of the existing isolated runner selected only that file; all 32 tests passed in 42.54s without source or timeout changes. The original timeout was not reproduced or diagnosed, so this is an unresolved validation instability, not a fixed bug or a green full Auth suite.
+
+Agent integration: 87 passed / 4 failed in 302.31s. PROVIDER_REFUSAL and scripted-long-tool-loop exceeded 5-second test limits; Steer and shutdown Tool-event waits did not observe their expected events in time. Evidence: /var/folders/py/j9ws8lpn57g_syngj3b58b6h0000gn/T/thesistrace-agent-test.5p85Gd. No Agent code changed in this task.
+
+Complete browser run `20260907t051055z-79319-89cef301`: 70 passed / 16 failed in 35.8 minutes; environment cleaned. Failures include Auth test-user setup, Chat session 503/timeouts and UI expectations. The first DailyTrack Chat test passed activation, current observations, reload and repeated-start assertions, then timed out at the capability-listing Chat request; the second failed in Auth test-user setup before its body. Financial formula-to-DailyTrack and artifacts-outlive-Chat scenarios passed. Full Playwright screenshots, traces and service evidence remain under the run's evidence directory. This is not a passing full browser acceptance.
+
+Targeted Agent reproduction: all four previously failing cases passed in 4.92s using a temporary copy of the existing isolated runner with test-name selection; no code or timeout changes. The earlier complete-suite failure remains unresolved.
+
+DailyTrack browser qualification: run `20260907t055336z-47972-414165e2` passed the complete first scenario (desktop/mobile observations, reload, repeated activation and Chat deletion). Its second scenario failed before refresh tool execution: Agent reported MCP_TRANSIENT with step_count 0 during preparation; the preceding detail request returned 200. Isolated single-scenario run `20260907t055946z-64839-90ad591d` then passed the full lost-Start/lost-Retry, capacity failure, explicit Retry, Chat deletion and continued Tracking scenario in 1.5 minutes, runner exit 0. This establishes successful execution of both relevant flows, but does not claim the transient failure fixed or the complete suite green.
+
+Final `pnpm test:image-smoke` exited 0 on frozen source under Node 24.14.0. Core run `20260907t060304z-66503-5344a1a8` completed its production-image research, persistence/restart, storage-outage, capacity and Operator Console qualification; Auth, Agent and Caddy image runners also completed. All test environments were cleaned by their runners. The earlier image timeout remains recorded and is not described as fixed by this successful run.
+
+Latest complete `pnpm check` (`/tmp/daily-track-pnpm-check-serial.log`) exited 1. Fast Python/TypeScript/typecheck stages passed; isolated Core run `20260907t062943z-92383-0a703c3e` had 425 passed / 1 failed / 8 deselected in 1301.46s. `test_tracking_execution_refuses_obsolete_numeric_contract` received HTTP 409 during Track activation after the seed research was processed, then raised KeyError on `id`; it had not changed the numeric contract yet. Original failure evidence did not include the seed Run state or response body, so the refusal cause is unknown. The suite's own cleanup removed its resources. A targeted run `20260907t065311z-14331-2f8eabbc` passed both obsolete-numeric-contract cases (2 passed / 432 deselected in 5.16s); its next restart phase selected zero cases, so the wrapper exited 5 and retained that environment. Explicit scoped cleanup subsequently exited 0. No code or timeout changes were made for the non-reproduced refusal.
+
+Acceptance limitation: complete final gate is not green. Targeted passes and final image qualification do not establish that earlier Auth hooks, Agent timing, Chat/MCP preparation or this activation refusal are fixed. Feature/issue03 remain open for that diagnosis rather than being marked complete.

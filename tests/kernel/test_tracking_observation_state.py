@@ -30,14 +30,15 @@ def test_replaced_boundary_does_not_leave_an_obsolete_peak_or_loss():
     assert tracking_maximum_drawdown(recovered, "120") == 0
 
 
-def test_multi_day_advances_match_independent_full_history_after_504_sessions():
+@pytest.mark.parametrize("trough_index", [7, 777])
+def test_multi_day_advances_match_independent_full_history_after_504_sessions(trough_index):
     sessions = [(date(2020, 1, 1) + timedelta(days=i)).isoformat() for i in range(1001)]
     state = initial_tracking_observation_state(sessions[0], "100")
     history = {sessions[0]: Decimal(100)}
     for start in range(0, 1000, 10):
         rows = []
         for index in range(start, start + 11):
-            nav = Decimal(80 if index == 7 else 100 + index % 11)
+            nav = Decimal(80 if index == trough_index else 100 + index % 11)
             history[sessions[index]] = nav
             rows.append({"session": sessions[index], "net_nav": str(nav)})
         state = advance_tracking_observation_state(state, rows)

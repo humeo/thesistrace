@@ -771,7 +771,9 @@ def _legal_result() -> dict[str, object]:
     }
 
 
-def test_compressed_checkpoint_is_verified_persistent_and_released(core_settings: CoreSettings):
+def test_compressed_checkpoint_is_verified_persistent_and_released(
+    core_settings: CoreSettings, rustfs_admin: BaseClient,
+):
     value = {"positions": [{"instrument_id": str(i), "nav": "100.125"} for i in range(50)]}
     with open_core_runtime(core_settings) as runtime:
         prepared = runtime.publication.prepare(
@@ -802,3 +804,4 @@ def test_compressed_checkpoint_is_verified_persistent_and_released(core_settings
                 "SELECT count(*) AS count FROM publication.objects"
             ).fetchone()
             assert count["count"] == 0
+        assert rustfs_admin.list_objects_v2(Bucket=core_settings.s3_bucket).get("KeyCount", 0) == 0

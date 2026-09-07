@@ -30,3 +30,7 @@ retry/cancel/fencing/restart/ownership/deleted seed and concurrent reads; benchm
 at 10/250/1000 advances measuring DB data, object bytes and latency; browser DailyTrack
 acceptance; final pnpm check and pnpm test:image-smoke. Each issue is reviewed, fixed,
 verified and committed separately; complete only after its acceptance passes.
+
+## Delivery state
+
+All three implementation units have independent commits and closed code review findings. The feature remains `ready-for-agent`, not complete: final image smoke passed, but the latest complete `pnpm check` did not pass. Required remaining work is diagnosis and resolution of the intermittent final-gate failures documented in evidence.md, followed by a green complete gate. No production or dev data was modified.

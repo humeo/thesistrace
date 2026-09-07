@@ -448,9 +448,30 @@ def test_reader_observes_one_snapshot_while_checkpoint_commit_is_pending() -> No
             assert before_commit.progressions[0].status == "running"
             assert before_commit.attempts[0].status == "running"
             assert len(before_commit.checkpoints) == 1
+            detail_before = repository.load_read_snapshot(
+                TEST_RESEARCHER.researcher_id, "track_snapshot",
+                calendar=["2026-08-03", "2026-08-04"],
+            )
+            assert detail_before["current_strategy_session"] == "2026-08-03"
+            assert detail_before["terminal_strategy_state"]["session"] == "2026-08-03"
+            assert detail_before["unresolved_progression"]["status"] == "running"
+            assert detail_before["observation_checkpoints"] == []
             allow_commit.set()
             future.result(timeout=10)
 
+        detail_after = repository.load_read_snapshot(
+            TEST_RESEARCHER.researcher_id, "track_snapshot",
+            calendar=["2026-08-03", "2026-08-04"],
+        )
+        assert detail_after["current_strategy_session"] == "2026-08-04"
+        assert detail_after["terminal_strategy_state"]["session"] == "2026-08-04"
+        assert detail_after["unresolved_progression"] is None
+        assert len(detail_after["observation_checkpoints"]) == 1
+        assert repository.load_read_snapshot(UUID(int=1), "track_snapshot", calendar=[]) is None
+        invalid_calendar = repository.load_read_snapshot(
+            TEST_RESEARCHER.researcher_id, "track_snapshot", calendar=["2026-08-03"],
+        )
+        assert invalid_calendar["observation_checkpoints"] == []
         after_commit = repository.load("track_snapshot")
         assert after_commit.track.current_checkpoint_session == date(2026, 8, 4)
         assert after_commit.progressions[0].status == "succeeded"
