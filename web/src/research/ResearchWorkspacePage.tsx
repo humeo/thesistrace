@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AlphaCatalog } from "../alphaCatalog";
 import { coreFetch } from "../auth/coreFetch";
+import type { BrowserLocation } from "../auth/routing";
 import type { DataOverview } from "../data/DataPage";
 import { AlphaFormulaEditor } from "./AlphaFormulaEditor";
 import { buildResearchDatePresets } from "./dateRange";
@@ -47,18 +48,23 @@ type WorkspaceResources = {
   data: DataOverview;
 };
 
-export function ResearchWorkspacePage({ researcherId }: { researcherId: string }) {
+export function ResearchWorkspacePage({ location, researcherId }: { location: BrowserLocation; researcherId: string }) {
   const [resources, setResources] = useState<WorkspaceResources | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
+  const resourceRequest = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
+    resourceRequest.current?.abort();
+    const controller = new AbortController();
+    resourceRequest.current = controller;
     setError(null);
+    setResources(null);
     try {
       const [folderResponse, catalogResponse, dataResponse] = await Promise.all([
-        coreFetch("/api/research-folders"),
-        coreFetch("/api/alpha/catalog"),
-        coreFetch("/api/data"),
+        coreFetch("/api/research-folders", { signal: controller.signal }),
+        coreFetch("/api/alpha/catalog", { signal: controller.signal }),
+        coreFetch("/api/data", { signal: controller.signal }),
       ]);
       if (!folderResponse.ok || !catalogResponse.ok || !dataResponse.ok) {
         throw new Error("Research workspace unavailable");
@@ -66,22 +72,28 @@ export function ResearchWorkspacePage({ researcherId }: { researcherId: string }
       const folders = (await folderResponse.json()) as ResearchFolderList;
       const defaults = folders.items.filter((folder) => folder.is_default);
       if (defaults.length !== 1) throw new Error("Default Folder unavailable");
-      const parameters = new URLSearchParams(window.location.search);
+      const parameters = new URLSearchParams(location.search);
       const requestedFolderId = parameters.has("new") ? null : parameters.get("folder");
       const selected = folders.items.find((folder) => folder.id === requestedFolderId) ?? defaults[0];
+      const [catalog, data] = await Promise.all([catalogResponse.json(), dataResponse.json()]);
+      if (controller.signal.aborted) return;
       setResources({
         folder: selected,
         folders: folders.items,
-        catalog: (await catalogResponse.json()) as AlphaCatalog,
-        data: (await dataResponse.json()) as DataOverview,
+        catalog: catalog as AlphaCatalog,
+        data: data as DataOverview,
       });
     } catch (reason: unknown) {
+      if (controller.signal.aborted) return;
       setResources(null);
       setError(reason instanceof Error ? reason.message : "Research workspace unavailable");
     }
-  }, []);
+  }, [location]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    return () => resourceRequest.current?.abort();
+  }, [load]);
 
   if (error !== null) return (
     <section aria-label="Research" className="page-section state-section">

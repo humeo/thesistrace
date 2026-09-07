@@ -165,7 +165,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_run",
         },
         "fixture": {"data"},
-        "adapters": {"benchmark", "data", "fixture"},
+        "adapters": {"benchmark", "data", "fixture", "operational_events"},
         "entrypoints": {
             "_postgres",
             "alpha_language",
@@ -490,7 +490,7 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
     browser = (ROOT / "web" / "playwright.config.ts").read_text()
     vite = (ROOT / "web" / "vite.config.ts").read_text()
     core_app = (ROOT / "web" / "src" / "shell" / "CoreApp.tsx").read_text()
-    resource_routes = source.partition("] as const;")[0]
+    resource_routes = source.partition("const resourceRoutes = [")[2].partition("] as const;")[0]
     for route in (
         'path: "/data"',
         'path: "/research"',

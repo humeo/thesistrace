@@ -76,7 +76,7 @@ test("calls a discovered no-argument Tool and then explains its result", async (
       content: [{ type: "text" as const, text: SCRIPTED_TOOL_PROMPT }],
       role: "user" as const,
     }],
-    tools: [{
+    tools: [{ type: "function", name: "get_alpha_catalog", inputSchema: { type: "object", properties: {} } }, {
       description: "Read the research context",
       inputSchema: { additionalProperties: false, properties: {}, type: "object" },
       name: "get_research_context",

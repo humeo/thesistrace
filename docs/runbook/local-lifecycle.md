@@ -180,7 +180,8 @@ startup preserves existing credentials and authority. This seed is enabled only
 by the Development Compose overlay; Test and Production never seed an account.
 
 Model definitions live in [`config/model-registry.json`](../../config/model-registry.json).
-Maintain `default_model_key`, model identity, `enabled`, `context_window`, `default_reasoning_effort`,
+Maintain `min_compaction_context_window`, `default_model_key`, model identity,
+`enabled`, `context_window`, `max_output_tokens`, `default_reasoning_effort`,
 and `reasoning_efforts` there. Development and Production lifecycle commands read
 this file and pass its JSON to the Agent Host at startup; the browser reads the
 Host's validated Catalog. API keys remain in their named environment variables.
@@ -191,20 +192,31 @@ reasoning. The project default remains `high`. See the
 [OpenAI Luna model documentation](https://developers.openai.com/api/docs/models/gpt-5.6-luna).
 Invalid JSON, unsupported efforts, or an unavailable default model fail startup.
 
-Every model must declare `context_window` as an integer of at least 16,384 tokens.
-Luna is configured for 258,000 tokens. The Agent reads this capacity at startup and
-checks the complete estimated input, including instructions and Tool schemas,
-with space reserved for the requested output (at most 8,192 tokens).
+Every model must declare integer `context_window` (at least 16,384) and positive
+`max_output_tokens`. These are separate capacities. The maintained Luna selection
+uses 258,000 and 128,000 respectively. The registry-level
+`min_compaction_context_window` defaults in the maintained configuration to 65,536.
+See [Session context and recovery](session-context.md) for the complete contract.
 
-Mastra Observational Memory owns the Session context. Unobserved messages trigger
-the Observer at half of `context_window - 8192`; accumulated observations trigger
-the Reflector at one eighth of that budget. For Luna these thresholds are 124,904
-and 31,226 tokens. The remaining budget accommodates instructions, Tools, and new
-Tool results. Both phases use the selected model and reasoning effort, complete
-inside the current Turn before the next model call, and share its usage, generated
-byte, cancellation, and timeout accounting. PostgreSQL retains the original
-messages and the compressed observations. Observations are scoped to one Session
-and are deleted with it. Compression activities stay internal to the Host.
+Before each main-model request, including after all Tool results and after
+Continue or `ask_user` resumption, the Host estimates the complete provider-visible
+input with tokenx. Normal compression begins at 90% of the selected context window
+(232,200 for Luna). The actual output budget is the smaller of the requested
+maximum, model maximum and remaining context minus a 4,096-token safety margin.
+There is no global 8,192-token output cap or cumulative generated-byte stop.
+
+The Session controller owns compression. It publishes Session-local memory M
+(Mastra Observer/Reflector), handoff summary S and stable retained-history
+references together in PostgreSQL. Between successful compressions, rendered M/S
+and the retained prefix remain fixed; new messages append. Raw messages remain
+stored. Auxiliary calls use the same selected model/effort and share Run usage,
+cancellation and timeouts. Nothing runs in the background or at idle.
+
+Models below the configured minimum never invoke compression or automatic recovery.
+They use the existing checkpoint and history if it fits, otherwise fail explicitly
+while preserving history, checkpoint and model selection. There is no automatic
+model switch. At or above the minimum, a context-constrained length stop may attempt
+one durable recovery; a full requested output allowance exhausted is terminal.
 
 Complete deletion of Product State, downloaded Canonical Data, and the
 Benchmark Snapshot is a separate explicit operation:

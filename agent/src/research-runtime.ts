@@ -220,7 +220,11 @@ export async function createResearchRuntime(
         if (!threadId || !researcherId || !runId || !abortSignal) throw new Error("SESSION_CONTEXT_IDENTITY_MISSING");
         abortSignal.throwIfAborted();
         await assertOwnedThread(repository, threadId, researcherId);
-        messageList.removeByIds(invalidRecoveryMessageIds(await repository.modelStepRecoveries(threadId, researcherId)));
+        const recoveries = await repository.modelStepRecoveries(threadId, researcherId);
+        messageList.removeByIds(invalidRecoveryMessageIds(recoveries));
+        const runObservation = requestContext.get<string, RunModelObservation | undefined>("modelObservation");
+        if (runObservation) runObservation.recoveryAttempts = recoveries.filter(record => record.runId === runId)
+          .reduce((total, record) => total + record.attempts, 0);
         if (!messageList.get.all.db().some((message) => message.id === sessionControlMessageId(runId))) {
           const lastCreated = Math.max(Date.now(), ...messageList.get.all.db().map((message) => message.createdAt.getTime() + 1));
           messageList.add(sessionControlMessage({ runId, threadId, researcherId, createdAt: new Date(lastCreated),
@@ -246,7 +250,7 @@ export async function createResearchRuntime(
           if (!observation || !context) throw new Error("SESSION_CONTEXT_IDENTITY_MISSING");
           recovery = new SessionModelRecovery({ repository, memory: createResearchMemory(storage), threadId, researcherId, runId,
             selection: selectionFrom(requestContext), context, observation, abortSignal,
-            notify: () => requestContext.get<string, (() => void) | undefined>("notifyModelRecovery")?.() });
+            notify: claimed => requestContext.get<string, ((claimed: boolean) => void) | undefined>("notifyModelRecovery")?.(claimed) });
           requestContext.set("sessionModelRecovery", recovery);
         }
         return { messageId: recovery.responseMessageId(freshResponseId, retryCount) };
@@ -512,6 +516,22 @@ function createRunAgent(options: Readonly<{
   options.requestContext.set("agentRunId", options.run.input.runId);
   options.requestContext.set("contextThreadId", options.run.input.threadId);
   options.requestContext.set("contextResearcherId", options.researcherId);
+  const telemetry = createRunTelemetry({
+    modelKey: options.selection.model.key,
+    providerModelId: options.providerModelId,
+    reasoningEffort: options.selection.effort,
+    researcherId: options.researcherId,
+    runId: options.run.input.runId,
+    threadId: options.run.input.threadId,
+    traceId: options.traceId,
+  }, {
+    metrics: () => ({ steps: options.modelObservation.steps, usage: options.usageCapture.value(),
+      recoveryAttempts: options.modelObservation.recoveryAttempts,
+      inputEstimate: options.modelObservation.inputEstimate,
+      compaction: options.requestContext.get<string, SessionContextController | undefined>("sessionContextController")?.compactionStatistics }),
+    write: options.telemetry,
+  });
+  options.modelObservation.onCallFinished = call => telemetry.modelCallFinished(call);
   return new ResearchMastraAgent({
     agent,
     agentId: RESEARCH_AGENT_ID,
@@ -541,20 +561,7 @@ function createRunAgent(options: Readonly<{
       providerModelId: options.providerModelId,
       reasoningEffort: options.selection.effort,
     },
-    telemetry: createRunTelemetry({
-      modelKey: options.selection.model.key,
-      providerModelId: options.providerModelId,
-      reasoningEffort: options.selection.effort,
-      researcherId: options.researcherId,
-      runId: options.run.input.runId,
-      threadId: options.run.input.threadId,
-      traceId: options.traceId,
-    }, {
-      metrics: () => ({ steps: options.modelObservation.steps, usage: options.usageCapture.value(),
-        inputEstimate: options.modelObservation.inputEstimate,
-        compaction: options.requestContext.get<string, SessionContextController | undefined>("sessionContextController")?.compactionStatistics }),
-      write: options.telemetry,
-    }),
+    telemetry,
     scheduleTitle: options.run.command === "prompt" && options.titleSelection !== undefined
       ? () => options.titleGenerator.schedule({
           languageModel: options.titleSelection!.languageModel,

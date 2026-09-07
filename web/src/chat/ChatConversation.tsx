@@ -31,7 +31,13 @@ export function AgentConversation(props: Readonly<{
   }).unsubscribe, [copilotkit]);
   const snapshot = useCallback(() => copilotkit.runtimeConnectionStatus, [copilotkit]);
   const runtimeStatus = useSyncExternalStore(subscribe, snapshot, snapshot);
-  if (runtimeStatus !== "connected") {
+  const [hasConnected, setHasConnected] = useState(runtimeStatus === "connected");
+  useEffect(() => {
+    if (runtimeStatus === "connected") setHasConnected(true);
+  }, [runtimeStatus]);
+  // Once mounted, the conversation owns drafts and authoritative rejection
+  // state. A later discovery failure must not discard that local state.
+  if (!hasConnected && runtimeStatus !== "connected") {
     return (
       <StaticChatMain
         error={runtimeStatus === "error" ? "The Research Agent could not be reached." : undefined}

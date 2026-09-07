@@ -338,11 +338,10 @@ test("only the singleton Operator can open and read the Operator Console", async
   const marketAsOfDate = "2026-08-14";
   const marketAsOf = `${marketAsOfDate}T18:00:00+08:00`;
   const marketAsOfInput = marketRefreshSection.getByLabel("As-of", { exact: true });
-  const marketKeyInput = marketRefreshSection.getByLabel("Idempotency key");
   await expect(marketAsOfInput).toHaveAttribute("type", "date");
   await marketAsOfInput.fill(marketAsOfDate);
   await expect(marketAsOfInput).toHaveValue(marketAsOfDate);
-  await expect(marketKeyInput).toHaveValue(/^market-\d{8}T\d{6}Z$/);
+  await expect(marketRefreshSection.getByLabel("Idempotency key")).toHaveCount(0);
   const reviewRefresh = marketRefreshSection.getByRole("button", {
     name: "Review Refresh",
   });
@@ -361,7 +360,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   const pendingProofStarted = new Promise<void>((resolve) => {
     markPendingProofStarted = resolve;
   });
-  const pendingKey = "browser-cancelled-market-refresh";
+  let pendingKey = "";
   const pendingProofHandler = async (route: Route): Promise<void> => {
     const body = route.request().postDataJSON() as {
       idempotency_key?: unknown;
@@ -386,8 +385,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   };
   await page.route("**/api/auth/operator/proofs", pendingProofHandler);
   await marketAsOfInput.fill(marketAsOfDate);
-  await marketKeyInput.fill(pendingKey);
-  await reviewRefresh.click();
+  pendingKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
   let marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
@@ -407,7 +405,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await pendingProofAborted;
   await page.unroute("**/api/auth/operator/proofs", pendingProofHandler);
 
-  const marketKey = "\uFEFFbrowser-market-refresh-20260814";
+  let marketKey = "";
   let releaseCoreResponse = (): void => {};
   let markCoreAccepted = (): void => {};
   let markCoreResponseDropped = (): void => {};
@@ -443,9 +441,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     delayedCoreResponseHandler,
   );
   await marketAsOfInput.fill(marketAsOfDate);
-  await marketKeyInput.fill(marketKey);
-  await reviewRefresh.focus();
-  await reviewRefresh.press("Enter");
+  marketKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
@@ -481,72 +477,23 @@ test("only the singleton Operator can open and read the Operator Console", async
     .toBeVisible();
   await expect(reviewRefresh).toBeFocused();
 
-  const conflictingMarketAsOfDate = "2026-08-12";
-  const conflictingMarketAsOf = `${conflictingMarketAsOfDate}T18:00:00+08:00`;
-  let releaseConflictResponse = (): void => {};
-  let markConflictRejected = (): void => {};
-  let markConflictResponseDropped = (): void => {};
-  const conflictResponseGate = new Promise<void>((resolve) => {
-    releaseConflictResponse = resolve;
-  });
-  const conflictRejected = new Promise<void>((resolve) => {
-    markConflictRejected = resolve;
-  });
-  const conflictResponseDropped = new Promise<void>((resolve) => {
-    markConflictResponseDropped = resolve;
-  });
-  const delayedConflictHandler = async (route: Route): Promise<void> => {
-    const request = route.request();
-    if (request.method() !== "POST") {
-      await route.continue();
-      return;
-    }
-    const body = request.postDataJSON() as {
-      as_of?: unknown;
-      idempotency_key?: unknown;
-    };
-    if (body.idempotency_key !== marketKey || body.as_of !== conflictingMarketAsOf) {
-      await route.continue();
-      return;
-    }
-    const response = await route.fetch();
-    expect(response.status()).toBe(409);
-    markConflictRejected();
-    await conflictResponseGate;
-    await route.abort("aborted");
-    markConflictResponseDropped();
-  };
-  await page.route(
-    "**/api/operator/data/refreshes/market**",
-    delayedConflictHandler,
-  );
-  await marketAsOfInput.fill(conflictingMarketAsOfDate);
-  await marketKeyInput.fill(marketKey);
-  await reviewRefresh.click();
-  marketConfirmation = page.getByRole("dialog", {
-    name: "Submit Market Refresh?",
-  });
-  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
-  await marketConfirmation.getByLabel("Current password").press("Enter");
-  await conflictRejected;
-  await page.keyboard.press("Escape");
-  await expect(marketConfirmation).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
-  releaseConflictResponse();
-  await conflictResponseDropped;
-  await page.unroute(
-    "**/api/operator/data/refreshes/market**",
-    delayedConflictHandler,
-  );
-  await expect(page.getByText(
-    "This key is already bound to a different Market target.",
-    { exact: true },
-  )).toBeVisible({ timeout: 15_000 });
-  await expect(marketKeyInput).toBeFocused();
-  expect(marketStatusRequests).toContainEqual({
-    asOf: conflictingMarketAsOf,
-    idempotencyKey: marketKey,
-  });
+  // Keys are generated by the UI. Verify deliberate reuse with a changed
+  // target at the HTTP contract, rather than inventing an editable key field.
+  const conflictStatus = await page.evaluate(async ({ key, password }) => {
+    const target = { as_of: "2026-08-12T18:00:00+08:00", idempotency_key: key };
+    const proofResponse = await fetch("/api/auth/operator/proofs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...target, operation: "data.refresh.market.submit", password }),
+    });
+    if (!proofResponse.ok) return proofResponse.status;
+    const { proof } = await proofResponse.json();
+    return (await fetch("/api/operator/data/refreshes/market", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...target, proof }),
+    })).status;
+  }, { key: marketKey, password: browserPassword });
+  expect(conflictStatus).toBe(409);
+  await expect(marketRefreshReceipt.getByText(marketKey, { exact: true })).toBeVisible();
 
   const marketProofRequests = operatorMutationRequests.filter((request) => {
     if (request.path !== "/api/auth/operator/proofs") return false;
@@ -579,7 +526,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     .toBe(true);
   resetAuthRateLimits();
 
-  const droppedAfterAcceptanceKey = "browser-dropped-after-acceptance";
+  let droppedAfterAcceptanceKey = "";
   let markDroppedAfterAcceptance = (): void => {};
   const droppedAfterAcceptance = new Promise<void>((resolve) => {
     markDroppedAfterAcceptance = resolve;
@@ -605,8 +552,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     droppedAfterAcceptanceHandler,
   );
   await marketAsOfInput.fill(marketAsOfDate);
-  await marketKeyInput.fill(droppedAfterAcceptanceKey);
-  await reviewRefresh.click();
+  droppedAfterAcceptanceKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
@@ -629,8 +575,8 @@ test("only the singleton Operator can open and read the Operator Console", async
     .toBeVisible();
   resetAuthRateLimits();
 
-  const staleMarketKey = "browser-stale-response-a";
-  const currentMarketKey = "browser-current-response-b";
+  let staleMarketKey = "";
+  let currentMarketKey = "";
   let releaseStaleResponse = (): void => {};
   let releaseCurrentResponse = (): void => {};
   let markStaleSubmissionStarted = (): void => {};
@@ -659,7 +605,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     outcome: "no_change",
     status: "succeeded",
   });
-  const recoveredBeforePostKey = "browser-recovered-before-post-response";
+  let recoveredBeforePostKey = "";
   let releaseRecoveredPostResponse = (): void => {};
   let markRecoveredPostStarted = (): void => {};
   const recoveredPostResponseGate = new Promise<void>((resolve) => {
@@ -716,8 +662,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     recoveredBeforePostHandler,
   );
   await marketAsOfInput.fill(marketAsOfDate);
-  await marketKeyInput.fill(recoveredBeforePostKey);
-  await reviewRefresh.click();
+  recoveredBeforePostKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
@@ -785,8 +730,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     submissionRaceHandler,
   );
   await marketAsOfInput.fill(marketAsOfDate);
-  await marketKeyInput.fill(staleMarketKey);
-  await reviewRefresh.click();
+  staleMarketKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
@@ -796,8 +740,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Stop checking" }).click();
 
-  await marketKeyInput.fill(currentMarketKey);
-  await reviewRefresh.click();
+  currentMarketKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
   const currentMarketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
@@ -840,8 +783,8 @@ test("only the singleton Operator can open and read the Operator Console", async
   );
   resetAuthRateLimits();
 
-  const polledMarketKey = "browser-polled-response-a";
-  const newerMarketKey = "browser-newer-response-b";
+  let polledMarketKey = "";
+  let newerMarketKey = "";
   let releasePolledRequest = (): void => {};
   let markPolledRequestStarted = (): void => {};
   let markPolledRequestSettled = (): void => {};
@@ -859,7 +802,6 @@ test("only the singleton Operator can open and read the Operator Console", async
     attempt_count: 0,
     data_through_session: null,
     failure_code: null,
-    idempotency_key: polledMarketKey,
     kind: "market",
     last_failure_code: null,
     last_refresh_at: null,
@@ -898,7 +840,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     const body = request.postDataJSON() as { idempotency_key?: unknown };
     if (body.idempotency_key === polledMarketKey) {
       await route.fulfill({
-        body: JSON.stringify(acceptedReceipt),
+        body: JSON.stringify({ ...acceptedReceipt, idempotency_key: polledMarketKey }),
         contentType: "application/json",
         status: 202,
       });
@@ -920,8 +862,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     pollingRaceHandler,
   );
   await marketAsOfInput.fill(marketAsOfDate);
-  await marketKeyInput.fill(polledMarketKey);
-  await reviewRefresh.click();
+  polledMarketKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
@@ -930,8 +871,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(page.getByRole("heading", { name: "Refresh accepted" })).toBeVisible();
   await polledRequestStarted;
 
-  await marketKeyInput.fill(newerMarketKey);
-  await reviewRefresh.click();
+  newerMarketKey = await reviewGeneratedRefresh(page, reviewRefresh, "Market");
   const newerMarketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
@@ -956,15 +896,14 @@ test("only the singleton Operator can open and read the Operator Console", async
   const financialTarget = financialRefreshSection.getByLabel(
     "Observation-through Research Session",
   );
-  const financialKeyInput = financialRefreshSection.getByLabel("Idempotency key");
   const financialReview = financialRefreshSection.getByRole("button", {
     name: "Review Refresh",
   });
   await expect(financialTarget).toHaveAttribute("type", "date");
   await expect(financialTarget).toHaveAttribute("required", "");
-  await expect(financialKeyInput).toHaveValue(/^financial-\d{8}T\d{6}Z$/);
+  await expect(financialRefreshSection.getByLabel("Idempotency key")).toHaveCount(0);
   const financialTargetSession = "2026-08-14";
-  const financialKey = "browser-financial-refresh-20260814";
+  let financialKey = "";
   await financialReview.click();
   expect(
     await financialTarget.evaluate(
@@ -975,8 +914,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(page.getByRole("dialog", { name: "Submit Financial Refresh?" }))
     .toHaveCount(0);
   await financialTarget.fill(financialTargetSession);
-  await financialKeyInput.fill(financialKey);
-  await financialReview.click();
+  financialKey = await reviewGeneratedRefresh(page, financialReview, "Financial");
   const financialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
@@ -1036,15 +974,14 @@ test("only the singleton Operator can open and read the Operator Console", async
   const industryTarget = industryRefreshSection.getByLabel(
     "Observation-through Research Session",
   );
-  const industryKeyInput = industryRefreshSection.getByLabel("Idempotency key");
   const industryReview = industryRefreshSection.getByRole("button", {
     name: "Review Refresh",
   });
   await expect(industryTarget).toHaveAttribute("type", "date");
   await expect(industryTarget).toHaveAttribute("required", "");
-  await expect(industryKeyInput).toHaveValue(/^industry-\d{8}T\d{6}Z$/);
+  await expect(industryRefreshSection.getByLabel("Idempotency key")).toHaveCount(0);
   const industryTargetSession = "2026-08-14";
-  const industryKey = "browser-industry-refresh-20260814";
+  let industryKey = "";
   await industryReview.click();
   expect(
     await industryTarget.evaluate(
@@ -1055,8 +992,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(page.getByRole("dialog", { name: "Submit Industry Refresh?" }))
     .toHaveCount(0);
   await industryTarget.fill(industryTargetSession);
-  await industryKeyInput.fill(industryKey);
-  await industryReview.click();
+  industryKey = await reviewGeneratedRefresh(page, industryReview, "Industry");
   let industryConfirmation = page.getByRole("dialog", {
     name: "Submit Industry Refresh?",
   });
@@ -1109,9 +1045,8 @@ test("only the singleton Operator can open and read the Operator Console", async
   expect(industryMutation?.body).not.toContain(browserPassword);
   resetAuthRateLimits();
 
-  const industryNoChangeKey = "browser-industry-no-change-20260814";
-  await industryKeyInput.fill(industryNoChangeKey);
-  await industryReview.click();
+  let industryNoChangeKey = "";
+  industryNoChangeKey = await reviewGeneratedRefresh(page, industryReview, "Industry");
   industryConfirmation = page.getByRole("dialog", {
     name: "Submit Industry Refresh?",
   });
@@ -1127,7 +1062,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     .toBeVisible();
   resetAuthRateLimits();
 
-  const industryRejectedKey = "browser-industry-business-rejected";
+  let industryRejectedKey = "";
   const industryRejectedHandler = async (route: Route): Promise<void> => {
     const request = route.request();
     if (request.method() !== "POST") {
@@ -1160,8 +1095,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     "**/api/operator/data/refreshes/industry",
     industryRejectedHandler,
   );
-  await industryKeyInput.fill(industryRejectedKey);
-  await industryReview.click();
+  industryRejectedKey = await reviewGeneratedRefresh(page, industryReview, "Industry");
   industryConfirmation = page.getByRole("dialog", {
     name: "Submit Industry Refresh?",
   });
@@ -1182,7 +1116,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   );
   resetAuthRateLimits();
 
-  const droppedFinancialKey = "browser-financial-dropped-after-acceptance";
+  let droppedFinancialKey = "";
   let markFinancialResponseDropped = (): void => {};
   const financialResponseDropped = new Promise<void>((resolve) => {
     markFinancialResponseDropped = resolve;
@@ -1208,8 +1142,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     droppedFinancialResponseHandler,
   );
   await financialTarget.fill(financialTargetSession);
-  await financialKeyInput.fill(droppedFinancialKey);
-  await financialReview.click();
+  droppedFinancialKey = await reviewGeneratedRefresh(page, financialReview, "Financial");
   let recoverableFinancialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
@@ -1242,7 +1175,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   });
   resetAuthRateLimits();
 
-  const knownFailureKey = "browser-financial-known-failure";
+  let knownFailureKey = "";
   let releaseKnownFailure = (): void => {};
   let markKnownFailureStarted = (): void => {};
   const knownFailureGate = new Promise<void>((resolve) => {
@@ -1275,8 +1208,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     knownFailureHandler,
   );
   await financialTarget.fill(financialTargetSession);
-  await financialKeyInput.fill(knownFailureKey);
-  await financialReview.click();
+  knownFailureKey = await reviewGeneratedRefresh(page, financialReview, "Financial");
   recoverableFinancialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
@@ -1303,7 +1235,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   );
   resetAuthRateLimits();
 
-  const retryKey = "browser-financial-retry-exact";
+  let retryKey = "";
   let releaseUncertainSubmission = (): void => {};
   let markUncertainSubmissionStarted = (): void => {};
   let markMissingReceiptObserved = (): void => {};
@@ -1349,8 +1281,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     });
   };
   await page.route("**/api/operator/data/refreshes/financial**", retryHandler);
-  await financialKeyInput.fill(retryKey);
-  await financialReview.click();
+  retryKey = await reviewGeneratedRefresh(page, financialReview, "Financial");
   recoverableFinancialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
@@ -1375,7 +1306,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await page.unroute("**/api/operator/data/refreshes/financial**", retryHandler);
   resetAuthRateLimits();
 
-  const stopKey = "browser-financial-stop-checking";
+  let stopKey = "";
   let markStopSubmissionStarted = (): void => {};
   let releaseStopSubmission = (): void => {};
   const stopSubmissionStarted = new Promise<void>((resolve) => {
@@ -1404,8 +1335,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     });
   };
   await page.route("**/api/operator/data/refreshes/financial", stopHandler);
-  await financialKeyInput.fill(stopKey);
-  await financialReview.click();
+  stopKey = await reviewGeneratedRefresh(page, financialReview, "Financial");
   recoverableFinancialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
@@ -1424,7 +1354,7 @@ test("only the singleton Operator can open and read the Operator Console", async
   await page.unroute("**/api/operator/data/refreshes/financial", stopHandler);
   resetAuthRateLimits();
 
-  const capabilityLossKey = "browser-financial-capability-loss";
+  let capabilityLossKey = "";
   const capabilityLossHandler = async (route: Route): Promise<void> => {
     const request = route.request();
     if (request.method() !== "POST") {
@@ -1465,8 +1395,7 @@ test("only the singleton Operator can open and read the Operator Console", async
     "**/api/operator/data/refreshes/financial",
     capabilityLossHandler,
   );
-  await financialKeyInput.fill(capabilityLossKey);
-  await financialReview.click();
+  capabilityLossKey = await reviewGeneratedRefresh(page, financialReview, "Financial");
   const capabilityLossConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
@@ -1818,12 +1747,16 @@ test("only the singleton Operator can open and read the Operator Console", async
   await expect(retryDialog).toContainText(
     "The original cancelled receipt remains unchanged and inspectable",
   );
-  const actionRetryKey = "browser-market-retry-new";
-  const retryKeyInput = retryDialog.getByLabel("New idempotency key");
-  await expect(retryKeyInput).toHaveValue(/^market-retry-\d{8}T\d{6}Z$/);
-  await retryKeyInput.fill(actionRetryKey);
+  await expect(retryDialog.getByLabel("New idempotency key")).toHaveCount(0);
+  const retryProofRequest = page.waitForRequest((request) =>
+    new URL(request.url()).pathname === "/api/auth/operator/proofs"
+    && request.method() === "POST"
+    && request.postDataJSON().operation === "data.refresh.retry");
   await fillPasswordInput(retryDialog.getByLabel("Current password"));
   await retryDialog.getByLabel("Current password").press("Enter");
+  const actionRetryKey = (await retryProofRequest).postDataJSON().new_idempotency_key as string;
+  expect(actionRetryKey).toMatch(/^market-retry-\d{8}T\d{6}Z-[a-f0-9-]{36}$/);
+  expect(actionRetryKey).not.toBe(cancelSourceKey);
   await expect(retryDialog).toHaveCount(0);
   await expect(cancelledDrawer).toBeVisible();
   await expect(cancelledDrawer).toContainText(cancelSourceKey);
@@ -2037,12 +1970,14 @@ test("only the singleton Operator can open and read the Operator Console", async
     await expect(page.getByRole("alert").filter({
       hasText: "Operator Console unavailable.",
     })).toBeVisible();
-    const retry = page.getByRole("button", { name: "Retry" });
+    const retry = page.getByRole("region", { name: "Operator Researchers" })
+      .getByRole("button", { name: "Retry", exact: true });
     await expect(retry).toBeFocused();
   } finally {
     await page.unroute("**/api/auth/operator/invitations*");
   }
-  await page.getByRole("button", { name: "Retry" }).click();
+  await page.getByRole("region", { name: "Operator Researchers" })
+    .getByRole("button", { name: "Retry", exact: true }).click();
   await expect(page.getByRole("table", { name: "Invitations" })).toBeVisible();
 
   const search = page.getByRole("searchbox", { name: "Search researchers" });
@@ -2384,4 +2319,13 @@ async function findInvitationReissue(
     await expect(previous).toBeEnabled();
   }
   throw new Error(`Seeded invitation ${email} was not found in the paged directory.`);
+}
+
+async function reviewGeneratedRefresh(page: Page, button: Locator, kind: "Market" | "Financial" | "Industry"): Promise<string> {
+  await button.click();
+  const dialog = page.getByRole("dialog", { name: `Submit ${kind} Refresh?`, exact: true });
+  await expect(dialog).toBeVisible();
+  const key = await dialog.locator("dl > div").filter({ has: page.locator("dt").filter({ hasText: /^Idempotency key$/ }) }).locator("dd").innerText();
+  expect(key).toMatch(new RegExp(`^${kind.toLowerCase()}-\\d{8}T\\d{6}Z-[a-f0-9-]{36}$`));
+  return key;
 }

@@ -411,6 +411,7 @@ async function refreshSessionOnBrowserEvent(
 
 async function openAccountMenu(page: Page): Promise<void> {
   const menu = page.getByLabel("Account menu");
+  if (!(await menu.isVisible())) await page.getByRole("button", { name: "Open navigation", exact: true }).click();
   if ((await menu.locator("xpath=..").getAttribute("open")) === null) await menu.click();
 }
 

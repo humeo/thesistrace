@@ -4,7 +4,7 @@ import { recoveryImprovesBudget } from "./model-step-recovery.js";
 
 import type { AgentFailureCode } from "../../contracts/agent-failure.mjs";
 import { AgentRunFailure, providerFailureCode } from "./run-failure.js";
-import { frameworkTokenUsage, RunUsageCapture } from "./usage-capture.js";
+import { frameworkTokenUsage, normalizeTokenUsage, RunUsageCapture, type PersistedTokenUsage } from "./usage-capture.js";
 import { ModelInputTokenCounter, modelRequestBudget, type ModelCapacity, type ModelRequestBudget } from "./model-context.js";
 
 export class ModelRequestFailure extends AgentRunFailure {
@@ -20,10 +20,21 @@ export const AGENT_LIMITS = Object.freeze({
 
 export type RunInputEstimate = Readonly<{ estimatedTokens: number; actualTokens: number | null; errorTokens: number | null }>;
 
+export type ModelCallObservation = Readonly<{
+  purpose: "answer" | "memory";
+  finishReason: "stop" | "tool-calls" | "length" | "content-filter" | "error" | "other" | "cancelled";
+  budget: ModelRequestBudget;
+  usage: PersistedTokenUsage | undefined;
+  durationMs: number;
+}>;
+
 /** Safe, request-local observations; not a planner or a second run lifecycle. */
 export class RunModelObservation {
   failure: AgentFailureCode | undefined;
   steps = 0;
+  recoveryAttempts = 0;
+  onCallFinished: ((call: ModelCallObservation) => void) | undefined;
+  private activeCall: { purpose: "answer" | "memory"; budget: ModelRequestBudget; startedAt: number } | undefined;
   inputEstimate: RunInputEstimate | undefined;
   private readonly tokenCounter = new ModelInputTokenCounter();
   private generatedBytes = 0;
@@ -51,6 +62,7 @@ export class RunModelObservation {
   }
 
   fail(code: AgentFailureCode): AgentRunFailure {
+    this.completeCall(undefined, "error");
     if ((code === "CONTEXT_TOO_LARGE" || code === "OUTPUT_LIMIT") && this.budget !== undefined) {
       this.requestFailure ??= new ModelRequestFailure(code, this.budget);
       return this.requestFailure;
@@ -66,6 +78,7 @@ export class RunModelObservation {
     const maxOutputTokens = this.budget.outputTokens;
     if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) throw this.fail(purpose === "memory" ? "CONTEXT_COMPACTION_FAILED" : "CONTEXT_TOO_LARGE");
     this.steps++;
+    this.activeCall = { purpose, budget: this.budget, startedAt: performance.now() };
     this.usage.beginStep();
     return { ...options, maxOutputTokens };
   }
@@ -83,6 +96,10 @@ export class RunModelObservation {
         errorTokens: actualTokens === null ? null : actualTokens - this.budget.inputTokens };
     }
     const reason = part.finishReason?.unified;
+    let usage: PersistedTokenUsage | undefined;
+    try { usage = normalizeTokenUsage(part.usage); } catch { /* Unknown usage remains unknown. */ }
+    this.completeCall(usage, reason === "stop" || reason === "tool-calls" || reason === "length"
+      || reason === "content-filter" || reason === "error" ? reason : "other");
     if (reason === "length") throw this.fail(purpose === "memory" ? "CONTEXT_COMPACTION_FAILED" : "OUTPUT_LIMIT");
     if (reason === "content-filter") throw this.fail("PROVIDER_REFUSAL");
     if (reason !== "stop" && reason !== "tool-calls") throw this.fail("PROVIDER_MALFORMED_STREAM");
@@ -103,6 +120,18 @@ export class RunModelObservation {
       throw new AgentRunFailure("CONTEXT_COMPACTION_FAILED");
     }
     this.requestFailure = undefined;
+  }
+
+  cancelCall(): void { this.completeCall(undefined, "cancelled"); }
+
+  private completeCall(usage: PersistedTokenUsage | undefined, finishReason: ModelCallObservation["finishReason"]): void {
+    const call = this.activeCall;
+    this.activeCall = undefined;
+    if (!call) return;
+    try {
+      this.onCallFinished?.({ purpose: call.purpose, budget: call.budget, usage, finishReason,
+        durationMs: Math.max(0, Math.floor(performance.now() - call.startedAt)) });
+    } catch { /* Observation cannot fail or retry model work. */ }
   }
 
   terminalFailure(): AgentFailureCode | undefined {
@@ -194,10 +223,13 @@ export class GuardedLanguageModel implements LanguageModelV3 {
           }
         } catch (error) {
           void reader.cancel().catch(() => undefined);
-          controller.error(failure(error));
+          // A stream error discards queued prose in downstream transforms.
+          // Preserve ordering with the Provider error event before closing.
+          controller.enqueue({ type: "error", error: failure(error) });
+          controller.close();
         }
       },
-      cancel: (reason) => reader.cancel(reason),
+      cancel: (reason) => { observation.cancelCall(); return reader.cancel(reason); },
     }) };
   }
 

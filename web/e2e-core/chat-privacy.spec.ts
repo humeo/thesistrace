@@ -5,7 +5,7 @@ import { expect, test, testProjectName } from "./auth-fixture";
 import { proxyState, setProxyMode } from "./fault-proxy";
 
 const canaries: Record<string, string> = JSON.parse(readFileSync(new URL("../../tests/fixtures/agent-privacy-canaries.json", import.meta.url), "utf8"));
-const logKeys = ["component", "duration_ms", "error_category", "event", "level", "model_key", "provider_model_id", "reasoning_effort", "researcher_correlation", "retry_classification", "run_id", "status", "step_count", "thread_id", "timestamp", "token_usage", "trace_id"].sort();
+const logKeys = ["component", "context_compaction", "duration_ms", "error_category", "event", "input_token_estimate", "level", "model_call", "model_key", "provider_model_id", "reasoning_effort", "recovery_attempts", "researcher_correlation", "retry_classification", "run_id", "status", "step_count", "thread_id", "timestamp", "token_usage", "tool_result_bytes", "trace_id"].sort();
 
 test("Chat content-free telemetry survives success faults restart and deletion in final images", async ({ researcher }, testInfo) => {
   test.setTimeout(180_000);
@@ -124,6 +124,7 @@ test("Chat content-free telemetry survives success faults restart and deletion i
       expect(finished.length).toBe(1);
       const metric = finished[0];
       expect(Object.keys(metric).sort()).toEqual(logKeys);
+      expect(metric).toMatchObject({ context_compaction: null, model_call: null, recovery_attempts: 0, tool_result_bytes: null });
       expect(metric).toMatchObject({ status: item.status, error_category: item.code, model_key: "scripted-research", provider_model_id: "scripted-v1", reasoning_effort: "medium" });
       expect(metric.researcher_correlation).toMatch(/^[a-f0-9]{64}$/);
       expect(metric.trace_id).toMatch(/^[a-f0-9-]{36}$/);

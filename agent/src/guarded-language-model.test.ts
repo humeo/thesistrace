@@ -34,6 +34,7 @@ test.each(["tool-calls", "length"] as const)("consecutive buffered calls reach t
     for (;;) {
       const next = await reader.read();
       if (next.done) break;
+      if (next.value.type === "error") throw next.value.error;
       if (next.value.type === "tool-call") delivered.push(next.value.toolCallId);
     }
   };
@@ -328,7 +329,7 @@ test("native SDK socket interruption is a Provider failure with unknown final us
     cause: Object.assign(new Error("private-socket-canary"), { code: "UND_ERR_SOCKET" }),
   }));
   const failure = await (async () => {
-    while (!(await reader.read()).done) { /* consume the interrupted native stream */ }
+    for (;;) { const next = await reader.read(); if (next.done) break; if (next.value.type === "error") throw next.value.error; }
   })().catch((error: unknown) => error);
   expect(failure).toMatchObject({ code: "PROVIDER_UNAVAILABLE", message: "PROVIDER_UNAVAILABLE" });
   expect(failure).not.toHaveProperty("cause");
@@ -448,7 +449,7 @@ function stream(parts: LanguageModelV3StreamPart[]) {
 }
 async function drain(result: { stream: ReadableStream<LanguageModelV3StreamPart> }) {
   const reader = result.stream.getReader();
-  while (!(await reader.read()).done) { /* consume the provider stream */ }
+  for (;;) { const next = await reader.read(); if (next.done) break; if (next.value.type === "error") throw next.value.error; }
 }
 
 test("an auxiliary length stop is a compaction failure, not a truncated user answer", async () => {
@@ -457,4 +458,21 @@ test("an auxiliary length stop is a compaction failure, not a truncated user ans
     { ...finish, finishReason: { unified: "length", raw: "length" } }])), observation, capacity(65_536), "memory");
   await expect(drain(await model.doStream(options))).rejects.toMatchObject({ code: "CONTEXT_COMPACTION_FAILED" });
   expect(observation.terminalFailure()).toBe("CONTEXT_COMPACTION_FAILED");
+});
+
+test("individual call observations preserve unknown usage and cannot fail model work", () => {
+  const observation = new RunModelObservation(new RunUsageCapture());
+  const calls: unknown[] = [];
+  observation.onCallFinished = call => { calls.push(call); throw new Error("private-observer-canary"); };
+  const capacity = { contextWindow: 65536, maxOutputTokens: 1000 };
+  observation.begin({ prompt: [{ role: "user", content: [{ type: "text", text: "Private source" }] }] }, capacity, "memory");
+  expect(() => observation.finish({ type: "finish", finishReason: { unified: "stop", raw: "private-reason" },
+    usage: { inputTokens: { total: 10, noCache: 8, cacheRead: 2, cacheWrite: undefined }, outputTokens: { total: 5, text: 5, reasoning: 0 } },
+  }, true, "memory")).not.toThrow();
+  observation.begin({ prompt: [{ role: "user", content: [{ type: "text", text: "Next source" }] }] }, capacity);
+  observation.fail("PROVIDER_TIMEOUT");
+  expect(calls).toHaveLength(2);
+  expect(calls[0]).toMatchObject({ purpose: "memory", finishReason: "stop", usage: { inputTokens: { total: 10, cacheRead: 2 } } });
+  expect(calls[1]).toMatchObject({ purpose: "answer", finishReason: "error", usage: undefined });
+  expect(JSON.stringify(calls)).not.toMatch(/Private source|Next source|private-reason/);
 });

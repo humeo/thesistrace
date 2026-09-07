@@ -52,6 +52,12 @@ export function OperatorDataPage() {
   const activeSubmissionGeneration = useRef(0);
   const pendingSubmissionRef = useRef<TrackedMarketRefreshRequest | null>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
+  const focusAfterCommit = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (confirmation !== null || pendingSubmission !== null) return;
+    focusAfterCommit.current?.focus();
+    focusAfterCommit.current = null;
+  }, [confirmation, pendingSubmission]);
   pendingSubmissionRef.current = pendingSubmission;
   const showNotFound = useCallback(() => setNotFound(true), []);
   const notifyOperationAccepted = useCallback(
@@ -114,7 +120,7 @@ export function OperatorDataPage() {
           setPendingSubmission(null);
           replaceOperation(next);
           notifyOperationAccepted();
-          window.requestAnimationFrame(() => trigger.current?.focus());
+          focusAfterCommit.current = trigger.current;
         } else {
           setOperation({ generation: trackedRequest.generation, operation: next });
         }
@@ -186,7 +192,7 @@ export function OperatorDataPage() {
     if (activeSubmissionGeneration.current !== generation) return;
     activeSubmissionGeneration.current += 1;
     setConfirmation(null);
-    window.requestAnimationFrame(() => trigger.current?.focus());
+    focusAfterCommit.current = trigger.current;
   }
 
   function replaceOperation(next: MarketRefreshOperation): void {
@@ -255,7 +261,7 @@ export function OperatorDataPage() {
     setPollError(false);
     setSubmissionError(null);
     setPendingSubmission(tracked);
-    window.requestAnimationFrame(() => trigger.current?.focus());
+    focusAfterCommit.current = trigger.current;
   }
 
   function failUncertainSubmission(tracked: TrackedMarketRefreshRequest): void {
@@ -358,7 +364,7 @@ export function OperatorDataPage() {
               setSubmissionError(
                 "Automatic receipt checks stopped. Retry with the same idempotency key to reconcile any accepted work.",
               );
-              window.requestAnimationFrame(() => trigger.current?.focus());
+              focusAfterCommit.current = trigger.current;
             }}
             pollError={pollError}
             request={pendingSubmission.request}
@@ -392,7 +398,7 @@ export function OperatorDataPage() {
             setPendingSubmission(null);
             setPollError(false);
             setSubmissionError(null);
-            window.requestAnimationFrame(() => trigger.current?.focus());
+            focusAfterCommit.current = trigger.current;
           }}
           request={confirmation.request}
         />

@@ -154,8 +154,8 @@ it is never truncated or partially returned.
 The inventory test serializes each tool name, required scope, description,
 annotations, input Schema, and output Schema with sorted JSON keys. Its current
 V1 SHA-256 is
-`b011d1801f2dc5040f15519cfbef609c6dfdaaca3827732bb33f43d1e18ee32e` and
-the canonical inventory is 151,707 bytes. A maximum 20-item Factor Evaluation
+`e00ef7bf365b978fbe071083e2e09428e64f0309bd2907d547dca0fa09b89979` and
+the canonical inventory is 146,969 bytes. A maximum 20-item Factor Evaluation
 Batch with a 4,096-character Formula in every item serializes to 84,536 bytes,
 so it fits the request ceiling without weakening either collection bound.
 
@@ -166,7 +166,7 @@ budget. The reproducible command, envelope, and observed CPU/RSS evidence are
 recorded in
 [`research-agent-mcp-v1-ingress-benchmark.json`](../research/research-agent-mcp-v1-ingress-benchmark.json).
 That probe completed the inventory, 120-call window, and four-call concurrency
-tests in 2.08 seconds of pytest time, with 153,223,168 bytes maximum RSS (7.14
+tests in 0.91 seconds of pytest time, with 157,057,024 bytes maximum RSS (7.31
 percent of the 2-GiB container envelope) and no swap. Tests pin the constants,
 inventory fingerprint, observed byte sizes, oversized single-item behavior,
 rate isolation, and concurrent-call admission. Any contract change is a hard

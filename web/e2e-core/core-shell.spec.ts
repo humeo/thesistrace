@@ -1,7 +1,7 @@
 import { type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
 import { execFileSync, type ChildProcess } from "node:child_process";
 
-import { expect, sameOriginHeaders, test } from "./auth-fixture";
+import { expect, openDataOverview, sameOriginHeaders, test } from "./auth-fixture";
 import {
   controlledWorkerExit,
   controlWorker,
@@ -547,7 +547,7 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
   try {
     controlWorker("pause");
     workerPaused = true;
-    await page.goto("/data");
+    await openDataOverview(page);
     await expect(page.getByRole("heading", { name: "Research fields" })).toBeVisible();
     await expect(page.getByText("revenue", { exact: true })).toBeVisible();
     await expect(page.getByText("Latest full year visible on each Research Session").first()).toBeVisible();

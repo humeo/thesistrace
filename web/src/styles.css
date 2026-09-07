@@ -2785,7 +2785,8 @@ select { color-scheme: dark; }
   }
   .chat-message-actions { opacity: 1; }
   .chat-run-error > .button { min-height: 44px; min-width: 44px; white-space: normal; }
-  .account-menu > summary { min-width: 44px; }
+  .account-menu > summary,
+  .sidebar-account-area .account-menu > summary { min-width: 44px; min-height: 44px; }
   .chat-composer-toolbar .chat-main-action {
     width: 44px;
     height: 44px;

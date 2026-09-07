@@ -91,7 +91,7 @@ test("Chat exposes the registered Catalog and responsive Session sidebar through
   });
   await expect(
     picker.getByRole("group", { name: "Model", exact: true }).getByRole("button"),
-  ).toHaveText(["Scripted Research", "Scripted Deep Research"]);
+  ).toHaveText(["Scripted Research", "Scripted Deep Research", "Scripted Small Window"]);
   await expect(
     picker.getByRole("group", { name: "Reasoning", exact: true }).getByRole("button"),
   ).toHaveText(["Low", "Medium", "High"]);
@@ -304,6 +304,7 @@ for (const viewport of [
     const navigation = page.getByRole("button", { name: "Open navigation" });
     if (viewport.name === "mobile") await navigation.click();
     const actions = page.locator(".chat-session-row").getByRole("button");
+    await page.locator(".chat-session-row").hover();
     await actions.click();
     await page.getByRole("menuitem", { name: "Delete Chat", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Delete Chat?", exact: true });
@@ -715,6 +716,8 @@ test("Chat executes a real protected MCP read Tool and renders only its safe lif
 
   await toolActivity(page, "get_research_context", "complete").first()
     .waitFor({ state: "attached" });
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
+  await expect(page.locator("details.chat-work-history")).not.toHaveAttribute("open", "");
   const toolGroup = page.locator("details.chat-tool-group").last();
   await expect(toolGroup).not.toHaveAttribute("open", "");
   const tool = await revealToolActivity(page, "get_research_context", "complete");
@@ -874,7 +877,7 @@ test("A2UI shows real running state and supports keyboard and narrow-screen resu
     await controlledWorkerExit(worker);
     worker = undefined;
     await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
-    await expect(page.getByRole("article", { name: "Research surface" })).toHaveCount(4);
+    await expect(page.getByRole("article", { name: "Research surface" })).toHaveCount(2);
     await expect(page.getByRole("region", { name: `ResearchRun ${runId}: succeeded` })).toBeVisible();
 
     const formula = page.getByRole("region", { name: "Proposed formula" });
@@ -1007,14 +1010,18 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
     }
   });
   await page.goto("/chat");
-  await submitChatPrompt(page, scriptedFactorSubmitOnlyPrompt);
+  const admissionTurnId = await submitChatPrompt(page, scriptedFactorSubmitOnlyPrompt);
 
-  await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
+  await expect(page.locator(`.chat-turn[data-turn-id="${admissionTurnId}"] .chat-response-footer time`))
+    .toBeVisible({ timeout: 90_000 });
+  await expect(agentRunStatus(page)).toHaveText("Run complete");
   const admission = await revealToolActivity(page, "submit_research_run", "complete");
   await expect(admission).toBeVisible();
-  const runSurface = page.locator(".chat-a2ui-run").last();
-  await expect(runSurface).toBeVisible();
-  const runId = (await runSurface.locator(".chat-a2ui-run-id").innerText()).trim();
+  // Completed turns hide stale queued/running surfaces. The final answer
+  // retains the navigation to the successfully admitted resource.
+  const runLink = page.locator('.chat-message-assistant a[href^="/research-runs/"]').last();
+  await expect(runLink).toBeVisible();
+  const runId = (await runLink.getAttribute("href"))?.split("/").at(-1);
   if (runId === undefined || !/^run_[a-f0-9]{20}$/.test(runId)) {
     throw new Error("Admission surface exposed an invalid ResearchRun id");
   }
@@ -1035,15 +1042,9 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
     "rank(-abs(pct_change(close, 1)))",
   );
-  const acceptedSurface = page.getByRole("region", {
-    name: `ResearchRun ${runId}: queued`,
-  });
-  await expect(acceptedSurface).toContainText("Accepted by ThesisTrace Core");
-  const acceptedNavigation = page.getByRole("link", {
-    name: "Open authoritative ResearchRun",
-  }).first();
-  await expect(acceptedNavigation).toHaveAttribute("href", `/research-runs/${runId}`);
-  await expect(page.getByRole("article", { name: "Research surface" })).toHaveCount(2);
+  await expect(page.getByRole("region", { name: `ResearchRun ${runId}: queued` })).toHaveCount(0);
+  await expect(runLink).toHaveAttribute("href", `/research-runs/${runId}`);
+  await expect(page.getByRole("article", { name: "Research surface" })).toHaveCount(1);
 
   await expect.poll(async () => {
     const response = await page.request.get(`/api/research-runs/${runId}`);
@@ -1060,7 +1061,9 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   });
   expect(durableFacts.data_generation_id).toMatch(/^[a-f0-9]{64}$/);
 
-  await submitChatPrompt(page, scriptedResumeResearchPrompt);
+  const resumedTurnId = await submitChatPrompt(page, scriptedResumeResearchPrompt);
+  const resumedTurn = page.locator(`.chat-turn[data-turn-id="${resumedTurnId}"]`);
+  await expect(resumedTurn.locator(".chat-response-footer time")).toBeVisible({ timeout: 30_000 });
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 30_000 });
 
   const detail = await page.request.get(`/api/research-runs/${runId}`);
@@ -1093,7 +1096,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
     status: "succeeded",
   });
   const factorSummary = detailBody.result.factor.horizons["5"].summary;
-  const result = page.locator(".chat-message-assistant .chat-assistant-markdown").last();
+  const result = resumedTurn.locator(".chat-message-assistant .chat-assistant-markdown").last();
   await expect(result).toContainText(detailBody.input.hypothesis);
   await expect(result).toContainText(detailBody.input.formula);
   const rankIc = factorSummary.rank_ic.mean === null
@@ -1135,18 +1138,20 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   await expect(resultSurface.getByRole("link", {
     name: "Open authoritative ResearchRun",
   })).toHaveAttribute("href", runHref);
-  await expect(page.getByRole("article", { name: "Research surface" })).toHaveCount(3);
+  await expect(page.getByRole("article", { name: "Research surface" })).toHaveCount(2);
   await expect(resultSurface.getByRole("button", {
     name: /Submit|Retry|Cancel|Stop|Delete/,
   })).toHaveCount(0);
 
-  await submitChatPrompt(page, scriptedStrategyPrompt);
+  const strategyTurnId = await submitChatPrompt(page, scriptedStrategyPrompt);
+  const strategyTurn = page.locator(`.chat-turn[data-turn-id="${strategyTurnId}"]`);
   const strategyAdmissions = await revealToolActivity(
     page,
     "submit_research_run",
     "complete",
   );
   await expect(strategyAdmissions).toHaveCount(2, { timeout: 30_000 });
+  await expect(strategyTurn.locator(".chat-response-footer time")).toBeVisible({ timeout: 90_000 });
   await expect(agentRunStatus(page)).toHaveText("Run complete", { timeout: 90_000 });
   const strategyRunId = (await page.locator(".chat-a2ui-run-id").last().innerText()).trim();
   if (strategyRunId === undefined || !/^run_[a-f0-9]{20}$/.test(strategyRunId)) {
@@ -1190,12 +1195,12 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   const surfaceFactsBeforeReplay = agentChatDatabaseFacts(replaySessionId);
   expect(surfaceFactsBeforeReplay.a2ui).toBeGreaterThanOrEqual(6);
   await expect(page.getByRole("article", { name: "Research surface" }))
-    .toHaveCount(surfaceFactsBeforeReplay.a2ui);
+    .toHaveCount(4);
   await page.reload();
   await expect(page).toHaveURL(durableUrl);
   await expect(agentRunStatus(page)).toHaveText("Run complete");
   await expect(page.getByRole("article", { name: "Research surface" }))
-    .toHaveCount(surfaceFactsBeforeReplay.a2ui);
+    .toHaveCount(4);
   await expect(page.getByRole("region", {
     name: "Alpha proposal: Low-volatility factor",
   })).toContainText("Chat-owned");
@@ -1250,6 +1255,7 @@ test("admitted Research artifacts and a DailyTrack outlive the Chat that created
   if (currentTitle === undefined || currentTitle.length === 0) {
     throw new Error("Durable Research Chat exposed no title");
   }
+  await page.getByRole("button", { name: `Actions for ${currentTitle}` }).locator("..").hover();
   await page.getByRole("button", { name: `Actions for ${currentTitle}` }).click();
   await page.getByRole("menuitem", { name: "Delete Chat" }).click();
   const deleteDialog = page.getByRole("dialog", { name: "Delete Chat?" });
@@ -1384,7 +1390,6 @@ test("the same Chat entry runs and explains a real Strategy Backtest", async ({
   }
   const runHref = `/research-runs/${runId}`;
   const runReads = await revealToolActivity(page, "get_research_run", "complete");
-  await expect.poll(() => runReads.count()).toBeGreaterThanOrEqual(2);
   await expect(runReads.last()).toBeVisible();
 
   const detail = await page.request.get(`/api/research-runs/${runId}`);

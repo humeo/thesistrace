@@ -30,3 +30,5 @@
 - 2026-09-07：用户确认本票只由 04 阻塞，沿用其传递依赖 03/01。02 的新分页契约不阻塞恢复闭环，06 负责两条链路的集成；原正常调度与快照工作前移至 03/04，恢复要求完整保留。
 
 - 2026-09-07：05实现、验证与串行复审完成，随本票独立提交发布。Agent单元632passed、真实PG90passed、Web相关39passed、Agent/Web类型检查通过；in-app browser验证生产时间线组件的恢复三态、替代正文、刷新及成功工具保留。Standards首轮P3重复Fixture和Spec首轮P2替代正文中途取消均已修复，Standards→Spec复审各0findings。证据见[实施记录](../evidence-05.md)。完整Core/Browser/真实模型质量及最终产品门禁仍由06承担。
+
+- 2026-09-07：06最终验收发现本票快速突发Provider流在controller.error时丢弃排队正文，归属恢复链路；已在06改为规范有序error part后close。公开Run+PG先红后绿、真实浏览器恢复/取消通过，Standards/Spec闭合，详见[evidence-06](../evidence-06.md)。

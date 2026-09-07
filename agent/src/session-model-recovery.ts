@@ -13,7 +13,7 @@ export class SessionModelRecovery {
   private pending: ModelStepRecovery | undefined;
   constructor(private readonly options: Readonly<{ repository: ResearchSessionRepository; memory: Memory;
     threadId: string; researcherId: string; runId: string; selection: ResolvedModelSelection;
-    context: SessionContextController; observation: RunModelObservation; abortSignal: AbortSignal; notify: () => void;
+    context: SessionContextController; observation: RunModelObservation; abortSignal: AbortSignal; notify: (claimed: boolean) => void;
   }>) {}
 
   responseMessageId(freshId: string, retryCount: number): string {
@@ -51,7 +51,8 @@ export class SessionModelRecovery {
     await memory.saveMessages({ messages });
     const claim = await repository.recordModelStepStop({ threadId, researcherId, runId, messageId,
       cause: error.code, budget: error.budget, allowRecovery: mayRecoverModelStep(selection.compactionEnabled, error.code, error.budget) });
-    this.options.notify();
+    if (claim.claimed) observation.recoveryAttempts++;
+    this.options.notify(claim.claimed);
     if (!claim.claimed) {
       if (claim.recovery.status === "recovering" && claim.recovery.replacementMessageId === messageId) {
         await repository.updateModelStepRecovery(threadId, researcherId, runId, claim.recovery.originalMessageId,

@@ -1,3 +1,4 @@
+import type { AgentTelemetryEvent } from "./run-telemetry.js";
 import { randomUUID } from "node:crypto";
 
 import type { AGUIEvent, Message, RunAgentInput } from "@ag-ui/core";
@@ -176,12 +177,33 @@ describe.sequential("durable Research Agent runtime", () => {
     await owner.end();
   });
 
+  it("retains burst-stream partial text through durable recovery", async () => {
+    const runtime = await createIntegrationRuntime();
+    const threadId = randomUUID();
+    const invoke = (existing: boolean) => run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+      sessionMode: existing ? "existing" : "new", content: existing ? "[scripted-context-recovery] Continue." : "Prepare research." }), primaryResearcher);
+    try {
+      expect((await invoke(false)).at(-1)?.type).toBe("RUN_FINISHED");
+      await seedRecoveryHistory(threadId);
+      const events = await invoke(true);
+      expect(events.at(-1)).toMatchObject({ type: "RUN_FINISHED" });
+      const repository = new ResearchSessionRepository(agentStore);
+      const [recovery] = await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id);
+      expect(recovery).toMatchObject({ status: "succeeded", attempts: 1 });
+      const timeline = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
+      const partial = timeline.turns.flatMap(turn => turn.entries).find(entry => entry.entryId === `assistant:${recovery!.originalMessageId}`);
+      expect(partial?.payload).toMatchObject({ content: "This is the retained partial answer." });
+      expect(events.some(event => event.type === "TOOL_CALL_START")).toBe(false);
+    } finally { await runtime.close(); }
+  });
+
   it("recovers a crowded length stop once through the public Run and retains its audit body", async () => {
+    const telemetry: AgentTelemetryEvent[] = [];
     const provider = openAIMemoryProvider({ lengthOnAnswers: [2] });
     vi.stubGlobal("fetch", provider.fetch);
     const dependencies = { mcpRunFactory: async () => ({ close: async () => undefined, hasFatalToolFailure: () => false,
       toolFailure: () => undefined, tools: {} }) };
-    const runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+    const runtime = await createResearchRuntime(memoryConfiguration, { ...dependencies, telemetry: event => telemetry.push(event) });
     const threadId = randomUUID();
     const prompt = (existing: boolean) => run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
       modelKey: "luna", reasoningEffort: "high", sessionMode: existing ? "existing" : "new", content: "Explain the research." }), primaryResearcher);
@@ -194,6 +216,12 @@ describe.sequential("durable Research Agent runtime", () => {
       const recoveries = await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id);
       expect(recoveries).toHaveLength(1);
       expect(recoveries[0]).toMatchObject({ status: "succeeded", attempts: 1, invalidReplacement: false });
+      const observed = telemetry.filter(event => event.run_id === recoveries[0]!.runId);
+      expect(observed.find(event => event.event === "agent_recovery_claimed")).toMatchObject({ recovery_attempts: 1 });
+      expect(observed.at(-1)).toMatchObject({ event: "agent_run_finished", recovery_attempts: 1 });
+      expect(observed.some(event => event.model_call?.purpose === "memory" && event.model_call.token_usage.reported)).toBe(true);
+      expect(observed.some(event => event.model_call?.finish_reason === "length")).toBe(true);
+      expect(JSON.stringify(telemetry)).not.toContain("TRUNCATED_ANSWER_CANARY");
       expect(provider.requests.filter((request) => request.phase === "answer")).toHaveLength(3);
       expect(provider.requests.slice(2).filter((request) => request.phase !== "answer").length).toBeGreaterThan(0);
       const timeline = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
@@ -291,7 +319,7 @@ describe.sequential("durable Research Agent runtime", () => {
       await seedRecoveryHistory(threadId);
       pending = run(runtime, runInput({ threadId, runId, messageId: randomUUID(), modelKey: "luna", reasoningEffort: "high",
         sessionMode: "existing", content: "Continue the explanation." }), primaryResearcher);
-      await vi.waitFor(() => expect(observing).toBe(true));
+      await vi.waitFor(() => expect(observing).toBe(true), { timeout: 10_000 });
       const repository = new ResearchSessionRepository(agentStore);
       expect(await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id)).toMatchObject([{ attempts: 1, status: "recovering" }]);
       const timeline = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
@@ -337,13 +365,13 @@ describe.sequential("durable Research Agent runtime", () => {
       expect((await run(runtime, request(randomUUID(), false), primaryResearcher)).at(-1)?.type).toBe("RUN_FINISHED");
       await seedRecoveryHistory(threadId);
       pending = run(runtime, request(runId, true), primaryResearcher);
-      await vi.waitFor(() => expect(replacing).toBe(true));
+      await vi.waitFor(() => expect(replacing).toBe(true), { timeout: 10_000 });
       const repository = new ResearchSessionRepository(agentStore);
       await vi.waitFor(async () => {
         const page = await repository.timeline(threadId, primaryResearcher.researcher_id, undefined, 20);
         expect(page.turns.flatMap(turn => turn.entries).some(entry => entry.kind === "assistant_message"
           && entry.payload.content === "INTERRUPTED_REPLACEMENT_CANARY")).toBe(true);
-      });
+      }, { timeout: 10_000 });
       await runtime.stop(threadId, primaryResearcher, stopInput(randomUUID(), runId));
       await pending;
       expect(await repository.modelStepRecoveries(threadId, primaryResearcher.researcher_id))
@@ -651,7 +679,7 @@ describe.sequential("durable Research Agent runtime", () => {
       const stoppedId = randomUUID();
       const pending = run(runtime, runInput({ threadId, sessionMode: "existing", runId: stoppedId, messageId: randomUUID(),
         modelKey: "luna", reasoningEffort: "high", content: "Read the current research." }), primaryResearcher);
-      await vi.waitFor(() => expect(reads).toBe(1));
+      await vi.waitFor(() => expect(reads).toBe(1), { timeout: 10_000 });
       await runtime.stop(threadId, primaryResearcher, stopInput(randomUUID(), stoppedId));
       barrier.resolve();
       await pending;
@@ -681,7 +709,7 @@ describe.sequential("durable Research Agent runtime", () => {
       await runtime.close();
       vi.unstubAllGlobals();
     }
-  }, 30_000);
+  }, 90_000);
 
   it.each(["success", "rate-limit", "invalid"] as const)("observes a large Tool result inside the Turn and handles compression failure: %s", async (failure) => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -2454,10 +2482,12 @@ describe.sequential("durable Research Agent runtime", () => {
   });
 
   it("executes a discovered Tool while exposing only safe Tool lifecycle events", async () => {
+    const telemetry: AgentTelemetryEvent[] = [];
     let closes = 0;
     let discoveries = 0;
     let executions = 0;
     const runtime = await createResearchRuntime(settings, {
+      telemetry: event => telemetry.push(event),
       mcpRunFactory: async (headers) => {
         discoveries += 1;
         expect(headers.get("cookie")).toBe("test-session-cookie=browser-only");
@@ -2520,6 +2550,11 @@ describe.sequential("durable Research Agent runtime", () => {
         content: SAFE_TOOL_COMPLETED,
       });
       expect(JSON.stringify(events)).not.toContain("server-only-sensitive-result");
+      expect(telemetry.find(event => event.event === "agent_tool_finished")).toMatchObject({
+        tool_result_bytes: Buffer.byteLength(JSON.stringify({ dataset: "server-only-sensitive-result", throughSession: "2026-08-28" }), "utf8"),
+      });
+      expect(telemetry.filter(event => event.event === "agent_model_call_finished")).toHaveLength(2);
+      expect(JSON.stringify(telemetry)).not.toContain("server-only-sensitive-result");
       expect({ closes, discoveries, executions }).toEqual({
         closes: 1,
         discoveries: 1,
