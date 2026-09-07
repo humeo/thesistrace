@@ -24,9 +24,10 @@
     "test:image-smoke": "./scripts/test-runtime image-smoke && pnpm --dir auth test:image-smoke && pnpm --dir agent test:image-smoke && pnpm test:caddy-image-smoke",
     "test:integration": "./scripts/test-runtime integration && pnpm --dir auth test:integration && pnpm --dir agent test:integration",
     "test:codex-mcp": "./scripts/test-runtime codex-mcp",
-    "check": "pnpm test && pnpm test:integration && pnpm test:e2e",
+    "check": "pnpm test && pnpm test:browser && pnpm test:integration && pnpm test:e2e",
     "check:performance": "./scripts/test-runtime performance",
     "check:release": "./scripts/release-gate",
-    "check:live-tushare": "node scripts/configure.mjs run uv run python scripts/check_live_tushare.py"
+    "check:live-tushare": "node scripts/configure.mjs run uv run python scripts/check_live_tushare.py",
+    "test:browser": "pnpm --dir web test:browser"
   }
 }

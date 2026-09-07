@@ -1,8 +1,13 @@
+// @vitest-environment happy-dom
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import * as statusClient from "./operatorDataStatusClient";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   datasetStatusNeedsPolling,
+  OperatorDatasetStatus,
   OperatorDataStatusDrawer,
   OperatorDatasetStatusView,
 } from "./OperatorDatasetStatus";
@@ -16,6 +21,49 @@ import type {
 } from "./operatorDataStatusClient";
 
 describe("Operator Dataset status", () => {
+  it("pauses polling while hidden, stops at terminal status, and reloads on recovery events", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.useFakeTimers();
+    let visibility: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    let terminal = false;
+    const load = vi.spyOn(statusClient, "loadDatasetOperationalStatus").mockImplementation(async () => statusPage({
+      latestByKind: [operation({ status: terminal ? "succeeded" : "accepted" })], operations: [],
+    }));
+    const host = document.createElement("div"); document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(<OperatorDatasetStatus onAccessNotFound={() => { throw new Error("Unexpected access rejection"); }} reloadGeneration={0} />));
+      expect(host.textContent).toContain("Accepted");
+      const initial = load.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(load.mock.calls.length).toBeGreaterThan(initial);
+      visibility = "hidden";
+      await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+      const hidden = load.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+      expect(load.mock.calls.length).toBe(hidden);
+      terminal = true; visibility = "visible";
+      await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+      expect(load.mock.calls.length).toBeGreaterThan(hidden);
+      expect(host.textContent).not.toContain("Accepted · queued");
+      expect(host.textContent).toContain("Published");
+      const completed = load.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+      expect(load.mock.calls.length).toBe(completed);
+      for (const name of ["focus", "online"]) {
+        const before = load.mock.calls.length;
+        await act(async () => window.dispatchEvent(new Event(name)));
+        expect(load.mock.calls.length).toBeGreaterThan(before);
+      }
+      const before = load.mock.calls.length;
+      await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent === "Reload")!.click());
+      expect(load.mock.calls.length).toBeGreaterThan(before);
+    } finally {
+      await act(async () => root.unmount()); host.remove();
+      vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers();
+    }
+  });
   it("shows each published dataset's own coverage and freshness without requiring receipts", () => {
     const markup = renderStatus(statusPage({ latestByKind: [], operations: [] }));
 

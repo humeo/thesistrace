@@ -23,99 +23,11 @@ import {
   type AuthenticatedResearcher,
 } from "./auth-fixture";
 
-test("only the singleton Operator can open and read the Operator Console", { tag: "@isolated" }, async ({ page }) => {
+test("Operator access control and responsive navigation", { tag: "@isolated" }, async ({ page }) => {
   test.setTimeout(240_000);
-  const operatorMutationRequests: Array<Readonly<{ path: string; body: string }>> = [];
-  const marketStatusRequests: Array<Readonly<{
-    asOf: string | null;
-    idempotencyKey: string | null;
-  }>> = [];
-  const financialStatusRequests: Array<Readonly<{
-    idempotencyKey: string | null;
-    observationThroughSession: string | null;
-  }>> = [];
-  const industryStatusRequests: Array<Readonly<{
-    idempotencyKey: string | null;
-    observationThroughSession: string | null;
-  }>> = [];
-  page.on("request", (request) => {
-    const url = new URL(request.url());
-    const path = url.pathname;
-    if (request.method() === "GET" && path === "/api/operator/data/refreshes/market") {
-      marketStatusRequests.push({
-        asOf: url.searchParams.get("as_of"),
-        idempotencyKey: url.searchParams.get("idempotency_key"),
-      });
-    }
-    if (request.method() === "GET" && path === "/api/operator/data/refreshes/financial") {
-      financialStatusRequests.push({
-        idempotencyKey: url.searchParams.get("idempotency_key"),
-        observationThroughSession: url.searchParams.get("observation_through_session"),
-      });
-    }
-    if (request.method() === "GET" && path === "/api/operator/data/refreshes/industry") {
-      industryStatusRequests.push({
-        idempotencyKey: url.searchParams.get("idempotency_key"),
-        observationThroughSession: url.searchParams.get("observation_through_session"),
-      });
-    }
-    if (
-      request.method() === "POST"
-      && (
-        path === "/api/auth/operator/proofs"
-        || path.startsWith("/api/auth/operator/invitations/")
-        || path === "/api/auth/operator/researchers/sessions/revoke"
-        || path === "/api/operator/data/refreshes/market"
-        || path === "/api/operator/data/refreshes/financial"
-        || path === "/api/operator/data/refreshes/industry"
-        || path === "/api/operator/data/refreshes/cancel"
-        || path === "/api/operator/data/refreshes/retry"
-      )
-    ) {
-      operatorMutationRequests.push({ body: request.postData() ?? "", path });
-    }
-  });
-  const operator = await createResearcher(page, "browser-operator@example.test");
-  await bootstrapResearcher(page, operator);
-  expect(runAuthOperator("assign-operator", "--researcher-id", operator.id)).toMatchObject({
-    command: "assign-operator",
-    researcher_id: operator.id,
-    status: "assigned",
-  });
-  await ensureOperatorDataBaseline(page);
-
-  const ordinary = await createResearcher(page, "browser-ordinary@example.test");
-  await bootstrapResearcher(page, ordinary);
-  await page.goto("/data");
-  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
-  seedOperatorDirectory();
-  const invitationEmail = "browser-reissued-invitation@example.test";
-  await issueInvitation(invitationEmail);
-  expect(runAuthOperator("reissue", "--email", invitationEmail)).toMatchObject({
-    command: "reissue",
-    email: invitationEmail,
-    status: "delivered",
-  });
-
-  await restoreResearcherSession(page, operator);
-  const operatorDocument = await page.goto("/operator/researchers");
-  expect(operatorDocument?.status()).toBe(200);
-  await expect(page.getByRole("link", { name: "Operator", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Researchers" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Invitations" })).toBeVisible();
-  const researcherTable = page.getByRole("table", { name: "Researchers" });
-  const operatorRow = researcherTable.getByRole("row").filter({ hasText: operator.email });
-  await expect(operatorRow.getByText("browser-operator", { exact: true })).toBeVisible();
-  await expect(operatorRow.getByText(operator.email, { exact: true })).toBeVisible();
-  await expect(operatorRow.locator('[data-label="Researcher ID"]')).toHaveText(operator.id);
-  await expect(operatorRow.locator('[data-label="Access"]')).toHaveText("Active");
-  await expect(operatorRow.locator('[data-label="Created"] time')).toHaveCount(1);
-  await expect(operatorRow.locator('[data-label="Latest login"]')).toHaveText(/.+/);
-  await expect(operatorRow.locator('[data-label="Current sessions"]')).toHaveText("1");
-  await expect(operatorRow.locator('[data-label="Effective invitation"]')).toHaveText("None");
-  await expect(researcherTable.getByText(ordinary.email, { exact: true })).toBeVisible();
-
+  const { operatorMutationRequests, operator, ordinary } = await prepareOperator(page);
+  const { invitationEmail, researcherTable, operatorRow } = await prepareOperatorDirectory(page, operator, ordinary);
+  const oldConsoleToken = await emailToken(invitationEmail, "/accept-invitation#token=");
   const initialViewport = page.viewportSize();
   const applicationShell = page.locator(".app-shell");
   const applicationSidebar = page.locator(".application-sidebar");
@@ -181,6 +93,215 @@ test("only the singleton Operator can open and read the Operator Console", { tag
   await page.emulateMedia({ reducedMotion: "no-preference" });
   if (initialViewport !== null) await page.setViewportSize(initialViewport);
 
+  const capability = await page.request.get("/api/auth/operator/capability");
+  expect(capability.status()).toBe(200);
+  expect(await capability.json()).toEqual({ operator: true });
+  const directory = await page.request.get("/api/auth/operator/researchers");
+  expect(directory.status()).toBe(200);
+  const serializedDirectory = JSON.stringify(await directory.json());
+  expect(serializedDirectory).toContain(operator.id);
+  expect(serializedDirectory).toContain(ordinary.id);
+  expect(serializedDirectory).not.toMatch(/token|ip_address|user_agent/i);
+
+  const deniedResearcher = await createResearcher(
+    page,
+    "browser-ordinary-denied@example.test",
+  );
+  await bootstrapResearcher(page, deniedResearcher);
+  await page.goto("/data");
+  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Operator", exact: true })).toHaveCount(0);
+
+  const deniedApi = await page.request.get("/api/auth/operator/researchers");
+  expect(deniedApi.status()).toBe(404);
+  expect(await deniedApi.text()).toBe("");
+  for (const [path, data] of [
+    [
+      "/api/auth/operator/proofs",
+      {
+        email: "ordinary-denied@example.test",
+        operation: "invitation.issue",
+        password: browserPassword,
+      },
+    ],
+    [
+      "/api/auth/operator/invitations/issue",
+      { email: "ordinary-denied@example.test", proof: oldConsoleToken },
+    ],
+    [
+      "/api/auth/operator/proofs",
+      {
+        as_of: "2026-08-11T18:00:00+08:00",
+        idempotency_key: "ordinary-denied-market-refresh",
+        operation: "data.refresh.market.submit",
+        password: browserPassword,
+      },
+    ],
+    [
+      "/api/auth/operator/proofs",
+      {
+        idempotency_key: "ordinary-denied-financial-refresh",
+        observation_through_session: "2026-08-11",
+        operation: "data.refresh.financial.submit",
+        password: browserPassword,
+      },
+    ],
+    [
+      "/api/auth/operator/proofs",
+      {
+        idempotency_key: "ordinary-denied-industry-refresh",
+        observation_through_session: "2026-08-11",
+        operation: "data.refresh.industry.submit",
+        password: browserPassword,
+      },
+    ],
+    [
+      "/api/auth/operator/proofs",
+      {
+        kind: "market",
+        operation: "data.refresh.cancel",
+        password: browserPassword,
+        source_idempotency_key: "ordinary-denied-action-source",
+        target: "2026-08-11T10:00:00Z",
+      },
+    ],
+    [
+      "/api/auth/operator/proofs",
+      {
+        kind: "industry",
+        new_idempotency_key: "ordinary-denied-action-retry",
+        operation: "data.refresh.retry",
+        password: browserPassword,
+        source_idempotency_key: "ordinary-denied-action-source",
+        target: "2026-08-11",
+      },
+    ],
+    [
+      "/api/auth/operator/researchers/sessions/revoke",
+      { proof: oldConsoleToken, researcher_id: deniedResearcher.id },
+    ],
+  ] as const) {
+    const deniedMutation = await page.request.post(path, {
+      data,
+      headers: sameOriginHeaders(),
+    });
+    expect(deniedMutation.status()).toBe(404);
+    expect(await deniedMutation.text()).toBe("");
+  }
+  const deniedMarketInspection = await page.request.get(
+    "/api/operator/data/refreshes/market?idempotency_key=browser-market-refresh-20260811",
+  );
+  expect(deniedMarketInspection.status()).toBe(404);
+  expect(await deniedMarketInspection.text()).toBe("");
+  const deniedDatasetStatus = await page.request.get("/api/operator/data/status");
+  expect(deniedDatasetStatus.status()).toBe(404);
+  expect(await deniedDatasetStatus.text()).toBe("");
+  for (const [path, data] of [
+    [
+      "/api/operator/data/refreshes/cancel",
+      {
+        kind: "market",
+        proof: oldConsoleToken,
+        source_idempotency_key: "ordinary-denied-action-source",
+        target: "2026-08-11T10:00:00Z",
+      },
+    ],
+    [
+      "/api/operator/data/refreshes/retry",
+      {
+        kind: "industry",
+        new_idempotency_key: "ordinary-denied-action-retry",
+        proof: oldConsoleToken,
+        source_idempotency_key: "ordinary-denied-action-source",
+        target: "2026-08-11",
+      },
+    ],
+  ] as const) {
+    const deniedAction = await page.request.post(path, {
+      data,
+      headers: sameOriginHeaders(),
+    });
+    expect(deniedAction.status()).toBe(404);
+    expect(await deniedAction.text()).toBe("");
+  }
+  const deniedMalformedInspection = await page.request.get(
+    "/api/operator/data/refreshes/market",
+  );
+  expect(deniedMalformedInspection.status()).toBe(404);
+  expect(await deniedMalformedInspection.text()).toBe("");
+  const deniedMarketMutation = await page.request.post(
+    "/api/operator/data/refreshes/market",
+    {
+      data: {
+        as_of: "2026-08-11T18:00:00+08:00",
+        idempotency_key: "ordinary-denied-market-refresh",
+        proof: oldConsoleToken,
+      },
+      headers: sameOriginHeaders(),
+    },
+  );
+  expect(deniedMarketMutation.status()).toBe(404);
+  expect(await deniedMarketMutation.text()).toBe("");
+  const deniedMalformedMutation = await page.request.post(
+    "/api/operator/data/refreshes/market",
+    { data: {}, headers: sameOriginHeaders() },
+  );
+  expect(deniedMalformedMutation.status()).toBe(404);
+  expect(await deniedMalformedMutation.text()).toBe("");
+  const deniedFinancialInspection = await page.request.get(
+    "/api/operator/data/refreshes/financial?"
+    + "idempotency_key=ordinary-denied-financial-refresh&"
+    + "observation_through_session=2026-08-11",
+  );
+  expect(deniedFinancialInspection.status()).toBe(404);
+  expect(await deniedFinancialInspection.text()).toBe("");
+  const deniedFinancialMutation = await page.request.post(
+    "/api/operator/data/refreshes/financial",
+    {
+      data: {
+        idempotency_key: "ordinary-denied-financial-refresh",
+        observation_through_session: "2026-08-11",
+        proof: oldConsoleToken,
+      },
+      headers: sameOriginHeaders(),
+    },
+  );
+  expect(deniedFinancialMutation.status()).toBe(404);
+  expect(await deniedFinancialMutation.text()).toBe("");
+  const deniedIndustryInspection = await page.request.get(
+    "/api/operator/data/refreshes/industry?"
+    + "idempotency_key=ordinary-denied-industry-refresh&"
+    + "observation_through_session=2026-08-11",
+  );
+  expect(deniedIndustryInspection.status()).toBe(404);
+  expect(await deniedIndustryInspection.text()).toBe("");
+  const deniedIndustryMutation = await page.request.post(
+    "/api/operator/data/refreshes/industry",
+    {
+      data: {
+        idempotency_key: "ordinary-denied-industry-refresh",
+        observation_through_session: "2026-08-11",
+        proof: oldConsoleToken,
+      },
+      headers: sameOriginHeaders(),
+    },
+  );
+  expect(deniedIndustryMutation.status()).toBe(404);
+  expect(await deniedIndustryMutation.text()).toBe("");
+  const deniedDocument = await page.goto("/operator/researchers");
+  expect(deniedDocument?.status()).toBe(404);
+  expect(await deniedDocument?.text()).toBe("");
+  await expect(page.locator("#root")).toHaveCount(0);
+  const deniedDataDocument = await page.goto("/operator/data");
+  expect(deniedDataDocument?.status()).toBe(404);
+  expect(await deniedDataDocument?.text()).toBe("");
+  await expect(page.locator("#root")).toHaveCount(0);
+});
+
+test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page }) => {
+  test.setTimeout(240_000);
+  const { operatorMutationRequests, operator, ordinary } = await prepareOperator(page);
+  const { invitationEmail, researcherTable, operatorRow } = await prepareOperatorDirectory(page, operator, ordinary);
   const invitationTable = page.getByRole("table", { name: "Invitations" });
   const invitationRows = invitationTable.getByRole("row").filter({ hasText: invitationEmail });
   await expect(invitationRows).toHaveCount(2);
@@ -323,6 +444,230 @@ test("only the singleton Operator can open and read the Operator Console", { tag
   expect(invitationMutations.map((request) => Object.keys(JSON.parse(request.body)).sort()))
     .toEqual([["email", "proof"], ["email", "proof"]]);
 
+  await page.getByRole("navigation", { name: "Operator Console sections" })
+    .getByRole("link", { name: "Researchers", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
+
+  const currentOperatorRow = researcherTable.getByRole("row").filter({
+    hasText: operator.email,
+  });
+  await expect(currentOperatorRow.getByText("Current Operator", { exact: true }))
+    .toBeVisible();
+  await expect(currentOperatorRow.getByRole("button", { name: /Revoke/ }))
+    .toHaveCount(0);
+  const ordinaryRow = researcherTable.getByRole("row").filter({
+    hasText: ordinary.email,
+  });
+  await expect(ordinaryRow.locator('[data-label="Current sessions"]')).toHaveText("1");
+  const revokeSessions = ordinaryRow.getByRole("button", {
+    name: `Revoke 1 Login Sessions for ${ordinary.email}`,
+  });
+  await revokeSessions.focus();
+  await revokeSessions.press("Enter");
+  let revocationDialog = page.getByRole("dialog", {
+    name: "Revoke Login Sessions?",
+  });
+  await expect(revocationDialog).toBeVisible();
+  await expect(revocationDialog).toContainText("browser-ordinary");
+  await expect(revocationDialog).toContainText(ordinary.email);
+  await expect(revocationDialog).toContainText(ordinary.id);
+  await expect(revocationDialog).toContainText("Current Login Sessions");
+  await expect(revocationDialog).toContainText(
+    "Every current Login Session for this Researcher will be revoked.",
+  );
+  const revocationPassword = revocationDialog.getByLabel("Current password");
+  await expect(revocationPassword).toBeFocused();
+  await fillPasswordInput(revocationPassword);
+  await revocationPassword.press("Shift+Tab");
+  expect(await revocationDialog.evaluate((element) =>
+    element.contains(document.activeElement)
+  )).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(revocationDialog).toHaveCount(0);
+  await expect(revokeSessions).toBeFocused();
+
+  await revokeSessions.press("Enter");
+  revocationDialog = page.getByRole("dialog", {
+    name: "Revoke Login Sessions?",
+  });
+  await expect(revocationDialog.getByLabel("Current password")).toHaveValue("");
+  await fillPasswordInput(revocationDialog.getByLabel("Current password"));
+  await revocationDialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(revocationDialog).toHaveCount(0);
+  await expect(revokeSessions).toBeFocused();
+
+  await revokeSessions.press("Enter");
+  revocationDialog = page.getByRole("dialog", {
+    name: "Revoke Login Sessions?",
+  });
+  await expect(revocationDialog.getByLabel("Current password")).toHaveValue("");
+  await fillPasswordInput(revocationDialog.getByLabel("Current password"));
+  await revocationDialog.getByLabel("Current password").press("Enter");
+  await expect(revocationDialog).toHaveCount(0);
+  await expect(page.getByRole("status").filter({
+    hasText: `Revoked 1 Login Session for ${ordinary.email}.`,
+  })).toBeVisible();
+  await expect(ordinaryRow.locator('[data-label="Current sessions"]')).toHaveText("0");
+  await expect(ordinaryRow.getByText("No active Sessions", { exact: true })).toBeVisible();
+  await expect(ordinaryRow.getByRole("button", { name: /Revoke/ })).toHaveCount(0);
+  await expect(page.locator("#operator-console-focus-fallback")).toBeFocused();
+
+  const sessionProofRequests = operatorMutationRequests.filter((request) => {
+    if (request.path !== "/api/auth/operator/proofs") return false;
+    const body = JSON.parse(request.body) as { operation?: unknown };
+    return body.operation === "researcher.sessions.revoke";
+  });
+  const sessionMutations = operatorMutationRequests.filter(
+    (request) =>
+      request.path === "/api/auth/operator/researchers/sessions/revoke",
+  );
+  expect(sessionProofRequests).toHaveLength(1);
+  expect(JSON.parse(sessionProofRequests[0]?.body ?? "{}")).toEqual({
+    operation: "researcher.sessions.revoke",
+    password: browserPassword,
+    researcher_id: ordinary.id,
+  });
+  expect(sessionMutations).toHaveLength(1);
+  expect(JSON.parse(sessionMutations[0]?.body ?? "{}")).toEqual({
+    proof: expect.any(String),
+    researcher_id: ordinary.id,
+  });
+  expect(sessionMutations[0]?.body).not.toContain(browserPassword);
+
+  await restoreResearcherSession(page, ordinary);
+  await refreshRevokedSessionOnBrowserEvent(page);
+  await expect(page.getByRole("heading", { name: "Log in to ThesisTrace" }))
+    .toBeVisible();
+  await restoreResearcherSession(page, operator);
+  await refreshOperatorSessionOnBrowserEvent(page);
+  await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
+  expect((await page.request.get("/api/auth/operator/capability")).status()).toBe(200);
+
+  const invitationPagination = page.getByRole("navigation", {
+    name: "Invitations pagination",
+  });
+  await invitationPagination.getByRole("button", { name: "Next" }).click();
+  await expect(invitationPagination).toContainText("Page 2");
+  const pagedInvitationEmail = "browser-invitation-01@example.test";
+  const secondPageReissue = await findInvitationReissue(
+    page,
+    invitationPagination,
+    pagedInvitationEmail,
+  );
+  await expect(secondPageReissue).toBeVisible();
+  await secondPageReissue.click();
+  const secondPageConfirmation = page.getByRole("dialog", {
+    name: "Reissue Invitation?",
+  });
+  await fillPasswordInput(secondPageConfirmation.getByLabel("Current password"));
+  await secondPageConfirmation.getByLabel("Current password").press("Enter");
+  await expect(secondPageConfirmation).toHaveCount(0);
+  await expect(invitationPagination).toContainText("Page 1");
+  await expect(inviteResearcher).toBeFocused();
+
+  const effectivePagedInvitation = page
+    .getByRole("table", { name: "Invitations" })
+    .getByRole("row")
+    .filter({ hasText: pagedInvitationEmail })
+    .filter({ hasText: "Effective · Delivered" });
+  const failedReloadReissue = effectivePagedInvitation.getByRole("button", {
+    name: `Reissue invitation for ${pagedInvitationEmail}`,
+  });
+  await expect(failedReloadReissue).toBeVisible();
+  await failedReloadReissue.click();
+  const failedReloadConfirmation = page.getByRole("dialog", {
+    name: "Reissue Invitation?",
+  });
+  await fillPasswordInput(failedReloadConfirmation.getByLabel("Current password"));
+  let failInvitationReload = true;
+  await page.route("**/api/auth/operator/invitations*", async (route) => {
+    if (route.request().method() !== "GET" || !failInvitationReload) {
+      await route.continue();
+      return;
+    }
+    failInvitationReload = false;
+    await route.fulfill({
+      body: JSON.stringify({ code: "OPERATOR_UNAVAILABLE" }),
+      contentType: "application/json",
+      status: 503,
+    });
+  });
+  try {
+    await failedReloadConfirmation.getByLabel("Current password").press("Enter");
+    await expect(failedReloadConfirmation).toHaveCount(0);
+    await expect(page.getByRole("alert").filter({
+      hasText: "Operator Console unavailable.",
+    })).toBeVisible();
+    const retry = page.getByRole("region", { name: "Operator Researchers" })
+      .getByRole("button", { name: "Retry", exact: true });
+    await expect(retry).toBeFocused();
+  } finally {
+    await page.unroute("**/api/auth/operator/invitations*");
+  }
+  await page.getByRole("region", { name: "Operator Researchers" })
+    .getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByRole("table", { name: "Invitations" })).toBeVisible();
+
+  const search = page.getByRole("searchbox", { name: "Search researchers" });
+  await search.fill("browser-page-");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(researcherTable.getByText("browser-page-55@example.test", { exact: true }))
+    .toBeVisible();
+  await expect(researcherTable.getByText("browser-page-01@example.test", { exact: true }))
+    .toHaveCount(0);
+
+  const researcherPagination = page.getByRole("navigation", {
+    name: "Researchers pagination",
+  });
+  const nextPage = researcherPagination.getByRole("button", { name: "Next" });
+  const previousPage = researcherPagination.getByRole("button", { name: "Previous" });
+  await expect(nextPage).toBeEnabled();
+  let releaseCursorRequest: () => void = () => undefined;
+  let markCursorRequestStarted: () => void = () => undefined;
+  const cursorRequestReleased = new Promise<void>((resolve) => {
+    releaseCursorRequest = resolve;
+  });
+  const cursorRequestStarted = new Promise<void>((resolve) => {
+    markCursorRequestStarted = resolve;
+  });
+  await page.route("**/api/auth/operator/researchers?*", async (route) => {
+    const url = new URL(route.request().url());
+    if (!url.searchParams.has("cursor")) {
+      await route.continue();
+      return;
+    }
+    markCursorRequestStarted();
+    await cursorRequestReleased;
+    await route.continue();
+  });
+  try {
+    await nextPage.click();
+    await cursorRequestStarted;
+    await expect(page.getByRole("status").filter({
+      hasText: "Refreshing Operator Console…",
+    })).toBeVisible();
+    await expect(nextPage).toBeDisabled();
+    await expect(previousPage).toBeDisabled();
+    await expect(search).toBeDisabled();
+    releaseCursorRequest();
+    await expect(researcherPagination).toContainText("Page 2");
+    await expect(researcherTable.getByText("browser-page-01@example.test", { exact: true }))
+      .toBeVisible();
+  } finally {
+    releaseCursorRequest();
+    await page.unroute("**/api/auth/operator/researchers?*");
+  }
+  await previousPage.click();
+  await expect(researcherPagination).toContainText("Page 1");
+  await expect(researcherTable.getByText("browser-page-55@example.test", { exact: true }))
+    .toBeVisible();
+
+
+});
+
+test("Operator Market submission and response recovery", { tag: "@isolated" }, async ({ page }) => {
+  test.setTimeout(240_000);
+  const { operatorMutationRequests, marketStatusRequests, financialStatusRequests, industryStatusRequests } = await prepareOperator(page);
   const operatorSections = page.getByRole("navigation", {
     name: "Operator Console sections",
   });
@@ -890,6 +1235,15 @@ test("only the singleton Operator can open and read the Operator Console", { tag
   );
   resetAuthRateLimits();
 
+
+});
+
+test("Operator Financial and Industry refresh and response recovery", { tag: "@isolated" }, async ({ page }) => {
+  test.setTimeout(240_000);
+  const { operatorMutationRequests, marketStatusRequests, financialStatusRequests, industryStatusRequests, operator, ordinary } = await prepareOperator(page);
+  await prepareDataOperation(page, "market");
+  await page.goto("/operator/data");
+  await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
   const financialRefreshSection = page.locator(
     'section[aria-labelledby="operator-financial-refresh-heading"]',
   );
@@ -1415,6 +1769,17 @@ test("only the singleton Operator can open and read the Operator Console", { tag
   await page.goto("/operator/data");
   await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
 
+
+});
+
+test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, async ({ page }) => {
+  test.setTimeout(240_000);
+  const { operatorMutationRequests, marketStatusRequests, financialStatusRequests, industryStatusRequests } = await prepareOperator(page);
+  await page.goto("/operator/data");
+  await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
+  const marketAsOf = "2026-08-14T18:00:00+08:00";
+  const [marketKey, financialKey, industryKey] = await prepareDatasetOperations(page);
+  await page.reload();
   const datasetStatus = page.locator(
     'section[aria-labelledby="operator-dataset-status-heading"]',
   );
@@ -1497,94 +1862,8 @@ test("only the singleton Operator can open and read the Operator Console", { tag
   expect(JSON.stringify(terminalStatus)).not.toMatch(
     /generation_manifest|owner_token|lease_expires_at|fingerprint|object_path/i,
   );
-  const terminalMarket = terminalStatus.latest_by_kind.find(
-    (operation) => operation.kind === "market",
-  );
-  expect(terminalMarket).toBeDefined();
-  const acceptedMarket = {
-    ...terminalMarket,
-    attempt_count: 0,
-    data_through_session: null,
-    failure_code: null,
-    finished_at: null,
-    last_failure_code: null,
-    last_heartbeat_at: null,
-    last_refresh_at: null,
-    outcome: null,
-    phase: null,
-    started_at: null,
-    status: "accepted",
-  };
-  const acceptedStatus = {
-    ...terminalStatus,
-    latest_by_kind: terminalStatus.latest_by_kind.map((operation) => (
-      operation.kind === "market" ? acceptedMarket : operation
-    )),
-    operations: terminalStatus.operations.map((operation) => (
-      operation.kind === "market" && operation.idempotency_key === terminalMarket?.idempotency_key
-        ? acceptedMarket
-        : operation
-    )),
-  };
-  let statusRouteCalls = 0;
-  const statusPollingHandler = async (route: Route): Promise<void> => {
-    statusRouteCalls += 1;
-    await route.fulfill({
-      body: JSON.stringify(statusRouteCalls === 1 ? acceptedStatus : terminalStatus),
-      contentType: "application/json",
-      status: 200,
-    });
-  };
-  await page.route("**/api/operator/data/status**", statusPollingHandler);
-  const acceptedResponse = page.waitForResponse(
-    (response) => new URL(response.url()).pathname === "/api/operator/data/status",
-  );
-  await datasetStatus.getByRole("button", { name: "Reload" }).click();
-  await acceptedResponse;
-  await expect(
-    latestRefreshes.getByRole("row").filter({ hasText: "Market Refresh" })
-      .getByText("Accepted · queued", { exact: true }),
-  ).toBeVisible();
+  // Polling lifecycle is covered with controlled time in OperatorDatasetStatus.test.tsx.
 
-  await page.evaluate(() => {
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      value: "hidden",
-    });
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
-  const hiddenRequestCount = statusRouteCalls;
-  await page.waitForTimeout(5_200);
-  expect(statusRouteCalls).toBe(hiddenRequestCount);
-
-  const visibleRecoveryResponse = page.waitForResponse(
-    (response) => new URL(response.url()).pathname === "/api/operator/data/status",
-  );
-  await page.evaluate(() => {
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      value: "visible",
-    });
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
-  await visibleRecoveryResponse;
-  const terminalRequestCount = statusRouteCalls;
-  await page.waitForTimeout(5_200);
-  expect(statusRouteCalls).toBe(terminalRequestCount);
-
-  for (const eventName of ["focus", "online"] as const) {
-    const recoveryResponse = page.waitForResponse(
-      (response) => new URL(response.url()).pathname === "/api/operator/data/status",
-    );
-    await page.evaluate((selectedEvent) => window.dispatchEvent(new Event(selectedEvent)), eventName);
-    await recoveryResponse;
-  }
-  const manualResponse = page.waitForResponse(
-    (response) => new URL(response.url()).pathname === "/api/operator/data/status",
-  );
-  await datasetStatus.getByRole("button", { name: "Reload" }).click();
-  await manualResponse;
-  await page.unroute("**/api/operator/data/status**", statusPollingHandler);
 
   stopDataOperatorWorker();
   assertDataOperatorWorkerLeaseReleased();
@@ -1816,428 +2095,9 @@ test("only the singleton Operator can open and read the Operator Console", { tag
     "/api/operator/data/refreshes/cancel",
   ]);
 
-  await page.getByRole("navigation", { name: "Operator Console sections" })
-    .getByRole("link", { name: "Researchers", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
 
-  const currentOperatorRow = researcherTable.getByRole("row").filter({
-    hasText: operator.email,
-  });
-  await expect(currentOperatorRow.getByText("Current Operator", { exact: true }))
-    .toBeVisible();
-  await expect(currentOperatorRow.getByRole("button", { name: /Revoke/ }))
-    .toHaveCount(0);
-  const ordinaryRow = researcherTable.getByRole("row").filter({
-    hasText: ordinary.email,
-  });
-  await expect(ordinaryRow.locator('[data-label="Current sessions"]')).toHaveText("1");
-  const revokeSessions = ordinaryRow.getByRole("button", {
-    name: `Revoke 1 Login Sessions for ${ordinary.email}`,
-  });
-  await revokeSessions.focus();
-  await revokeSessions.press("Enter");
-  let revocationDialog = page.getByRole("dialog", {
-    name: "Revoke Login Sessions?",
-  });
-  await expect(revocationDialog).toBeVisible();
-  await expect(revocationDialog).toContainText("browser-ordinary");
-  await expect(revocationDialog).toContainText(ordinary.email);
-  await expect(revocationDialog).toContainText(ordinary.id);
-  await expect(revocationDialog).toContainText("Current Login Sessions");
-  await expect(revocationDialog).toContainText(
-    "Every current Login Session for this Researcher will be revoked.",
-  );
-  const revocationPassword = revocationDialog.getByLabel("Current password");
-  await expect(revocationPassword).toBeFocused();
-  await fillPasswordInput(revocationPassword);
-  await revocationPassword.press("Shift+Tab");
-  expect(await revocationDialog.evaluate((element) =>
-    element.contains(document.activeElement)
-  )).toBe(true);
-  await page.keyboard.press("Escape");
-  await expect(revocationDialog).toHaveCount(0);
-  await expect(revokeSessions).toBeFocused();
-
-  await revokeSessions.press("Enter");
-  revocationDialog = page.getByRole("dialog", {
-    name: "Revoke Login Sessions?",
-  });
-  await expect(revocationDialog.getByLabel("Current password")).toHaveValue("");
-  await fillPasswordInput(revocationDialog.getByLabel("Current password"));
-  await revocationDialog.getByRole("button", { name: "Cancel" }).click();
-  await expect(revocationDialog).toHaveCount(0);
-  await expect(revokeSessions).toBeFocused();
-
-  await revokeSessions.press("Enter");
-  revocationDialog = page.getByRole("dialog", {
-    name: "Revoke Login Sessions?",
-  });
-  await expect(revocationDialog.getByLabel("Current password")).toHaveValue("");
-  await fillPasswordInput(revocationDialog.getByLabel("Current password"));
-  await revocationDialog.getByLabel("Current password").press("Enter");
-  await expect(revocationDialog).toHaveCount(0);
-  await expect(page.getByRole("status").filter({
-    hasText: `Revoked 1 Login Session for ${ordinary.email}.`,
-  })).toBeVisible();
-  await expect(ordinaryRow.locator('[data-label="Current sessions"]')).toHaveText("0");
-  await expect(ordinaryRow.getByText("No active Sessions", { exact: true })).toBeVisible();
-  await expect(ordinaryRow.getByRole("button", { name: /Revoke/ })).toHaveCount(0);
-  await expect(page.locator("#operator-console-focus-fallback")).toBeFocused();
-
-  const sessionProofRequests = operatorMutationRequests.filter((request) => {
-    if (request.path !== "/api/auth/operator/proofs") return false;
-    const body = JSON.parse(request.body) as { operation?: unknown };
-    return body.operation === "researcher.sessions.revoke";
-  });
-  const sessionMutations = operatorMutationRequests.filter(
-    (request) =>
-      request.path === "/api/auth/operator/researchers/sessions/revoke",
-  );
-  expect(sessionProofRequests).toHaveLength(1);
-  expect(JSON.parse(sessionProofRequests[0]?.body ?? "{}")).toEqual({
-    operation: "researcher.sessions.revoke",
-    password: browserPassword,
-    researcher_id: ordinary.id,
-  });
-  expect(sessionMutations).toHaveLength(1);
-  expect(JSON.parse(sessionMutations[0]?.body ?? "{}")).toEqual({
-    proof: expect.any(String),
-    researcher_id: ordinary.id,
-  });
-  expect(sessionMutations[0]?.body).not.toContain(browserPassword);
-
-  await restoreResearcherSession(page, ordinary);
-  await refreshRevokedSessionOnBrowserEvent(page);
-  await expect(page.getByRole("heading", { name: "Log in to ThesisTrace" }))
-    .toBeVisible();
-  await restoreResearcherSession(page, operator);
-  await refreshOperatorSessionOnBrowserEvent(page);
-  await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
-  expect((await page.request.get("/api/auth/operator/capability")).status()).toBe(200);
-
-  const invitationPagination = page.getByRole("navigation", {
-    name: "Invitations pagination",
-  });
-  await invitationPagination.getByRole("button", { name: "Next" }).click();
-  await expect(invitationPagination).toContainText("Page 2");
-  const pagedInvitationEmail = "browser-invitation-01@example.test";
-  const secondPageReissue = await findInvitationReissue(
-    page,
-    invitationPagination,
-    pagedInvitationEmail,
-  );
-  await expect(secondPageReissue).toBeVisible();
-  await secondPageReissue.click();
-  const secondPageConfirmation = page.getByRole("dialog", {
-    name: "Reissue Invitation?",
-  });
-  await fillPasswordInput(secondPageConfirmation.getByLabel("Current password"));
-  await secondPageConfirmation.getByLabel("Current password").press("Enter");
-  await expect(secondPageConfirmation).toHaveCount(0);
-  await expect(invitationPagination).toContainText("Page 1");
-  await expect(inviteResearcher).toBeFocused();
-
-  const effectivePagedInvitation = page
-    .getByRole("table", { name: "Invitations" })
-    .getByRole("row")
-    .filter({ hasText: pagedInvitationEmail })
-    .filter({ hasText: "Effective · Delivered" });
-  const failedReloadReissue = effectivePagedInvitation.getByRole("button", {
-    name: `Reissue invitation for ${pagedInvitationEmail}`,
-  });
-  await expect(failedReloadReissue).toBeVisible();
-  await failedReloadReissue.click();
-  const failedReloadConfirmation = page.getByRole("dialog", {
-    name: "Reissue Invitation?",
-  });
-  await fillPasswordInput(failedReloadConfirmation.getByLabel("Current password"));
-  let failInvitationReload = true;
-  await page.route("**/api/auth/operator/invitations*", async (route) => {
-    if (route.request().method() !== "GET" || !failInvitationReload) {
-      await route.continue();
-      return;
-    }
-    failInvitationReload = false;
-    await route.fulfill({
-      body: JSON.stringify({ code: "OPERATOR_UNAVAILABLE" }),
-      contentType: "application/json",
-      status: 503,
-    });
-  });
-  try {
-    await failedReloadConfirmation.getByLabel("Current password").press("Enter");
-    await expect(failedReloadConfirmation).toHaveCount(0);
-    await expect(page.getByRole("alert").filter({
-      hasText: "Operator Console unavailable.",
-    })).toBeVisible();
-    const retry = page.getByRole("region", { name: "Operator Researchers" })
-      .getByRole("button", { name: "Retry", exact: true });
-    await expect(retry).toBeFocused();
-  } finally {
-    await page.unroute("**/api/auth/operator/invitations*");
-  }
-  await page.getByRole("region", { name: "Operator Researchers" })
-    .getByRole("button", { name: "Retry", exact: true }).click();
-  await expect(page.getByRole("table", { name: "Invitations" })).toBeVisible();
-
-  const search = page.getByRole("searchbox", { name: "Search researchers" });
-  await search.fill("browser-page-");
-  await page.getByRole("button", { name: "Search", exact: true }).click();
-  await expect(researcherTable.getByText("browser-page-55@example.test", { exact: true }))
-    .toBeVisible();
-  await expect(researcherTable.getByText("browser-page-01@example.test", { exact: true }))
-    .toHaveCount(0);
-
-  const researcherPagination = page.getByRole("navigation", {
-    name: "Researchers pagination",
-  });
-  const nextPage = researcherPagination.getByRole("button", { name: "Next" });
-  const previousPage = researcherPagination.getByRole("button", { name: "Previous" });
-  await expect(nextPage).toBeEnabled();
-  let releaseCursorRequest: () => void = () => undefined;
-  let markCursorRequestStarted: () => void = () => undefined;
-  const cursorRequestReleased = new Promise<void>((resolve) => {
-    releaseCursorRequest = resolve;
-  });
-  const cursorRequestStarted = new Promise<void>((resolve) => {
-    markCursorRequestStarted = resolve;
-  });
-  await page.route("**/api/auth/operator/researchers?*", async (route) => {
-    const url = new URL(route.request().url());
-    if (!url.searchParams.has("cursor")) {
-      await route.continue();
-      return;
-    }
-    markCursorRequestStarted();
-    await cursorRequestReleased;
-    await route.continue();
-  });
-  try {
-    await nextPage.click();
-    await cursorRequestStarted;
-    await expect(page.getByRole("status").filter({
-      hasText: "Refreshing Operator Console…",
-    })).toBeVisible();
-    await expect(nextPage).toBeDisabled();
-    await expect(previousPage).toBeDisabled();
-    await expect(search).toBeDisabled();
-    releaseCursorRequest();
-    await expect(researcherPagination).toContainText("Page 2");
-    await expect(researcherTable.getByText("browser-page-01@example.test", { exact: true }))
-      .toBeVisible();
-  } finally {
-    releaseCursorRequest();
-    await page.unroute("**/api/auth/operator/researchers?*");
-  }
-  await previousPage.click();
-  await expect(researcherPagination).toContainText("Page 1");
-  await expect(researcherTable.getByText("browser-page-55@example.test", { exact: true }))
-    .toBeVisible();
-
-  const capability = await page.request.get("/api/auth/operator/capability");
-  expect(capability.status()).toBe(200);
-  expect(await capability.json()).toEqual({ operator: true });
-  const directory = await page.request.get("/api/auth/operator/researchers");
-  expect(directory.status()).toBe(200);
-  const serializedDirectory = JSON.stringify(await directory.json());
-  expect(serializedDirectory).toContain(operator.id);
-  expect(serializedDirectory).toContain(ordinary.id);
-  expect(serializedDirectory).not.toMatch(/token|ip_address|user_agent/i);
-
-  const deniedResearcher = await createResearcher(
-    page,
-    "browser-ordinary-denied@example.test",
-  );
-  await bootstrapResearcher(page, deniedResearcher);
-  await page.goto("/data");
-  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Operator", exact: true })).toHaveCount(0);
-
-  const deniedApi = await page.request.get("/api/auth/operator/researchers");
-  expect(deniedApi.status()).toBe(404);
-  expect(await deniedApi.text()).toBe("");
-  for (const [path, data] of [
-    [
-      "/api/auth/operator/proofs",
-      {
-        email: "ordinary-denied@example.test",
-        operation: "invitation.issue",
-        password: browserPassword,
-      },
-    ],
-    [
-      "/api/auth/operator/invitations/issue",
-      { email: "ordinary-denied@example.test", proof: oldConsoleToken },
-    ],
-    [
-      "/api/auth/operator/proofs",
-      {
-        as_of: "2026-08-11T18:00:00+08:00",
-        idempotency_key: "ordinary-denied-market-refresh",
-        operation: "data.refresh.market.submit",
-        password: browserPassword,
-      },
-    ],
-    [
-      "/api/auth/operator/proofs",
-      {
-        idempotency_key: "ordinary-denied-financial-refresh",
-        observation_through_session: "2026-08-11",
-        operation: "data.refresh.financial.submit",
-        password: browserPassword,
-      },
-    ],
-    [
-      "/api/auth/operator/proofs",
-      {
-        idempotency_key: "ordinary-denied-industry-refresh",
-        observation_through_session: "2026-08-11",
-        operation: "data.refresh.industry.submit",
-        password: browserPassword,
-      },
-    ],
-    [
-      "/api/auth/operator/proofs",
-      {
-        kind: "market",
-        operation: "data.refresh.cancel",
-        password: browserPassword,
-        source_idempotency_key: "ordinary-denied-action-source",
-        target: "2026-08-11T10:00:00Z",
-      },
-    ],
-    [
-      "/api/auth/operator/proofs",
-      {
-        kind: "industry",
-        new_idempotency_key: "ordinary-denied-action-retry",
-        operation: "data.refresh.retry",
-        password: browserPassword,
-        source_idempotency_key: "ordinary-denied-action-source",
-        target: "2026-08-11",
-      },
-    ],
-    [
-      "/api/auth/operator/researchers/sessions/revoke",
-      { proof: oldConsoleToken, researcher_id: deniedResearcher.id },
-    ],
-  ] as const) {
-    const deniedMutation = await page.request.post(path, {
-      data,
-      headers: sameOriginHeaders(),
-    });
-    expect(deniedMutation.status()).toBe(404);
-    expect(await deniedMutation.text()).toBe("");
-  }
-  const deniedMarketInspection = await page.request.get(
-    "/api/operator/data/refreshes/market?idempotency_key=browser-market-refresh-20260811",
-  );
-  expect(deniedMarketInspection.status()).toBe(404);
-  expect(await deniedMarketInspection.text()).toBe("");
-  const deniedDatasetStatus = await page.request.get("/api/operator/data/status");
-  expect(deniedDatasetStatus.status()).toBe(404);
-  expect(await deniedDatasetStatus.text()).toBe("");
-  for (const [path, data] of [
-    [
-      "/api/operator/data/refreshes/cancel",
-      {
-        kind: "market",
-        proof: oldConsoleToken,
-        source_idempotency_key: "ordinary-denied-action-source",
-        target: "2026-08-11T10:00:00Z",
-      },
-    ],
-    [
-      "/api/operator/data/refreshes/retry",
-      {
-        kind: "industry",
-        new_idempotency_key: "ordinary-denied-action-retry",
-        proof: oldConsoleToken,
-        source_idempotency_key: "ordinary-denied-action-source",
-        target: "2026-08-11",
-      },
-    ],
-  ] as const) {
-    const deniedAction = await page.request.post(path, {
-      data,
-      headers: sameOriginHeaders(),
-    });
-    expect(deniedAction.status()).toBe(404);
-    expect(await deniedAction.text()).toBe("");
-  }
-  const deniedMalformedInspection = await page.request.get(
-    "/api/operator/data/refreshes/market",
-  );
-  expect(deniedMalformedInspection.status()).toBe(404);
-  expect(await deniedMalformedInspection.text()).toBe("");
-  const deniedMarketMutation = await page.request.post(
-    "/api/operator/data/refreshes/market",
-    {
-      data: {
-        as_of: "2026-08-11T18:00:00+08:00",
-        idempotency_key: "ordinary-denied-market-refresh",
-        proof: oldConsoleToken,
-      },
-      headers: sameOriginHeaders(),
-    },
-  );
-  expect(deniedMarketMutation.status()).toBe(404);
-  expect(await deniedMarketMutation.text()).toBe("");
-  const deniedMalformedMutation = await page.request.post(
-    "/api/operator/data/refreshes/market",
-    { data: {}, headers: sameOriginHeaders() },
-  );
-  expect(deniedMalformedMutation.status()).toBe(404);
-  expect(await deniedMalformedMutation.text()).toBe("");
-  const deniedFinancialInspection = await page.request.get(
-    "/api/operator/data/refreshes/financial?"
-    + "idempotency_key=ordinary-denied-financial-refresh&"
-    + "observation_through_session=2026-08-11",
-  );
-  expect(deniedFinancialInspection.status()).toBe(404);
-  expect(await deniedFinancialInspection.text()).toBe("");
-  const deniedFinancialMutation = await page.request.post(
-    "/api/operator/data/refreshes/financial",
-    {
-      data: {
-        idempotency_key: "ordinary-denied-financial-refresh",
-        observation_through_session: "2026-08-11",
-        proof: oldConsoleToken,
-      },
-      headers: sameOriginHeaders(),
-    },
-  );
-  expect(deniedFinancialMutation.status()).toBe(404);
-  expect(await deniedFinancialMutation.text()).toBe("");
-  const deniedIndustryInspection = await page.request.get(
-    "/api/operator/data/refreshes/industry?"
-    + "idempotency_key=ordinary-denied-industry-refresh&"
-    + "observation_through_session=2026-08-11",
-  );
-  expect(deniedIndustryInspection.status()).toBe(404);
-  expect(await deniedIndustryInspection.text()).toBe("");
-  const deniedIndustryMutation = await page.request.post(
-    "/api/operator/data/refreshes/industry",
-    {
-      data: {
-        idempotency_key: "ordinary-denied-industry-refresh",
-        observation_through_session: "2026-08-11",
-        proof: oldConsoleToken,
-      },
-      headers: sameOriginHeaders(),
-    },
-  );
-  expect(deniedIndustryMutation.status()).toBe(404);
-  expect(await deniedIndustryMutation.text()).toBe("");
-  const deniedDocument = await page.goto("/operator/researchers");
-  expect(deniedDocument?.status()).toBe(404);
-  expect(await deniedDocument?.text()).toBe("");
-  await expect(page.locator("#root")).toHaveCount(0);
-  const deniedDataDocument = await page.goto("/operator/data");
-  expect(deniedDataDocument?.status()).toBe(404);
-  expect(await deniedDataDocument?.text()).toBe("");
-  await expect(page.locator("#root")).toHaveCount(0);
 });
+
 
 async function bootstrapResearcher(
   page: Page,
@@ -2327,5 +2187,138 @@ async function reviewGeneratedRefresh(page: Page, button: Locator, kind: "Market
   await expect(dialog).toBeVisible();
   const key = await dialog.locator("dl > div").filter({ has: page.locator("dt").filter({ hasText: /^Idempotency key$/ }) }).locator("dd").innerText();
   expect(key).toMatch(new RegExp(`^${kind.toLowerCase()}-\\d{8}T\\d{6}Z-[a-f0-9-]{36}$`));
+  return key;
+}
+
+async function prepareOperator(page: Page) {
+  const operatorMutationRequests: Array<Readonly<{ path: string; body: string }>> = [];
+  const marketStatusRequests: Array<Readonly<{
+    asOf: string | null;
+    idempotencyKey: string | null;
+  }>> = [];
+  const financialStatusRequests: Array<Readonly<{
+    idempotencyKey: string | null;
+    observationThroughSession: string | null;
+  }>> = [];
+  const industryStatusRequests: Array<Readonly<{
+    idempotencyKey: string | null;
+    observationThroughSession: string | null;
+  }>> = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    const path = url.pathname;
+    if (request.method() === "GET" && path === "/api/operator/data/refreshes/market") {
+      marketStatusRequests.push({
+        asOf: url.searchParams.get("as_of"),
+        idempotencyKey: url.searchParams.get("idempotency_key"),
+      });
+    }
+    if (request.method() === "GET" && path === "/api/operator/data/refreshes/financial") {
+      financialStatusRequests.push({
+        idempotencyKey: url.searchParams.get("idempotency_key"),
+        observationThroughSession: url.searchParams.get("observation_through_session"),
+      });
+    }
+    if (request.method() === "GET" && path === "/api/operator/data/refreshes/industry") {
+      industryStatusRequests.push({
+        idempotencyKey: url.searchParams.get("idempotency_key"),
+        observationThroughSession: url.searchParams.get("observation_through_session"),
+      });
+    }
+    if (
+      request.method() === "POST"
+      && (
+        path === "/api/auth/operator/proofs"
+        || path.startsWith("/api/auth/operator/invitations/")
+        || path === "/api/auth/operator/researchers/sessions/revoke"
+        || path === "/api/operator/data/refreshes/market"
+        || path === "/api/operator/data/refreshes/financial"
+        || path === "/api/operator/data/refreshes/industry"
+        || path === "/api/operator/data/refreshes/cancel"
+        || path === "/api/operator/data/refreshes/retry"
+      )
+    ) {
+      operatorMutationRequests.push({ body: request.postData() ?? "", path });
+    }
+  });
+  const operator = await createResearcher(page, "browser-operator@example.test");
+  await bootstrapResearcher(page, operator);
+  expect(runAuthOperator("assign-operator", "--researcher-id", operator.id)).toMatchObject({
+    command: "assign-operator",
+    researcher_id: operator.id,
+    status: "assigned",
+  });
+  await ensureOperatorDataBaseline(page);
+
+  const ordinary = await createResearcher(page, "browser-ordinary@example.test");
+  await bootstrapResearcher(page, ordinary);
+  const denied = await page.request.get("/api/operator/data/status", { headers: sameOriginHeaders() });
+  expect(denied.status()).toBe(404);
+  await page.goto("/data");
+  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+  await restoreResearcherSession(page, operator);
+  await page.goto("/operator/data");
+  await expect(page.getByRole("heading", { name: "Data operations" })).toBeVisible();
+  return { operatorMutationRequests, marketStatusRequests, financialStatusRequests, industryStatusRequests, operator, ordinary };
+}
+
+async function prepareOperatorDirectory(
+  page: Page,
+  operator: Awaited<ReturnType<typeof createResearcher>>,
+  ordinary: Awaited<ReturnType<typeof createResearcher>>,
+) {
+  seedOperatorDirectory();
+  const invitationEmail = "browser-reissued-invitation@example.test";
+  await issueInvitation(invitationEmail);
+  expect(runAuthOperator("reissue", "--email", invitationEmail)).toMatchObject({
+    command: "reissue",
+    email: invitationEmail,
+    status: "delivered",
+  });
+
+  await restoreResearcherSession(page, operator);
+  const operatorDocument = await page.goto("/operator/researchers");
+  expect(operatorDocument?.status()).toBe(200);
+  await expect(page.getByRole("link", { name: "Operator", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Researcher access" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Researchers" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Invitations" })).toBeVisible();
+  const researcherTable = page.getByRole("table", { name: "Researchers" });
+  const operatorRow = researcherTable.getByRole("row").filter({ hasText: operator.email });
+  await expect(operatorRow.getByText("browser-operator", { exact: true })).toBeVisible();
+  await expect(operatorRow.getByText(operator.email, { exact: true })).toBeVisible();
+  await expect(operatorRow.locator('[data-label="Researcher ID"]')).toHaveText(operator.id);
+  await expect(operatorRow.locator('[data-label="Access"]')).toHaveText("Active");
+  await expect(operatorRow.locator('[data-label="Created"] time')).toHaveCount(1);
+  await expect(operatorRow.locator('[data-label="Latest login"]')).toHaveText(/.+/);
+  await expect(operatorRow.locator('[data-label="Current sessions"]')).toHaveText("1");
+  await expect(operatorRow.locator('[data-label="Effective invitation"]')).toHaveText("None");
+  await expect(researcherTable.getByText(ordinary.email, { exact: true })).toBeVisible();
+
+  return { invitationEmail, researcherTable, operatorRow };
+}
+
+async function prepareDatasetOperations(page: Page): Promise<[string, string, string]> {
+  return [await prepareDataOperation(page, "market"), await prepareDataOperation(page, "financial"), await prepareDataOperation(page, "industry")];
+}
+
+async function prepareDataOperation(page: Page, kind: "market" | "financial" | "industry"): Promise<string> {
+  const key = `browser-dataset-${kind}`;
+  const target = kind === "market" ? { as_of: "2026-08-14T18:00:00+08:00" }
+    : { observation_through_session: "2026-08-14" };
+  const proof = await page.request.post("/api/auth/operator/proofs", {
+    headers: sameOriginHeaders(), data: { ...target, idempotency_key: key,
+      operation: `data.refresh.${kind}.submit`, password: browserPassword },
+  });
+  expect(proof.status()).toBe(200);
+  const submitted = await page.request.post(`/api/operator/data/refreshes/${kind}`, {
+    headers: sameOriginHeaders(), data: { ...target, idempotency_key: key, proof: (await proof.json()).proof },
+  });
+  expect(submitted.status()).toBe(202);
+  await expect.poll(async () => {
+    const response = await page.request.get("/api/operator/data/status", { headers: sameOriginHeaders() });
+    expect(response.status()).toBe(200);
+    return (await response.json()).operations.find((operation: { idempotency_key: string }) => operation.idempotency_key === key)?.status;
+  }, { timeout: 60_000 }).toBe("succeeded");
   return key;
 }

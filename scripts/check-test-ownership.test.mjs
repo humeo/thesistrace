@@ -5,6 +5,7 @@ import { checkFiles, owners } from './check-test-ownership.mjs';
 test('new unit and integration tests have distinct owners', () => {
   assert.deepEqual(owners('agent/src/new.integration.test.ts'), ['agent-integration']);
   assert.deepEqual(owners('web/src/chat/new.test.tsx'), ['web-unit']);
+  assert.deepEqual(owners('tests/acceptance/test_real_codex_research_agent_mcp.py'), ['core-codex']);
 });
 test('unknown directories and overlapping suites fail closed', () => {
   assert.equal(checkFiles(['tests/unknown/test_new.py']).length, 1);

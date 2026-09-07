@@ -509,6 +509,7 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
         "build",
         "dev",
         "test:e2e",
+        "test:browser",
         "test:shell",
         "typecheck",
     }
@@ -582,7 +583,7 @@ def test_default_gate_excludes_deferred_and_credential_dependent_work() -> None:
     core_gate = _package_script("check")
     live_gate = _package_script("check:live-tushare")
 
-    assert core_gate == "pnpm test && pnpm test:integration && pnpm test:e2e"
+    assert core_gate == "pnpm test && pnpm test:browser && pnpm test:integration && pnpm test:e2e"
     for deferred in (
         "hosted",
         "login",

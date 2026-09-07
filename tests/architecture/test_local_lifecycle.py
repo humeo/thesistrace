@@ -1689,9 +1689,12 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
     package = json.loads((ROOT / "package.json").read_text())
     scripts = package["scripts"]
 
-    assert scripts["check"] == "pnpm test && pnpm test:integration && pnpm test:e2e"
+    assert scripts["check"] == (
+        "pnpm test && pnpm test:browser && pnpm test:integration && pnpm test:e2e"
+    )
     assert scripts["check"].split(" && ") == [
         "pnpm test",
+        "pnpm test:browser",
         "pnpm test:integration",
         "pnpm test:e2e",
     ]
@@ -2621,7 +2624,7 @@ def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None
     assert ".local/test-runs/<run-id>/" in guide
     assert "--keep-environment" in guide
     assert "mise exec -- pnpm test:integration --keep-environment" in guide
-    assert "mise exec -- pnpm test:e2e --keep-environment" in guide
+    assert "mise exec -- ./scripts/test-runtime e2e --keep-environment" in guide
     assert "mise exec -- pnpm test:cleanup" in guide
     assert "./scripts/test-runtime cleanup" not in guide
     assert " -- --keep-environment" not in guide

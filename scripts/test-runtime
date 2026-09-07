@@ -1798,7 +1798,7 @@ case "$command" in
     auth_fixture_origin="http://127.0.0.1:$auth_fixture_port"
     run_phase image-smoke-operator-browser-auth-fixture-ready wait_for_auth_fixture_control
     run_phase image-smoke-operator-browser run_operator_playwright \
-      pnpm --dir web exec playwright test operator-console.spec.ts
+      pnpm --dir web exec playwright test operator-console.spec.ts --grep "Operator Market submission and response recovery"
     run_phase image-smoke-final-evidence capture_evidence
     run_phase image-smoke-final-secret-scan scan_secret_canaries
     ;;

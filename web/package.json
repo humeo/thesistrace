@@ -8,7 +8,8 @@
     "build": "lezer-generator --typeScript --noTerms --output src/research/alpha-language-parser.ts src/research/alpha-language.grammar && tsc -b && vite build && node scripts/assert-product-bundle.mjs",
     "typecheck": "tsc -b --pretty false",
     "test:shell": "vitest run --config vitest.config.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:browser": "playwright test --config playwright.browser.config.ts"
   },
   "dependencies": {
     "@ag-ui/client": "0.0.59",

@@ -238,6 +238,22 @@ Run the inexpensive host checks first during ordinary edits:
 mise exec -- pnpm test
 ```
 
+`pnpm test` includes Python quick suites, Agent/Auth unit suites, Agent Eval
+preflight, Web unit tests, and test-runner checks. The ownership check rejects
+unknown test locations and overlapping same-level suites, and compares the
+Vitest file lists with their configured collection. Web unit tests are discovered
+from `src/**/*.test.ts(x)`; adding a test does not require editing a command.
+
+Run component-only Chromium acceptance without Docker, Auth, or a backend URL:
+
+```sh
+mise exec -- pnpm test:browser
+```
+
+This collection owns Composer/Timeline layout, focus, touch, and scrolling
+fixtures, plus deterministic Chat wait-helper checks. Operator polling uses
+controlled clocks in the Web unit suite. These files are excluded from E2E.
+
 Run real PostgreSQL, Auth-schema, and RustFS integration and acceptance tests in
 a fresh Test project:
 
@@ -252,6 +268,26 @@ Workers/PostgreSQL/RustFS topology with a private Resend-compatible fake:
 mise exec -- pnpm test:e2e
 ```
 
+The root E2E command collects Playwright cases before starting infrastructure.
+Ordinary cases share one fresh project. Each `@isolated` case (Dataset Head
+publication or Operator identity/data mutation) runs in its own fresh project
+and starts from the declared fixture baseline. Projects run serially, reuse
+one build of the images, and have distinct ports, volumes and evidence. A case
+failure is recorded and cleaned before later groups run; the aggregate remains
+non-zero. Cancellation stops scheduling further groups and cleans owned resources.
+
+Filtering preserves Playwright grep semantics and still allocates environments:
+
+```sh
+THESISTRACE_TEST_PLAYWRIGHT_GREP='Operator Financial' mise exec -- pnpm test:e2e
+```
+
+Group results and wall time are written to `.local/e2e-runs/<id>/results.json`.
+Each child `run.txt` records build/reuse, initialization, execution and cleanup
+separately; compare execution time separately from the extra isolation cost.
+The low-level `scripts/test-runtime e2e` is a single-environment diagnostic
+entry, not the complete E2E gate; use it only with a single explicit case filter.
+
 The browser gate sends every request through Caddy and uses two Researchers to
 cover Invitation acceptance/replay/expiry/reissue, login/logout/reset/password
 change, Session revocation, deactivate/reactivate, bootstrap retry, Auth
@@ -264,6 +300,9 @@ Data mount on an internal-only Compose network:
 ```sh
 mise exec -- pnpm test:image-smoke
 ```
+
+`pnpm test:image-smoke` includes the standalone `pnpm test:caddy-image-smoke`
+entry; the latter remains available for targeted Caddy verification.
 
 The image smoke initializes fresh Core and Auth schemas, prepares deterministic
 mounted data, and executes ordinary Research, both Research Batch Kinds, and
@@ -293,9 +332,9 @@ Before merge, run the standard fail-fast gate:
 mise exec -- pnpm check
 ```
 
-`pnpm check` delegates to `pnpm test`, `pnpm test:integration`, and
+`pnpm check` delegates to `pnpm test`, `pnpm test:browser`, `pnpm test:integration`, and
 `pnpm test:e2e` in that order. A failing layer returns non-zero and prevents
-later layers from starting. Integration and browser commands use random
+later layers from starting. Integration and full E2E commands use random
 loopback ports, distinct `thesistrace-test-*` project identities, separate
 volumes, and isolated object-store buckets. They never address or clean
 `thesistrace-dev`.
@@ -343,7 +382,8 @@ for interactive inspection, append the diagnostic escape hatch:
 
 ```sh
 mise exec -- pnpm test:integration --keep-environment
-mise exec -- pnpm test:e2e --keep-environment
+THESISTRACE_TEST_PLAYWRIGHT_GREP='Operator Market submission and response recovery' \
+  mise exec -- ./scripts/test-runtime e2e --keep-environment
 ```
 
 The command prints the exact Test project name. After inspection, clean that

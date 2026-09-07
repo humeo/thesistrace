@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { matchesGlob } from 'node:path';
+import { matchesGlob, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const suites = {
   'core-quick': ['tests/{kernel,architecture,adapters,data,entrypoints}/**/test_*.py'],
   'core-integration': ['tests/{integration,acceptance}/**/test_*.py'],
+  'core-codex': ['tests/acceptance/test_real_codex_research_agent_mcp.py'],
   'agent-unit': ['agent/src/**/*.test.ts'],
   'agent-integration': ['agent/src/**/*.integration.test.ts'],
   'agent-preflight': ['agent/scripts/*.test.mjs'],
@@ -19,7 +20,8 @@ export const suites = {
 
 export function owners(path, rules = suites) {
   return Object.entries(rules).filter(([name, patterns]) =>
-    !(name.endsWith('-unit') && path.endsWith('.integration.test.ts'))
+    !(name === 'core-integration' && path === 'tests/acceptance/test_real_codex_research_agent_mcp.py')
+    && !(name.endsWith('-unit') && path.endsWith('.integration.test.ts'))
     && patterns.some(pattern => matchesGlob(path, pattern))).map(([name]) => name);
 }
 
@@ -38,6 +40,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const root = JSON.parse(readFileSync('package.json', 'utf8'));
   for (const dir of ['kernel', 'architecture', 'adapters', 'data', 'entrypoints']) {
     if (!root.scripts.test.includes(`tests/${dir}`)) failures.push(`core-quick directory not invoked: ${dir}`);
+  }
+  for (const [directory, suite, config] of [
+    ['agent', 'agent-unit', 'vitest.config.ts'],
+    ['agent', 'agent-integration', 'vitest.integration.config.ts'],
+    ['auth', 'auth-unit', 'vitest.config.ts'],
+    ['auth', 'auth-integration', 'vitest.integration.config.ts'],
+    ['web', 'web-unit', 'vitest.config.ts'],
+  ]) {
+    const collected = JSON.parse(execFileSync('pnpm', ['--dir', directory, 'exec', 'vitest', 'list', '--filesOnly', '--json', '--config', config], {
+      encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+    })).map(item => relative(process.cwd(), item.file));
+    const expected = paths.filter(path => owners(path).includes(suite));
+    for (const path of expected) if (!collected.includes(path)) failures.push(`${suite} does not collect ${path}`);
+    for (const path of collected) if (!expected.includes(path)) failures.push(`${suite} unexpectedly collects ${path}`);
   }
   if (failures.length) { console.error(failures.join('\n')); process.exitCode = 1; }
   else console.log('Every test file has one suite owner.');
