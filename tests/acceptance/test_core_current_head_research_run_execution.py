@@ -42,6 +42,7 @@ from thesistrace.daily_track.checkpoint import (
     restore_tracking_origin,
     terminal_strategy_state,
 )
+from thesistrace.daily_track.observation_state import initial_tracking_observation_state
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.data.financial_candidate import (
@@ -59,7 +60,7 @@ from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_co
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_fixture, build_minimal_canonical_fixture
 from thesistrace.operational_events import OperationalEvent, OperationalEventSink
-from thesistrace.publication import Publication, PublishedRef
+from thesistrace.publication import Publication, PublishedRef, decode_compressed_json
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
     AdvanceInput,
@@ -1289,7 +1290,6 @@ def test_tracking_working_cache_failure_is_safe_and_non_authoritative(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
             working_cache_root=cache_root,
         )
         cache_root.rmdir()
@@ -1439,7 +1439,6 @@ def test_tracking_advance_blocks_one_session_before_creating_an_attempt(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
             execution_memory_bytes=1,
             lifecycle_event=unchanged_retry_events.append,
         )
@@ -1495,7 +1494,6 @@ def test_tracking_advance_blocks_one_session_before_creating_an_attempt(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, fit_settings.data_mount),
             generation_store=MountedGenerationStore(fit_settings.data_mount),
-            read_result_bundle=read_result_bundle,
             lifecycle_event=lossy_retry_event,
         )
         retry = retrier.retry(
@@ -1585,7 +1583,6 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
             ),
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
         )
         failure_events: list[dict[str, object]] = []
         _refresh_daily_track(client, retry_track, "tracking-retry-cycle-first-refresh")
@@ -1691,7 +1688,6 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
         )
         assert restarted_processor.process_next() is False
 
@@ -1758,7 +1754,6 @@ def test_blocked_and_retry_wait_tracks_stop_without_future_attempts(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
             execution_memory_bytes=1,
         )
         blocked_track, retry_wait_track = track_ids
@@ -1782,7 +1777,6 @@ def test_blocked_and_retry_wait_tracks_stop_without_future_attempts(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
             lifecycle_event=lossy_stop_event,
         )
         blocked_stop = stopper.stop(
@@ -1826,7 +1820,6 @@ def test_blocked_and_retry_wait_tracks_stop_without_future_attempts(
                 ),
                 dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
                 generation_store=MountedGenerationStore(settings.data_mount),
-                read_result_bundle=read_result_bundle,
             )
             _refresh_daily_track(client, retry_wait_track, "stop-retry-wait-track-refresh")
             with pytest.raises(DailyTrackProgressionFailed):
@@ -1919,7 +1912,6 @@ def test_tracking_pool_timeout_enters_the_transient_cycle(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(constrained, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
             lease_seconds=1,
             heartbeat_seconds=0.05,
         )
@@ -2679,7 +2671,6 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
                 settings.data_mount,
             ),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
             progress=tracking_barrier,
         )
         _refresh_daily_track(client, str(track["id"]), "attempt-start-head-first-refresh")
@@ -2769,6 +2760,9 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         )
         checkpoint_c = project_tracking_checkpoint(
             reference_c,
+            prior_observation_state=initial_tracking_observation_state(
+                sessions[-1], "10000000",
+            ),
             retained_strategy_sessions=[sessions[-1], *extended_sessions[len(sessions) :]],
         )
         canonical_d = open_complete_refresh_basis(store, head_d)
@@ -2815,7 +2809,6 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
             progress=stop_barrier,
         )
         _refresh_daily_track(client, str(track["id"]), "attempt-start-head-stop-refresh")
@@ -2922,7 +2915,6 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
             progress=forced_stop_barrier,
         )
         _refresh_daily_track(client, forced_track_id, "forced-tracking-stop-refresh")
@@ -3060,7 +3052,6 @@ def test_research_delete_preserves_track_until_explicit_stop_and_delete(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
             working_cache_root=worker_cache_root,
         )
         _refresh_daily_track(client, track_id, "delete-preserves-track-refresh")
@@ -3421,7 +3412,6 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
             progress=hold_stopping_track,
         )
         _refresh_daily_track(
@@ -3537,7 +3527,6 @@ def test_live_tracking_owner_renews_lease_and_blocks_duplicate_claim(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
             lease_seconds=0.4,
             heartbeat_seconds=0.05,
         )
@@ -3546,7 +3535,6 @@ def test_live_tracking_owner_renews_lease_and_blocks_duplicate_claim(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(
@@ -3643,7 +3631,6 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
         )
         _refresh_daily_track(
             client,
@@ -3818,7 +3805,6 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
         )
         _refresh_daily_track(
             restarted,
@@ -3895,14 +3881,12 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
         )
         cache_processor = DailyTrackService(
             runtime.database,
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
             working_cache_root=cache_root,
         )
         _refresh_daily_track(
@@ -6169,7 +6153,7 @@ def _checkpoint_payload(
         )
     )
     payload = bundle.payloads["checkpoint"]
-    value = json.loads(payload.content)
+    value = decode_compressed_json(payload)
     assert isinstance(value, dict)
     return value
 

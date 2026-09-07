@@ -103,6 +103,14 @@ class DatasetLifecycle:
                     return pointer
         raise DataLifecycleError("Dataset Head changed repeatedly during inspection")
 
+    def current_admission_in_transaction(
+        self, transaction: PostgresTransaction,
+    ) -> MountedGenerationAdmission | None:
+        """Keep the admission calendar stable through a caller's short read snapshot."""
+        lock_data_lifecycle(transaction)
+        pointer = self._heads.current_pointer()
+        return None if pointer is None else self._heads.resolve_admission(pointer)
+
     def current_admission(self) -> MountedGenerationAdmission | None:
         for _ in range(4):
             with self._database.transaction() as transaction:

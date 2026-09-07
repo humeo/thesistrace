@@ -58,7 +58,6 @@ from thesistrace.research_agent.mcp_server import (
 )
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.execution import SupervisedResearchExecutor
-from thesistrace.research_run.result import read_result_bundle
 from thesistrace.researcher import ResearcherService
 
 _ISSUER_URL = "https://issuer.test/"
@@ -1827,10 +1826,6 @@ async def _exercise_http_live_tracking_stop(
         publication=runtime.publication,
         dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
         generation_store=MountedGenerationStore(settings.data_mount),
-        read_result_bundle=partial(
-            read_result_bundle,
-            research_kind="strategy_backtest",
-        ),
         progress=progress,
     )
     with ThreadPoolExecutor(max_workers=1) as executor:

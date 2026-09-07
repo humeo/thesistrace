@@ -1,6 +1,9 @@
+import gzip
 import hashlib
+import io
 import json
 import math
+import zlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -23,6 +26,43 @@ def canonical_json_bytes(value: object) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+MAX_COMPRESSED_JSON_BYTES = 64 * 1024**2
+
+
+def compressed_json_bytes(value: object) -> bytes:
+    raw = canonical_json_bytes(value)
+    if len(raw) > MAX_COMPRESSED_JSON_BYTES:
+        raise ValueError("Compressed JSON exceeds its decoded size limit")
+    output = io.BytesIO()
+    with gzip.GzipFile(filename="", mode="wb", fileobj=output, compresslevel=9, mtime=0) as stream:
+        stream.write(raw)
+    return output.getvalue()
+
+
+def read_compressed_json_bytes(content: bytes, uncompressed_bytes: int) -> object:
+    if (
+        type(uncompressed_bytes) is not int
+        or not 0 < uncompressed_bytes <= MAX_COMPRESSED_JSON_BYTES
+    ):
+        raise ValueError("Compressed JSON decoded length is invalid")
+    decoder = zlib.decompressobj(wbits=31)
+    try:
+        raw = decoder.decompress(content, uncompressed_bytes + 1)
+        if (
+            len(raw) != uncompressed_bytes
+            or not decoder.eof
+            or decoder.unused_data
+            or decoder.unconsumed_tail
+        ):
+            raise ValueError("Compressed JSON stream or length is invalid")
+        value = json.loads(raw)
+        if canonical_json_bytes(value) != raw:
+            raise ValueError("Compressed JSON content is not canonical")
+        return value
+    except (zlib.error, UnicodeError, RecursionError) as error:
+        raise ValueError("Compressed JSON content is invalid") from error
 
 
 class ParquetContractError(ValueError):

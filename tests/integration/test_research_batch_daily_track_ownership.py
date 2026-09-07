@@ -15,6 +15,7 @@ from thesistrace.daily_track import (
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
 )
+from thesistrace.data import DatasetLifecycle
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import CORE_SCHEMAS, initialize_core
 from thesistrace.research_batch import ResearchBatchCancelCommand, ResearchBatchService
@@ -145,7 +146,7 @@ def test_research_batch_cancel_hides_foreign_id_before_receipt_conflict(
 
 
 def test_daily_track_browse_mutations_and_active_count_are_researcher_scoped(
-    ownership_database: PostgresDatabase,
+    ownership_database: PostgresDatabase, tmp_path: Path,
 ) -> None:
     for researcher_id, track_id, status in (
         (RESEARCHER_A.researcher_id, "track-alpha-active", "active"),
@@ -201,8 +202,7 @@ def test_daily_track_browse_mutations_and_active_count_are_researcher_scoped(
     service = DailyTrackService(
         ownership_database,
         publication=cast(Any, object()),
-        dataset_lifecycle=cast(Any, object()),
-        read_result_bundle=lambda _bundle: {},
+        dataset_lifecycle=DatasetLifecycle(ownership_database, tmp_path),
     )
     inspector = DailyTrackAccessInspector(ownership_database)
 

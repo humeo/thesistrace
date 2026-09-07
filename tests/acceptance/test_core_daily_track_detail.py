@@ -11,8 +11,8 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from core_runtime import TEST_RESEARCHER, drop_product_schemas, internal_api_origin
 from core_runtime import create_initialized_test_app as create_app
-from core_runtime import drop_product_schemas, internal_api_origin
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
@@ -79,6 +79,9 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         )
         assert started.status_code == 201
         track_id = started.json()["id"]
+        assert client.app.state.core_runtime.daily_tracks.get(
+            TEST_RESEARCHER.researcher_id, track_id,
+        ) is not None
         seed_detail = client.get(f"/api/daily-tracks/{track_id}").json()
         assert [item["session"] for item in seed_detail["strategy"]["observations"]] == list(
             seed_sessions

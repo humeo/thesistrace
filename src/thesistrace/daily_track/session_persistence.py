@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date
 from itertools import pairwise
 from typing import Literal
+from uuid import UUID
 
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
@@ -76,6 +78,90 @@ class SessionCoordinateRepository:
 
     def __init__(self, database: PostgresDatabase) -> None:
         self._database = database
+
+    def load_read_snapshot(
+        self, researcher_id: UUID, track_id: str, *, calendar: list[str] | None = None,
+        after: str | None = None, checkpoint_limit: int | None = None,
+        transaction: PostgresTransaction | None = None,
+    ) -> dict[str, object] | None:
+        """One authority snapshot; historical accounts and completed attempts stay unread."""
+        if calendar is None and checkpoint_limit is None:
+            raise ValueError("Read snapshot requires a window or checkpoint page limit")
+        scope = (
+            nullcontext(transaction) if transaction is not None else self._database.transaction()
+        )
+        with scope as transaction:
+            return transaction.execute(
+                """
+                WITH calendar AS (SELECT %s::date[] AS sessions)
+                SELECT track.id, track.status, track.origin, track.blocked_reason,
+                       track.queue_position,
+                       checkpoint.boundary_session::text AS current_strategy_session,
+                       checkpoint.manifest_sha256 AS current_checkpoint_manifest_sha256,
+                       checkpoint.provenance AS current_checkpoint_provenance,
+                       checkpoint.progression_id IS NULL AS current_checkpoint_is_seed,
+                       checkpoint.terminal_strategy_state,
+                       EXISTS(SELECT 1 FROM research_runs.runs AS run
+                              WHERE run.id = track.origin->>'seed_run_id'
+                                AND run.researcher_id = track.researcher_id
+                       ) AS seed_research_available,
+                       to_jsonb(unresolved) AS unresolved_progression,
+                       COALESCE((
+                           SELECT jsonb_agg(jsonb_build_object(
+                               'manifest_sha256', item.manifest_sha256,
+                               'boundary_session', item.boundary_session,
+                               'provenance', item.provenance
+                           ) ORDER BY item.boundary_session)
+                           FROM (
+                               SELECT item.manifest_sha256, item.boundary_session, item.provenance
+                               FROM daily_tracks.session_checkpoints AS item
+                               WHERE item.track_id = track.id
+                                 AND item.progression_id IS NOT NULL
+                                 AND (%s::date IS NULL OR item.boundary_session > %s::date)
+                                 AND (calendar.sessions IS NULL OR (
+                                      array_position(calendar.sessions,
+                                                     checkpoint.boundary_session) IS NOT NULL
+                                      AND item.boundary_session >= calendar.sessions[
+                                          GREATEST(1, array_position(
+                                              calendar.sessions, checkpoint.boundary_session
+                                          ) - 503)]))
+                                 AND item.boundary_session <= checkpoint.boundary_session
+                               ORDER BY item.boundary_session
+                               LIMIT %s
+                           ) AS item
+                       ), '[]'::jsonb) AS observation_checkpoints
+                FROM daily_tracks.tracks AS track
+                JOIN daily_tracks.session_tracking_states AS state ON state.track_id = track.id
+                JOIN daily_tracks.session_checkpoints AS checkpoint
+                  ON checkpoint.track_id = state.track_id
+                 AND checkpoint.manifest_sha256 = state.current_checkpoint_manifest_sha256
+                CROSS JOIN calendar
+                LEFT JOIN LATERAL (
+                    SELECT progression.status,
+                           progression.target_start_session::text,
+                           progression.target_end_session::text,
+                           cardinality(progression.target_sessions) AS target_session_count,
+                           progression.current_cycle_ordinal,
+                           progression.next_attempt_eligible_at::text,
+                           progression.next_attempt_eligible_at > now() AS retry_wait,
+                           attempt.status AS attempt_status,
+                           attempt.cycle_attempt_ordinal,
+                           attempt.execution_phase,
+                           attempt.current_session::text AS current_session
+                    FROM daily_tracks.session_progressions AS progression
+                    LEFT JOIN LATERAL (
+                        SELECT status, execution_phase, current_session, cycle_attempt_ordinal
+                        FROM daily_tracks.session_progression_attempts
+                        WHERE progression_id = progression.id
+                        ORDER BY ordinal DESC LIMIT 1
+                    ) AS attempt ON true
+                    WHERE progression.track_id = track.id
+                      AND progression.status IN ('running', 'stopping', 'blocked')
+                ) AS unresolved ON true
+                WHERE track.researcher_id = %s AND track.id = %s
+                """,
+                (calendar, after, after, checkpoint_limit, researcher_id, track_id),
+            ).fetchone()
 
     def activate(
         self,

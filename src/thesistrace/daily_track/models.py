@@ -14,6 +14,7 @@ from pydantic import (
 )
 
 from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
+from thesistrace.daily_track.observation_state import TrackingObservationState
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 type DailyTrackResultSection = Literal[
@@ -749,7 +750,8 @@ class KernelStateCheckpoint(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["daily-track-checkpoint-v2"]
+    schema_version: Literal["daily-track-checkpoint-v3"]
+    tracking_observation_state: TrackingObservationState
     origin_session: str
     boundary_session: str
     run_input: KernelRunInputSnapshot
@@ -759,3 +761,10 @@ class KernelStateCheckpoint(BaseModel):
     continuation_sha256: str
     pending_alpha_sessions: int
     rolling_factor_rows: int
+
+
+    @model_validator(mode="after")
+    def observation_boundary_matches(self) -> KernelStateCheckpoint:
+        if self.tracking_observation_state.boundary_session != self.boundary_session:
+            raise ValueError("Checkpoint observation boundary differs")
+        return self

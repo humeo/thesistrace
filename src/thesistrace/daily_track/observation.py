@@ -4,6 +4,10 @@ from collections.abc import Mapping, Sequence
 from decimal import Decimal, localcontext
 
 from thesistrace.daily_track.models import DailyTrackObservation, DailyTrackOriginAccount
+from thesistrace.daily_track.observation_state import (
+    TrackingObservationState,
+    tracking_maximum_drawdown,
+)
 from thesistrace.research_kernel.numeric import ACCOUNTING_CONTEXT, canonical_decimal
 
 
@@ -12,6 +16,7 @@ def project_daily_observation(
     origin: DailyTrackOriginAccount,
     current: DailyTrackOriginAccount,
     observations: Sequence[Mapping[str, object]],
+    tracking_observation_state: TrackingObservationState,
 ) -> DailyTrackObservation:
     """Keep the inception denominator even when the chart's retained window rolls."""
     with localcontext(ACCOUNTING_CONTEXT):
@@ -22,15 +27,14 @@ def project_daily_observation(
         if current.session < origin.session:
             raise ValueError("Daily observation precedes its Tracking Origin")
         points = []
-        peak_nav = origin_nav
-        maximum_drawdown = Decimal(0)
+        if tracking_observation_state.boundary_session != current.session:
+            raise ValueError("Tracking observation state has a different boundary")
+        maximum_drawdown = tracking_maximum_drawdown(tracking_observation_state, current.net_nav)
         for row in observations:
             session = str(row["session"])
             if not origin.session <= session <= current.session:
                 continue
             nav = Decimal(str(row["net_nav"]))
-            peak_nav = max(peak_nav, nav)
-            maximum_drawdown = max(maximum_drawdown, 1 - nav / peak_nav)
             points.append({"session": session, "net_return": float(nav / origin_nav - 1)})
         holdings = []
         for position in current.positions:
