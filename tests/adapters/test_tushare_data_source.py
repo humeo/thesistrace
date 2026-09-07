@@ -1316,18 +1316,20 @@ def test_tushare_provider_retries_rate_limit_with_exponential_backoff() -> None:
 
 
 def test_tushare_provider_paces_each_upstream_request() -> None:
+    clock = PacingClock()
     sleeps: list[float] = []
     provider = TushareAdapter(
         token="secret",
         transport=RecordingTransport(),
         throttle_seconds=0.5,
-        sleeper=sleeps.append,
+        sleeper=lambda delay: (sleeps.append(delay), clock.sleep(delay)),
+        monotonic=clock.monotonic,
     )
 
     provider.query("daily", params={"trade_date": "20260803"}, fields=("ts_code",))
     provider.query("adj_factor", params={"trade_date": "20260803"}, fields=("ts_code",))
 
-    assert sleeps == [0.5, 0.5]
+    assert sleeps == [0.5]
 
 
 @pytest.mark.parametrize(
@@ -1850,7 +1852,7 @@ def test_tushare_provider_paginates_deduplicates_and_sorts() -> None:
         token="secret",
         transport=transport,
         page_size=2,
-        throttle_seconds=0.5,
+        throttle_seconds=0,
         sleeper=sleeps.append,
         progress=progress.append,
         monotonic=lambda: next(timestamps),
@@ -1864,7 +1866,7 @@ def test_tushare_provider_paginates_deduplicates_and_sorts() -> None:
     )
 
     assert transport.offsets == [0, 2, 4]
-    assert sleeps == [0.5, 0.5, 0.5]
+    assert sleeps == []
     assert progress == [
         {
             "event": "upstream_query",
@@ -2031,3 +2033,46 @@ def test_tushare_rejects_non_source_price_correction_fields(field: str) -> None:
 
     assert failure.value.category == "invalid_source_data"
     assert failure.value.detail_code == "INVALID_CANONICAL_INCREMENT"
+
+
+class PacingClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.mark.parametrize("response_seconds", [0.1, 0.6])
+def test_tushare_pacing_counts_response_time_and_preserves_results(response_seconds: float) -> None:
+    clock = PacingClock()
+    starts: list[float] = []
+
+    class TimedTransport(RecordingTransport):
+        def post(self, payload: Mapping[str, object]) -> dict[str, object]:
+            starts.append(clock.now)
+            clock.now += response_seconds
+            return super().post(payload)
+
+    provider = TushareAdapter(
+        token="test-only",
+        transport=TimedTransport(),
+        sleeper=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+    reference = TushareAdapter(
+        token="test-only", transport=RecordingTransport(), throttle_seconds=0
+    )
+    for index in range(181):
+        api = "daily" if index % 2 == 0 else "adj_factor"
+        params = {"trade_date": "20260803"}
+        assert provider.query(api, params=params, fields=("ts_code",)) == reference.query(
+            api, params=params, fields=("ts_code",)
+        )
+    assert starts[0] == 0
+    assert starts[1] == pytest.approx(max(1 / 3, response_seconds))
+    assert starts[-1] == pytest.approx(180 * max(1 / 3, response_seconds))
+    assert starts[180] - starts[0] >= 60 - 1e-9

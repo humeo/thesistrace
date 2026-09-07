@@ -331,7 +331,7 @@ class TushareAdapter:
         token: str,
         transport: TushareTransport,
         page_size: int | None = None,
-        throttle_seconds: float = 0.5,
+        throttle_seconds: float = 60 / 180,
         rate_limit_backoff_seconds: float = 2.0,
         max_attempts: int = 6,
         sleeper: Callable[[float], None] = time.sleep,
@@ -345,6 +345,7 @@ class TushareAdapter:
         self._transport = transport
         self._page_size_override = page_size
         self._throttle_seconds = throttle_seconds
+        self._last_request_started_at: float | None = None
         self._rate_limit_backoff_seconds = rate_limit_backoff_seconds
         self._max_attempts = max_attempts
         self._sleeper = sleeper
@@ -853,7 +854,14 @@ class TushareAdapter:
     def _request_with_retry(self, payload: dict[str, object]) -> dict[str, object]:
         for attempt in range(1, self._max_attempts + 1):
             if self._throttle_seconds:
-                self._sleeper(self._throttle_seconds)
+                # Pace starts across all endpoints/pages/retries on this provider.
+                # Time spent in HTTP, processing, or backoff already counts.
+                now = self._monotonic()
+                if self._last_request_started_at is not None:
+                    remaining = self._throttle_seconds - (now - self._last_request_started_at)
+                    if remaining > 0:
+                        self._sleeper(remaining)
+                self._last_request_started_at = self._monotonic()
             try:
                 result = self._transport.post(payload)
             except httpx.HTTPStatusError as error:
