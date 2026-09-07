@@ -118,6 +118,6 @@ function model(
     provider_adapter: provider,
     provider_model_id: providerModelId,
     reasoning_efforts: efforts,
-    secret_env: secret,
+    context_window: 65_536, secret_env: secret,
   };
 }

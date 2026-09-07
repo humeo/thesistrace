@@ -3,7 +3,7 @@ import { noopLogger } from "@mastra/core/logger";
 import { Mastra } from "@mastra/core/mastra";
 import { RequestContext } from "@mastra/core/request-context";
 import { askUserTool } from "@mastra/core/tools";
-import { Memory } from "@mastra/memory";
+import type { Memory } from "@mastra/memory";
 import { PostgresStore } from "@mastra/pg";
 import {
   CopilotRuntime,
@@ -42,6 +42,7 @@ import {
   RegisteredModelRuntime,
   type ResolvedModelSelection,
 } from "./model-runtime.js";
+import { createResearchMemory } from "./research-memory.js";
 import {
   createMcpRunFactory,
   type DiscoveredMcpTools,
@@ -168,16 +169,7 @@ export async function createResearchRuntime(
     pool,
     schemaName: "agent",
   });
-  const memory = new Memory({
-    options: {
-      lastMessages: 50,
-      observationalMemory: false,
-      semanticRecall: false,
-      workingMemory: { enabled: false },
-    },
-    storage,
-    vector: false,
-  });
+  const memories = new Map<string, Memory>();
   const agent = new Agent({
     defaultOptions: ({ requestContext }) => {
       const observation = requestContext.get<string, RunModelObservation | undefined>("modelObservation");
@@ -203,7 +195,16 @@ export async function createResearchRuntime(
     id: RESEARCH_AGENT_ID,
     instructions: ({ requestContext }) => researchAgentInstructions(requestContext),
     maxRetries: 0,
-    memory,
+    memory: ({ requestContext }) => {
+      const selection = selectionFrom(requestContext);
+      const key = `${selection.model.key}:${selection.effort}`;
+      let memory = memories.get(key);
+      if (memory === undefined) {
+        memory = createResearchMemory(storage, selection);
+        memories.set(key, memory);
+      }
+      return memory;
+    },
     model: ({ requestContext }) => selectionFrom(requestContext).languageModel,
     name: "ThesisTrace Research Agent",
     tools: ({ requestContext }) => researchToolsFrom(requestContext),
@@ -293,6 +294,7 @@ export async function createResearchRuntime(
             agentId: RESEARCH_AGENT_ID,
             a2ui: researchA2UIBridgeConfig(),
             emitInterruptOutcome: true,
+            // This controls AG-UI activity exposure, not server-side compression.
             observationalMemory: false,
             requestContext,
             resourceId: researcherId,
@@ -352,7 +354,7 @@ export async function createResearchRuntime(
       await Promise.all(pendingBridges);
       await Promise.all(interruptedRuns.map((runId) => repository.awaitFrameworkRunSettled(runId)));
       await titleGenerator.settled();
-      await memory.settled();
+      await Promise.all([...memories.values()].map((memory) => memory.settled()));
       await repository.failInterruptedRunsAfterHostRestart();
       await storage.close();
       await readinessPool.end();
@@ -453,6 +455,7 @@ function createRunAgent(options: Readonly<{
     agentId: RESEARCH_AGENT_ID,
     a2ui: researchA2UIBridgeConfig(),
     emitInterruptOutcome: true,
+    // Keep private observation content inside the Host's Memory store.
     observationalMemory: false,
     requestContext: options.requestContext,
     resourceId: options.researcherId,

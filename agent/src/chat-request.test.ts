@@ -23,7 +23,7 @@ const registry = readModelRegistry(JSON.stringify({
     provider_adapter: "scripted",
     provider_model_id: "scripted-v1",
     reasoning_efforts: ["none", "medium"],
-    secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+    context_window: 65_536, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
   }],
 }), { THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "test-secret" });
 

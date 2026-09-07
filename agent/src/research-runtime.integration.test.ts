@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import type { AGUIEvent, Message, RunAgentInput } from "@ag-ui/core";
 import { createTool } from "@mastra/core/tools";
+import { Memory } from "@mastra/memory";
+import { PostgresStore } from "@mastra/pg";
 import {
   getMcpCallToolContent,
   MCP_CALL_TOOL_CONTENT,
@@ -10,10 +12,12 @@ import {
 import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { estimateTokenCount } from "tokenx";
 
 import { BATCH_ID, BATCH_TOOL_NAMES, CHILD_IDS, batchFixtureOutput } from "../test-fixtures/batch-research.js";
 import { DAILY_TRACK_TOOL_NAMES, ORIGIN_RUN_ID, TRACK_ID, dailyTrackFixtureOutput } from "../test-fixtures/daily-track.js";
 import { openAIToolProvider } from "../test-fixtures/openai-tool-provider.js";
+import { MEMORY_FACT, openAIMemoryProvider } from "../test-fixtures/openai-memory-provider.js";
 
 import {
   RESEARCH_A2UI_ACTIVITY_TYPE,
@@ -92,7 +96,7 @@ const modelRegistry = readModelRegistry(JSON.stringify({
       provider_adapter: "scripted",
       provider_model_id: "scripted-v1",
       reasoning_efforts: ["none", "medium", "max"],
-      secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      context_window: 65_536, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     },
     {
       default_reasoning_effort: "medium",
@@ -102,7 +106,7 @@ const modelRegistry = readModelRegistry(JSON.stringify({
       provider_adapter: "scripted",
       provider_model_id: "scripted-failure-v1",
       reasoning_efforts: ["medium"],
-      secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      context_window: 65_536, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     },
   ],
 }), { THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "integration-secret" });
@@ -119,6 +123,12 @@ const settings: AgentSettings = {
   publicOrigin: "http://127.0.0.1:4317",
   runMaxWallSeconds: 300,
 };
+const memoryConfiguration = { ...settings, modelRegistry: readModelRegistry(JSON.stringify({
+  default_model_key: "luna",
+  models: [{ context_window: 65_536, key: "luna", display_name: "Luna", enabled: true,
+    provider_adapter: "openai", provider_model_id: "gpt-5.6-luna", default_reasoning_effort: "high",
+    reasoning_efforts: ["high"], secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY" }],
+}), { THESISTRACE_AGENT_OPENAI_API_KEY: "memory-replay-only" }) };
 
 const createIntegrationRuntime = () => createResearchRuntime(settings, {
   mcpRunFactory: async () => ({
@@ -165,6 +175,104 @@ describe.sequential("durable Research Agent runtime", () => {
     await owner.query("DROP SCHEMA IF EXISTS core CASCADE");
     await owner.end();
   });
+
+  it("compresses old Session history before answering and retains it across Host restart", async () => {
+    const provider = openAIMemoryProvider();
+    vi.stubGlobal("fetch", provider.fetch);
+    const threadId = randomUUID();
+    const storage = new PostgresStore({ id: "memory-fixture", pool: agentStore, schemaName: "agent", disableInit: true });
+    const memory = new Memory({ storage, vector: false });
+    const dependencies = { mcpRunFactory: async () => ({
+      close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {},
+    }) };
+    let runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+    const prompt = async (existing: boolean, targetThread = threadId) => run(runtime, runInput({
+      threadId: targetThread, runId: randomUUID(), messageId: randomUUID(), modelKey: "luna", reasoningEffort: "high",
+      sessionMode: existing ? "existing" : "new", content: "Explain the earlier research failure.",
+    }), primaryResearcher);
+    try {
+      expect((await prompt(false)).at(-1)?.type).toBe("RUN_FINISHED");
+      const ids: string[] = Array.from({ length: 60 }, () => randomUUID());
+      await memory.saveMessages({ messages: ids.map((id, index) => ({
+        id, threadId, resourceId: primaryResearcher.researcher_id,
+        role: index % 2 === 0 ? "user" as const : "assistant" as const,
+        createdAt: new Date(Date.now() - 120_000 + index * 1000),
+        content: { format: 2 as const, parts: [{ type: "text" as const,
+          text: index === 0 ? MEMORY_FACT : `Archived detail ${index}: ${"context ".repeat(320)}` }] },
+      })) });
+      const events = await prompt(true);
+      expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+      const answer = provider.requests.filter((request) => request.phase === "answer").at(-1)!;
+      expect(answer.prompt.includes("run_memory_alpha")).toBe(true);
+      expect(answer.prompt.includes("INSUFFICIENT_HISTORY")).toBe(true);
+      expect(answer.prompt.length).toBeLessThan(60_000);
+      expect(provider.requests.some((request) => request.phase === "observer")).toBe(true);
+      expect(provider.requests.every((request) => request.body.model === "gpt-5.6-luna"
+        && (request.body.reasoning as { effort: string }).effort === "high" && request.body.store === false)).toBe(true);
+      expect(JSON.stringify(events)).not.toContain("<observations>");
+      const metered = await owner.query(`SELECT token_usage FROM agent.agent_run WHERE thread_id = $1 ORDER BY started_at DESC LIMIT 1`, [threadId]);
+      expect(metered.rows[0].token_usage.outputTokens.total).toBeGreaterThan(30);
+      const retained = await memory.recall({ threadId, resourceId: primaryResearcher.researcher_id, perPage: false });
+      expect(retained.messages.filter((message) => ids.includes(message.id))).toHaveLength(60);
+      const memoryStore = (await storage.getStore("memory"))!;
+      const record = (await memoryStore.getObservationalMemory(threadId, primaryResearcher.researcher_id))!;
+      // Exercise the next level of compression with an already-grown observation log.
+      const observations = `${MEMORY_FACT}\n${Array.from({ length: 1800 }, (_, index) => `* Detail ${index}: archived research note.`).join("\n")}`;
+      await memoryStore.updateActiveObservations({ id: record.id, observations,
+        tokenCount: estimateTokenCount(observations), lastObservedAt: record.lastObservedAt! });
+      await runtime.close();
+      runtime = await createResearchRuntime(memoryConfiguration, dependencies);
+      expect((await prompt(true)).at(-1)?.type).toBe("RUN_FINISHED");
+      expect(provider.requests.at(-1)?.prompt).toContain("INSUFFICIENT_HISTORY");
+      expect(provider.requests.some((request) => request.phase === "reflector")).toBe(true);
+      expect((await prompt(false, randomUUID())).at(-1)?.type).toBe("RUN_FINISHED");
+      expect(provider.requests.at(-1)?.prompt).not.toContain("run_memory_alpha");
+      await runtime.deleteSession(threadId, primaryResearcher);
+      expect(await memoryStore.getObservationalMemory(threadId, primaryResearcher.researcher_id)).toBeNull();
+    } finally {
+      await runtime.close();
+      vi.unstubAllGlobals();
+    }
+  }, 30_000);
+
+  it.each([false, true])("observes a large Tool result inside the Turn and handles compression failure: %s", async (failObserver) => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const provider = openAIMemoryProvider({ tool: "get_research_run", failObserver });
+    vi.stubGlobal("fetch", provider.fetch);
+    const runtime = await createResearchRuntime(memoryConfiguration, {
+      mcpRunFactory: async () => ({
+        close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined,
+        tools: { get_research_run: createTool({
+          id: "get_research_run", description: "Read the research outcome.", inputSchema: z.object({}), outputSchema: z.object({ text: z.string() }),
+          execute: async () => ({ text: `${MEMORY_FACT}\n${"context ".repeat(18_000)}` }),
+          toModelOutput: (result) => ({ type: "text", value: result.text }),
+        }) },
+      }),
+    });
+    const threadId = randomUUID();
+    try {
+      const events = await run(runtime, runInput({ threadId, runId: randomUUID(), messageId: randomUUID(),
+        modelKey: "luna", reasoningEffort: "high", content: "Read the earlier research failure." }), primaryResearcher);
+      expect(provider.requests.some((request) => request.phase === "observer")).toBe(true);
+      if (failObserver) {
+        expect(events.at(-1)).toMatchObject({ type: "RUN_ERROR", code: "PROVIDER_RATE_LIMIT" });
+        expect(JSON.stringify(events).includes("private-observer-canary")).toBe(false);
+      } else {
+        expect(events.at(-1)?.type).toBe("RUN_FINISHED");
+        const answer = provider.requests.filter((request) => request.phase === "answer").at(-1)!;
+        expect(answer.prompt.includes("INSUFFICIENT_HISTORY")).toBe(true);
+        expect(answer.prompt.length).toBeLessThan(60_000);
+      }
+      const stored = await owner.query(`SELECT content FROM agent.mastra_messages WHERE thread_id = $1`, [threadId]);
+      expect(JSON.stringify(stored.rows).includes(MEMORY_FACT)).toBe(true);
+      expect(JSON.stringify(stored.rows).includes("context ".repeat(18_000))).toBe(true);
+      expect(errorLog.mock.calls.length).toBe(0);
+    } finally {
+      await runtime.close();
+      vi.unstubAllGlobals();
+      errorLog.mockRestore();
+    }
+  }, 30_000);
 
   it.each(Object.entries(SCRIPTED_FAILURE_PROMPTS))("persists one %s terminal event and retries only on a new explicit message", async (code, content) => {
     const runtime = await createIntegrationRuntime();
@@ -289,7 +397,7 @@ describe.sequential("durable Research Agent runtime", () => {
     try { await run(runtime, input, primaryResearcher); } finally { await runtime.close(); }
     const nextRegistry = readModelRegistry(JSON.stringify({ default_model_key: "scripted-next", models: [{
       default_reasoning_effort: "high", display_name: "Scripted Next", enabled: true, key: "scripted-next", provider_adapter: "scripted",
-      provider_model_id: "scripted-next-id", reasoning_efforts: ["high"], secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      provider_model_id: "scripted-next-id", reasoning_efforts: ["high"], context_window: 65_536, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     }] }), { THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "fixture-secret" });
     const discover = vi.fn(async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }));
     const restarted = await createResearchRuntime({ ...settings, modelRegistry: nextRegistry }, { mcpRunFactory: discover });
@@ -554,7 +662,7 @@ describe.sequential("durable Research Agent runtime", () => {
           key: "gpt-5.6-luna", display_name: "GPT-5.6 Luna", enabled: true,
           provider_adapter: "openai", provider_model_id: "gpt-5.6-luna",
           default_reasoning_effort: "high", reasoning_efforts: ["high"],
-          secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
+          context_window: 65_536, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
         }],
       }), { THESISTRACE_AGENT_OPENAI_API_KEY: "fixture-only" }) };
       const openRuntime = () => createResearchRuntime(configuration, { mcpRunFactory: async () => ({

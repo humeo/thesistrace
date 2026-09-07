@@ -13,4 +13,5 @@ minimumReleaseAge: 1440
 
 patchedDependencies:
   '@ag-ui/mastra@1.1.1': patches/@ag-ui__mastra@1.1.1.patch
+  '@mastra/memory@1.28.1': patches/@mastra__memory@1.28.1.patch
   '@mastra/schema-compat@1.3.7': patches/@mastra__schema-compat@1.3.7.patch

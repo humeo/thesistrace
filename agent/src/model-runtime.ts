@@ -21,6 +21,7 @@ import { GuardedLanguageModel, type RunModelObservation } from "./guarded-langua
 export type ResolvedModelSelection = Readonly<{
   effort: ReasoningEffort;
   languageModel: LanguageModelV3;
+  memoryLanguageModel: LanguageModelV3;
   model: RegisteredModel;
   providerOptions: SharedV3ProviderOptions;
 }>;
@@ -56,7 +57,10 @@ export class RegisteredModelRuntime {
       effort,
       languageModel: observation === undefined
         ? languageModel
-        : new GuardedLanguageModel(languageModel, observation),
+        : new GuardedLanguageModel(languageModel, observation, model.contextWindow),
+      memoryLanguageModel: observation === undefined
+        ? languageModel
+        : new GuardedLanguageModel(languageModel, observation, model.contextWindow, "memory"),
       model,
       providerOptions: providerOptionsFor(model, effort),
     };
