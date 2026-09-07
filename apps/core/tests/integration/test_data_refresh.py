@@ -444,6 +444,13 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
 ) -> None:
     database = _database(core_settings)
     try:
+        # This suite shares the singleton row; establish this test's prior refresh.
+        with database.transaction() as transaction:
+            transaction.execute(
+                "UPDATE data.current_dataset_state SET last_market_refresh_at = %s "
+                "WHERE singleton = 1",
+                (FIRST_REFRESH_AT,),
+            )
         current = _twenty_session_canonical()
         manifest = _establish_head(database, tmp_path, current)
         source = RecordingRefreshSource(current)
