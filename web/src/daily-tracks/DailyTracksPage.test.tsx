@@ -12,6 +12,54 @@ import {
   DailyTrackAnalysisView,
   type DailyTrackAnalysis,
 } from "./DailyTrackAnalysisView";
+import { CurrentHoldings, ObservationSummary, RebalanceSchedule, TrackingReturnChart, type DailyTrackObservation } from "./DailyTrackObservationView";
+
+const observation: DailyTrackObservation = {
+  session: "2026-08-18", net_asset_value_cny: "1100", cash_cny: "200",
+  net_change_cny: "100", net_return: 0.1, maximum_drawdown: 0.025, transaction_cost_cny: "2.75", session_count: 1,
+  holdings: [{ instrument_id: "000001.SZ", shares: 100, market_value_cny: "900", weight: 9 / 11 }],
+  rebalance_interval: 5, pending_signal_session: null, sessions_until_next_signal: 4,
+  returns: [{ session: "2026-08-17", net_return: 0 }, { session: "2026-08-18", net_return: 0.1 }],
+};
+
+describe("Daily observation presentation", () => {
+  it("labels the tracking period and displays the published account", () => {
+    const markup = renderToStaticMarkup(<ObservationSummary observation={observation} originSession="2026-08-17" />);
+    expect(markup).toContain("Return since tracking");
+    expect(markup).toContain("10.00%");
+    expect(markup).toContain("Maximum drawdown");
+    expect(markup).toContain("2.50%");
+    expect(markup).toContain("Since 2026-08-17");
+    expect(markup).toContain("CN¥1,100.00");
+    expect(markup).toContain("CN¥200.00");
+    expect(markup).toContain("As of 2026-08-18");
+  });
+
+  it("renders actual shares separately from adjusted market value and cash", () => {
+    const markup = renderToStaticMarkup(<CurrentHoldings observation={observation} />);
+    expect(markup).toContain("000001.SZ");
+    expect(markup).toContain("<td>100</td>");
+    expect(markup).toContain("CN¥900.00");
+    expect(markup).toContain("81.82%");
+    expect(markup).toContain("18.18%");
+  });
+
+  it("keeps stale schedules distinct from available trade instructions", () => {
+    const markup = renderToStaticMarkup(<RebalanceSchedule observation={observation} isBehind isStopped={false} />);
+    expect(markup).toContain("Next signal in 4 trading sessions");
+    expect(markup).toContain("Tracking is behind the available data");
+    expect(markup).toContain("Buy and sell instructions are not available yet");
+    const stopped = renderToStaticMarkup(<RebalanceSchedule observation={observation} isBehind isStopped />);
+    expect(stopped).toContain("Tracking stopped");
+    expect(stopped).not.toContain("Update the track");
+  });
+
+  it("does not invent a performance curve before the first completed update", () => {
+    const markup = renderToStaticMarkup(<TrackingReturnChart observation={{ ...observation, returns: [{ session: "2026-08-17", net_return: 0 }] }} originSession="2026-08-17" />);
+    expect(markup).toContain("Your daily observations start here");
+    expect(markup).not.toContain("<canvas");
+  });
+});
 
 describe("DailyTrack detail polling", () => {
   const progress = (phase: DailyTrackDetail["progress"]["phase"]) => ({

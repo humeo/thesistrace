@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 
 import { coreFetch } from "../auth/coreFetch";
-import {
-  DailyTrackAnalysisView,
-  type DailyTrackAnalysis,
-} from "./DailyTrackAnalysisView";
+import type { DailyTrackAnalysis } from "./DailyTrackAnalysisView";
+import type { DailyTrackObservation } from "./DailyTrackObservationView";
+import { DailyTrackWorkspace } from "./DailyTrackWorkspace";
 import type { TerminalStrategyState } from "../research-runs/ResearchRunsPage";
+import "./daily-tracks.css";
 
 type DailyTrackSummary = {
   id: string;
@@ -44,6 +44,7 @@ export type DailyTrackDetail = {
     next_attempt_eligible_at: string | null;
   };
   blocked_reason: string | null;
+  observation: DailyTrackObservation;
   factor: DailyTrackAnalysis["factor"];
   strategy: DailyTrackAnalysis["strategy"];
 };
@@ -79,6 +80,8 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const [track, setTrack] = useState<DailyTrackDetail | null>(null);
   const [items, setItems] = useState<DailyTrackSummary[] | null>(null);
   const [error, setError] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmStop, setConfirmStop] = useState(false);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [advanceState, setAdvanceState] = useState<RefreshState>(null);
@@ -95,6 +98,8 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     setRetryState(null);
     setStopState(null);
     setDeleteError(null);
+    setActionError(null);
+    setConfirmStop(false);
   }, [trackId]);
 
   useEffect(() => () => {
@@ -121,6 +126,8 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
             timeout = window.setTimeout(() => void load(true), 500);
           } else {
             setAdvanceState(null);
+            setRetryState(null);
+            setStopState(null);
           }
         } else {
           const nextItems = ((await response.json()) as DailyTrackList).items;
@@ -154,6 +161,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   async function refreshToLatestData() {
     if (!trackId || !track || !dailyTrackCanRefresh(track)) return;
     setAdvanceState("submitting");
+    setActionError(null);
     try {
       const response = await coreFetch(`/api/daily-tracks/${trackId}/refresh`, {
         method: "POST",
@@ -166,13 +174,14 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       setRefreshGeneration((value) => value + 1);
     } catch {
       setAdvanceState(null);
-      setError(true);
+      setActionError("The update could not be queued. Reload the status and try again.");
     }
   }
 
   async function retryBlockedTrack() {
     if (!trackId) return;
     setRetryState("submitting");
+    setActionError(null);
     try {
       const response = await coreFetch(`/api/daily-tracks/${trackId}/retry`, {
         method: "POST",
@@ -185,13 +194,14 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       setRefreshGeneration((value) => value + 1);
     } catch {
       setRetryState(null);
-      setError(true);
+      setActionError("The retry could not be queued. Reload the status and try again.");
     }
   }
 
   async function stopTrack() {
     if (!trackId) return;
     setStopState("submitting");
+    setActionError(null);
     try {
       const response = await coreFetch(`/api/daily-tracks/${trackId}/stop`, {
         method: "POST",
@@ -201,10 +211,11 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
       if (!response.ok) throw new Error("DailyTrack Stop was not accepted");
       await response.json();
       setStopState("accepted");
+      setConfirmStop(false);
       setRefreshGeneration((value) => value + 1);
     } catch {
       setStopState(null);
-      setError(true);
+      setActionError("The track could not be stopped. Please try again.");
     }
   }
 
@@ -239,7 +250,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     }
   }
 
-  if (error) {
+  if (error && track === null && items === null) {
     return (
       <section aria-label="Daily Tracks" className="state-section">
         <h1>DailyTrack</h1>
@@ -249,130 +260,92 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     );
   }
   if (trackId && track === null) {
-    return <section aria-label="Daily Tracks" className="state-section"><p>Loading DailyTrack…</p></section>;
+    return <TrackLoading detail />;
   }
   if (!trackId && items === null) {
-    return <section aria-label="Daily Tracks" className="state-section"><p>Loading DailyTracks…</p></section>;
+    return <TrackLoading detail={false} />;
   }
   if (track) {
-    const analysis: DailyTrackAnalysis = {
-      factor: track.factor,
-      strategy: track.strategy,
-    };
-    return (
-      <section aria-label="Daily Tracks">
-        <header className="page-header">
-          <div>
-            <p className="eyebrow">Persisted daily research</p>
-            <h1>DailyTrack</h1>
-          </div>
-          <div className="page-header-actions">
-            {track.status === "active" ? (
-              <button
-                disabled={!dailyTrackCanRefresh(track) || advanceState !== null}
-                onClick={() => void refreshToLatestData()}
-              >
-                Refresh to latest data
-              </button>
-            ) : null}
-            <button disabled={loadState !== null || deleting} onClick={reloadStatus}>
-              Reload status
-            </button>
-            {track.status === "blocked" ? (
-              <button
-                disabled={retryState === "submitting"}
-                onClick={() => void retryBlockedTrack()}
-              >
-                Retry blocked target
-              </button>
-            ) : null}
-            {track.status === "active" || track.status === "blocked" ? (
-              <button
-                disabled={stopState === "submitting"}
-                onClick={() => void stopTrack()}
-              >
-                Stop DailyTrack
-              </button>
-            ) : null}
-            {track.status === "stopped" ? (
-              <button disabled={deleting} onClick={() => void deleteTrack()}>
-                {deleting ? "Deleting…" : "Delete DailyTrack"}
-              </button>
-            ) : null}
-          </div>
-        </header>
-        {track.status === "active" || track.status === "blocked" ? (
-          <p>Stopping this DailyTrack is irreversible.</p>
-        ) : null}
-        {loadState === "reloading" ? (
-          <p role="status">Reloading DailyTrack status…</p>
-        ) : null}
-        {advanceState === "submitting" ? (
-          <p role="status">Queuing DailyTrack Refresh…</p>
-        ) : null}
-        {advanceState === "accepted" ? (
-          <p role="status">DailyTrack Refresh accepted.</p>
-        ) : null}
-        {retryState === "submitting" ? (
-          <p role="status">Retrying blocked DailyTrack…</p>
-        ) : null}
-        {retryState === "accepted" ? (
-          <p role="status">Retry accepted for the blocked target.</p>
-        ) : null}
-        {stopState === "submitting" ? (
-          <p role="status">Stopping DailyTrack…</p>
-        ) : null}
-        {stopState === "accepted" ? (
-          <p role="status">DailyTrack Stop accepted.</p>
-        ) : null}
-        {track.status === "stopping" ? (
-          <p role="status">DailyTrack is stopping; its execution child is still being confirmed.</p>
-        ) : null}
-        {track.status === "stopped" ? (
-          <p role="status">DailyTrack stopped permanently.</p>
-        ) : null}
-        {deleteError !== null ? <p role="alert">{deleteError}</p> : null}
-        <div className="research-run-facts">
-          <p><strong>Status</strong> {track.status}</p>
-          <p><strong>Data through</strong> {track.data_through_session}</p>
-          <p>
-            <strong>Lag</strong>{" "}
-            {track.lag_sessions === 0
-              ? "Up to date"
-              : `${track.lag_sessions} ${track.lag_sessions === 1 ? "session" : "sessions"} behind`}
-          </p>
-          <p><strong>Strategy session</strong> {track.strategy_session}</p>
-          <TrackingProgressView progress={track.progress} />
-          {track.blocked_reason ? (
-            <p><strong>Blocked</strong> {track.blocked_reason}</p>
-          ) : null}
-        </div>
-
-        <TrackingOriginView origin={track.origin} />
-
-        <DailyTrackAnalysisView analysis={analysis} />
-      </section>
-    );
+    return <>
+      <DailyTrackWorkspace key={track.id} track={track} actions={<>
+        {track.status === "active" ? <button className="primary-action"
+          disabled={!dailyTrackCanRefresh(track) || advanceState !== null}
+          onClick={() => void refreshToLatestData()}>
+          {advanceState === "submitting" ? "Queuing update…" : dailyTrackNeedsPolling(track) ? "Updating…" : "Refresh to latest data"}
+        </button> : null}
+        {track.status === "blocked" ? <button className="primary-action" disabled={retryState !== null}
+          onClick={() => void retryBlockedTrack()}>Retry blocked target</button> : null}
+        <button disabled={loadState !== null || deleting} onClick={reloadStatus}>Reload status</button>
+        <details className="track-manage"><summary>Manage</summary><div>
+          {track.status === "active" || track.status === "blocked" ? <button onClick={() => setConfirmStop(true)}
+            disabled={stopState !== null}>Stop DailyTrack</button> : null}
+          {track.status === "stopped" ? <button disabled={deleting} onClick={() => void deleteTrack()}>
+            {deleting ? "Deleting…" : "Delete DailyTrack"}</button> : null}
+          {track.status === "stopping" ? <span>Stopping DailyTrack…</span> : null}
+        </div></details>
+      </>} notices={<>
+        {error ? <p className="track-action-error" role="alert">Could not reload the track. Showing the last loaded observation; use Reload status to try again.</p> : null}
+        {loadState === "reloading" ? <p className="track-action-notice" role="status">Reloading DailyTrack status…</p> : null}
+        {advanceState === "accepted" ? <p className="track-action-notice" role="status">DailyTrack Refresh accepted. Your current observation remains visible while the update runs.</p> : null}
+        {retryState !== null ? <p className="track-action-notice" role="status">{retryState === "submitting" ? "Retrying blocked DailyTrack…" : "Retry accepted for the blocked target."}</p> : null}
+        {track.status === "stopping" ? <p className="track-action-notice" role="status">DailyTrack is stopping. Waiting for the current execution to finish stopping.</p> : null}
+        {actionError || deleteError ? <p className="track-action-error" role="alert">{actionError || deleteError}</p> : null}
+      </>} />
+      <StopTrackDialog open={confirmStop} submitting={stopState === "submitting"}
+        error={actionError} onCancel={() => setConfirmStop(false)} onConfirm={() => void stopTrack()} />
+    </>;
   }
   return (
-    <section aria-label="Daily Tracks">
-      <h1>Daily Tracks</h1>
-      {items?.length === 0 ? <p>No DailyTracks yet.</p> : null}
-      <ol aria-label="Daily Tracks" className="track-history">
-        {items?.map((item) => (
-          <li key={item.id}>
-            <a href={`/daily-tracks/${item.id}`}><strong>{item.id}</strong></a>
-            <dl>
-              <div><dt>Status</dt><dd>{item.status}</dd></div>
-              <div><dt>Origin session</dt><dd>{item.origin_session}</dd></div>
-              <div><dt>Strategy session</dt><dd>{item.strategy_session}</dd></div>
-              <div><dt>Seed ResearchRun</dt><dd><code>{item.seed_run_id}</code></dd></div>
-            </dl>
-          </li>
-        ))}
-      </ol>
+    <section aria-label="Daily Tracks" className="daily-track-list">
+      <header className="track-header"><div><h1>Daily Tracks</h1>
+        <p>Follow your strategies through each new trading session.</p></div>
+        <button disabled={loadState !== null} onClick={reloadStatus}>Reload status</button></header>
+      {error ? <p className="track-action-error" role="alert">Could not reload your tracks. Showing the last loaded list.</p> : null}
+      {items?.length === 0 ? <div className="track-list-empty"><h2>Your strategy watch starts with a backtest</h2>
+        <p>Open a successful Strategy Backtest and start a Daily Track to follow its holdings and returns.</p>
+        <a className="track-text-link" href="/research-runs">Browse Research Runs</a></div> : (
+        <div className="track-table-scroll" role="region" aria-label="Daily Tracks list" tabIndex={0}>
+          <table className="track-table"><thead><tr><th scope="col">Track</th><th scope="col">Status</th>
+            <th scope="col">Tracking from</th><th scope="col">Last observation</th><th scope="col">Seed ResearchRun</th></tr></thead>
+            <tbody>{items?.map((item) => <tr key={item.id}>
+              <th scope="row"><a href={`/daily-tracks/${item.id}`}>{item.id}</a></th>
+              <td><span className="track-status" data-status={item.status}>{item.status}</span></td>
+              <td><time>{item.origin_session}</time></td><td><time>{item.strategy_session}</time></td>
+              <td><code>{item.seed_run_id}</code></td>
+            </tr>)}</tbody></table>
+        </div>
+      )}
     </section>
   );
+}
+
+function TrackLoading({ detail }: { detail: boolean }) {
+  return <section className="track-loading" aria-label="Daily Tracks" aria-busy="true">
+    <p role="status">{detail ? "Loading DailyTrack…" : "Loading DailyTracks…"}</p>
+    <div aria-hidden="true" className="track-loading-header" />
+    <div aria-hidden="true" className="track-loading-strip"><span /><span /><span /><span /></div>
+    <div aria-hidden="true" className="track-loading-content" />
+  </section>;
+}
+
+function StopTrackDialog({ open, submitting, error, onCancel, onConfirm }: {
+  open: boolean; submitting: boolean; error: string | null; onCancel: () => void; onConfirm: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+  return <dialog ref={dialogRef} className="track-stop-dialog" aria-labelledby="track-stop-title"
+    onCancel={(event) => { event.preventDefault(); if (!submitting) onCancel(); }}>
+    <h2 id="track-stop-title">Stop this DailyTrack?</h2>
+    <p>Stopping is permanent. The last published holdings and performance stay available, but this track cannot receive further updates.</p>
+    {error ? <p role="alert">{error}</p> : null}
+    <footer><button onClick={onCancel} disabled={submitting}>Keep tracking</button>
+      <button className="track-danger-button" onClick={onConfirm} disabled={submitting}>{submitting ? "Stopping…" : "Stop DailyTrack"}</button></footer>
+  </dialog>;
 }
 
 export function TrackingProgressView({

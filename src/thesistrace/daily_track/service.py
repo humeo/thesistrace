@@ -49,6 +49,7 @@ from thesistrace.daily_track.models import (
     DailyTrackFactorResultSection,
     DailyTrackFactorResultSectionInput,
     DailyTrackList,
+    DailyTrackOriginAccount,
     DailyTrackOriginResultSection,
     DailyTrackOriginResultSectionInput,
     DailyTrackPollingDetail,
@@ -71,6 +72,7 @@ from thesistrace.daily_track.models import (
     TrackingOrigin,
     daily_track_polling_retry_after_seconds,
 )
+from thesistrace.daily_track.observation import project_daily_observation
 from thesistrace.daily_track.planning import (
     DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES,
     MAX_CHUNK_SESSION_COUNT,
@@ -2260,6 +2262,19 @@ class DailyTrackService:
                         ),
                     },
                     "blocked_reason": row["blocked_reason"],
+                    "observation": project_daily_observation(
+                        origin=DailyTrackOriginAccount.model_validate({
+                            name: getattr(origin.initial_strategy_state, name)
+                            for name in DailyTrackOriginAccount.model_fields
+                        }),
+                        current=DailyTrackOriginAccount.model_validate({
+                            name: snapshot.track.terminal_strategy_state[name]
+                            for name in DailyTrackOriginAccount.model_fields
+                        }),
+                        observations=[
+                            observations_by_session[session] for session in all_strategy_sessions
+                        ],
+                    ),
                     "factor": factor,
                     "strategy": {
                         "summary": projected_strategy_summary,
