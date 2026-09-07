@@ -1108,8 +1108,11 @@ finish() {
     echo "preserved failing Test project $project_name" >&2
     printf 'cleanup_status=kept\n' >>"$run_metadata"
   else
+    cleanup_started=$(date +%s)
     cleanup_project
     cleanup_status=$?
+    cleanup_finished=$(date +%s)
+    printf 'cleanup_seconds=%s\n' "$((cleanup_finished - cleanup_started))" >>"$run_metadata"
     printf 'cleanup_status=%s\n' "$cleanup_status" >>"$run_metadata"
     if [ "$cleanup_status" -ne 0 ]; then
       echo "cleanup failed for Test project $project_name (status $cleanup_status)" >&2
