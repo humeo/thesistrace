@@ -27,18 +27,13 @@ export function OperatorFinancialRefreshPanel({
   onOperationAccepted?: () => void;
 }>) {
   const [target, setTarget] = useState("");
-  const [idempotencyKey, setIdempotencyKey] = useState(() =>
-    suggestFinancialRefreshKey(new Date())
-  );
   const [confirmation, setConfirmation] = useState<TrackedRequest | null>(null);
   const [pending, setPending] = useState<TrackedRequest | null>(null);
   const [operation, setOperation] = useState<TrackedOperation | null>(null);
   const [pollError, setPollError] = useState(false);
   const [targetError, setTargetError] = useState<string | null>(null);
-  const [keyError, setKeyError] = useState<string | null>(null);
   const [submissionError, setSubmissionError] = useState<string | null>(null);
   const targetInput = useRef<HTMLInputElement | null>(null);
-  const keyInput = useRef<HTMLInputElement | null>(null);
   const trigger = useRef<HTMLButtonElement | null>(null);
   const submissionGeneration = useRef(0);
   const operationGeneration = useRef(0);
@@ -150,20 +145,14 @@ export function OperatorFinancialRefreshPanel({
   }
 
   function review(): void {
+    if (confirmation !== null || pending !== null) return;
+    const idempotencyKey = suggestFinancialRefreshKey(new Date());
     const nextTargetError = isIsoResearchSession(target)
       ? null
       : "Choose a valid Research Session date.";
-    const nextKeyError = isMarketRefreshIdempotencyKey(idempotencyKey)
-      ? null
-      : "Use 1–512 characters with no boundary whitespace, NUL, or unpaired surrogate.";
     setTargetError(nextTargetError);
-    setKeyError(nextKeyError);
     if (nextTargetError !== null) {
       window.requestAnimationFrame(() => targetInput.current?.focus());
-      return;
-    }
-    if (nextKeyError !== null) {
-      window.requestAnimationFrame(() => keyInput.current?.focus());
       return;
     }
     setPollError(false);
@@ -187,10 +176,8 @@ export function OperatorFinancialRefreshPanel({
     setPending(null);
     setSubmissionError(null);
     if (code === "conflict" || !isMarketRefreshIdempotencyKey(tracked.request.idempotencyKey)) {
-      setKeyError(code === "conflict"
-        ? "This key is already bound to a different Data Refresh target."
-        : "Use 1–512 characters with no boundary whitespace, NUL, or unpaired surrogate.");
-      focusAfterCommit.current = keyInput.current;
+      setSubmissionError("Unable to create this refresh. Review the request again to start a new submission.");
+      focusAfterCommit.current = trigger.current;
     } else {
       setTargetError("Choose a valid Research Session date.");
       focusAfterCommit.current = targetInput.current;
@@ -263,34 +250,6 @@ export function OperatorFinancialRefreshPanel({
               </small>
             )}
           </div>
-          <label>
-            <span>Idempotency key</span>
-            <input
-              aria-describedby={keyError === null
-                ? "operator-financial-key-help"
-                : "operator-financial-key-help operator-financial-key-error"}
-              aria-invalid={keyError === null ? undefined : true}
-              autoComplete="off"
-              disabled={confirmation !== null || pending !== null}
-              onChange={(event) => {
-                setIdempotencyKey(event.target.value);
-                setKeyError(null);
-              }}
-              ref={keyInput}
-              required
-              spellCheck={false}
-              type="text"
-              value={idempotencyKey}
-            />
-            <small id="operator-financial-key-help">
-              The suggestion is editable and the exact accepted key stays visible.
-            </small>
-            {keyError === null ? null : (
-              <small className="operator-field-error" id="operator-financial-key-error" role="alert">
-                {keyError}
-              </small>
-            )}
-          </label>
           {submissionError === null ? null : (
             <p className="inline-status inline-status-error operator-refresh-form-error" role="alert">
               {submissionError}
@@ -678,5 +637,5 @@ function submissionFailureIsUncertain(reason: unknown): boolean {
 }
 
 export function suggestFinancialRefreshKey(now: Date): string {
-  return `financial-${now.toISOString().replace(/\.\d{3}Z$/, "Z").replaceAll("-", "").replaceAll(":", "")}`;
+  return `financial-${now.toISOString().replace(/\.\d{3}Z$/, "Z").replaceAll("-", "").replaceAll(":", "")}-${crypto.randomUUID()}`;
 }

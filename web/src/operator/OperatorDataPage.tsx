@@ -38,9 +38,6 @@ const noFieldErrors: MarketRefreshFieldErrors = {
 
 export function OperatorDataPage() {
   const [asOf, setAsOf] = useState("");
-  const [idempotencyKey, setIdempotencyKey] = useState(() =>
-    suggestMarketRefreshKey(new Date())
-  );
   const [confirmation, setConfirmation] = useState<TrackedMarketRefreshRequest | null>(null);
   const [pendingSubmission, setPendingSubmission] = useState<TrackedMarketRefreshRequest | null>(null);
   const [operation, setOperation] = useState<TrackedMarketRefreshOperation | null>(null);
@@ -50,7 +47,6 @@ export function OperatorDataPage() {
   const [fieldErrors, setFieldErrors] = useState(noFieldErrors);
   const [datasetStatusReloadGeneration, setDatasetStatusReloadGeneration] = useState(0);
   const asOfInput = useRef<HTMLInputElement | null>(null);
-  const idempotencyKeyInput = useRef<HTMLInputElement | null>(null);
   const pendingFieldFocus = useRef<keyof MarketRefreshFieldErrors | null>(null);
   const activeOperationGeneration = useRef(0);
   const activeSubmissionGeneration = useRef(0);
@@ -69,9 +65,7 @@ export function OperatorDataPage() {
       || pendingSubmission !== null
       || pendingFieldFocus.current === null
     ) return;
-    const target = pendingFieldFocus.current === "asOf"
-      ? asOfInput.current
-      : idempotencyKeyInput.current;
+    const target = asOfInput.current;
     if (target === null) return;
     pendingFieldFocus.current = null;
     target.focus();
@@ -202,6 +196,8 @@ export function OperatorDataPage() {
   }
 
   function reviewRefresh(): void {
+    if (confirmation !== null || pendingSubmission !== null) return;
+    const idempotencyKey = suggestMarketRefreshKey(new Date());
     const errors = marketRefreshFieldErrors(asOf, idempotencyKey);
     setFieldErrors(errors);
     const invalid = errors.asOf !== null
@@ -240,13 +236,8 @@ export function OperatorDataPage() {
       code === "conflict"
       || !isMarketRefreshIdempotencyKey(tracked.request.idempotencyKey)
     ) {
-      pendingFieldFocus.current = "idempotencyKey";
-      setFieldErrors({
-        asOf: null,
-        idempotencyKey: code === "conflict"
-          ? "This key is already bound to a different Market target."
-          : marketRefreshKeyError,
-      });
+      setSubmissionError("Unable to create this refresh. Review the request again to start a new submission.");
+      pendingFieldFocus.current = "asOf";
       return;
     }
     pendingFieldFocus.current = "asOf";
@@ -332,34 +323,6 @@ export function OperatorDataPage() {
                 </small>
               )}
             </div>
-            <label>
-              <span>Idempotency key</span>
-              <input
-                aria-describedby={fieldErrors.idempotencyKey === null
-                  ? "operator-market-key-help"
-                  : "operator-market-key-help operator-market-key-error"}
-                aria-invalid={fieldErrors.idempotencyKey === null ? undefined : true}
-                autoComplete="off"
-                disabled={confirmation !== null || pendingSubmission !== null}
-                onChange={(event) => {
-                  setIdempotencyKey(event.target.value);
-                  setFieldErrors((current) => ({ ...current, idempotencyKey: null }));
-                }}
-                required
-                ref={idempotencyKeyInput}
-                spellCheck={false}
-                type="text"
-                value={idempotencyKey}
-              />
-              <small id="operator-market-key-help">
-                The suggestion is editable; keep it to safely replay the same request (up to 512 characters).
-              </small>
-              {fieldErrors.idempotencyKey === null ? null : (
-                <small className="operator-field-error" id="operator-market-key-error" role="alert">
-                  {fieldErrors.idempotencyKey}
-                </small>
-              )}
-            </label>
             {submissionError === null ? null : (
               <p className="inline-status inline-status-error operator-refresh-form-error" role="alert">
                 {submissionError}
@@ -582,7 +545,7 @@ function isTerminal(operation: MarketRefreshOperation): boolean {
 }
 
 export function suggestMarketRefreshKey(now: Date): string {
-  return `market-${now.toISOString().replace(/\.\d{3}Z$/, "Z").replaceAll("-", "").replaceAll(":", "")}`;
+  return `market-${now.toISOString().replace(/\.\d{3}Z$/, "Z").replaceAll("-", "").replaceAll(":", "")}-${crypto.randomUUID()}`;
 }
 
 export function marketRefreshAsOfForDate(date: string): string {

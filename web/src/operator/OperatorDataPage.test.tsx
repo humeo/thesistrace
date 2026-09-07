@@ -19,12 +19,12 @@ test("renders the focused forms without redundant Operator copy", () => {
   expect(markup).toContain("Industry Refresh");
   expect(markup).toContain(">As-of<");
   expect(markup).toContain("Observation-through Research Session");
-  expect(markup).toContain('type="text"');
+  expect(markup).not.toContain('type="text"');
   expect(markup).toContain('type="date"');
   expect(markup).not.toContain('type="datetime-local"');
   expect(markup).toContain('id="operator-market-as-of"');
   expect(markup).toContain("Submitted at 18:00 Asia/Shanghai (+08:00)");
-  expect(markup).toContain(">Idempotency key<");
+  expect(markup).not.toContain(">Idempotency key<");
   expect(markup).not.toContain('<p class="eyebrow">Operator Console</p>');
   expect(markup).not.toContain(
     "Queue private refresh work and follow the exact operation through publication.",
@@ -47,13 +47,13 @@ test("maps a calendar date to an explicit post-close Shanghai timestamp", () => 
   expect(marketRefreshAsOfForDate("")).toBe("");
 });
 
-test("suggests a stable kind-and-time key without selecting an as-of target", () => {
+test("generates a unique kind-and-time key without selecting an as-of target", () => {
   expect(
     suggestMarketRefreshKey(new Date("2026-08-30T05:06:07.000Z")),
-  ).toBe("market-20260830T050607Z");
+  ).toEqual(expect.stringMatching(/^market-20260830T050607Z-[0-9a-f-]{36}$/));
   expect(
     suggestMarketRefreshKey(new Date("2026-08-30T05:06:07.996Z")),
-  ).toBe("market-20260830T050607Z");
+  ).toEqual(expect.stringMatching(/^market-20260830T050607Z-[0-9a-f-]{36}$/));
 });
 
 test("keeps the last known running state honest when status polling fails", () => {
