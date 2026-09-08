@@ -2,6 +2,12 @@
 - Do not preserve backward compatibility. Remove obsolete paths instead of adding compatibility layers, fallbacks, or migrations.
 - ** 在开发过程中永远不要fallback，迁移和兼容 **
 
+## Deployment Branch
+
+- `main` 是唯一开发与集成基准。所有功能、修复、部署配置和测试修改必须先进入 `main`。
+- `codex/contabo-deployment` 只允许从 `main` 合并更新，禁止合并其他分支、直接开发或通过 cherry-pick 引入独立修改。
+- 发布流程：验证并提交到 `main` → 从 `main` 合并到部署分支 → 推送部署分支 → 执行服务器更新。不得维护与 `main` 分叉的另一套实现。
+
 ## Browser Operations
 
 For interactive browser inspection and acceptance, prefer the available in-app browser tools. Use the repository's Playwright tests for repeatable browser regression checks.
