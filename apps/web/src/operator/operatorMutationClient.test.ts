@@ -61,7 +61,7 @@ describe("Operator mutation client", () => {
     expect(isIsoResearchSession("2026-02-30")).toBe(false);
   });
 
-  it("sends the password only to confirmation and forwards only the opaque proof", async () => {
+  it("sends the otp only to confirmation and forwards only the opaque proof", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(Response.json({
@@ -75,12 +75,12 @@ describe("Operator mutation client", () => {
       }));
     vi.stubGlobal("fetch", fetchMock);
     const controller = new AbortController();
-    const password = "correct-horse-battery-staple";
+    const otp = "123456";
 
     const confirmation = await confirmOperatorProof(
       "issue",
       "researcher@example.com",
-      password,
+      otp,
       controller.signal,
     );
     await submitInvitationMutation(
@@ -97,7 +97,7 @@ describe("Operator mutation client", () => {
         body: JSON.stringify({
           email: "researcher@example.com",
           operation: "invitation.issue",
-          password,
+          otp,
         }),
       }),
     );
@@ -108,7 +108,7 @@ describe("Operator mutation client", () => {
         body: JSON.stringify({ email: "researcher@example.com", proof }),
       }),
     );
-    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(password);
+    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(otp);
   });
 
   it("rejects malformed success and maps sanitized proof errors", async () => {
@@ -119,7 +119,7 @@ describe("Operator mutation client", () => {
       confirmOperatorProof(
         "reissue",
         "researcher@example.com",
-        "correct-horse-battery-staple",
+        "123456",
         new AbortController().signal,
       ),
     ).rejects.toEqual(new OperatorMutationError("unavailable"));
@@ -137,9 +137,9 @@ describe("Operator mutation client", () => {
     ).rejects.toEqual(new OperatorMutationError("invalid-proof"));
   });
 
-  it("binds Session revocation to one Researcher and excludes the password from mutation", async () => {
+  it("binds Session revocation to one Researcher and excludes the otp from mutation", async () => {
     const researcherId = "00000000-0000-4000-8000-000000000002";
-    const password = "correct-horse-battery-staple";
+    const otp = "123456";
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(Response.json({
@@ -156,7 +156,7 @@ describe("Operator mutation client", () => {
 
     const confirmation = await confirmSessionRevocationProof(
       researcherId,
-      password,
+      otp,
       signal,
     );
     await expect(
@@ -169,7 +169,7 @@ describe("Operator mutation client", () => {
       expect.objectContaining({
         body: JSON.stringify({
           operation: "researcher.sessions.revoke",
-          password,
+          otp,
           researcher_id: researcherId,
         }),
       }),
@@ -181,7 +181,7 @@ describe("Operator mutation client", () => {
         body: JSON.stringify({ proof, researcher_id: researcherId }),
       }),
     );
-    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(password);
+    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(otp);
   });
 
   it("rejects malformed Session results and maps protected and stale targets", async () => {
@@ -214,8 +214,8 @@ describe("Operator mutation client", () => {
     }
   });
 
-  it("binds a Market proof to the exact free-form target and key without forwarding password", async () => {
-    const password = "correct-horse-battery-staple";
+  it("binds a Market proof to the exact free-form target and key without forwarding otp", async () => {
+    const otp = "123456";
     const request = {
       asOf: "2026-08-11T18:00:00+08:00",
       idempotencyKey: "market-20260811T180000+0800",
@@ -243,7 +243,7 @@ describe("Operator mutation client", () => {
 
     const confirmation = await confirmMarketRefreshProof(
       request,
-      password,
+      otp,
       signal,
     );
     const operation = await submitMarketRefresh(
@@ -265,7 +265,7 @@ describe("Operator mutation client", () => {
           as_of: request.asOf,
           idempotency_key: request.idempotencyKey,
           operation: "data.refresh.market.submit",
-          password,
+          otp,
         }),
       }),
     );
@@ -280,11 +280,11 @@ describe("Operator mutation client", () => {
         }),
       }),
     );
-    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(password);
+    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(otp);
   });
 
   it("binds a Financial proof and parses the safe degraded receipt", async () => {
-    const password = "correct-horse-battery-staple";
+    const otp = "123456";
     const request = {
       idempotencyKey: "financial-20260814-custom",
       observationThroughSession: "2026-08-14",
@@ -322,7 +322,7 @@ describe("Operator mutation client", () => {
 
     const confirmation = await confirmFinancialRefreshProof(
       request,
-      password,
+      otp,
       signal,
     );
     const submitted = await submitFinancialRefresh(
@@ -346,7 +346,7 @@ describe("Operator mutation client", () => {
           idempotency_key: request.idempotencyKey,
           observation_through_session: request.observationThroughSession,
           operation: "data.refresh.financial.submit",
-          password,
+          otp,
         }),
       }),
     );
@@ -361,11 +361,11 @@ describe("Operator mutation client", () => {
         }),
       }),
     );
-    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(password);
+    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(otp);
   });
 
   it("binds an Industry proof and parses the safe no-change receipt", async () => {
-    const password = "correct-horse-battery-staple";
+    const otp = "123456";
     const request = {
       idempotencyKey: "industry-20260814-custom",
       observationThroughSession: "2026-08-14",
@@ -395,7 +395,7 @@ describe("Operator mutation client", () => {
 
     const confirmation = await confirmIndustryRefreshProof(
       request,
-      password,
+      otp,
       signal,
     );
     const submitted = await submitIndustryRefresh(
@@ -419,7 +419,7 @@ describe("Operator mutation client", () => {
           idempotency_key: request.idempotencyKey,
           observation_through_session: request.observationThroughSession,
           operation: "data.refresh.industry.submit",
-          password,
+          otp,
         }),
       }),
     );
@@ -434,7 +434,7 @@ describe("Operator mutation client", () => {
         }),
       }),
     );
-    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(password);
+    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(otp);
   });
 
   it("round-trips a Python-valid boundary FEFF Market key", async () => {
@@ -472,7 +472,7 @@ describe("Operator mutation client", () => {
   });
 
   it("binds Cancel and Retry proofs to exact immutable receipt actions", async () => {
-    const password = "correct-horse-battery-staple";
+    const otp = "123456";
     const cancel = {
       action: "cancel" as const,
       kind: "market" as const,
@@ -515,7 +515,7 @@ describe("Operator mutation client", () => {
 
     const cancelProof = await confirmDataRefreshActionProof(
       cancel,
-      password,
+      otp,
       signal,
     );
     await expect(
@@ -524,7 +524,7 @@ describe("Operator mutation client", () => {
       idempotencyKey: cancel.sourceIdempotencyKey,
       status: "cancelled",
     });
-    const retryProof = await confirmDataRefreshActionProof(retry, password, signal);
+    const retryProof = await confirmDataRefreshActionProof(retry, otp, signal);
     await expect(
       submitDataRefreshAction(retry, retryProof.proof, signal),
     ).resolves.toMatchObject({
@@ -539,7 +539,7 @@ describe("Operator mutation client", () => {
         body: JSON.stringify({
           kind: cancel.kind,
           operation: "data.refresh.cancel",
-          password,
+          otp,
           source_idempotency_key: cancel.sourceIdempotencyKey,
           target: cancel.target,
         }),
@@ -565,7 +565,7 @@ describe("Operator mutation client", () => {
           kind: retry.kind,
           new_idempotency_key: retry.newIdempotencyKey,
           operation: "data.refresh.retry",
-          password,
+          otp,
           source_idempotency_key: retry.sourceIdempotencyKey,
           target: retry.target,
         }),
@@ -584,8 +584,8 @@ describe("Operator mutation client", () => {
         }),
       }),
     );
-    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(password);
-    expect(JSON.stringify(fetchMock.mock.calls[3])).not.toContain(password);
+    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(otp);
+    expect(JSON.stringify(fetchMock.mock.calls[3])).not.toContain(otp);
   });
 
   it.each([

@@ -209,6 +209,30 @@ export async function emailToken(email: string, path: string): Promise<string> {
   throw new Error(`Invitation email was not delivered; observed ${lastEmailCount} email(s)`);
 }
 
+export async function emailCode(email: string): Promise<string> {
+  const payload = requestResendFixture("GET");
+  if (!isRecord(payload) || !Array.isArray(payload.emails)) throw new Error("Invalid mail fixture");
+  for (const candidate of [...payload.emails].reverse()) {
+    if (!isRecord(candidate) || !Array.isArray(candidate.to) || !candidate.to.includes(email) || typeof candidate.text !== "string") continue;
+    const code = candidate.text.match(/\b[0-9]{6}\b/);
+    if (code) return code[0];
+  }
+  throw new Error("Verification code was not delivered");
+}
+
+export async function requestOperatorCode(page: Page): Promise<string> {
+  const sessionResponse = await page.request.get("/api/auth/get-session");
+  const session = await sessionResponse.json();
+  const sent = await page.request.post("/api/auth/operator/proofs/send-code", {data:{},headers:sameOriginHeaders()});
+  expect(sent.status()).toBe(200);
+  return emailCode(session.user.email);
+}
+
+export async function fillOperatorCode(input: Locator, invalid?: string): Promise<void> {
+  const valid = await requestOperatorCode(input.page());
+  await input.fill(invalid ? (valid === "000000" ? "111111" : "000000") : valid);
+}
+
 function requestResendFixture(method: "DELETE" | "GET"): unknown {
   return authFixtureRequest("/__test/resend-emails", { method });
 }

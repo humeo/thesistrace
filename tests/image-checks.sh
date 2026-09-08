@@ -106,9 +106,9 @@ verify_caddy_single_origin() {
     --header 'Content-Type: application/json' \
     --header 'Cookie: observability=observability-request-canary' \
     --request POST \
-    --data '{"email":"observability-request-canary@example.test","password":"observability-request-canary"}' \
+    --data '{"email":"observability-request-canary@example.test","otp":"000000"}' \
     --output /dev/null --write-out '%{http_code}' \
-    "$public_origin/api/auth/sign-in/email?token=observability-request-canary")
+    "$public_origin/api/auth/sign-in/email-otp?token=observability-request-canary")
   test "$auth_canary_status" = 400 || test "$auth_canary_status" = 401
 
   for private_path in \

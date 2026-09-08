@@ -282,7 +282,7 @@ describe("Operator Dataset status", () => {
     expect(markup).not.toContain("cannot start");
   });
 
-  it("shows exact Cancel facts and effect before asking for the password", () => {
+  it("shows exact Cancel facts and effect before asking for the otp", () => {
     const target = operation({
       idempotencyKey: "market-cancel-source",
       kind: "market",
@@ -303,7 +303,7 @@ describe("Operator Dataset status", () => {
     expect(markup).toContain("2026-08-30T08:00:00Z");
     expect(markup).toContain("market-cancel-source");
     expect(markup).toContain("The Worker will never claim this queued receipt");
-    expect(markup.indexOf("Effect")).toBeLessThan(markup.indexOf("Current password"));
+    expect(markup.indexOf("Effect")).toBeLessThan(markup.indexOf("Verification code"));
     expect(markup).not.toContain("New idempotency key");
   });
 

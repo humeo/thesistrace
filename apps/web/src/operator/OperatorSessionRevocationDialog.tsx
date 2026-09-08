@@ -1,3 +1,4 @@
+import { OperatorCodeField } from "./OperatorCodeField";
 import { useEffect, useRef, useState } from "react";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
@@ -29,7 +30,7 @@ export function OperatorSessionRevocationDialog({
 }>) {
   const dialog = useRef<HTMLDialogElement | null>(null);
   const request = useRef<AbortController | null>(null);
-  const [password, setPassword] = useState("");
+  const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -54,10 +55,10 @@ export function OperatorSessionRevocationDialog({
     try {
       const confirmed = await confirmSessionRevocationProof(
         target.researcherId,
-        password,
+        otp,
         controller.signal,
       );
-      setPassword("");
+      setOtp("");
       const result = await submitSessionRevocation(
         target.researcherId,
         confirmed.proof,
@@ -68,7 +69,7 @@ export function OperatorSessionRevocationDialog({
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       setError(sessionRevocationMessage(reason));
     } finally {
-      setPassword("");
+      setOtp("");
       request.current = null;
       setSubmitting(false);
     }
@@ -122,20 +123,7 @@ export function OperatorSessionRevocationDialog({
             Researcher remains active and can sign in again.
           </p>
         </div>
-        <label className="operator-confirmation-field">
-          <span>Current password</span>
-          <input
-            autoComplete="current-password"
-            autoFocus
-            disabled={submitting}
-            maxLength={128}
-            minLength={12}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-            type="password"
-            value={password}
-          />
-        </label>
+        <OperatorCodeField value={otp} onChange={setOtp} disabled={submitting} />
         {error === null ? null : (
           <p className="inline-status inline-status-error" role="alert">{error}</p>
         )}
@@ -163,7 +151,7 @@ function sessionRevocationMessage(reason: unknown): string {
   if (!(reason instanceof OperatorMutationError)) {
     return "Login Sessions could not be revoked. Try again.";
   }
-  if (reason.code === "invalid-password") return "Current password is incorrect.";
+  if (reason.code === "invalid-otp") return "The verification code is incorrect or has expired.";
   if (reason.code === "invalid-proof") {
     return "Confirmation expired or was already used. Submit again.";
   }

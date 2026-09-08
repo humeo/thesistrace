@@ -43,7 +43,7 @@ export class AuthEventRecorder {
   }
 
   async #record(snapshot: RequestSnapshot, succeeded: boolean): Promise<void> {
-    if (snapshot.path === "/api/auth/sign-in/email" && snapshot.email !== undefined) {
+    if (snapshot.path === "/api/auth/sign-in/email-otp" && snapshot.email !== undefined) {
       await this.#recordEmailIdentity(
         snapshot.email,
         succeeded ? "sign_in_succeeded" : "sign_in_failed",
@@ -166,7 +166,7 @@ async function requestSnapshot(
 ): Promise<RequestSnapshot> {
   const path = new URL(request.url).pathname;
   if (
-    path === "/api/auth/sign-in/email" ||
+    path === "/api/auth/sign-in/email-otp" ||
     path === "/api/auth/request-password-reset"
   ) {
     const body = await jsonBody(request);

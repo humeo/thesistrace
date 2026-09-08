@@ -5,7 +5,7 @@ import type { Locator, Page, Route } from "@playwright/test";
 import {
   createResearcher,
   expect,
-  fillPasswordInput,
+  emailCode,
   restoreResearcherSession,
   sameOriginHeaders,
   securityTest,
@@ -64,9 +64,10 @@ securityTest("Chat preserves returnTo and opens after login without a document r
     if (request.resourceType() === "document") documentRequests.push(request.url());
   });
   await page.getByLabel("Email").fill(email);
-  await fillPasswordInput(page.getByLabel("Password"));
+  await page.getByRole("button", {name: "Continue with email"}).click();
+  await page.getByLabel("Verification code").fill(await emailCode(email));
   documentRequests.length = 0;
-  await page.getByRole("button", { name: "Log in" }).click();
+  await page.getByRole("button", { name: "Verify and continue" }).click();
 
   await expect(page).toHaveURL(/\/chat$/);
   await expect(

@@ -1,3 +1,4 @@
+import { OperatorCodeField } from "./OperatorCodeField";
 import { useEffect, useRef, useState } from "react";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
@@ -26,7 +27,7 @@ export function OperatorInvitationDialog({
   const dialog = useRef<HTMLDialogElement | null>(null);
   const request = useRef<AbortController | null>(null);
   const [email, setEmail] = useState(initialEmail);
-  const [password, setPassword] = useState("");
+  const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const canonicalTarget = email.trim().toLowerCase();
@@ -54,10 +55,10 @@ export function OperatorInvitationDialog({
       const confirmed = await confirmOperatorProof(
         operation,
         email,
-        password,
+        otp,
         controller.signal,
       );
-      setPassword("");
+      setOtp("");
       const result = await submitInvitationMutation(
         operation,
         email,
@@ -69,7 +70,7 @@ export function OperatorInvitationDialog({
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       setError(operatorMutationMessage(reason, reissue));
     } finally {
-      setPassword("");
+      setOtp("");
       request.current = null;
       setSubmitting(false);
     }
@@ -96,7 +97,7 @@ export function OperatorInvitationDialog({
         }}
       >
         <header>
-          <p className="eyebrow">Password confirmation</p>
+          <p className="eyebrow">Email confirmation</p>
           <h2 id="operator-invitation-title">
             {reissue ? "Reissue Invitation?" : "Issue Invitation?"}
           </h2>
@@ -126,22 +127,10 @@ export function OperatorInvitationDialog({
           <p>
             {reissue
               ? "A new link will be sent. The old link becomes invalid only after delivery succeeds."
-              : "A 48-hour Invitation will be delivered using the existing invite-only rules."}
+              : "An optional 48-hour invitation link will be sent to this email."}
           </p>
         </div>
-        <label className="operator-confirmation-field">
-          <span>Current password</span>
-          <input
-            autoComplete="current-password"
-            disabled={submitting}
-            maxLength={128}
-            minLength={12}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-            type="password"
-            value={password}
-          />
-        </label>
+        <OperatorCodeField autoFocus={false} value={otp} onChange={setOtp} disabled={submitting} />
         {error === null ? null : (
           <p className="inline-status inline-status-error" role="alert">{error}</p>
         )}
@@ -171,7 +160,7 @@ function operatorMutationMessage(reason: unknown, reissue: boolean): string {
   if (!(reason instanceof OperatorMutationError)) {
     return "Invitation could not be completed. Try again.";
   }
-  if (reason.code === "invalid-password") return "Current password is incorrect.";
+  if (reason.code === "invalid-otp") return "The verification code is incorrect or has expired.";
   if (reason.code === "invalid-proof") {
     return "Confirmation expired or was already used. Submit again.";
   }

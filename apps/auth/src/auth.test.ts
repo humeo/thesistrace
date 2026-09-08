@@ -61,7 +61,7 @@ describe("ThesisTrace Better Auth configuration", () => {
     }
   });
 
-  it("uses only database-backed email/password and revocable Sessions", async () => {
+  it("uses database-backed email OTP and revocable Sessions", async () => {
     const pool = new Pool({ connectionString: settings.databaseUrl });
     try {
       const dependencies = lifecycle();
@@ -70,7 +70,7 @@ describe("ThesisTrace Better Auth configuration", () => {
       expect(auth.options.baseURL).toBe(settings.publicOrigin);
       expect(auth.options.basePath).toBe("/api/auth");
       expect(auth.options.trustedOrigins).toEqual([settings.publicOrigin]);
-      expect(auth.options.plugins?.map((plugin) => plugin.id)).toEqual(["oauth-provider", "jwt"]);
+      expect(auth.options.plugins?.map((plugin) => plugin.id)).toEqual(["email-otp", "oauth-provider", "jwt"]);
       expect(auth.options.emailAndPassword).toMatchObject({
         enabled: true,
         maxPasswordLength: 128,
@@ -157,9 +157,9 @@ describe("ThesisTrace Better Auth configuration", () => {
         updatedAt: new Date("2026-08-28T00:00:00.000Z"),
       };
 
-      expect(await before?.(user)).toBe(false);
+      expect(await before?.(user, null)).toBe(false);
       await invitationAdmission.run("researcher.label@example.com", async () => {
-        expect(await before?.(user)).toMatchObject({
+        expect(await before?.(user, null)).toMatchObject({
           data: {
             active: true,
             email: "researcher.label@example.com",
@@ -169,7 +169,7 @@ describe("ThesisTrace Better Auth configuration", () => {
         });
       });
       await invitationAdmission.run("other@example.com", async () => {
-        expect(await before?.(user)).toBe(false);
+        expect(await before?.(user, null)).toBe(false);
       });
     } finally {
       await pool.end();
@@ -223,7 +223,7 @@ describe("ThesisTrace Better Auth configuration", () => {
         userId: "00000000-0000-4000-8000-000000000001",
       };
 
-      expect(await before?.(session)).toBe(false);
+      await expect(before?.(session)).rejects.toMatchObject({status: "FORBIDDEN"});
       expect(isResearcherActive).toHaveBeenCalledWith(session.userId);
     } finally {
       await pool.end();

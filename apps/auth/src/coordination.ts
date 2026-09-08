@@ -381,7 +381,7 @@ async function credentialRequestContext(
 }> | undefined> {
   const path = new URL(request.url).pathname;
   if (
-    path === "/api/auth/sign-in/email"
+    (path === "/api/auth/sign-in/email" || path === "/api/auth/sign-in/email-otp" || path === "/api/auth/email-otp/send-verification-otp")
     || path === "/api/auth/request-password-reset"
   ) {
     const body = await jsonBody(request);

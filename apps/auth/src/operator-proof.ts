@@ -1,6 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
 
-import { verifyPassword } from "better-auth/crypto";
 import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
 
@@ -128,12 +127,12 @@ export class OperatorProofNotFoundError extends Error {
   }
 }
 
-export class OperatorPasswordInvalidError extends Error {
-  readonly code = "OPERATOR_PASSWORD_INVALID";
+export class OperatorCodeInvalidError extends Error {
+  readonly code = "OPERATOR_CODE_INVALID";
 
   constructor() {
-    super("OPERATOR_PASSWORD_INVALID");
-    this.name = "OperatorPasswordInvalidError";
+    super("OPERATOR_CODE_INVALID");
+    this.name = "OperatorCodeInvalidError";
   }
 }
 
@@ -150,6 +149,7 @@ type OperatorProofDependencies = Readonly<{
   clock?: () => Date;
   createId?: () => string;
   pool: Pool;
+  verifyCode?: (principal: OperatorPrincipal, otp: string) => Promise<void>;
   randomBytes?: (size: number) => Buffer;
 }>;
 
@@ -167,12 +167,14 @@ type SessionProofRow = ProofRow & Readonly<{
 }>;
 
 export class OperatorProofService {
+  readonly #verifyCode: OperatorProofDependencies["verifyCode"];
   readonly #clock: () => Date;
   readonly #createId: () => string;
   readonly #pool: Pool;
   readonly #randomBytes: (size: number) => Buffer;
 
   constructor(dependencies: OperatorProofDependencies) {
+    this.#verifyCode = dependencies.verifyCode;
     this.#clock = dependencies.clock ?? (() => new Date());
     this.#createId = dependencies.createId ?? randomUUID;
     this.#pool = dependencies.pool;
@@ -181,10 +183,12 @@ export class OperatorProofService {
 
   async confirm(
     principal: OperatorPrincipal,
-    input: OperatorProofRequest & Readonly<{ password: string }>,
+    input: OperatorProofRequest & Readonly<{ otp: string }>,
   ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
     assertPrincipal(principal);
     const request = normalizeProofRequest(input);
+    if (!this.#verifyCode) throw new OperatorCodeInvalidError();
+    await this.#verifyCode(principal, input.otp);
     const proofId = this.#createId();
     const proof = createOpaqueToken(proofId, this.#randomBytes);
     const parsedProof = parseOpaqueToken(proof);
@@ -196,27 +200,21 @@ export class OperatorProofService {
       await lockAuthMutationShared(client);
       await lockOperatorAssignment(client);
       const credential = await client.query<{
-        password: string;
         session_expires_at: Date;
       }>(
         `
           SELECT
-            credential.password,
             login_session."expiresAt" AS session_expires_at
           FROM auth.operator_assignment AS assignment
           JOIN auth."user" AS researcher
             ON researcher.id = assignment.researcher_id
           JOIN auth."session" AS login_session
             ON login_session."userId" = researcher.id
-          JOIN auth."account" AS credential
-            ON credential."userId" = researcher.id
-           AND credential."providerId" = 'credential'
-           AND credential.password IS NOT NULL
           WHERE assignment.singleton IS TRUE
             AND assignment.researcher_id = $1
             AND researcher.active IS TRUE
             AND login_session.id = $2
-          FOR UPDATE OF assignment, researcher, login_session, credential
+          FOR UPDATE OF assignment, researcher, login_session
         `,
         [principal.researcherId, principal.sessionId],
       );
@@ -227,12 +225,6 @@ export class OperatorProofService {
         || credentialRow.session_expires_at.getTime() <= authorizationAt.getTime()
       ) {
         throw new OperatorProofNotFoundError();
-      }
-      if (!(await verifyPassword({
-        hash: credentialRow.password,
-        password: input.password,
-      }))) {
-        throw new OperatorPasswordInvalidError();
       }
       const issuedAt = this.#clock();
       if (credentialRow.session_expires_at.getTime() <= issuedAt.getTime()) {

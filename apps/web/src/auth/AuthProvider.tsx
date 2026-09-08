@@ -30,12 +30,10 @@ type AuthResult = Readonly<{ ok: true }> | Readonly<{ ok: false; message: string
 type AuthContextValue = Readonly<{
   state: AuthState;
   acceptInvitation: (token: string, password: string) => Promise<AuthResult>;
-  changePassword: (currentPassword: string, newPassword: string) => Promise<AuthResult>;
   inspectInvitation: (token: string) => Promise<Readonly<{ email: string }> | null>;
-  requestPasswordReset: (email: string) => Promise<AuthResult>;
-  resetPassword: (token: string, newPassword: string) => Promise<AuthResult>;
   retry: () => Promise<void>;
-  signIn: (email: string, password: string) => Promise<AuthResult>;
+  sendCode: (email: string) => Promise<AuthResult>;
+  signIn: (email: string, otp: string) => Promise<AuthResult>;
   signOut: () => Promise<AuthResult>;
 }>;
 
@@ -142,11 +140,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [refreshSession]);
 
-  const signIn = useCallback(async (email: string, password: string): Promise<AuthResult> => {
+  const signIn = useCallback(async (email: string, otp: string): Promise<AuthResult> => {
     try {
-      const result = await authClient.signIn.email({ email, password });
-      if (result.error !== null) return failure("Email or password is incorrect.");
-      if (result.data?.redirect && result.data.url) {
+      const result = await authClient.signIn.emailOtp({ email: email.trim().toLowerCase(), otp });
+      if (result.error !== null) {
+        if (result.error.code === "ACCOUNT_INACTIVE") return failure("This account is inactive. Please contact the operator.");
+        if (result.error.status === 429) return failure("Too many attempts. Please wait before trying again.");
+        if (result.error.status >= 500) return failure("Authentication is temporarily unavailable.");
+        return failure("The code is incorrect or has expired. Please request a new code.");
+      }
+      if (isOAuthRedirect(result.data)) {
         // Better Auth owns the OAuth redirect; do not race it with workspace bootstrap.
         return { ok: true };
       }
@@ -157,6 +160,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return failure("Authentication is temporarily unavailable.");
     }
   }, [refreshSession]);
+
+  const sendCode = useCallback(async (email: string): Promise<AuthResult> => {
+    try {
+      const result = await authJson("/api/auth/email-otp/send-verification-otp", {email: email.trim().toLowerCase(), type: "sign-in"});
+      if (!result.ok) return failure(result.status === 429 ? "Too many requests. Please wait before trying again." : "The verification code could not be sent. Please try again.");
+      return {ok: true};
+    } catch { return failure("The verification code could not be sent. Please try again."); }
+  }, []);
 
   const signOut = useCallback(async (): Promise<AuthResult> => {
     try {
@@ -196,62 +207,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshSession]);
 
-  const requestPasswordReset = useCallback(async (email: string): Promise<AuthResult> => {
-    try {
-      const result = await authClient.requestPasswordReset({ email });
-      if (result.error !== null) return failure("The reset request could not be sent.");
-      return { ok: true };
-    } catch {
-      return failure("The reset request could not be sent.");
-    }
-  }, []);
-
-  const resetPassword = useCallback(async (
-    token: string,
-    newPassword: string,
-  ): Promise<AuthResult> => {
-    try {
-      const response = await authJson("/api/auth/reset-password", { newPassword, token });
-      if (!response.ok) return failure("This reset link is invalid or has expired.");
-      readyResearcherId.current = null;
-      dispatch({ type: "session-missing" });
-      return { ok: true };
-    } catch {
-      return failure("The password could not be reset.");
-    }
-  }, []);
-
-  const changePassword = useCallback(async (
-    currentPassword: string,
-    newPassword: string,
-  ): Promise<AuthResult> => {
-    try {
-      const result = await authClient.changePassword({ currentPassword, newPassword });
-      if (result.error !== null) return failure("The current password is incorrect.");
-      return { ok: true };
-    } catch {
-      return failure("The password could not be changed.");
-    }
-  }, []);
-
   const value = useMemo<AuthContextValue>(() => ({
     state,
     acceptInvitation,
-    changePassword,
     inspectInvitation,
-    requestPasswordReset,
-    resetPassword,
     retry: () => refreshSession(stateRef.current.session !== null
       && readyResearcherId.current !== stateRef.current.session.researcherId),
+    sendCode,
     signIn,
     signOut,
   }), [
     acceptInvitation,
-    changePassword,
     inspectInvitation,
-    requestPasswordReset,
-    resetPassword,
     refreshSession,
+    sendCode,
     signIn,
     signOut,
     state,
@@ -268,6 +237,7 @@ export function useAuth(): AuthContextValue {
 
 async function authJson(path: string, body: Record<string, string>): Promise<Readonly<{
   ok: boolean;
+  status: number;
   data: unknown;
 }>> {
   const response = await fetch(path, {
@@ -282,7 +252,7 @@ async function authJson(path: string, body: Record<string, string>): Promise<Rea
   } catch {
     // Status is authoritative; do not retain response text that may contain secrets.
   }
-  return { data, ok: response.ok };
+  return { data, ok: response.ok, status: response.status };
 }
 
 function failure(message: string): AuthResult {
@@ -297,4 +267,8 @@ function isSystemFolderContract(value: unknown): boolean {
   return isRecord(value)
     && value.default === "folder_default"
     && value.batch_research === "folder_batch_research";
+}
+
+function isOAuthRedirect(value: unknown): boolean {
+  return isRecord(value) && value.redirect === true && typeof value.url === "string";
 }

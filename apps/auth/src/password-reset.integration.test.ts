@@ -1,7 +1,6 @@
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createAuthApp } from "./app.js";
 import {
   createThesisTraceAuth,
   type AuthLifecycleDependencies,
@@ -14,9 +13,8 @@ import {
   CredentialOperationCoordinator,
 } from "./coordination.js";
 import { createAuthCoordinationPool, createAuthPool } from "./database.js";
-import { InvitationRejectedError } from "./invitation.js";
 import { InvitationAdmission } from "./invitation-admission.js";
-import { PasswordResetLifecycle } from "./password-reset.js";
+import { PasswordResetLifecycle, PasswordResetRejectedError } from "./password-reset.js";
 import { passwordResetIdentifier } from "./password-reset-token.js";
 import type { ResendEmail } from "./resend.js";
 import { initializeAuthSchema } from "./schema-initialize.js";
@@ -201,7 +199,7 @@ describe.sequential("Password Reset lifecycle", () => {
       const resets = await owner.query<{ status: string }>(`
         SELECT status FROM auth.password_reset ORDER BY id
       `);
-      const signInResponse = await publicSignIn(
+      const signInResponse = await coordinatedCredentialSignIn(
         harness,
         "available@example.com",
         "correct-horse-battery-staple",
@@ -303,20 +301,7 @@ describe.sequential("Password Reset lifecycle", () => {
     await harness.tasks.drain();
     const token = resetToken(harness.sent[0]);
 
-    const response = await harness.app.request(
-      `${settings.publicOrigin}/api/auth/reset-password`,
-      {
-        body: JSON.stringify({
-          newPassword: "new-correct-horse-battery-staple",
-          token,
-        }),
-        headers: {
-          "content-type": "application/json",
-          origin: settings.publicOrigin,
-        },
-        method: "POST",
-      },
-    );
+    const response = await resetPassword(harness, token);
 
     expect(response.status).toBe(200);
     expect(response.headers.has("set-cookie")).toBe(false);
@@ -461,7 +446,7 @@ describe.sequential("Password Reset lifecycle", () => {
         EXECUTE FUNCTION auth.test_hold_session_insert()
       `);
 
-      signInPromise = publicSignIn(
+      signInPromise = coordinatedCredentialSignIn(
         harness,
         "linearized@example.com",
         "correct-horse-battery-staple",
@@ -553,7 +538,7 @@ describe.sequential("Password Reset lifecycle", () => {
         EXECUTE FUNCTION auth.test_hold_coordination_loss_insert()
       `);
 
-      signInPromise = publicSignIn(
+      signInPromise = coordinatedCredentialSignIn(
         harness,
         "coordination-loss@example.com",
         "correct-horse-battery-staple",
@@ -690,7 +675,7 @@ describe.sequential("Password Reset lifecycle", () => {
 
       expect(
         (
-          await publicSignIn(
+          await coordinatedCredentialSignIn(
             successor,
             "rotation-coordination-loss@example.com",
             "correct-horse-battery-staple",
@@ -921,7 +906,7 @@ describe.sequential("Password Reset lifecycle", () => {
 
       expect(
         (
-          await publicSignIn(
+          await coordinatedCredentialSignIn(
             harness,
             "uncertain-sign-in@example.com",
             "correct-horse-battery-staple",
@@ -1207,63 +1192,13 @@ function resetHarness(
     sendResetPassword: reset.sendResetPassword,
   };
   const auth = createThesisTraceAuth(settings, runtimePool, lifecycle);
-  const app = createAuthApp({
-    async acceptInvitation() {
-      throw new InvitationRejectedError();
-    },
-    authHandler: (request) =>
-      requestCoordinator.handleAuthRequest(
-        request,
-        (coordinated) => auth.handler(coordinated),
-        (headers) =>
-          auth.api.getSession({
-            headers,
-            query: { disableCookieCache: true, disableRefresh: true },
-          }),
-      ),
-    async confirmOperatorProof() {
-      throw new Error("OPERATOR_PROOF_UNAVAILABLE_IN_RESET_HARNESS");
-    },
-    async consumeOperatorProof() {
-      throw new Error("OPERATOR_PROOF_UNAVAILABLE_IN_RESET_HARNESS");
-    },
-    async consumeInvitationRateLimit() {
-      return { allowed: true, retryAfterSeconds: 0 };
-    },
-    consumePasswordResetRateLimit,
-    async consumeOperatorProofRateLimit() {
-      return { allowed: true, retryAfterSeconds: 0 };
-    },
-    getSession: (input) => auth.api.getSession(input),
-    async hasOperatorCapability() {
-      return false;
-    },
-    async inspectInvitation() {
-      throw new InvitationRejectedError();
-    },
-    async issueOperatorInvitation() {
-      throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_RESET_HARNESS");
-    },
-    async listOperatorInvitations() {
-      throw new Error("OPERATOR_DIRECTORY_UNAVAILABLE_IN_RESET_HARNESS");
-    },
-    async listOperatorResearchers() {
-      throw new Error("OPERATOR_DIRECTORY_UNAVAILABLE_IN_RESET_HARNESS");
-    },
-    async issueMcpAccessToken() {
-      throw new Error("MCP_TOKEN_NOT_USED_IN_PASSWORD_RESET_TEST");
-    },
-    publicOrigin: settings.publicOrigin,
-    readiness: async () => true,
-    async reissueOperatorInvitation() {
-      throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_RESET_HARNESS");
-    },
-    async revokeOperatorResearcherSessions() {
-      throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_RESET_HARNESS");
-    },
-    resetPassword: completionReset.completeReset,
-  });
-  return { app, auth, invitationAdmission, reset, sent, tasks };
+  // Exercise the credential module directly. Password recovery is no longer a public route.
+  const handleCredentialRequest = (request: Request) => requestCoordinator.handleAuthRequest(
+    request, coordinated => auth.handler(coordinated),
+    headers => auth.api.getSession({headers, query:{disableCookieCache:true,disableRefresh:true}}),
+  ).catch(() => new Response(null,{status:503}));
+  return { auth, invitationAdmission, reset, sent, tasks, handleCredentialRequest, completionReset, consumePasswordResetRateLimit };
+
 }
 
 function createCredentialCoordinator(): CredentialOperationCoordinator {
@@ -1292,39 +1227,22 @@ async function createUser(
   expect(response.status).toBe(200);
 }
 
-async function requestReset(
-  harness: ReturnType<typeof resetHarness>,
-  email: string,
-): Promise<Response> {
-  return await harness.app.request(
-    `${settings.publicOrigin}/api/auth/request-password-reset`,
-    {
-      body: JSON.stringify({ email }),
-      headers: {
-        "content-type": "application/json",
-        origin: settings.publicOrigin,
-      },
-      method: "POST",
-    },
-  );
+async function requestReset(harness: ReturnType<typeof resetHarness>, email: string): Promise<Response> {
+  return harness.handleCredentialRequest(new Request(`${settings.publicOrigin}/api/auth/request-password-reset`, {
+    body: JSON.stringify({email}), headers: requestHeaders(), method:"POST",
+  }));
 }
 
-async function resetPassword(
-  harness: ReturnType<typeof resetHarness>,
-  token: string,
-): Promise<Response> {
-  return await harness.app.request(`${settings.publicOrigin}/api/auth/reset-password`, {
-    body: JSON.stringify({
-      newPassword: "new-correct-horse-battery-staple",
-      token,
-    }),
-    headers: {
-      "content-type": "application/json",
-      origin: settings.publicOrigin,
-      "x-thesistrace-client-ip": "192.0.2.20",
-    },
-    method: "POST",
-  });
+async function resetPassword(harness: ReturnType<typeof resetHarness>, token: string): Promise<Response> {
+  const headers = requestHeaders(); headers.set("x-thesistrace-client-ip", "192.0.2.20");
+  try {
+    const rate = await harness.consumePasswordResetRateLimit(token,headers);
+    if (!rate.allowed) return new Response(null,{status:429,headers:{"retry-after":String(rate.retryAfterSeconds)}});
+    await harness.completionReset.completeReset(token, "new-correct-horse-battery-staple");
+    return Response.json({status:true});
+  } catch (error) {
+    return new Response(null,{status:error instanceof PasswordResetRejectedError ? 400 : 503});
+  }
 }
 
 async function signIn(
@@ -1339,22 +1257,10 @@ async function signIn(
   });
 }
 
-async function publicSignIn(
-  harness: ReturnType<typeof resetHarness>,
-  email: string,
-  password: string,
-): Promise<Response> {
-  return await harness.app.request(
-    `${settings.publicOrigin}/api/auth/sign-in/email`,
-    {
-      body: JSON.stringify({ email, password }),
-      headers: {
-        "content-type": "application/json",
-        origin: settings.publicOrigin,
-      },
-      method: "POST",
-    },
-  );
+async function coordinatedCredentialSignIn(harness: ReturnType<typeof resetHarness>, email: string, password: string): Promise<Response> {
+  return harness.handleCredentialRequest(new Request(`${settings.publicOrigin}/api/auth/sign-in/email`, {
+    body:JSON.stringify({email,password}), headers:requestHeaders(), method:"POST",
+  }));
 }
 
 function resetToken(email: ResendEmail | undefined): string {
@@ -1367,6 +1273,7 @@ function resetToken(email: ResendEmail | undefined): string {
 
 function requestHeaders(): Headers {
   return new Headers({
+    "content-type": "application/json",
     origin: settings.publicOrigin,
     "x-thesistrace-client-ip": "192.0.2.20",
   });

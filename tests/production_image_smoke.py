@@ -2779,7 +2779,7 @@ def _verify_observability_evidence(
     assert auth_completions
     assert any(
         event.get("method") == "POST"
-        and event.get("route") == "/api/auth/sign-in/email"
+        and event.get("route") == "/api/auth/sign-in/email-otp"
         and event.get("status_code") in {400, 401}
         for event in auth_completions
     )
