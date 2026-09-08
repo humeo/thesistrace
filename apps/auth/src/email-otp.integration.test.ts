@@ -37,6 +37,7 @@ const delivery = new EmailCodeDelivery({auth, coordinator, sendEmail: async emai
 const limiter = new AuthEndpointRateLimiter({authSecret: settings.secret, pool, scope: "email-code"});
 const unavailable = async (): Promise<never> => { throw new Error("unrelated endpoint"); };
 const deps: AuthAppDependencies = {
+  isOperator: async () => false,
   sendSignInCode: email => delivery.send(email, "sign-in"),
   consumeEmailCodeRateLimit: (email,headers) => limiter.consume(email,headers),
   acceptInvitation: unavailable, inspectInvitation: unavailable,

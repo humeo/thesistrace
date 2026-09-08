@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
@@ -15,9 +15,11 @@ import { authenticatedResearcherId } from "./auth/session";
 import { CoreApp } from "./shell/CoreApp";
 import "./styles.css";
 
+const LandingPage = lazy(() => import('./landing/LandingPage'));
+
 function browserLocation(): BrowserLocation {
   return {
-    pathname: window.location.pathname === "/" ? "/data" : window.location.pathname,
+    pathname: window.location.pathname,
     search: window.location.search,
     hash: window.location.hash,
   };
@@ -31,8 +33,7 @@ function consumeBrowserLocation(): ConsumedBrowserLocation {
   const observed = browserLocation();
   const extracted = extractInitialAuthSecret(observed);
   if (
-    window.location.pathname === "/"
-    || locationHref(extracted.location) !== `${window.location.pathname}${window.location.search}${window.location.hash}`
+    locationHref(extracted.location) !== `${window.location.pathname}${window.location.search}${window.location.hash}`
   ) {
     window.history.replaceState(null, "", locationHref(extracted.location));
   }
@@ -53,9 +54,7 @@ function BrowserRoutedApp() {
     setSecret((current) => {
       if (next.secret !== null) return next.secret;
       if (next.hadFragment || current === null) return null;
-      const currentPath = current.kind === "invitation"
-        ? "/accept-invitation"
-        : "/reset-password";
+      const currentPath = "/accept-invitation";
       return next.location.pathname === currentPath ? current : null;
     });
   }, []);
@@ -170,8 +169,10 @@ function AuthStatus({ title, message, action, actionLabel }: {
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <AuthProvider>
-      <BrowserRoutedApp />
-    </AuthProvider>
+    {window.location.pathname === "/" ? (
+      <Suspense fallback={null}><LandingPage /></Suspense>
+    ) : (
+      <AuthProvider><BrowserRoutedApp /></AuthProvider>
+    )}
   </React.StrictMode>,
 );
