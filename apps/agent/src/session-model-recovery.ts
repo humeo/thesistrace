@@ -69,9 +69,11 @@ export class SessionModelRecovery {
       messageList.removeByIds(invalidRecoveryMessageIds(await repository.modelStepRecoveries(threadId, researcherId)));
       return { retry: true };
     } catch (failure) {
+      const failureCode = providerFailureCode(failure);
       const code = abortSignal.aborted ? providerFailureCode(abortSignal.reason)
         : failure instanceof ModelRequestFailure ? failure.code
-        : providerFailureCode(failure) === "PROVIDER_TIMEOUT" ? "PROVIDER_TIMEOUT" : "CONTEXT_COMPACTION_FAILED";
+        : failureCode === "DAILY_MODEL_BUDGET_EXCEEDED" || failureCode === "PROVIDER_TIMEOUT"
+          ? failureCode : "CONTEXT_COMPACTION_FAILED";
       await repository.updateModelStepRecovery(threadId, researcherId, runId, claim.recovery.originalMessageId, { status: "failed", errorCode: code });
       throw observation.terminateRequestFailure(code);
     }

@@ -113,6 +113,7 @@ from thesistrace.research_series import (
     research_sessions,
     slice_research_sessions,
 )
+from thesistrace.researcher.quota import QuotaPolicyLookup, unavailable_quota_policy
 
 Progress = Callable[[str, str, str], None]
 
@@ -155,7 +156,6 @@ ResearchReferencesResult = Callable[[PostgresTransaction, str], bool]
 ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
 WORKER_LOST_FAILURE = "WorkerLost"
-ACTIVE_DAILY_TRACK_LIMIT = 10
 PUBLIC_BLOCKED_REASON = "DailyTrack could not process the current dataset."
 CAPACITY_BLOCKED_REASON = "DailyTrack target exceeds Tracking Worker capacity."
 FINANCIAL_COVERAGE_BLOCKED_REASON = "Financial Coverage ends before the next Research Session."
@@ -361,6 +361,7 @@ class DailyTrackService:
         self,
         database: PostgresDatabase,
         *,
+        quota_policy: QuotaPolicyLookup = unavailable_quota_policy,
         publication: Publication | None = None,
         dataset_lifecycle: DatasetLifecycle | None = None,
         generation_store: MountedGenerationStore | None = None,
@@ -377,6 +378,7 @@ class DailyTrackService:
         if lease_seconds <= 0 or heartbeat_seconds <= 0 or execution_memory_bytes <= 0:
             raise ValueError("DailyTrack lease and heartbeat intervals must be positive")
         self._database = database
+        self._quota_policy = quota_policy
         self._publication = publication
         self._dataset_lifecycle = dataset_lifecycle
         self._generation_store = generation_store
@@ -466,8 +468,10 @@ class DailyTrackService:
             (researcher_id,),
         ).fetchone()
         assert capacity is not None
-        if int(capacity["count"]) >= ACTIVE_DAILY_TRACK_LIMIT:
-            raise DailyTrackActivationLimitReached("Active DailyTrack limit of 10 reached")
+        policy = self._quota_policy(researcher_id)
+        limit = policy.active_daily_track_limit
+        if limit is not None and int(capacity["count"]) >= limit:
+            raise DailyTrackActivationLimitReached(f"Active DailyTrack limit of {limit} reached")
         row = self._activate_current(transaction, researcher_id, origin)
         assert row is not None
         return _summary(row)

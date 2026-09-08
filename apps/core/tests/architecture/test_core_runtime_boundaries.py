@@ -105,6 +105,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "research_folder": {"_postgres"},
         "researcher": {"_postgres", "research_folder"},
         "daily_track": {
+            "researcher",
             "_paging",
             "_postgres",
             "benchmark",
@@ -115,6 +116,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_run": {
+            "researcher",
             "_paging",
             "_postgres",
             "alpha_language",
@@ -128,6 +130,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_batch": {
+            "researcher",
             "_paging",
             "_postgres",
             "alpha_language",
@@ -711,7 +714,6 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "CREATE TABLE daily_tracks.refresh_receipts" in track_schema
     assert "CREATE TABLE daily_tracks.retry_receipts" in track_schema
     assert "CREATE TABLE daily_tracks.stop_receipts" in track_schema
-    assert "ACTIVE_DAILY_TRACK_LIMIT = 10" in track_source
     assert 'f"daily_tracks.activation.capacity:{researcher_id}"' in track_source
     assert "def _record_current_failure(" in track_source
     assert "def reconcile_working_cache(" in track_source

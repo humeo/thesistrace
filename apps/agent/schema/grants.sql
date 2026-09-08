@@ -5,7 +5,8 @@ REVOKE ALL ON ALL TABLES IN SCHEMA agent FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA agent FROM agent_runtime;
 
 GRANT SELECT, INSERT, UPDATE, DELETE
-    ON TABLE agent.a2ui_message,
+    ON TABLE agent.model_charge,
+             agent.a2ui_message,
              agent.agent_run,
              agent.chat_command,
              agent.chat_interrupt,

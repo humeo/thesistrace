@@ -12,7 +12,7 @@ const registry = JSON.stringify({
     provider_adapter: "scripted",
     provider_model_id: "scripted-v1",
     reasoning_efforts: ["low", "medium", "high"],
-    context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+    context_window: 65_536, max_output_tokens: 128_000, pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
   }],
 });
 const environment = {
@@ -136,7 +136,7 @@ describe("Agent Host configuration", () => {
         provider_adapter: "openai",
         provider_model_id: "gpt-research",
         reasoning_efforts: ["high"],
-        context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
+        context_window: 65_536, max_output_tokens: 128_000, pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
       }],
     });
     const productionEnvironment = {

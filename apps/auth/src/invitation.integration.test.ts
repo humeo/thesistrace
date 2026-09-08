@@ -276,6 +276,7 @@ describe.sequential("Researcher Invitation lifecycle", () => {
         return { allowed: true, retryAfterSeconds: 0 };
       },
       getSession: (input) => harness.auth.api.getSession(input),
+      async isOperator() { return false; },
       async hasOperatorCapability() {
         return false;
       },

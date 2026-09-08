@@ -120,6 +120,11 @@ def _prepare_tied_pagination_batches(settings: CoreSettings) -> list[str]:
     batch_ids: list[str] = []
     with open_core_runtime(settings) as runtime:
         for index in range(51):
+            if index % 10 == 0:
+                # Pagination covers historical admissions across multiple days.
+                with runtime.database.transaction() as transaction:
+                    transaction.execute("""UPDATE research_runs.run_ownership
+                        SET created_at = created_at - interval '1 day'""")
             command = adapter.validate_python(
                 _factor_batch_command(
                     f"mcp-pagination-batch-{index:02d}",

@@ -29,6 +29,7 @@ from thesistrace.data import (
     DatasetOverviewService,
     MountedGenerationStore,
 )
+from thesistrace.entrypoints.quota_policy import quota_policy_lookup
 from thesistrace.entrypoints.readiness import CoreReadiness
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.operational_events import emit_operational_event_data
@@ -260,6 +261,7 @@ def _open_runtime(
         generation_store = MountedGenerationStore(settings.data_mount)
         daily_tracks = DailyTrackService(
             database,
+            quota_policy=quota_policy_lookup(os.environ.get("THESISTRACE_AUTH_INTERNAL_ORIGIN")),
             publication=publication,
             dataset_lifecycle=dataset_lifecycle,
             generation_store=generation_store,
@@ -272,6 +274,7 @@ def _open_runtime(
         )
         research_runs = ResearchRunService(
             database,
+            quota_policy=quota_policy_lookup(os.environ.get("THESISTRACE_AUTH_INTERNAL_ORIGIN")),
             dataset_lifecycle=dataset_lifecycle,
             generation_store=generation_store,
             publication=publication,

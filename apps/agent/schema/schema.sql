@@ -1,3 +1,13 @@
+CREATE TABLE agent.model_charge (
+    id uuid PRIMARY KEY,
+    researcher_id uuid NOT NULL,
+    budget_day date NOT NULL,
+    reserved_nanodollars bigint NOT NULL CHECK (reserved_nanodollars >= 0),
+    actual_nanodollars bigint CHECK (actual_nanodollars >= 0),
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE INDEX model_charge_researcher_day ON agent.model_charge (researcher_id, budget_day);
+
 CREATE TABLE agent."mastra_threads" (
     "id" text NOT NULL,
     "resourceId" text NOT NULL,

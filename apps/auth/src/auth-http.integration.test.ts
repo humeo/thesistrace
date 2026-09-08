@@ -174,6 +174,21 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       "ordinary-http@example.com",
       "192.0.2.102",
     );
+    const ordinary = await persistedPrincipal("ordinary-http@example.com");
+    for (const [researcherId, unlimited] of [
+      [operator.researcherId, true], [ordinary.researcherId, false],
+    ] as const) {
+      const policy = await app.request(
+        `${settings.publicOrigin}/internal/researchers/${researcherId}/quota-policy`,
+      );
+      expect(policy.status).toBe(200);
+      expect(await policy.json()).toEqual({
+        timezone: "Asia/Shanghai",
+        daily_model_budget_nanodollars: unlimited ? null : 1_000_000_000,
+        daily_run_limit: unlimited ? null : 10,
+        active_daily_track_limit: unlimited ? null : 10,
+      });
+    }
 
     const capability = await app.request(
       `${settings.publicOrigin}/api/auth/operator/capability`,
@@ -1191,6 +1206,7 @@ function runtime() {
       return { allowed: true, retryAfterSeconds: 0 };
     },
     getSession: (input) => auth.api.getSession(input),
+    isOperator: (researcherId) => operatorDirectory.isOperator(researcherId),
     hasOperatorCapability: (principal) =>
       operatorDirectory.hasCapability(principal),
     async inspectInvitation() {

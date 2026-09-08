@@ -98,6 +98,7 @@ from thesistrace.research_run.service import (
     ResearchRunExecutionClaim,
     ResearchRunService,
 )
+from thesistrace.researcher.quota import QuotaPolicyUnavailable
 
 BATCH_ADMISSION_RETENTION_SECONDS = 15 * 60
 BATCH_ATTEMPT_LEASE_SECONDS = 15 * 60
@@ -667,7 +668,23 @@ class ResearchBatchService:
                     command,
                     error.issues,
                 )
-        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+            except ResearchRunAdmissionRejected as error:
+                return self._record_admission_rejection(
+                    researcher_id,
+                    command,
+                    [
+                        ResearchBatchAdmissionIssue(
+                            code=issue.code, field=issue.field, message=issue.message
+                        )
+                        for issue in error.issues
+                    ],
+                )
+        except (
+            OperationalError,
+            PoolTimeout,
+            PublicationUnavailableError,
+            QuotaPolicyUnavailable,
+        ) as error:
             raise ResearchBatchTemporarilyUnavailable(
                 "Research Batch admission is temporarily unavailable"
             ) from error

@@ -511,6 +511,56 @@ def test_batch_receipt_schema_rejects_malformed_durable_outcomes(tmp_path: Path)
                     )
 
 
+@pytest.mark.skipif(
+    not core_environment_is_configured(), reason="isolated Core dependencies required"
+)
+def test_batch_quota_counts_children_and_rolls_back_an_over_budget_batch(tmp_path: Path) -> None:
+    settings = isolated_core_settings(tmp_path)
+    drop_product_schemas(settings)
+    with TestClient(create_app(settings)) as client:
+        _publish_current_data(settings)
+        for index in range(4):
+            assert (
+                client.post(
+                    "/api/research-batches", json=_factor_command(f"quota-seed-{index}")
+                ).status_code
+                == 202
+            )
+        oversized = _factor_command("quota-three-children")
+        oversized["factors"] = [
+            *oversized["factors"],
+            {"item_key": "negative", "name": "Negative", "formula": "-close"},
+        ]
+        rejected = client.post("/api/research-batches", json=oversized)
+        assert rejected.status_code == 422
+        assert "DAILY_RUN_QUOTA_EXCEEDED" in rejected.text
+        with client.app.state.core_runtime.database.transaction() as transaction:
+            assert (
+                transaction.execute(
+                    "SELECT count(*) AS count FROM research_runs.run_ownership"
+                ).fetchone()["count"]
+                == 8
+            )
+            assert (
+                transaction.execute(
+                    "SELECT count(*) AS count FROM research_batches.batches"
+                ).fetchone()["count"]
+                == 4
+            )
+        accepted = _factor_command("quota-last-two")
+        first = client.post("/api/research-batches", json=accepted)
+        assert first.status_code == 202
+        assert (
+            client.post("/api/research-batches", json=accepted).json()["id"] == first.json()["id"]
+        )
+        assert (
+            client.post(
+                "/api/research-batches", json=_factor_command("quota-exhausted")
+            ).status_code
+            == 422
+        )
+
+
 def _factor_command(request_id: str) -> dict[str, object]:
     return {
         "request_id": request_id,

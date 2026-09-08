@@ -64,6 +64,8 @@ describe.sequential("Auth Operator directory", () => {
 
   it("authorizes only the current active Operator Login Session", async () => {
     const directory = service();
+    await expect(directory.isOperator(operatorId)).resolves.toBe(true);
+    await expect(directory.isOperator(ordinaryId)).resolves.toBe(false);
 
     await expect(directory.hasCapability(operatorPrincipal())).resolves.toBe(true);
     await expect(directory.hasCapability({

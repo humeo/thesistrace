@@ -16,7 +16,7 @@ const validRegistry = {
       provider_adapter: "openai",
       provider_model_id: "gpt-research",
       reasoning_efforts: ["low", "medium", "high"],
-      secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
+      pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
     },
     {
       context_window: 128_000, max_output_tokens: 128_000,
@@ -27,7 +27,7 @@ const validRegistry = {
       provider_adapter: "anthropic",
       provider_model_id: "claude-research",
       reasoning_efforts: ["high"],
-      secret_env: "THESISTRACE_AGENT_ANTHROPIC_API_KEY",
+      pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: "THESISTRACE_AGENT_ANTHROPIC_API_KEY",
     },
     {
       context_window: 32_768, max_output_tokens: 128_000,
@@ -38,7 +38,7 @@ const validRegistry = {
       provider_adapter: "google",
       provider_model_id: "gemini-disabled",
       reasoning_efforts: ["none"],
-      secret_env: "THESISTRACE_AGENT_GOOGLE_API_KEY",
+      pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: "THESISTRACE_AGENT_GOOGLE_API_KEY",
     },
   ],
 };
@@ -52,6 +52,18 @@ function encoded(overrides: Record<string, unknown> = {}): string {
 }
 
 describe("model Registry", () => {
+  it("requires explicit prices and converts dollars to exact nanodollars per token", () => {
+    const model = { ...validRegistry.models[0], pricing_usd_per_million_tokens: {
+      input: 0.2, cache_read: 0.02, cache_write: 0.25, output: 1.2,
+    } };
+    expect(readModelRegistry(encoded({ models: [model] }), environment).models[0]?.pricing)
+      .toEqual({ input: 200, cacheRead: 20, cacheWrite: 250, output: 1200 });
+    for (const pricing of [undefined, {}, { ...model.pricing_usd_per_million_tokens, input: -1 },
+      { ...model.pricing_usd_per_million_tokens, output: 0.0001 }]) {
+      expect(() => readModelRegistry(encoded({ models: [{ ...model, pricing_usd_per_million_tokens: pricing }] }), environment))
+        .toThrow("Agent configuration is invalid");
+    }
+  });
   it("requires explicit output capacity and a global compaction gate", () => {
     const configured = { ...validRegistry, min_compaction_context_window: 65_536,
       models: validRegistry.models.map((model) => ({ ...model, max_output_tokens: 128_000 })) };
@@ -195,7 +207,7 @@ describe("model Registry", () => {
       encoded({
         models: [{
           ...validRegistry.models[0],
-          secret_env: "THESISTRACE_AGENT_ANTHROPIC_API_KEY",
+          pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: "THESISTRACE_AGENT_ANTHROPIC_API_KEY",
         }],
       }),
     ],

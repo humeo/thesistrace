@@ -17,6 +17,8 @@ import {
   ScriptedLanguageModel,
 } from "./scripted-language-model.js";
 import { GuardedLanguageModel, type RunModelObservation } from "./guarded-language-model.js";
+import { MeteredLanguageModel } from "./metered-language-model.js";
+import type { ModelBudget } from "./model-budget.js";
 
 export type ResolvedModelSelection = Readonly<{
   compactionEnabled: boolean;
@@ -42,11 +44,12 @@ export class RegisteredModelRuntime {
     modelKey: string,
     effort: ReasoningEffort,
     observation?: RunModelObservation,
+    metering?: Readonly<{ budget: ModelBudget; researcherId: string }>,
   ): ResolvedModelSelection {
     const model = this.registry.models.find(
       (candidate) => candidate.enabled && candidate.key === modelKey,
     );
-    const languageModel = this.languageModels.get(modelKey);
+    let languageModel = this.languageModels.get(modelKey);
     if (
       model === undefined
       || languageModel === undefined
@@ -54,6 +57,8 @@ export class RegisteredModelRuntime {
     ) {
       throw new AgentConfigurationError();
     }
+    if (metering !== undefined) languageModel = new MeteredLanguageModel(
+      fetch => createLanguageModel(model, fetch), model, metering.budget, metering.researcherId);
     return {
       compactionEnabled: model.contextWindow >= this.registry.minCompactionContextWindow,
       effort,
@@ -69,15 +74,15 @@ export class RegisteredModelRuntime {
   }
 }
 
-function createLanguageModel(model: RegisteredModel): LanguageModelV3 {
+function createLanguageModel(model: RegisteredModel, fetch?: typeof globalThis.fetch): LanguageModelV3 {
   if (model.credential === null) throw new AgentConfigurationError();
   switch (model.providerAdapter) {
     case "anthropic":
-      return createAnthropic({ apiKey: model.credential })(model.providerModelId);
+      return createAnthropic({ apiKey: model.credential, fetch })(model.providerModelId);
     case "google":
-      return createGoogleGenerativeAI({ apiKey: model.credential })(model.providerModelId);
+      return createGoogleGenerativeAI({ apiKey: model.credential, fetch })(model.providerModelId);
     case "openai":
-      return createOpenAI({ apiKey: model.credential })(model.providerModelId);
+      return createOpenAI({ apiKey: model.credential, fetch })(model.providerModelId);
     case "scripted":
       return new ScriptedLanguageModel(
         model.providerModelId,

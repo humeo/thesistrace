@@ -26,10 +26,20 @@ const providerSecretEnvironment = {
   scripted: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
 } as const satisfies Record<(typeof providerAdapters)[number], string>;
 const reasoningEffortSchema = z.enum(reasoningEfforts);
+// USD per million tokens, stored internally as integer nanodollars per token.
+const tokenPriceSchema = z.number().nonnegative().finite()
+  .refine((value) => Number(value.toFixed(3)) === value && Number.isSafeInteger(Math.round(value * 1000)));
+const modelPricingSchema = z.object({
+  input: tokenPriceSchema,
+  cache_read: tokenPriceSchema,
+  cache_write: tokenPriceSchema,
+  output: tokenPriceSchema,
+}).strict();
 const registryModelSchema = z
   .object({
     context_window: z.number().int().min(16_384),
     max_output_tokens: z.number().int().positive(),
+    pricing_usd_per_million_tokens: modelPricingSchema,
     default_reasoning_effort: reasoningEffortSchema,
     display_name: z.string().min(1).max(80).refine(isCanonicalText),
     enabled: z.boolean(),
@@ -61,6 +71,7 @@ export type SafeModelCatalog = Readonly<{
   models: readonly SafeModel[];
 }>;
 export type RegisteredModel = Readonly<{
+  pricing: Readonly<{ input: number; cacheRead: number; cacheWrite: number; output: number }>;
   contextWindow: number;
   maxOutputTokens: number;
   credential: string | null;
@@ -126,6 +137,12 @@ export function readModelRegistry(
       throw invalidConfiguration();
     }
     models.push({
+      pricing: {
+        input: Math.round(model.pricing_usd_per_million_tokens.input * 1000),
+        cacheRead: Math.round(model.pricing_usd_per_million_tokens.cache_read * 1000),
+        cacheWrite: Math.round(model.pricing_usd_per_million_tokens.cache_write * 1000),
+        output: Math.round(model.pricing_usd_per_million_tokens.output * 1000),
+      },
       contextWindow: model.context_window,
       maxOutputTokens: model.max_output_tokens,
       credential: model.enabled ? credential ?? null : null,

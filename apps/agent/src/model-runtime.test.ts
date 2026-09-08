@@ -129,6 +129,6 @@ function model(
     provider_adapter: provider,
     provider_model_id: providerModelId,
     reasoning_efforts: efforts,
-    context_window: 65_536, max_output_tokens: 128_000, secret_env: secret,
+    context_window: 65_536, max_output_tokens: 128_000, pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: secret,
   };
 }

@@ -54,6 +54,7 @@ from thesistrace.research_run.execution import ResearchExecutionResourceExhauste
 from thesistrace.research_run.models import StrategyBacktestAdmissionCommand
 from thesistrace.research_run.result import read_result_bundle
 from thesistrace.research_run.service import ResearchRunService
+from thesistrace.researcher.quota import QuotaPolicy
 
 
 class _StrategyTransportFailureExecutor:
@@ -1497,7 +1498,16 @@ def test_strategy_sweep_isolates_one_strategy_failure_and_keeps_order(
 def test_strategy_sweep_one_and_twenty_items_use_the_same_ordered_contract(
     tmp_path: Path,
     item_count: int,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Exercise the batch capacity contract with an Operator, whose daily Run quota is unlimited.
+    monkeypatch.setattr(
+        "thesistrace.entrypoints.runtime.quota_policy_lookup",
+        lambda _origin: lambda _researcher_id: QuotaPolicy(
+            timezone="Asia/Shanghai", daily_model_budget_nanodollars=None,
+            daily_run_limit=None, active_daily_track_limit=None,
+        ),
+    )
     settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     events: list[dict[str, object]] = []

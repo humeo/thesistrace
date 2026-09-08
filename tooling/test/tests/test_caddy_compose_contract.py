@@ -451,6 +451,12 @@ def test_eval_endpoint_is_explicit_and_deterministic_test_endpoint_is_inert() ->
             "phases/image-qualification.mjs",
         )
     )
+                "pricing_usd_per_million_tokens": {
+                    "input": 0.2,
+                    "cache_read": 0.02,
+                    "cache_write": 0.2,
+                    "output": 1.2,
+                },
 
     assert "OPENAI_BASE_URL: ${THESISTRACE_AGENT_OPENAI_BASE_URL:?" in agent
     assert "OPENAI_BASE_URL" not in overlay.replace(agent, "")

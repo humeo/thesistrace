@@ -1467,6 +1467,12 @@ def test_only_explicit_eval_injects_the_configured_credential_and_selected_endpo
             "THESISTRACE_AGENT_EVAL_MODEL_KEY": "gpt-5.6-luna",
             "THESISTRACE_AGENT_EVAL_REASONING_EFFORT": "high",
             "THESISTRACE_AGENT_EVAL_PHASE": "baseline",
+                "pricing_usd_per_million_tokens": {
+                    "input": 0.2,
+                    "cache_read": 0.02,
+                    "cache_write": 0.2,
+                    "output": 1.2,
+                },
             "THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD": "20",
             "THESISTRACE_TEST_EVIDENCE_DIR": str(tmp_path / "prepare-evidence"),
             "FAKE_CONFIG_STATUS": "11",

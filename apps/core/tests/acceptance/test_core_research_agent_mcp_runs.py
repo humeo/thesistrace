@@ -860,6 +860,11 @@ def _expire_active_attempt(settings: CoreSettings, run_id: str) -> None:
 def _seed_pagination_runs(settings: CoreSettings, count: int) -> None:
     with open_core_runtime(settings) as runtime:
         for index in range(count):
+            if index % 10 == 0:
+                # Pagination covers historical admissions across multiple days.
+                with runtime.database.transaction() as transaction:
+                    transaction.execute("""UPDATE research_runs.run_ownership
+                        SET created_at = created_at - interval '1 day'""")
             command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(
                 _command(
                     f"mcp-pagination-{index}",

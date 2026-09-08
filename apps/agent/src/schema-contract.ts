@@ -65,6 +65,7 @@ type Queryable = Pick<Pool | PoolClient, "query">;
 
 const expectedCatalogUrl = new URL("../schema/catalog-contract.json", import.meta.url);
 const writableTables = [
+  "model_charge",
   "a2ui_message",
   "agent_run",
   "chat_command",

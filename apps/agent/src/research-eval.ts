@@ -112,6 +112,7 @@ export function evalStartupRegistry(candidate: ResearchEvalCandidate, effort: st
   if (!candidate.reasoning_efforts.some((value) => value === effort)) throw new ResearchEvalError("CONFIG_INVALID");
   return { min_compaction_context_window: 65_536, default_model_key: candidate.key, models: [{
     context_window: candidate.provider_max_input_tokens,
+    pricing_usd_per_million_tokens: { input: candidate.pricing.input_usd_per_million, cache_read: candidate.pricing.cached_input_usd_per_million, cache_write: candidate.pricing.input_usd_per_million, output: candidate.pricing.output_usd_per_million },
     max_output_tokens: candidate.provider_max_output_tokens,
     key: candidate.key, display_name: candidate.display_name, provider_adapter: candidate.provider_adapter,
     provider_model_id: candidate.provider_model_id, reasoning_efforts: [effort], default_reasoning_effort: effort,

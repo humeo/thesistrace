@@ -1050,6 +1050,54 @@
     },
     {
       "default": null,
+      "name": "id",
+      "notNull": true,
+      "position": 1,
+      "relation": "model_charge",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "researcher_id",
+      "notNull": true,
+      "position": 2,
+      "relation": "model_charge",
+      "type": "uuid"
+    },
+    {
+      "default": null,
+      "name": "budget_day",
+      "notNull": true,
+      "position": 3,
+      "relation": "model_charge",
+      "type": "date"
+    },
+    {
+      "default": null,
+      "name": "reserved_nanodollars",
+      "notNull": true,
+      "position": 4,
+      "relation": "model_charge",
+      "type": "bigint"
+    },
+    {
+      "default": null,
+      "name": "actual_nanodollars",
+      "notNull": false,
+      "position": 5,
+      "relation": "model_charge",
+      "type": "bigint"
+    },
+    {
+      "default": "now()",
+      "name": "created_at",
+      "notNull": true,
+      "position": 6,
+      "relation": "model_charge",
+      "type": "timestamp with time zone"
+    },
+    {
+      "default": null,
       "name": "thread_id",
       "notNull": true,
       "position": 1,
@@ -1583,6 +1631,24 @@
       "type": "u"
     },
     {
+      "definition": "CHECK ((actual_nanodollars >= 0))",
+      "name": "model_charge_actual_nanodollars_check",
+      "relation": "model_charge",
+      "type": "c"
+    },
+    {
+      "definition": "PRIMARY KEY (id)",
+      "name": "model_charge_pkey",
+      "relation": "model_charge",
+      "type": "p"
+    },
+    {
+      "definition": "CHECK ((reserved_nanodollars >= 0))",
+      "name": "model_charge_reserved_nanodollars_check",
+      "relation": "model_charge",
+      "type": "c"
+    },
+    {
       "definition": "CHECK ((jsonb_typeof(after_budget) = 'object'::text))",
       "name": "model_step_recovery_after_budget_check",
       "relation": "model_step_recovery",
@@ -1847,6 +1913,16 @@
       "relation": "mastra_workflow_snapshot"
     },
     {
+      "definition": "CREATE UNIQUE INDEX model_charge_pkey ON agent.model_charge USING btree (id)",
+      "name": "model_charge_pkey",
+      "relation": "model_charge"
+    },
+    {
+      "definition": "CREATE INDEX model_charge_researcher_day ON agent.model_charge USING btree (researcher_id, budget_day)",
+      "name": "model_charge_researcher_day",
+      "relation": "model_charge"
+    },
+    {
       "definition": "CREATE UNIQUE INDEX model_step_recovery_pkey ON agent.model_step_recovery USING btree (thread_id, original_message_id)",
       "name": "model_step_recovery_pkey",
       "relation": "model_step_recovery"
@@ -1961,6 +2037,14 @@
       "forceRowSecurity": false,
       "kind": "r",
       "name": "mastra_workflow_snapshot",
+      "owner": "thesistrace_owner",
+      "persistence": "p",
+      "rowSecurity": false
+    },
+    {
+      "forceRowSecurity": false,
+      "kind": "r",
+      "name": "model_charge",
       "owner": "thesistrace_owner",
       "persistence": "p",
       "rowSecurity": false

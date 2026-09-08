@@ -64,6 +64,7 @@ function dependencies(
       retryAfterSeconds: 0,
     })),
     getSession: vi.fn(async () => activeSession),
+    isOperator: vi.fn(async () => false),
     hasOperatorCapability: vi.fn(async () => true),
     inspectInvitation: vi.fn(async () => ({ email: "researcher@example.com" })),
     issueOperatorInvitation: vi.fn(async (_principal, input) => ({
@@ -97,6 +98,17 @@ function dependencies(
 }
 
 describe("Auth HTTP boundary", () => {
+  it("returns live quota policy and fails closed when Auth cannot resolve it", async () => {
+    const isOperator = vi.fn(async () => true);
+    const app = createAuthApp(dependencies({ isOperator }));
+    const path = "/internal/researchers/00000000-0000-4000-8000-000000000001/quota-policy";
+    expect(await (await app.request(`http://auth.test${path}`)).json()).toEqual({ timezone: "Asia/Shanghai", daily_model_budget_nanodollars: null, daily_run_limit: null, active_daily_track_limit: null });
+    isOperator.mockResolvedValueOnce(false);
+    expect(await (await app.request(`http://auth.test${path}`)).json()).toEqual({ timezone: "Asia/Shanghai", daily_model_budget_nanodollars: 1_000_000_000, daily_run_limit: 10, active_daily_track_limit: 10 });
+    isOperator.mockRejectedValueOnce(new Error("database unavailable"));
+    expect((await app.request(`http://auth.test${path}`)).status).toBe(503);
+    expect((await app.request("http://auth.test/internal/researchers/invalid/quota-policy")).status).toBe(400);
+  });
   it("exchanges only a freshly database-verified Active Session", async () => {
     const appDependencies = dependencies();
     const response = await createAuthApp(appDependencies).request(

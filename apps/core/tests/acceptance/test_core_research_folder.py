@@ -1,3 +1,4 @@
+import os
 from datetime import date
 
 import pytest
@@ -9,6 +10,7 @@ from pydantic import TypeAdapter
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
 from thesistrace.data import DatasetAdmissionSnapshot
+from thesistrace.entrypoints.quota_policy import quota_policy_lookup
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.research_folder import BATCH_RESEARCH_FOLDER_ID, DEFAULT_FOLDER_ID
 from thesistrace.research_run import ImmutableRunInput, ResearchRunService
@@ -122,6 +124,7 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
         )
         admitted = ResearchRunService(
             client.app.state.core_runtime.database,
+            quota_policy=quota_policy_lookup(os.environ["THESISTRACE_AUTH_INTERNAL_ORIGIN"]),
             compile_formula=alpha_language.compile,
             current_dataset=lambda: snapshot,
         ).admit(

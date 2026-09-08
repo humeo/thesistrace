@@ -21,6 +21,7 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
 from thesistrace.data import DatasetAdmissionSnapshot, DatasetLifecycle, MountedGenerationStore
 from thesistrace.data.canonical_mapping import field_catalog
+from thesistrace.entrypoints.quota_policy import quota_policy_lookup
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
     core_environment_is_configured,
@@ -306,6 +307,7 @@ def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan()
         )
         service = ResearchRunService(
             client.app.state.core_runtime.database,
+            quota_policy=quota_policy_lookup(os.environ["THESISTRACE_AUTH_INTERNAL_ORIGIN"]),
             compile_formula=alpha_language.compile,
             current_dataset=lambda: snapshot,
         )
@@ -364,6 +366,7 @@ def test_degraded_financial_readiness_is_admitted_and_frozen() -> None:
         )
         service = ResearchRunService(
             client.app.state.core_runtime.database,
+            quota_policy=quota_policy_lookup(os.environ["THESISTRACE_AUTH_INTERNAL_ORIGIN"]),
             compile_formula=alpha_language.compile,
             current_dataset=lambda: snapshot,
         )

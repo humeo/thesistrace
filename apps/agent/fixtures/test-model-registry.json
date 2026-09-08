@@ -16,7 +16,13 @@
       ],
       "context_window": 258000,
       "max_output_tokens": 128000,
-      "secret_env": "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"
+      "secret_env": "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      "pricing_usd_per_million_tokens": {
+        "input": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0
+      }
     },
     {
       "default_reasoning_effort": "high",
@@ -30,7 +36,13 @@
       ],
       "context_window": 258000,
       "max_output_tokens": 128000,
-      "secret_env": "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"
+      "secret_env": "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      "pricing_usd_per_million_tokens": {
+        "input": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0
+      }
     },
     {
       "default_reasoning_effort": "medium",
@@ -46,7 +58,13 @@
       ],
       "context_window": 65535,
       "max_output_tokens": 128000,
-      "secret_env": "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"
+      "secret_env": "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      "pricing_usd_per_million_tokens": {
+        "input": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0
+      }
     }
   ]
 }

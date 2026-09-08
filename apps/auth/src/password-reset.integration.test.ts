@@ -1235,6 +1235,7 @@ function resetHarness(
       return { allowed: true, retryAfterSeconds: 0 };
     },
     getSession: (input) => auth.api.getSession(input),
+    async isOperator() { return false; },
     async hasOperatorCapability() {
       return false;
     },

@@ -19,7 +19,13 @@
       ],
       "context_window": 258000,
       "max_output_tokens": 128000,
-      "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY"
+      "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
+      "pricing_usd_per_million_tokens": {
+        "input": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "output": 0
+      }
     }
   ]
 }

@@ -124,6 +124,17 @@ export class OperatorDirectoryService {
     return result.rows[0]?.authorized === true;
   }
 
+  async isOperator(researcherId: string): Promise<boolean> {
+    const result = await this.#pool.query<{ unlimited: boolean }>(`
+      SELECT EXISTS (
+        SELECT 1 FROM auth.operator_assignment AS assignment
+        JOIN auth."user" AS researcher ON researcher.id = assignment.researcher_id
+        WHERE assignment.researcher_id = $1 AND researcher.active = TRUE
+      ) AS unlimited
+    `, [researcherId]);
+    return result.rows[0]!.unlimited;
+  }
+
   async listResearchers(
     principal: OperatorPrincipal,
     input: Readonly<{ cursor: string | null; search: string | null }>,

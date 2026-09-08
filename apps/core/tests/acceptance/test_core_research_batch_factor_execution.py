@@ -23,6 +23,7 @@ from thesistrace.research_batch.execution import (
     SupervisedResearchBatchExecutor,
 )
 from thesistrace.research_run.result import read_result_bundle
+from thesistrace.researcher.quota import QuotaPolicy
 
 
 class _PreparationBarrierExecutor:
@@ -448,7 +449,16 @@ def test_widest_admitted_shared_slice_stays_inside_child_memory_budget(
 )
 def test_one_and_twenty_factor_items_use_the_same_ordered_execution_contract(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Operators may exercise the full Batch capacity in a single day.
+    monkeypatch.setattr(
+        "thesistrace.entrypoints.runtime.quota_policy_lookup",
+        lambda _origin: lambda _researcher_id: QuotaPolicy(
+            timezone="Asia/Shanghai", daily_model_budget_nanodollars=None,
+            daily_run_limit=None, active_daily_track_limit=None,
+        ),
+    )
     settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
     with TestClient(create_app(settings)) as client:

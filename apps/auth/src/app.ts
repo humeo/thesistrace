@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
+import { ResearcherQuotaPolicy } from "./quota-policy.js";
 
 import {
   ResearcherNotFoundError,
@@ -247,6 +248,7 @@ export type AuthAppDependencies = Readonly<{
   ) => Promise<Readonly<{ allowed: boolean; retryAfterSeconds: number }>>;
   getSession: (input: GetSessionInput) => Promise<unknown>;
   hasOperatorCapability: (principal: OperatorPrincipal) => Promise<boolean>;
+  isOperator: (researcherId: string) => Promise<boolean>;
   httpObserver?: AuthHttpObserver;
   inspectInvitation: (token: string) => Promise<Readonly<{ email: string }>>;
   confirmOperatorProof: (
@@ -339,6 +341,19 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
       email: result.user.email,
       researcher_id: result.user.id,
     });
+  });
+
+  const quotaPolicy = new ResearcherQuotaPolicy(dependencies.isOperator);
+
+  // Internal service policy lookup; Caddy never routes /internal to Auth.
+  app.get("/internal/researchers/:researcherId/quota-policy", async (context) => {
+    const researcherId = z.uuid().safeParse(context.req.param("researcherId"));
+    if (!researcherId.success) return context.json({ code: "INVALID_RESEARCHER" }, 400);
+    try {
+      return context.json(await quotaPolicy.forResearcher(researcherId.data));
+    } catch {
+      return context.json({ code: "AUTH_SERVICE_UNAVAILABLE" }, 503);
+    }
   });
 
   app.get("/internal/operator/page-access", async (context) => {

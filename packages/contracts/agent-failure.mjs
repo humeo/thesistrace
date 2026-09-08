@@ -1,5 +1,6 @@
 // The browser and Host share codes/copy, never provider exception messages.
 const definitions = {
+  DAILY_MODEL_BUDGET_EXCEEDED: ["Daily model budget reached", "Your remaining daily model budget cannot cover another call. Try again after your daily quota resets. Accepted research continues independently.", "retry"],
   AUTHENTICATION_REQUIRED: ["Sign in required", "Your login session is no longer active. Sign in before sending another message.", "sign-in"],
   AGENT_UNAVAILABLE: ["Agent unavailable", "The Agent connection is unavailable. Reconnect to check the accepted run before sending again.", "reconnect"],
   INVALID_MODEL: ["Model unavailable", "This model is no longer enabled. Choose a registered model for the next run.", "select-model"],

@@ -97,7 +97,7 @@ const modelRegistry = readModelRegistry(JSON.stringify({
       provider_adapter: "scripted",
       provider_model_id: "scripted-v1",
       reasoning_efforts: ["none", "medium", "max"],
-      context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      context_window: 65_536, max_output_tokens: 128_000, pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     },
     {
       default_reasoning_effort: "medium",
@@ -107,7 +107,7 @@ const modelRegistry = readModelRegistry(JSON.stringify({
       provider_adapter: "scripted",
       provider_model_id: "scripted-failure-v1",
       reasoning_efforts: ["medium"],
-      context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      context_window: 65_536, max_output_tokens: 128_000, pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     },
   ],
 }), { THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "integration-secret" });
@@ -128,7 +128,7 @@ const memoryConfiguration = { ...settings, modelRegistry: readModelRegistry(JSON
   min_compaction_context_window: 65_536, default_model_key: "luna",
   models: [{ context_window: 65_536, max_output_tokens: 128_000, key: "luna", display_name: "Luna", enabled: true,
     provider_adapter: "openai", provider_model_id: "gpt-5.6-luna", default_reasoning_effort: "high",
-    reasoning_efforts: ["high"], secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY" }],
+    reasoning_efforts: ["high"], pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY" }],
 }), { THESISTRACE_AGENT_OPENAI_API_KEY: "memory-replay-only" }) };
 
 const createIntegrationRuntime = () => createResearchRuntime(settings, {
@@ -143,7 +143,10 @@ const createIntegrationRuntime = () => createResearchRuntime(settings, {
 // Production stdout/stderr is checked by the final-image Canary test. Other
 // real-PG cases do not need hundreds of repeated, content-free metric lines.
 function createResearchRuntime(configuration: AgentSettings, dependencies: ResearchRuntimeDependencies = {}) {
-  return createRuntime(configuration, { telemetry: () => undefined, ...dependencies });
+  return createRuntime(configuration, { telemetry: () => undefined,
+    quotaPolicyFetch: async () => Response.json({ timezone: "Asia/Shanghai",
+      daily_model_budget_nanodollars: 1_000_000_000, daily_run_limit: 10, active_daily_track_limit: 10 }),
+    ...dependencies });
 }
 
 describe.sequential("durable Research Agent runtime", () => {
@@ -492,7 +495,7 @@ describe.sequential("durable Research Agent runtime", () => {
       min_compaction_context_window: 65_536, default_model_key: "luna",
       models: [{ context_window: 32_768, max_output_tokens: 128_000, key: "luna", display_name: "Luna", enabled: true,
         provider_adapter: "openai", provider_model_id: "gpt-5.6-luna", default_reasoning_effort: "high",
-        reasoning_efforts: ["high"], secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY" }],
+        reasoning_efforts: ["high"], pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY" }],
     }), { THESISTRACE_AGENT_OPENAI_API_KEY: "memory-replay-only" }) };
     const dependencies = { mcpRunFactory: async () => ({ close: async () => undefined,
       hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }) };
@@ -890,7 +893,7 @@ describe.sequential("durable Research Agent runtime", () => {
     try { await run(runtime, input, primaryResearcher); } finally { await runtime.close(); }
     const nextRegistry = readModelRegistry(JSON.stringify({ min_compaction_context_window: 65_536, default_model_key: "scripted-next", models: [{
       default_reasoning_effort: "high", display_name: "Scripted Next", enabled: true, key: "scripted-next", provider_adapter: "scripted",
-      provider_model_id: "scripted-next-id", reasoning_efforts: ["high"], context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
+      provider_model_id: "scripted-next-id", reasoning_efforts: ["high"], context_window: 65_536, max_output_tokens: 128_000, pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: "THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET",
     }] }), { THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET: "fixture-secret" });
     const discover = vi.fn(async () => ({ close: async () => undefined, hasFatalToolFailure: () => false, toolFailure: () => undefined, tools: {} }));
     const restarted = await createResearchRuntime({ ...settings, modelRegistry: nextRegistry }, { mcpRunFactory: discover });
@@ -1155,7 +1158,7 @@ describe.sequential("durable Research Agent runtime", () => {
           key: "gpt-5.6-luna", display_name: "GPT-5.6 Luna", enabled: true,
           provider_adapter: "openai", provider_model_id: "gpt-5.6-luna",
           default_reasoning_effort: "high", reasoning_efforts: ["high"],
-          context_window: 65_536, max_output_tokens: 128_000, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
+          context_window: 65_536, max_output_tokens: 128_000, pricing_usd_per_million_tokens: { input: 0, cache_read: 0, cache_write: 0, output: 0 }, secret_env: "THESISTRACE_AGENT_OPENAI_API_KEY",
         }],
       }), { THESISTRACE_AGENT_OPENAI_API_KEY: "fixture-only" }) };
       const openRuntime = () => createResearchRuntime(configuration, { mcpRunFactory: async () => ({

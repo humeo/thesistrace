@@ -157,6 +157,7 @@ def assert_worker_succeeded(completed: subprocess.CompletedProcess[str]) -> None
 
 def core_environment(settings: CoreSettings) -> dict[str, str]:
     return {
+        "THESISTRACE_AUTH_INTERNAL_ORIGIN": os.environ["THESISTRACE_AUTH_INTERNAL_ORIGIN"],
         "THESISTRACE_DATABASE_URL": settings.database_url,
         "THESISTRACE_S3_ENDPOINT_URL": settings.s3_endpoint_url,
         "THESISTRACE_S3_ACCESS_KEY_ID": settings.s3_access_key_id,

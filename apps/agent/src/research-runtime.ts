@@ -73,6 +73,7 @@ import { SessionTitleGenerator } from "./session-title.js";
 import type { VerifiedResearcher } from "./session-verifier.js";
 import { verifyAgentSchema } from "./schema-contract.js";
 import { RunUsageCapture } from "./usage-capture.js";
+import { ModelBudget } from "./model-budget.js";
 import { AGENT_LIMITS, RunModelObservation } from "./guarded-language-model.js";
 import { providerFailureCode } from "./run-failure.js";
 import { agentTraceId, createRunTelemetry, type AgentTelemetryWriter } from "./run-telemetry.js";
@@ -139,6 +140,7 @@ export type ResearchRuntime = Readonly<{
 export type ResearchRuntimeDependencies = Readonly<{
   mcpRunFactory?: McpRunFactory;
   readinessFetch?: typeof globalThis.fetch;
+  quotaPolicyFetch?: typeof globalThis.fetch;
   telemetry?: AgentTelemetryWriter;
 }>;
 
@@ -167,6 +169,7 @@ export async function createResearchRuntime(
     fetch: dependencies.readinessFetch,
   });
   const modelRuntime = new RegisteredModelRuntime(settings.modelRegistry);
+  const modelBudget = new ModelBudget(pool, settings.authInternalOrigin, dependencies.quotaPolicyFetch);
   const mcpRunFactory = dependencies.mcpRunFactory ?? createMcpRunFactory(settings);
   const storage = new PostgresStore({
     disableInit: true,
@@ -337,6 +340,7 @@ export async function createResearchRuntime(
               ? resumedExecution?.selection.reasoningEffort ?? "medium"
               : validated.reasoningEffort,
             modelObservation,
+            { budget: modelBudget, researcherId },
           );
       if (
         resumedExecution !== undefined
@@ -346,7 +350,7 @@ export async function createResearchRuntime(
       }
       const titleSelection = validated?.command !== "prompt"
         ? undefined
-        : modelRuntime.resolve(validated.modelKey, validated.reasoningEffort);
+        : modelRuntime.resolve(validated.modelKey, validated.reasoningEffort, undefined, { budget: modelBudget, researcherId });
       const requestContext = createRequestContext(selection);
       requestContext.set("modelObservation", modelObservation);
       requestContext.set("continueIntent", validated?.command === "continue");

@@ -166,6 +166,7 @@ async function main(): Promise<void> {
       consumePasswordResetRateLimit: (token, headers) =>
         passwordResetRateLimiter.consume(token, headers),
       getSession: (input) => auth.api.getSession(input),
+      isOperator: (researcherId) => operatorDirectory.isOperator(researcherId),
       hasOperatorCapability: (principal) =>
         operatorDirectory.hasCapability(principal),
       httpObserver: createAuthHttpObserver(),

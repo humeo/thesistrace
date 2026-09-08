@@ -135,6 +135,7 @@ from thesistrace.research_run.planning import (
     ResearchChunkCapacityError,
     plan_research_chunks,
 )
+from thesistrace.research_run.quota import daily_run_count
 from thesistrace.research_run.result import (
     STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
     ResearchResultError,
@@ -143,6 +144,11 @@ from thesistrace.research_run.result import (
     read_result_bundle,
     read_semantic_result_section,
     result_publication_payloads_from_staged,
+)
+from thesistrace.researcher.quota import (
+    QuotaPolicyLookup,
+    QuotaPolicyUnavailable,
+    unavailable_quota_policy,
 )
 
 ATTEMPT_LEASE_SECONDS = 15 * 60
@@ -340,6 +346,7 @@ class ResearchRunService:
         self,
         database: PostgresDatabase,
         *,
+        quota_policy: QuotaPolicyLookup = unavailable_quota_policy,
         dataset_lifecycle: DatasetLifecycle | None = None,
         generation_store: MountedGenerationStore | None = None,
         publication: Publication | None = None,
@@ -361,6 +368,7 @@ class ResearchRunService:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
         self._database = database
+        self._quota_policy = quota_policy
         self._dataset_lifecycle = dataset_lifecycle
         self._generation_store = generation_store
         self._publication = publication
@@ -946,6 +954,22 @@ class ResearchRunService:
         if execution_owner not in {"ordinary", "research_batch"}:
             raise ValueError("ResearchRun execution owner is invalid")
         immutable_input = prepared.immutable_input
+        policy = self._quota_policy(prepared.researcher_id)
+        count = daily_run_count(transaction, prepared.researcher_id, policy.timezone)
+        if policy.daily_run_limit is not None and count >= policy.daily_run_limit:
+            raise ResearchRunAdmissionRejected(
+                [
+                    ResearchRunAdmissionIssue(
+                        code="DAILY_RUN_QUOTA_EXCEEDED",
+                        field="request_id",
+                        message=(
+                            "Daily ResearchRun submission limit of "
+                            f"{policy.daily_run_limit} reached. "
+                            f"Resets at 00:00 {policy.timezone}."
+                        ),
+                    )
+                ]
+            )
         transaction.execute(
             """
             INSERT INTO research_runs.run_ownership (researcher_id, run_id)
@@ -1040,7 +1064,19 @@ class ResearchRunService:
     ) -> ResearchRunAdmissionOutcome:
         try:
             return self._admit_with_outcome(researcher_id, command)
-        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+        except ResearchRunAdmissionRejected as error:
+            return self._record_admission_rejection(
+                researcher_id,
+                command,
+                request_fingerprint=_admission_fingerprint(command),
+                issues=error.issues,
+            )
+        except (
+            OperationalError,
+            PoolTimeout,
+            PublicationUnavailableError,
+            QuotaPolicyUnavailable,
+        ) as error:
             raise ResearchRunTemporarilyUnavailable(
                 "ResearchRun admission is temporarily unavailable"
             ) from error
@@ -2047,9 +2083,7 @@ class ResearchRunService:
                     replayed=False,
                 )
         except DailyTrackActivationLimitReached as error:
-            raise ResearchRunTrackingUnavailable(
-                "Active DailyTrack limit of 10 reached"
-            ) from error
+            raise ResearchRunTrackingUnavailable(str(error)) from error
         except DailyTrackAlreadyExists as error:
             raise ResearchRunTrackingUnavailable("ResearchRun already has a DailyTrack") from error
         except UniqueViolation as error:
@@ -2059,7 +2093,12 @@ class ResearchRunService:
             }:
                 raise
             raise ResearchRunTrackingUnavailable("ResearchRun already has a DailyTrack") from error
-        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+        except (
+            OperationalError,
+            PoolTimeout,
+            PublicationUnavailableError,
+            QuotaPolicyUnavailable,
+        ) as error:
             raise ResearchRunTrackingTemporarilyUnavailable(
                 "Start Tracking is temporarily unavailable"
             ) from error

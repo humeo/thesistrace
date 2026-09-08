@@ -71,11 +71,16 @@ from thesistrace.research_kernel import (
     empty_continuation,
     run,
 )
-from thesistrace.research_run import ResearchRunCancelCommand, ResearchRunService
+from thesistrace.research_run import (
+    ResearchRunCancelCommand,
+    ResearchRunService,
+    ResearchRunTrackingUnavailable,
+)
 from thesistrace.research_run.execution import SupervisedResearchExecutor
-from thesistrace.research_run.models import ImmutableRunInput
+from thesistrace.research_run.models import ImmutableRunInput, StartTrackingCommand
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
 from thesistrace.research_series import research_sessions, slice_research_sessions
+from thesistrace.researcher.quota import QuotaPolicy
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -3299,6 +3304,11 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
     with TestClient(create_app(settings)) as client:
         run_ids: list[str] = []
         for index in range(11):
+            if index == 10:
+                # Track capacity spans days; these seeds were submitted yesterday.
+                with client.app.state.core_runtime.database.transaction() as transaction:
+                    transaction.execute("""UPDATE research_runs.run_ownership
+                        SET created_at = created_at - interval '1 day'""")
             accepted = client.post(
                 "/api/research-runs",
                 json=_run_command(f"current-track-capacity-{index}"),
@@ -3315,6 +3325,16 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
         assert runtime.research_runs.process_next() is False
         for run_id in run_ids:
             assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "succeeded"
+
+        zero_tracks = DailyTrackService(runtime.database, publication=runtime.publication,
+            quota_policy=lambda _rid: QuotaPolicy(timezone="Asia/Shanghai",
+                daily_model_budget_nanodollars=0, daily_run_limit=0, active_daily_track_limit=0))
+        zero_runs = ResearchRunService(runtime.database, publication=runtime.publication,
+            activate_track=zero_tracks.activate)
+        with pytest.raises(ResearchRunTrackingUnavailable, match="limit of 0"):
+            zero_runs.start_tracking(TEST_RESEARCHER.researcher_id, run_ids[0],
+                StartTrackingCommand(request_id="zero-track-policy"))
+        assert client.get("/api/daily-tracks").json()["items"] == []
 
         same_seed_barrier = Barrier(4)
 
@@ -3469,6 +3489,25 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             )
             == 10
         )
+
+        # The same public service permits an Operator to exceed business capacity.
+
+        extra = client.post("/api/research-runs", json=_run_command("operator-track-seed"))
+        assert extra.status_code == 202
+        assert runtime.research_runs.process_next() is True
+        extra_id = extra.json()["id"]
+        assert client.post(f"/api/research-runs/{extra_id}/daily-tracks",
+            json={"request_id": "ordinary-extra-track"}).status_code == 409
+        operator_tracks = DailyTrackService(runtime.database, publication=runtime.publication,
+            quota_policy=lambda _researcher_id: QuotaPolicy(
+                timezone="Asia/Shanghai", daily_model_budget_nanodollars=None,
+                daily_run_limit=None, active_daily_track_limit=None))
+        operator_runs = ResearchRunService(runtime.database, publication=runtime.publication,
+            activate_track=operator_tracks.activate)
+        assert operator_runs.start_tracking(TEST_RESEARCHER.researcher_id, extra_id,
+            StartTrackingCommand(request_id="operator-extra-track")) is not None
+        assert sum(track["status"] in {"active", "blocked", "stopping"}
+            for track in client.get("/api/daily-tracks").json()["items"]) == 11
 
 
 @pytest.mark.skipif(
