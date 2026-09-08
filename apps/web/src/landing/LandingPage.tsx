@@ -37,7 +37,6 @@ export default function Landing() {
     <header className="qt-header">
       <a className="qt-brand" href="#top" aria-label={t.home}><Brand language={language}/></a>
       <nav aria-label={t.navigation}>
-        <a href="#method">{t.method}</a><a href="#preview">{t.preview}</a>
         <a className="qt-community" href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer" aria-label={t.community} title={t.community}><img src="/brand/discord-symbol-white.svg" alt="" width={20} height={15}/><span>Discord</span></a>
         <div className="qt-language" role="group" aria-label="Language / 语言">
           <button type="button" lang="en" aria-label="English" aria-pressed={language === 'en'} onClick={() => changeLanguage('en')}>EN</button>
