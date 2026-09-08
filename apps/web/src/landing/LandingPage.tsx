@@ -77,6 +77,6 @@ export default function Landing() {
       </section>
       <section className="qt-access"><h2>{t.accessTitle}</h2><p>{t.accessBody}</p><a className="qt-primary" href="/login">{t.login}</a></section>
     </main>
-    <footer><a className="qt-brand" href="#top"><Brand language={language}/></a><p>{t.footer}</p></footer>
+    <footer><a className="qt-brand" href="#top"><Brand language={language}/></a><a className="qt-community" href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer">{t.community}<span aria-hidden="true">↗</span></a><p>{t.footer}</p></footer>
   </div>;
 }

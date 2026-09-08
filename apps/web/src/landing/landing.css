@@ -783,3 +783,13 @@ html:lang(en) .landing-page dt {
 .landing-page button {
   box-shadow:none
 }
+
+.landing-page .qt-community {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  color: #d0d6e0;
+  font-size: 14px;
+}
+.landing-page .qt-community:hover { color: #aab2ff; }

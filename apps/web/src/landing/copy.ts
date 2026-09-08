@@ -11,7 +11,7 @@ export const copy = {
         ],
         validation: [['Factor performance', 'Examine the relationship between signals and subsequent returns'], ['Strategy backtest', 'Inspect returns, drawdowns and changes in holdings'], ['Research context', 'Keep the expression, parameters and data context together']],
         tracking: [['Starting point', 'An existing research result'], ['Frequency', 'After the market closes'], ['Record', 'Review daily observations and run status']],
-        accessTitle: 'Your next experiment starts with a hypothesis.', accessBody: 'A quantitative research workbench for China A-shares.', footer: 'QuantTrace · Quantitative Research Workbench',
+        accessTitle: 'Your next experiment starts with a hypothesis.', accessBody: 'A quantitative research workbench for China A-shares.', footer: 'QuantTrace · Quantitative Research Workbench', community: 'Join Discord',
         meta: 'QuantTrace: a quantitative research workbench for China A-shares. Factor research, strategy backtesting and daily tracking.',
     },
     zh: {
@@ -25,6 +25,6 @@ export const copy = {
         ],
         validation: [['因子表现', '观察信号与后续收益的关系'], ['策略回测', '检查收益、回撤和持仓变化'], ['研究依据', '保留表达式、参数与数据上下文']],
         tracking: [['起点', '已有研究结果'], ['频率', '交易日收盘后'], ['记录', '逐日查看观察结果与运行状态']],
-        accessTitle: '下一次研究，从一个假设开始。', accessBody: '面向 A 股研究者的量化实验工作台。', footer: '量研 · 量化实验工作台', meta: '量研 QuantTrace：从因子研究、策略回测到每日跟踪的量化实验工作台。',
+        accessTitle: '下一次研究，从一个假设开始。', accessBody: '面向 A 股研究者的量化实验工作台。', footer: '量研 · 量化实验工作台', community: '加入社区', meta: '量研 QuantTrace：从因子研究、策略回测到每日跟踪的量化实验工作台。',
     },
 };
