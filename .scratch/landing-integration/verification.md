@@ -13,3 +13,5 @@ Verification before merge:
 - Logs: `/private/tmp/landing-auth-integration.txt`, `/private/tmp/landing-auth-recheck.txt`, `/private/tmp/landing-auth-target.txt`, `/private/tmp/landing-browser-final.txt`, `/private/tmp/landing-build.txt`.
 
 No production deployment or real email delivery was performed. Main contains unrelated uncommitted parallel work, which must be preserved during merge. Destination checks will be recorded after merge.
+
+Destination `main` at `f35f66a`: Auth/Web typechecks passed; Auth unit tests 75/75, isolated integration tests 55/55, browser tests 4/4 passed. Logs: `/private/tmp/main-landing-{unit,auth,browser}.txt`. All pre-existing tracked edits were verified by content hash, and the parallel styles diff hunks were verified unchanged after restoration. The initial integration timeout remains recorded above; no production timeout setting was relaxed.
