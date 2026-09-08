@@ -99,10 +99,11 @@ export class ResearchA2UIEventProjector {
     this.frameworkCalls.set(toolCallId, { ...call, terminal: true });
     const messageId = `a2ui-surface-${toolCallId}`;
     if (!isResearchA2UIMessageId(messageId) || call.ownerMessageId === null) return empty();
-    const projected = projectResearchA2UIContent(parseToolResult(result));
+    const parsed = parseToolResult(result);
+    const projected = projectResearchA2UIContent(parsed);
     const confirmed = projected.valid && projected.kind === "ready";
     const activity: PersistableA2UIActivity = {
-      content: confirmed ? projected.content : safeResearchA2UIErrorContent(),
+      content: confirmed ? projected.content : result === undefined ? safeResearchA2UIErrorContent("TOOL_RESULT_MISSING") : parsed === undefined ? safeResearchA2UIErrorContent("TOOL_RESULT_INVALID_JSON") : projected.content,
       lifecycle: confirmed ? "ready" : "error",
       messageId,
       ownerMessageId: call.ownerMessageId,

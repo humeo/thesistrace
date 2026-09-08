@@ -17,12 +17,12 @@ describe("Research A2UI contract", () => {
     expect(Object.keys(RESEARCH_A2UI_INLINE_CATALOG.components).sort()).toEqual([
       "AlphaProposal",
       "Column",
+      "DailyTrack",
       "Divider",
       "Formula",
       "Navigation",
-      "Provenance",
-      "ResearchRunStatus",
-      "ResultMetrics",
+      "ResearchComparison",
+      "ResearchRun",
       "Row",
       "Table",
       "Text",
@@ -118,7 +118,7 @@ describe("Research A2UI contract", () => {
     ["multiple parents", () => replaceComponent("row", { ...component("row"), children: ["text", "formula"] })],
   ])("rejects %s as one stable safe error", (_name, mutate) => {
     expect(projectResearchA2UIContent(envelope(mutate()))).toEqual({
-      content: safeResearchA2UIErrorContent(),
+      content: safeResearchA2UIErrorContent("INVALID_OPERATIONS"),
       kind: "error",
       valid: false,
     });
@@ -164,7 +164,7 @@ describe("Research A2UI contract", () => {
       incomplete,
     ]) {
       expect(projectResearchA2UIContent(candidate)).toMatchObject({
-        content: safeResearchA2UIErrorContent(),
+        content: { status: "failed", errorCode: expect.stringMatching(/^INVALID_/) },
         kind: "error",
         valid: false,
       });
@@ -218,20 +218,8 @@ function allComponents(): Record<string, unknown>[] {
       title: "Low-volatility factor",
       universe: "top1000",
     },
-    {
-      component: "ResearchRunStatus",
-      formula: "rank(-abs(pct_change(close, 1)))",
-      id: "status",
-      phase: "Result available",
-      runId: RUN_ID,
-      status: "succeeded",
-    },
-    {
-      component: "ResultMetrics",
-      id: "metrics",
-      metrics: [{ label: "Rank IC", value: "0.1200" }],
-      title: "Factor result",
-    },
+    { component: "ResearchRun", id: "status", runId: RUN_ID },
+    { component: "ResearchComparison", id: "metrics", runIds: ["run_0123456789abcdef0123"] },
     {
       caption: "Authoritative result metrics",
       columns: ["Metric", "Value"],
@@ -241,12 +229,7 @@ function allComponents(): Record<string, unknown>[] {
       rows: [["Rank IC", "0.1200"]],
       summary: "Inspect metrics",
     },
-    {
-      component: "Provenance",
-      entries: [{ label: "ResearchRun", value: RUN_ID }],
-      id: "provenance",
-      summary: "Inspect provenance",
-    },
+    { component: "DailyTrack", id: "provenance", trackId: "track_0123456789abcdef0123" },
     {
       component: "Navigation",
       href: `/research-runs/${RUN_ID}`,

@@ -35,12 +35,12 @@ describe("Research A2UI renderer", () => {
     expect(Object.keys(researchA2UICatalogDefinitions).sort()).toEqual([
       "AlphaProposal",
       "Column",
+      "DailyTrack",
       "Divider",
       "Formula",
       "Navigation",
-      "Provenance",
-      "ResearchRunStatus",
-      "ResultMetrics",
+      "ResearchComparison",
+      "ResearchRun",
       "Row",
       "Table",
       "Text",
@@ -63,10 +63,10 @@ describe("Research A2UI renderer", () => {
         .not.toBeNull();
     });
     expect(document.body.textContent).toContain("Research evidence");
-    expect(document.body.textContent).toContain("Succeeded");
-    expect(document.querySelector(`[aria-label="ResearchRun ${RUN_ID}: succeeded"]`))
+    expect(document.body.textContent).toContain(RUN_ID);
+    expect(document.querySelector(`[aria-label="ResearchRun ${RUN_ID}"]`))
       .not.toBeNull();
-    expect(document.querySelector('a[href="/research-runs/run_0123456789abcdef0123"]')?.textContent)
+    expect([...document.querySelectorAll('a')].find(a => a.textContent === 'Open authoritative ResearchRun')?.textContent)
       .toContain("Open authoritative ResearchRun");
     expect(document.querySelector("img, iframe, script, style")).toBeNull();
 
@@ -89,14 +89,6 @@ describe("Research A2UI renderer", () => {
     expect(table?.querySelector("caption")?.textContent).toBe("Authoritative result metrics");
     expect(table?.querySelector('td[data-label="Metric"] .chat-a2ui-cell-value')?.textContent)
       .toBe("Rank IC");
-
-    const provenance = [...document.querySelectorAll("button")].find((button) => (
-      button.textContent?.includes("Inspect provenance") === true
-    ));
-    if (provenance === undefined) throw new Error("Provenance disclosure was not rendered");
-    await act(async () => provenance.click());
-    expect(document.body.textContent).toContain("Result section");
-    expect(document.body.textContent).toContain("factor");
 
     await act(async () => root.unmount());
   });
@@ -169,7 +161,7 @@ describe("Research A2UI renderer", () => {
       }],
     }, "a2ui-surface-invalid"));
     expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-      "could not be displayed",
+      "could not be prepared",
     );
     expect(document.body.textContent).not.toContain("Do not partially render me");
     expect(document.querySelector("button, a")).toBeNull();
@@ -254,20 +246,8 @@ function allComponents(): Record<string, unknown>[] {
       title: "Low-volatility factor",
       universe: "top1000",
     },
-    {
-      component: "ResearchRunStatus",
-      formula: "rank(-abs(pct_change(close, 1)))",
-      id: "status",
-      phase: "Result available",
-      runId: RUN_ID,
-      status: "succeeded",
-    },
-    {
-      component: "ResultMetrics",
-      id: "metrics",
-      metrics: [{ label: "Rank IC", value: "0.1200" }],
-      title: "Factor result",
-    },
+    { component: "ResearchRun", id: "status", runId: RUN_ID },
+    { component: "ResearchComparison", id: "metrics", runIds: ["run_0123456789abcdef0123"] },
     {
       caption: "Authoritative result metrics",
       columns: ["Metric", "Value"],
@@ -276,15 +256,7 @@ function allComponents(): Record<string, unknown>[] {
       rows: [["Rank IC", "0.1200"]],
       summary: "Inspect metrics",
     },
-    {
-      component: "Provenance",
-      entries: [
-        { label: "ResearchRun", value: RUN_ID },
-        { label: "Result section", value: "factor" },
-      ],
-      id: "provenance",
-      summary: "Inspect provenance",
-    },
+    { component: "DailyTrack", id: "provenance", trackId: "track_0123456789abcdef0123" },
     {
       component: "Navigation",
       href: `/research-runs/${RUN_ID}`,

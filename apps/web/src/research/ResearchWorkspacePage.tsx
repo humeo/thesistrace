@@ -6,7 +6,7 @@ import {
   Play,
   Plus,
 } from "@phosphor-icons/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { AlphaCatalog } from "../alphaCatalog";
 import { coreFetch } from "../auth/coreFetch";
@@ -180,17 +180,19 @@ export function ResearchWorkspacePage({ location, researcherId }: { location: Br
 
   return (
     <section aria-label="Research workspace" className="research-folder-layout">
-      <ResearchFolderNavigation
-        activeFolder={resources.folder}
-        error={folderError}
-        folders={resources.folders}
-        onCreate={createFolder}
-        onDelete={deleteFolder}
-        onRename={renameFolder}
-      />
       <ResearchDraftWorkspace
         key={`${researcherId}:${resources.folder.id}`}
         researcherId={researcherId}
+        folderNavigation={
+          <ResearchFolderNavigation
+            activeFolder={resources.folder}
+            error={folderError}
+            folders={resources.folders}
+            onCreate={createFolder}
+            onDelete={deleteFolder}
+            onRename={renameFolder}
+          />
+        }
         {...resources}
       />
     </section>
@@ -217,7 +219,6 @@ export function ResearchFolderNavigation({
   useEffect(() => setRenameName(activeFolder.name), [activeFolder.id, activeFolder.name]);
   return (
     <div className="research-folder-control">
-      <span className="research-control-label">Folder</span>
       <details aria-label="Research Folders" className="research-folder-navigation">
         <summary>
           <FolderSimple aria-hidden="true" size={18} weight="regular" />
@@ -227,7 +228,6 @@ export function ResearchFolderNavigation({
         <div className="folder-menu-panel">
           <div className="folder-navigation-heading">
             <span>Folders</span>
-            <small>One level</small>
           </div>
           <nav aria-label="Research Folder navigation">
             {folders.map((folder) => (
@@ -361,11 +361,13 @@ export function ResearchDraftWorkspace({
   folder,
   catalog,
   data,
+  folderNavigation,
   storage = window.localStorage,
   confirmDiscard = (message) => window.confirm(message),
   startNewOnOpen = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("new"),
 }: Omit<WorkspaceResources, "folders"> & {
   researcherId: string;
+  folderNavigation?: ReactNode;
   storage?: Storage;
   confirmDiscard?: (message: string) => boolean;
   startNewOnOpen?: boolean;
@@ -512,6 +514,7 @@ export function ResearchDraftWorkspace({
   return (
     <section aria-label="Research" className="page-section research-workspace">
       <header className="research-workspace-header">
+        {folderNavigation}
         <label className="research-name-field" htmlFor="research-name">
           <span className="research-control-label">Draft name</span>
           <input
@@ -544,6 +547,7 @@ export function ResearchDraftWorkspace({
             onChange={(formula, editor) => updateDraft((current) => ({ ...current, formula, editor }))}
             selection={draft.editor}
           />
+          <footer className="formula-status"><span>Alpha expression</span><span>Ctrl + Space to autocomplete</span></footer>
         </div>
         {diagnosticState.kind === "complete" && diagnosticState.result.diagnostics.length > 0 ? (
           <ul aria-label="Formula diagnostics" className="formula-diagnostics">
@@ -565,10 +569,29 @@ export function ResearchDraftWorkspace({
             ))}
           </ul>
         ) : null}
+        <div className="research-editor-context">
+          <span>Market data</span>
+          <span>{coverage ? `${coverage.start} — ${coverage.end}` : "Not ready for research"}</span>
+        </div>
+        <div className="research-notes">
+          <label htmlFor="research-notes">Notes</label>
+          <textarea
+            aria-describedby="research-notes-limit"
+            aria-invalid={Array.from(draft.hypothesis).length > MAX_HYPOTHESIS_LENGTH}
+            id="research-notes"
+            onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))}
+            placeholder="Optional context for this research"
+            rows={3}
+            value={draft.hypothesis}
+          />
+          <p id="research-notes-limit">
+            {Array.from(draft.hypothesis).length} / {MAX_HYPOTHESIS_LENGTH} characters
+          </p>
+        </div>
       </section>
 
       <section className="research-run-settings" id="research-parameters" aria-label="Research parameters">
-          <header><h2>Research parameters</h2></header>
+          <header><h2>Research parameters</h2><p>Configure your next run.</p></header>
           <div className="run-configuration-grid">
             <fieldset className="research-kind-control">
               <legend>Research type</legend>
@@ -648,22 +671,8 @@ export function ResearchDraftWorkspace({
                 />
               </>
             ) : null}
-            <div className="research-notes">
-              <label htmlFor="research-notes">Notes</label>
-              <textarea
-                aria-describedby="research-notes-limit"
-                aria-invalid={Array.from(draft.hypothesis).length > MAX_HYPOTHESIS_LENGTH}
-                id="research-notes"
-                onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))}
-                placeholder="Optional context for this research"
-                rows={3}
-                value={draft.hypothesis}
-              />
-              <p id="research-notes-limit">
-                {Array.from(draft.hypothesis).length} / {MAX_HYPOTHESIS_LENGTH} characters
-              </p>
-            </div>
             <footer>
+              <p>{isCompleteResearchInputs(researchInputs(draft)) ? "Ready to run." : "Complete the formula and research parameters to start a run."}</p>
               <button
                 className="button button-primary"
                 disabled={!isCompleteResearchInputs(researchInputs(draft)) || submitting}

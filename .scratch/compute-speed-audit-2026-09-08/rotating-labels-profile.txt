@@ -1,0 +1,41 @@
+         6866093 function calls (6866090 primitive calls) in 5.697 seconds
+
+   Ordered by: cumulative time
+   List reduced from 72 to 35 due to restriction <35>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    5.701    5.701 rotating_labels.py:101(operation)
+        1    0.820    0.820    5.693    5.693 factor.py:109(prepare_columnar_forward_labels)
+   640332    0.202    0.000    2.820    0.000 <frozen _collections_abc>:804(get)
+   640332    0.607    0.000    2.618    0.000 columnar_series.py:41(__getitem__)
+      7/4    0.000    0.000    1.500    0.375 functools.py:982(__get__)
+        2    0.499    0.250    1.165    0.582 columnar_series.py:61(__init__)
+   210903    0.437    0.000    1.142    0.000 columnar_series.py:108(position)
+        1    0.000    0.000    0.978    0.978 columnar_series.py:390(adjusted_open_matrix)
+        1    0.000    0.000    0.972    0.972 columnar_series.py:410(_adjusted_open_numeric_matrix)
+   210907    0.118    0.000    0.889    0.000 fromnumeric.py:1459(searchsorted)
+   211359    0.117    0.000    0.776    0.000 fromnumeric.py:48(_wrapfunc)
+        1    0.000    0.000    0.652    0.652 columnar_series.py:261(_eod_index)
+   210907    0.612    0.000    0.612    0.000 {method 'searchsorted' of 'numpy.ndarray' objects}
+  1280671    0.556    0.000    0.556    0.000 {method 'get' of 'dict' objects}
+        1    0.000    0.000    0.516    0.516 columnar_series.py:340(trading_states)
+        1    0.000    0.000    0.513    0.513 columnar_series.py:270(_trading_state_index)
+   640332    0.199    0.000    0.408    0.000 columnar_series.py:139(__getitem__)
+        8    0.391    0.049    0.391    0.049 {built-in method numpy.asarray}
+   421806    0.368    0.000    0.368    0.000 columnar_series.py:46(<genexpr>)
+        1    0.013    0.013    0.320    0.320 columnar_series.py:448(_numeric_matrix)
+        1    0.009    0.009    0.304    0.304 columnar_series.py:471(_decimal_binary64_values)
+        1    0.095    0.095    0.258    0.258 {built-in method numpy.fromiter}
+   255001    0.163    0.000    0.163    0.000 columnar_series.py:479(<genexpr>)
+   210903    0.098    0.000    0.146    0.000 {built-in method builtins.any}
+   640332    0.125    0.000    0.125    0.000 factor.py:356(unavailable_reason)
+   427158    0.060    0.000    0.060    0.000 {built-in method builtins.len}
+   421806    0.048    0.000    0.048    0.000 columnar_series.py:47(<genexpr>)
+   211359    0.043    0.000    0.043    0.000 {built-in method builtins.getattr}
+        1    0.036    0.036    0.036    0.036 compute.py:348(cast)
+   210907    0.028    0.000    0.028    0.000 fromnumeric.py:1455(_searchsorted_dispatcher)
+      452    0.002    0.000    0.013    0.000 numeric.py:675(flatnonzero)
+        1    0.008    0.008    0.008    0.008 shape_base.py:378(stack)
+        7    0.006    0.001    0.007    0.001 numeric.py:323(full)
+        2    0.005    0.002    0.007    0.004 {built-in method builtins.sorted}
+        1    0.000    0.000    0.006    0.006 columnar_series.py:299(instruments)

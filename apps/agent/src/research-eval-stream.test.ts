@@ -76,11 +76,11 @@ describe("real-model evaluator AG-UI transport", () => {
       { id: "navigation", component: "Navigation", label: "Open", href: "/research-runs/run_0123456789abcdef0123" },
       { id: "visible", component: "Row", children: ["coverage_rank_ic_unavailable", "body"] },
       { id: "body", component: "Text", text: "Evidence", variant: "title" },
-      { id: "metrics", component: "ResultMetrics", title: "Metrics", metrics: [{ label: "Coverage", value: "100%" }] },
+      { component: "ResearchComparison", id: "metrics", runIds: ["run_0123456789abcdef0123"] },
       { id: "table", component: "Table", caption: "Observations", summary: "Rows", columns: ["Rank IC"], rows: [["unavailable"]] },
-      { id: "provenance", component: "Provenance", summary: "Source", entries: [{ label: "Sample", value: "One stock" }] },
+      { component: "DailyTrack", id: "provenance", trackId: "track_0123456789abcdef0123" },
     ]), frames.at(-1)])));
-    expect(turn.text).toBe("Evidence\nMetrics\nCoverage\n100%\nRows\nObservations\nRank IC\nunavailable\nSource\nSample\nOne stock\nOpen");
+    expect(turn.text).toBe("Evidence\nRows\nObservations\nRank IC\nunavailable\nOpen");
     expect(turn.text).not.toContain("run_0123456789abcdef0123");
     expect(researchEvalConversationMeetsOutcome({ outcome: "explained-result" }, [turn], { runId: "run_0123456789abcdef0123" })).toBe(false);
   });

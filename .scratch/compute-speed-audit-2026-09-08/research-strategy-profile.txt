@@ -1,0 +1,41 @@
+         6058384 function calls (6058356 primitive calls) in 2.358 seconds
+
+   Ordered by: cumulative time
+   List reduced from 311 to 35 due to restriction <35>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    2.358    2.358 benchmark.py:289(operation)
+        1    0.009    0.009    2.358    2.358 benchmark.py:269(calculate)
+        1    0.018    0.018    2.136    2.136 research_chunks.py:423(execute_research_chunk)
+        1    0.001    0.001    1.762    1.762 research_chunks.py:701(_execute_alpha_factor_chunk_from_validated)
+        1    0.001    0.001    0.702    0.702 factor.py:373(prepared_forward_factor_days_by_horizon)
+        1    0.088    0.088    0.701    0.701 factor.py:38(factor_days_by_horizon)
+     11/7    0.000    0.000    0.528    0.075 functools.py:982(__get__)
+        1    0.000    0.000    0.506    0.506 alpha.py:116(evaluate_columnar_alpha_sessions)
+        1    0.005    0.005    0.506    0.506 alpha.py:132(_evaluate_columnar_alpha)
+      556    0.170    0.000    0.403    0.001 {built-in method numpy.fromiter}
+        3    0.092    0.031    0.362    0.121 columnar_series.py:61(__init__)
+        1    0.000    0.000    0.355    0.355 research_chunks.py:531(_execute_strategy_chunk_from_validated_alpha_factor)
+        1    0.000    0.000    0.354    0.354 strategy.py:260(run_strategy_with_metric_state)
+        1    0.004    0.004    0.350    0.350 strategy.py:286(_execute_strategy)
+       64    0.016    0.000    0.301    0.005 alpha.py:295(advance_alpha_checksum)
+      192    0.021    0.000    0.297    0.002 factor.py:466(_factor_array_values)
+        1    0.020    0.020    0.213    0.213 factor.py:109(prepare_columnar_forward_labels)
+       64    0.020    0.000    0.209    0.003 {method 'join' of 'bytes' objects}
+     3572    0.002    0.000    0.209    0.000 fromnumeric.py:48(_wrapfunc)
+   192064    0.102    0.000    0.189    0.000 alpha.py:313(<genexpr>)
+        1    0.000    0.000    0.189    0.189 columnar_series.py:390(adjusted_open_matrix)
+        1    0.000    0.000    0.189    0.189 columnar_series.py:410(_adjusted_open_numeric_matrix)
+     1955    0.001    0.000    0.188    0.000 <frozen _collections_abc>:804(get)
+       27    0.000    0.000    0.183    0.007 {method 'extend' of 'list' objects}
+       65    0.003    0.000    0.183    0.003 research_chunks.py:743(<genexpr>)
+       64    0.062    0.001    0.180    0.003 research_chunks.py:827(_compact_pending_alpha)
+      383    0.115    0.000    0.172    0.000 columnar_series.py:187(__getitem__)
+      326    0.042    0.000    0.171    0.001 factor.py:516(_pearson_arrays)
+      749    0.153    0.000    0.153    0.000 {built-in method numpy.asarray}
+        2    0.009    0.005    0.141    0.071 columnar_series.py:448(_numeric_matrix)
+        1    0.000    0.000    0.140    0.140 columnar_series.py:340(trading_states)
+     1179    0.001    0.000    0.136    0.000 fromnumeric.py:1459(searchsorted)
+     1179    0.135    0.000    0.135    0.000 {method 'searchsorted' of 'numpy.ndarray' objects}
+        1    0.000    0.000    0.135    0.135 columnar_series.py:270(_trading_state_index)
+        2    0.010    0.005    0.132    0.066 columnar_series.py:471(_decimal_binary64_values)

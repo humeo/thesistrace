@@ -234,37 +234,16 @@ function readBatchDetail(value: JsonRecord, id: string, mode: BatchMode): BatchD
 function renderBatch(
   options: LanguageModelV3CallOptions,
   detail: BatchDetail,
-  resultRows: readonly string[][],
+  _resultRows: readonly string[][],
   surfaceId: string,
-  terminal: boolean,
+  _terminal: boolean,
 ): ScriptedResearchDecision {
   const progress = isRecord(detail.progress) ? detail.progress : undefined;
   const completed = detail.batch_kind === "factor_evaluation" ? progress?.completed_factor_tasks : progress?.completed_strategy_tasks;
   const total = detail.batch_kind === "factor_evaluation" ? progress?.total_factor_tasks : progress?.total_strategy_tasks;
   if (!Number.isSafeInteger(completed) || !Number.isSafeInteger(total)
     || typeof completed !== "number" || typeof total !== "number" || completed < 0 || total < 1 || completed > total) return incomplete();
-  const title = detail.batch_kind === "factor_evaluation" ? "Positive versus negative price-rank Alpha" : "Focused versus broad holdings";
-  const navigation = detail.items.filter((item) => item.run_availability === "available").map((item) => ({
-    component: "Navigation", href: `/research-runs/${item.research_run_id}`,
-    id: `child-${item.ordinal}`, label: `Open ${item.item_key} ResearchRun`,
-  }));
-  const components = [
-    { component: "Column", id: "root", gap: "normal", children: ["title", "progress", "comparison", "provenance", ...navigation.map((item) => item.id)] },
-    { component: "Text", id: "title", variant: "title", text: title },
-    { component: "Text", id: "progress", text: `Batch ${detail.id} · ${detail.status} · ${completed}/${total} completed` },
-    {
-      component: "Table", id: "comparison", caption: terminal ? "Ordered child ResearchRun results" : "Ordered Batch progress",
-      columns: ["Order", "Item", "ResearchRun", "Status", "Result"], initiallyExpanded: true,
-      rows: terminal ? resultRows : detail.items.map((item) => [String(item.ordinal), item.item_key, item.research_run_id, item.status, "Not read"]),
-      summary: terminal ? "Inspect Batch comparison" : "Inspect Batch progress",
-    },
-    {
-      component: "Provenance", id: "provenance", summary: "Inspect Batch provenance",
-      entries: [{ label: "Batch", value: detail.id }, { label: "Research type", value: detail.batch_kind },
-        { label: "Result ownership", value: "Each Child ResearchRun owns its own immutable Result; Batch has no aggregate Result." }],
-    },
-    ...navigation,
-  ];
+  const components = [{ component: "ResearchComparison", id: "root", runIds: detail.items.map((item) => item.research_run_id) }];
   const projected = projectResearchA2UIContent({ a2ui_operations: [{
     version: RESEARCH_A2UI_PROTOCOL_VERSION,
     createSurface: { catalogId: RESEARCH_A2UI_CATALOG_ID, surfaceId },

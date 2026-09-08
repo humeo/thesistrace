@@ -1,0 +1,175 @@
+{
+  "factor_coordinate_reuse": {
+    "samples_seconds": {
+      "current": [
+        0.4612542079994455,
+        0.423036125022918,
+        0.42732250003609806
+      ],
+      "shared": [
+        0.4464469169615768,
+        0.33778525004163384,
+        0.2813295000232756
+      ]
+    },
+    "median_seconds": {
+      "current": 0.42732250003609806,
+      "shared": 0.33778525004163384
+    },
+    "cpu_samples_seconds": {
+      "current": [
+        0.4317230000000003,
+        0.41409399999999996,
+        0.42218100000000014
+      ],
+      "shared": [
+        0.3563019999999999,
+        0.3230329999999997,
+        0.2793390000000002
+      ]
+    },
+    "phase_seconds": {
+      "current": [
+        {},
+        {},
+        {}
+      ],
+      "shared": [
+        {},
+        {},
+        {}
+      ]
+    },
+    "exact_equal": true,
+    "sha256": "b69929b74c9e4e55757337a380f28c63833073f8267e84a7e410e791e78c9f4c"
+  },
+  "factor_chunk_coordinate_reuse": {
+    "samples_seconds": {
+      "current": [
+        1.0493073749821633,
+        1.1334068749565631,
+        1.1581652919994667
+      ],
+      "shared": [
+        1.1706934999674559,
+        1.0174064169987105,
+        1.1346471249707974
+      ]
+    },
+    "median_seconds": {
+      "current": 1.1334068749565631,
+      "shared": 1.1346471249707974
+    },
+    "cpu_samples_seconds": {
+      "current": [
+        1.0278400000000003,
+        1.084682,
+        1.1253449999999994
+      ],
+      "shared": [
+        1.0891569999999993,
+        0.9884659999999998,
+        1.0899619999999999
+      ]
+    },
+    "phase_seconds": {
+      "current": [
+        {
+          "prepare_labels": 0.16921341698616743,
+          "alpha_and_pending": 0.5204549580230378,
+          "factor": 0.340862792043481,
+          "strategy": 0.0,
+          "finalize": 0.0005177499842830002
+        },
+        {
+          "prepare_labels": 0.1513014169759117,
+          "alpha_and_pending": 0.5498851250158623,
+          "factor": 0.41006025002570823,
+          "strategy": 0.0,
+          "finalize": 0.0004160419921390712
+        },
+        {
+          "prepare_labels": 0.17928174999542534,
+          "alpha_and_pending": 0.5554044580203481,
+          "factor": 0.40134833299089223,
+          "strategy": 0.0,
+          "finalize": 0.0005076249944977462
+        }
+      ],
+      "shared": [
+        {
+          "prepare_labels": 0.15066729200771078,
+          "alpha_and_pending": 0.6037021249649115,
+          "factor": 0.39044049999210984,
+          "strategy": 0.0,
+          "finalize": 0.0005137079861015081
+        },
+        {
+          "prepare_labels": 0.1807567920186557,
+          "alpha_and_pending": 0.5355782919796184,
+          "factor": 0.2836993749951944,
+          "strategy": 0.0,
+          "finalize": 0.0006481669843196869
+        },
+        {
+          "prepare_labels": 0.18637295899679884,
+          "alpha_and_pending": 0.5651559589896351,
+          "factor": 0.35648679203586653,
+          "strategy": 0.0,
+          "finalize": 0.0004314999678172171
+        }
+      ]
+    },
+    "exact_equal": true,
+    "sha256": "3abd5a8fab3bcaa28b68bbe3914b5d33da9af62aa1e60feb60dfab8e29fc6976"
+  },
+  "two_occurrence_formula": {
+    "formula": "rank(close / ts_mean(close, 20)) - rank(lag(close / ts_mean(close, 20), 5))",
+    "stocks": 300,
+    "sessions": 85,
+    "nodes_before": 15,
+    "nodes_after": 9,
+    "samples_seconds": {
+      "current": [
+        0.12627645797329023,
+        0.09826137498021126,
+        0.10197608300950378
+      ],
+      "shared": [
+        0.05471029196633026,
+        0.05284995795227587,
+        0.060234166972804815
+      ]
+    },
+    "median_seconds": {
+      "current": 0.10197608300950378,
+      "shared": 0.05471029196633026
+    },
+    "cpu_samples_seconds": {
+      "current": [
+        0.12420200000000037,
+        0.09728699999999968,
+        0.10101700000000058
+      ],
+      "shared": [
+        0.0543950000000013,
+        0.052699000000000495,
+        0.059361000000000885
+      ]
+    },
+    "phase_seconds": {
+      "current": [
+        {},
+        {},
+        {}
+      ],
+      "shared": [
+        {},
+        {},
+        {}
+      ]
+    },
+    "exact_equal": true,
+    "sha256": "415ce4607b8c2cbff18ddfc0c86b96fd51b50d7aaee81692c441419c639ac30d"
+  }
+}

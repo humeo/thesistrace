@@ -20,7 +20,7 @@ export type ResearchA2UIProjection = Readonly<{
   valid: boolean;
 }>;
 
-export function safeResearchA2UIErrorContent(): Record<string, unknown>;
+export function safeResearchA2UIErrorContent(errorCode?: string): Record<string, unknown>;
 export function isResearchA2UIMessageId(value: unknown): value is string;
 export function parseResearchA2UINavigationHref(value: unknown): string | null;
 export function projectResearchA2UIContent(value: unknown): ResearchA2UIProjection;

@@ -102,7 +102,7 @@ describe("ResearchA2UIEventProjector", () => {
       type: EventType.RUN_FINISHED,
     });
     expect(terminal.activities).toEqual([{
-      content: safeResearchA2UIErrorContent(),
+      content: safeResearchA2UIErrorContent("TOOL_RESULT_MISSING"),
       lifecycle: "error",
       messageId: "a2ui-surface-loading-call",
       ownerMessageId: "assistant-message",
@@ -110,7 +110,7 @@ describe("ResearchA2UIEventProjector", () => {
     }]);
     expect(terminal.events).toHaveLength(2);
     expect(terminal.events[0]).toMatchObject({
-      content: safeResearchA2UIErrorContent(),
+      content: safeResearchA2UIErrorContent("TOOL_RESULT_MISSING"),
       type: EventType.ACTIVITY_SNAPSHOT,
     });
     expect(terminal.events[1]?.type).toBe(EventType.RUN_FINISHED);
@@ -200,7 +200,7 @@ function safeErrorBatch(callId: string) {
   const messageId = `a2ui-surface-${callId}`;
   return {
     activities: [{
-      content: safeResearchA2UIErrorContent(),
+      content: safeResearchA2UIErrorContent("INVALID_LIFECYCLE"),
       lifecycle: "error",
       messageId,
       ownerMessageId: "assistant-message",
@@ -208,7 +208,7 @@ function safeErrorBatch(callId: string) {
     }],
     events: [{
       activityType: RESEARCH_A2UI_ACTIVITY_TYPE,
-      content: safeResearchA2UIErrorContent(),
+      content: safeResearchA2UIErrorContent("INVALID_LIFECYCLE"),
       messageId,
       replace: true,
       type: EventType.ACTIVITY_SNAPSHOT,

@@ -36,9 +36,9 @@ test.each([
   const surfaces = output.calls.filter((call) => call.name === "render_a2ui");
   expect(surfaces).toHaveLength(1);
   for (const surface of surfaces) expect(validSurface(surface.input)).toMatchObject({ kind: "ready", valid: true });
-  const table = (surfaces[0]?.input.components as Record<string, unknown>[]).find((component) => component.component === "Table");
-  expect((table?.rows as string[][]).map((row) => row[2])).toEqual(CHILD_IDS);
-  expect(JSON.stringify(table)).toContain(mode === "factor_evaluation" ? "-0.1200" : "1.2300");
+  const comparison = (surfaces.at(-1)?.input.components as Record<string, unknown>[]).find(component => component.component === "ResearchComparison");
+  expect(comparison?.runIds).toEqual(CHILD_IDS);
+  expect(comparison).not.toHaveProperty("metrics");
   expect(output.text).toContain(BATCH_ID);
   expect(output.text).toContain("not a combined Batch Result");
   expect(JSON.stringify(surfaces)).not.toContain("private-batch-core-provenance");
@@ -50,8 +50,9 @@ test("partial child failure preserves the successful sibling evidence without in
     ? batchDetail("factor_evaluation", "completed_with_failures") : batchFixtureOutput("factor_evaluation", call));
   expect(output.calls.filter((call) => call.name === "get_research_run_result").map((call) => call.input.run_id)).toEqual([CHILD_IDS[0]]);
   const surfaces = output.calls.filter((call) => call.name === "render_a2ui");
-  const table = (surfaces.at(-1)?.input.components as Record<string, unknown>[]).find((component) => component.component === "Table");
-  expect((table?.rows as string[][])[1]).toEqual(["2", "negative-price-rank", CHILD_IDS[1], "failed", "No successful Result"]);
+  const comparison = (surfaces.at(-1)?.input.components as Record<string, unknown>[]).find(component => component.component === "ResearchComparison");
+  expect(comparison?.runIds).toEqual(CHILD_IDS);
+  expect(comparison).not.toHaveProperty("metrics");
   expect(output.text).toContain("Some children failed");
   expect(output.text).not.toContain("0.0000");
 });

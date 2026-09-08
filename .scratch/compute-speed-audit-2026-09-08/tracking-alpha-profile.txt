@@ -1,0 +1,41 @@
+         2425346 function calls (2425338 primitive calls) in 0.993 seconds
+
+   Ordered by: cumulative time
+   List reduced from 101 to 35 due to restriction <35>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    0.993    0.993 benchmark.py:190(operation)
+        1    0.003    0.003    0.993    0.993 alpha.py:61(evaluate_alpha_matrix)
+        1    0.025    0.025    0.869    0.869 series_plan.py:150(evaluate_series_execution_matrix)
+    66044    0.017    0.000    0.567    0.000 <frozen _collections_abc>:804(get)
+     3000    0.048    0.000    0.536    0.000 alpha.py:75(<lambda>)
+    66000    0.097    0.000    0.452    0.000 columnar_series.py:41(__getitem__)
+    66000    0.073    0.000    0.222    0.000 columnar_series.py:108(position)
+    66002    0.023    0.000    0.138    0.000 fromnumeric.py:1459(searchsorted)
+    66002    0.026    0.000    0.115    0.000 fromnumeric.py:48(_wrapfunc)
+       90    0.008    0.000    0.104    0.001 {built-in method builtins.sorted}
+       44    0.076    0.002    0.099    0.002 columnar_series.py:187(__getitem__)
+     6022    0.027    0.000    0.094    0.000 series_plan.py:206(<genexpr>)
+      5/3    0.000    0.000    0.081    0.027 functools.py:982(__get__)
+    66002    0.081    0.000    0.081    0.000 {method 'searchsorted' of 'numpy.ndarray' objects}
+        1    0.000    0.000    0.077    0.077 columnar_series.py:303(universe_members)
+   132000    0.076    0.000    0.076    0.000 columnar_series.py:46(<genexpr>)
+     3000    0.017    0.000    0.054    0.000 alpha_builtins.py:124(_pct_change)
+    66000    0.016    0.000    0.043    0.000 series_plan.py:426(_series_item)
+        1    0.014    0.014    0.041    0.041 columnar_series.py:161(__init__)
+        1    0.020    0.020    0.038    0.038 alpha.py:231(_compose_alpha_matrix)
+        1    0.000    0.000    0.035    0.035 columnar_series.py:261(_eod_index)
+        1    0.012    0.012    0.035    0.035 columnar_series.py:61(__init__)
+    69000    0.015    0.000    0.034    0.000 series_plan.py:181(<genexpr>)
+    66001    0.021    0.000    0.030    0.000 {built-in method builtins.any}
+    69000    0.018    0.000    0.029    0.000 series_plan.py:479(_broadcast)
+     3000    0.009    0.000    0.027    0.000 alpha_builtins.py:100(_series_window)
+    75000    0.021    0.000    0.027    0.000 series_plan.py:411(_matrix_value)
+    66022    0.022    0.000    0.022    0.000 columnar_series.py:196(<genexpr>)
+   219151    0.022    0.000    0.022    0.000 {built-in method builtins.len}
+    66093    0.020    0.000    0.020    0.000 {method 'get' of 'dict' objects}
+    66000    0.015    0.000    0.019    0.000 series_plan.py:489(_finite_or_missing)
+    66000    0.013    0.000    0.019    0.000 alpha.py:323(finite_or_missing)
+       22    0.006    0.000    0.018    0.001 series_plan.py:430(_cross_section_ranks)
+    69000    0.012    0.000    0.018    0.000 alpha_builtins.py:105(<genexpr>)
+   222000    0.017    0.000    0.017    0.000 {built-in method math.isfinite}

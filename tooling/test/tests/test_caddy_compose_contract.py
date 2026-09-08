@@ -166,7 +166,9 @@ def test_auth_image_reuses_the_package_store_for_production_deploy() -> None:
     dockerfile = (ROOT / "apps/auth" / "Dockerfile").read_text()
 
     assert dockerfile.count("node:24.14.0-bookworm-slim@sha256:") == 2
-    assert dockerfile.count("--mount=type=cache,target=/root/.local/share/pnpm/store") == 2
+    assert (
+        dockerfile.count("--mount=type=cache,target=/root/.local/share/pnpm/store") == 2
+    )
     assert "pnpm --filter thesistrace-auth deploy --prod /auth-runtime" in dockerfile
 
 
@@ -174,8 +176,13 @@ def test_agent_image_is_a_private_pinned_node_runtime() -> None:
     dockerfile = (ROOT / "apps/agent" / "Dockerfile").read_text()
 
     assert dockerfile.count("node:24.14.0-bookworm-slim@sha256:") == 2
-    assert dockerfile.count("--mount=type=cache,target=/root/.local/share/pnpm/store") == 2
-    assert "pnpm --filter thesistrace-agent-host deploy --prod /agent-runtime" in dockerfile
+    assert (
+        dockerfile.count("--mount=type=cache,target=/root/.local/share/pnpm/store") == 2
+    )
+    assert (
+        "pnpm --filter thesistrace-agent-host deploy --prod /agent-runtime"
+        in dockerfile
+    )
     assert "USER node" in dockerfile
 
 
@@ -186,7 +193,10 @@ def test_base_compose_has_independent_agent_auth_and_core_identities() -> None:
     for service in ("auth-initialize", "auth", "agent-initialize", "agent", "web"):
         assert f"  {service}:\n" in compose
     assert "POSTGRES_USER: thesistrace_owner" in compose
-    assert "010-runtime-roles.sh:/docker-entrypoint-initdb.d/010-runtime-roles.sh:ro" in compose
+    assert (
+        "010-runtime-roles.sh:/docker-entrypoint-initdb.d/010-runtime-roles.sh:ro"
+        in compose
+    )
     assert "postgresql://core_runtime:" in compose
     assert "postgresql://auth_runtime:" in compose
     assert "postgresql://thesistrace_owner:" in compose
@@ -364,10 +374,16 @@ def test_development_and_test_origins_are_exact_before_compose_rendering() -> No
     assert "THESISTRACE_MCP_SIGNING_PRIVATE_JWK=" in development_env
     assert "THESISTRACE_MCP_VERIFYING_PUBLIC_JWK=" in development_env
     assert "THESISTRACE_MCP_INTERNAL_URL" not in development_env
-    assert "127.0.0.1:${THESISTRACE_DEV_WEB_PORT}:${THESISTRACE_DEV_WEB_PORT}" in development
+    assert (
+        "127.0.0.1:${THESISTRACE_DEV_WEB_PORT}:${THESISTRACE_DEV_WEB_PORT}"
+        in development
+    )
     assert "127.0.0.1:${THESISTRACE_DEV_API_PORT}:8100" in development
 
-    assert "127.0.0.1:${THESISTRACE_TEST_CADDY_PORT}:${THESISTRACE_TEST_CADDY_PORT}" in test_overlay
+    assert (
+        "127.0.0.1:${THESISTRACE_TEST_CADDY_PORT}:${THESISTRACE_TEST_CADDY_PORT}"
+        in test_overlay
+    )
     assert "127.0.0.1::8100" not in test_overlay
     assert "127.0.0.1::5173" not in test_overlay
     assert "locked-loopback-port" in runner
@@ -408,12 +424,17 @@ def test_development_agent_uses_the_configured_local_luna_provider() -> None:
 
     compose = (DEPLOY / "compose.yaml").read_text()
     shared_agent = _service(compose, "agent", "agent-initialize")
-    assert "THESISTRACE_AGENT_OPENAI_API_KEY: ${THESISTRACE_AGENT_OPENAI_API_KEY:-}" in shared_agent
+    assert (
+        "THESISTRACE_AGENT_OPENAI_API_KEY: ${THESISTRACE_AGENT_OPENAI_API_KEY:-}"
+        in shared_agent
+    )
     assert "OPENAI_BASE_URL: ${THESISTRACE_AGENT_OPENAI_BASE_URL:?" in shared_agent
     assert "CLI_API_KEY" not in development
     assert "OPENAI_BASE_URL" not in agent
     assert environment["THESISTRACE_AGENT_OPENAI_API_KEY"] == ""
-    assert environment["THESISTRACE_AGENT_OPENAI_BASE_URL"] == "https://api.openai.com/v1"
+    assert (
+        environment["THESISTRACE_AGENT_OPENAI_BASE_URL"] == "https://api.openai.com/v1"
+    )
     assert "THESISTRACE_AGENT_MODEL_REGISTRY" not in environment
     registry = json.loads((ROOT / "apps/agent" / "config" / "model-registry.json").read_text())
     assert registry == {
@@ -430,6 +451,12 @@ def test_development_agent_uses_the_configured_local_luna_provider() -> None:
                 "reasoning_efforts": ["none", "low", "medium", "high", "xhigh", "max"],
                 "context_window": 258000,
                 "max_output_tokens": 128000,
+                "pricing_usd_per_million_tokens": {
+                    "input": 0.2,
+                    "cache_read": 0.02,
+                    "cache_write": 0.2,
+                    "output": 1.2,
+                },
                 "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
             }
         ],
@@ -451,12 +478,6 @@ def test_eval_endpoint_is_explicit_and_deterministic_test_endpoint_is_inert() ->
             "phases/image-qualification.mjs",
         )
     )
-                "pricing_usd_per_million_tokens": {
-                    "input": 0.2,
-                    "cache_read": 0.02,
-                    "cache_write": 0.2,
-                    "output": 1.2,
-                },
 
     assert "OPENAI_BASE_URL: ${THESISTRACE_AGENT_OPENAI_BASE_URL:?" in agent
     assert "OPENAI_BASE_URL" not in overlay.replace(agent, "")

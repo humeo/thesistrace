@@ -1,0 +1,19 @@
+{
+  "created_at": "2026-09-08T03:43:37.709238+00:00",
+  "head": "adc1007bf40308246e46c4e4deb3c31648b1c149",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "source_sha256": {
+    "apps/core/src/thesistrace/research_kernel/alpha.py": "95f7c4afb0bb4fce6f1e2023770f52a807bcad7144ab179f95cecee5f17f1815",
+    "apps/core/src/thesistrace/research_kernel/series_plan.py": "97ec931598adb711f55a104e8757a9d6b86d6c71b09dfdccd9787b07156c612d",
+    "apps/core/src/thesistrace/research_kernel/alpha_builtins.py": "2e012d34807991548d6fbcb00fb73daa3978e905fca8d8c8884d8873310b6b6f",
+    "apps/core/src/thesistrace/research_kernel/factor.py": "c3cb13e74431bc5f78f3135e2eac21f85d3c0e747f18a82255c7d5334fcd2bdb",
+    "apps/core/src/thesistrace/research_kernel/strategy.py": "c6be8be8e28858754a86b2b796fd8ffa56758d35f94fe6eddd7f4275eb1633e5",
+    "apps/core/src/thesistrace/research_kernel/research_chunks.py": "e4349b6165f8044cc234db84ed59d7bc53751dcdf298b1f1e08165c5bb11e9f9",
+    "apps/core/src/thesistrace/research_kernel/kernel_advance.py": "6e4b8e9dc34540203b81f89962772299b3b93bf5dbb0d3708ebdd99466d99e2e",
+    "apps/core/src/thesistrace/research_run/execution.py": "bfc1214457cb54966348cdd1bfef0d1d873d43d85010bcf90fc86541efe56626",
+    "apps/core/src/thesistrace/daily_track/calculation.py": "59bf8581329e5213a6f3114fbeb3aba141f315f20f884c28b6ce33c8aaa1a8a1",
+    "apps/core/src/thesistrace/data/columnar_series.py": "a6c4f28e5365df3bb1ec0b22cc8cc375da9cfcf203eed1293caa616344b5b7b4"
+  },
+  "scope": "Performance feasibility audit and process-local prototypes only; no product source changes",
+  "qualification": "No full pnpm check:performance run; current host is not idle"
+}

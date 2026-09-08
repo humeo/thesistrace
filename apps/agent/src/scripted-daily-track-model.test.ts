@@ -31,10 +31,10 @@ test.each([false, true])("the model verifies the %s Origin and presents current 
   });
   const surface = output.calls.find((call) => call.name === "render_a2ui")!;
   expect(validSurface(surface.input)).toMatchObject({ valid: true, kind: "ready" });
-  expect(JSON.stringify(surface)).toContain(`/daily-tracks/${TRACK_ID}`);
-  expect(JSON.stringify(surface)).toContain(ORIGIN_RUN_ID);
-  expect(JSON.stringify(surface)).toContain("1.2300");
-  expect(JSON.stringify(surface)).toContain("1.17");
+  expect(surface.input.components).toEqual([{ component: "DailyTrack", id: "root", trackId: TRACK_ID }]);
+  expect(JSON.stringify(surface)).not.toContain(ORIGIN_RUN_ID);
+  expect(JSON.stringify(surface)).not.toContain("1.2300");
+  expect(JSON.stringify(surface)).not.toContain("1.17");
   expect(JSON.stringify(surface)).not.toContain("private-daily-track-provenance");
   expect(output.text).toContain("not a new immutable Research Result");
   expect(output.calls.length + 1).toBeLessThanOrEqual(16);
@@ -181,8 +181,8 @@ test("reloading creates a new read-only current surface without rewriting prior 
   followUp(request, SCRIPTED_RELOAD_DAILY_TRACK_PROMPT);
   const refreshed = await runScriptedTrajectory(request, (call) => dailyTrackFixtureOutput(call, "2024-02-01"));
   expect(refreshed.calls.map((call) => call.name)).toEqual(["get_daily_track", "get_daily_track_result", "get_daily_track_result", "get_daily_track_result", "render_a2ui"]);
-  expect(JSON.stringify(refreshed.calls.at(-1))).toContain("2024-02-01");
-  expect(JSON.stringify(originalSurface)).toContain("2024-01-31");
+  expect(refreshed.calls.at(-1)?.input.components).toEqual([{ component: "DailyTrack", id: "root", trackId: TRACK_ID }]);
+  expect(JSON.stringify(originalSurface)).not.toContain("2024-01-31");
   expect(JSON.stringify(request.prompt).startsWith(prior.slice(0, -1))).toBe(true);
 });
 
@@ -200,7 +200,7 @@ test.each([false, true])("Observation pagination distinguishes a latest row from
     { track_id: TRACK_ID, section: "strategy_observations", limit: 50, cursor: "first" },
     { track_id: TRACK_ID, section: "strategy_observations", limit: 50, cursor: "second" },
   ]);
-  expect(JSON.stringify(output.calls.at(-1))).toContain(partial ? "Latest retrieved Observation (partial)" : "Latest DailyTrack Observation");
+  expect(output.calls.at(-1)?.input.components).toEqual([{ component: "DailyTrack", id: "root", trackId: TRACK_ID }]);
 });
 
 test.each(["wrong-track", "missing-summary", "changed-head", "private-section", "bad-observation"])("inconsistent %s data never becomes a surface fact", async (scenario) => {

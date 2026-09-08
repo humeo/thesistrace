@@ -19,7 +19,7 @@ function surface(id: string, status: string, runId = "run_0123456789abcdef0123")
       { version: "v0.9", createSurface: { catalogId: "urn:thesistrace:a2ui:research:v0.9", surfaceId: id } },
       { version: "v0.9", updateComponents: { surfaceId: id, components: [
         { id: "root", component: "Column", children: ["run"] },
-        { id: "run", component: "ResearchRunStatus", runId, status, formula: "rank(close)" },
+        { component: "ResearchRun", id: "run", runId },
       ] } },
     ] },
   } };

@@ -1,0 +1,286 @@
+{
+  "description": "Synthetic in-memory actual-kernel audit; no end-to-end Worker or storage claim",
+  "stock_count": 3000,
+  "research_sessions": 64,
+  "context_sessions": 21,
+  "repetitions": 3,
+  "seed": 20260908,
+  "python": "3.12.11",
+  "numpy": "2.5.2",
+  "pyarrow": "25.0.0",
+  "host_load_start": [
+    13.15625,
+    12.8388671875,
+    13.09423828125
+  ],
+  "experiments": {
+    "tracking_alpha_22_sessions": {
+      "samples_seconds": {
+        "current_row": [
+          0.42041229200549424,
+          0.40483770897844806,
+          0.381176583992783
+        ],
+        "existing_columnar": [
+          0.1465695410151966,
+          0.11575424997135997,
+          0.12935770902549848
+        ]
+      },
+      "median_seconds": {
+        "current_row": 0.40483770897844806,
+        "existing_columnar": 0.12935770902549848
+      },
+      "cpu_samples_seconds": {
+        "current_row": [
+          0.38432599999999995,
+          0.3691070000000001,
+          0.35469799999999996
+        ],
+        "existing_columnar": [
+          0.1270150000000001,
+          0.10237700000000016,
+          0.11678100000000002
+        ]
+      },
+      "phase_seconds": {
+        "current_row": [
+          {},
+          {},
+          {}
+        ],
+        "existing_columnar": [
+          {},
+          {},
+          {}
+        ]
+      },
+      "exact_equal": true,
+      "sha256": "a2d51bf707bae39dc3f0746ed90c7bed25b47afd9c187218c532ca0e8933716a"
+    },
+    "tracking_factor_1_new_session": {
+      "samples_seconds": {
+        "current_row": [
+          0.18830404098844156,
+          0.22492079198127612,
+          0.1935879170196131
+        ],
+        "existing_columnar": [
+          0.0544881250243634,
+          0.06129937502555549,
+          0.05524108302779496
+        ]
+      },
+      "median_seconds": {
+        "current_row": 0.1935879170196131,
+        "existing_columnar": 0.05524108302779496
+      },
+      "cpu_samples_seconds": {
+        "current_row": [
+          0.1765270000000001,
+          0.20086099999999973,
+          0.17948200000000014
+        ],
+        "existing_columnar": [
+          0.052049000000000234,
+          0.052496999999999794,
+          0.05337199999999953
+        ]
+      },
+      "phase_seconds": {
+        "current_row": [
+          {},
+          {},
+          {}
+        ],
+        "existing_columnar": [
+          {},
+          {},
+          {}
+        ]
+      },
+      "exact_equal": true,
+      "sha256": "4f6029980536828b10ffbbd819eadc7235219b95b4fc5cb374637f41969b7579"
+    },
+    "factor_evaluation_chunk": {
+      "samples_seconds": {
+        "current": [
+          1.188754417002201,
+          1.1753879169700667,
+          1.1199143750127405
+        ]
+      },
+      "median_seconds": {
+        "current": 1.1753879169700667
+      },
+      "cpu_samples_seconds": {
+        "current": [
+          1.1269269999999993,
+          1.121048,
+          1.0918409999999996
+        ]
+      },
+      "phase_seconds": {
+        "current": [
+          {
+            "prepare_labels": 0.19761904201004654,
+            "alpha_and_pending": 0.5360852499725297,
+            "factor": 0.4333626250154339,
+            "strategy": 0.0,
+            "finalize": 0.00046900002053007483
+          },
+          {
+            "prepare_labels": 0.19040750002022833,
+            "alpha_and_pending": 0.5879495419794694,
+            "factor": 0.37269062496488914,
+            "strategy": 0.0,
+            "finalize": 0.00039737496990710497
+          },
+          {
+            "prepare_labels": 0.1750950409914367,
+            "alpha_and_pending": 0.5371325840242207,
+            "factor": 0.3845842499868013,
+            "strategy": 0.0,
+            "finalize": 0.00043470802484080195
+          }
+        ]
+      },
+      "exact_equal": true,
+      "sha256": "3abd5a8fab3bcaa28b68bbe3914b5d33da9af62aa1e60feb60dfab8e29fc6976"
+    },
+    "strategy_backtest_chunk": {
+      "samples_seconds": {
+        "current": [
+          1.9718592499848455,
+          1.5052612090366893,
+          1.3997145830071531
+        ],
+        "float_score_ranking": [
+          1.7151616659830324,
+          1.443571540992707,
+          1.368077666964382
+        ]
+      },
+      "median_seconds": {
+        "current": 1.5052612090366893,
+        "float_score_ranking": 1.443571540992707
+      },
+      "cpu_samples_seconds": {
+        "current": [
+          1.467459999999999,
+          1.4082750000000015,
+          1.343439
+        ],
+        "float_score_ranking": [
+          1.4263460000000006,
+          1.3736440000000005,
+          1.3151130000000002
+        ]
+      },
+      "phase_seconds": {
+        "current": [
+          {
+            "prepare_labels": 0.18947545799892396,
+            "alpha_and_pending": 0.6326107499771751,
+            "factor": 0.6274407500168309,
+            "strategy": 0.4799646249739453,
+            "finalize": 0.0014939590473659337
+          },
+          {
+            "prepare_labels": 0.1907821669592522,
+            "alpha_and_pending": 0.5930735419970006,
+            "factor": 0.43924858298851177,
+            "strategy": 0.2610737499780953,
+            "finalize": 0.0004378340090624988
+          },
+          {
+            "prepare_labels": 0.16075416596140712,
+            "alpha_and_pending": 0.5321367500000633,
+            "factor": 0.41603274998487905,
+            "strategy": 0.2700529160210863,
+            "finalize": 0.0004598330124281347
+          }
+        ],
+        "float_score_ranking": [
+          {
+            "prepare_labels": 0.22510325000621378,
+            "alpha_and_pending": 0.7359941669856198,
+            "factor": 0.464939208002761,
+            "strategy": 0.2643769580172375,
+            "finalize": 0.0012077500578016043
+          },
+          {
+            "prepare_labels": 0.17464275000384077,
+            "alpha_and_pending": 0.5645924169803038,
+            "factor": 0.427126708033029,
+            "strategy": 0.2536013330100104,
+            "finalize": 0.00045383296674117446
+          },
+          {
+            "prepare_labels": 0.17164691595826298,
+            "alpha_and_pending": 0.5400149580091238,
+            "factor": 0.37992362497607246,
+            "strategy": 0.253769333998207,
+            "finalize": 0.0006347919697873294
+          }
+        ]
+      },
+      "exact_equal": true,
+      "sha256": "bebf8928043953a0f72331a0d8f3b3e7dc99cf09b77f37765a3ea5def7c9e0f1"
+    },
+    "repeated_alpha_subexpressions": {
+      "stocks": 300,
+      "sessions": 85,
+      "formula": "rank(ts_mean(close, 20)) + rank(ts_mean(close, 20)) + rank(ts_mean(close, 20)) + rank(ts_mean(close, 20)) + rank(ts_mean(close, 20)) + rank(ts_mean(close, 20)) + rank(ts_mean(close, 20)) + rank(ts_mean(close, 20))",
+      "nodes_before": 39,
+      "nodes_after": 11,
+      "samples_seconds": {
+        "current_tree": [
+          0.4923523750039749,
+          0.5054672079859301,
+          0.6759315840317868
+        ],
+        "deduplicated_dag": [
+          0.07987304200651124,
+          0.06593158398754895,
+          0.06357708299765363
+        ]
+      },
+      "median_seconds": {
+        "current_tree": 0.5054672079859301,
+        "deduplicated_dag": 0.06593158398754895
+      },
+      "cpu_samples_seconds": {
+        "current_tree": [
+          0.4316059999999986,
+          0.4151720000000019,
+          0.40253999999999834
+        ],
+        "deduplicated_dag": [
+          0.05866400000000027,
+          0.054147999999997865,
+          0.05556400000000039
+        ]
+      },
+      "phase_seconds": {
+        "current_tree": [
+          {},
+          {},
+          {}
+        ],
+        "deduplicated_dag": [
+          {},
+          {},
+          {}
+        ]
+      },
+      "exact_equal": true,
+      "sha256": "8b90e1d6a0320311d6d4b3c0a380becea06bb267818a7d9c446b107ff37de8b5"
+    }
+  },
+  "host_load_end": [
+    15.876953125,
+    13.50830078125,
+    13.328125
+  ]
+}

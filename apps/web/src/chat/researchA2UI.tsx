@@ -16,6 +16,8 @@ import {
   RESEARCH_A2UI_CATALOG_ID,
 } from "@thesistrace/contracts/research-a2ui";
 
+import { ResearchResourceCards } from "./ResearchResourceCards";
+
 const pairSchema = (labelLength: number, valueLength: number) => z.object({
   label: z.string().min(1).max(labelLength),
   value: z.string().min(1).max(valueLength),
@@ -69,22 +71,9 @@ export const researchA2UICatalogDefinitions = {
       universe: z.string().min(1).max(160),
     }).strict(),
   },
-  ResearchRunStatus: {
-    description: "Authoritative ResearchRun lifecycle.",
-    props: z.object({
-      formula: z.string().min(1).max(8_192),
-      phase: z.string().min(1).max(120).optional(),
-      runId: z.string().regex(/^run_[a-f0-9]{20}$/),
-      status: z.enum(["queued", "running", "cancelling", "succeeded", "failed", "cancelled"]),
-    }).strict(),
-  },
-  ResultMetrics: {
-    description: "Authoritative result metrics.",
-    props: z.object({
-      metrics: z.array(pairSchema(80, 120)).min(1).max(20),
-      title: z.string().min(1).max(120),
-    }).strict(),
-  },
+  ResearchRun: { description: "Current ResearchRun from Core.", props: z.object({ runId: z.string().regex(/^run_[a-f0-9]{20}$/) }).strict() },
+  ResearchComparison: { description: "Ordered authoritative ResearchRuns.", props: z.object({ runIds: z.array(z.string().regex(/^run_[a-f0-9]{20}$/)).min(1).max(20) }).strict() },
+  DailyTrack: { description: "Current DailyTrack from Core.", props: z.object({ trackId: z.string().regex(/^track_[a-f0-9]{20}$/) }).strict() },
   Table: {
     description: "Bounded read-only result table.",
     props: z.object({
@@ -92,13 +81,6 @@ export const researchA2UICatalogDefinitions = {
       columns: z.array(z.string().min(1).max(80)).min(1).max(12),
       initiallyExpanded: z.boolean().optional(),
       rows: z.array(z.array(z.string().max(320)).min(1).max(12)).max(100),
-      summary: z.string().min(1).max(160),
-    }).strict(),
-  },
-  Provenance: {
-    description: "Bounded authoritative provenance.",
-    props: z.object({
-      entries: z.array(pairSchema(100, 600)).min(1).max(24),
       summary: z.string().min(1).max(160),
     }).strict(),
   },
@@ -152,48 +134,10 @@ const researchA2UICatalog = createCatalog(
         <p>{props.explanation}</p>
       </section>
     ),
-    ResearchRunStatus: ({ props }) => (
-      <section aria-label={`ResearchRun ${props.runId}: ${props.status}`} className="chat-a2ui-domain-section chat-a2ui-run">
-        <header>
-          <span>ResearchRun</span>
-          <strong className={`chat-a2ui-status chat-a2ui-status-${props.status}`}>
-            {researchStatusLabel(props.status)}
-          </strong>
-        </header>
-        <code className="chat-a2ui-run-id">{props.runId}</code>
-        {props.phase === undefined ? null : <p>{props.phase}</p>}
-        <div className="chat-a2ui-proposal-formula">
-          <span>Authoritative formula</span>
-          <code>{props.formula}</code>
-        </div>
-      </section>
-    ),
-    ResultMetrics: ({ props }) => (
-      <section aria-label={props.title} className="chat-a2ui-domain-section">
-        <h2>{props.title}</h2>
-        <dl className="chat-a2ui-metrics">
-          {props.metrics.map((metric) => (
-            <div key={metric.label}>
-              <dt>{metric.label}</dt>
-              <dd>{metric.value}</dd>
-            </div>
-          ))}
-        </dl>
-      </section>
-    ),
+    ResearchRun: ({ props }) => <ResearchResourceCards kind="run" ids={[props.runId]} />,
+    ResearchComparison: ({ props }) => <ResearchResourceCards kind="run" ids={props.runIds} />,
+    DailyTrack: ({ props }) => <ResearchResourceCards kind="track" ids={[props.trackId]} />,
     Table: ({ props }) => <ResearchTable {...props} />,
-    Provenance: ({ props }) => (
-      <LocalDisclosure summary={props.summary}>
-        <dl className="chat-a2ui-provenance">
-          {props.entries.map((entry) => (
-            <div key={entry.label}>
-              <dt>{entry.label}</dt>
-              <dd>{entry.value}</dd>
-            </div>
-          ))}
-        </dl>
-      </LocalDisclosure>
-    ),
     Navigation: ({ props }) => {
       const href = parseResearchA2UINavigationHref(props.href);
       return href === null ? (
@@ -227,7 +171,8 @@ export function ResearchA2UIActivity({
   if (projection.kind === "error") {
     return (
       <article className="chat-a2ui-error" role="alert">
-        This research surface could not be displayed. The conversation is still available.
+        This research view could not be prepared. The conversation is still available.
+        <small>Reference: {message.id} · {String(projection.content.errorCode)}</small>
       </article>
     );
   }
@@ -388,16 +333,4 @@ function Fact({ label, value, wide = false }: { label: string; value: string; wi
       <dd>{value}</dd>
     </div>
   );
-}
-
-function researchStatusLabel(status: string): string {
-  switch (status) {
-    case "queued": return "Queued";
-    case "running": return "Running";
-    case "cancelling": return "Cancelling";
-    case "succeeded": return "Succeeded";
-    case "failed": return "Failed";
-    case "cancelled": return "Cancelled";
-    default: return "Unknown";
-  }
 }

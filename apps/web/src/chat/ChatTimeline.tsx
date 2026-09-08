@@ -25,7 +25,7 @@ import { agentFailure } from "@thesistrace/contracts/agent-failure";
 
 import { parseResearchRunHref } from "./toolResult";
 import { ResearchA2UIActivity } from "./researchA2UI";
-import { isProgressSurface, progressHistory } from "./progressHistory";
+import { progressHistory } from "./progressHistory";
 import type { ChatQuestion, TimelineEntry, TimelineTurn } from "./chatProtocol";
 import type { ChatConversationController } from "./useChatConversation";
 
@@ -311,7 +311,6 @@ function TimelineTurnView({
   const processEntries = assistantEntries.filter((entry, index) => (
     entry.kind === "tool_activity"
     || (entry.kind === "assistant_message" && !entry.payload.recovery && (index < lastTool || (!ended && lastTool >= 0)))
-    || isProgressSurface(entry)
   ));
   const processIds = new Set(processEntries.map((entry) => entry.entry_id));
   const resultEntries = assistantEntries.filter((entry) => !processIds.has(entry.entry_id));

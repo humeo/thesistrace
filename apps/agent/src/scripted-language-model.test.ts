@@ -238,34 +238,11 @@ test("drives deterministic proposal, status, and result surfaces through direct 
     "AlphaProposal",
     "Formula",
   ]);
-  expect(surfaceComponentNames(surfaces[1]?.input)).toEqual([
-    "Column",
-    "ResearchRunStatus",
-    "Navigation",
-  ]);
-  expect(surfaceComponentNames(surfaces[2]?.input)).toEqual([
-    "Column",
-    "ResearchRunStatus",
-    "Navigation",
-  ]);
-  expect(surfaces[2]?.input.components).toContainEqual(expect.objectContaining({
-    component: "ResearchRunStatus",
-    formula: "rank(-abs(pct_change(close, 1)))",
-    phase: "research",
-    runId: "run_0123456789abcdef0123",
-    status: "running",
-  }));
-  expect(surfaceComponentNames(surfaces[3]?.input)).toEqual([
-    "Column",
-    "ResearchRunStatus",
-    "ResultMetrics",
-    "Table",
-    "Provenance",
-    "Navigation",
-  ]);
-  expect(JSON.stringify(surfaces)).toContain("run_0123456789abcdef0123");
-  expect(JSON.stringify(surfaces)).toContain("0.1200");
-  expect(JSON.stringify(surfaces)).toContain("3.40%");
+  for (const surface of surfaces.slice(1)) {
+    expect(surface.input.components).toEqual([{ component: "ResearchRun", id: "root", runId: "run_0123456789abcdef0123" }]);
+  }
+  expect(JSON.stringify(surfaces.slice(1))).not.toContain("0.1200");
+  expect(JSON.stringify(surfaces.slice(1))).not.toContain("3.40%");
 });
 
 test("emits one explicitly non-research large table for renderer acceptance", async () => {
@@ -290,28 +267,21 @@ test("emits one explicitly non-research large table for renderer acceptance", as
 });
 
 test.each([
-  { label: "missing admission state", admission: { status: undefined } },
-  { label: "unknown admission state", admission: { status: "finished" } },
   { label: "mismatched running id", detail: { id: "run_aaaaaaaaaaaaaaaaaaaa" } },
-  { label: "missing running formula", detail: { input: {} } },
-  { label: "oversized running formula", detail: { input: { formula: "x".repeat(9000) } } },
-  { label: "invalid running phase", detail: { progress: { phase: 7 } } },
-])("does not invent replacement facts for $label", async ({ admission, detail }) => {
+])("does not invent replacement facts for $label", async ({ detail }) => {
   const trajectory = await runResearchTrajectory(SCRIPTED_FACTOR_IDEA_PROMPT, ({ input, name }) => {
     switch (name) {
       case "get_research_context": return researchContext();
       case "get_alpha_catalog": return alphaCatalog();
       case "diagnose_alpha_formula": return { diagnostics: [], valid: true };
       case "render_a2ui": return { rendered: true };
-      case "submit_research_run": return { ...acceptedRun(), ...admission };
+      case "submit_research_run": return acceptedRun();
       case "get_research_run": return { ...pollingDetail(input, "running", []), ...detail };
       default: throw new Error(`Unexpected Tool call: ${name}`);
     }
   }, true);
   const surfaces = trajectory.calls.filter((call) => call.name === "render_a2ui");
-  expect(surfaces.map((call) => call.input.surfaceId)).toEqual(admission === undefined
-    ? ["alpha-proposal", "research-run-status"]
-    : ["alpha-proposal"]);
+  expect(surfaces.map((call) => call.input.surfaceId)).toEqual(["alpha-proposal", "research-run-status"]);
   expect(trajectory.text).toContain("did not create a surface or invent replacement Research facts");
   expect(JSON.stringify(surfaces)).not.toContain("run_00000000000000000000");
 });

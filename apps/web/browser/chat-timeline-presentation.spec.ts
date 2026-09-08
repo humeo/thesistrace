@@ -149,7 +149,7 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
           if (samples.length === 1) {
             [...document.querySelectorAll('button')].find((button) => button.textContent === 'Short reply')!.click();
           }
-          if (Math.abs(offset - 96) < 1 || performance.now() - start > 1500) resolve(samples);
+          if (Math.abs(offset - 96) < 0.5 || performance.now() - start > 1500) resolve(samples);
           else requestAnimationFrame(sample);
         }
         requestAnimationFrame(sample);

@@ -97,9 +97,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const DISPLAY_FIELDS: Readonly<Record<string, readonly string[]>> = {
   Text: ["text"], Formula: ["label", "expression"],
   AlphaProposal: ["title", "hypothesis", "universe", "period", "researchType", "strategy", "formula", "explanation"],
-  ResearchRunStatus: ["status", "runId", "phase", "formula"],
-  ResultMetrics: ["title", "metrics"], Table: ["summary", "caption", "columns", "rows"],
-  Provenance: ["summary", "entries"], Navigation: ["label"],
+  Table: ["summary", "caption", "columns", "rows"],
+  Navigation: ["label"],
 };
 
 function visibleA2UIText(content: unknown): string {

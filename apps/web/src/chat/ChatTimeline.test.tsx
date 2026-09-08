@@ -358,7 +358,7 @@ function researchSurface(id: string, status: string, runId = "run_0123456789abcd
       { version: "v0.9", createSurface: { catalogId: "urn:thesistrace:a2ui:research:v0.9", surfaceId: id } },
       { version: "v0.9", updateComponents: { surfaceId: id, components: [
         { id: "root", component: "Column", children: ["run"] },
-        { id: "run", component: "ResearchRunStatus", runId, status, formula: "rank(close)" },
+        { component: "ResearchRun", id: "run", runId },
       ] } },
     ],
   } });
@@ -388,9 +388,9 @@ test("active Turns replace older progress only for the same research resources",
   expect(document.querySelector('[data-entry-id="unrelated"]')?.closest(".chat-progress-history")).toBeNull();
 });
 
-test("interrupted Turns do not add a stale progress card", async () => {
+test("interrupted Turns retain resource references for current authoritative reads", async () => {
   await mount(controller({ turns: [timelineTurn([researchSurface("progress", "running")], { status: "failed" })] }));
-  expect(document.querySelector('[data-entry-id="progress"]')).toBeNull();
+  expect(document.querySelector('[data-entry-id="progress"]')).not.toBeNull();
 });
 
 test("Worked for folds the complete execution history but leaves the final answer outside", async () => {

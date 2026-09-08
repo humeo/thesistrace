@@ -447,90 +447,12 @@ function proposalSurface(payload: JsonRecord): JsonRecord {
   };
 }
 
-function statusSurface(
-  stage: "progress" | "status",
-  payload: JsonRecord,
-): JsonRecord | null {
-  const runId = payload.runId;
-  if (typeof runId !== "string") return null;
-  return {
-    components: [
-      { component: "Column", gap: "compact", id: "root", children: ["status", "navigation"] },
-      {
-        component: "ResearchRunStatus",
-        formula: payload.formula,
-        id: "status",
-        phase: payload.phase,
-        runId,
-        status: payload.status,
-      },
-      {
-        component: "Navigation",
-        href: `/research-runs/${runId}`,
-        id: "navigation",
-        label: "Open authoritative ResearchRun",
-      },
-    ],
-    data: {},
-    surfaceId: A2UI_SURFACE_IDS[stage],
-  };
+function statusSurface(stage: "progress" | "status", payload: JsonRecord): JsonRecord | null {
+  return typeof payload.runId === "string" ? { surfaceId: A2UI_SURFACE_IDS[stage], data: {}, components: [{ component: "ResearchRun", id: "root", runId: payload.runId }] } : null;
 }
 
 function resultSurface(payload: JsonRecord): JsonRecord | null {
-  const { runId, metrics, resultSection, researchType } = payload;
-  if (
-    typeof runId !== "string"
-    || typeof resultSection !== "string"
-    || typeof researchType !== "string"
-    || !Array.isArray(metrics)
-    || !metrics.every(isRecord)
-  ) return null;
-  return {
-    components: [
-      {
-        component: "Column",
-        gap: "normal",
-        id: "root",
-        children: ["status", "metrics", "table", "provenance", "navigation"],
-      },
-      {
-        component: "ResearchRunStatus",
-        formula: payload.formula,
-        id: "status",
-        phase: "Authoritative immutable Result is available.",
-        runId,
-        status: "succeeded",
-      },
-      { component: "ResultMetrics", id: "metrics", metrics, title: `${researchType} result` },
-      {
-        caption: `Authoritative ${resultSection} metrics`,
-        columns: ["Metric", "Value"],
-        component: "Table",
-        id: "table",
-        initiallyExpanded: false,
-        rows: metrics.map((metric) => [metric.label, metric.value]),
-        summary: "Inspect result metrics",
-      },
-      {
-        component: "Provenance",
-        entries: [
-          { label: "ResearchRun", value: runId },
-          { label: "Result section", value: resultSection },
-          { label: "Research type", value: researchType },
-        ],
-        id: "provenance",
-        summary: "Inspect provenance",
-      },
-      {
-        component: "Navigation",
-        href: `/research-runs/${runId}`,
-        id: "navigation",
-        label: "Open authoritative ResearchRun",
-      },
-    ],
-    data: {},
-    surfaceId: A2UI_SURFACE_IDS.result,
-  };
+  return typeof payload.runId === "string" ? { surfaceId: A2UI_SURFACE_IDS.result, data: {}, components: [{ component: "ResearchRun", id: "root", runId: payload.runId }] } : null;
 }
 
 function hasFunctionTool(options: LanguageModelV3CallOptions, name: string): boolean {

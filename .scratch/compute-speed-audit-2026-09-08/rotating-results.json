@@ -1,0 +1,207 @@
+{
+  "description": "Existing long-research qualification generator; 85 sessions, 5541 historical IDs, rotating Top3000",
+  "label_arrays_and_error_states": {
+    "samples_seconds": {
+      "current": [
+        2.34892891603522,
+        2.088687375013251,
+        2.309936917037703
+      ],
+      "vector_once": [
+        1.7592047919752076,
+        1.703656333964318,
+        2.3354894170188345
+      ]
+    },
+    "median_seconds": {
+      "current": 2.309936917037703,
+      "vector_once": 1.7592047919752076
+    },
+    "cpu_samples_seconds": {
+      "current": [
+        2.108241,
+        1.941128,
+        2.0358920000000005
+      ],
+      "vector_once": [
+        1.644796,
+        1.6170270000000002,
+        1.8569620000000011
+      ]
+    },
+    "phase_seconds": {
+      "current": [
+        {},
+        {},
+        {}
+      ],
+      "vector_once": [
+        {},
+        {},
+        {}
+      ]
+    },
+    "exact_equal": true,
+    "sha256": "a842c73a2d80493d9b0fa16f35318f4df2fc54ed31a345826ea27ebdc3e6e900"
+  },
+  "factor_evaluation": {
+    "samples_seconds": {
+      "current": [
+        4.6549933750065975,
+        3.748270916985348,
+        3.394955875002779
+      ],
+      "vector_once": [
+        3.1769375409930944,
+        2.838481832994148,
+        3.2324837089981884
+      ]
+    },
+    "median_seconds": {
+      "current": 3.748270916985348,
+      "vector_once": 3.1769375409930944
+    },
+    "cpu_samples_seconds": {
+      "current": [
+        3.204891,
+        2.846617000000002,
+        3.009807000000002
+      ],
+      "vector_once": [
+        2.7188039999999987,
+        2.5854929999999996,
+        2.7638989999999986
+      ]
+    },
+    "phase_seconds": {
+      "current": [
+        {
+          "prepare_labels": 2.7876784169930033,
+          "alpha_and_pending": 0.9678435410023667,
+          "factor": 0.8705573339830153,
+          "strategy": 0.0,
+          "finalize": 0.00047374999849125743
+        },
+        {
+          "prepare_labels": 2.0162990409880877,
+          "alpha_and_pending": 1.0167805419769138,
+          "factor": 0.6870120000094175,
+          "strategy": 0.0,
+          "finalize": 0.00036820798413828015
+        },
+        {
+          "prepare_labels": 2.3480691249715164,
+          "alpha_and_pending": 0.7266126250033267,
+          "factor": 0.29069791699294,
+          "strategy": 0.0,
+          "finalize": 0.0004111669841222465
+        }
+      ],
+      "vector_once": [
+        {
+          "prepare_labels": 2.1739260830217972,
+          "alpha_and_pending": 0.7603386670234613,
+          "factor": 0.21937712497310713,
+          "strategy": 0.0,
+          "finalize": 0.0004897500039078295
+        },
+        {
+          "prepare_labels": 1.9031179170124233,
+          "alpha_and_pending": 0.6694006669567898,
+          "factor": 0.24682487500831485,
+          "strategy": 0.0,
+          "finalize": 0.00026004196843132377
+        },
+        {
+          "prepare_labels": 2.095038957952056,
+          "alpha_and_pending": 0.8513007080182433,
+          "factor": 0.2646015419741161,
+          "strategy": 0.0,
+          "finalize": 0.0003231670125387609
+        }
+      ]
+    },
+    "exact_equal": true,
+    "sha256": "da2381ac67ba3f0d5efdc11e84ac54ff4a8453dd92755807c1dbfbe20b42fdda"
+  },
+  "strategy_backtest": {
+    "samples_seconds": {
+      "current": [
+        5.061568000004627,
+        4.143011042033322,
+        5.35582825000165
+      ],
+      "vector_once": [
+        3.419061209016945,
+        3.404491249995772,
+        5.17152775003342
+      ]
+    },
+    "median_seconds": {
+      "current": 5.061568000004627,
+      "vector_once": 3.419061209016945
+    },
+    "cpu_samples_seconds": {
+      "current": [
+        3.4559250000000006,
+        3.3318020000000033,
+        3.447484000000003
+      ],
+      "vector_once": [
+        2.9202049999999957,
+        2.8925669999999997,
+        3.110292000000001
+      ]
+    },
+    "phase_seconds": {
+      "current": [
+        {
+          "prepare_labels": 3.5790486250189133,
+          "alpha_and_pending": 0.8962605830165558,
+          "factor": 0.30111274996306747,
+          "strategy": 0.2619435000233352,
+          "finalize": 0.0006073740078136325
+        },
+        {
+          "prepare_labels": 2.718644500011578,
+          "alpha_and_pending": 0.8680964999948628,
+          "factor": 0.2923545829835348,
+          "strategy": 0.24106070800917223,
+          "finalize": 0.0006699170335195959
+        },
+        {
+          "prepare_labels": 3.1480531659908593,
+          "alpha_and_pending": 1.1980536250048317,
+          "factor": 0.4082705419859849,
+          "strategy": 0.5317312080296688,
+          "finalize": 0.0015349590103141963
+        }
+      ],
+      "vector_once": [
+        {
+          "prepare_labels": 2.0654700419981964,
+          "alpha_and_pending": 0.8458474159706384,
+          "factor": 0.25391737499739975,
+          "strategy": 0.22948183299740776,
+          "finalize": 0.0005750409909524024
+        },
+        {
+          "prepare_labels": 2.0810730409575626,
+          "alpha_and_pending": 0.8138795830309391,
+          "factor": 0.25453949999064207,
+          "strategy": 0.22867045796010643,
+          "finalize": 0.0004947910201735795
+        },
+        {
+          "prepare_labels": 3.2866426670225337,
+          "alpha_and_pending": 1.1230291250394657,
+          "factor": 0.3568745420197956,
+          "strategy": 0.36943562497617677,
+          "finalize": 0.0010060420027002692
+        }
+      ]
+    },
+    "exact_equal": true,
+    "sha256": "2294f85c31fc2cdcabd3e806cb1b7e573653d9ca923259fa18f5ae419da202d1"
+  }
+}

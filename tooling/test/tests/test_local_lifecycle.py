@@ -665,7 +665,9 @@ def test_development_erase_removes_every_development_volume(tmp_path: Path) -> N
     assert "up --detach" not in commands
 
 
-def test_development_topology_declares_every_core_service_and_pinned_infrastructure() -> None:
+def test_development_topology_declares_every_core_service_and_pinned_infrastructure() -> (
+    None
+):
     compose = (ROOT / "deploy" / "compose.yaml").read_text()
 
     for service in (
@@ -815,10 +817,12 @@ def test_container_builds_exclude_host_dependency_directories() -> None:
     assert "node_modules" not in backend
     assert "COPY agent/node_modules" not in agent
     assert "node_modules" not in web
-    assert backend.index("uv sync --frozen --no-dev --no-install-project") < backend.index(
-        "COPY apps/core/src ./src"
+    assert backend.index(
+        "uv sync --frozen --no-dev --no-install-project"
+    ) < backend.index("COPY apps/core/src ./src")
+    assert backend.index("COPY apps/core/src ./src") < backend.rindex(
+        "uv sync --frozen --no-dev"
     )
-    assert backend.index("COPY apps/core/src ./src") < backend.rindex("uv sync --frozen --no-dev")
     assert "--mount=type=cache,target=/root/.cache/uv" in backend
     assert "pnpm --dir apps/agent build" in agent
     assert "pnpm --filter thesistrace-agent-host deploy --prod /agent-runtime" in agent
@@ -983,7 +987,9 @@ signal.pause()
             time.sleep(0.01)
         assert process_group_file.exists()
         process_groups = json.loads(process_group_file.read_text())
-        assert process_groups["process_group"] != process_groups["wrapper_process_group"]
+        assert (
+            process_groups["process_group"] != process_groups["wrapper_process_group"]
+        )
     finally:
         if process_group_file.exists():
             process_group = json.loads(process_group_file.read_text())["process_group"]
@@ -1238,7 +1244,10 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
     for port in (5432, 8150, 8250, 8260, 9000):
         assert f"127.0.0.1::{port}" in overlay
     assert overlay.count("node:24.14.0-bookworm-slim@sha256:") == 3
-    assert "127.0.0.1:${THESISTRACE_TEST_CADDY_PORT}:${THESISTRACE_TEST_CADDY_PORT}" in overlay
+    assert (
+        "127.0.0.1:${THESISTRACE_TEST_CADDY_PORT}:${THESISTRACE_TEST_CADDY_PORT}"
+        in overlay
+    )
     assert "127.0.0.1::8100" not in overlay
     assert "127.0.0.1::5173" not in overlay
     for development_port in (55432, 59010, 8101, 5274):
@@ -1277,7 +1286,9 @@ def test_shared_browser_control_fixtures_do_not_depend_on_docker_exec() -> None:
     assert "127.0.0.1::8260" not in auth_service
     assert "127.0.0.1::8260" in auth_fixture_service
     assert "THESISTRACE_AUTH_FIXTURE_AUTH_ORIGIN: http://127.0.0.1:8200" in auth_service
-    assert "THESISTRACE_AUTH_FIXTURE_AUTH_ORIGIN: http://auth:8200" in auth_fixture_service
+    assert (
+        "THESISTRACE_AUTH_FIXTURE_AUTH_ORIGIN: http://auth:8200" in auth_fixture_service
+    )
     assert "THESISTRACE_AUTH_FIXTURE_CONTROL_PORT" in overlay
     assert "THESISTRACE_TEST_AUTH_FIXTURE_ORIGIN" in runner
     assert "THESISTRACE_TEST_AUTH_PROXY_ORIGIN" in runner
@@ -1456,6 +1467,12 @@ def test_only_explicit_eval_injects_the_configured_credential_and_selected_endpo
                 "default_reasoning_effort": "high",
                 "context_window": 258000,
                 "max_output_tokens": 128000,
+                "pricing_usd_per_million_tokens": {
+                    "input": 0.2,
+                    "cache_read": 0.02,
+                    "cache_write": 0.2,
+                    "output": 1.2,
+                },
                 "secret_env": "THESISTRACE_AGENT_OPENAI_API_KEY",
                 "enabled": True,
             }
@@ -1470,12 +1487,6 @@ def test_only_explicit_eval_injects_the_configured_credential_and_selected_endpo
             "THESISTRACE_AGENT_EVAL_MODEL_KEY": "gpt-5.6-luna",
             "THESISTRACE_AGENT_EVAL_REASONING_EFFORT": "high",
             "THESISTRACE_AGENT_EVAL_PHASE": "baseline",
-                "pricing_usd_per_million_tokens": {
-                    "input": 0.2,
-                    "cache_read": 0.02,
-                    "cache_write": 0.2,
-                    "output": 1.2,
-                },
             "THESISTRACE_AGENT_EVAL_SPEND_LIMIT_USD": "20",
             "THESISTRACE_TEST_EVIDENCE_DIR": str(tmp_path / "prepare-evidence"),
             "FAKE_CONFIG_STATUS": "11",
@@ -1503,18 +1514,28 @@ def test_only_explicit_eval_injects_the_configured_credential_and_selected_endpo
     registry = json.loads(observed["THESISTRACE_AGENT_MODEL_REGISTRY"])
     if command == "agent-eval":
         assert registry == eval_registry
-        assert observed["THESISTRACE_AGENT_OPENAI_API_KEY"] == "configured-provider-offline-canary"
         assert (
-            observed["THESISTRACE_AGENT_OPENAI_BASE_URL"] == "http://host.docker.internal:8317/v1"
+            observed["THESISTRACE_AGENT_OPENAI_API_KEY"]
+            == "configured-provider-offline-canary"
+        )
+        assert (
+            observed["THESISTRACE_AGENT_OPENAI_BASE_URL"]
+            == "http://host.docker.internal:8317/v1"
         )
         assert observed["THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"] == ""
     else:
         assert registry["default_model_key"] == "scripted-research"
         assert observed["THESISTRACE_AGENT_OPENAI_API_KEY"] == ""
-        assert observed["THESISTRACE_AGENT_OPENAI_BASE_URL"] == "http://provider.invalid/v1"
+        assert (
+            observed["THESISTRACE_AGENT_OPENAI_BASE_URL"]
+            == "http://provider.invalid/v1"
+        )
         assert observed["THESISTRACE_AGENT_SCRIPTED_MODEL_SECRET"]
     for credential in ("cli-provider-offline-canary", "ambient-canonical-key-canary"):
-        assert credential not in completed.stdout + completed.stderr + command_log.read_text()
+        assert (
+            credential
+            not in completed.stdout + completed.stderr + command_log.read_text()
+        )
     if command == "agent-eval":
         configure_command = (
             f"node {ROOT / 'apps/agent' / 'scripts' / 'eval-research.mjs'} configure"
@@ -1572,8 +1593,14 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     assert "up --detach --wait --wait-timeout 300 postgres rustfs" in commands
     assert "--build" not in commands
     assert "uv run thesistrace-initialize" in commands
-    assert f"--rootdir {ROOT} -q apps/core/tests/integration apps/core/tests/acceptance" in commands
-    assert "db=postgresql://thesistrace_owner:owner-test-password@127.0.0.1:41001" in commands
+    assert (
+        f"--rootdir {ROOT} -q apps/core/tests/integration apps/core/tests/acceptance"
+        in commands
+    )
+    assert (
+        "db=postgresql://thesistrace_owner:owner-test-password@127.0.0.1:41001"
+        in commands
+    )
     assert "s3=http://127.0.0.1:41002" in commands
     assert "port auth 8200" in commands
     assert "down --volumes --remove-orphans" in commands
@@ -1602,15 +1629,22 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     commands = command_log.read_text()
     assert commands.index("config --quiet") < commands.index("up --detach")
     assert commands.count("build initialize auth-initialize agent web\n") == 1
-    assert f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
+    assert (
+        f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
+    )
     for role in (
         "research-worker",
         "batch-research-worker",
         "tracking-worker",
         "data-operator-worker",
     ):
-        assert f"docker image tag {project_name}-initialize {project_name}-{role}\n" in commands
-    assert "up --detach --no-build --wait --wait-timeout 300 postgres rustfs\n" in commands
+        assert (
+            f"docker image tag {project_name}-initialize {project_name}-{role}\n"
+            in commands
+        )
+    assert (
+        "up --detach --no-build --wait --wait-timeout 300 postgres rustfs\n" in commands
+    )
     assert "up --detach --no-build initialize auth-initialize\n" in commands
     assert "wait initialize auth-initialize\n" in commands
     assert (
@@ -1667,7 +1701,9 @@ def test_e2e_secret_scope_fails_closed_when_container_inspection_fails(
     assert completed.returncode != 0
     commands = command_log.read_text()
     assert "inspect --format {{range .Config.Env}}" in commands
-    assert "pnpm exec playwright test --config tests/playwright.config.ts" not in commands
+    assert (
+        "pnpm exec playwright test --config tests/playwright.config.ts" not in commands
+    )
     run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
     metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
     assert any(
@@ -1676,7 +1712,9 @@ def test_e2e_secret_scope_fails_closed_when_container_inspection_fails(
     )
 
 
-def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate() -> None:
+def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate() -> (
+    None
+):
     package = json.loads((ROOT / "package.json").read_text())
     scripts = package["scripts"]
 
@@ -1706,7 +1744,9 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
     assert scripts["test:cleanup"] == "./tooling/test/cli.mjs cleanup"
 
 
-def test_test_runtime_managed_phases_cannot_read_from_the_controlling_terminal() -> None:
+def test_test_runtime_managed_phases_cannot_read_from_the_controlling_terminal() -> (
+    None
+):
     completed = subprocess.run(
         [
             "node",
@@ -1727,7 +1767,9 @@ def test_test_runtime_managed_phases_cannot_read_from_the_controlling_terminal()
     assert completed.returncode == 0, completed.stderr
 
 
-def test_image_smoke_provisions_auth_inside_the_private_compose_network(tmp_path: Path) -> None:
+def test_image_smoke_provisions_auth_inside_the_private_compose_network(
+    tmp_path: Path,
+) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
     completed = subprocess.run(
         [ROOT / "tooling/test/cli.mjs", "image-qualification"],
@@ -1745,12 +1787,16 @@ def test_image_smoke_provisions_auth_inside_the_private_compose_network(tmp_path
     overlay = (ROOT / "deploy/compose.image-smoke.yaml").read_text()
     browser_fixture = (ROOT / "tests/e2e/auth-fixture.ts").read_text()
     assert 'authFixtureRequest("/__test/resend-emails"' in browser_fixture
-    assert "auth-fixture-control:\n    networks:\n      - default\n      - edge" in overlay
+    assert (
+        "auth-fixture-control:\n    networks:\n      - default\n      - edge" in overlay
+    )
     assert "create_private_compose_login_session" in provisioner
     assert "../apps/auth/test-fixtures:/test-fixtures:ro" in overlay
 
 
-def test_product_state_reset_recreates_the_auth_fixture_network_namespace(tmp_path: Path) -> None:
+def test_product_state_reset_recreates_the_auth_fixture_network_namespace(
+    tmp_path: Path,
+) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
     completed = subprocess.run(
         [ROOT / "tooling/test/cli.mjs", "performance"],
@@ -1835,7 +1881,9 @@ def test_long_research_performance_stops_after_the_first_failed_sample(
     assert "status=7" in metadata
 
 
-def test_managed_compose_run_phases_never_read_from_the_parent_terminal(tmp_path: Path) -> None:
+def test_managed_compose_run_phases_never_read_from_the_parent_terminal(
+    tmp_path: Path,
+) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
     completed = subprocess.run(
         [ROOT / "tooling/test/cli.mjs", "image-qualification"],
@@ -1872,18 +1920,28 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     project_name = completed.stdout.splitlines()[1].removeprefix("Compose project: ")
     commands = command_log.read_text()
     assert commands.count("build initialize auth-initialize agent web\n") == 1
-    assert f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
+    assert (
+        f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
+    )
     for role in (
         "research-worker",
         "batch-research-worker",
         "tracking-worker",
         "data-operator-worker",
     ):
-        assert f"docker image tag {project_name}-initialize {project_name}-{role}\n" in commands
-    assert "up --detach --no-build --wait --wait-timeout 300 postgres rustfs\n" in commands
+        assert (
+            f"docker image tag {project_name}-initialize {project_name}-{role}\n"
+            in commands
+        )
+    assert (
+        "up --detach --no-build --wait --wait-timeout 300 postgres rustfs\n" in commands
+    )
     assert "up --detach --no-build initialize auth-initialize\n" in commands
     assert "wait initialize auth-initialize\n" in commands
-    assert "up --detach --no-build --wait --wait-timeout 300 auth agent api web\n" in commands
+    assert (
+        "up --detach --no-build --wait --wait-timeout 300 auth agent api web\n"
+        in commands
+    )
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
         "research-worker batch-research-worker tracking-worker "
@@ -1927,7 +1985,9 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert "--build" not in commands
 
 
-def test_operator_console_release_qualification_runs_inside_final_images(tmp_path: Path) -> None:
+def test_operator_console_release_qualification_runs_inside_final_images(
+    tmp_path: Path,
+) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
     completed = subprocess.run(
         [ROOT / "tooling/test/cli.mjs", "image-qualification"],
@@ -1967,20 +2027,33 @@ def test_operator_console_release_qualification_runs_inside_final_images(tmp_pat
     assert "phase=image-smoke-operator-browser-bootstrap " in metadata
     assert "python /smoke/tests/e2e/support/prepare_current_data.py" in runtime
     assert "phase=image-smoke-operator-browser-worker " in metadata
-    assert "python /smoke/tests/e2e/support/publish_financial_track_head.py lagged" in runtime
-    assert "python /smoke/tests/e2e/support/publish_financial_track_head.py recovered" in runtime
+    assert (
+        "python /smoke/tests/e2e/support/publish_financial_track_head.py lagged"
+        in runtime
+    )
+    assert (
+        "python /smoke/tests/e2e/support/publish_financial_track_head.py recovered"
+        in runtime
+    )
     assert metadata.index(
         "phase=image-smoke-operator-browser-auth-fixture-ready "
     ) < metadata.index("phase=image-smoke-operator-browser ")
-    assert "playwright test --config tests/playwright.config.ts operator-console.spec.ts" in runtime
+    assert (
+        "playwright test --config tests/playwright.config.ts operator-console.spec.ts"
+        in runtime
+    )
     assert "create_private_compose_login_session" in fixture
     assert "run_auth_operator" in fixture
     assert "operator-sessions.json" in runtime
     assert "UPDATE data.refresh_operations" in retention
-    assert "WORKER_TUSHARE_TOKEN_INVALID" in (ROOT / "tests/image-checks.sh").read_text()
+    assert (
+        "WORKER_TUSHARE_TOKEN_INVALID" in (ROOT / "tests/image-checks.sh").read_text()
+    )
 
 
-def test_image_smoke_mounts_explicit_local_mcp_api_without_changing_production_image() -> None:
+def test_image_smoke_mounts_explicit_local_mcp_api_without_changing_production_image() -> (
+    None
+):
     overlay = (ROOT / "deploy" / "compose.image-smoke.yaml").read_text()
     dockerfile = (ROOT / "apps/core" / "Dockerfile").read_text()
     api_harness = (ROOT / "tests" / "production_mcp_image_api.py").read_text()
@@ -2081,7 +2154,10 @@ def test_failed_image_smoke_persists_runner_diagnostics_before_cleanup(
     assert completed.returncode == 9
     run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
     evidence = tmp_path / "runs" / run_id / "evidence"
-    assert "fake before image smoke failure" in (evidence / "smoke-before.stderr.log").read_text()
+    assert (
+        "fake before image smoke failure"
+        in (evidence / "smoke-before.stderr.log").read_text()
+    )
     assert (evidence / "compose-ps.txt").exists()
     assert (evidence / "compose-logs.txt").exists()
     assert (evidence / "container-inspect.txt").exists()
@@ -2323,7 +2399,10 @@ def test_failed_runtime_detects_original_leak_before_sanitizing_evidence(
     assert "failure_evidence_sanitization_status=0\n" in metadata
     assert "failure_canary_scan_status=0\n" in metadata
     assert "raw_canary_scan_status=1\n" in metadata
-    assert json.loads((evidence / "raw-canary-scan.json").read_text())["status"] == "failed"
+    assert (
+        json.loads((evidence / "raw-canary-scan.json").read_text())["status"]
+        == "failed"
+    )
 
 
 def test_successful_runtime_is_failed_by_a_raw_log_canary(tmp_path: Path) -> None:
@@ -2559,7 +2638,9 @@ def _release_fake_pytest_workers(
             finally:
                 os.close(descriptor)
         else:
-            commands = command_log.read_text() if command_log.exists() else "<no command log>"
+            commands = (
+                command_log.read_text() if command_log.exists() else "<no command log>"
+            )
             pytest.fail(
                 f"timed out releasing fake Pytest worker {worker_pid}; "
                 f"last_error={last_error!r}; commands={commands!r}"
@@ -2591,7 +2672,9 @@ def test_full_compose_lifecycle_decision_is_recorded_without_glossary_drift() ->
         assert engineering_term not in glossary
 
 
-def test_current_architecture_documents_only_the_active_data_and_schema_contracts() -> None:
+def test_current_architecture_documents_only_the_active_data_and_schema_contracts() -> (
+    None
+):
     architecture = (ROOT / "docs" / "architecture" / "core.md").read_text()
 
     for current in (
@@ -2685,7 +2768,9 @@ def test_development_watch_covers_application_and_shared_build_inputs() -> None:
     assert ".env" not in "\n".join(re.findall(r"- path: (.+)", development))
 
 
-def test_short_image_smoke_exercises_startup_without_qualification(tmp_path: Path) -> None:
+def test_short_image_smoke_exercises_startup_without_qualification(
+    tmp_path: Path,
+) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
     completed = subprocess.run(
         [ROOT / "tooling/test/cli.mjs", "image-smoke"],
@@ -2700,7 +2785,9 @@ def test_short_image_smoke_exercises_startup_without_qualification(tmp_path: Pat
     assert "down --volumes" in commands
 
 
-def test_short_image_smoke_preserves_failed_worker_result_and_cleans(tmp_path: Path) -> None:
+def test_short_image_smoke_preserves_failed_worker_result_and_cleans(
+    tmp_path: Path,
+) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
     environment.update(FAKE_IMAGE_SMOKE_PHASE="startup", FAKE_IMAGE_SMOKE_STATUS="9")
     completed = subprocess.run(
@@ -2711,5 +2798,8 @@ def test_short_image_smoke_preserves_failed_worker_result_and_cleans(tmp_path: P
     assert "down --volumes" in command_log.read_text()
     run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
     evidence = tmp_path / "runs" / run_id / "evidence"
-    assert "fake startup image smoke failure" in (evidence / "startup.stderr.log").read_text()
+    assert (
+        "fake startup image smoke failure"
+        in (evidence / "startup.stderr.log").read_text()
+    )
     assert list((tmp_path / "runs" / ".runtime-secrets").iterdir()) == []

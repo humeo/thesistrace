@@ -1,0 +1,18 @@
+{
+  "label_edge_cases": 30,
+  "label_state_codes": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "candidate_patches": [
+    "vector_label_preparation",
+    "shared_factor_coordinates",
+    "alpha_subexpression_reuse"
+  ],
+  "pytest_exit_code": 0,
+  "boundary": "In-process candidate computation; excludes DailyTrack orchestration, storage, and Worker qualification"
+}

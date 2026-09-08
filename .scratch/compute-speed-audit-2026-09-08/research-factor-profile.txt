@@ -1,0 +1,41 @@
+         5897996 function calls (5897970 primitive calls) in 2.131 seconds
+
+   Ordered by: cumulative time
+   List reduced from 225 to 35 due to restriction <35>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    2.132    2.132 benchmark.py:289(operation)
+        1    0.008    0.008    2.131    2.131 benchmark.py:269(calculate)
+        1    0.009    0.009    1.869    1.869 research_chunks.py:423(execute_research_chunk)
+        1    0.001    0.001    1.858    1.858 research_chunks.py:701(_execute_alpha_factor_chunk_from_validated)
+        1    0.000    0.000    0.680    0.680 factor.py:373(prepared_forward_factor_days_by_horizon)
+        1    0.077    0.077    0.680    0.680 factor.py:38(factor_days_by_horizon)
+        1    0.000    0.000    0.636    0.636 alpha.py:116(evaluate_columnar_alpha_sessions)
+        1    0.013    0.013    0.636    0.636 alpha.py:132(_evaluate_columnar_alpha)
+      556    0.167    0.000    0.404    0.001 {built-in method numpy.fromiter}
+      6/4    0.000    0.000    0.329    0.082 functools.py:982(__get__)
+      192    0.021    0.000    0.300    0.002 factor.py:466(_factor_array_values)
+       64    0.016    0.000    0.293    0.005 alpha.py:295(advance_alpha_checksum)
+        1    0.017    0.017    0.254    0.254 factor.py:109(prepare_columnar_forward_labels)
+        1    0.000    0.000    0.233    0.233 columnar_series.py:390(adjusted_open_matrix)
+        1    0.000    0.000    0.233    0.233 columnar_series.py:410(_adjusted_open_numeric_matrix)
+       64    0.018    0.000    0.204    0.003 {method 'join' of 'bytes' objects}
+      383    0.001    0.000    0.201    0.001 <frozen _collections_abc>:804(get)
+      383    0.133    0.000    0.199    0.001 columnar_series.py:187(__getitem__)
+   192064    0.098    0.000    0.186    0.000 alpha.py:313(<genexpr>)
+        1    0.115    0.115    0.183    0.183 alpha.py:183(_compose_unneutralized_columnar_alpha_matrix)
+        1    0.000    0.000    0.176    0.176 {method 'extend' of 'list' objects}
+       65    0.003    0.000    0.176    0.003 research_chunks.py:743(<genexpr>)
+      326    0.042    0.000    0.175    0.001 factor.py:516(_pearson_arrays)
+       64    0.060    0.001    0.173    0.003 research_chunks.py:827(_compact_pending_alpha)
+        2    0.010    0.005    0.163    0.082 columnar_series.py:448(_numeric_matrix)
+        1    0.000    0.000    0.159    0.159 columnar_series.py:261(_eod_index)
+        1    0.048    0.048    0.159    0.159 columnar_series.py:61(__init__)
+        2    0.019    0.009    0.153    0.076 columnar_series.py:471(_decimal_binary64_values)
+     2395    0.001    0.000    0.132    0.000 fromnumeric.py:48(_wrapfunc)
+        1    0.000    0.000    0.094    0.094 columnar_series.py:303(universe_members)
+        1    0.034    0.034    0.094    0.094 columnar_series.py:161(__init__)
+      326    0.016    0.000    0.094    0.000 factor.py:533(_average_ranks_array)
+        1    0.000    0.000    0.090    0.090 columnar_series.py:363(numeric_field_matrices)
+   399643    0.044    0.000    0.086    0.000 {built-in method builtins.isinstance}
+     2469    0.078    0.000    0.078    0.000 {built-in method math.fsum}

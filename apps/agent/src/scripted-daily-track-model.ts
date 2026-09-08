@@ -180,25 +180,7 @@ function currentResult(
     + (ineligibleAction === null ? "" : ` The current lifecycle is not eligible for ${ineligibleAction}; no ${ineligibleAction} was submitted.`)
     + (complete ? "" : " More Observation pages remain; the displayed row is only the latest retrieved, not the current latest Observation.");
   if (current.some((item) => item.name === "render_a2ui" && item.input.surfaceId === surfaceId)) return text(note);
-  const components = [
-    { component: "Column", id: "root", gap: "normal", children: ["title", "state", "dates", "block", "metrics", "observation", "provenance", "navigation"] },
-    { component: "Text", id: "title", variant: "title", text: `DailyTrack ${detail.id}` },
-    { component: "Text", id: "state", text: `Status ${detail.status} · Advance phase ${detail.progress.phase}` },
-    { component: "Text", id: "dates", text: `Origin ${detail.origin.research_run_id} · Tracking session ${detail.progress.head_session} · Data through ${detail.progress.data_through_session}` },
-    { component: "Text", id: "block", text: detail.blocked_reason ?? "No block reason." },
-    { component: "ResultMetrics", id: "metrics", title: "Current DailyTrack metrics", metrics },
-    { component: "Table", id: "observation", caption: complete ? "Latest DailyTrack Observation" : "Latest retrieved Observation (partial)",
-      columns: ["Session", "Net NAV", "Net cash (CNY)", "Holdings", "Transaction cost (CNY)"],
-      rows: latest === undefined ? [] : [[String(latest.session), String(latest.net_nav), String(latest.net_cash), String(latest.holdings_count), String(latest.transaction_cost_cny)]],
-      initiallyExpanded: true, summary: "Inspect current Observation" },
-    { component: "Provenance", id: "provenance", summary: "Inspect DailyTrack provenance", entries: [
-      { label: "Origin ResearchRun", value: detail.origin.research_run_id },
-      { label: "Origin session", value: detail.origin.origin_session },
-      { label: "Formula", value: provenance.frozen_research_input.formula },
-      { label: "Current view", value: note },
-    ] },
-    { component: "Navigation", id: "navigation", href: `/daily-tracks/${detail.id}`, label: "Open DailyTrack" },
-  ];
+  const components = [{ component: "DailyTrack", id: "root", trackId: detail.id }];
   const projection = projectResearchA2UIContent({ a2ui_operations: [
     { version: RESEARCH_A2UI_PROTOCOL_VERSION, createSurface: { catalogId: RESEARCH_A2UI_CATALOG_ID, surfaceId } },
     { version: RESEARCH_A2UI_PROTOCOL_VERSION, updateComponents: { components, surfaceId } },

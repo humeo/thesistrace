@@ -113,40 +113,27 @@ export const RESEARCH_A2UI_INLINE_CATALOG = Object.freeze({
       ],
       type: "object",
     },
-    ResearchRunStatus: {
+    ResearchRun: {
       additionalProperties: false,
-      description: "Authoritative ResearchRun identity and lifecycle from a Tool result.",
-      properties: {
-        formula: string(8_192, "Authoritative ResearchRun Alpha expression."),
-        phase: string(120, "Current bounded lifecycle detail."),
-        runId: {
-          pattern: "^run_[a-f0-9]{20}$",
-          type: "string",
-        },
-        status: {
-          enum: ["queued", "running", "cancelling", "succeeded", "failed", "cancelled"],
-          type: "string",
-        },
-      },
-      required: ["runId", "status", "formula"],
-      type: "object",
+      description: "Show a ResearchRun by ID. The client reads current authoritative status, formula and results; never supply those facts.",
+      properties: { runId: { type: "string", pattern: "^run_[a-f0-9]{20}$" } },
+      required: ["runId"], type: "object",
     },
-    ResultMetrics: {
+    ResearchComparison: {
       additionalProperties: false,
-      description: "Bounded display metrics from an authoritative Result section.",
-      properties: {
-        metrics: objectArray(20, {
-          label: string(80, "Metric name."),
-          value: string(120, "Formatted finite metric value."),
-        }, ["label", "value"], "Result metrics."),
-        title: string(120, "Metric group title."),
-      },
-      required: ["title", "metrics"],
-      type: "object",
+      description: "Compare up to 20 ResearchRuns in the supplied order using client-fetched authoritative results.",
+      properties: { runIds: { type: "array", minItems: 1, maxItems: 20, uniqueItems: true, items: { type: "string", pattern: "^run_[a-f0-9]{20}$" } } },
+      required: ["runIds"], type: "object",
+    },
+    DailyTrack: {
+      additionalProperties: false,
+      description: "Show the current DailyTrack by ID, loaded by the authenticated client. This is a live view, not a historical snapshot.",
+      properties: { trackId: { type: "string", pattern: "^track_[a-f0-9]{20}$" } },
+      required: ["trackId"], type: "object",
     },
     Table: {
       additionalProperties: false,
-      description: "Bounded read-only table with a local disclosure control.",
+      description: "Non-authoritative explanatory table. For research metrics use ResearchComparison; never copy Result values into this table.",
       properties: {
         caption: string(240, "Accessible table caption."),
         columns: stringArray(12, 80, "Column headings."),
@@ -166,19 +153,6 @@ export const RESEARCH_A2UI_INLINE_CATALOG = Object.freeze({
       required: ["caption", "columns", "rows", "summary"],
       type: "object",
     },
-    Provenance: {
-      additionalProperties: false,
-      description: "Bounded provenance facts with a local disclosure control.",
-      properties: {
-        entries: objectArray(24, {
-          label: string(100, "Provenance field name."),
-          value: string(600, "Provenance field display value."),
-        }, ["label", "value"], "Provenance fields."),
-        summary: string(160, "Disclosure label."),
-      },
-      required: ["summary", "entries"],
-      type: "object",
-    },
     Navigation: {
       additionalProperties: false,
       description: "Link to an allowlisted same-origin ThesisTrace product route.",
@@ -196,17 +170,19 @@ const COMPONENT_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const MESSAGE_ID = /^a2ui-surface-[A-Za-z0-9._:-]{1,200}$/;
 const SURFACE_ID = /^[a-z][a-z0-9-]{0,63}$/;
 const RESEARCH_RUN_ID = /^run_[a-f0-9]{20}$/;
-const RUN_STATUSES = new Set(["queued", "running", "cancelling", "succeeded", "failed", "cancelled"]);
+
 const TEXT_VARIANTS = new Set(["body", "caption", "label", "title"]);
 const LAYOUT_ALIGNS = new Set(["start", "center", "end", "stretch"]);
 const LAYOUT_GAPS = new Set(["compact", "normal", "wide"]);
 const COMPONENT_NAMES = new Set(Object.keys(RESEARCH_A2UI_INLINE_CATALOG.components));
 
-export function safeResearchA2UIErrorContent() {
+const ERROR_CODES = new Set(["GENERATION_FAILED", "INVALID_PAYLOAD", "INVALID_ENVELOPE", "INVALID_OPERATIONS", "INVALID_LIFECYCLE", "TOOL_RESULT_MISSING", "TOOL_RESULT_INVALID_JSON"]);
+export function safeResearchA2UIErrorContent(errorCode = "GENERATION_FAILED") {
   return {
     debugExposure: "hidden",
     error: "This research surface could not be displayed.",
     status: "failed",
+    errorCode: ERROR_CODES.has(errorCode) ? errorCode : "GENERATION_FAILED",
   };
 }
 
@@ -247,13 +223,14 @@ function projectLifecycle(value) {
     "debugExposure",
     "error",
     "errors",
+    "errorCode",
     "maxAttempts",
     "progressTokens",
     "status",
   ];
   if (!exactKeys(value, allowed)) return invalid("lifecycle");
   if (value.status === "failed") {
-    return { content: safeResearchA2UIErrorContent(), kind: "error", valid: false };
+    return { content: safeResearchA2UIErrorContent(value.errorCode), kind: "error", valid: false };
   }
   if (value.status !== "building" && value.status !== "retrying") {
     return invalid("lifecycle");
@@ -391,14 +368,14 @@ function projectComponent(value) {
       return { ...base, expression: value.expression, ...(value.label === undefined ? {} : { label: value.label }) };
     case "AlphaProposal":
       return projectAlphaProposal(value, base);
-    case "ResearchRunStatus":
-      return projectResearchRunStatus(value, base);
-    case "ResultMetrics":
-      return projectResultMetrics(value, base);
+    case "ResearchRun":
+      return exactKeys(value, ["component", "id", "runId"]) && typeof value.runId === "string" && RESEARCH_RUN_ID.test(value.runId) ? { ...base, runId: value.runId } : null;
+    case "ResearchComparison":
+      return exactKeys(value, ["component", "id", "runIds"]) && validStringArray(value.runIds, 20, 24, RESEARCH_RUN_ID) && new Set(value.runIds).size === value.runIds.length ? { ...base, runIds: [...value.runIds] } : null;
+    case "DailyTrack":
+      return exactKeys(value, ["component", "id", "trackId"]) && typeof value.trackId === "string" && /^track_[a-f0-9]{20}$/.test(value.trackId) ? { ...base, trackId: value.trackId } : null;
     case "Table":
       return projectTable(value, base);
-    case "Provenance":
-      return projectProvenance(value, base);
     case "Navigation": {
       if (!exactKeys(value, ["component", "href", "id", "label"]) || !validString(value.label, 120)) return null;
       const href = parseResearchA2UINavigationHref(value.href);
@@ -430,25 +407,6 @@ function projectAlphaProposal(value, base) {
   };
 }
 
-function projectResearchRunStatus(value, base) {
-  if (!exactKeys(value, ["component", "formula", "id", "phase", "runId", "status"])) return null;
-  if (!RESEARCH_RUN_ID.test(value.runId) || !RUN_STATUSES.has(value.status) || !validString(value.formula, 8_192)) return null;
-  if (value.phase !== undefined && !validString(value.phase, 120)) return null;
-  return {
-    ...base,
-    formula: value.formula,
-    runId: value.runId,
-    status: value.status,
-    ...(value.phase === undefined ? {} : { phase: value.phase }),
-  };
-}
-
-function projectResultMetrics(value, base) {
-  if (!exactKeys(value, ["component", "id", "metrics", "title"]) || !validString(value.title, 120)) return null;
-  const metrics = projectPairs(value.metrics, 20, 80, 120);
-  return metrics === null ? null : { ...base, metrics, title: value.title };
-}
-
 function projectTable(value, base) {
   if (!exactKeys(value, ["caption", "columns", "component", "id", "initiallyExpanded", "rows", "summary"])) return null;
   if (!validString(value.caption, 240) || !validString(value.summary, 160)) return null;
@@ -469,12 +427,6 @@ function projectTable(value, base) {
   };
 }
 
-function projectProvenance(value, base) {
-  if (!exactKeys(value, ["component", "entries", "id", "summary"]) || !validString(value.summary, 160)) return null;
-  const entries = projectPairs(value.entries, 24, 100, 600);
-  return entries === null ? null : { ...base, entries, summary: value.summary };
-}
-
 function projectPairs(value, maxItems, labelLimit, valueLimit) {
   if (!Array.isArray(value) || value.length === 0 || value.length > maxItems) return null;
   const result = [];
@@ -486,8 +438,8 @@ function projectPairs(value, maxItems, labelLimit, valueLimit) {
   return result;
 }
 
-function invalid(_reason) {
-  return { content: safeResearchA2UIErrorContent(), kind: "error", valid: false };
+function invalid(reason) {
+  return { content: safeResearchA2UIErrorContent(`INVALID_${reason.toUpperCase()}`), kind: "error", valid: false };
 }
 
 function isBoundedJson(value, maxBytes) {

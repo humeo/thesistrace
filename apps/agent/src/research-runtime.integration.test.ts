@@ -2912,11 +2912,12 @@ describe.sequential("durable Research Agent runtime", () => {
     try {
       const events = await run(runtime, input, primaryResearcher);
       expect(events.at(-1)?.type).toBe("RUN_FINISHED");
-      expect(JSON.stringify(events)).toContain(`/daily-tracks/${TRACK_ID}`);
+      expect(JSON.stringify(events)).toContain(TRACK_ID);
       expect(JSON.stringify(events)).not.toContain("private-daily-track-provenance");
       const initial = a2uiMessages(events);
       expect(initial).toHaveLength(1);
-      expect(JSON.stringify(initial)).toContain("2024-01-31");
+      expect(JSON.stringify(initial)).toContain(TRACK_ID);
+      expect(JSON.stringify(initial)).not.toContain("2024-01-31");
       const submitted = calls.filter((call) => call.name === "start_daily_track");
       expect(submitted.map((call) => call.input)).toEqual([{
         run_id: ORIGIN_RUN_ID, request_id: `agent_${agentRunId.replaceAll("-", "")}_track_start_v1`,
@@ -2939,7 +2940,8 @@ describe.sequential("durable Research Agent runtime", () => {
       const history = a2uiMessages(snapshotMessages(await connect(runtime, threadId, primaryResearcher)));
       expect(history).toHaveLength(2);
       expect(history[0]).toEqual(initial[0]);
-      expect(JSON.stringify(history[1])).toContain("2024-02-01");
+      expect(JSON.stringify(history[1])).toContain(TRACK_ID);
+      expect(JSON.stringify(history[1])).not.toContain("2024-02-01");
       expect(calls.filter((call) => call.name === "start_daily_track")).toEqual(submitted);
       expect(calls.some((call) => call.name === "retry_daily_track" || call.name === "stop_daily_track")).toBe(false);
     } finally {
@@ -3116,13 +3118,12 @@ describe.sequential("durable Research Agent runtime", () => {
       });
       const browserJson = JSON.stringify(events);
       expect(browserJson).toContain("rank(-abs(pct_change(close, 1)))");
-      expect(browserJson).toContain("0.1200");
-      expect(browserJson).toContain("3.40%");
-      expect(browserJson).toContain(`/research-runs/${coreRunId}`);
+
+
+      expect(browserJson).toContain(coreRunId);
       expect(browserJson).toContain("AlphaProposal");
-      expect(browserJson).toContain("ResearchRunStatus");
-      expect(browserJson).toContain("ResultMetrics");
-      expect(browserJson).toContain("Provenance");
+      expect(browserJson).toContain("ResearchRun");
+      expect(browserJson).not.toContain("ResultMetrics");
       expect(browserJson).not.toMatch(/generate_a2ui|render_a2ui/);
       expect(browserJson).not.toContain("private-core-provenance");
       const readySurfaceEvents = a2uiMessages(events).filter((message) => (
@@ -3130,8 +3131,9 @@ describe.sequential("durable Research Agent runtime", () => {
       ));
       expect(readySurfaceEvents).toHaveLength(4);
       expect(new Set(readySurfaceEvents.map((message) => message.id)).size).toBe(4);
-      expect(JSON.stringify(readySurfaceEvents)).toContain('"phase":"research"');
-      expect(JSON.stringify(readySurfaceEvents)).toContain('"status":"running"');
+      expect(JSON.stringify(readySurfaceEvents)).toContain(coreRunId);
+      expect(JSON.stringify(readySurfaceEvents)).not.toContain('"status":"running"');
+      expect(JSON.stringify(readySurfaceEvents)).not.toContain('"metrics"');
 
       const durable = await owner.query<{ content: string }>(`
         SELECT content
@@ -3224,7 +3226,7 @@ describe.sequential("durable Research Agent runtime", () => {
       expect(events.at(-1)?.type).toBe("RUN_FINISHED");
       const surfaces = a2uiMessages(events);
       expect(surfaces).toHaveLength(1);
-      expect(surfaces.at(-1)?.content).toEqual(safeResearchA2UIErrorContent());
+      expect(surfaces.at(-1)?.content).toEqual(safeResearchA2UIErrorContent("INVALID_LIFECYCLE"));
       const browserJson = JSON.stringify(events);
       expect(browserJson).toContain("unsafe research surface was rejected");
       expect(browserJson).not.toContain("MALICIOUS_A2UI_SHOULD_NOT_RENDER");
@@ -3240,13 +3242,13 @@ describe.sequential("durable Research Agent runtime", () => {
         WHERE thread_id = $1::uuid
       `, [threadId]);
       expect(stored.rows).toEqual([{
-        content: safeResearchA2UIErrorContent(),
+        content: safeResearchA2UIErrorContent("INVALID_LIFECYCLE"),
         lifecycle_status: "error",
       }]);
 
       const duplicate = await run(runtime, input, primaryResearcher);
       expect(a2uiMessages(snapshotMessages(duplicate))).toEqual([{
-        content: safeResearchA2UIErrorContent(),
+        content: safeResearchA2UIErrorContent("INVALID_LIFECYCLE"),
         id: surfaces.at(-1)?.id,
       }]);
       expect(JSON.stringify(frameworkLogs.flatMap((log) => log.mock.calls)))
