@@ -1,6 +1,8 @@
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { mcpOAuthOptions } from "./mcp-oauth.js";
 import { betterAuth } from "better-auth";
+import { emailOTP } from "better-auth/plugins/email-otp";
+import { APIError } from "better-auth/api";
 import { jwt } from "better-auth/plugins";
 import type { Pool } from "pg";
 
@@ -139,9 +141,9 @@ export function createThesisTraceAuth(
       },
       user: {
         create: {
-          async before(user) {
+          async before(user, context) {
             const email = canonicalizeEmail(user.email);
-            if (!lifecycle.invitationAdmission.allows(email)) {
+            if (context?.path !== "/sign-in/email-otp" && !lifecycle.invitationAdmission.allows(email)) {
               return false;
             }
             return {
@@ -163,7 +165,10 @@ export function createThesisTraceAuth(
               !lifecycle.invitationAdmission.isActive()
               && !(await lifecycle.isResearcherActive(session.userId))
             ) {
-              return false;
+              throw new APIError("FORBIDDEN", {
+                code: "ACCOUNT_INACTIVE",
+                message: "This account is inactive.",
+              });
             }
             lifecycle.recordSession({
               researcherId: session.userId,
@@ -185,6 +190,19 @@ export function createThesisTraceAuth(
     },
     logger: { disabled: true },
     plugins: [
+      emailOTP({
+        otpLength: 6,
+        expiresIn: 300,
+        allowedAttempts: 3,
+        storeOTP: "hashed",
+        disableSignUp: false,
+        resendStrategy: "rotate",
+        // The plugin swallows background delivery failures. Our HTTP issuance
+        // uses EmailCodeDelivery so a failed delivery cannot report success.
+        async sendVerificationOTP() {
+          throw new Error("USE_EMAIL_CODE_DELIVERY");
+        },
+      }),
       oauthProvider(mcpOAuthOptions(settings, lifecycle.isResearcherActive)),
       jwt({
         adapter: {
@@ -216,6 +234,7 @@ export function createThesisTraceAuth(
     ],
     rateLimit: {
       customRules: {
+        "/sign-in/email-otp": { max: 5, window: 60 },
         "/sign-in/email": { max: 5, window: 60 },
         "/sign-up/email": { max: 1, window: 60 },
       },

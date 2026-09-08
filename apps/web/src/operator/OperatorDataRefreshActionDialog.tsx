@@ -1,3 +1,4 @@
+import { OperatorCodeField } from "./OperatorCodeField";
 import { useEffect, useRef, useState } from "react";
 
 import type { DataRefreshOperationalStatus } from "./operatorDataStatusClient";
@@ -34,7 +35,7 @@ export function OperatorDataRefreshActionDialog({
 }>) {
   const dialog = useRef<HTMLDialogElement | null>(null);
   const request = useRef<AbortController | null>(null);
-  const [password, setPassword] = useState("");
+  const [otp, setOtp] = useState("");
   const [newKey] = useState(() => (
     action.action === "retry"
       ? suggestDataRefreshRetryKey(action.operation.kind, now())
@@ -83,10 +84,10 @@ export function OperatorDataRefreshActionDialog({
     try {
       const confirmed = await confirmDataRefreshActionProof(
         actionRequest,
-        password,
+        otp,
         controller.signal,
       );
-      setPassword("");
+      setOtp("");
       mutationStarted = true;
       const receipt = await submitDataRefreshAction(
         actionRequest,
@@ -121,7 +122,7 @@ export function OperatorDataRefreshActionDialog({
         setError("Confirmation is temporarily unavailable. Try again.");
       }
     } finally {
-      setPassword("");
+      setOtp("");
       request.current = null;
       setSubmitting(false);
     }
@@ -172,7 +173,7 @@ export function OperatorDataRefreshActionDialog({
           </h2>
         </header>
         <p id={descriptionId}>
-          Review the exact receipt and effect before confirming with your current password.
+          Review the exact receipt and effect before confirming with your verification code.
         </p>
         <dl className="operator-confirmation-target">
           <div><dt>Kind</dt><dd><strong>{kindText(operation.kind)}</strong></dd></div>
@@ -191,20 +192,7 @@ export function OperatorDataRefreshActionDialog({
           </p>
         </div>
         {keyError === null ? null : <p role="alert">{keyError}</p>}
-        <label className="operator-confirmation-field">
-          <span>Current password</span>
-          <input
-            autoComplete="current-password"
-            autoFocus
-            disabled={submitting || stale}
-            maxLength={128}
-            minLength={12}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-            type="password"
-            value={password}
-          />
-        </label>
+        <OperatorCodeField value={otp} onChange={setOtp} disabled={submitting} />
         {error === null ? null : (
           <p className="inline-status inline-status-error" role="alert">{error}</p>
         )}
@@ -280,7 +268,7 @@ function dataRefreshActionMessage(
   action: DataRefreshStatusAction["action"],
   reason: OperatorMutationError,
 ): string {
-  if (reason.code === "invalid-password") return "Current password is incorrect.";
+  if (reason.code === "invalid-otp") return "The verification code is incorrect or has expired.";
   if (reason.code === "invalid-proof") {
     return "Confirmation expired or was already used. Submit again.";
   }

@@ -136,7 +136,7 @@ describe.sequential("Operator Invitation authorization", () => {
     const confirmed = await harness.proofs.confirm(principal(), {
       email: "concurrent@example.com",
       operation: "invitation.issue",
-      password,
+      otp: "123456",
     });
 
     const attempts = await Promise.allSettled([
@@ -170,7 +170,7 @@ describe.sequential("Operator Invitation authorization", () => {
     const replacementProof = await harness.proofs.confirm(principal(), {
       email: "concurrent@example.com",
       operation: "invitation.reissue",
-      password,
+      otp: "123456",
     });
     await expect(
       harness.operatorInvitations.reissue(principal(), {
@@ -194,7 +194,7 @@ describe.sequential("Operator Invitation authorization", () => {
     const confirmed = await harness.proofs.confirm(principal(), {
       email: "preserved@example.com",
       operation: "invitation.reissue",
-      password,
+      otp: "123456",
     });
 
     failDelivery = true;
@@ -227,7 +227,7 @@ describe.sequential("Operator Invitation authorization", () => {
     const confirmed = await harness.proofs.confirm(principal(), {
       email: "bound@example.com",
       operation: "invitation.issue",
-      password,
+      otp: "123456",
     });
     for (const attempt of [
       () => harness.operatorInvitations.issue(principal(), {
@@ -285,7 +285,7 @@ describe.sequential("Operator Invitation authorization", () => {
       const confirmed = await harness.proofs.confirm(principal(), {
         email,
         operation: "invitation.reissue",
-        password,
+        otp: "123456",
       });
 
       pauseDelivery = true;
@@ -341,7 +341,7 @@ describe.sequential("Operator Invitation authorization", () => {
     const confirmed = await harness.proofs.confirm(principal(), {
       email,
       operation: "invitation.reissue",
-      password,
+      otp: "123456",
     });
     await insertReplacementOperator();
     const blocker = await owner.connect();
@@ -416,7 +416,7 @@ describe.sequential("Operator Invitation authorization", () => {
     const confirmed = await harness.proofs.confirm(principal(), {
       email,
       operation: "invitation.reissue",
-      password,
+      otp: "123456",
     });
     const blocker = await owner.connect();
     let replacing: Promise<unknown> | undefined;
@@ -488,6 +488,7 @@ function createHarness(
     },
   });
   const proofs = new OperatorProofService({
+    verifyCode: async (_principal, otp) => { if (otp !== "123456") throw new Error("invalid-test-code"); },
     clock: () => now,
     createId: () => nextId(nextProofId++),
     pool: runtimePool,

@@ -95,7 +95,7 @@ export type OperatorMutationErrorCode =
   | "delivery-failed"
   | "data-not-ready"
   | "invalid-target"
-  | "invalid-password"
+  | "invalid-otp"
   | "invalid-proof"
   | "not-cancellable"
   | "not-retryable"
@@ -135,7 +135,7 @@ export function isIsoResearchSession(value: unknown): value is string {
 export async function confirmOperatorProof(
   operation: InvitationMutationOperation,
   email: string,
-  password: string,
+  otp: string,
   signal: AbortSignal,
 ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
   const value = await operatorPost(
@@ -143,7 +143,7 @@ export async function confirmOperatorProof(
     {
       email,
       operation: `invitation.${operation}`,
-      password,
+      otp,
     },
     signal,
   );
@@ -185,14 +185,14 @@ export async function submitInvitationMutation(
 
 export async function confirmSessionRevocationProof(
   researcherId: string,
-  password: string,
+  otp: string,
   signal: AbortSignal,
 ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
   const value = await operatorPost(
     "/api/auth/operator/proofs",
     {
       operation: "researcher.sessions.revoke",
-      password,
+      otp,
       researcher_id: researcherId,
     },
     signal,
@@ -210,7 +210,7 @@ export async function confirmSessionRevocationProof(
 
 export async function confirmMarketRefreshProof(
   request: MarketRefreshRequest,
-  password: string,
+  otp: string,
   signal: AbortSignal,
 ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
   const value = await operatorPost(
@@ -219,7 +219,7 @@ export async function confirmMarketRefreshProof(
       as_of: request.asOf,
       idempotency_key: request.idempotencyKey,
       operation: "data.refresh.market.submit",
-      password,
+      otp,
     },
     signal,
   );
@@ -266,7 +266,7 @@ export async function loadMarketRefresh(
 
 export async function confirmFinancialRefreshProof(
   request: FinancialRefreshRequest,
-  password: string,
+  otp: string,
   signal: AbortSignal,
 ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
   const value = await operatorPost(
@@ -275,7 +275,7 @@ export async function confirmFinancialRefreshProof(
       idempotency_key: request.idempotencyKey,
       observation_through_session: request.observationThroughSession,
       operation: "data.refresh.financial.submit",
-      password,
+      otp,
     },
     signal,
   );
@@ -322,7 +322,7 @@ export async function loadFinancialRefresh(
 
 export async function confirmIndustryRefreshProof(
   request: IndustryRefreshRequest,
-  password: string,
+  otp: string,
   signal: AbortSignal,
 ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
   const value = await operatorPost(
@@ -331,7 +331,7 @@ export async function confirmIndustryRefreshProof(
       idempotency_key: request.idempotencyKey,
       observation_through_session: request.observationThroughSession,
       operation: "data.refresh.industry.submit",
-      password,
+      otp,
     },
     signal,
   );
@@ -378,7 +378,7 @@ export async function loadIndustryRefresh(
 
 export async function confirmDataRefreshActionProof(
   request: DataRefreshActionRequest,
-  password: string,
+  otp: string,
   signal: AbortSignal,
 ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
   let body: Readonly<Record<string, string>>;
@@ -386,7 +386,7 @@ export async function confirmDataRefreshActionProof(
     body = {
       kind: request.kind,
       operation: "data.refresh.cancel",
-      password,
+      otp,
       source_idempotency_key: request.sourceIdempotencyKey,
       target: request.target,
     };
@@ -395,7 +395,7 @@ export async function confirmDataRefreshActionProof(
       kind: request.kind,
       new_idempotency_key: request.newIdempotencyKey,
       operation: "data.refresh.retry",
-      password,
+      otp,
       source_idempotency_key: request.sourceIdempotencyKey,
       target: request.target,
     };
@@ -544,7 +544,7 @@ async function responseErrorCode(
   } catch {
     return "unavailable";
   }
-  if (code === "OPERATOR_PASSWORD_INVALID") return "invalid-password";
+  if (code === "OPERATOR_CODE_INVALID") return "invalid-otp";
   if (code === "OPERATOR_PROOF_INVALID") return "invalid-proof";
   if (code === "OPERATOR_INVITATION_CONFLICT") return "conflict";
   if (code === "OPERATOR_INVITATION_DELIVERY_FAILED") return "delivery-failed";

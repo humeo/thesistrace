@@ -25,7 +25,7 @@ describe("Auth HTTP observability", () => {
 
     observer.complete(observation, {
       method: "POST",
-      path: "/api/auth/sign-in/email",
+      path: "/api/auth/sign-in/email-otp",
       status: 401,
     });
 
@@ -37,7 +37,7 @@ describe("Auth HTTP observability", () => {
         http_request_id: "00000000-0000-4000-8000-000000000001",
         level: "INFO",
         method: "POST",
-        route: "/api/auth/sign-in/email",
+        route: "/api/auth/sign-in/email-otp",
         status_code: 401,
         timestamp: "2026-08-29T00:00:00.000Z",
       },

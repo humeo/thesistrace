@@ -1,3 +1,4 @@
+import { OperatorCodeField } from "./OperatorCodeField";
 import { useEffect, useRef, useState } from "react";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
@@ -30,7 +31,7 @@ export function OperatorMarketRefreshDialog({
   const mounted = useRef(true);
   const phase = useRef<"idle" | "proof" | "submission">("idle");
   const request = useRef<AbortController | null>(null);
-  const [password, setPassword] = useState("");
+  const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -64,11 +65,11 @@ export function OperatorMarketRefreshDialog({
       phase.current = "proof";
       const confirmed = await confirmMarketRefreshProof(
         refreshRequest,
-        password,
+        otp,
         controller.signal,
       );
       if (dismissed.current || !mounted.current) return;
-      setPassword("");
+      setOtp("");
       phase.current = "submission";
       accepted = await submitMarketRefresh(
         refreshRequest,
@@ -101,7 +102,7 @@ export function OperatorMarketRefreshDialog({
       phase.current = "idle";
       request.current = null;
       if (mounted.current) {
-        setPassword("");
+        setOtp("");
         setSubmitting(false);
       }
     }
@@ -149,7 +150,7 @@ export function OperatorMarketRefreshDialog({
         }}
       >
         <header>
-          <p className="eyebrow">Password confirmation</p>
+          <p className="eyebrow">Email confirmation</p>
           <h2 id="operator-market-refresh-title">Submit Market Refresh?</h2>
         </header>
         <p id="operator-market-refresh-description">
@@ -176,20 +177,7 @@ export function OperatorMarketRefreshDialog({
             later only if the Worker validates and publishes a changed Dataset.
           </p>
         </div>
-        <label className="operator-confirmation-field">
-          <span>Current password</span>
-          <input
-            autoComplete="current-password"
-            autoFocus
-            disabled={submitting}
-            maxLength={128}
-            minLength={12}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-            type="password"
-            value={password}
-          />
-        </label>
+        <OperatorCodeField value={otp} onChange={setOtp} disabled={submitting} />
         {error === null ? null : (
           <p className="inline-status inline-status-error" role="alert">{error}</p>
         )}
@@ -213,7 +201,7 @@ function marketRefreshMutationMessage(reason: unknown): string {
   if (!(reason instanceof OperatorMutationError)) {
     return "Market Refresh could not be submitted. Try again.";
   }
-  if (reason.code === "invalid-password") return "Current password is incorrect.";
+  if (reason.code === "invalid-otp") return "The verification code is incorrect or has expired.";
   if (reason.code === "invalid-proof") {
     return "Confirmation expired or was already used. Submit again.";
   }

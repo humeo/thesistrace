@@ -4,6 +4,7 @@ import {
   browserPassword,
   createResearcher,
   emailToken,
+  emailCode,
   expect,
   expireInvitation,
   fillPasswordInput,
@@ -14,140 +15,32 @@ import {
   securityTest as test,
 } from "./auth-fixture";
 
-test("Invitation, login, account password, reset, refresh, and access lifecycle stay invite-only", async ({ page }) => {
-  test.setTimeout(90_000);
-  await page.setViewportSize({ width: 375, height: 812 });
-  const email = "browser-auth-flow@example.test";
-  const invitationToken = await issueInvitation(email);
-
-  await page.goto(`/accept-invitation#token=${encodeURIComponent(invitationToken)}`);
-  await expect(page).toHaveURL(/\/accept-invitation$/);
-  await expect(page.getByLabel("Email")).toHaveValue(email);
-  await expect(page.getByLabel("Email")).toHaveAttribute("readonly", "");
-  await expect(page.getByLabel(/name/i)).toHaveCount(0);
-  const invitationPassword = page.getByLabel("Password", { exact: true });
-  const invitationConfirmation = page.getByLabel("Confirm password");
-  const acceptInvitation = page.getByRole("button", { name: "Accept invitation" });
-  await expectTouchTargets(invitationPassword, invitationConfirmation, acceptInvitation);
-  await expect(invitationPassword).toHaveAttribute("autocomplete", "new-password");
-  await invitationPassword.focus();
-  await page.keyboard.press("Tab");
-  await expect(invitationConfirmation).toBeFocused();
-  await fillPasswordInput(invitationPassword);
-  await fillPasswordInput(invitationConfirmation);
-  await acceptInvitation.click();
-
+test("Email verification creates one account and preserves the access lifecycle", async ({page}) => {
+  const email = "browser-email-access@example.test";
+  await page.setViewportSize({width:375,height:812});
+  await page.goto("/login");
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await loginThroughUi(page,email);
   await expect(page).toHaveURL(/\/data$/);
-  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
-  await expect(page.locator("body")).not.toContainText(invitationToken);
-  expect(await localStorageContains(page, invitationToken)).toBe(false);
-  expect(await localStorageContains(page, "session_token")).toBe(false);
-
+  const first = await (await page.request.get("/api/auth/get-session")).json();
+  await page.reload(); await expect(page.getByRole("heading",{name:"Data overview"})).toBeVisible();
   await openAccountMenu(page);
-  const accountMenu = page.getByLabel("Account menu");
-  const changePasswordAction = page.getByRole("button", {
-    name: "Change password",
-    exact: true,
-  });
-  const logOutAction = page.getByRole("button", { name: "Log out" });
-  await expectTouchTargets(accountMenu, changePasswordAction, logOutAction);
-  await expect(accountMenu).not.toHaveAttribute("aria-haspopup");
-  await expect(page.getByText(email, { exact: true })).toBeVisible();
-  await accountMenu.focus();
-  await page.keyboard.press("Shift+Tab");
-  await expect(logOutAction).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(accountMenu).toBeFocused();
-  await logOutAction.focus();
-  await page.keyboard.press("Escape");
-  await expect(accountMenu.locator("xpath=..")).not.toHaveAttribute("open", "");
-  await expect(accountMenu).toBeFocused();
-
-  await openAccountMenu(page);
-  await changePasswordAction.click();
-  const changedPassword = "Browser-changed-password-2026";
-  const currentPassword = page.getByLabel("Current password");
-  const newPassword = page.getByLabel("New password", { exact: true });
-  const passwordConfirmation = page.getByLabel("Confirm password");
-  const submitPassword = page.getByRole("button", {
-    name: "Change password",
-    exact: true,
-  }).last();
-  await expectTouchTargets(
-    currentPassword,
-    newPassword,
-    passwordConfirmation,
-    submitPassword,
-    logOutAction,
-  );
-  await fillPasswordInput(currentPassword);
-  await fillPasswordInput(newPassword, changedPassword);
-  await fillPasswordInput(passwordConfirmation, changedPassword);
-  await submitPassword.click();
-  await expect(page.getByText("Password changed. Other sessions were logged out.")).toBeVisible();
-  await page.getByRole("button", { name: "Log out" }).click();
-  await expect(page).toHaveURL(/\/login\?returnTo=/);
-
-  await page.goto("/research?folder=folder_default#formula");
-  await expect(page).toHaveURL(/\/login\?returnTo=/);
-  const returnTo = new URL(page.url()).searchParams.get("returnTo");
-  expect(returnTo).toBe("/research?folder=folder_default#formula");
-  await loginThroughUi(page, email, browserPassword);
-  await expect(page.getByRole("alert")).toContainText("Email or password is incorrect.");
-  await loginThroughUi(page, email, changedPassword);
-  await expect(page).toHaveURL(/\/research\?folder=folder_default#formula$/);
-
-  await refreshSessionOnBrowserEvent(page, "focus");
-  await refreshSessionOnBrowserEvent(page, "online");
-
-  await openAccountMenu(page);
-  await page.getByRole("button", { name: "Log out" }).click();
-  await expect(page.getByRole("heading", { name: "Log in to ThesisTrace" })).toBeVisible();
-  const forgotPassword = page.getByRole("button", { name: "Forgot password?" });
-  await expectTouchTargets(forgotPassword);
-  await forgotPassword.click();
-  const forgotEmail = page.getByLabel("Email");
-  const sendResetLink = page.getByRole("button", { name: "Send reset link" });
-  await expectTouchTargets(forgotEmail, sendResetLink);
-  await forgotEmail.fill(email);
-  await sendResetLink.click();
-  await expect(page.getByText("If the account exists, a reset link has been sent.")).toBeVisible();
-  const resetToken = await emailToken(email, "/reset-password#token=");
-  await page.goto(`/reset-password#token=${encodeURIComponent(resetToken)}`);
-  await expect(page).toHaveURL(/\/reset-password$/);
-  const resetPassword = "Browser-reset-password-2026";
-  const resetPasswordInput = page.locator("#reset-password");
-  const resetConfirmation = page.getByLabel("Confirm password");
-  const resetPasswordAction = page.getByRole("button", { name: "Reset password" });
-  await expectTouchTargets(resetPasswordInput, resetConfirmation, resetPasswordAction);
-  await fillPasswordInput(resetPasswordInput, resetPassword);
-  await fillPasswordInput(resetConfirmation, resetPassword);
-  await resetPasswordAction.click();
-  await expect(page).toHaveURL(/\/login\?reset=complete$/);
-  await expect(page.getByText("Password reset. Log in with your new password.")).toBeVisible();
-  expect(await localStorageContains(page, resetToken)).toBe(false);
-  await loginThroughUi(page, email, resetPassword);
+  await expect(page.getByRole("button",{name:"Change password"})).toHaveCount(0);
+  await page.getByRole("button",{name:"Log out"}).click();
+  await expect(page.getByRole("heading",{name:"Get started with QuantTrace"})).toBeVisible();
+  await loginThroughUi(page,email.toUpperCase());
   await expect(page).toHaveURL(/\/data$/);
-
-  expect(runAuthOperator("deactivate", "--email", email)).toMatchObject({
-    command: "deactivate",
-    status: "updated",
-  });
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(page.getByRole("heading", { name: "Log in to ThesisTrace" })).toBeVisible();
-  expect(runAuthOperator("reactivate", "--email", email)).toMatchObject({
-    command: "reactivate",
-    status: "updated",
-  });
-  await loginThroughUi(page, email, resetPassword);
+  const second = await (await page.request.get("/api/auth/get-session")).json();
+  expect(second.user.id).toBe(first.user.id);
+  expect(runAuthOperator("deactivate","--email",email)).toMatchObject({status:"updated"});
+  await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("heading",{name:"Get started with QuantTrace"})).toBeVisible();
+  expect(runAuthOperator("reactivate","--email",email)).toMatchObject({status:"updated"});
+  await loginThroughUi(page,email);
   await expect(page).toHaveURL(/\/data$/);
-
-  expect(runAuthOperator("revoke-sessions", "--email", email)).toMatchObject({
-    command: "revoke-sessions",
-    status: "updated",
-  });
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(page.getByRole("heading", { name: "Log in to ThesisTrace" })).toBeVisible();
+  expect(runAuthOperator("revoke-sessions","--email",email)).toMatchObject({status:"updated"});
+  await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("heading",{name:"Get started with QuantTrace"})).toBeVisible();
 });
 
 test("Invitation expiry, reissue, and lost-response replay converge safely", async ({ page }) => {
@@ -251,7 +144,7 @@ test("Bootstrap and Core failures preserve the exact Session boundary", async ({
     status: 401,
   }));
   await page.getByRole("link", { name: "Data", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Log in to ThesisTrace" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Get started with QuantTrace" })).toBeVisible();
   await expect(page.getByLabel("Account menu")).toHaveCount(0);
 });
 
@@ -278,20 +171,9 @@ test.describe("tablet touch presentation", () => {
     await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
     await openAccountMenu(page);
     const accountMenu = page.getByLabel("Account menu");
-    const changePassword = page.getByRole("button", {
-      name: "Change password",
-      exact: true,
-    });
     const logOut = page.getByRole("button", { name: "Log out" });
-    await expectTouchTargets(accountMenu, changePassword, logOut);
-
-    await changePassword.click();
-    await expectTouchTargets(
-      page.getByLabel("Current password"),
-      page.getByLabel("New password", { exact: true }),
-      page.getByLabel("Confirm password"),
-      page.getByRole("button", { name: "Change password", exact: true }).last(),
-    );
+    await expectTouchTargets(accountMenu, logOut);
+    await expect(page.getByRole("button", {name:"Change password"})).toHaveCount(0);
   });
 });
 
@@ -373,19 +255,12 @@ test("Two Researchers isolate Drafts, receipts, cursors, and system Folder ident
   ))).toBeNull();
 });
 
-async function loginThroughUi(page: Page, email: string, password: string): Promise<void> {
-  const emailInput = page.getByLabel("Email");
-  const passwordInput = page.getByLabel("Password");
-  const logIn = page.getByRole("button", { name: "Log in" });
-  await expectTouchTargets(emailInput, passwordInput, logIn);
-  await emailInput.fill(email);
-  await fillPasswordInput(passwordInput, password);
-  const signIn = page.waitForResponse(
-    (response) => response.request().method() === "POST"
-      && new URL(response.url()).pathname === "/api/auth/sign-in/email",
-  );
-  await logIn.click();
-  await signIn;
+async function loginThroughUi(page: Page, email: string): Promise<void> {
+  await page.getByLabel("Email",{exact:true}).fill(email);
+  await page.getByRole("button",{name:"Continue with email"}).click();
+  await expect(page.getByLabel("Verification code")).toBeVisible();
+  await page.getByLabel("Verification code").fill(await emailCode(email.trim().toLowerCase()));
+  await page.getByRole("button",{name:"Verify and continue"}).click();
 }
 
 async function refreshSessionOnBrowserEvent(

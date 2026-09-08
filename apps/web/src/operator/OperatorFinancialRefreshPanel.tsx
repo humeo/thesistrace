@@ -1,3 +1,4 @@
+import { OperatorCodeField } from "./OperatorCodeField";
 import { useEffect, useRef, useState } from "react";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
@@ -427,7 +428,7 @@ function FinancialRefreshDialog({
   const mounted = useRef(true);
   const phase = useRef<"idle" | "proof" | "submission">("idle");
   const activeRequest = useRef<AbortController | null>(null);
-  const [password, setPassword] = useState("");
+  const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -460,11 +461,11 @@ function FinancialRefreshDialog({
       phase.current = "proof";
       const confirmed = await confirmFinancialRefreshProof(
         refreshRequest,
-        password,
+        otp,
         controller.signal,
       );
       if (dismissed.current || !mounted.current) return;
-      setPassword("");
+      setOtp("");
       phase.current = "submission";
       accepted = await submitFinancialRefresh(
         refreshRequest,
@@ -475,7 +476,7 @@ function FinancialRefreshDialog({
       if (phase.current === "submission" && submissionFailureIsUncertain(reason)) {
         if (!dismissed.current && mounted.current) uncertain = true;
       } else if (reason instanceof DOMException && reason.name === "AbortError") {
-        // Closing password confirmation before Core submission has no mutation side effect.
+        // Closing otp confirmation before Core submission has no mutation side effect.
       } else if (
         reason instanceof OperatorMutationError
         && (reason.code === "conflict" || reason.code === "request-invalid")
@@ -490,7 +491,7 @@ function FinancialRefreshDialog({
       phase.current = "idle";
       activeRequest.current = null;
       if (mounted.current) {
-        setPassword("");
+        setOtp("");
         setSubmitting(false);
       }
     }
@@ -527,7 +528,7 @@ function FinancialRefreshDialog({
         event.preventDefault();
         void submit();
       }}>
-        <header><p className="eyebrow">Password confirmation</p><h2 id="operator-financial-refresh-title">Submit Financial Refresh?</h2></header>
+        <header><p className="eyebrow">Email confirmation</p><h2 id="operator-financial-refresh-title">Submit Financial Refresh?</h2></header>
         <p id="operator-financial-refresh-description">Confirm the exact CLI-equivalent collection boundary before queuing.</p>
         <dl className="operator-confirmation-target">
           <div><dt>Kind</dt><dd><strong>Financial</strong></dd></div>
@@ -538,20 +539,7 @@ function FinancialRefreshDialog({
           <span>Effect</span>
           <p>The operation enters the shared durable FIFO. Collection and publication happen later in the Data Operator Worker.</p>
         </div>
-        <label className="operator-confirmation-field">
-          <span>Current password</span>
-          <input
-            autoComplete="current-password"
-            autoFocus
-            disabled={submitting}
-            maxLength={128}
-            minLength={12}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-            type="password"
-            value={password}
-          />
-        </label>
+        <OperatorCodeField value={otp} onChange={setOtp} disabled={submitting} />
         {error === null ? null : <p className="inline-status inline-status-error" role="alert">{error}</p>}
         <footer className="operator-confirmation-actions">
           <button onClick={dismiss} type="button">Cancel</button>
@@ -623,7 +611,7 @@ function financialRefreshIsTerminal(operation: FinancialRefreshOperation): boole
 function financialMutationMessage(reason: unknown): string {
   if (reason instanceof OperatorPageNotFoundError) return "Operator access is no longer available.";
   if (!(reason instanceof OperatorMutationError)) return "Financial Refresh could not be submitted. Try again.";
-  if (reason.code === "invalid-password") return "Current password is incorrect.";
+  if (reason.code === "invalid-otp") return "The verification code is incorrect or has expired.";
   if (reason.code === "invalid-proof") return "Confirmation expired or was already used. Submit again.";
   if (reason.code === "data-not-ready") return "The current Dataset is not ready for a Financial Refresh.";
   if (reason.code === "rate-limited") return "Too many confirmation attempts. Wait one minute and try again.";

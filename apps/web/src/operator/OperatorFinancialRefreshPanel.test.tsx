@@ -49,7 +49,7 @@ test("polls company checkpoints, preserves stale counts, and stops at a terminal
     await act(async () => {root.render(<OperatorFinancialRefreshPanel onAccessNotFound={() => undefined} />);});
     await fill("#operator-financial-target", "2026-08-14", "change");
     await act(async () => {host.querySelector("form")!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));});
-    await fill('input[type="password"]', "test-only-password", "input");
+    await fill('input[autocomplete="one-time-code"]', "test-only-otp", "input");
     await act(async () => {host.querySelector("dialog form")!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));});
     expect(host.textContent).toContain("Collecting company statements");
     await tick();
@@ -302,13 +302,13 @@ test("automatically keeps a submission key across confirmation retries and chang
     expect(host.querySelector('input[type="text"]')).toBeNull();
     await fill('input[type="date"]', "2026-08-14", "change");
     await send("form");
-    await fill('input[type="password"]', "test-only-password", "input");
+    await fill('input[autocomplete="one-time-code"]', "test-only-otp", "input");
     await send("dialog form");
     await send("dialog form");
     expect(proof.mock.calls[0]![0].idempotencyKey).toBe(proof.mock.calls[1]![0].idempotencyKey);
     const firstKey = submit.mock.calls[0]![0].idempotencyKey;
     await send("form");
-    await fill('input[type="password"]', "test-only-password", "input");
+    await fill('input[autocomplete="one-time-code"]', "test-only-otp", "input");
     await send("dialog form");
     expect(submit.mock.calls[1]![0].idempotencyKey).not.toBe(firstKey);
   } finally {

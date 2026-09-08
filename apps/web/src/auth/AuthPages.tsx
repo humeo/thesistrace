@@ -5,59 +5,141 @@ import { safeReturnTo, type BrowserLocation, type InitialAuthSecret } from "./ro
 
 type Navigate = (path: string, options?: Readonly<{ replace?: boolean }>) => void;
 
-function LoginPage({ location, navigate }: {
-  location: BrowserLocation;
-  navigate: Navigate;
-}) {
-  const { signIn } = useAuth();
+function LoginPage() {
+  const { signIn, sendCode } = useAuth();
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [otp, setOtp] = useState("");
+  const [sent, setSent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [retryAt, setRetryAt] = useState(0);
+  const [now, setNow] = useState(Date.now());
   const [error, setError] = useState<string | null>(null);
-  const resetComplete = new URLSearchParams(location.search).get("reset") === "complete";
+  const otpRef = useRef<HTMLInputElement>(null);
+  const cooldown = Math.max(0, Math.ceil((retryAt - now) / 1000));
+
+  useEffect(() => {
+    if (!retryAt) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [retryAt]);
+
+  useEffect(() => {
+    if (sent) otpRef.current?.focus();
+  }, [sent]);
+
+  async function requestCode(): Promise<void> {
+    if (submitting || cooldown > 0) return;
+    setSubmitting(true);
+    setError(null);
+    const result = await sendCode(email);
+    setSubmitting(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    setEmail(email.trim().toLowerCase());
+    setOtp("");
+    setSent(true);
+    setNow(Date.now());
+    setRetryAt(Date.now() + 60_000);
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (submitting) return;
+    if (!sent) {
+      await requestCode();
+      return;
+    }
     setSubmitting(true);
     setError(null);
-    const result = await signIn(email, password);
+    const result = await signIn(email, otp);
     setSubmitting(false);
     if (!result.ok) setError(result.message);
   }
 
   return (
-    <AuthSurface eyebrow="Research workspace" title="Log in to ThesisTrace">
-      {resetComplete ? <p className="auth-success" role="status">Password reset. Log in with your new password.</p> : null}
+    <AuthSurface
+      eyebrow="Quantitative research workspace"
+      title={sent ? "Check your email" : "Get started with QuantTrace"}
+    >
+      <p>
+        {sent
+          ? `Enter the six-digit code sent to ${email}. It expires in 5 minutes.`
+          : "Sign in or create an account with your email. No password needed."}
+      </p>
       <form className="auth-form" onSubmit={(event) => void submit(event)}>
-        <label htmlFor="login-email">Email</label>
-        <input
-          autoComplete="email"
-          id="login-email"
-          onChange={(event) => setEmail(event.target.value)}
-          required
-          type="email"
-          value={email}
-        />
-        <label htmlFor="login-password">Password</label>
-        <input
-          autoComplete="current-password"
-          id="login-password"
-          maxLength={128}
-          minLength={12}
-          onChange={(event) => setPassword(event.target.value)}
-          required
-          type="password"
-          value={password}
-        />
+        {!sent ? (
+          <>
+            <label htmlFor="login-email">Email</label>
+            <input
+              autoComplete="email"
+              disabled={submitting}
+              id="login-email"
+              onChange={(event) => setEmail(event.target.value)}
+              required
+              type="email"
+              value={email}
+            />
+          </>
+        ) : (
+          <>
+            <label htmlFor="login-code">Verification code</label>
+            <input
+              autoComplete="one-time-code"
+              disabled={submitting}
+              id="login-code"
+              inputMode="numeric"
+              maxLength={6}
+              minLength={6}
+              onChange={(event) => setOtp(event.target.value)}
+              pattern="[0-9]{6}"
+              ref={otpRef}
+              required
+              value={otp}
+            />
+          </>
+        )}
         {error !== null ? <p className="auth-error" role="alert">{error}</p> : null}
-        <button className="button-primary auth-submit" disabled={submitting} type="submit">
-          {submitting ? "Logging in…" : "Log in"}
+        <button
+          className="button-primary auth-submit"
+          disabled={submitting || (!sent && cooldown > 0)}
+          type="submit"
+        >
+          {submitting
+            ? sent ? "Verifying…" : "Sending…"
+            : sent ? "Verify and continue" : "Continue with email"}
         </button>
       </form>
-      <button className="auth-text-action" onClick={() => navigate("/forgot-password")} type="button">
-        Forgot password?
-      </button>
+      {sent ? (
+        <div className="auth-secondary-actions">
+          <button
+            className="auth-text-action"
+            disabled={submitting || cooldown > 0}
+            onClick={() => void requestCode()}
+            type="button"
+          >
+            {cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend code"}
+          </button>
+          <button
+            className="auth-text-action"
+            disabled={submitting}
+            onClick={() => {
+              setSent(false);
+              setOtp("");
+              setError(null);
+              setRetryAt(0);
+            }}
+            type="button"
+          >
+            Use a different email
+          </button>
+        </div>
+      ) : (
+        <p className="auth-field-hint">
+          One email, one account. Your account is created after verification.
+        </p>
+      )}
     </AuthSurface>
   );
 }
@@ -156,124 +238,6 @@ function AcceptInvitationPage({ secret, clearSecret }: {
   );
 }
 
-function ForgotPasswordPage({ navigate }: { navigate: Navigate }) {
-  const { requestPasswordReset } = useAuth();
-  const [email, setEmail] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (submitting) return;
-    setSubmitting(true);
-    setError(null);
-    const result = await requestPasswordReset(email);
-    setSubmitting(false);
-    if (result.ok) setSent(true);
-    else setError(result.message);
-  }
-
-  return (
-    <AuthSurface eyebrow="Account recovery" title="Reset your password">
-      {sent ? (
-        <p className="auth-success" role="status">
-          If the account exists, a reset link has been sent.
-        </p>
-      ) : (
-        <form className="auth-form" onSubmit={(event) => void submit(event)}>
-          <label htmlFor="recovery-email">Email</label>
-          <input
-            autoComplete="email"
-            id="recovery-email"
-            onChange={(event) => setEmail(event.target.value)}
-            required
-            type="email"
-            value={email}
-          />
-          {error !== null ? <p className="auth-error" role="alert">{error}</p> : null}
-          <button className="button-primary auth-submit" disabled={submitting} type="submit">
-            {submitting ? "Sending…" : "Send reset link"}
-          </button>
-        </form>
-      )}
-      <button className="auth-text-action" onClick={() => navigate("/login")} type="button">
-        Return to login
-      </button>
-    </AuthSurface>
-  );
-}
-
-function ResetPasswordPage({ secret, clearSecret, navigate }: {
-  secret: InitialAuthSecret | null;
-  clearSecret: () => void;
-  navigate: Navigate;
-}) {
-  const { resetPassword } = useAuth();
-  const token = secret?.kind === "password-reset" ? secret.token : null;
-  const [password, setPassword] = useState("");
-  const [confirmation, setConfirmation] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(token === null
-    ? "This reset link is invalid."
-    : null);
-
-  async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (token === null || submitting) return;
-    if (password !== confirmation) {
-      setError("Passwords do not match.");
-      return;
-    }
-    setSubmitting(true);
-    setError(null);
-    const result = await resetPassword(token, password);
-    setSubmitting(false);
-    if (!result.ok) {
-      setError(result.message);
-      return;
-    }
-    clearSecret();
-    navigate("/login?reset=complete", { replace: true });
-  }
-
-  return (
-    <AuthSurface eyebrow="Account recovery" title="Choose a new password">
-      {token !== null ? (
-        <form className="auth-form" onSubmit={(event) => void submit(event)}>
-          <label htmlFor="reset-password">New password</label>
-          <input
-            autoComplete="new-password"
-            id="reset-password"
-            maxLength={128}
-            minLength={12}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-            type="password"
-            value={password}
-          />
-          <span className="auth-field-hint">Use 12–128 characters.</span>
-          <label htmlFor="reset-password-confirmation">Confirm password</label>
-          <input
-            autoComplete="new-password"
-            id="reset-password-confirmation"
-            maxLength={128}
-            minLength={12}
-            onChange={(event) => setConfirmation(event.target.value)}
-            required
-            type="password"
-            value={confirmation}
-          />
-          {error !== null ? <p className="auth-error" role="alert">{error}</p> : null}
-          <button className="button-primary auth-submit" disabled={submitting} type="submit">
-            {submitting ? "Resetting…" : "Reset password"}
-          </button>
-        </form>
-      ) : <p className="auth-error" role="alert">{error}</p>}
-    </AuthSurface>
-  );
-}
-
 export function AuthRoute({
   clearSecret,
   location,
@@ -287,23 +251,12 @@ export function AuthRoute({
 }) {
   switch (location.pathname) {
     case "/login":
-      return <LoginPage location={location} navigate={navigate} />;
+      return <LoginPage />;
     case "/accept-invitation":
       return (
         <AcceptInvitationPage
           clearSecret={clearSecret}
           key={secret?.kind === "invitation" ? secret.token : "missing-invitation"}
-          secret={secret}
-        />
-      );
-    case "/forgot-password":
-      return <ForgotPasswordPage navigate={navigate} />;
-    case "/reset-password":
-      return (
-        <ResetPasswordPage
-          clearSecret={clearSecret}
-          key={secret?.kind === "password-reset" ? secret.token : "missing-password-reset"}
-          navigate={navigate}
           secret={secret}
         />
       );
@@ -328,8 +281,8 @@ export function AuthSurface({ eyebrow, title, children }: {
     <main className="auth-page">
       <section aria-labelledby="auth-title" className="auth-panel">
         <a className="auth-brand" href="/login">
-          <span className="brand-mark" aria-hidden="true">T</span>
-          <span>ThesisTrace</span>
+          <img src="/quanttrace-logo.png" alt="" width={30} height={30} />
+          <span>QuantTrace</span>
         </a>
         <header>
           <span className="auth-eyebrow">{eyebrow}</span>

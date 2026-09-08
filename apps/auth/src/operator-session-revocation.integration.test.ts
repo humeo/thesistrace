@@ -212,6 +212,7 @@ function service(): Readonly<{
   revocations: OperatorSessionRevocationService;
 }> {
   const proofs = new OperatorProofService({
+    verifyCode: async (_principal, otp) => { if (otp !== "123456") throw new Error("invalid-test-code"); },
     clock: () => fixedNow,
     createId: () =>
       `00000000-0000-4000-8000-${String(nextProofId++).padStart(12, "0")}`,
@@ -237,7 +238,7 @@ async function confirmProof(
   return (
     await proofs.confirm(principal(), {
       operation: "researcher.sessions.revoke",
-      password,
+      otp: "123456",
       researcherId,
     })
   ).proof;

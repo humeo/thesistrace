@@ -249,11 +249,11 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     );
     const target = await persistedPrincipal("target-revoke@example.com");
     const targetSecondSignIn = await app.request(
-      `${settings.publicOrigin}/api/auth/sign-in/email`,
+      `${settings.publicOrigin}/api/auth/sign-in/email-otp`,
       {
         body: JSON.stringify({
           email: "target-revoke@example.com",
-          password: "correct-horse-battery-staple",
+          otp: await auth.api.createVerificationOTP({body:{email:"target-revoke@example.com",type:"sign-in"}}),
         }),
         headers: {
           "content-type": "application/json",
@@ -276,7 +276,7 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       {
         body: JSON.stringify({
           operation: "researcher.sessions.revoke",
-          password: "correct-horse-battery-staple",
+          otp: "123456",
           researcher_id: target.researcherId,
         }),
         headers: {
@@ -328,7 +328,7 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       {
         body: JSON.stringify({
           operation: "researcher.sessions.revoke",
-          password: "correct-horse-battery-staple",
+          otp: "123456",
           researcher_id: operator.researcherId,
         }),
         headers: {
@@ -406,7 +406,7 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       {
         body: JSON.stringify({
           operation: "researcher.sessions.revoke",
-          password: "correct-horse-battery-staple",
+          otp: "123456",
           researcher_id: target.researcherId,
         }),
         headers: {
@@ -447,11 +447,11 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       `);
 
       const startedSignIn = Promise.resolve(app.request(
-        `${settings.publicOrigin}/api/auth/sign-in/email`,
+        `${settings.publicOrigin}/api/auth/sign-in/email-otp`,
         {
           body: JSON.stringify({
             email: "target-linearized-revoke@example.com",
-            password: "correct-horse-battery-staple",
+            otp: await auth.api.createVerificationOTP({body:{email:"target-linearized-revoke@example.com",type:"sign-in"}}),
           }),
           headers: {
             "content-type": "application/json",
@@ -593,16 +593,16 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     expect(await persistedSessionTimes()).toEqual(before);
   });
 
-  it("trims and lowercases email at the public email-password boundary", async () => {
+  it("trims and lowercases email at the public email-OTP boundary", async () => {
     const { app, auth } = runtime();
     await createSessionCookie(auth, "canonical@example.com");
 
     const response = await app.request(
-      `${settings.publicOrigin}/api/auth/sign-in/email`,
+      `${settings.publicOrigin}/api/auth/sign-in/email-otp`,
       {
         body: JSON.stringify({
           email: "  Canonical@Example.COM  ",
-          password: "correct-horse-battery-staple",
+          otp: await auth.api.createVerificationOTP({body:{email:"canonical@example.com",type:"sign-in"}}),
         }),
         headers: {
           "content-type": "application/json",
@@ -622,11 +622,11 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     await createSessionCookie(auth, "origin@example.com");
 
     const response = await app.request(
-      `${settings.publicOrigin}/api/auth/sign-in/email`,
+      `${settings.publicOrigin}/api/auth/sign-in/email-otp`,
       {
         body: JSON.stringify({
           email: "origin@example.com",
-          password: "correct-horse-battery-staple",
+          otp: await auth.api.createVerificationOTP({body:{email:"origin@example.com",type:"sign-in"}}),
         }),
         headers: {
           "content-type": "application/json",
@@ -657,11 +657,11 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     const statuses: number[] = [];
     for (let attempt = 0; attempt < 6; attempt += 1) {
       const response = await app.request(
-        `${settings.publicOrigin}/api/auth/sign-in/email`,
+        `${settings.publicOrigin}/api/auth/sign-in/email-otp`,
         {
           body: JSON.stringify({
             email: "missing@example.com",
-            password: "correct-horse-battery-staple",
+            otp: "000000",
           }),
           headers: {
             "content-type": "application/json",
@@ -687,11 +687,11 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     await createSessionCookie(auth, "audit@example.com");
 
     const knownFailure = await app.request(
-      `${settings.publicOrigin}/api/auth/sign-in/email`,
+      `${settings.publicOrigin}/api/auth/sign-in/email-otp`,
       {
         body: JSON.stringify({
           email: "audit@example.com",
-          password: "wrong-password-still-long",
+          otp: "000000",
         }),
         headers: {
           "content-type": "application/json",
@@ -701,11 +701,11 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       },
     );
     const knownSuccess = await app.request(
-      `${settings.publicOrigin}/api/auth/sign-in/email`,
+      `${settings.publicOrigin}/api/auth/sign-in/email-otp`,
       {
         body: JSON.stringify({
           email: "audit@example.com",
-          password: "correct-horse-battery-staple",
+          otp: await auth.api.createVerificationOTP({body:{email:"audit@example.com",type:"sign-in"}}),
         }),
         headers: {
           "content-type": "application/json",
@@ -714,10 +714,10 @@ describe.sequential("Auth database-backed HTTP contract", () => {
         method: "POST",
       },
     );
-    await app.request(`${settings.publicOrigin}/api/auth/sign-in/email`, {
+    await app.request(`${settings.publicOrigin}/api/auth/sign-in/email-otp`, {
       body: JSON.stringify({
         email: "unknown-audit@example.com",
-        password: "wrong-password-still-long",
+        otp: "000000",
       }),
       headers: {
         "content-type": "application/json",
@@ -759,68 +759,16 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     expect(JSON.stringify(audits.rows)).not.toContain("unknown-audit@example.com");
   });
 
-  it("audits password change and logout while revoking the intended Sessions", async () => {
-    const { app, auth, tasks } = runtime();
-    const originalCookie = await createSessionCookie(auth, "password@example.com");
-    await app.request(`${settings.publicOrigin}/api/auth/sign-in/email`, {
-      body: JSON.stringify({
-        email: "password@example.com",
-        password: "correct-horse-battery-staple",
-      }),
-      headers: {
-        "content-type": "application/json",
-        origin: settings.publicOrigin,
-      },
-      method: "POST",
-    });
-
-    const changed = await app.request(
-      `${settings.publicOrigin}/api/auth/change-password`,
-      {
-        body: JSON.stringify({
-          currentPassword: "correct-horse-battery-staple",
-          newPassword: "new-correct-horse-battery-staple",
-        }),
-        headers: {
-          "content-type": "application/json",
-          cookie: originalCookie,
-          origin: settings.publicOrigin,
-        },
-        method: "POST",
-      },
-    );
-    const currentCookie = changed.headers.get("set-cookie") ?? "";
-    expect(changed.status).toBe(200);
-    expect(currentCookie).toContain("session_token=");
-    expect(
-      await owner.query<{ count: string }>('SELECT count(*) FROM auth."session"'),
-    ).toMatchObject({ rows: [{ count: "1" }] });
-
-    const signedOut = await app.request(`${settings.publicOrigin}/api/auth/sign-out`, {
-      headers: { cookie: currentCookie, origin: settings.publicOrigin },
-      method: "POST",
-    });
-    await tasks.drain();
-    const audits = await owner.query<{ event: string; outcome: string }>(`
-      SELECT event, outcome
-      FROM auth.security_audit
-      WHERE event IN ('password_changed', 'sessions_revoked')
-    `);
-
-    expect(signedOut.status).toBe(200);
-    expect(
-      await owner.query<{ count: string }>('SELECT count(*) FROM auth."session"'),
-    ).toMatchObject({ rows: [{ count: "0" }] });
-    expect(audits.rows).toEqual(
-      expect.arrayContaining([
-        { event: "password_changed", outcome: "succeeded" },
-        { event: "sessions_revoked", outcome: "succeeded" },
-        { event: "sessions_revoked", outcome: "succeeded" },
-      ]),
-    );
+  it("audits logout and revokes only its current Session", async () => {
+    const {app,auth,tasks} = runtime();
+    const cookie = await createSessionCookie(auth, "logout@example.com");
+    const response = await app.request(`${settings.publicOrigin}/api/auth/sign-out`, {method:"POST",headers:{cookie,origin:settings.publicOrigin}});
+    expect(response.status).toBe(200); await tasks.drain();
+    expect((await owner.query('SELECT count(*) FROM auth."session"')).rows[0].count).toBe("0");
+    expect((await owner.query("SELECT event,outcome FROM auth.security_audit WHERE event='sessions_revoked'")).rows).toContainEqual({event:"sessions_revoked",outcome:"succeeded"});
   });
 
-  it("never turns a committed sign-in, password change, or sign-out into an audit 503", async () => {
+  it("never turns a committed sign-in or sign-out into an audit 503", async () => {
     const { app, auth, tasks } = runtime();
     const originalCookie = await createSessionCookie(
       auth,
@@ -850,11 +798,11 @@ describe.sequential("Auth database-backed HTTP contract", () => {
       return response;
     };
 
-    const signedIn = await whileAuditUnavailable(() =>
-      Promise.resolve(app.request(`${settings.publicOrigin}/api/auth/sign-in/email`, {
+    const signedIn = await whileAuditUnavailable(async () =>
+      Promise.resolve(app.request(`${settings.publicOrigin}/api/auth/sign-in/email-otp`, {
         body: JSON.stringify({
           email: "audit-unavailable@example.com",
-          password: "correct-horse-battery-staple",
+          otp: await auth.api.createVerificationOTP({body:{email:"audit-unavailable@example.com",type:"sign-in"}}),
         }),
         headers: {
           "content-type": "application/json",
@@ -865,98 +813,15 @@ describe.sequential("Auth database-backed HTTP contract", () => {
     );
     expect(signedIn.headers.get("set-cookie")).toContain("session_token=");
 
-    const changed = await whileAuditUnavailable(() =>
-      Promise.resolve(app.request(`${settings.publicOrigin}/api/auth/change-password`, {
-        body: JSON.stringify({
-          currentPassword: "correct-horse-battery-staple",
-          newPassword: "new-correct-horse-battery-staple",
-        }),
-        headers: {
-          "content-type": "application/json",
-          cookie: originalCookie,
-          origin: settings.publicOrigin,
-        },
-        method: "POST",
-      })),
-    );
-    const changedCookie = changed.headers.get("set-cookie") ?? "";
-    expect(changedCookie).toContain("session_token=");
-
-    await whileAuditUnavailable(() =>
+    await whileAuditUnavailable(async () =>
       Promise.resolve(app.request(`${settings.publicOrigin}/api/auth/sign-out`, {
-        headers: { cookie: changedCookie, origin: settings.publicOrigin },
+        headers: { cookie: originalCookie, origin: settings.publicOrigin },
         method: "POST",
       })),
     );
     expect(
       await owner.query<{ count: string }>('SELECT count(*) FROM auth."session"'),
-    ).toMatchObject({ rows: [{ count: "0" }] });
-  });
-
-  it("audits an unknown Reset request only as a keyed HMAC", async () => {
-    const { app, tasks } = runtime();
-    const response = await app.request(
-      `${settings.publicOrigin}/api/auth/request-password-reset`,
-      {
-        body: JSON.stringify({ email: "unknown-reset@example.com" }),
-        headers: {
-          "content-type": "application/json",
-          origin: settings.publicOrigin,
-        },
-        method: "POST",
-      },
-    );
-    await tasks.drain();
-    const audit = await owner.query<{
-      outcome: string;
-      researcher_id: string | null;
-      unknown_email_hmac: Buffer;
-    }>(`
-      SELECT outcome, researcher_id, unknown_email_hmac
-      FROM auth.security_audit
-      WHERE event = 'password_reset_requested'
-    `);
-
-    expect(response.status).toBe(200);
-    expect(audit.rows).toEqual([
-      {
-        outcome: "no_change",
-        researcher_id: null,
-        unknown_email_hmac: unknownEmailHmac(
-          settings.secret,
-          "unknown-reset@example.com",
-        ),
-      },
-    ]);
-  });
-
-  it("does not hold an unknown Reset response on deferred audit storage", async () => {
-    const { app, tasks } = runtime();
-    const blocker = await owner.connect();
-    try {
-      await blocker.query("BEGIN");
-      await blocker.query("LOCK TABLE auth.security_audit IN ACCESS EXCLUSIVE MODE");
-      const startedAt = performance.now();
-
-      const response = await app.request(
-        `${settings.publicOrigin}/api/auth/request-password-reset`,
-        {
-          body: JSON.stringify({ email: "deferred-reset@example.com" }),
-          headers: {
-            "content-type": "application/json",
-            origin: settings.publicOrigin,
-          },
-          method: "POST",
-        },
-      );
-
-      expect(response.status).toBe(200);
-      expect(performance.now() - startedAt).toBeLessThan(500);
-    } finally {
-      await blocker.query("ROLLBACK").catch(() => undefined);
-      blocker.release();
-    }
-    await tasks.drain();
+    ).toMatchObject({ rows: [{ count: "1" }] });
   });
 
   it("sets the complete Production Session Cookie attributes", async () => {
@@ -1158,7 +1023,8 @@ function runtime() {
     authSecret: settings.secret,
     pool: runtimePool,
   });
-  const operatorProofs = new OperatorProofService({ pool: runtimePool });
+  const operatorProofs = new OperatorProofService({
+    verifyCode: async (_principal, otp) => { if (otp !== "123456") throw new Error("invalid-test-code"); }, pool: runtimePool });
   const researcherAccess = new ResearcherAccessService({
     authSecret: settings.secret,
     credentialCoordinator,
@@ -1199,9 +1065,7 @@ function runtime() {
     async consumeInvitationRateLimit() {
       return { allowed: true, retryAfterSeconds: 0 };
     },
-    async consumePasswordResetRateLimit() {
-      return { allowed: true, retryAfterSeconds: 0 };
-    },
+
     async consumeOperatorProofRateLimit() {
       return { allowed: true, retryAfterSeconds: 0 };
     },
@@ -1227,9 +1091,7 @@ function runtime() {
     },
     revokeOperatorResearcherSessions: (principal, input) =>
       operatorSessionRevocations.revoke(principal, input),
-    async resetPassword() {
-      throw new Error("PASSWORD_RESET_UNAVAILABLE_IN_HTTP_CONTRACT_HARNESS");
-    },
+
   });
   return { app, auth, tasks };
 }

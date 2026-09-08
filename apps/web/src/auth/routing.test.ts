@@ -25,8 +25,6 @@ describe("browser auth routing", () => {
   test.each([
     "/login",
     "/accept-invitation",
-    "/forgot-password",
-    "/reset-password",
   ])("recognizes the Auth route %s", (pathname) => {
     expect(isAuthPath(pathname)).toBe(true);
     expect(isProductPath(pathname)).toBe(false);
@@ -62,15 +60,15 @@ describe("browser auth routing", () => {
     });
   });
 
-  test("clears malformed Reset fragments without retaining them", () => {
+  test("clears malformed Invitation fragments without retaining them", () => {
     expect(
       extractInitialAuthSecret({
-        pathname: "/reset-password",
+        pathname: "/accept-invitation",
         search: "",
         hash: "#unexpected=value",
       }),
     ).toEqual({
-      location: { pathname: "/reset-password", search: "", hash: "" },
+      location: { pathname: "/accept-invitation", search: "", hash: "" },
       secret: null,
     });
   });

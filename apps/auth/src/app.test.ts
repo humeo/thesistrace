@@ -12,7 +12,7 @@ import {
 } from "./http-observability.js";
 import { OperatorAccessNotFoundError } from "./operator-directory.js";
 import {
-  OperatorPasswordInvalidError,
+  OperatorCodeInvalidError,
   OperatorProofInvalidError,
 } from "./operator-proof.js";
 import { OperatorSessionTargetProtectedError } from "./operator-session-revocation.js";
@@ -59,10 +59,7 @@ function dependencies(
       allowed: true,
       retryAfterSeconds: 0,
     })),
-    consumePasswordResetRateLimit: vi.fn(async () => ({
-      allowed: true,
-      retryAfterSeconds: 0,
-    })),
+
     getSession: vi.fn(async () => activeSession),
     isOperator: vi.fn(async () => false),
     hasOperatorCapability: vi.fn(async () => true),
@@ -92,7 +89,6 @@ function dependencies(
       revokedSessionCount: 2,
       status: "updated" as const,
     })),
-    resetPassword: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -183,66 +179,6 @@ describe("Auth HTTP boundary", () => {
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ code: "RESEARCHER_INVITATION_REQUIRED" });
-    expect(appDependencies.authHandler).not.toHaveBeenCalled();
-  });
-
-  it("completes Password Reset only through the atomic Auth lifecycle", async () => {
-    const appDependencies = dependencies();
-    const response = await createAuthApp(appDependencies).request(
-      "http://auth.test/api/auth/reset-password",
-      {
-        body: JSON.stringify({
-          newPassword: "new-correct-horse-battery-staple",
-          token: "reset-token-canary",
-        }),
-        headers: {
-          "content-type": "application/json",
-          origin: "http://auth.test",
-        },
-        method: "POST",
-      },
-    );
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: true });
-    expect(response.headers.has("set-cookie")).toBe(false);
-    expect(appDependencies.resetPassword).toHaveBeenCalledWith(
-      "reset-token-canary",
-      "new-correct-horse-battery-staple",
-    );
-    expect(appDependencies.consumePasswordResetRateLimit).toHaveBeenCalledWith(
-      "reset-token-canary",
-      expect.any(Headers),
-    );
-    expect(appDependencies.authHandler).not.toHaveBeenCalled();
-  });
-
-  it("rate limits Password Reset before hashing or database mutation", async () => {
-    const appDependencies = dependencies({
-      consumePasswordResetRateLimit: vi.fn(async () => ({
-        allowed: false,
-        retryAfterSeconds: 41,
-      })),
-    });
-    const response = await createAuthApp(appDependencies).request(
-      "http://auth.test/api/auth/reset-password",
-      {
-        body: JSON.stringify({
-          newPassword: "new-correct-horse-battery-staple",
-          token: "reset-token-canary",
-        }),
-        headers: {
-          "content-type": "application/json",
-          origin: "http://auth.test",
-        },
-        method: "POST",
-      },
-    );
-
-    expect(response.status).toBe(429);
-    expect(response.headers.get("retry-after")).toBe("41");
-    expect(await response.json()).toEqual({ code: "AUTH_RATE_LIMITED" });
-    expect(appDependencies.resetPassword).not.toHaveBeenCalled();
     expect(appDependencies.authHandler).not.toHaveBeenCalled();
   });
 
@@ -469,17 +405,17 @@ describe("Auth HTTP boundary", () => {
     },
   );
 
-  it("confirms one target-bound Session proof and never forwards its password", async () => {
+  it("confirms one target-bound Session proof and never forwards its otp", async () => {
     const appDependencies = dependencies();
     const app = createAuthApp(appDependencies);
-    const password = "correct-horse-battery-staple";
+    const otp = "123456";
     const researcherId = "00000000-0000-4000-8000-000000000002";
     const confirmation = await app.request(
       "http://auth.test/api/auth/operator/proofs",
       {
         body: JSON.stringify({
           operation: "researcher.sessions.revoke",
-          password,
+          otp,
           researcher_id: researcherId,
         }),
         headers: {
@@ -499,7 +435,7 @@ describe("Auth HTTP boundary", () => {
       },
       {
         operation: "researcher.sessions.revoke",
-        password,
+        otp,
         researcherId,
       },
     );
@@ -537,7 +473,7 @@ describe("Auth HTTP boundary", () => {
       JSON.stringify(
         vi.mocked(appDependencies.revokeOperatorResearcherSessions).mock.calls,
       ),
-    ).not.toContain(password);
+    ).not.toContain(otp);
   });
 
   it("rejects a non-exact Session revocation before mutation", async () => {
@@ -617,7 +553,7 @@ describe("Auth HTTP boundary", () => {
         body: {
           email: "researcher@example.com",
           operation: "invitation.issue",
-          password: "correct-horse-battery-staple",
+          otp: "123456",
         },
         path: "/api/auth/operator/proofs",
       },
@@ -651,7 +587,7 @@ describe("Auth HTTP boundary", () => {
     }
   });
 
-  it("rate limits proof confirmation before password verification", async () => {
+  it("rate limits proof confirmation before otp verification", async () => {
     const appDependencies = dependencies({
       consumeOperatorProofRateLimit: vi.fn(async () => ({
         allowed: false,
@@ -664,7 +600,7 @@ describe("Auth HTTP boundary", () => {
         body: JSON.stringify({
           email: "researcher@example.com",
           operation: "invitation.issue",
-          password: "correct-horse-battery-staple",
+          otp: "123456",
         }),
         headers: {
           "content-type": "application/json",
@@ -690,7 +626,7 @@ describe("Auth HTTP boundary", () => {
           as_of: "2026-08-11T18:00:00+08:00",
           idempotency_key: idempotencyKey,
           operation: "data.refresh.market.submit",
-          password: "correct-horse-battery-staple",
+          otp: "123456",
         }),
         headers: {
           "content-type": "application/json",
@@ -707,7 +643,7 @@ describe("Auth HTTP boundary", () => {
     expect(appDependencies.confirmOperatorProof).not.toHaveBeenCalled();
   });
 
-  it.each(["list-sessions", "update-session", "sign-in/social", "unknown"])(
+  it.each(["reset-password", "request-password-reset", "change-password", "sign-in/email", "list-sessions", "update-session", "sign-in/social", "unknown"])(
     "rejects the unapproved Better Auth path: %s",
     async (path) => {
       const appDependencies = dependencies();
@@ -721,7 +657,7 @@ describe("Auth HTTP boundary", () => {
     },
   );
 
-  it("canonicalizes email before delegating an email-password request", async () => {
+  it("canonicalizes email before delegating an email-code request", async () => {
     let delegatedBody: unknown;
     const appDependencies = dependencies({
       authHandler: vi.fn(async (request) => {
@@ -731,13 +667,13 @@ describe("Auth HTTP boundary", () => {
     });
 
     const response = await createAuthApp(appDependencies).request(
-      "http://auth.test/api/auth/sign-in/email",
+      "http://auth.test/api/auth/sign-in/email-otp",
       {
         body: JSON.stringify({
           email: "  Researcher@Example.COM  ",
-          password: "correct-horse-battery-staple",
+          otp: "123456",
         }),
-        headers: { "content-type": 'application/json; charset="utf-8"' },
+        headers: { "content-type": 'application/json; charset="utf-8"', origin: "http://auth.test" },
         method: "POST",
       },
     );
@@ -745,20 +681,20 @@ describe("Auth HTTP boundary", () => {
     expect(response.status).toBe(200);
     expect(delegatedBody).toEqual({
       email: "researcher@example.com",
-      password: "correct-horse-battery-staple",
+      otp: "123456",
     });
   });
 
   it.each(["application/jsonp", "application/jsonevil", "application/json; invalid"])(
-    "rejects the non-JSON email-password media type %s before Better Auth",
+    "rejects the non-JSON email-code media type %s before Better Auth",
     async (contentType) => {
       const appDependencies = dependencies();
       const response = await createAuthApp(appDependencies).request(
-        "http://auth.test/api/auth/sign-in/email",
+        "http://auth.test/api/auth/sign-in/email-otp",
         {
           body: JSON.stringify({
             email: "researcher@example.com",
-            password: "correct-horse-battery-staple",
+            otp: "123456",
           }),
           headers: { "content-type": contentType },
           method: "POST",
@@ -771,59 +707,9 @@ describe("Auth HTTP boundary", () => {
     },
   );
 
-  it("forces other-Session revocation on password change", async () => {
-    let delegatedBody: unknown;
-    const appDependencies = dependencies({
-      authHandler: vi.fn(async (request) => {
-        delegatedBody = await request.json();
-        return Response.json({ status: true });
-      }),
-    });
-
-    const response = await createAuthApp(appDependencies).request(
-      "http://auth.test/api/auth/change-password",
-      {
-        body: JSON.stringify({
-          currentPassword: "correct-horse-battery-staple",
-          newPassword: "new-correct-horse-battery-staple",
-        }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-      },
-    );
-
-    expect(response.status).toBe(200);
-    expect(delegatedBody).toEqual({
-      currentPassword: "correct-horse-battery-staple",
-      newPassword: "new-correct-horse-battery-staple",
-      revokeOtherSessions: true,
-    });
-  });
-
   it.each([
-    [
-      "sign-in/email",
-      {
-        email: "researcher@example.com",
-        password: "correct-horse-battery-staple",
-        rememberMe: true,
-      },
-    ],
-    [
-      "request-password-reset",
-      {
-        email: "researcher@example.com",
-        redirectTo: "https://attacker.example",
-      },
-    ],
-    [
-      "change-password",
-      {
-        currentPassword: "correct-horse-battery-staple",
-        newPassword: "new-correct-horse-battery-staple",
-        revokeOtherSessions: false,
-      },
-    ],
+    ["sign-in/email-otp", {email: "researcher@example.com", otp: "123456", rememberMe: true}],
+    ["sign-in/email-otp", {email: "researcher@example.com", otp: "123456", active: true}],
   ])("rejects client control fields on %s", async (path, body) => {
     const appDependencies = dependencies();
     const response = await createAuthApp(appDependencies).request(
@@ -843,7 +729,7 @@ describe("Auth HTTP boundary", () => {
   it("rejects an overlong email before Better Auth receives it", async () => {
     const appDependencies = dependencies();
     const response = await createAuthApp(appDependencies).request(
-      "http://auth.test/api/auth/sign-in/email",
+      "http://auth.test/api/auth/sign-in/email-otp",
       {
         body: JSON.stringify({ email: `${"a".repeat(255)}@example.com` }),
         headers: { "content-type": "application/json" },
@@ -945,7 +831,7 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           ...request,
-          password: "correct-horse-battery-staple",
+          otp: "123456",
         }),
         headers: {
           "content-type": "application/json",
@@ -966,7 +852,7 @@ describe("Auth HTTP boundary", () => {
         asOf: request.as_of,
         idempotencyKey: request.idempotency_key,
         operation: request.operation,
-        password: "correct-horse-battery-staple",
+        otp: "123456",
       },
     );
 
@@ -1010,7 +896,7 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           ...request,
-          password: "correct-horse-battery-staple",
+          otp: "123456",
         }),
         headers: {
           "content-type": "application/json",
@@ -1031,7 +917,7 @@ describe("Auth HTTP boundary", () => {
         idempotencyKey: request.idempotency_key,
         observationThroughSession: request.observation_through_session,
         operation: request.operation,
-        password: "correct-horse-battery-staple",
+        otp: "123456",
       },
     );
 
@@ -1075,7 +961,7 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           ...request,
-          password: "correct-horse-battery-staple",
+          otp: "123456",
         }),
         headers: {
           "content-type": "application/json",
@@ -1096,7 +982,7 @@ describe("Auth HTTP boundary", () => {
         idempotencyKey: request.idempotency_key,
         observationThroughSession: request.observation_through_session,
         operation: request.operation,
-        password: "correct-horse-battery-staple",
+        otp: "123456",
       },
     );
 
@@ -1169,7 +1055,7 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           ...request,
-          password: "correct-horse-battery-staple",
+          otp: "123456",
         }),
         headers: {
           "content-type": "application/json",
@@ -1186,7 +1072,7 @@ describe("Auth HTTP boundary", () => {
         researcherId: "00000000-0000-4000-8000-000000000001",
         sessionId: "00000000-0000-4000-8000-000000000010",
       },
-      { ...expected, password: "correct-horse-battery-staple" },
+      { ...expected, otp: "123456" },
     );
 
     const consumed = await app.request(
@@ -1231,7 +1117,7 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           ...request,
-          password: "correct-horse-battery-staple",
+          otp: "123456",
         }),
         headers,
         method: "POST",
@@ -1271,7 +1157,7 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           ...request,
-          password: "correct-horse-battery-staple",
+          otp: "123456",
         }),
         headers,
         method: "POST",
@@ -1311,7 +1197,7 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           ...request,
-          password: "correct-horse-battery-staple",
+          otp: "123456",
         }),
         headers,
         method: "POST",
@@ -1345,7 +1231,7 @@ describe("Auth HTTP boundary", () => {
           as_of: "2026-08-11T18:00:00+08:00",
           idempotency_key: key,
           operation: "data.refresh.market.submit",
-          password: "correct-horse-battery-staple",
+          otp: "123456",
         }),
         headers: {
           "content-type": "application/json",
@@ -1364,18 +1250,18 @@ describe("Auth HTTP boundary", () => {
     ["issue", "invitation.issue"],
     ["reissue", "invitation.reissue"],
   ] as const)(
-    "confirms the exact %s request and never forwards the password to mutation",
+    "confirms the exact %s request and never forwards the otp to mutation",
     async (path, operation) => {
       const appDependencies = dependencies();
       const app = createAuthApp(appDependencies);
-      const password = "correct-horse-battery-staple";
+      const otp = "123456";
       const confirmation = await app.request(
         "http://auth.test/api/auth/operator/proofs",
         {
           body: JSON.stringify({
             email: " Researcher@Example.COM ",
             operation,
-            password,
+            otp,
           }),
           headers: {
             "content-type": "application/json",
@@ -1396,7 +1282,7 @@ describe("Auth HTTP boundary", () => {
           researcherId: "00000000-0000-4000-8000-000000000001",
           sessionId: "00000000-0000-4000-8000-000000000010",
         },
-        { email: "researcher@example.com", operation, password },
+        { email: "researcher@example.com", operation, otp },
       );
 
       const mutation = await app.request(
@@ -1431,24 +1317,24 @@ describe("Auth HTTP boundary", () => {
         { email: "researcher@example.com", proof: opaqueInvitationToken },
       );
       expect(JSON.stringify(vi.mocked(mutationHandler).mock.calls)).not.toContain(
-        password,
+        otp,
       );
     },
   );
 
-  it("maps password and proof rejection without exposing an Operator surface", async () => {
+  it("maps otp and proof rejection without exposing an Operator surface", async () => {
     const invalidPassword = dependencies({
       confirmOperatorProof: vi.fn(async () => {
-        throw new OperatorPasswordInvalidError();
+        throw new OperatorCodeInvalidError();
       }),
     });
-    const passwordResponse = await createAuthApp(invalidPassword).request(
+    const otpResponse = await createAuthApp(invalidPassword).request(
       "http://auth.test/api/auth/operator/proofs",
       {
         body: JSON.stringify({
           email: "researcher@example.com",
           operation: "invitation.issue",
-          password: "wrong-password-is-long-enough",
+          otp: "000000",
         }),
         headers: {
           "content-type": "application/json",
@@ -1457,9 +1343,9 @@ describe("Auth HTTP boundary", () => {
         method: "POST",
       },
     );
-    expect(passwordResponse.status).toBe(400);
-    expect(await passwordResponse.json()).toEqual({
-      code: "OPERATOR_PASSWORD_INVALID",
+    expect(otpResponse.status).toBe(400);
+    expect(await otpResponse.json()).toEqual({
+      code: "OPERATOR_CODE_INVALID",
     });
 
     const invalidProof = dependencies({

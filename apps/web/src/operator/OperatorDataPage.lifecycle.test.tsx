@@ -40,7 +40,7 @@ test.each(["accepted", "reconciled"])("restores Market focus after the %s receip
     await act(async () => root.render(<OperatorDataPage />));
     await fill('input[type="date"]', "2026-08-14", "change");
     await send("form");
-    await fill('input[type="password"]', "test-only", "input");
+    await fill('input[autocomplete="one-time-code"]', "test-only", "input");
     await send("dialog form");
     if (path === "reconciled") {
       expect(host.textContent).toContain("Confirming submission");

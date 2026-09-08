@@ -28,9 +28,8 @@ import {
   type OperatorResearcherSummary,
 } from "./operator-directory.js";
 import type { McpAccessToken } from "./mcp-access-token.js";
-import { PasswordResetRejectedError } from "./password-reset.js";
 import {
-  OperatorPasswordInvalidError,
+  OperatorCodeInvalidError,
   OperatorProofInvalidError,
   OperatorProofNotFoundError,
   isIsoResearchSession,
@@ -49,34 +48,18 @@ const invitationAcceptSchema = z
     token: z.string().length(80),
   })
   .strict();
-const signInSchema = z
-  .object({ email: z.email(), password: z.string().min(12).max(128), oauth_query: z.string().max(16384).optional() })
-  .strict();
-const requestPasswordResetSchema = z.object({ email: z.email() }).strict();
-const resetPasswordSchema = z
-  .object({
-    newPassword: z.string().min(12).max(128),
-    token: z.string().min(1).max(512),
-  })
-  .strict();
-const changePasswordSchema = z
-  .object({
-    currentPassword: z.string().min(12).max(128),
-    newPassword: z.string().min(12).max(128),
-  })
-  .strict();
 const operatorProofSchema = z.union([
   z
     .object({
       email: z.string().min(1).max(512),
       operation: z.enum(["invitation.issue", "invitation.reissue"]),
-      password: z.string().min(12).max(128),
+      otp: z.string().regex(/^\d{6}$/),
     })
     .strict(),
   z
     .object({
       operation: z.literal("researcher.sessions.revoke"),
-      password: z.string().min(12).max(128),
+      otp: z.string().regex(/^\d{6}$/),
       researcher_id: z.uuid(),
     })
     .strict(),
@@ -85,7 +68,7 @@ const operatorProofSchema = z.union([
       as_of: z.string().min(1).max(128).refine((value) => value === value.trim()),
       idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       operation: z.literal("data.refresh.market.submit"),
-      password: z.string().min(12).max(128),
+      otp: z.string().regex(/^\d{6}$/),
     })
     .strict(),
   z
@@ -93,7 +76,7 @@ const operatorProofSchema = z.union([
       idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       observation_through_session: z.string().refine(isIsoResearchSession),
       operation: z.literal("data.refresh.financial.submit"),
-      password: z.string().min(12).max(128),
+      otp: z.string().regex(/^\d{6}$/),
     })
     .strict(),
   z
@@ -101,14 +84,14 @@ const operatorProofSchema = z.union([
       idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       observation_through_session: z.string().refine(isIsoResearchSession),
       operation: z.literal("data.refresh.industry.submit"),
-      password: z.string().min(12).max(128),
+      otp: z.string().regex(/^\d{6}$/),
     })
     .strict(),
   z
     .object({
       kind: z.enum(["market", "financial", "industry"]),
       operation: z.literal("data.refresh.cancel"),
-      password: z.string().min(12).max(128),
+      otp: z.string().regex(/^\d{6}$/),
       source_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       target: z.string().min(1).max(128),
     })
@@ -119,7 +102,7 @@ const operatorProofSchema = z.union([
       kind: z.enum(["market", "financial", "industry"]),
       new_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       operation: z.literal("data.refresh.retry"),
-      password: z.string().min(12).max(128),
+      otp: z.string().regex(/^\d{6}$/),
       source_idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       target: z.string().min(1).max(128),
     })
@@ -219,11 +202,9 @@ const publicBetterAuthPaths = new Set([
   "/api/auth/oauth2/public-client",
   "/api/auth/oauth2/revoke",
   "/api/auth/oauth2/introspect",
-  "/api/auth/change-password",
   "/api/auth/get-session",
   "/api/auth/ok",
-  "/api/auth/request-password-reset",
-  "/api/auth/sign-in/email",
+  "/api/auth/sign-in/email-otp",
   "/api/auth/sign-out",
 ]);
 
@@ -242,18 +223,17 @@ export type AuthAppDependencies = Readonly<{
     sessionId: string,
     headers: Headers,
   ) => Promise<Readonly<{ allowed: boolean; retryAfterSeconds: number }>>;
-  consumePasswordResetRateLimit: (
-    token: string,
-    headers: Headers,
-  ) => Promise<Readonly<{ allowed: boolean; retryAfterSeconds: number }>>;
   getSession: (input: GetSessionInput) => Promise<unknown>;
   hasOperatorCapability: (principal: OperatorPrincipal) => Promise<boolean>;
   isOperator: (researcherId: string) => Promise<boolean>;
   httpObserver?: AuthHttpObserver;
   inspectInvitation: (token: string) => Promise<Readonly<{ email: string }>>;
+  sendSignInCode?: (email: string) => Promise<void>;
+  consumeEmailCodeRateLimit?: (email: string, headers: Headers) => Promise<Readonly<{allowed: boolean; retryAfterSeconds: number}>>;
+  sendOperatorCode?: (principal: OperatorPrincipal) => Promise<void>;
   confirmOperatorProof: (
     principal: OperatorPrincipal,
-    input: OperatorProofRequest & Readonly<{ password: string }>,
+    input: OperatorProofRequest & Readonly<{ otp: string }>,
   ) => Promise<Readonly<{ expiresAt: string; proof: string }>>;
   consumeOperatorProof: (
     principal: OperatorPrincipal,
@@ -290,7 +270,6 @@ export type AuthAppDependencies = Readonly<{
     principal: OperatorPrincipal,
     input: Readonly<{ proof: string; researcherId: string }>,
   ) => Promise<ResearcherSessionRevocationResult>;
-  resetPassword: (token: string, newPassword: string) => Promise<void>;
 }>;
 
 export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: ReturnType<typeof import("./mcp-connections.js").createMcpConnectionsApp>): Hono {
@@ -478,6 +457,32 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
     }
   });
 
+  app.post("/api/auth/email-otp/send-verification-otp", async context => {
+    if (context.req.header("origin") !== dependencies.publicOrigin) return context.json({code: "ORIGIN_NOT_ALLOWED"}, 403);
+    const body = await exactJson(context.req.raw, z.object({email: z.string(), type: z.literal("sign-in")}).strict());
+    if (!body) return context.json({code: "AUTH_REQUEST_INVALID"}, 400);
+    let email: string;
+    try { email = canonicalizeEmail(body.email); } catch { return context.json({code: "INVALID_EMAIL"}, 400); }
+    if (!dependencies.sendSignInCode || !dependencies.consumeEmailCodeRateLimit) return context.json({code: "AUTH_SERVICE_UNAVAILABLE"}, 503);
+    const rate = await dependencies.consumeEmailCodeRateLimit(email, context.req.raw.headers);
+    if (!rate.allowed) { context.header("Retry-After", String(rate.retryAfterSeconds)); return context.json({code: "AUTH_RATE_LIMITED"}, 429); }
+    await dependencies.sendSignInCode(email);
+    return context.json({success: true});
+  });
+
+  app.post("/api/auth/operator/proofs/send-code", async (context) => {
+    const principal = await requireOperator(dependencies, context.req.raw.headers);
+    if (principal instanceof Response) return principal;
+    if (context.req.header("origin") !== dependencies.publicOrigin) return context.json({code: "AUTH_ORIGIN_INVALID"}, 403);
+    if (await exactJson(context.req.raw, z.object({}).strict()) === null) return context.json({code: "OPERATOR_REQUEST_INVALID"}, 400);
+    if (!dependencies.consumeEmailCodeRateLimit) return context.json({code: "AUTH_SERVICE_UNAVAILABLE"}, 503);
+    const rate = await dependencies.consumeEmailCodeRateLimit(`operator:${principal.sessionId}`, context.req.raw.headers);
+    if (!rate.allowed) { context.header("Retry-After", String(rate.retryAfterSeconds)); return context.json({code: "RATE_LIMITED"}, 429); }
+    if (!dependencies.sendOperatorCode) return context.json({code: "AUTH_UNAVAILABLE"}, 503);
+    await dependencies.sendOperatorCode(principal);
+    return context.json({success: true});
+  });
+
   app.post("/api/auth/operator/proofs", async (context) => {
     const principal = await requireOperator(
       dependencies,
@@ -505,7 +510,7 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
         body.operation === "researcher.sessions.revoke"
           ? {
               operation: body.operation,
-              password: body.password,
+              otp: body.otp,
               researcherId: body.researcher_id,
             }
           : body.operation === "data.refresh.market.submit"
@@ -513,7 +518,7 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
                 asOf: body.as_of,
                 idempotencyKey: body.idempotency_key,
                 operation: body.operation,
-                password: body.password,
+                otp: body.otp,
               }
             : body.operation === "data.refresh.financial.submit"
               || body.operation === "data.refresh.industry.submit"
@@ -521,13 +526,13 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
                   idempotencyKey: body.idempotency_key,
                   observationThroughSession: body.observation_through_session,
                   operation: body.operation,
-                  password: body.password,
+                  otp: body.otp,
                 }
               : body.operation === "data.refresh.cancel"
                 ? {
                     kind: body.kind,
                     operation: body.operation,
-                    password: body.password,
+                    otp: body.otp,
                     sourceIdempotencyKey: body.source_idempotency_key,
                     target: body.target,
                   }
@@ -536,14 +541,14 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
                       kind: body.kind,
                       newIdempotencyKey: body.new_idempotency_key,
                       operation: body.operation,
-                      password: body.password,
+                      otp: body.otp,
                       sourceIdempotencyKey: body.source_idempotency_key,
                       target: body.target,
                     }
               : {
                   email: canonicalizeEmail(body.email),
                   operation: body.operation,
-                  password: body.password,
+                  otp: body.otp,
                 },
       );
       return context.json({
@@ -554,8 +559,8 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
       if (error instanceof OperatorProofNotFoundError) {
         return context.body(null, 404);
       }
-      if (error instanceof OperatorPasswordInvalidError) {
-        return context.json({ code: "OPERATOR_PASSWORD_INVALID" }, 400);
+      if (error instanceof OperatorCodeInvalidError) {
+        return context.json({ code: "OPERATOR_CODE_INVALID" }, 400);
       }
       if (error instanceof InvalidEmailError) {
         return context.json({ code: "OPERATOR_REQUEST_INVALID" }, 400);
@@ -597,32 +602,6 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
   app.post("/api/auth/sign-up/email", (context) =>
     context.json({ code: "RESEARCHER_INVITATION_REQUIRED" }, 403),
   );
-  app.post("/api/auth/reset-password", async (context) => {
-    if (context.req.header("origin") !== dependencies.publicOrigin) {
-      return context.json({ code: "ORIGIN_NOT_ALLOWED" }, 403);
-    }
-    const body = await exactJson(context.req.raw, resetPasswordSchema);
-    if (body === null) {
-      return context.json({ code: "AUTH_REQUEST_INVALID" }, 400);
-    }
-    const rateLimit = await dependencies.consumePasswordResetRateLimit(
-      body.token,
-      context.req.raw.headers,
-    );
-    if (!rateLimit.allowed) {
-      context.header("retry-after", String(rateLimit.retryAfterSeconds));
-      return context.json({ code: "AUTH_RATE_LIMITED" }, 429);
-    }
-    try {
-      await dependencies.resetPassword(body.token, body.newPassword);
-      return context.json({ status: true as const });
-    } catch (error) {
-      if (error instanceof PasswordResetRejectedError) {
-        return context.json({ code: "AUTH_REQUEST_INVALID" }, 400);
-      }
-      throw error;
-    }
-  });
   app.post("/api/auth/researcher-invitation/inspect", async (context) => {
     if (context.req.header("origin") !== dependencies.publicOrigin) {
       return context.json({ code: "ORIGIN_NOT_ALLOWED" }, 403);
@@ -694,6 +673,9 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
     const normalizedRequest = await normalizePublicAuthRequest(request);
     if (normalizedRequest instanceof Response) {
       return normalizedRequest;
+    }
+    if (context.req.path === "/api/auth/sign-in/email-otp" && context.req.header("origin") !== dependencies.publicOrigin) {
+      return context.json({code: "ORIGIN_NOT_ALLOWED"}, 403);
     }
     return dependencies.authHandler(normalizedRequest);
   });
@@ -839,13 +821,9 @@ async function normalizePublicAuthRequest(
   }
   const path = new URL(request.url).pathname;
   const schema =
-    path === "/api/auth/sign-in/email"
-      ? signInSchema
-      : path === "/api/auth/request-password-reset"
-        ? requestPasswordResetSchema
-        : path === "/api/auth/change-password"
-          ? changePasswordSchema
-          : null;
+    path === "/api/auth/sign-in/email-otp"
+      ? z.object({email: z.email(), otp: z.string().regex(/^\d{6}$/), oauth_query: z.string().max(16384).optional()}).strict()
+      : null;
   if (schema === null) {
     return request;
   }
@@ -857,10 +835,7 @@ async function normalizePublicAuthRequest(
     if (!parsed.success) {
       return Response.json({ code: "AUTH_REQUEST_INVALID" }, { status: 400 });
     }
-    const body =
-      path === "/api/auth/change-password"
-        ? { ...parsed.data, revokeOtherSessions: true }
-        : parsed.data;
+    const body = parsed.data;
     const headers = new Headers(request.headers);
     headers.delete("content-length");
     return new Request(request, { body: JSON.stringify(body), headers });

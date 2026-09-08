@@ -1,11 +1,10 @@
-import { hashPassword } from "better-auth/crypto";
 import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createAuthPool } from "./database.js";
 import { OperatorAssignmentService } from "./operator-assignment.js";
 import {
-  OperatorPasswordInvalidError,
+  OperatorCodeInvalidError,
   OperatorProofInvalidError,
   OperatorProofService,
   type OperatorProofClaim,
@@ -28,7 +27,6 @@ const operatorId = "00000000-0000-4000-8000-000000000001";
 const operatorSessionId = "00000000-0000-4000-8000-000000000011";
 const secondSessionId = "00000000-0000-4000-8000-000000000012";
 const targetResearcherId = "00000000-0000-4000-8000-000000000002";
-const password = "correct-horse-battery-staple";
 let now = new Date("2026-08-29T06:00:00.000Z");
 let nextProofId = 100;
 
@@ -62,19 +60,6 @@ describe.sequential("Auth Operator Proof", () => {
       `,
       [operatorId, now],
     );
-    await owner.query(
-      `
-        INSERT INTO auth."account" (
-          id, issuer, "accountId", "providerId", "userId", password,
-          "createdAt", "updatedAt"
-        )
-        VALUES (
-          '00000000-0000-4000-8000-000000000021',
-          'credential', $1, 'credential', $2, $3, $4, $4
-        )
-      `,
-      [operatorId, operatorId, await hashPassword(password), now],
-    );
     await insertSession(operatorSessionId);
     await insertSession(secondSessionId);
     await new OperatorAssignmentService({ clock: () => now, pool: runtimePool })
@@ -92,7 +77,7 @@ describe.sequential("Auth Operator Proof", () => {
     const confirmed = await proofService.confirm(principal(), {
       email: " Researcher@Example.COM ",
       operation: "invitation.issue",
-      password,
+      otp: "123456",
     });
 
     expect(confirmed.expiresAt).toBe("2026-08-29T06:01:00.000Z");
@@ -132,7 +117,7 @@ describe.sequential("Auth Operator Proof", () => {
     const proofService = service();
     const confirmed = await proofService.confirm(principal(), {
       operation: "researcher.sessions.revoke",
-      password,
+      otp: "123456",
       researcherId: targetResearcherId,
     });
 
@@ -169,7 +154,7 @@ describe.sequential("Auth Operator Proof", () => {
     };
     const confirmed = await proofService.confirm(principal(), {
       ...request,
-      password,
+      otp: "123456",
     });
 
     await expect(
@@ -224,7 +209,7 @@ describe.sequential("Auth Operator Proof", () => {
     };
     const confirmed = await proofService.confirm(principal(), {
       ...request,
-      password,
+      otp: "123456",
     });
 
     await expect(
@@ -254,7 +239,7 @@ describe.sequential("Auth Operator Proof", () => {
     };
     const earliestConfirmed = await proofService.confirm(principal(), {
       ...earliestPythonDate,
-      password,
+      otp: "123456",
     });
     await expect(
       proofService.consumeExternal(principal(), {
@@ -268,7 +253,7 @@ describe.sequential("Auth Operator Proof", () => {
         ...earliestPythonDate,
         idempotencyKey: "financial-year-zero",
         observationThroughSession: "0000-01-01",
-        password,
+        otp: "123456",
       }),
     ).rejects.toEqual(new OperatorProofInvalidError());
   });
@@ -282,7 +267,7 @@ describe.sequential("Auth Operator Proof", () => {
     };
     const confirmed = await proofService.confirm(principal(), {
       ...request,
-      password,
+      otp: "123456",
     });
 
     await expect(
@@ -316,7 +301,7 @@ describe.sequential("Auth Operator Proof", () => {
     };
     const confirmed = await proofService.confirm(principal(), {
       ...request,
-      password,
+      otp: "123456",
     });
 
     for (const mismatch of [
@@ -356,7 +341,7 @@ describe.sequential("Auth Operator Proof", () => {
     };
     const confirmed = await proofService.confirm(principal(), {
       ...request,
-      password,
+      otp: "123456",
     });
 
     for (const mismatch of [
@@ -386,7 +371,7 @@ describe.sequential("Auth Operator Proof", () => {
     ).resolves.toBe("duplicate");
   });
 
-  it("starts the lifetime after credential locking and rejects expiry reached behind a proof lock", async () => {
+  it("starts the lifetime after session locking and rejects expiry reached behind a proof lock", async () => {
     const proofService = service();
     const credentialBlocker = await owner.connect();
     let credentialReleased = false;
@@ -396,8 +381,8 @@ describe.sequential("Auth Operator Proof", () => {
       await credentialBlocker.query(
         `
           SELECT id
-          FROM auth."account"
-          WHERE "userId" = $1 AND "providerId" = 'credential'
+          FROM auth."session"
+          WHERE "userId" = $1
           FOR UPDATE
         `,
         [operatorId],
@@ -405,7 +390,7 @@ describe.sequential("Auth Operator Proof", () => {
       confirming = proofService.confirm(principal(), {
         email: "delayed@example.com",
         operation: "invitation.issue",
-        password,
+        otp: "123456",
       });
       await waitForBlockedQuery("FROM auth.operator_assignment AS assignment");
       now = new Date("2026-08-29T06:00:30.000Z");
@@ -454,14 +439,14 @@ describe.sequential("Auth Operator Proof", () => {
     ).toMatchObject({ rows: [{ state: "available" }] });
   });
 
-  it("rejects an invalid password without creating a proof", async () => {
+  it("rejects an invalid code without creating a proof", async () => {
     await expect(
       service().confirm(principal(), {
         email: "researcher@example.com",
         operation: "invitation.issue",
-        password: "wrong-password-is-long-enough",
+        otp: "wrong-password-is-long-enough",
       }),
-    ).rejects.toEqual(new OperatorPasswordInvalidError());
+    ).rejects.toEqual(new OperatorCodeInvalidError());
     expect(
       await owner.query("SELECT id FROM auth.operator_proof"),
     ).toMatchObject({ rowCount: 0 });
@@ -472,7 +457,7 @@ describe.sequential("Auth Operator Proof", () => {
     const confirmed = await proofService.confirm(principal(), {
       email: "bound@example.com",
       operation: "invitation.reissue",
-      password,
+      otp: "123456",
     });
     const candidates = [
       {
@@ -536,7 +521,7 @@ describe.sequential("Auth Operator Proof", () => {
     const confirmed = await proofService.confirm(principal(), {
       email: "concurrent@example.com",
       operation: "invitation.issue",
-      password,
+      otp: "123456",
     });
     const input = {
       email: "concurrent@example.com",
@@ -565,6 +550,7 @@ describe.sequential("Auth Operator Proof", () => {
 
 function service(): OperatorProofService {
   return new OperatorProofService({
+    verifyCode: async (_principal, otp) => { if (otp !== "123456") throw new OperatorCodeInvalidError(); },
     clock: () => now,
     createId: () =>
       `00000000-0000-4000-8000-${String(nextProofId++).padStart(12, "0")}`,

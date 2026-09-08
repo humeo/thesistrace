@@ -5,11 +5,13 @@ import {
   browserPassword,
   createResearcher,
   emailToken,
+  emailCode,
   ensureOperatorDataBaseline,
   exhaustDataRefresh,
   expireDataRefreshClaim,
   expect,
-  fillPasswordInput,
+  fillOperatorCode,
+  requestOperatorCode,
   issueInvitation,
   markDataRefreshRunning,
   resetAuthRateLimits,
@@ -22,6 +24,30 @@ import {
   securityTest as test,
   type AuthenticatedResearcher,
 } from "./auth-fixture";
+
+test("Operator confirms session revocation with an emailed code", {tag:"@isolated"}, async ({page}) => {
+  const operator = await createResearcher(page,"otp-operator-e2e@example.test");
+  expect(runAuthOperator("assign-operator","--researcher-id",operator.id)).toMatchObject({status:"assigned"});
+  const ordinary = await createResearcher(page,"otp-target-e2e@example.test");
+  await restoreResearcherSession(page,operator);
+  await page.goto("/operator/researchers");
+  const row = page.getByRole("row").filter({hasText:ordinary.email});
+  await row.getByRole("button",{name:`Revoke 1 Login Sessions for ${ordinary.email}`}).click();
+  const dialog = page.getByRole("dialog",{name:"Revoke Login Sessions?"});
+  await expect(dialog.getByLabel("Verification code")).toBeFocused();
+  await dialog.getByRole("button",{name:"Send confirmation code"}).click();
+  await expect(dialog.getByRole("status")).toContainText("A code was sent");
+  const code = await emailCode(operator.email);
+  await dialog.getByLabel("Verification code").fill(code === "000000" ? "111111" : "000000");
+  await dialog.getByRole("button",{name:"Revoke sessions",exact:true}).click();
+  await expect(dialog.getByRole("alert")).toContainText("incorrect or has expired");
+  await dialog.getByLabel("Verification code").fill(code);
+  await dialog.getByRole("button",{name:"Revoke sessions",exact:true}).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(row.locator('[data-label="Current sessions"]')).toHaveText("0");
+  const session = await (await page.request.get("/api/auth/get-session")).json();
+  expect(session.user.id).toBe(operator.id);
+});
 
 test("Operator access control and responsive navigation", { tag: "@isolated" }, async ({ page }) => {
   test.setTimeout(240_000);
@@ -121,7 +147,7 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
       {
         email: "ordinary-denied@example.test",
         operation: "invitation.issue",
-        password: browserPassword,
+        otp: "123456",
       },
     ],
     [
@@ -134,7 +160,7 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
         as_of: "2026-08-11T18:00:00+08:00",
         idempotency_key: "ordinary-denied-market-refresh",
         operation: "data.refresh.market.submit",
-        password: browserPassword,
+        otp: "123456",
       },
     ],
     [
@@ -143,7 +169,7 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
         idempotency_key: "ordinary-denied-financial-refresh",
         observation_through_session: "2026-08-11",
         operation: "data.refresh.financial.submit",
-        password: browserPassword,
+        otp: "123456",
       },
     ],
     [
@@ -152,7 +178,7 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
         idempotency_key: "ordinary-denied-industry-refresh",
         observation_through_session: "2026-08-11",
         operation: "data.refresh.industry.submit",
-        password: browserPassword,
+        otp: "123456",
       },
     ],
     [
@@ -160,7 +186,7 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
       {
         kind: "market",
         operation: "data.refresh.cancel",
-        password: browserPassword,
+        otp: "123456",
         source_idempotency_key: "ordinary-denied-action-source",
         target: "2026-08-11T10:00:00Z",
       },
@@ -171,7 +197,7 @@ test("Operator access control and responsive navigation", { tag: "@isolated" }, 
         kind: "industry",
         new_idempotency_key: "ordinary-denied-action-retry",
         operation: "data.refresh.retry",
-        password: browserPassword,
+        otp: "123456",
         source_idempotency_key: "ordinary-denied-action-source",
         target: "2026-08-11",
       },
@@ -325,7 +351,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   await expect(confirmation).toContainText("Target email");
   await expect(confirmation).toContainText("A 48-hour Invitation");
   const issueEmail = confirmation.getByLabel("Target email");
-  const issuePassword = confirmation.getByLabel("Current password");
+  const issuePassword = confirmation.getByLabel("Verification code");
   await expect(issueEmail).toBeFocused();
   await issueEmail.press("Shift+Tab");
   expect(await confirmation.evaluate((element) =>
@@ -336,14 +362,14 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
     element.contains(document.activeElement)
   )).toBe(true);
   await issueEmail.fill(consoleInvitationEmail);
-  await fillPasswordInput(issuePassword);
+  await fillOperatorCode(issuePassword);
   await page.keyboard.press("Escape");
   await expect(confirmation).toHaveCount(0);
   await expect(inviteResearcher).toBeFocused();
 
   await inviteResearcher.press("Enter");
   confirmation = page.getByRole("dialog", { name: "Issue Invitation?" });
-  await expect(confirmation.getByLabel("Current password")).toHaveValue("");
+  await expect(confirmation.getByLabel("Verification code")).toHaveValue("");
   await confirmation.getByRole("button", { name: "Cancel" }).click();
   await expect(confirmation).toHaveCount(0);
   await expect(inviteResearcher).toBeFocused();
@@ -361,9 +387,9 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   confirmation = page.getByRole("dialog", { name: "Issue Invitation?" });
   await confirmation.getByLabel("Target email").fill(consoleInvitationEmail);
   await confirmation.getByLabel("Target email").press("Tab");
-  await expect(confirmation.getByLabel("Current password")).toBeFocused();
-  await fillPasswordInput(confirmation.getByLabel("Current password"));
-  await confirmation.getByLabel("Current password").press("Enter");
+  await expect(confirmation.getByLabel("Verification code")).toBeFocused();
+  await fillOperatorCode(confirmation.getByLabel("Verification code"));
+  await confirmation.getByLabel("Verification code").press("Enter");
   await expect(confirmation).toHaveCount(0);
   await expect(page.getByRole("status").filter({
     hasText: `Invitation sent to ${consoleInvitationEmail}.`,
@@ -389,8 +415,8 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   await expect(reissueConfirmation).toContainText(
     "The old link becomes invalid only after delivery succeeds.",
   );
-  await fillPasswordInput(reissueConfirmation.getByLabel("Current password"));
-  await reissueConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(reissueConfirmation.getByLabel("Verification code"));
+  await reissueConfirmation.getByLabel("Verification code").press("Enter");
   await expect(reissueConfirmation).toHaveCount(0);
   await expect(page.getByRole("status").filter({
     hasText: `Invitation reissued for ${consoleInvitationEmail}.`,
@@ -436,7 +462,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
     (request) => request.path.startsWith("/api/auth/operator/invitations/"),
   );
   expect(proofRequests).toHaveLength(2);
-  expect(proofRequests.every((request) => request.body.includes(browserPassword)))
+  expect(proofRequests.every((request) => /^[0-9]{6}$/.test(JSON.parse(request.body).otp)))
     .toBe(true);
   expect(invitationMutations).toHaveLength(2);
   expect(invitationMutations.every((request) => !request.body.includes(browserPassword)))
@@ -475,9 +501,9 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   await expect(revocationDialog).toContainText(
     "Every current Login Session for this Researcher will be revoked.",
   );
-  const revocationPassword = revocationDialog.getByLabel("Current password");
+  const revocationPassword = revocationDialog.getByLabel("Verification code");
   await expect(revocationPassword).toBeFocused();
-  await fillPasswordInput(revocationPassword);
+  await fillOperatorCode(revocationPassword);
   await revocationPassword.press("Shift+Tab");
   expect(await revocationDialog.evaluate((element) =>
     element.contains(document.activeElement)
@@ -490,8 +516,8 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   revocationDialog = page.getByRole("dialog", {
     name: "Revoke Login Sessions?",
   });
-  await expect(revocationDialog.getByLabel("Current password")).toHaveValue("");
-  await fillPasswordInput(revocationDialog.getByLabel("Current password"));
+  await expect(revocationDialog.getByLabel("Verification code")).toHaveValue("");
+  await fillOperatorCode(revocationDialog.getByLabel("Verification code"));
   await revocationDialog.getByRole("button", { name: "Cancel" }).click();
   await expect(revocationDialog).toHaveCount(0);
   await expect(revokeSessions).toBeFocused();
@@ -500,9 +526,9 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   revocationDialog = page.getByRole("dialog", {
     name: "Revoke Login Sessions?",
   });
-  await expect(revocationDialog.getByLabel("Current password")).toHaveValue("");
-  await fillPasswordInput(revocationDialog.getByLabel("Current password"));
-  await revocationDialog.getByLabel("Current password").press("Enter");
+  await expect(revocationDialog.getByLabel("Verification code")).toHaveValue("");
+  await fillOperatorCode(revocationDialog.getByLabel("Verification code"));
+  await revocationDialog.getByLabel("Verification code").press("Enter");
   await expect(revocationDialog).toHaveCount(0);
   await expect(page.getByRole("status").filter({
     hasText: `Revoked 1 Login Session for ${ordinary.email}.`,
@@ -524,7 +550,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   expect(sessionProofRequests).toHaveLength(1);
   expect(JSON.parse(sessionProofRequests[0]?.body ?? "{}")).toEqual({
     operation: "researcher.sessions.revoke",
-    password: browserPassword,
+    otp: expect.any(String),
     researcher_id: ordinary.id,
   });
   expect(sessionMutations).toHaveLength(1);
@@ -536,7 +562,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
 
   await restoreResearcherSession(page, ordinary);
   await refreshRevokedSessionOnBrowserEvent(page);
-  await expect(page.getByRole("heading", { name: "Log in to ThesisTrace" }))
+  await expect(page.getByRole("heading", { name: "Get started with QuantTrace" }))
     .toBeVisible();
   await restoreResearcherSession(page, operator);
   await refreshOperatorSessionOnBrowserEvent(page);
@@ -559,8 +585,8 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   const secondPageConfirmation = page.getByRole("dialog", {
     name: "Reissue Invitation?",
   });
-  await fillPasswordInput(secondPageConfirmation.getByLabel("Current password"));
-  await secondPageConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(secondPageConfirmation.getByLabel("Verification code"));
+  await secondPageConfirmation.getByLabel("Verification code").press("Enter");
   await expect(secondPageConfirmation).toHaveCount(0);
   await expect(invitationPagination).toContainText("Page 1");
   await expect(inviteResearcher).toBeFocused();
@@ -578,7 +604,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
   const failedReloadConfirmation = page.getByRole("dialog", {
     name: "Reissue Invitation?",
   });
-  await fillPasswordInput(failedReloadConfirmation.getByLabel("Current password"));
+  await fillOperatorCode(failedReloadConfirmation.getByLabel("Verification code"));
   let failInvitationReload = true;
   await page.route("**/api/auth/operator/invitations*", async (route) => {
     if (route.request().method() !== "GET" || !failInvitationReload) {
@@ -593,7 +619,7 @@ test("Operator researchers and invitations", { tag: "@isolated" }, async ({ page
     });
   });
   try {
-    await failedReloadConfirmation.getByLabel("Current password").press("Enter");
+    await failedReloadConfirmation.getByLabel("Verification code").press("Enter");
     await expect(failedReloadConfirmation).toHaveCount(0);
     await expect(page.getByRole("alert").filter({
       hasText: "Operator Console unavailable.",
@@ -734,8 +760,8 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
   let marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
-  await marketConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(marketConfirmation.getByLabel("Verification code"));
+  await marketConfirmation.getByLabel("Verification code").press("Enter");
   await pendingProofStarted;
   await expect(marketConfirmation.getByRole("button", { name: "Cancel" })).toBeEnabled();
   const pendingProofAborted = page.waitForEvent("requestfailed", (request) => {
@@ -793,9 +819,9 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
   await expect(marketConfirmation).toContainText(marketAsOf);
   await expect(marketConfirmation).toContainText(marketKey);
   await expect(marketConfirmation).toContainText("durable FIFO");
-  const marketPassword = marketConfirmation.getByLabel("Current password");
+  const marketPassword = marketConfirmation.getByLabel("Verification code");
   await expect(marketPassword).toBeFocused();
-  await fillPasswordInput(marketPassword);
+  await fillOperatorCode(marketPassword);
   await marketPassword.press("Enter");
   await coreAccepted;
   await expect(marketConfirmation.getByRole("button", { name: "Cancel" })).toBeEnabled();
@@ -824,11 +850,11 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
 
   // Keys are generated by the UI. Verify deliberate reuse with a changed
   // target at the HTTP contract, rather than inventing an editable key field.
-  const conflictStatus = await page.evaluate(async ({ key, password }) => {
+  const conflictStatus = await page.evaluate(async ({ key, otp }) => {
     const target = { as_of: "2026-08-12T18:00:00+08:00", idempotency_key: key };
     const proofResponse = await fetch("/api/auth/operator/proofs", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...target, operation: "data.refresh.market.submit", password }),
+      body: JSON.stringify({ ...target, operation: "data.refresh.market.submit", otp }),
     });
     if (!proofResponse.ok) return proofResponse.status;
     const { proof } = await proofResponse.json();
@@ -836,7 +862,7 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...target, proof }),
     })).status;
-  }, { key: marketKey, password: browserPassword });
+  }, { key: marketKey, otp: await requestOperatorCode(page) });
   expect(conflictStatus).toBe(409);
   await expect(marketRefreshReceipt.getByText(marketKey, { exact: true })).toBeVisible();
 
@@ -856,7 +882,7 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     as_of: marketAsOf,
     idempotency_key: marketKey,
     operation: "data.refresh.market.submit",
-    password: browserPassword,
+    otp: expect.any(String),
   });
   expect(marketMutations).toHaveLength(2);
   const completedMarketMutation = marketMutations.find((request) =>
@@ -901,8 +927,8 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
-  await marketConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(marketConfirmation.getByLabel("Verification code"));
+  await marketConfirmation.getByLabel("Verification code").press("Enter");
   await droppedAfterAcceptance;
   await expect(marketConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
@@ -1011,8 +1037,8 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
-  await marketConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(marketConfirmation.getByLabel("Verification code"));
+  await marketConfirmation.getByLabel("Verification code").press("Enter");
   await recoveredPostStarted;
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
@@ -1079,8 +1105,8 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
-  await marketConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(marketConfirmation.getByLabel("Verification code"));
+  await marketConfirmation.getByLabel("Verification code").press("Enter");
   await staleSubmissionStarted;
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Stop checking" }).click();
@@ -1089,8 +1115,8 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
   const currentMarketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await fillPasswordInput(currentMarketConfirmation.getByLabel("Current password"));
-  await currentMarketConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(currentMarketConfirmation.getByLabel("Verification code"));
+  await currentMarketConfirmation.getByLabel("Verification code").press("Enter");
   await currentSubmissionStarted;
   const staleBrowserResponse = page.waitForResponse((response) => {
     const request = response.request();
@@ -1211,8 +1237,8 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
   marketConfirmation = page.getByRole("dialog", {
     name: "Submit Market Refresh?",
   });
-  await fillPasswordInput(marketConfirmation.getByLabel("Current password"));
-  await marketConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(marketConfirmation.getByLabel("Verification code"));
+  await marketConfirmation.getByLabel("Verification code").press("Enter");
   await expect(page.getByRole("heading", { name: "Refresh accepted" })).toBeVisible();
   await polledRequestStarted;
 
@@ -1221,8 +1247,8 @@ test("Operator Market submission and response recovery", { tag: "@isolated" }, a
     name: "Submit Market Refresh?",
   });
   await expect(marketRefreshReceipt.getByText(polledMarketKey, { exact: true })).toBeVisible();
-  await fillPasswordInput(newerMarketConfirmation.getByLabel("Current password"));
-  await newerMarketConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(newerMarketConfirmation.getByLabel("Verification code"));
+  await newerMarketConfirmation.getByLabel("Verification code").press("Enter");
   await expect(newerMarketConfirmation).toHaveCount(0);
   await polledRequestSettled;
   await settleReactUpdates(page);
@@ -1276,8 +1302,8 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   await expect(financialConfirmation).toContainText(financialTargetSession);
   await expect(financialConfirmation).toContainText(financialKey);
   await expect(financialConfirmation).toContainText("shared durable FIFO");
-  await fillPasswordInput(financialConfirmation.getByLabel("Current password"));
-  await financialConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(financialConfirmation.getByLabel("Verification code"));
+  await financialConfirmation.getByLabel("Verification code").press("Enter");
   await expect(financialConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Financial Refresh accepted" }))
     .toBeVisible({ timeout: 10_000 });
@@ -1309,7 +1335,7 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
     idempotency_key: financialKey,
     observation_through_session: financialTargetSession,
     operation: "data.refresh.financial.submit",
-    password: browserPassword,
+    otp: expect.any(String),
   });
   const financialMutation = operatorMutationRequests.find(
     (request) => request.path === "/api/operator/data/refreshes/financial",
@@ -1354,9 +1380,9 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   await expect(industryConfirmation).toContainText(industryTargetSession);
   await expect(industryConfirmation).toContainText(industryKey);
   await expect(industryConfirmation).toContainText("shared durable FIFO");
-  const industryPassword = industryConfirmation.getByLabel("Current password");
+  const industryPassword = industryConfirmation.getByLabel("Verification code");
   await expect(industryPassword).toBeFocused();
-  await fillPasswordInput(industryPassword);
+  await fillOperatorCode(industryPassword);
   await industryPassword.press("Enter");
   await expect(industryConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Industry Refresh accepted" }))
@@ -1386,7 +1412,7 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
     idempotency_key: industryKey,
     observation_through_session: industryTargetSession,
     operation: "data.refresh.industry.submit",
-    password: browserPassword,
+    otp: expect.any(String),
   });
   const industryMutation = operatorMutationRequests.find(
     (request) => request.path === "/api/operator/data/refreshes/industry",
@@ -1404,8 +1430,8 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   industryConfirmation = page.getByRole("dialog", {
     name: "Submit Industry Refresh?",
   });
-  await fillPasswordInput(industryConfirmation.getByLabel("Current password"));
-  await industryConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(industryConfirmation.getByLabel("Verification code"));
+  await industryConfirmation.getByLabel("Verification code").press("Enter");
   await expect(industryConfirmation).toHaveCount(0);
   const industryNoChangeReceipt = page.locator("section.operator-refresh-receipt").filter({
     hasText: industryNoChangeKey,
@@ -1453,8 +1479,8 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   industryConfirmation = page.getByRole("dialog", {
     name: "Submit Industry Refresh?",
   });
-  await fillPasswordInput(industryConfirmation.getByLabel("Current password"));
-  await industryConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(industryConfirmation.getByLabel("Verification code"));
+  await industryConfirmation.getByLabel("Verification code").press("Enter");
   await expect(industryConfirmation).toHaveCount(0);
   const industryRejectedReceipt = page.locator("section.operator-refresh-receipt").filter({
     hasText: industryRejectedKey,
@@ -1500,10 +1526,10 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   let recoverableFinancialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
-  await fillPasswordInput(
-    recoverableFinancialConfirmation.getByLabel("Current password"),
+  await fillOperatorCode(
+    recoverableFinancialConfirmation.getByLabel("Verification code"),
   );
-  await recoverableFinancialConfirmation.getByLabel("Current password").press("Enter");
+  await recoverableFinancialConfirmation.getByLabel("Verification code").press("Enter");
   await financialResponseDropped;
   await expect(recoverableFinancialConfirmation).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
@@ -1566,8 +1592,8 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   recoverableFinancialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
-  await fillPasswordInput(recoverableFinancialConfirmation.getByLabel("Current password"));
-  await recoverableFinancialConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(recoverableFinancialConfirmation.getByLabel("Verification code"));
+  await recoverableFinancialConfirmation.getByLabel("Verification code").press("Enter");
   await knownFailureStarted;
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { name: "Confirming submission" })).toBeVisible();
@@ -1639,8 +1665,8 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   recoverableFinancialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
-  await fillPasswordInput(recoverableFinancialConfirmation.getByLabel("Current password"));
-  await recoverableFinancialConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(recoverableFinancialConfirmation.getByLabel("Verification code"));
+  await recoverableFinancialConfirmation.getByLabel("Verification code").press("Enter");
   await uncertainSubmissionStarted;
   await page.keyboard.press("Escape");
   releaseUncertainSubmission();
@@ -1693,8 +1719,8 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   recoverableFinancialConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
-  await fillPasswordInput(recoverableFinancialConfirmation.getByLabel("Current password"));
-  await recoverableFinancialConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(recoverableFinancialConfirmation.getByLabel("Verification code"));
+  await recoverableFinancialConfirmation.getByLabel("Verification code").press("Enter");
   await stopSubmissionStarted;
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Stop checking" }).click();
@@ -1753,8 +1779,8 @@ test("Operator Financial and Industry refresh and response recovery", { tag: "@i
   const capabilityLossConfirmation = page.getByRole("dialog", {
     name: "Submit Financial Refresh?",
   });
-  await fillPasswordInput(capabilityLossConfirmation.getByLabel("Current password"));
-  await capabilityLossConfirmation.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(capabilityLossConfirmation.getByLabel("Verification code"));
+  await capabilityLossConfirmation.getByLabel("Verification code").press("Enter");
   await expect(page.getByRole("heading", { name: "Financial Refresh accepted" }))
     .toBeVisible();
   await restoreResearcherSession(page, ordinary);
@@ -1949,7 +1975,7 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
         as_of: marketAsOf,
         idempotency_key: key,
         operation: "data.refresh.market.submit",
-        password: browserPassword,
+        otp: await requestOperatorCode(page),
       },
       headers: sameOriginHeaders(),
     });
@@ -1998,9 +2024,9 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   await expect(cancelDialog).toContainText(cancelSourceTarget);
   await expect(cancelDialog).toContainText(cancelSourceKey);
   await expect(cancelDialog).toContainText("The Worker will never claim this queued receipt");
-  const cancelPassword = cancelDialog.getByLabel("Current password");
+  const cancelPassword = cancelDialog.getByLabel("Verification code");
   await expect(cancelPassword).toBeFocused();
-  await fillPasswordInput(cancelPassword);
+  await fillOperatorCode(cancelPassword);
   await cancelPassword.press("Enter");
   await expect(cancelDialog).toHaveCount(0);
   await expect(cancelSourceRow.getByText("Cancelled", { exact: true })).toBeVisible();
@@ -2031,8 +2057,8 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
     new URL(request.url()).pathname === "/api/auth/operator/proofs"
     && request.method() === "POST"
     && request.postDataJSON().operation === "data.refresh.retry");
-  await fillPasswordInput(retryDialog.getByLabel("Current password"));
-  await retryDialog.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(retryDialog.getByLabel("Verification code"));
+  await retryDialog.getByLabel("Verification code").press("Enter");
   const actionRetryKey = (await retryProofRequest).postDataJSON().new_idempotency_key as string;
   expect(actionRetryKey).toMatch(/^market-retry-\d{8}T\d{6}Z-[a-f0-9-]{36}$/);
   expect(actionRetryKey).not.toBe(cancelSourceKey);
@@ -2062,8 +2088,8 @@ test("Operator Dataset operations and Worker recovery", { tag: "@isolated" }, as
   }).click();
   const rejectedCancel = page.getByRole("dialog", { name: "Cancel queued Refresh?" });
   markDataRefreshRunning(claimedSourceKey);
-  await fillPasswordInput(rejectedCancel.getByLabel("Current password"));
-  await rejectedCancel.getByLabel("Current password").press("Enter");
+  await fillOperatorCode(rejectedCancel.getByLabel("Verification code"));
+  await rejectedCancel.getByLabel("Verification code").press("Enter");
   await expect(rejectedCancel.getByRole("alert")).toContainText(
     "The Worker claimed this operation before Cancel won",
   );
@@ -2308,7 +2334,7 @@ async function prepareDataOperation(page: Page, kind: "market" | "financial" | "
     : { observation_through_session: "2026-08-14" };
   const proof = await page.request.post("/api/auth/operator/proofs", {
     headers: sameOriginHeaders(), data: { ...target, idempotency_key: key,
-      operation: `data.refresh.${kind}.submit`, password: browserPassword },
+      operation: `data.refresh.${kind}.submit`, otp: await requestOperatorCode(page) },
   });
   expect(proof.status()).toBe(200);
   const submitted = await page.request.post(`/api/operator/data/refreshes/${kind}`, {

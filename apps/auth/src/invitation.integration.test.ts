@@ -272,9 +272,7 @@ describe.sequential("Researcher Invitation lifecycle", () => {
       async consumeOperatorProofRateLimit() {
         return { allowed: true, retryAfterSeconds: 0 };
       },
-      async consumePasswordResetRateLimit() {
-        return { allowed: true, retryAfterSeconds: 0 };
-      },
+
       getSession: (input) => harness.auth.api.getSession(input),
       async isOperator() { return false; },
       async hasOperatorCapability() {
@@ -301,7 +299,7 @@ describe.sequential("Researcher Invitation lifecycle", () => {
       async revokeOperatorResearcherSessions() {
         throw new Error("OPERATOR_MUTATION_UNAVAILABLE_IN_INVITATION_HARNESS");
       },
-      async resetPassword() {},
+
     });
 
     const responses = await Promise.all(

@@ -5,15 +5,13 @@ export type BrowserLocation = Readonly<{
 }>;
 
 export type InitialAuthSecret = Readonly<{
-  kind: "invitation" | "password-reset";
+  kind: "invitation";
   token: string;
 }>;
 
 const AUTH_PATHS = new Set([
   "/login",
   "/accept-invitation",
-  "/forgot-password",
-  "/reset-password",
 ]);
 
 const PRODUCT_ROOTS = new Set([
@@ -48,7 +46,6 @@ export function extractInitialAuthSecret(location: BrowserLocation): Readonly<{
 }> {
   if (
     location.pathname !== "/accept-invitation"
-    && location.pathname !== "/reset-password"
   ) {
     return { location, secret: null };
   }
@@ -64,9 +61,7 @@ export function extractInitialAuthSecret(location: BrowserLocation): Readonly<{
   return {
     location: cleared,
     secret: {
-      kind: location.pathname === "/accept-invitation"
-        ? "invitation"
-        : "password-reset",
+      kind: "invitation",
       token,
     },
   };
