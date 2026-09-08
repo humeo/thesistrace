@@ -84,6 +84,7 @@ BATCH_PERFORMANCE_MAXIMUM_MEDIAN_RATIO = 0.8
 
 def main() -> None:
     phases = {
+        "startup",
         "before",
         "expire-worker-loss",
         "checkpointed",
@@ -112,6 +113,7 @@ def main() -> None:
     phase = sys.argv[1]
     _assert_web_image(web_origin)
     if phase in {
+        "startup",
         "before",
         "checkpointed",
         "recovered",
@@ -123,6 +125,8 @@ def main() -> None:
         _ensure_researcher_bootstrap(api_origin)
     if phase == "health":
         result = _verify_health(api_origin)
+    elif phase == "startup":
+        result = _verify_startup(api_origin)
     elif phase == "readiness-outage":
         result = _verify_readiness_outage(
             api_origin,
@@ -571,6 +575,35 @@ def _qualify_operator_receipt_cleanup(
         "receipt_removed": True,
         "request_ids": _request_ids(receipt_request_id, status_request_id),
     }
+
+
+def _verify_startup(api_origin: str) -> dict[str, object]:
+    factor_accepted = _request_json(
+        api_origin,
+        "POST",
+        "/api/research-runs",
+        {
+            "request_id": "production-image-startup-factor-run",
+            "folder_id": "folder_default",
+            "name": "Production Image Smoke Factor Evaluation",
+            "hypothesis": "Factor evidence remains executable offline.",
+            "start_date": "2026-08-03",
+            "end_date": "2026-08-05",
+            "formula": "rank(close) + rank(revenue)",
+            "universe": "top300",
+            "neutralization": "none",
+            "research_kind": "factor_evaluation",
+        },
+    )
+    assert factor_accepted["status"] == "queued"
+    assert factor_accepted["research_kind"] == "factor_evaluation"
+    factor_run_id = str(factor_accepted["id"])
+    factor_detail = _wait_for_run(
+        api_origin,
+        factor_run_id,
+        research_kind="factor_evaluation",
+    )
+    return {"run_id": factor_run_id, "status": factor_detail["status"]}
 
 
 def _before_restart(

@@ -178,8 +178,7 @@ deactivation transaction commits may finish; every verification begun after
 commit fails. Reactivation restores no Session.
 
 Routine access administration is available through the Operator Console.
-Operator Assignment and transfer remain deployment-private; see the
-[Production runbook](../runbook/single-node-production.md#operator-assignment-and-researcher-access).
+Operator Assignment and transfer remain deployment-private.
 Separate private commands also invite,
 reissue, deactivate, reactivate, revoke Sessions, and correct the initial
 display label; each emits one structured stdout result and safe operational
@@ -789,37 +788,7 @@ relay, event bus, global job table, or generic dispatch interface.
 
 ## Verification
 
-The active local gates are documented in the
-[local lifecycle guide](../runbook/local-lifecycle.md):
-
-1. `mise exec -- pnpm test` runs fast host checks.
-2. `mise exec -- pnpm test:integration` exercises real PostgreSQL and RustFS in
-   a fresh isolated Compose Test project.
-3. `mise exec -- pnpm test:e2e` drives the complete browser loop against a fresh
-   topology.
-4. `mise exec -- pnpm test:image-smoke` qualifies the built application images.
-5. `mise exec -- pnpm check:performance` independently qualifies both long
-   Research Kinds in the final image under the declared Worker envelope on a
-   controlled idle host. It is serial and fails immediately after persisting an
-   over-budget sample.
-6. `mise exec -- pnpm check` is the ordinary merge gate;
-   `mise exec -- pnpm check:release` adds image smoke. Long-Research performance
-   qualification remains explicit so unrelated host load cannot turn an
-   ordinary release check into a multi-hour ambiguous failure.
-
-Identity and ownership use those same gates rather than a second test topology.
-Test uses a local Resend-compatible HTTP fake and never the public
-service. Browser acceptance covers Invitation acceptance, replay and expiry;
-login, logout, reset, revoke, deactivate, and reactivate; two Researchers with
-identical system Folder IDs; cross-Researcher Folder, Run, Batch, and Track
-`404`; per-Researcher request-ID and Draft isolation; and Session refresh and
-Auth-unavailable behavior. Image smoke drives every browser and API request
-through Caddy, proves only Caddy has Production host ports, verifies HTTP-to-
-HTTPS redirect and 443, proves private health endpoints are not public, and
-scans final logs for credential and token leakage.
-
-Live Tushare credential verification is a separate explicit gate. Local checks
-are not Production readiness.
+Testing policy and commands are maintained in [AGENTS.md](../../AGENTS.md#testing).
 
 ## Deliberately absent
 
@@ -844,5 +813,3 @@ are not Production readiness.
 
 The current domain vocabulary is defined in [`CONTEXT.md`](../../CONTEXT.md).
 Current accepted decisions are grouped in the [ADR index](../adr/README.md).
-Operator commands are documented in the
-[Data Operator runbook](../runbook/data-operator.md).

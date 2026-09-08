@@ -111,4 +111,4 @@ Operator Financial／Industry → Financial catalog → 普通 MCP 恢复场景�
 
 本任务的修改限于测试、夹具、运行入口和文档。没有删除或重置
 `thesistrace-dev` 容器数据、卷或 Dataset Head，也没有增加兼容、迁移或 fallback。
-测试命令归属见[本地生命周期文档](../../docs/runbook/local-lifecycle.md)。
+测试命令归属见[AGENTS.md](../../AGENTS.md#testing)。

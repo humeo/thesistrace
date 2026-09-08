@@ -37,7 +37,7 @@ export class TestRun {
     this.database_restart_report = `${this.evidence_dir}/pytest-database-restart.xml`;
     this.dependency_restart_report = `${this.evidence_dir}/pytest-dependency-restart.xml`;
     this.secret_dir = this.auth_session_file = this.operator_sessions_file = '';
-    this.use_image_overlay = ['performance', 'image-smoke'].includes(command);
+    this.use_image_overlay = ['performance', 'image-smoke', 'image-qualification'].includes(command);
     this.compose_cleanup_required = false;
     this.port_acquired = false;
     this.keep_environment = options.keepEnvironment ?? false;
@@ -113,7 +113,7 @@ export class TestRun {
       chmodSync(secretRoot, 0o700);
       this.secret_dir = mkdtempSync(`${secretRoot}/${this.run_id}.`);
       this.auth_session_file = `${this.secret_dir}/auth-session.json`;
-      if (this.command === 'image-smoke') this.operator_sessions_file = `${this.secret_dir}/operator-sessions.json`;
+      if (this.command === 'image-qualification') this.operator_sessions_file = `${this.secret_dir}/operator-sessions.json`;
     }
     const revision = (await this.exec('git', ['-C', root, 'rev-parse', 'HEAD'], { capture: true, quiet: true })).trim();
     const dirty = (await this.exec('git', ['-C', root, 'status', '--short'], { capture: true, quiet: true })).trim().length > 0;

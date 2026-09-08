@@ -21,7 +21,7 @@
     "test:cleanup": "./tooling/test/cli.mjs cleanup",
     "test:e2e": "node tooling/test/run-e2e.mjs",
     "test:caddy-image-smoke": "./tooling/test/caddy-image.mjs",
-    "test:image-smoke": "./tooling/test/cli.mjs image-smoke && pnpm --dir apps/auth test:image-smoke && pnpm --dir apps/agent test:image-smoke && pnpm test:caddy-image-smoke",
+    "test:image-smoke": "./tooling/test/cli.mjs image-smoke",
     "test:integration": "./tooling/test/cli.mjs integration && pnpm --dir apps/auth test:integration && pnpm --dir apps/agent test:integration",
     "test:codex-mcp": "./tooling/test/cli.mjs codex-mcp",
     "check": "pnpm test && pnpm test:browser && pnpm test:integration && pnpm test:e2e",
@@ -31,7 +31,8 @@
     "test:browser": "pnpm --dir apps/web test:browser",
     "prod": "node tooling/dev/runtime.mjs production",
     "dev:status": "node tooling/dev/runtime.mjs development status",
-    "config:template": "node tooling/config/cli.mjs template"
+    "config:template": "node tooling/config/cli.mjs template",
+    "test:image:qualification": "./tooling/test/cli.mjs image-qualification && pnpm --dir apps/auth test:image-smoke && pnpm --dir apps/agent test:image-smoke && pnpm test:caddy-image-smoke"
   },
   "devDependencies": {
     "@playwright/test": "^1.54.2",

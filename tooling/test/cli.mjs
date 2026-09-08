@@ -3,7 +3,7 @@ import { CommandError } from '../process.mjs';
 import { TestRun, runId } from './resources.mjs';
 import { cleanupProject, finish } from './cleanup.mjs';
 
-const phases = { integration: 'integration', e2e: 'e2e', 'agent-eval': 'e2e', 'image-smoke': 'image-smoke', performance: 'performance', 'codex-mcp': 'codex', 'integration-batch-cancel': 'batch-cancel' };
+const phases = { integration: 'integration', e2e: 'e2e', 'agent-eval': 'e2e', 'image-smoke': 'image-smoke', 'image-qualification': 'image-qualification', performance: 'performance', 'codex-mcp': 'codex', 'integration-batch-cancel': 'batch-cancel' };
 let run;
 try {
   const [command, ...args] = process.argv.slice(2);

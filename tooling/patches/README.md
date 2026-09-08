@@ -55,10 +55,7 @@ recall and working memory disabled. The Host controller owns fixed M/S snapshots
 
 PostgreSQL runtime tests cover same-Turn question recovery, mid-Tool-loop
 compression, raw-history retention, restart, Session isolation/deletion, usage and
-safe failures. Candidate tests exercise the patched entry points below. See
-[Session context](../docs/runbook/session-context.md) for current scheduling and
-[Issue 06 evidence](../.scratch/session-context-compaction/evidence-06.md) for final
-acceptance status.
+safe failures. Candidate tests exercise the patched entry points below. Testing policy is maintained in [AGENTS.md](../../AGENTS.md#testing).
 
 ## Controlled compaction candidates
 

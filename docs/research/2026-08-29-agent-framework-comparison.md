@@ -13,7 +13,7 @@ Agno、Mastra 与原 `badlogic/pi-mono` 对 ThesisTrace 独立 Research Agent Ho
 本项目已有的边界是前提，而不是交给框架重新定义：Core 内的 MCP 是无状态
 Streamable HTTP `/mcp`，MCP 不拥有 User、Tenant、ResearchRun、Research Batch
 或 DailyTrack 等业务状态，连接关闭后仍以 Core 的持久状态为恢复事实
-（[V1 contract](../runbook/research-agent-mcp.md)）；远程 MCP 是 OAuth 2.1
+（当时的 V1 MCP 契约）；远程 MCP 是 OAuth 2.1
 protected resource，只接受请求上下文中的 access token
 （[ADR-0221](../adr/0221-authenticate-remote-research-agent-access-with-oauth.md)）；
 HTTP MCP 继续挂在 Core FastAPI/ASGI 进程中

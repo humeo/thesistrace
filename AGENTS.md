@@ -41,6 +41,42 @@ Domain documentation uses a single-context layout. See `docs/agents/domain.md`.
 | 关键用户流程 | 相关组件测试与真实浏览器验收；核心闭环使用少量可重复 E2E |
 | 容器、启动配置、运行依赖 | 构建最终镜像，验证启动、健康检查及受影响的 API/Worker 链路 |
 
+### 入口与成本
+
+测试用途、选择和运行说明只维护在本节；其他文档链接到这里，不另建 runbook。
+命令使用 `.mise.toml` 固定的工具版本，可加 `mise exec --` 前缀。以下耗时是本机历史参考，包含启动和清理成本；首次构建、缓存和机器负载会改变耗时，不是超时预算。
+
+| 入口 | 验证内容与使用时机 | 已有耗时参考 |
+|---|---|---|
+| `pnpm test` | Python/Node/各应用的快速测试、lint 和类型检查；涉及多个模块的日常快速检查 | 约 4 分 10 秒 |
+| `pnpm test:browser` | Web 组件在真实浏览器中的交互；组件行为变化时运行 | 约 17 秒 |
+| `pnpm test:integration` | Core、Auth、Agent 的真实依赖验证，含事务、权限和故障恢复；跨服务或依赖边界变化时运行 | 上轮累计约 22 分钟，含失败后的补跑，不是单次基线 |
+| `pnpm test:e2e` | 浏览器驱动的产品闭环，含分组隔离环境；关键流程或全面回归时运行 | 约 21 分 50 秒 |
+| `pnpm test:image-smoke` | 构建镜像、初始化和服务健康、Caddy 路由、一条真实 API → Research Worker → Result 链路；容器和启动配置变化时运行 | 2026-09-08 实测约 4 分 04 秒，含缓存构建 41 秒、清理 23 秒 |
+| `pnpm test:image:qualification` | 完整镜像验收：故障注入、重启恢复、Operator 流程、日志与凭证边界，以及 Auth、Agent 和 Caddy 独立镜像检查；恢复、安全部署边界变化或发布资格验证时运行 | 拆分前同一完整覆盖约 14 分钟 |
+| `pnpm check` | 快速检查、浏览器组件、集成和 E2E 的完整产品回归；跨模块交付或明确要求全面验证时运行 | 各阶段串行累加 |
+| `pnpm check:release` | `check` 加完整镜像验收；仅明确进行发布资格验证时运行 | 各阶段串行累加，不重复跑短镜像检查 |
+
+镜像测试复用确定性 Replay 和测试 OAuth Harness，不访问真实模型或数据供应商。短检查不证明故障恢复、完整 Agent 推理流程或生产 HTTPS 配置正确；这些边界由完整镜像验收负责。组件交互、数据库权限与网关认证虽涉及同一功能，但验证边界不同，不按测试名称相似就删除覆盖。
+
+### 定向运行
+
+先运行受影响的现有测试。例如（将路径或用例名称替换为本次涉及的对象）：
+
+```sh
+# Core 纯单元测试，无需 Compose
+uv run --project apps/core pytest -c apps/core/pyproject.toml --rootdir . apps/core/tests/kernel/test_alpha_expression_contract.py
+# Auth / Agent 的定向真实依赖测试：保留现有隔离运行器
+pnpm --dir apps/auth test:integration <test_file>
+pnpm --dir apps/agent test:integration <test_file>
+# E2E 按用例名称选择，仍使用隔离拓扑
+THESISTRACE_TEST_PLAYWRIGHT_GREP='用例名称' pnpm test:e2e
+```
+
+Core 完整集成入口会执行普通集成及专门的依赖重启阶段；不能用一次普通 pytest 执行声称重启阶段已验证。性能敏感改动使用 `pnpm check:performance`，在空闲机器上保留基线和对比；普通改动不运行该项。`pnpm test:codex-mcp`、`pnpm check:live-tushare` 和应用的真实模型评估是专用检查，按涉及的外部边界和授权选择，不属于确定性日常门禁。
+
+测试运行器在 `.local/test-runs/` 保存阶段命令、耗时、退出码和诊断证据，E2E 分组汇总在 `.local/e2e-runs/`。失败先读该次证据，再修复和复跑受影响范围；报告区分首次失败、修复后的通过以及未运行的链路。
+
 ### 执行原则
 
 - 可稳定复现的行为缺陷先补失败回归测试，再修复；仅能在运行环境复现时，先保留复现步骤和证据，再建立可靠的验证方式。诊断和读代码不必等待测试写完。
@@ -54,8 +90,8 @@ Domain documentation uses a single-context layout. See `docs/agents/domain.md`.
 
 - 迭代时先跑受影响测试及相应 lint/typecheck；通过后不重复跑无关检查。跨模块影响、失败或未解决疑点出现时再扩大范围。
 - 使用当前 `package.json` 中的入口：`pnpm test` 为快速检查集合；真实依赖和用户闭环分别使用 `pnpm test:integration`、`pnpm test:e2e`。完整产品回归使用 `pnpm check`，在跨模块交付或用户要求全面验证时运行，不要求每个小改动都跑全套。
-- 容器、运行依赖或发布候选变更使用 `pnpm test:image-smoke`；只有明确进行发布资格验证时才使用 `pnpm check:release`。性能敏感变更需要相关基线和对比，普通改动无需跑 benchmark。
-- 用户要求合并时，在目标版本复跑本次变更对应的必要检查。没有实测的链路不得声明通过；交付说明已验证范围、结果和仍被阻塞或未验证的部分。
+- 容器和启动变更先跑 `pnpm test:image-smoke`；恢复或安全部署边界变化再选择完整镜像验收。只有明确进行发布资格验证时才使用 `pnpm check:release`。
+- 用户要求合并时，在目标版本复跑本次变更对应的必要检查；合并本身不触发 `pnpm check` 或发布全套，也不重复已验证且未变化的无关阶段。没有实测的链路不得声明通过；交付说明已验证范围、结果和仍被阻塞或未验证的部分。
 
 ### Agent 验证
 

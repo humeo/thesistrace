@@ -255,6 +255,7 @@ def test_base_compose_has_one_single_slot_data_refresh_runtime() -> None:
             "resources.mjs",
             "phases/e2e.mjs",
             "phases/image-smoke.mjs",
+            "phases/image-qualification.mjs",
         )
     )
     worker = _service(compose, "data-operator-worker", "web")
@@ -292,19 +293,6 @@ def test_base_compose_has_one_single_slot_data_refresh_runtime() -> None:
         "auth auth-fixture-control agent api research-worker "
         "batch-research-worker tracking-worker data-operator-worker web" in normalized_runner
     )
-
-
-def test_financial_submission_runbook_keeps_live_source_secret_worker_only() -> None:
-    runbook = (ROOT / "docs" / "runbook" / "data-operator.md").read_text()
-
-    assert (
-        '"${tt_compose[@]}" run --rm -T \\\n  api thesistrace-data-operator refresh-financial \\\n'
-    ) in runbook
-    assert (
-        '"${tt_compose[@]}" run --rm -T \\\n'
-        "  -e THESISTRACE_TUSHARE_TOKEN \\\n"
-        "  api thesistrace-data-operator refresh-financial \\\n"
-    ) not in runbook
 
 
 def test_production_overlay_publishes_only_caddy_and_persists_certificates() -> None:
@@ -365,6 +353,7 @@ def test_development_and_test_origins_are_exact_before_compose_rendering() -> No
             "resources.mjs",
             "phases/e2e.mjs",
             "phases/image-smoke.mjs",
+            "phases/image-qualification.mjs",
         )
     )
 
@@ -459,6 +448,7 @@ def test_eval_endpoint_is_explicit_and_deterministic_test_endpoint_is_inert() ->
             "resources.mjs",
             "phases/e2e.mjs",
             "phases/image-smoke.mjs",
+            "phases/image-qualification.mjs",
         )
     )
 

@@ -50,8 +50,6 @@ mise exec -- pnpm bootstrap
 credentials once and refuses to overwrite an existing file. Model definitions
 remain in `apps/agent/config/model-registry.json`; set the canonical provider key and
 `THESISTRACE_AGENT_OPENAI_BASE_URL` in `.env` for your chosen endpoint.
-See the [configuration guide](docs/runbook/configuration.md) for the complete
-configuration inventory, Production settings, and private CLI commands.
 
 Start the complete Development topology with Compose Watch:
 
@@ -62,49 +60,15 @@ mise exec -- pnpm dev
 Open `http://127.0.0.1:5173`. Caddy Web, Hono and Better Auth, Agent, FastAPI Core,
 the ordinary Research, Batch Research, Tracking, and Data Operator Workers,
 PostgreSQL, RustFS, and the three one-shot schema initializers belong to the canonical
-Compose project. There is no public signup; Researcher invitation and access
-commands are documented for [local Development](docs/runbook/local-lifecycle.md#local-researcher-access)
-and [single-node Production](docs/runbook/single-node-production.md#operator-assignment-and-researcher-access).
+Compose project. There is no public signup; an Operator manages Researcher access.
 For a detached start use `mise exec -- pnpm dev:up`; use
 `mise exec -- pnpm dev:stop` to stop services without deleting data, and
 `mise exec -- pnpm dev:reset` to hard-cut Product State while preserving Canonical
 Data. Use `mise exec -- pnpm dev:erase` only when all Development data should be
 deleted.
 
-The complete Development command contract, Test isolation rules, and failure
-evidence are documented in the [local lifecycle guide](docs/runbook/local-lifecycle.md).
-The canonical single-node Production wrapper, external environment contract,
-and Researcher access operations are documented in the
-[Production runbook](docs/runbook/single-node-production.md). Passing local
-checks qualifies the images and configuration; it does not assert that any
-particular Production deployment is healthy.
+Canonical market data is prepared outside the user product through the private
+Data Operator. The Data page is a read-only view of the current Dataset Head.
 
-Canonical market data is prepared outside the user product through the
-[private Data Operator](docs/runbook/data-operator.md). The Data page is a
-read-only view of the current Dataset Head.
-
-The current Tushare adapter has a separate
-[credential verification guide](docs/runbook/tushare-live-bootstrap.md).
-
-Run the current backend, frontend, and browser acceptance checks with:
-
-```sh
-mise exec -- pnpm check
-```
-
-Before a release, include the final Production Image Smoke with:
-
-```sh
-mise exec -- pnpm check:release
-```
-
-Agent model quality additionally requires the separate, authorized
-[real-model evaluation](docs/runbook/research-agent-eval.md). Deterministic
-release checks alone do not qualify a Provider/model/reasoning combination.
-
-Run the long-Research final-image performance qualification separately on a
-controlled idle host:
-
-```sh
-mise exec -- pnpm check:performance
-```
+Testing commands, purposes, verification selection, and timing guidance are
+maintained in [AGENTS.md](AGENTS.md#testing).

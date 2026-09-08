@@ -1102,14 +1102,15 @@ def test_rustfs_startup_and_restart_wait_for_the_writable_s3_api() -> None:
     assert "client.head_bucket(Bucket=arguments.ensure_bucket)" in probe
     assert 'retries={"max_attempts": 0, "mode": "standard"}' in probe
     assert "is_transient_s3_error" in probe
-    for mode, next_phase in (
-        ("integration", "integration-auth-initialization"),
-        ("e2e", "e2e-initializers"),
-        ("image-smoke", "image-smoke-initializers"),
+    for mode, phase_prefix, next_phase in (
+        ("integration", "integration", "integration-auth-initialization"),
+        ("e2e", "e2e", "e2e-initializers"),
+        ("image-smoke", "image-smoke", "image-smoke-initializers"),
+        ("image-qualification", "image-smoke", "image-smoke-initializers"),
     ):
         phase = (ROOT / f"tooling/test/phases/{mode}.mjs").read_text()
-        assert phase.index(f"{mode}-rustfs-s3-ready") < phase.index(next_phase)
-    image = (ROOT / "tooling/test/phases/image-smoke.mjs").read_text()
+        assert phase.index(f"{phase_prefix}-rustfs-s3-ready") < phase.index(next_phase)
+    image = (ROOT / "tooling/test/phases/image-qualification.mjs").read_text()
     startup = image[
         image.index("image-smoke-infrastructure") : image.index("image-smoke-initializers")
     ]
@@ -1687,8 +1688,9 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
     assert scripts["check:performance"] == "./tooling/test/cli.mjs performance"
     assert "test:benchmark" not in scripts
     assert scripts["test:e2e"] == "node tooling/test/run-e2e.mjs"
-    assert scripts["test:image-smoke"] == (
-        "./tooling/test/cli.mjs image-smoke && pnpm --dir apps/auth test:image-smoke "
+    assert scripts["test:image-smoke"] == "./tooling/test/cli.mjs image-smoke"
+    assert scripts["test:image:qualification"] == (
+        "./tooling/test/cli.mjs image-qualification && pnpm --dir apps/auth test:image-smoke "
         "&& pnpm --dir apps/agent test:image-smoke && pnpm test:caddy-image-smoke"
     )
     assert scripts["test:caddy-image-smoke"] == "./tooling/test/caddy-image.mjs"
@@ -1719,7 +1721,7 @@ def test_test_runtime_managed_phases_cannot_read_from_the_controlling_terminal()
 def test_image_smoke_provisions_auth_inside_the_private_compose_network(tmp_path: Path) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
     completed = subprocess.run(
-        [ROOT / "tooling/test/cli.mjs", "image-smoke"],
+        [ROOT / "tooling/test/cli.mjs", "image-qualification"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1827,7 +1829,7 @@ def test_long_research_performance_stops_after_the_first_failed_sample(
 def test_managed_compose_run_phases_never_read_from_the_parent_terminal(tmp_path: Path) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
     completed = subprocess.run(
-        [ROOT / "tooling/test/cli.mjs", "image-smoke"],
+        [ROOT / "tooling/test/cli.mjs", "image-qualification"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1849,7 +1851,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     command_log, environment = _fake_test_runtime_commands(tmp_path)
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-qualification"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1919,7 +1921,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
 def test_operator_console_release_qualification_runs_inside_final_images(tmp_path: Path) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
     completed = subprocess.run(
-        [ROOT / "tooling/test/cli.mjs", "image-smoke"],
+        [ROOT / "tooling/test/cli.mjs", "image-qualification"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -1969,29 +1971,6 @@ def test_operator_console_release_qualification_runs_inside_final_images(tmp_pat
     assert "WORKER_TUSHARE_TOKEN_INVALID" in (ROOT / "tests/image-checks.sh").read_text()
 
 
-def test_operator_console_runbooks_define_the_supported_production_boundary() -> None:
-    production = " ".join(
-        (ROOT / "docs" / "runbook" / "single-node-production.md").read_text().split()
-    )
-    data_operator = " ".join((ROOT / "docs" / "runbook" / "data-operator.md").read_text().split())
-
-    for current in (
-        "assign-operator",
-        "transfer-operator",
-        "exactly one Operator",
-        "accepted is not published",
-        "Data Operator Worker",
-        "Worker-only Tushare Secret",
-        "Operator Console",
-        "playwright-results",
-    ):
-        assert current in production
-    assert "Researcher deactivation is not a Console operation" in production
-    assert "one always-running, single-slot Data Operator Worker" in data_operator
-    assert "all three Refresh kinds share one global FIFO" in data_operator
-    assert "public internet" in data_operator
-
-
 def test_image_smoke_mounts_explicit_local_mcp_api_without_changing_production_image() -> None:
     overlay = (ROOT / "deploy" / "compose.image-smoke.yaml").read_text()
     dockerfile = (ROOT / "apps/core" / "Dockerfile").read_text()
@@ -2027,7 +2006,7 @@ def test_failed_image_build_stops_smoke_before_runtime_phases(tmp_path: Path) ->
     environment["FAKE_BUILD_STATUS"] = "7"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-qualification"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2060,7 +2039,7 @@ def test_failed_backend_image_tag_stops_smoke_before_runtime_phases(
     environment["FAKE_IMAGE_TAG_FAILURE_TARGET"] = target
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-qualification"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2082,7 +2061,7 @@ def test_failed_image_smoke_persists_runner_diagnostics_before_cleanup(
     environment["FAKE_IMAGE_SMOKE_STATUS"] = "9"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-qualification"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2113,7 +2092,7 @@ def test_failed_image_build_stops_before_infrastructure_and_preserves_status(
     environment["FAKE_BUILD_STATUS"] = "12"
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-qualification"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2153,7 +2132,7 @@ def test_failed_mcp_image_smoke_sanitizes_preserved_protocol_evidence(
     )
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-qualification"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2194,7 +2173,7 @@ def test_failed_evidence_sanitization_discards_all_text_evidence(
     )
 
     completed = subprocess.run(
-        [ROOT / "tooling" / "test" / "cli.mjs", "image-smoke"],
+        [ROOT / "tooling" / "test" / "cli.mjs", "image-qualification"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -2578,63 +2557,6 @@ def _release_fake_pytest_workers(
             )
 
 
-def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None:
-    readme = (ROOT / "README.md").read_text()
-    architecture = (ROOT / "docs" / "architecture" / "core.md").read_text()
-    guide = (ROOT / "docs" / "runbook" / "local-lifecycle.md").read_text()
-    production = (ROOT / "docs" / "runbook" / "single-node-production.md").read_text()
-    tushare = (ROOT / "docs" / "runbook" / "tushare-live-bootstrap.md").read_text()
-    active_docs = "\n".join((readme, architecture, guide, production, tushare))
-
-    for command in (
-        "mise exec -- pnpm bootstrap",
-        "mise exec -- pnpm dev",
-        "mise exec -- pnpm dev:up",
-        "mise exec -- pnpm dev:logs",
-        "mise exec -- pnpm dev:stop",
-        "mise exec -- pnpm dev:reset",
-        "mise exec -- pnpm test",
-        "mise exec -- pnpm test:integration",
-        "mise exec -- pnpm test:e2e",
-        "mise exec -- pnpm check",
-    ):
-        assert command in active_docs
-    assert "Node.js 24.14.0" in guide
-    assert "pnpm 11.9.0" in guide
-    assert "uv" in guide
-    assert ".local/test-runs/<run-id>/" in guide
-    assert "--keep-environment" in guide
-    assert "mise exec -- ./tooling/test/cli.mjs integration --keep-environment" in guide
-    assert "mise exec -- ./tooling/test/cli.mjs e2e --keep-environment" in guide
-    assert "mise exec -- pnpm test:cleanup" in guide
-    assert "./tooling/test/cli.mjs cleanup" not in guide
-    assert " -- --keep-environment" not in guide
-    assert "pnpm prod validate" in production
-    assert "pnpm prod up" in production
-    assert "root with mode `0600`" in production
-    assert "not Production readiness" in active_docs
-    for command in (
-        "mise exec -- pnpm test",
-        "mise exec -- pnpm test:integration",
-        "mise exec -- pnpm test:e2e",
-        "mise exec -- pnpm test:image-smoke",
-        "mise exec -- pnpm check",
-        "mise exec -- pnpm check:release",
-        "mise exec -- pnpm check:performance",
-    ):
-        assert f"`{command}`" in architecture
-    assert "`bun run " not in architecture
-    for retired in (
-        "Makefile",
-        "make dev",
-        "make check",
-        "dev:down",
-        "core-test-runtime",
-        "compose.test.yaml",
-    ):
-        assert retired not in active_docs
-
-
 def test_full_compose_lifecycle_decision_is_recorded_without_glossary_drift() -> None:
     adr = (
         ROOT
@@ -2752,3 +2674,33 @@ def test_development_watch_covers_application_and_shared_build_inputs() -> None:
             )
     assert "ignore:\n            - config/model-registry.json" in services["agent"]
     assert ".env" not in "\n".join(re.findall(r"- path: (.+)", development))
+
+
+def test_short_image_smoke_exercises_startup_without_qualification(tmp_path: Path) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    completed = subprocess.run(
+        [ROOT / "tooling/test/cli.mjs", "image-smoke"],
+        cwd=ROOT, env=environment, capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    commands = command_log.read_text()
+    assert "production_image_smoke.py startup" in commands
+    assert "production_image_smoke.py health" in commands
+    assert "production_image_smoke.py before" not in commands
+    assert "readiness-outage" not in commands
+    assert "down --volumes" in commands
+
+
+def test_short_image_smoke_preserves_failed_worker_result_and_cleans(tmp_path: Path) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment.update(FAKE_IMAGE_SMOKE_PHASE="startup", FAKE_IMAGE_SMOKE_STATUS="9")
+    completed = subprocess.run(
+        [ROOT / "tooling/test/cli.mjs", "image-smoke"],
+        cwd=ROOT, env=environment, capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 9
+    assert "down --volumes" in command_log.read_text()
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    evidence = tmp_path / "runs" / run_id / "evidence"
+    assert "fake startup image smoke failure" in (evidence / "startup.stderr.log").read_text()
+    assert list((tmp_path / "runs" / ".runtime-secrets").iterdir()) == []

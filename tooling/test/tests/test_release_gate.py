@@ -37,7 +37,7 @@ printf '%s|cwd=%s|cli=%s|openai=%s|anthropic=%s|google=%s\n' \
   "${THESISTRACE_AGENT_GOOGLE_API_KEY-unset}" >>"$RELEASE_COMMAND_LOG"
 case "$*" in
   check) exit "${FAKE_CHECK_STATUS:-0}" ;;
-  test:image-smoke) exit "${FAKE_IMAGE_STATUS:-0}" ;;
+  test:image:qualification) exit "${FAKE_IMAGE_STATUS:-0}" ;;
   *) exit 2 ;;
 esac
 """
@@ -75,7 +75,7 @@ def test_release_gate_runs_only_deterministic_gates_from_a_clean_commit(
     assert completed.returncode == 0, completed.stderr
     assert command_log.read_text().splitlines() == [
         f"check|cwd={ROOT}|cli=unset|openai=unset|anthropic=unset|google=unset",
-        f"test:image-smoke|cwd={ROOT}|cli=unset|openai=unset|anthropic=unset|google=unset",
+        f"test:image:qualification|cwd={ROOT}|cli=unset|openai=unset|anthropic=unset|google=unset",
     ]
     assert '"git_revision":"0123456789abcdef0123456789abcdef01234567"' in (
         completed.stdout

@@ -15,6 +15,6 @@ if (state.trim()) fail('RELEASE_WORKTREE_DIRTY');
 const report = event => console.log(JSON.stringify({ event, git_revision: revision, real_model_eval: 'not_run', model_qualification: 'pending' }));
 try {
   report('release_gate_started');
-  for (const command of ['check', 'test:image-smoke']) await execute('pnpm', [command], { cwd: root, env: deterministicEnvironment(process.env) });
+  for (const command of ['check', 'test:image:qualification']) await execute('pnpm', [command], { cwd: root, env: deterministicEnvironment(process.env) });
   report('release_gate_completed');
 } catch (error) { process.exitCode = error.status ?? 1; }
