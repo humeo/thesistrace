@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
@@ -29,6 +29,25 @@ function fixture(t) {
 function run(env, ...args) {
   return spawnSync(process.execPath, [cli, ...args], { env, encoding: 'utf8' });
 }
+
+test('production init creates independent private credentials and requires explicit deployment inputs', t => {
+  const f = fixture(t);
+  const file = resolve(f.dir, 'production.env');
+  const env = { ...f.env, THESISTRACE_ENV_FILE: file };
+  const result = run(env, 'init', '--production');
+  assert.equal(result.status, 0, result.stderr);
+  const values = parseEnv(readFileSync(file, 'utf8'));
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.equal(values.THESISTRACE_ENVIRONMENT, 'production');
+  for (const name of ['THESISTRACE_PUBLIC_ORIGIN', 'THESISTRACE_AUTH_IMAGE', 'THESISTRACE_AGENT_IMAGE', 'THESISTRACE_AGENT_BUILD_REVISION']) assert.equal(values[name], '');
+  assert.match(JSON.parse(values.THESISTRACE_MCP_SIGNING_PRIVATE_JWK).kid, /^production-/);
+  assert.notEqual(values.BETTER_AUTH_SECRET, f.values.BETTER_AUTH_SECRET);
+  assert.ok(!result.stdout.includes(values.BETTER_AUTH_SECRET));
+  assert.equal(run(env, 'init', '--production').status, 2);
+  assert.equal(readFileSync(file, 'utf8').includes(values.BETTER_AUTH_SECRET), true);
+  const missing = run({ ...env, THESISTRACE_ENV_FILE: '' }, 'init', '--production');
+  assert.equal(JSON.parse(missing.stderr).code, 'PRODUCTION_ENV_FILE_PATH_INVALID');
+});
 
 test('private CLI accepts file worker capacity and discards ambient capacity', t => {
   const f = fixture(t);

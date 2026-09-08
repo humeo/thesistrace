@@ -59,7 +59,7 @@ def test_caddy_is_the_only_web_runtime_and_preserves_api_paths() -> None:
     assert "reverse_proxy agent:8400" in caddyfile
     assert "reverse_proxy api:8100" in caddyfile
     assert caddyfile.count("reverse_proxy api:8100") == 3
-    assert caddyfile.count("header_up X-ThesisTrace-Client-IP {remote_host}") == 6
+    assert caddyfile.count("header_up X-ThesisTrace-Client-IP {client_ip}") == 6
     assert caddyfile.count("header_up X-Request-ID {http.request.uuid}") == 6
     assert "@operator_pages path /operator /operator/*" in caddyfile
     assert "forward_auth auth:8200" in caddyfile
@@ -569,6 +569,9 @@ if arguments[:2] == ["volume", "create"]:
     raise SystemExit(0)
 if arguments[0] == "run":
     print("container-id")
+    raise SystemExit(0)
+if arguments[:2] == ["inspect", "--format"]:
+    print("172.20.0.3")
     raise SystemExit(0)
 if arguments[0] == "exec":
     url = arguments[-1]

@@ -47,6 +47,22 @@ test -n "$client_ip_two"
 test "$client_ip_one" != "$client_ip_two"
 test "$forged_client_ip" = "$client_ip_one"
 
+# Only the explicitly trusted edge may supply the visitor address.
+for visitor in 203.0.113.10 203.0.113.11; do
+  forwarded=$(docker exec "$client_one_name" wget --quiet \
+    --header "CF-Connecting-IP: $visitor" \
+    --header 'X-Forwarded-For: 203.0.113.250' \
+    --header 'X-ThesisTrace-Client-IP: 203.0.113.251' \
+    --no-check-certificate --output-document - \
+    https://thesistrace.test/api/auth/client-ip)
+  test "$forwarded" = "$visitor"
+done
+untrusted=$(docker exec "$client_two_name" wget --quiet \
+  --header 'CF-Connecting-IP: 203.0.113.10' \
+  --no-check-certificate --output-document - \
+  https://thesistrace.test/api/auth/client-ip)
+test "$untrusted" = "$client_ip_two"
+
 for private_probe in \
   "health/live private-health" \
   "internal/session/verify private-internal"; do

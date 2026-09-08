@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { captureEvidence, captureLogs, scanCanaries } from '../evidence.mjs';
 
 export async function imageQualification(run) {
@@ -47,6 +47,12 @@ export async function imageQualification(run) {
   await run.phase("image-smoke-operator-receipt-cleaned", () => run.composeRun(["-e", "THESISTRACE_TEST_API_ORIGIN=http://api:8100", "-e", "THESISTRACE_TEST_WEB_ORIGIN=http://web:" + run.caddy_port, "-e", "THESISTRACE_TEST_OPERATOR_SESSION_FILE=/smoke-secrets/operator-sessions.json", "-e", "THESISTRACE_TEST_OPERATOR_STATE=/smoke-evidence/operator-processed.json", "-e", "THESISTRACE_TEST_SMOKE_STATE=" + run.smoke_state, "initialize", "python", "/smoke/tests/production_image_smoke.py", "operator-receipt-cleaned"], {stdoutFile: run.evidence_dir + "/operator-receipt-cleaned.json", stderrFile: run.evidence_dir + "/operator-receipt-cleaned.stderr.log"}));
   await run.phase("image-smoke-receipt-worker-stop", () => run.compose(["stop", "data-operator-worker"]));
   await run.phase("image-smoke-receipt-worker-reopen", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "120", "data-operator-worker"]));
+  // The recovery matrix submits more than the ordinary daily Run quota. Operator
+  // authorization/revocation was checked above; use its current owner for research.
+  await run.phase("image-smoke-research-operator-session", async () => {
+    const sessions = JSON.parse(readFileSync(run.operator_sessions_file, 'utf8'));
+    writeFileSync(run.auth_session_file, JSON.stringify(sessions.successor_operator), { mode: 0o600 });
+  });
   run.network_internal = (await run.exec("docker", ["network", "inspect", run.project_name + "_default", "--format", "{{.Internal}}"], {capture: true})).trim();
   assert.equal(run.network_internal, "true");
   writeFileSync(run.evidence_dir + "/network.txt", "internal=" + run.network_internal + "\n");

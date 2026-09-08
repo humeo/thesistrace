@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -73,7 +74,6 @@ UNAVAILABLE_DEPENDENCY_CODES = {
     "auth": "AUTH_UNAVAILABLE",
 }
 HTTP_REQUEST_TIMEOUT_SECONDS = 10
-OPERATOR_IMAGE_SMOKE_PASSWORD = "correct-horse-battery-staple"
 OPERATOR_IMAGE_SMOKE_MARKET_KEY = "image-smoke-operator-market-refresh"
 OPERATOR_IMAGE_SMOKE_MARKET_AS_OF = "2026-08-06T15:00:00+08:00"
 
@@ -254,7 +254,6 @@ def _qualify_operator_while_worker_unavailable(
         {
             "email": invitation_email,
             "operation": "invitation.issue",
-            "password": OPERATOR_IMAGE_SMOKE_PASSWORD,
         },
     )
     issue_body = {"email": invitation_email, "proof": issue_proof}
@@ -288,7 +287,6 @@ def _qualify_operator_while_worker_unavailable(
         {
             "email": invitation_email,
             "operation": "invitation.reissue",
-            "password": OPERATOR_IMAGE_SMOKE_PASSWORD,
         },
     )
     reissue_status, reissued, reissue_request_id = _gateway_json(
@@ -311,7 +309,6 @@ def _qualify_operator_while_worker_unavailable(
         operator["cookie"],
         {
             "operation": "researcher.sessions.revoke",
-            "password": OPERATOR_IMAGE_SMOKE_PASSWORD,
             "researcher_id": revocation_target["researcher_id"],
         },
     )
@@ -353,7 +350,6 @@ def _qualify_operator_while_worker_unavailable(
             "as_of": OPERATOR_IMAGE_SMOKE_MARKET_AS_OF,
             "idempotency_key": OPERATOR_IMAGE_SMOKE_MARKET_KEY,
             "operation": "data.refresh.market.submit",
-            "password": OPERATOR_IMAGE_SMOKE_PASSWORD,
         },
     )
     submit_status, submitted, submit_request_id = _gateway_json(
@@ -3479,12 +3475,32 @@ def _operator_proof(
     cookie: str,
     request_body: dict[str, object],
 ) -> str:
+    mailbox_url = "http://resend-fake:8300/__test/emails"
+    with urllib.request.urlopen(
+        mailbox_url, timeout=HTTP_REQUEST_TIMEOUT_SECONDS
+    ) as response:
+        before = len(json.load(response)["emails"])
+    code_status, _, _ = _gateway_json(
+        gateway_origin,
+        "POST",
+        "/api/auth/operator/proofs/send-code",
+        cookie=cookie,
+        body={},
+    )
+    assert code_status == 200
+    with urllib.request.urlopen(
+        mailbox_url, timeout=HTTP_REQUEST_TIMEOUT_SECONDS
+    ) as response:
+        messages = json.load(response)["emails"]
+    assert len(messages) == before + 1
+    match = re.search(r"\b([0-9]{6})\b", messages[-1]["text"])
+    assert match is not None
     status, value, _ = _gateway_json(
         gateway_origin,
         "POST",
         "/api/auth/operator/proofs",
         cookie=cookie,
-        body=request_body,
+        body={**request_body, "otp": match.group(1)},
     )
     assert status == 200
     assert isinstance(value, dict)
