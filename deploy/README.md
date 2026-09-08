@@ -40,6 +40,15 @@ Stop the gateway before `pnpm prod down`, because it also uses that network. Res
 it after the product network is recreated. Normal product container updates preserve
 the network.
 
+Paid model calls reserve the configured context-window input ceiling plus the
+requested output allowance before dispatch. They settle against the provider's
+actual token usage, including configured cache prices. No token-count endpoint is
+required: gateway estimates can omit provider-added input. The configured model
+capacity must bound provider usage. A small remaining daily budget can reject a
+call whose eventual cost would be lower; interrupted calls without final usage
+retain their reservation. This deployment keeps the GPT-5.6 Luna token prices in
+`apps/agent/config/model-registry.json`; it does not treat subscription calls as free.
+
 For an existing local research dataset, copy a consistent Canonical and benchmark
 snapshot into the server's new data volumes before starting data updates. Verify the
 archive checksum and mounted Dataset Head on the destination. Initialize the server's
