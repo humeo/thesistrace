@@ -26,8 +26,10 @@ const onInt = () => { if (!cleaning) { result = 130; controller.abort(); } };
 const onTerm = () => { if (!cleaning) { result = 143; controller.abort(); } };
 process.on('SIGINT', onInt); process.on('SIGTERM', onTerm);
 const start = async () => {
+  const proxyIp = (await docker(['inspect', '--format', '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}', names.client_one_name], { capture: true })).trim();
   await docker(['run', '--detach', '--name', web, '--hostname', 'thesistrace.test', '--network', network, '--network-alias', 'thesistrace.test',
     '--env', 'THESISTRACE_PUBLIC_ORIGIN=https://thesistrace.test', '--env', 'THESISTRACE_CADDY_TLS_DIRECTIVE=tls internal',
+    '--env', `THESISTRACE_CADDY_TRUSTED_PROXIES_DIRECTIVE=trusted_proxies static ${proxyIp}`,
     '--env', 'THESISTRACE_CADDY_HSTS_DIRECTIVE=header >Strict-Transport-Security "max-age=31536000"', '--volume', `${volume}:/data`, image], { stdoutFile: `${evidence}/container-id.txt` });
   const deadline = Date.now() + 20000;
   while (true) {

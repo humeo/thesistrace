@@ -7,11 +7,13 @@ try {
     const args = extra[0] === '--' ? extra.slice(1) : extra;
     if (!args.length) fail('CONFIG_USAGE_INVALID');
     await run(args[0], args.slice(1), { env: loadConfiguration() });
+  } else if (action === 'init') {
+    if (extra.length && (extra.length !== 1 || extra[0] !== '--production')) fail('CONFIG_USAGE_INVALID');
+    const mode = extra.length ? 'production' : 'development';
+    initialize(configurationFile(mode), mode);
+    console.log(`Created private configuration. Fill deployment inputs and external credentials, then run ${mode === 'production' ? 'pnpm prod validate' : 'pnpm config:check'}.`);
   } else if (extra.length) fail('CONFIG_USAGE_INVALID');
-  else if (action === 'init') {
-    initialize(configurationFile());
-    console.log('Created private configuration. Fill external credentials, then run pnpm config:check.');
-  } else if (action === 'check') loadConfiguration();
+  else if (action === 'check') loadConfiguration();
   else if (action === 'template') writeFileSync(`${root}/.env.example`, template());
   else fail('CONFIG_USAGE_INVALID');
 } catch (error) {

@@ -116,12 +116,17 @@ export function template(generated = {}) {
   }
   return lines.join('\n') + '\n';
 }
-export function initialize(file) {
+export function initialize(file, mode = 'development') {
+  if (!['development', 'production'].includes(mode)) fail('CONFIG_USAGE_INVALID');
   const generated = {};
+  if (mode === 'production') {
+    generated.THESISTRACE_ENVIRONMENT = mode;
+    for (const name of ['THESISTRACE_PUBLIC_ORIGIN', 'THESISTRACE_AUTH_IMAGE', 'THESISTRACE_AGENT_IMAGE', 'THESISTRACE_AGENT_BUILD_REVISION']) generated[name] = '';
+  }
   for (const name of Object.keys(fields)) if (/PASSWORD$|^BETTER_AUTH_SECRET$|^THESISTRACE_S3_SECRET_ACCESS_KEY$/.test(name)) generated[name] = randomBytes(32).toString('hex');
   generated.THESISTRACE_S3_ACCESS_KEY_ID = randomBytes(16).toString('hex');
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
-  const privateJwk = privateKey.export({ format: 'jwk' }), publicJwk = publicKey.export({ format: 'jwk' }), kid = `development-${randomUUID()}`;
+  const privateJwk = privateKey.export({ format: 'jwk' }), publicJwk = publicKey.export({ format: 'jwk' }), kid = `${mode}-${randomUUID()}`;
   generated.THESISTRACE_MCP_SIGNING_PRIVATE_JWK = JSON.stringify({ alg: 'EdDSA', crv: privateJwk.crv, d: privateJwk.d, kid, kty: privateJwk.kty, use: 'sig', x: privateJwk.x });
   generated.THESISTRACE_MCP_VERIFYING_PUBLIC_JWK = JSON.stringify({ alg: 'EdDSA', crv: publicJwk.crv, kid, kty: publicJwk.kty, use: 'sig', x: publicJwk.x });
   try { writeFileSync(file, template(generated), { flag: 'wx', mode: 0o600 }); }
