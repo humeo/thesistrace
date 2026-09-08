@@ -342,6 +342,16 @@ for argument in "$@"; do
   esac
 done
 case " $* " in
+  *"qualify_operator_image_smoke.py provision "*)
+    output=
+    for argument in "$@"; do output=$argument; done
+    mkdir -p "$(dirname "$output")"
+    printf '%s\\n' \
+      '{"successor_operator":{"cookie":"fake-operator-cookie",' \
+      '"researcher_id":"00000000-0000-4000-8000-000000000098"}}' \
+      > "$output"
+    chmod 600 "$output"
+    ;;
   *" provision_image_smoke_auth.py "*)
     output=
     for argument in "$@"; do
