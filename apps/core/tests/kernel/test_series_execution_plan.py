@@ -127,6 +127,44 @@ def test_compiled_expression_builds_a_canonical_field_plan() -> None:
     ) == [None, 3.5, 5.0]
 
 
+@pytest.mark.parametrize("source", [
+    "rank(pct_change(close, 2)) + rank(pct_change(close, 2))",
+    "ts_mean(close, 3) / (ts_mean(close, 3) + ts_mean(close, 3))",
+    "ts_std(close, 3) + delta(ts_std(close, 3), 1) - ts_std(close, 3)",
+    "rank(ts_mean(close, 3)) + ts_mean(rank(ts_mean(close, 3)), 2)",
+    "(close + 1.0) + ts_mean(close, 1)",
+])
+def test_repeated_columnar_subexpressions_preserve_values_and_plan_across_calls(source) -> None:
+    plan = build_series_execution_plan(alpha_language.compile(source))
+    original = replace(plan)
+    instruments = ("a", "b", "c")
+    sessions = tuple(f"s{index}" for index in range(8))
+    universe = {session: instruments[index % 2:] for index, session in enumerate(sessions)}
+    prices = np.array([
+        [1.0, 2.0, 2.0, 0.0, np.nan, 7.0, 1e9, 1.0],
+        [3.0, 3.0, 2.0, 5.0, 6.0, 7.0, 1e9, 2.0],
+        [1.0, 5.0, 4.0, 7.0, 8.0, 8.0, 1e-9, 1.0],
+    ])
+    for multiplier in (1.0, -1.0, 2.0):
+        fields = {"price.close.adjusted": prices * multiplier}
+        expected = evaluate_series_execution_matrix(
+            plan, instruments,
+            lambda instrument, fields=fields: {
+                key: matrix[instruments.index(instrument)].tolist()
+                for key, matrix in fields.items()
+            },
+            length=len(sessions), sessions=sessions, universe_members=universe,
+        )
+        actual = evaluate_columnar_execution_matrix(
+            plan, instruments, sessions, fields, universe,
+            cancellation_check=lambda: None,
+        )
+        np.testing.assert_array_equal(
+            actual, np.asarray([expected[instrument] for instrument in instruments], dtype=float),
+        )
+        assert plan == original
+
+
 def test_columnar_plan_is_exactly_equivalent_for_time_series_and_cross_section() -> None:
     compiled = alpha_language.compile(
         "rank(pct_change(close, 1)) + ts_mean(volume, 2)"

@@ -164,11 +164,7 @@ def advance(advance_input: AdvanceInput) -> KernelState:
 
 
 def continuation_snapshot(state: KernelState) -> dict[str, object]:
-    return continuation_from_output(state.output_snapshot())
-
-
-def continuation_from_output(output: Mapping[str, object]) -> dict[str, object]:
-    """Project the bounded working state shared by ordinary Advance and recovery."""
+    output = state.output_snapshot()
     alpha = _mapping(output.get("alpha_matrix"), "Alpha Matrix")
     factor = _mapping(output.get("factor_evaluation"), "Factor")
     alpha_sessions = alpha.get("sessions")

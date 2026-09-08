@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 import numpy as np
@@ -237,28 +237,6 @@ def evaluate_series_execution_matrix(
     }
 
 
-def _share_columnar_subexpressions(
-    plan: SeriesExecutionPlan,
-    cancellation_check: Callable[[], None],
-) -> SeriesExecutionPlan:
-    """Intern identical nodes in this execution only; keep the frozen binding intact."""
-    nodes: list[SeriesPlanNode] = []
-    positions: dict[tuple[SeriesPlanNode, str], int] = {}
-    remapped: list[int] = []
-    for node in plan.nodes:
-        cancellation_check()
-        shared = replace(node, inputs=tuple(remapped[index] for index in node.inputs))
-        # repr distinguishes integer windows, float literals and signed zero.
-        key = (shared, repr(shared.value))
-        position = positions.get(key)
-        if position is None:
-            position = len(nodes)
-            positions[key] = position
-            nodes.append(shared)
-        remapped.append(position)
-    return replace(plan, nodes=tuple(nodes), root=remapped[plan.root])
-
-
 def evaluate_columnar_execution_matrix(
     plan: SeriesExecutionPlan,
     instruments: tuple[str, ...],
@@ -271,7 +249,6 @@ def evaluate_columnar_execution_matrix(
     shape = (len(instruments), len(sessions))
     if any(matrix.shape != shape for matrix in field_matrices.values()):
         raise ValueError("columnar Alpha fields are misaligned")
-    plan = _share_columnar_subexpressions(plan, cancellation_check)
     values: list[float | int | np.ndarray | None] = []
     remaining = [0] * len(plan.nodes)
     for node in plan.nodes:
@@ -330,10 +307,7 @@ def evaluate_columnar_execution_matrix(
                 )
                 for instrument_index in range(len(instruments))
             ]
-            value = (
-                np.asarray(rows, dtype=np.float64)
-                if rows else np.empty(shape, dtype=np.float64)
-            )
+            value = np.asarray(rows, dtype=np.float64)
             if value.shape != shape:
                 raise ValueError("columnar Alpha builtin produced a misaligned result")
         values.append(value)

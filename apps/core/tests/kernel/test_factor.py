@@ -230,6 +230,97 @@ def test_vectorized_pearson_is_binary64_equal_to_ordered_fsum_reference() -> Non
     assert equivalence_bytes(pearson(left, right)) == equivalence_bytes(expected)
 
 
+@pytest.mark.parametrize("horizon", [1, 5, 20])
+@pytest.mark.parametrize(
+    ("entry", "exit_open", "state", "listed_to", "expected", "error"),
+    [
+        (10.0, 12.0, "normal", "", 0.2, None),
+        (0.0, 12.0, "normal", "", None, "invalid Label entry Open"),
+        (None, 12.0, "normal", "", None, "unexplained Label entry Open"),
+        (10.0, None, "normal", "", None, "unexplained Label exit Open"),
+        (None, 12.0, "full_session_suspension", "", None, None),
+        (10.0, None, "full_session_suspension", "", None, None),
+        (None, 12.0, "data_unavailable", "", None, None),
+        (10.0, None, "data_unavailable", "", None, None),
+        (None, 12.0, "normal", "s01", None, None),
+        (10.0, None, "normal", "s01", -1.0, None),
+        (1e-308, 1e308, "normal", "", None, "non-finite Label"),
+    ],
+)
+def test_columnar_labels_preserve_entry_exit_and_censoring_rules(
+    horizon, entry, exit_open, state, listed_to, expected, error,
+) -> None:
+    sessions = tuple(f"s{index:02d}" for index in range(23))
+    instrument = "equity:000001.SH"
+    prices = {
+        (session, instrument): ExecutionPrice("10", "10") for session in sessions
+    }
+    for session, price in ((sessions[1], entry), (sessions[1 + horizon], exit_open)):
+        if price is None:
+            del prices[session, instrument]
+        else:
+            prices[session, instrument] = ExecutionPrice(str(price), str(price))
+    data = _ColumnarFactorFixture(
+        sessions=sessions,
+        instruments={instrument: InstrumentProfile("main", listed_to)},
+        universe_members={session: (instrument,) for session in sessions},
+        execution_prices=prices,
+        trading_states={(session, instrument): state for session in sessions},
+    )
+    matrix = {"sessions": [
+        {"session": session, "values": [{"instrument_id": instrument, "value": 1.0}]}
+        for session in sessions
+    ]}
+    with np.errstate(all="ignore"):
+        labels = prepare_columnar_forward_labels(data, cancellation_check=lambda: None)
+    if error:
+        with pytest.raises(FactorDataError, match=error):
+            labels.factor_days_by_horizon(
+                matrix, signal_sessions_by_horizon={horizon: sessions[:1]},
+                cancellation_check=lambda: None,
+            )
+    else:
+        days = labels.factor_days_by_horizon(
+            matrix, signal_sessions_by_horizon={horizon: sessions[:1]},
+            cancellation_check=lambda: None,
+        )[str(horizon)]
+        assert days[0]["sample_count"] == (0 if expected is None else 1)
+        if expected is not None:
+            assert labels.labels_by_horizon[horizon][0, 0] == pytest.approx(expected)
+    # Invalid coordinates only fail when selected, and never before an exit matures.
+    censored = labels.factor_days_by_horizon(
+        matrix, signal_sessions_by_horizon={horizon: sessions[-horizon - 1:]},
+        cancellation_check=lambda: None,
+    )[str(horizon)]
+    assert all(day["sample_count"] == 0 for day in censored)
+
+
+@pytest.mark.parametrize(("state", "listed_to"), [
+    ("normal", "s2"), ("full_session_suspension", ""),
+    ("data_unavailable", ""), ("normal", ""),
+])
+def test_invalid_label_entry_is_rejected_even_when_exit_is_missing(state, listed_to) -> None:
+    sessions = ("s0", "s1", "s2")
+    instrument = "equity:000001.SH"
+    data = _ColumnarFactorFixture(
+        sessions=sessions,
+        instruments={instrument: InstrumentProfile("main", listed_to)},
+        universe_members={session: (instrument,) for session in sessions},
+        execution_prices={("s1", instrument): ExecutionPrice("0", "0")},
+        trading_states={("s2", instrument): state},
+    )
+    matrix = {"checksum": "a" * 64, "sessions": [
+        {"session": "s0", "values": [{"instrument_id": instrument, "value": 1.0}]},
+    ]}
+    with pytest.raises(FactorDataError, match="invalid Label entry Open"):
+        build_forward_labels(data, matrix, signal_sessions=["s0"], horizons=(1,))
+    prepared = prepare_columnar_forward_labels(data, cancellation_check=lambda: None)
+    with pytest.raises(FactorDataError, match="invalid Label entry Open"):
+        prepared.factor_days_by_horizon(
+            matrix, signal_sessions_by_horizon={1: ["s0"]}, cancellation_check=lambda: None,
+        )
+
+
 def test_forward_labels_use_next_open_timing_and_explicit_period_limits() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(

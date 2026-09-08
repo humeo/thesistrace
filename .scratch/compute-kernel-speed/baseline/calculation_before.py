@@ -15,14 +15,12 @@ from thesistrace.data import MountedGenerationStore
 from thesistrace.research_kernel import (
     AdvanceInput,
     KernelState,
+    advance,
+    advance_continuation,
     continuation_snapshot,
     empty_continuation,
 )
 from thesistrace.research_kernel.numeric import require_current_numeric_contract
-from thesistrace.research_kernel.tracking_advance import (
-    advance_tracking,
-    advance_tracking_continuation,
-)
 from thesistrace.research_series import (
     AlignedResearchData,
     ColumnarResearchSeries,
@@ -173,7 +171,7 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
             predecessor=predecessor,
         )
     )
-    state = advance_tracking(
+    state = advance(
         AdvanceInput(
             prior_state=prior,
             target_research_data=research_data,
@@ -235,7 +233,7 @@ def _rebuild_continuation(
             origin.initial_strategy_state.model_dump(mode="json"),
             chunk_data,
         ).run_input_with_research_data(chunk_data)
-        continuation = advance_tracking_continuation(
+        continuation = advance_continuation(
             run_input=run_input,
             prior_continuation=continuation,
             target_research_data=chunk_data,

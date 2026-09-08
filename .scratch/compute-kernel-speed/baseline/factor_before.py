@@ -114,56 +114,59 @@ def prepare_columnar_forward_labels(
     sessions = tuple(research_data.sessions)
     instrument_ids = tuple(sorted(research_data.instruments))
     adjusted_opens = research_data.adjusted_open_matrix(instrument_ids)
-    finite = np.isfinite(adjusted_opens)
-    # Classify each missing coordinate once, across all horizons. A terminal
-    # delisting is unavailable on entry, but a total loss after a valid entry.
-    missing_reason = np.zeros(adjusted_opens.shape, dtype=np.uint8)
-    terminal_delisting, unexplained = 1, 2
-    for index, session in enumerate(sessions):
-        cancellation_check()
-        for position in np.flatnonzero(~finite[:, index]):
-            instrument_id = instrument_ids[int(position)]
-            reason = unavailable_reason(
-                research_data.trading_states.get((session, instrument_id)),
-                research_data.instruments[instrument_id],
-                session,
-                valid_entry=True,
-            )
-            if reason == "terminal_delisting":
-                missing_reason[position, index] = terminal_delisting
-            elif reason == "unexplained_missing_or_invalid_data":
-                missing_reason[position, index] = unexplained
     labels_by_horizon: dict[int, np.ndarray] = {}
     states_by_horizon: dict[int, np.ndarray] = {}
     for horizon in HORIZONS:
-        cancellation_check()
         labels = np.full(adjusted_opens.shape, np.nan, dtype=np.float64)
         states = np.full(adjusted_opens.shape, _LABEL_UNAVAILABLE, dtype=np.uint8)
-        width = max(0, len(sessions) - horizon - 1)
-        entry_opens = adjusted_opens[:, 1 : 1 + width]
-        exit_opens = adjusted_opens[:, 1 + horizon : 1 + horizon + width]
-        valid_entry = finite[:, 1 : 1 + width]
-        valid_exit = finite[:, 1 + horizon : 1 + horizon + width]
-        entry_reason = missing_reason[:, 1 : 1 + width]
-        exit_reason = missing_reason[:, 1 + horizon : 1 + horizon + width]
-        projected_labels = labels[:, :width]
-        projected_states = states[:, :width]
-        zero_entry = valid_entry & (entry_opens == 0.0)
-        projected_states[zero_entry] = _LABEL_INVALID_ZERO_ENTRY
-        valid = valid_entry & valid_exit & ~zero_entry
-        projected_labels[valid] = exit_opens[valid] / entry_opens[valid] - 1.0
-        projected_states[valid] = 0
-        projected_states[~valid_entry & (entry_reason == unexplained)] = _LABEL_INVALID_ENTRY
-        missing_exit = valid_entry & ~valid_exit & ~zero_entry
-        terminal = missing_exit & (exit_reason == terminal_delisting)
-        projected_labels[terminal] = -1.0
-        projected_states[terminal] = 0
-        projected_states[missing_exit & (exit_reason == unexplained)] = _LABEL_INVALID_EXIT
-        non_finite = (projected_states == 0) & ~np.isfinite(projected_labels)
-        projected_states[non_finite] = _LABEL_INVALID_NON_FINITE
+        for signal_index, _signal_session in enumerate(sessions):
+            cancellation_check()
+            entry_index = signal_index + 1
+            exit_index = signal_index + 1 + horizon
+            if exit_index >= len(sessions):
+                continue
+            entry_session = sessions[entry_index]
+            exit_session = sessions[exit_index]
+            entry_opens = adjusted_opens[:, entry_index]
+            exit_opens = adjusted_opens[:, exit_index]
+            valid_entry = np.isfinite(entry_opens)
+            valid_exit = np.isfinite(exit_opens)
+            zero_entry = valid_entry & (entry_opens == 0.0)
+            states[zero_entry, signal_index] = _LABEL_INVALID_ZERO_ENTRY
+            valid = valid_entry & valid_exit & ~zero_entry
+            labels[valid, signal_index] = (
+                exit_opens[valid] / entry_opens[valid] - 1.0
+            )
+            states[valid, signal_index] = 0
+            for position in np.flatnonzero(~valid_entry):
+                instrument_id = instrument_ids[int(position)]
+                reason = unavailable_reason(
+                    research_data.trading_states.get((entry_session, instrument_id)),
+                    research_data.instruments[instrument_id],
+                    entry_session,
+                    valid_entry=False,
+                )
+                if reason == "unexplained_missing_or_invalid_data":
+                    states[position, signal_index] = _LABEL_INVALID_ENTRY
+            for position in np.flatnonzero(valid_entry & ~valid_exit & ~zero_entry):
+                instrument_id = instrument_ids[int(position)]
+                reason = unavailable_reason(
+                    research_data.trading_states.get((exit_session, instrument_id)),
+                    research_data.instruments[instrument_id],
+                    exit_session,
+                    valid_entry=True,
+                )
+                if reason == "terminal_delisting":
+                    labels[position, signal_index] = -1.0
+                    states[position, signal_index] = 0
+                elif reason == "unexplained_missing_or_invalid_data":
+                    states[position, signal_index] = _LABEL_INVALID_EXIT
+            non_finite = (states[:, signal_index] == 0) & ~np.isfinite(
+                labels[:, signal_index]
+            )
+            states[non_finite, signal_index] = _LABEL_INVALID_NON_FINITE
         labels_by_horizon[horizon] = labels
         states_by_horizon[horizon] = states
-    cancellation_check()
     return PreparedColumnarForwardLabels(
         sessions=sessions,
         instrument_ids=instrument_ids,
@@ -277,11 +280,6 @@ def build_forward_labels(
                         }
                     )
                     continue
-                entry_open = float(entry.adjusted_open)
-                if entry_open == 0.0:
-                    raise FactorDataError(
-                        f"invalid Label entry Open for {instrument_id} on {entry_session}"
-                    )
                 exit_price = prices.get((exit_session, instrument_id))
                 if exit_price is None:
                     reason = unavailable_reason(
@@ -308,7 +306,12 @@ def build_forward_labels(
                         )
                         continue
                 else:
+                    entry_open = float(entry.adjusted_open)
                     exit_open = float(exit_price.adjusted_open)
+                    if entry_open == 0.0:
+                        raise FactorDataError(
+                            f"invalid Label entry Open for {instrument_id} on {entry_session}"
+                        )
                     label = exit_open / entry_open - 1.0
                     if not math.isfinite(label):
                         raise FactorDataError(
@@ -410,21 +413,7 @@ def factor_horizon_from_daily(
     label_checksum: str,
     daily: list[dict[str, object]],
 ) -> dict[str, object]:
-    payload = {
-        "horizon": horizon,
-        "alpha_checksum": alpha_checksum,
-        "label_checksum": label_checksum,
-        "daily": daily,
-        "summary": summarize_factor_days(daily),
-    }
-    return {
-        **payload,
-        "checksum": hashlib.sha256(canonical_json_bytes(payload)).hexdigest(),
-    }
-
-
-def summarize_factor_days(daily: list[dict[str, object]]) -> dict[str, object]:
-    return {
+    summary = {
         "ic": correlation_summary(daily, "ic"),
         "rank_ic": correlation_summary(daily, "rank_ic"),
         "quantile_returns": {
@@ -444,6 +433,17 @@ def summarize_factor_days(daily: list[dict[str, object]]) -> dict[str, object]:
                 if day["top_bottom_return"] is not None
             ]
         ),
+    }
+    payload = {
+        "horizon": horizon,
+        "alpha_checksum": alpha_checksum,
+        "label_checksum": label_checksum,
+        "daily": daily,
+        "summary": summary,
+    }
+    return {
+        **payload,
+        "checksum": hashlib.sha256(canonical_json_bytes(payload)).hexdigest(),
     }
 
 

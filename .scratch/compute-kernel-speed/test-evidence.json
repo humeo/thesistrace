@@ -1,0 +1,121 @@
+{
+  "baseline-kernel": [
+    {
+      "tests": "262",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "85.889"
+    }
+  ],
+  "core-quick": [
+    {
+      "tests": "1190",
+      "failures": "43",
+      "errors": "0",
+      "skipped": "0",
+      "time": "80.240"
+    }
+  ],
+  "core-quick-correct-environment": [
+    {
+      "tests": "1190",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "140.508"
+    }
+  ],
+  "review-fixes": [
+    {
+      "tests": "90",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "33.608"
+    }
+  ],
+  "final-kernel": [
+    {
+      "tests": "311",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "47.119"
+    }
+  ],
+  "long-label-window": [
+    {
+      "tests": "3",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "12.499"
+    }
+  ],
+  "integration": {
+    "pytest-dependency-restart.xml": [
+      {
+        "tests": "1",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "time": "5.114"
+      }
+    ],
+    "pytest-rustfs-strategy-restart.xml": [
+      {
+        "tests": "1",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "time": "6.659"
+      }
+    ],
+    "pytest-rustfs-batch-cancel-restart.xml": [
+      {
+        "tests": "1",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "time": "3.377"
+      }
+    ],
+    "pytest-database-restart.xml": [
+      {
+        "tests": "1",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "time": "7.129"
+      }
+    ],
+    "pytest.xml": [
+      {
+        "tests": "426",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "time": "1402.093"
+      }
+    ],
+    "pytest-postgres-strategy-restart.xml": [
+      {
+        "tests": "1",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "time": "69.037"
+      }
+    ],
+    "pytest-postgres-batch-restart.xml": [
+      {
+        "tests": "1",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "time": "65.610"
+      }
+    ]
+  }
+}
