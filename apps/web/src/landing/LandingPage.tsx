@@ -2,14 +2,12 @@ import React, { useEffect, useRef, useState } from 'react';
 const logo = '/quanttrace-logo.png';
 import { copy, type Language } from './copy';
 import './landing.css';
-function Logo({ hero = false }: {
-    hero?: boolean;
-}) {
-    return <img className={hero ? 'qt-logo qt-logo-hero' : 'qt-logo'} src={logo} alt="" width={hero ? 112 : 48} height={hero ? 112 : 48}/>;
+function Logo() {
+    return <img className="qt-logo" src={logo} alt="" width={32} height={32}/>;
 }
 function Brand({ language }: {
     language: Language;
-}) { const t = copy[language]; return <><Logo /><span className="qt-brand-text"><strong>{t.brand}</strong><span>{t.descriptor}</span></span></>; }
+}) { const t = copy[language]; return <><Logo /><span className="qt-brand-text"><strong>{t.brand}</strong></span></>; }
 export default function Landing() {
     const [language, setLanguage] = useState<Language>(() => new URLSearchParams(location.search).get('lang') === 'zh' ? 'zh' : 'en');
     const t = copy[language];
@@ -40,6 +38,7 @@ export default function Landing() {
       <a className="qt-brand" href="#top" aria-label={t.home}><Brand language={language}/></a>
       <nav aria-label={t.navigation}>
         <a href="#method">{t.method}</a><a href="#preview">{t.preview}</a>
+        <a className="qt-community" href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer" aria-label={t.community} title={t.community}><img src="/brand/discord-symbol-white.svg" alt="" width={20} height={15}/><span>Discord</span></a>
         <div className="qt-language" role="group" aria-label="Language / 语言">
           <button type="button" lang="en" aria-label="English" aria-pressed={language === 'en'} onClick={() => changeLanguage('en')}>EN</button>
           <span aria-hidden="true">/</span>
@@ -50,14 +49,12 @@ export default function Landing() {
     </header>
     <main id="top">
       <section className="qt-hero" aria-labelledby="hero-title">
-        <Logo hero/><div className="qt-hero-brand">{t.brand}</div><p className="qt-descriptor">{t.descriptor}</p>
         <h1 id="hero-title">{t.headline[0]}<span className="qt-headline-ending">{t.headline[1]}</span></h1>
         <p className="qt-subtitle">{t.subtitle}</p><a className="qt-primary" href="#preview">{t.explore}</a>
       </section>
       <section id="method" className="qt-method" aria-label={t.stepsLabel}>
         {t.stages.map((item, index) => <button className="qt-stage" key={index} onClick={() => selectStage(index)} aria-label={`${item.title}: ${t.viewExample}`}><span className="qt-number">0{index + 1}</span><h2>{item.title}</h2><p>{item.description}</p></button>)}
       </section>
-      <div className="qt-expression"><span>{t.demo}</span><code>-rank(ts_delta(close, 5))</code></div>
       <section id="preview" ref={previewRef} className="qt-preview" aria-labelledby="preview-title">
         <div className="qt-preview-intro"><div><span className="qt-caption">{t.preview}</span><h2 id="preview-title">{t.previewTitle}</h2></div><p>{t.previewIntro}<br />{t.previewNote}</p></div>
         <div className="qt-tabs" role="tablist" aria-label={t.stagesLabel}>
@@ -75,8 +72,12 @@ export default function Landing() {
           <button className="qt-next" onClick={() => setStage((stage + 1) % 3)}>{t.stages[stage].action}</button>
         </div>
       </section>
+      <section className="qt-value" aria-labelledby="value-title">
+        <h2 id="value-title">{t.valueTitle}</h2>
+        <div className="qt-value-reasons">{t.reasons.map(([title, body]) => <article key={title}><h3>{title}</h3><p>{body}</p></article>)}</div>
+      </section>
       <section className="qt-access"><h2>{t.accessTitle}</h2><p>{t.accessBody}</p><a className="qt-primary" href="/login">{t.login}</a></section>
     </main>
-    <footer><a className="qt-brand" href="#top"><Brand language={language}/></a><a className="qt-community" href="https://discord.gg/tdwxubVhMJ" target="_blank" rel="noopener noreferrer">{t.community}<span aria-hidden="true">↗</span></a><p>{t.footer}</p></footer>
+    <footer><a className="qt-brand" href="#top"><Brand language={language}/></a><p>{t.footer}</p></footer>
   </div>;
 }

@@ -18,8 +18,12 @@ for (const width of [1220, 390]) {
     });
     await page.setViewportSize({ width, height: 964 });
     await page.goto(origin);
-    await expect(page.getByRole('heading', { name: 'Put every hypothesis to the test.' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'A quantitative research lab for AI agents.' })).toBeVisible();
     expect(authRequests).toEqual([]);
+    await expect(page.getByRole('link', { name: 'Join Discord' })).toHaveAttribute('href', 'https://discord.gg/tdwxubVhMJ');
+    await expect(page.getByRole('heading', { name: 'Why ThesisTrace?' })).toBeVisible();
+    await expect(page.locator('.qt-value-reasons article')).toHaveCount(4);
+    await expect(page.locator('.qt-community img')).toHaveJSProperty('naturalWidth', 64);
     await page.getByRole('button', { name: 'Keep observing: View example' }).click();
     await expect(page.getByRole('tab', { name: 'Keep observing' })).toHaveAttribute('aria-selected', 'true');
     await page.getByRole('button', { name: '中文', exact: true }).click();
