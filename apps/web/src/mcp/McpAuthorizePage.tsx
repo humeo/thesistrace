@@ -34,7 +34,7 @@ export function McpAuthorizePage({ search }: { search: string }) {
     } catch { setError("Authorization could not be completed. Start again from your AI client."); setBusy(false); }
   }
   return <section className="page-section mcp-page mcp-authorization">
-    <h1>{request ? `Allow ${request.name} to access ThesisTrace?` : "Authorize your AI assistant"}</h1>
+    <h1>{request ? `Allow ${request.name} to access QuantTrace?` : "Authorize your AI assistant"}</h1>
     <p>Signed in as <strong>{state.session?.email}</strong></p>
     {request ? <><h2>This app will be able to</h2><ul>{request.scopes.map(scope => <li key={scope}>{scopeLabels[scope] ?? scope}</li>)}</ul><p>You can revoke access from the MCP page at any time.</p></> : !error ? <p role="status">Checking authorization request…</p> : null}
     {error ? <p role="alert">{error}</p> : null}

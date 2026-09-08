@@ -39,13 +39,13 @@ describe("MCP product page", () => {
     expect(host.textContent).toContain("Available");
     expect(host.textContent).toContain("1 tools");
     expect(host.textContent).not.toContain("Browse daily tracks");
-    expect(host.textContent).not.toContain("Built into ThesisTrace chat");
+    expect(host.textContent).not.toContain("Built into QuantTrace chat");
     await click(button("Copy setup prompt"));
-    expect(copied).toHaveBeenLastCalledWith(expect.stringContaining(`Add ThesisTrace MCP to Codex using ${endpoint}.`));
+    expect(copied).toHaveBeenLastCalledWith(expect.stringContaining(`Add QuantTrace MCP to Codex using ${endpoint}.`));
     expect(host.textContent).toContain("No authorized apps yet");
     await click(button("Claude Code"));
     await click(button("Copy setup prompt"));
-    expect(copied).toHaveBeenLastCalledWith(expect.stringContaining("Add ThesisTrace MCP to Claude Code"));
+    expect(copied).toHaveBeenLastCalledWith(expect.stringContaining("Add QuantTrace MCP to Claude Code"));
     expect(requested.every(path => !path.includes("revoke") && !path.includes("consent"))).toBe(true);
   });
   it("does not erase authorizations when a service check fails", async () => {

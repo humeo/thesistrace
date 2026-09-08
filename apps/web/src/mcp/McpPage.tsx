@@ -1,4 +1,4 @@
-import { ArrowClockwise, Info, Plug, ShieldCheck } from "@phosphor-icons/react";
+import { ArrowClockwise, Info, ShieldCheck } from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { checkConnection, loadConnections, revokeApp, type AuthorizedApp, type Connection } from "./api";
 import { CopyButton } from "./CopyButton";
@@ -40,13 +40,14 @@ export function McpPage() {
   useEffect(() => { if (selected) { setRevokeError(""); dialog.current?.showModal(); } }, [selected]);
   function closeDialog() { if (revoking) return; dialog.current?.close(); setSelected(null); }
   return <section className="page-section mcp-page" aria-labelledby="mcp-page-heading">
-    <header className="mcp-page-heading"><h1 id="mcp-page-heading">MCP</h1><p>Connect your AI assistant to your research.</p></header>
-    <section aria-labelledby="mcp-connection-heading"><h2 id="mcp-connection-heading">Connection</h2>
-      <div className="mcp-service"><div className="mcp-service-name"><Plug size={23} /><div><strong>ThesisTrace</strong><span>Research tools for your AI assistants</span></div></div>
+    <header className="mcp-page-heading"><h1 id="mcp-page-heading">MCP</h1><p>Use your QuantTrace research tools in the AI assistant you already work with.</p></header>
+    <section className="mcp-server" aria-labelledby="mcp-connection-heading">
+      <div className="mcp-service"><div className="mcp-service-name"><img src="/quanttrace-logo.png" alt="" width={36} height={36} /><div><h2 id="mcp-connection-heading">QuantTrace MCP</h2><span>Research, results and daily tracking</span></div></div>
         <div role="status" className="mcp-service-status"><span className={`mcp-status mcp-status-${status}`}>{status === "checking" ? "Checking…" : status === "available" ? "Available" : "Unavailable"}</span><small>{checkedAt ? `Checked ${new Date(checkedAt).toLocaleTimeString()}` : "Not checked yet"}</small></div>
         <button type="button" disabled={status === "checking"} onClick={() => void check()}><ArrowClockwise size={15} />{status === "checking" ? "Checking…" : "Check connection"}</button>
       </div>
       {catalog ? <div className="mcp-endpoint"><span>Server URL</span><code>{catalog.server_url}</code><CopyButton text={catalog.server_url} label="Copy URL" /></div> : !catalogError ? <p role="status">Loading server details…</p> : null}
+      <p className="mcp-server-note">This checks the research service. Client access is shown under Authorized apps.</p>
       {status === "unavailable" ? <p className="mcp-feedback" role="status">The connection could not be verified. Check again before reconnecting.</p> : null}
       {catalogError ? <div className="mcp-feedback" role="alert">Server details and app access could not be refreshed. <button type="button" onClick={() => void load()}>Retry</button></div> : null}
     </section>
@@ -55,7 +56,7 @@ export function McpPage() {
       <McpTools tools={connection?.tools ?? null} checking={status === "checking"} />
       <section className="mcp-apps" aria-labelledby="mcp-apps-heading">
         <div className="mcp-section-heading"><h2 id="mcp-apps-heading">Authorized apps</h2>{catalog && !catalogError ? <span className="mcp-tag">{catalog.apps.length}</span> : null}</div>
-        <p className="mcp-muted">AI clients you have given access to ThesisTrace.</p>
+        <p className="mcp-muted">AI clients you have given access to QuantTrace.</p>
         <div role="status">{notice}</div>
         {!catalog || catalogError ? <p>{catalogError ? "App access is not verified. Retry above." : "Loading authorized apps…"}</p> : catalog.apps.length === 0 ? <div className="mcp-empty"><ShieldCheck size={23} /><div><strong>No authorized apps yet</strong><p>After you sign in from an AI client and allow access, it will appear here.</p></div></div> : catalog.apps.map(app => <article className="mcp-app" key={app.id}>
           <div className="mcp-section-heading"><strong>{app.name || app.client_id}</strong><span className="mcp-tag">Authorized</span></div>
@@ -67,7 +68,7 @@ export function McpPage() {
       </section>
     </div>
     <dialog className="mcp-dialog" ref={dialog} aria-labelledby="mcp-revoke-title" onCancel={event => { if (revoking) event.preventDefault(); else setSelected(null); }}>
-      {selected ? <><h2 id="mcp-revoke-title">Revoke {selected.name || selected.client_id} access?</h2><p>This app will need your permission again before it can use ThesisTrace tools.</p>
+      {selected ? <><h2 id="mcp-revoke-title">Revoke {selected.name || selected.client_id} access?</h2><p>This app will need your permission again before it can use QuantTrace tools.</p>
         {revokeError ? <p role="alert">{revokeError}</p> : null}
         <footer><button type="button" onClick={closeDialog} disabled={revoking}>Cancel</button><button className="mcp-danger" type="button" disabled={revoking} onClick={async () => {
           if (revoking) return;

@@ -1,4 +1,4 @@
-.mcp-page { max-width: 1280px; margin-inline: auto; padding-block: 32px; }
+.mcp-page { max-width: 1060px; margin-inline: auto; padding-block: 24px; }
 .mcp-page-heading { margin-bottom: 30px; }
 .mcp-page h1 { font-size: 28px; font-weight: 600; letter-spacing: -.04em; margin: 0 0 8px; }
 .mcp-page h2 { font-size: 20px; font-weight: 500; letter-spacing: -.035em; margin: 0; }
@@ -12,7 +12,16 @@
 .mcp-page button.mcp-primary { background: var(--primary); border-color: var(--primary); color: white; }
 .mcp-page button.mcp-primary:hover { background: var(--primary-control-hover); }
 .mcp-page button.mcp-danger { background: var(--danger-action); border-color: var(--danger-action); color: white; }
-.mcp-service { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 28px; align-items: center; border-top: 1px solid var(--line); margin-top: 14px; padding-block: 22px 18px; }
+.mcp-server { padding: 20px; background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; }
+.mcp-service { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 24px; align-items: center; margin-bottom: 20px; }
+.mcp-service-name h2 { font-size: 16px; font-weight: 600; letter-spacing: -.02em; }
+.mcp-service-name img { flex-shrink: 0; object-fit: contain; }
+.mcp-server-note { margin: 12px 0 0; color: var(--ink-soft); font-size: 12px; }
+.mcp-setup-flow { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 24px; list-style: none; counter-reset: setup; margin: 24px 0; padding: 0; }
+.mcp-setup-flow li { counter-increment: setup; position: relative; padding-left: 30px; }
+.mcp-setup-flow li::before { content: counter(setup); position: absolute; left: 0; top: 1px; color: var(--ink-soft); font-size: 12px; border: 1px solid var(--line-strong); width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; }
+.mcp-setup-flow strong { font-size: 13px; font-weight: 500; }
+.mcp-setup-flow span { display: block; font-size: 12px; line-height: 1.6; color: var(--ink-soft); margin-top: 6px; }
 .mcp-service-name { display: flex; align-items: center; gap: 14px; }
 .mcp-service-name > svg { color: var(--ink-soft); flex-shrink: 0; }
 .mcp-service-name strong { font-size: 14px; font-weight: 500; }
@@ -80,6 +89,8 @@
   .mcp-apps { padding-left: 24px; }
 }
 @media (max-width: 768px) {
+  .mcp-server { padding: 16px; }
+  .mcp-setup-flow { grid-template-columns: 1fr; gap: 16px; }
   .mcp-page { padding-block: 20px; }
   .mcp-page button, .mcp-page summary { min-height: 44px; }
   .mcp-service { grid-template-columns: minmax(0,1fr) auto; gap: 16px 8px; }
