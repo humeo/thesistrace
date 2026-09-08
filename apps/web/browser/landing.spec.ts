@@ -31,7 +31,7 @@ for (const width of [1220, 390]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({path: test.info().outputPath(`landing-${width}.png`)});
     await page.getByRole('link', { name: 'Log in', exact: true }).first().click();
-    await expect(page.getByRole('heading', { name: 'Get started with QuantTrace' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Welcome to QuantTrace' })).toBeVisible();
     await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
   });
 }

@@ -36,7 +36,7 @@ for(const width of [1200,390]) {
     });
     await page.setViewportSize({width,height:850});
     await page.goto("http://auth.fixture/login?returnTo=%2Fresearch");await page.addScriptTag({content:script});
-    await expect(page.getByRole("heading",{name:"Get started with QuantTrace"})).toBeVisible();
+    await expect(page.getByRole("heading",{name:"Welcome to QuantTrace"})).toBeVisible();
     await expect(page.locator('input[type="password"]')).toHaveCount(0);
     await page.getByLabel("Email",{exact:true}).fill("Researcher@Example.com");
     await page.getByRole("button",{name:"Continue with email"}).click();
@@ -46,6 +46,12 @@ for(const width of [1200,390]) {
     await expect(page.getByLabel("Verification code")).toBeFocused();
     await page.screenshot({path:test.info().outputPath(`email-code-${width}.png`)});
     await expect(page.getByRole("button",{name:/Resend code in/})).toBeDisabled();
+    await expect(page.getByRole("button",{name:"Verify and continue"})).toBeDisabled();
+    await page.getByRole("button",{name:"Edit",exact:true}).click();
+    await expect(page.getByLabel("Email",{exact:true})).toBeFocused();
+    await expect(page.getByLabel("Email",{exact:true})).toHaveValue("researcher@example.com");
+    await page.getByRole("button",{name:"Continue with email"}).click();
+    await expect(page.getByLabel("Verification code")).toBeFocused();
     await page.getByLabel("Verification code").fill("000000");
     await page.getByRole("button",{name:"Verify and continue"}).click();
     await expect(page.getByRole("alert")).toContainText("incorrect or has expired");

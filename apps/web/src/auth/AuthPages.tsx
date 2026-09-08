@@ -15,6 +15,7 @@ function LoginPage() {
   const [now, setNow] = useState(Date.now());
   const [error, setError] = useState<string | null>(null);
   const otpRef = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
   const cooldown = Math.max(0, Math.ceil((retryAt - now) / 1000));
 
   useEffect(() => {
@@ -26,6 +27,14 @@ function LoginPage() {
   useEffect(() => {
     if (sent) otpRef.current?.focus();
   }, [sent]);
+
+  function editEmail(): void {
+    setSent(false);
+    setOtp("");
+    setError(null);
+    setRetryAt(0);
+    window.requestAnimationFrame(() => emailRef.current?.focus());
+  }
 
   async function requestCode(): Promise<void> {
     if (submitting || cooldown > 0) return;
@@ -59,15 +68,18 @@ function LoginPage() {
   }
 
   return (
-    <AuthSurface
-      eyebrow="Quantitative research workspace"
-      title={sent ? "Check your email" : "Get started with QuantTrace"}
-    >
-      <p className="auth-intro">
-        {sent
-          ? <>We sent a six-digit code to <strong className="auth-recipient">{email}</strong></>
-          : "Sign in or create an account with your email. No password needed."}
-      </p>
+    <div className="login-page">
+      <a className="login-brand" href="/">
+        <img src="/quanttrace-logo.png" alt="" width={28} height={28} />
+        <span>QuantTrace</span>
+      </a>
+      <main className="login-main">
+      <section className="login-content" aria-labelledby="login-title">
+      <header className="login-heading">
+        <img src="/quanttrace-logo.png" alt="" width={48} height={48} />
+        <h1 id="login-title">{sent ? "Check your email" : "Welcome to QuantTrace"}</h1>
+        <p>{sent ? "Enter the six-digit code from your email." : "Sign in or create an account with your email."}</p>
+      </header>
       <form className="auth-form" onSubmit={(event) => void submit(event)}>
         {!sent ? (
           <>
@@ -76,6 +88,8 @@ function LoginPage() {
               autoComplete="email"
               disabled={submitting}
               id="login-email"
+              placeholder="you@example.com"
+              ref={emailRef}
               onChange={(event) => setEmail(event.target.value)}
               required
               type="email"
@@ -84,7 +98,13 @@ function LoginPage() {
           </>
         ) : (
           <>
+            <span className="login-email-label">Email</span>
+            <div className="login-recipient">
+              <span>{email}</span>
+              <button className="auth-text-action" type="button" disabled={submitting} onClick={editEmail}>Edit</button>
+            </div>
             <label htmlFor="login-code">Verification code</label>
+            <div className="login-code-row">
             <input
               autoComplete="one-time-code"
               aria-describedby="login-code-hint"
@@ -95,20 +115,28 @@ function LoginPage() {
               inputMode="numeric"
               maxLength={6}
               minLength={6}
-              onChange={(event) => setOtp(event.target.value)}
+              onChange={(event) => { setOtp(event.target.value.replace(/\D/g, "")); setError(null); }}
               pattern="[0-9]{6}"
-              placeholder="000000"
+              placeholder="Enter 6-digit code"
               ref={otpRef}
               required
               value={otp}
             />
-            <p className="auth-code-hint" id="login-code-hint">Valid for 5 minutes. You can paste the full code.</p>
+            <button
+              className="auth-text-action login-resend"
+              aria-label={cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend code"}
+              disabled={submitting || cooldown > 0}
+              onClick={() => void requestCode()}
+              type="button"
+            >{cooldown > 0 ? `${cooldown}s` : "Resend"}</button>
+            </div>
+            <p className="auth-code-hint" id="login-code-hint">Valid for 5 minutes.</p>
           </>
         )}
         {error !== null ? <p className="auth-error" role="alert">{error}</p> : null}
         <button
           className="button-primary auth-submit"
-          disabled={submitting || (!sent && cooldown > 0)}
+          disabled={submitting || (!sent && cooldown > 0) || (sent && otp.length !== 6)}
           type="submit"
         >
           {submitting
@@ -117,35 +145,23 @@ function LoginPage() {
         </button>
       </form>
       {sent ? (
-        <div className="auth-secondary-actions">
           <button
-            className="auth-text-action"
-            disabled={submitting || cooldown > 0}
-            onClick={() => void requestCode()}
-            type="button"
-          >
-            {cooldown > 0 ? `Resend code in ${cooldown}s` : "Resend code"}
-          </button>
-          <button
-            className="auth-text-action"
+            className="auth-text-action login-back"
             disabled={submitting}
-            onClick={() => {
-              setSent(false);
-              setOtp("");
-              setError(null);
-              setRetryAt(0);
-            }}
+            onClick={editEmail}
             type="button"
           >
-            Use a different email
+            Back
           </button>
-        </div>
       ) : (
         <p className="auth-field-hint">
-          One email, one account. Your account is created after verification.
+          No password needed. New accounts are created after verification.
         </p>
       )}
-    </AuthSurface>
+      </section>
+      </main>
+      <footer className="login-footer">QuantTrace · Quantitative research workspace</footer>
+    </div>
   );
 }
 
