@@ -131,7 +131,7 @@ This direction replaces the previous OpenAI light theme. Do not keep a legacy li
 ### Desktop
 
 - Use a persistent, collapsible left sidebar. It is 224px expanded and 56px collapsed.
-- Place the ThesisTrace wordmark and sidebar collapse control in the sidebar's top row. When collapsed, retain the expand control in that row. The wordmark may use the product sans stack; do not introduce a decorative display face.
+- Place the QuantTrace logo and wordmark alongside the sidebar collapse control in the sidebar's top row. Reuse the landing and sign-in logo asset. When collapsed, retain the expand control in that row. The wordmark may use the product sans stack; do not introduce a decorative display face.
 - The primary resource order is fixed: **Data**, **Research**, **Research Runs**, **Daily Tracks**.
 - Use icons plus labels in the expanded state and icons with accessible tooltips in the collapsed state.
 - Resource pages start directly with their page content, without a shared context bar or Workspace breadcrumb. Keep resource identity in the sidebar and page-specific context and actions in the page itself.

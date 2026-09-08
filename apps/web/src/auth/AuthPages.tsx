@@ -63,9 +63,9 @@ function LoginPage() {
       eyebrow="Quantitative research workspace"
       title={sent ? "Check your email" : "Get started with QuantTrace"}
     >
-      <p>
+      <p className="auth-intro">
         {sent
-          ? `Enter the six-digit code sent to ${email}. It expires in 5 minutes.`
+          ? <>We sent a six-digit code to <strong className="auth-recipient">{email}</strong></>
           : "Sign in or create an account with your email. No password needed."}
       </p>
       <form className="auth-form" onSubmit={(event) => void submit(event)}>
@@ -87,6 +87,9 @@ function LoginPage() {
             <label htmlFor="login-code">Verification code</label>
             <input
               autoComplete="one-time-code"
+              aria-describedby="login-code-hint"
+              aria-invalid={error !== null}
+              className="auth-code-input"
               disabled={submitting}
               id="login-code"
               inputMode="numeric"
@@ -94,10 +97,12 @@ function LoginPage() {
               minLength={6}
               onChange={(event) => setOtp(event.target.value)}
               pattern="[0-9]{6}"
+              placeholder="000000"
               ref={otpRef}
               required
               value={otp}
             />
+            <p className="auth-code-hint" id="login-code-hint">Valid for 5 minutes. You can paste the full code.</p>
           </>
         )}
         {error !== null ? <p className="auth-error" role="alert">{error}</p> : null}

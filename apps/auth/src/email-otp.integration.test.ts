@@ -30,7 +30,7 @@ const auth = createThesisTraceAuth(settings, pool, {
   recordSession: coordinator.recordSession,
 
 });
-const delivery = new EmailCodeDelivery({auth, coordinator, sendEmail: async email => {
+const delivery = new EmailCodeDelivery({auth, publicOrigin: settings.publicOrigin, coordinator, sendEmail: async email => {
   if (email.to === "delivery-failure@example.com") throw new Error("simulated mail failure");
   messages.set(email.to, email.text.match(/\b[0-9]{6}\b/)![0]);
 }});

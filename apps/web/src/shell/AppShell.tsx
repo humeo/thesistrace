@@ -125,10 +125,10 @@ export function AppShell({
           role={mobileViewport && isNavigationOpen ? "dialog" : undefined}
         >
           <div className="sidebar-brand-row">
-            <a className="brand" aria-label="ThesisTrace home" href="/data"
+            <a className="brand" aria-label="QuantTrace home" href="/data"
               onClick={(event) => handleWorkspaceNavigation(event, () => openPage("/data"))}>
-              <span className="brand-mark" aria-hidden="true">T</span>
-              <span className="sidebar-label">ThesisTrace</span>
+              <img className="brand-mark" src="/quanttrace-logo.png" alt="" width={30} height={30} />
+              <span className="sidebar-label">QuantTrace</span>
             </a>
             <button aria-controls="primary-navigation" aria-expanded={!isCollapsed}
               aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}

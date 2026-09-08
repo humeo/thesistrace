@@ -92,7 +92,7 @@ async function main(): Promise<void> {
       sendResetPassword: passwordReset.sendResetPassword,
     });
     await auth.$context;
-    const emailCodes = new EmailCodeDelivery({auth, coordinator: credentialCoordinator, sendEmail});
+    const emailCodes = new EmailCodeDelivery({auth, publicOrigin: settings.publicOrigin, coordinator: credentialCoordinator, sendEmail});
     const emailCodeRateLimiter = new AuthEndpointRateLimiter({authSecret: settings.secret, pool, scope: "email-code"});
     const issueMcpAccessToken = createMcpAccessTokenIssuer(settings, {
       sign: (payload) => auth.api.signJWT({ body: { payload } }),

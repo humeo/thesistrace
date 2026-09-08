@@ -119,7 +119,7 @@ test("mobile focus wraps through the account trigger, excluding closed menu cont
   expect(open).not.toBeNull();
   expect(open.closest(".context-bar")).toBeNull();
   await act(async () => open.click());
-  const home = document.querySelector<HTMLAnchorElement>('[aria-label="ThesisTrace home"]')!;
+  const home = document.querySelector<HTMLAnchorElement>('[aria-label="QuantTrace home"]')!;
   const account = document.querySelector<HTMLElement>('[aria-label="Account menu"]')!;
   await act(async () => {
     home.focus();
