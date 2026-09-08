@@ -54,7 +54,7 @@ export function AccountMenuContent({
     const focusable = [
       summary,
       ...panel.querySelectorAll<HTMLElement>(
-        "button:not([disabled]), input:not([disabled])",
+        "a[href], button:not([disabled]), input:not([disabled])",
       ),
     ];
     const first = focusable[0];
@@ -101,6 +101,15 @@ export function AccountMenuContent({
           <span>{session.email}</span>
         </div>
         {message !== null ? <p className="account-message" role="status">{message}</p> : null}
+        <a
+          className="button account-action"
+          href="https://discord.gg/tdwxubVhMJ"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <img src="/brand/discord-symbol-white.svg" alt="" width={16} height={12} />
+          Join Discord
+        </a>
         <button
           className="account-action"
           disabled={signingOut}

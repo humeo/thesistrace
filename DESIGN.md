@@ -130,7 +130,8 @@ This direction replaces the previous OpenAI light theme. Do not keep a legacy li
 
 ### Desktop
 
-- Use a persistent, collapsible left sidebar. It is 224px expanded and 56px collapsed.
+- Use a persistent, collapsible left sidebar. It defaults to 224px expanded and is 56px collapsed. On desktop, drag its right edge to resize between 224px and 400px; the focused edge also supports arrow keys and Home/End. Keep the chosen width while navigating and collapsing within the workspace.
+- In the expanded sidebar, align the account popup with the account trigger and match its width. In the collapsed icon rail, keep the popup readable at 224px.
 - Place the QuantTrace logo and wordmark alongside the sidebar collapse control in the sidebar's top row. Reuse the landing and sign-in logo asset. When collapsed, retain the expand control in that row. The wordmark may use the product sans stack; do not introduce a decorative display face.
 - The primary resource order is fixed: **Data**, **Research**, **Research Runs**, **Daily Tracks**.
 - Use icons plus labels in the expanded state and icons with accessible tooltips in the collapsed state.

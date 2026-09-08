@@ -4,7 +4,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   createContext, useContext, useEffect, useRef, useState,
-  type KeyboardEvent, type ReactNode,
+  type CSSProperties, type KeyboardEvent, type ReactNode,
 } from "react";
 
 import { AccountMenu } from "../auth/AccountMenu";
@@ -51,6 +51,9 @@ export function AppShell({
 }: AppShellProps) {
   const isChat = currentPath === "/chat";
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(224);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeSidebar = (width: number) => setSidebarWidth(Math.max(224, Math.min(400, width)));
   const [isNavigationOpen, setIsNavigationOpen] = useState(false);
   const mobileViewport = useMobileViewport();
   const mobileNavigationCloseRef = useRef<HTMLButtonElement>(null);
@@ -113,7 +116,8 @@ export function AppShell({
 
   return (
     <WorkspaceContext value={{ navigate: openPage, sessionHistory }}>
-      <div className={`app-shell${isChat ? " app-shell-chat" : ""}${currentPath === "/research" ? " app-shell-research" : ""}${isCollapsed ? " app-shell-collapsed" : ""}${isNavigationOpen ? " app-shell-navigation-open" : ""}`}>
+      <div style={{ "--sidebar-expanded": `${sidebarWidth}px` } as CSSProperties}
+        className={`app-shell${isChat ? " app-shell-chat" : ""}${currentPath === "/research" ? " app-shell-research" : ""}${isCollapsed ? " app-shell-collapsed" : ""}${isNavigationOpen ? " app-shell-navigation-open" : ""}${isResizing ? " app-shell-resizing" : ""}`}>
         <aside
           aria-hidden={mobileViewport && !isNavigationOpen ? true : undefined}
           aria-label={mobileViewport && isNavigationOpen ? "Navigation" : undefined}
@@ -171,6 +175,32 @@ export function AppShell({
             </nav>
           ) : null}
           <div className="sidebar-account-area"><AccountMenu /></div>
+          {!mobileViewport && !isCollapsed ? (
+            <div className="sidebar-resize-handle" role="separator" tabIndex={0}
+              aria-label="Resize sidebar" aria-orientation="vertical" aria-controls="primary-navigation"
+              aria-valuemin={224} aria-valuemax={400} aria-valuenow={sidebarWidth}
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                event.preventDefault();
+                event.currentTarget.focus();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                setIsResizing(true);
+              }}
+              onPointerMove={(event) => {
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) resizeSidebar(event.clientX);
+              }}
+              onPointerUp={(event) => {
+                if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+                setIsResizing(false);
+              }}
+              onLostPointerCapture={() => setIsResizing(false)}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                resizeSidebar(event.key === "Home" ? 224 : event.key === "End" ? 400 : sidebarWidth + (event.key === "ArrowRight" ? 16 : -16));
+              }}
+            />
+          ) : null}
         </aside>
         <div className="application-frame">
           {mobileNavigationToggle}

@@ -107,6 +107,11 @@ code { font-family: var(--mono); }
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
 }
+.sidebar-resize-handle { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; z-index: 61; cursor: col-resize; touch-action: none; }
+.sidebar-resize-handle:hover::after, .sidebar-resize-handle:focus-visible::after { content: ""; position: absolute; inset: 0 3px; background: var(--primary); }
+.sidebar-resize-handle:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.app-shell-resizing { cursor: col-resize; user-select: none; }
+.app-shell-resizing .application-sidebar, .app-shell-resizing .application-frame { transition: none; }
 .sidebar-new-chat,
 .resource-nav a {
   position: relative;
@@ -341,7 +346,10 @@ code { font-family: var(--mono); }
   right: auto;
   bottom: calc(100% + 7px);
   left: 0;
-  width: min(340px, calc(100vw - 24px));
+  width: 100%;
+}
+@media (min-width: 769px) {
+  .app-shell-collapsed .sidebar-account-area .account-menu-panel { width: 224px; }
 }
 .application-frame {
   min-width: 0;
