@@ -779,8 +779,10 @@ reconciles Tracking Working Caches, and only the Batch Research Worker
 reconciles inactive Batch Attempt files. Shared maintenance never creates
 another execution slot or role.
 
-Development runs one 2-vCPU, 2-GiB replica in each of the three pools. Each pool
-has its own deployment capacity declaration, and every execution supervisor
+Development runs one 2-vCPU, 2-GiB replica in each Research pool and one
+1-vCPU, 1-GiB Tracking replica. The Agent Host has a 2-vCPU, 4-GiB limit and
+accepts at most 50 concurrent Chat Runs. Each Worker pool has its own deployment
+capacity declaration, and every execution supervisor
 reserves 25 percent of container memory outside its child budget. Production
 owns each pool's capacity and replica count. ResearchRuns, Research Batches, and
 DailyTracks claim and fence their own Attempts; there is no Temporal, outbox

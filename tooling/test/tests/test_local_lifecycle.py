@@ -695,16 +695,19 @@ def test_development_topology_declares_every_core_service_and_pinned_infrastruct
     tracking_worker = compose.split("  tracking-worker:\n", maxsplit=1)[1].split(
         "  web:\n", maxsplit=1
     )[0]
-    for role, variable_role, service in (
-        ("research", "RESEARCH", research_worker),
-        ("batch-research", "BATCH_RESEARCH", batch_research_worker),
-        ("tracking", "TRACKING", tracking_worker),
+    for role, variable_role, service, cpu, memory, execution_memory in (
+        ("research", "RESEARCH", research_worker, 2, 2147483648, 1610612736),
+        ("batch-research", "BATCH_RESEARCH", batch_research_worker, 2, 2147483648, 1610612736),
+        ("tracking", "TRACKING", tracking_worker, 1, 1073741824, 805306368),
     ):
         assert f"      - {role}\n" in service
-        assert f"THESISTRACE_{variable_role}_WORKER_CPU_COUNT:-2" in service
-        assert f"THESISTRACE_{variable_role}_WORKER_MEMORY_BYTES:-2147483648" in service
-        assert f"THESISTRACE_{variable_role}_WORKER_EXECUTION_MEMORY_BYTES:-1610612736" in service
-        assert f"THESISTRACE_{variable_role}_WORKER_CALCULATION_THREADS:-2" in service
+        assert f"THESISTRACE_{variable_role}_WORKER_CPU_COUNT:-{cpu}" in service
+        assert f"THESISTRACE_{variable_role}_WORKER_MEMORY_BYTES:-{memory}" in service
+        assert (
+            f"THESISTRACE_{variable_role}_WORKER_EXECUTION_MEMORY_BYTES:-{execution_memory}"
+            in service
+        )
+        assert f"THESISTRACE_{variable_role}_WORKER_CALCULATION_THREADS:-{cpu}" in service
         assert "healthcheck:" not in service
     assert "--healthcheck" not in compose
     api_service = compose.split("  api:\n", maxsplit=1)[1].split(

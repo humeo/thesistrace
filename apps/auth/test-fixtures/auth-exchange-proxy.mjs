@@ -45,12 +45,14 @@ http.createServer(async (request, response) => {
     json(response, 200, { readiness_mode: readinessMode });
     return;
   }
+  const isReadiness = url.pathname === "/health/ready";
+  const isQuotaPolicy = /^\/internal\/researchers\/[^/]+\/quota-policy$/.test(url.pathname);
   if (
     request.method === "GET"
-    && url.pathname === "/health/ready"
+    && (isReadiness || isQuotaPolicy)
     && url.search === ""
   ) {
-    readinessRequests += 1;
+    if (isReadiness) readinessRequests += 1;
     try {
       const upstream = await fetch(new URL(url.pathname, upstreamOrigin), {
         method: "GET",
@@ -58,7 +60,7 @@ http.createServer(async (request, response) => {
         signal: AbortSignal.timeout(upstreamTimeoutMs),
       });
       const body = new Uint8Array(await upstream.arrayBuffer());
-      if (readinessMode === "disconnect") {
+      if (isReadiness && readinessMode === "disconnect") {
         disconnectedReadinessResponses += 1;
         response.destroy();
         return;

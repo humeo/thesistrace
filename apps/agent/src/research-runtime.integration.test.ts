@@ -1708,7 +1708,7 @@ describe.sequential("durable Research Agent runtime", () => {
       await Promise.allSettled(pending);
       await runtime.close();
     }
-  });
+  }, 30_000);
 
   it("does not expose framework Stop, inspector, memory, or unscoped Thread endpoints", async () => {
     const runtime = await createIntegrationRuntime();

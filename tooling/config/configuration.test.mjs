@@ -36,7 +36,7 @@ test('private CLI accepts file worker capacity and discards ambient capacity', t
   const result = run({ ...f.env, THESISTRACE_RESEARCH_WORKER_CPU_COUNT: '9', THESISTRACE_TRACKING_WORKER_CPU_COUNT: '9' },
     'run', process.execPath, '-e', 'console.log(JSON.stringify([process.env.THESISTRACE_RESEARCH_WORKER_CPU_COUNT,process.env.THESISTRACE_TRACKING_WORKER_CPU_COUNT]))');
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), ['4', '2']);
+  assert.deepEqual(JSON.parse(result.stdout), ['4', '1']);
 });
 
 test('one public origin determines browser port and every MCP address', t => {

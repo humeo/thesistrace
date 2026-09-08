@@ -10,7 +10,7 @@ import {
   RESEARCH_A2UI_CATALOG_ID,
   RESEARCH_A2UI_PROTOCOL_VERSION,
 } from "@thesistrace/contracts/research-a2ui";
-import { DurableResearchAgentRunner, MAX_ACTIVE_AGENT_RUNS } from "./durable-agent-runner.js";
+import { DurableResearchAgentRunner } from "./durable-agent-runner.js";
 import {
   SessionActiveRunError,
   type ResearchSessionRepository,
@@ -25,9 +25,9 @@ class HoldingAgent extends AbstractAgent {
 }
 
 describe("DurableResearchAgentRunner", () => {
-  it("rejects excess Threads without queuing, preserves replay, and releases a terminal slot", async () => {
+  it("accepts 50 concurrent Threads, rejects overflow, preserves replay, and releases a terminal slot", async () => {
     const runner = new DurableResearchAgentRunner({} as ResearchSessionRepository);
-    const accepted = Array.from({ length: MAX_ACTIVE_AGENT_RUNS }, () => {
+    const accepted = Array.from({ length: 50 }, () => {
       const agent = new HoldingAgent();
       const threadId = randomUUID(), runId = randomUUID();
       const request = { agent, input: input(threadId, runId), threadId };

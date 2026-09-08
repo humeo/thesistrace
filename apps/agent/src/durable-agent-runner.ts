@@ -38,7 +38,7 @@ import type { RunSelection } from "@thesistrace/contracts/agent-run-selection";
 export const RESEARCHER_ID_HEADER = "x-thesistrace-agent-researcher-id";
 // One Host replica. Reject excess work; never create a hidden queue. Changes
 // require deterministic saturation and real-model envelope qualification.
-export const MAX_ACTIVE_AGENT_RUNS = 4;
+export const MAX_ACTIVE_AGENT_RUNS = 50;
 
 type ActiveRun = Readonly<{
   events: Observable<BaseEvent>;

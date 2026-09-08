@@ -9,10 +9,11 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
   test.setTimeout(120_000);
   const origin = process.env.THESISTRACE_TEST_WEB_ORIGIN!;
   const prompt = "[scripted-tool-turn] Inspect the available research context.";
+  const activeRunLimit = 50;
   const pending: Promise<{ ok: boolean; finished: boolean }>[] = [];
   setProxyMode("mcp-fault-proxy", 8150, "tool-call", "hold");
   try {
-    for (let index = 0; index < 4; index++) {
+    for (let index = 0; index < activeRunLimit; index++) {
       pending.push((async () => {
         try {
           const response = await fetch(new URL("/api/agent/copilotkit/agent/research/run", origin), {
@@ -28,7 +29,7 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
         } catch { return { ok: false, finished: false }; }
       })());
     }
-    await expect.poll(() => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses, { timeout: 20_000 }).toBe(4);
+    await expect.poll(() => proxyState("mcp-fault-proxy", 8150).pending_held_tool_responses, { timeout: 20_000 }).toBe(activeRunLimit);
     await page.goto("/chat");
     await page.getByRole("textbox", { name: "Message", exact: true }).fill(prompt);
     await page.getByRole("button", { name: "Send" }).click();
@@ -36,7 +37,7 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
     await expect(page.getByRole("alert")).toContainText("Agent at capacity");
     await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue(prompt);
     await expect(page).toHaveURL(/\/chat$/);
-    expect(databaseCounts(researcher.id)).toEqual({ sessions: 4, runs: 4, running: 4 });
+    expect(databaseCounts(researcher.id)).toEqual({ sessions: activeRunLimit, runs: activeRunLimit, running: activeRunLimit });
 
     const resource = JSON.parse(docker(["exec", `${testProjectName()}-agent-1`, "node", "--input-type=module", "--eval", `
       import { readFileSync } from 'node:fs';
@@ -47,24 +48,24 @@ test("Chat saturation rejects an unaccepted Session and preserves an explicit br
         cpu_max: readFileSync('/sys/fs/cgroup/cpu.max', 'utf8').trim()
       }));
     `]));
-    expect(resource.limit_bytes).toBe(1073741824);
+    expect(resource.limit_bytes).toBe(4294967296);
     expect(resource.memory_bytes).toBeGreaterThan(0);
     expect(resource.peak_bytes).toBeLessThan(resource.limit_bytes);
-    expect(resource.cpu_max).toBe("100000 100000");
+    expect(resource.cpu_max).toBe("200000 100000");
     await testInfo.attach("agent-capacity-engineering-envelope", { body: JSON.stringify({
       kind: "deterministic-engineering-evidence", model_quality_evidence: false,
-      active_runs: 4, ...resource,
+      active_runs: activeRunLimit, ...resource,
     }), contentType: "application/json" });
 
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
-    expect(await Promise.all(pending)).toEqual(Array.from({ length: 4 }, () => ({ ok: true, finished: true })));
+    expect(await Promise.all(pending)).toEqual(Array.from({ length: activeRunLimit }, () => ({ ok: true, finished: true })));
     const acceptedTurn = await submitChatPrompt(page, prompt);
     await waitForChatTurn(page, acceptedTurn);
     await expect(page.locator("[data-chat-status]")).toHaveText("Run complete", { timeout: 30_000 });
     await expect(page.locator(".chat-message-user .chat-message-content")).toHaveText(prompt);
     await expect((await revealToolActivity(page, "get_research_context", "complete")).last()).toBeVisible();
     await expect(page).toHaveURL(/\/chat\?session=[a-f0-9-]{36}$/);
-    expect(databaseCounts(researcher.id)).toEqual({ sessions: 5, runs: 5, running: 0 });
+    expect(databaseCounts(researcher.id)).toEqual({ sessions: activeRunLimit + 1, runs: activeRunLimit + 1, running: 0 });
   } finally {
     setProxyMode("mcp-fault-proxy", 8150, "tool-call", "pass");
     await Promise.allSettled(pending);
