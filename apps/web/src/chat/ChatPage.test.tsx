@@ -61,7 +61,7 @@ test("renders Chat within the shared workspace hierarchy and integrated model pi
     </TestWorkspace>,
   );
 
-  const labels = ["ThesisTrace", "New Chat", ">Data<", ">Research<", "Research Runs", "Daily Tracks"];
+  const labels = ["QuantTrace", "New Chat", ">Data<", ">Research<", "Research Runs", "Daily Tracks", "ThesisTrace"];
   const positions = labels.map((label) => markup.indexOf(label));
   expect(positions.every((position) => position >= 0)).toBe(true);
   expect(positions).toEqual([...positions].sort((left, right) => left - right));
