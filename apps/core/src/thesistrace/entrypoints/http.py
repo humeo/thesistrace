@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 from starlette.routing import Route
@@ -115,10 +115,12 @@ from thesistrace.research_run import (
     ResearchRunCancelConflict,
     ResearchRunDeleteConflict,
     ResearchRunDetail,
-    ResearchRunInvalidCursor,
-    ResearchRunList,
+    ResearchRunMetricFilters,
     ResearchRunOrganizationConflict,
+    ResearchRunPage,
     ResearchRunResultUnavailable,
+    ResearchRunSortDirection,
+    ResearchRunSortKey,
     ResearchRunStartTrackingConflict,
     ResearchRunSummary,
     ResearchRunTemporarilyUnavailable,
@@ -1082,24 +1084,35 @@ def create_app(
                 detail="ResearchRun admission temporarily unavailable",
             ) from error
 
-    @app.get("/api/research-runs", response_model=ResearchRunList)
+    @app.get("/api/research-runs", response_model=ResearchRunPage)
     def list_research_runs(
         request: Request,
         folder_id: str | None = None,
         research_kind: ResearchKind | None = None,
-        cursor: str | None = None,
-        limit: int = Query(default=50, ge=1, le=100),
-    ) -> ResearchRunList:
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=50),
+        sort_by: ResearchRunSortKey = "created_at",
+        sort_direction: ResearchRunSortDirection = "descending",
+        metric_filters: str | None = Query(default=None, max_length=4096),
+    ) -> ResearchRunPage:
         try:
-            return _runtime(request).research_runs.list(
+            filters = (TypeAdapter(ResearchRunMetricFilters).validate_json(metric_filters)
+                       if metric_filters is not None else [])
+        except ValidationError as error:
+            raise HTTPException(
+                status_code=422, detail="Invalid Research metric filters"
+            ) from error
+        try:
+            return _runtime(request).research_runs.list_page(
                 _researcher_id(request),
                 folder_id=folder_id,
                 research_kind=research_kind,
-                cursor=cursor,
-                limit=limit,
+                page=page,
+                page_size=page_size,
+                sort_by=sort_by,
+                sort_direction=sort_direction,
+                metric_filters=filters,
             )
-        except ResearchRunInvalidCursor as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
         except ResearchRunTemporarilyUnavailable as error:
             raise HTTPException(
                 status_code=503,

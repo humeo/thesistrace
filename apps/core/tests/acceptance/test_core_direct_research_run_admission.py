@@ -584,16 +584,16 @@ def test_research_organization_changes_without_changing_evidence(tmp_path: Path)
 
         custom_page = client.get(
             "/api/research-runs",
-            params={"folder_id": folder["id"], "limit": 1},
+            params={"folder_id": folder["id"], "page_size": 1},
         ).json()
         default_page = client.get(
             "/api/research-runs",
-            params={"folder_id": "folder_default", "limit": 1},
+            params={"folder_id": "folder_default", "page_size": 1},
         ).json()
         assert [item["id"] for item in custom_page["items"]] == [first["id"]]
         assert [item["id"] for item in default_page["items"]] == [second["id"]]
         assert (
-            client.get("/api/research-runs", params={"cursor": "not-a-cursor"}).status_code == 400
+            client.get("/api/research-runs", params={"page": 0}).status_code == 422
         )
         factor = client.post(
             "/api/research-runs",
@@ -637,7 +637,7 @@ def test_research_organization_changes_without_changing_evidence(tmp_path: Path)
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_research_organization_updates_compose_concurrently_and_cursor_is_stable(
+def test_research_organization_updates_compose_concurrently_and_pages_are_stable(
     tmp_path: Path,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
@@ -653,9 +653,9 @@ def test_research_organization_updates_compose_concurrently_and_cursor_is_stable
             for index in range(3)
         ]
         folder = client.post("/api/research-folders", json={"name": "Signals"}).json()
-        first_page = client.get("/api/research-runs", params={"limit": 1}).json()
+        first_page = client.get("/api/research-runs", params={"page_size": 1}).json()
         assert len(first_page["items"]) == 1
-        assert first_page["next_cursor"] is not None
+        assert first_page["total_count"] == 3
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             responses = list(
@@ -674,32 +674,32 @@ def test_research_organization_updates_compose_concurrently_and_cursor_is_stable
 
         second_page = client.get(
             "/api/research-runs",
-            params={"limit": 1, "cursor": first_page["next_cursor"]},
+            params={"page_size": 1, "page": 2},
         ).json()
         assert len(second_page["items"]) == 1
         assert second_page["items"][0]["id"] != first_page["items"][0]["id"]
-        assert second_page["next_cursor"] is not None
+        assert second_page["total_count"] == 3
         assert (
             client.get(
                 "/api/research-runs",
                 params={
                     "folder_id": "folder_default",
-                    "limit": 1,
-                    "cursor": first_page["next_cursor"],
+                    "page_size": 1,
+                    "page": 2,
                 },
             ).status_code
-            == 400
+            == 200
         )
         assert (
             client.get(
                 "/api/research-runs",
                 params={
                     "research_kind": "strategy_backtest",
-                    "limit": 1,
-                    "cursor": first_page["next_cursor"],
+                    "page_size": 1,
+                    "page": 2,
                 },
             ).status_code
-            == 400
+            == 200
         )
 
 

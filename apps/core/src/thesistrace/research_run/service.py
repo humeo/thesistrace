@@ -106,11 +106,15 @@ from thesistrace.research_run.models import (
     ResearchRunExecutionTiming,
     ResearchRunKeyMetrics,
     ResearchRunList,
+    ResearchRunMetricFilter,
+    ResearchRunPage,
     ResearchRunPollingDetail,
     ResearchRunProgress,
     ResearchRunResult,
     ResearchRunResultSectionInput,
     ResearchRunResultSectionResponse,
+    ResearchRunSortDirection,
+    ResearchRunSortKey,
     ResearchRunStartTrackingOutcome,
     ResearchRunSummary,
     ResultDataProvenance,
@@ -1436,6 +1440,86 @@ class ResearchRunService:
                         )
                     )
         return True
+
+    def list_page(
+        self,
+        researcher_id: UUID,
+        *,
+        folder_id: str | None = None,
+        research_kind: ResearchKind | None = None,
+        page: int = 1,
+        page_size: int = 20,
+        sort_by: ResearchRunSortKey = "created_at",
+        sort_direction: ResearchRunSortDirection = "descending",
+        metric_filters: Sequence[ResearchRunMetricFilter] = (),
+    ) -> ResearchRunPage:
+        """Fixed-size Web pages; Agent lists retain their bounded cursor contract."""
+        if isinstance(page, bool) or page < 1:
+            raise ValueError("Page must be positive")
+        if isinstance(page_size, bool) or not 1 <= page_size <= 50:
+            raise ValueError("Page size must be between 1 and 50")
+        metric_keys = {
+            "annualized_excess_return", "sharpe", "maximum_drawdown",
+            "one_session_rank_ic", "five_session_rank_ic", "twenty_session_rank_ic",
+        }
+        if sort_by != "created_at" and sort_by not in metric_keys:
+            raise ValueError("ResearchRun sort key is invalid")
+        if sort_direction not in {"ascending", "descending"}:
+            raise ValueError("ResearchRun sort direction is invalid")
+        # Both fragments are selected from closed allowlists, never raw request SQL.
+        expression = (
+            "created_at" if sort_by == "created_at"
+            else f"(key_metrics->>'{sort_by}')::double precision"
+        )
+        direction = "ASC" if sort_direction == "ascending" else "DESC"
+        if len(metric_filters) > 12:
+            raise ValueError("At most 12 metric filters are allowed")
+        operators = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
+        predicates = []
+        thresholds = []
+        for item in metric_filters:
+            item = ResearchRunMetricFilter.model_validate(item)
+            predicates.append(
+                f"AND (key_metrics->>'{item.metric}')::double precision "
+                f"{operators[item.operator]} %s"
+            )
+            thresholds.append(item.value)
+        metric_predicates = " ".join(predicates)
+        try:
+            with self._database.transaction() as transaction:
+                rows = transaction.execute(
+                    f"""
+                    WITH filtered AS NOT MATERIALIZED (
+                        SELECT id, name, folder_id, status, requested_start_date,
+                               requested_end_date, created_at, immutable_input,
+                               key_metrics, failure_reason
+                        FROM research_runs.runs
+                        WHERE researcher_id = %s
+                          AND (%s::text IS NULL OR folder_id = %s::text)
+                          AND (%s::text IS NULL OR immutable_input->>'research_kind' = %s::text)
+                          {metric_predicates}
+                    )
+                    SELECT totals.total_count, page_rows.*
+                    FROM (SELECT count(*) AS total_count FROM filtered) AS totals
+                    LEFT JOIN LATERAL (
+                        SELECT *, {expression} AS sort_value FROM filtered
+                        ORDER BY sort_value {direction} NULLS LAST, created_at DESC, id
+                        LIMIT %s OFFSET %s
+                    ) AS page_rows ON true
+                    ORDER BY page_rows.sort_value {direction} NULLS LAST,
+                             page_rows.created_at DESC, page_rows.id
+                    """,
+                    (researcher_id, folder_id, folder_id, research_kind, research_kind,
+                     *thresholds, page_size, (page - 1) * page_size),
+                ).fetchall()
+            return ResearchRunPage(
+                items=[_summary(row) for row in rows if row["id"] is not None],
+                total_count=rows[0]["total_count"],
+            )
+        except (OperationalError, PoolTimeout) as error:
+            raise ResearchRunTemporarilyUnavailable(
+                "ResearchRun history is temporarily unavailable"
+            ) from error
 
     def list(
         self,

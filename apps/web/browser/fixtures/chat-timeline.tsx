@@ -28,6 +28,7 @@ function surface(id: string, status: string, runId = "run_0123456789abcdef0123")
 // Production timeline, deterministic local state; no Auth, Agent or network effects.
 function TimelineFixture() {
   const [state, setState] = useState("running");
+  const [toolRunning, setToolRunning] = useState(false);
   const [sentTurns, setSentTurns] = useState<TimelineTurn[]>([]);
   const entries = [text("before", "Checking the research context."), tool("first-tool"),
     text("between", "The context is ready. Checking the results."), surface("progress", "running"), tool("second-tool"),
@@ -37,6 +38,8 @@ function TimelineFixture() {
     { entry_id: "answer", turn_id: turnId, created_at: time, kind: "user_input" as const, payload: {
       source: "answer" as const, content: "Default approach", inputId: turnId,
     } }];
+  if (toolRunning) entries.push({ entry_id: "live-tool", turn_id: turnId, created_at: time,
+    kind: "tool_activity", payload: { name: "submit_research_run", status: state === "running" ? "running" : "complete" } });
   if (state === "completed") entries.push(surface("result", "succeeded"),
     surface("other-result", "succeeded", "run_abcdef0123456789abcd"), text("final", "Both research tasks finished."), { entry_id: "outcome", turn_id: turnId, created_at: time, kind: "turn_outcome", payload: { status: "completed" } });
   const turn: TimelineTurn = { id: turnId, started_at: time, completed_at: state === "running" ? null : time,
@@ -61,9 +64,12 @@ function TimelineFixture() {
   return <main style={{ height: "100vh", maxWidth: 900, margin: "auto", display: "grid", gridTemplateRows: "auto minmax(0, 1fr)" }}>
     <nav aria-label="Fixture state"><button onClick={() => setState("running")}>Running</button>
       <button onClick={() => setState("completed")}>Complete</button>
+      <button onClick={() => setToolRunning(true)}>Start tool</button>
+      <button onClick={() => setToolRunning(false)}>Finish tool</button>
       <button onClick={() => setState("failed")}>Fail</button>
       <button onClick={sendNext}>Send next</button>
       <button onClick={() => respond("Hello. How can I help?")}>Short reply</button>
+      <button onClick={() => respond("**数据截至：**2026-08-27\n\n`**原文：**保持`", true)}>CJK reply</button>
       <button onClick={() => respond("Hello. How can I help?", true)}>Finish reply</button>
       <button onClick={() => respond("A longer streamed paragraph.\n\n".repeat(60))}>Long reply</button></nav>
     <ChatTimeline controller={controller} onAnnounce={() => undefined} />

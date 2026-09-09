@@ -21,6 +21,7 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
 import { agentFailure } from "@thesistrace/contracts/agent-failure";
 
 import { parseResearchRunHref } from "./toolResult";
@@ -32,7 +33,7 @@ import type { ChatConversationController } from "./useChatConversation";
 const BOTTOM_THRESHOLD_PX = 24;
 const NEW_TURN_TOP_GAP_PX = 96;
 const SCROLL_TRANSITION_MS = 240;
-const RESEARCH_MARKDOWN_REMARK_PLUGINS = [remarkGfm];
+const RESEARCH_MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkCjkFriendly];
 
 type ScrollAnchor = Readonly<{ top: number; turnId: string }>;
 type ToolEntry = Extract<TimelineEntry, { kind: "tool_activity" }> & { questionDetails?: { question: string; answer?: string } };
@@ -323,6 +324,16 @@ function TimelineTurnView({
   const activeWithoutText = turn.id === controller.currentTurnId
     && controller.phase === "active"
     && !controller.hasFirstAssistantText;
+  const runningTools = turn.entries.filter((entry): entry is ToolEntry =>
+    entry.kind === "tool_activity" && entry.payload.status === "running");
+  const showCurrentActivity = !ended && turn.id === controller.currentTurnId
+    && (controller.phase === "active" || turn.status === "stopping")
+    && (!activeWithoutText || runningTools.length > 0);
+  const latestTool = runningTools.at(-1);
+  const currentActivity = turn.status === "stopping" ? "Stopping…"
+    : latestTool ? `Running ${latestTool.payload.name.replaceAll("_", " ")}…${runningTools.length > 1 ? ` (${runningTools.length} tools running)` : ""}`
+    : turn.entries.some(entry => entry.kind === "assistant_message" && entry.payload.status === "streaming")
+      ? "Writing response…" : "Preparing response…";
   const showAssistantSection = assistantEntries.length > 0 || activeWithoutText;
 
   const renderEntries = (entries: readonly TimelineEntry[]) => segmentTurnEntries(entries).map((segment) => (
@@ -348,7 +359,12 @@ function TimelineTurnView({
           </div>
         )}
         {renderEntries(resultEntries)}
-        {activeWithoutText ? (
+        {showCurrentActivity ? (
+          <div className={`chat-current-activity${turn.status === "stopping" ? "" : " chat-current-activity-running"}`} role="status" aria-live="polite">
+            <span>{currentActivity}</span>
+          </div>
+        ) : null}
+        {activeWithoutText && !showCurrentActivity ? (
           <div aria-label="Research Agent is preparing a response" className="chat-response-indicator">
             <span aria-hidden="true" />
           </div>
@@ -376,7 +392,7 @@ function WorkedFor({ turn }: { turn: TimelineTurn }) {
   }, [ticking]);
   const startedAt = Date.parse(turn.started_at);
   const completedAt = turn.completed_at === null ? now : Date.parse(turn.completed_at);
-  return `Worked for ${formatDuration(Math.max(0, completedAt - startedAt))}`;
+  return `${ticking ? "Working" : "Worked"} for ${formatDuration(Math.max(0, completedAt - startedAt))}`;
 }
 
 function TimelineItem({

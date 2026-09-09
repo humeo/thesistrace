@@ -426,3 +426,22 @@ test("answered questions stay in the tool history with their answer, without a u
   expect(tool?.textContent).toContain("Default approach");
   expect(document.body.textContent).not.toContain("Question answered");
 });
+
+test("keeps the current tool visible outside folded history and clears running state at completion", async () => {
+  const entries = [
+    entry("assistant_message", "assistant:progress", { content: "Submitting research.", status: "complete" }),
+    entry("tool_activity", "tool:running", { name: "submit_research_run", status: "running" }),
+  ];
+  await mount(controller({ currentTurnId: TURN_ID, phase: "active", hasFirstAssistantText: true,
+    turns: [timelineTurn(entries, { completed_at: null, status: "running" })] }));
+  const live = document.querySelector(".chat-current-activity");
+  expect(live?.textContent).toContain("Running submit research run");
+  expect(live?.closest("details")).toBeNull();
+  expect(document.querySelector(".chat-work-meta")?.textContent).toContain("Working for");
+  await mount(controller({ currentTurnId: TURN_ID, phase: "active", hasFirstAssistantText: true,
+    turns: [timelineTurn([entries[0], entry("tool_activity", "tool:running", { name: "submit_research_run", status: "complete" })],
+      { completed_at: null, status: "running" })] }));
+  expect(document.querySelector(".chat-current-activity")?.textContent).toContain("Preparing response");
+  await mount(controller({ turns: [timelineTurn(entries)] }));
+  expect(document.querySelector(".chat-current-activity")).toBeNull();
+});

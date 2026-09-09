@@ -30,6 +30,28 @@ def _normalized_request_id(value: str) -> str:
     return normalized
 
 
+ResearchRunSortKey = Literal[
+    "created_at", "annualized_excess_return", "sharpe", "maximum_drawdown",
+    "one_session_rank_ic", "five_session_rank_ic", "twenty_session_rank_ic",
+]
+ResearchRunSortDirection = Literal["ascending", "descending"]
+ResearchRunMetric = Literal[
+    "annualized_excess_return", "sharpe", "maximum_drawdown",
+    "one_session_rank_ic", "five_session_rank_ic", "twenty_session_rank_ic",
+]
+
+
+class ResearchRunMetricFilter(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    metric: ResearchRunMetric
+    operator: Literal["gt", "gte", "lt", "lte"]
+    value: Annotated[float, Field(strict=True, allow_inf_nan=False)]
+
+
+ResearchRunMetricFilters = Annotated[list[ResearchRunMetricFilter], Field(max_length=12)]
+
+
 RequestId = Annotated[
     str,
     Field(strict=True, min_length=1, max_length=200),
@@ -446,6 +468,13 @@ class ResearchRunList(BaseModel):
 
     items: list[ResearchRunSummary]
     next_cursor: str | None
+
+
+class ResearchRunPage(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: list[ResearchRunSummary]
+    total_count: int = Field(ge=0)
 
 
 class FactorCorrelationSummary(BaseModel):

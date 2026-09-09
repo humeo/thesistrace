@@ -5,6 +5,7 @@ from datetime import date
 from uuid import UUID
 
 import pytest
+from psycopg.types.json import Jsonb
 from pydantic import TypeAdapter
 
 from thesistrace._postgres import PostgresDatabase
@@ -17,6 +18,7 @@ from thesistrace.research_run import (
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionConflict,
     ResearchRunCancelCommand,
+    ResearchRunMetricFilter,
     ResearchRunService,
 )
 from thesistrace.researcher import ResearcherIdentity, ResearcherService
@@ -124,6 +126,51 @@ def test_research_run_service_scopes_resources_receipts_and_cursors(
             cursor=first_page.next_cursor,
             limit=1,
         )
+
+    page = service.list_page(RESEARCHER_A.researcher_id, page=1, page_size=1)
+    assert page.total_count == 2
+    assert len(page.items) == 1
+    last_page = service.list_page(RESEARCHER_A.researcher_id, page=2, page_size=1)
+    assert last_page.total_count == 2
+    assert {page.items[0].id, last_page.items[0].id} == {run_a.id, run_a_second.id}
+    assert service.list_page(RESEARCHER_B.researcher_id).total_count == 1
+    empty = service.list_page(RESEARCHER_A.researcher_id, research_kind="strategy_backtest")
+    assert empty.total_count == 0
+    assert empty.items == []
+    assert service.list_page(RESEARCHER_A.researcher_id, folder_id="missing").total_count == 0
+    assert service.list_page(RESEARCHER_A.researcher_id, page=3, page_size=1).items == []
+
+    # The older record must move across the page boundary, not merely sort in-page.
+    with ownership_database.transaction() as transaction:
+        for run, score in ((run_a, 0.8), (run_a_second, 0.2), (run_b, 0.99)):
+            transaction.execute(
+                "UPDATE research_runs.runs SET key_metrics = %s WHERE id = %s",
+                (Jsonb({"research_kind": "factor_evaluation",
+                        "one_session_rank_ic": score, "five_session_rank_ic": score,
+                        "twenty_session_rank_ic": score}), run.id),
+            )
+    for key in ("one_session_rank_ic", "five_session_rank_ic", "twenty_session_rank_ic"):
+        for direction, expected in (("descending", [run_a.id, run_a_second.id]),
+                                    ("ascending", [run_a_second.id, run_a.id])):
+            pages = [service.list_page(RESEARCHER_A.researcher_id, page=p, page_size=1,
+                                      sort_by=key, sort_direction=direction,
+                                      research_kind="factor_evaluation") for p in (1, 2)]
+            assert [page.items[0].id for page in pages] == expected
+            assert all(page.total_count == 2 for page in pages)
+        filtered = service.list_page(
+            RESEARCHER_A.researcher_id, page_size=1,
+            metric_filters=[ResearchRunMetricFilter(metric=key, operator="gt", value=0.2),
+                            ResearchRunMetricFilter(metric=key, operator="lte", value=0.8)],
+        )
+        assert filtered.total_count == 1
+        assert filtered.items[0].id == run_a.id
+    with ownership_database.transaction() as transaction:
+        transaction.execute("UPDATE research_runs.runs SET key_metrics = NULL WHERE id = %s",
+                            (run_a.id,))
+    for direction in ("ascending", "descending"):
+        page = service.list_page(RESEARCHER_A.researcher_id, sort_by="five_session_rank_ic",
+                                 sort_direction=direction)
+        assert [item.id for item in page.items] == [run_a_second.id, run_a.id]
 
     cancelled_a = service.cancel(
         RESEARCHER_A.researcher_id,
@@ -250,3 +297,62 @@ def _drop_core_schemas(database_url: str) -> None:
                 transaction.execute(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE')
     finally:
         database.close()
+
+
+@pytest.mark.parametrize("sort_by", ["annualized_excess_return", "sharpe", "maximum_drawdown"])
+def test_strategy_metric_sorting_precedes_pagination(ownership_database, sort_by):
+    ResearcherService(ownership_database).bootstrap(RESEARCHER_A)
+    snapshot = DatasetAdmissionSnapshot(
+        generation_manifest_sha256="a" * 64,
+        data_through_session=date(2026, 8, 5),
+        coverage_start=date(2026, 8, 3), coverage_end=date(2026, 8, 5),
+        research_sessions=(date(2026, 8, 3), date(2026, 8, 4), date(2026, 8, 5)),
+        available_field_ids=frozenset({"price.close.adjusted"}),
+        maximum_universe_cardinality=lambda _u, _s, _e: 300,
+        universe_member_union_cardinalities=lambda _u, windows: tuple(300 for _ in windows),
+        financial_research_readiness="not_ready",
+    )
+    service = ResearchRunService(ownership_database, compile_formula=alpha_language.compile,
+                                current_dataset=lambda: snapshot,
+                                quota_policy=lambda _rid: TEST_QUOTA)
+    runs = []
+    for index, score in enumerate((10.0, 2.0, 2.0, None)):
+        command = ADMISSION.validate_python({
+            **_command(f"metric-{index}").model_dump(mode="json"),
+            "research_kind": "strategy_backtest", "holdings_count": 10,
+            "rebalance_every_sessions": 5,
+        })
+        run = service.admit(RESEARCHER_A.researcher_id, command)
+        runs.append(run)
+        metrics = None if score is None else Jsonb({
+            "research_kind": "strategy_backtest", "annualized_excess_return": score,
+            "sharpe": score, "maximum_drawdown": score,
+        })
+        with ownership_database.transaction() as transaction:
+            transaction.execute(
+                "UPDATE research_runs.runs SET key_metrics = %s, created_at = %s WHERE id = %s",
+                (metrics, "2026-08-06T00:00:00Z", run.id),
+            )
+    ties = sorted([runs[1].id, runs[2].id])
+    for direction, expected in (("descending", [runs[0].id, *ties, runs[3].id]),
+                                ("ascending", [*ties, runs[0].id, runs[3].id])):
+        pages = [service.list_page(RESEARCHER_A.researcher_id, page=p, page_size=1,
+                                  sort_by=sort_by, sort_direction=direction,
+                                  research_kind="strategy_backtest", folder_id="folder_default")
+                 for p in range(1, 5)]
+        assert [page.items[0].id for page in pages] == expected
+        assert all(page.total_count == 4 for page in pages)
+    matching = service.list_page(
+        RESEARCHER_A.researcher_id, page_size=1, sort_by=sort_by,
+        metric_filters=[ResearchRunMetricFilter(metric=sort_by, operator="gt", value=2)],
+    )
+    assert matching.total_count == 1
+    assert matching.items[0].id == runs[0].id
+    bounded = service.list_page(
+        RESEARCHER_A.researcher_id, page_size=1, page=2,
+        metric_filters=[ResearchRunMetricFilter(metric=sort_by, operator="gte", value=2),
+                        ResearchRunMetricFilter(metric=sort_by, operator="lt", value=10)],
+    )
+    assert bounded.total_count == 2
+    assert len(bounded.items) == 1
+    assert bounded.items[0].id in ties

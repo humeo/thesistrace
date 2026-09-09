@@ -45,7 +45,7 @@ test("ResearchRun return keeps the selected Type without a document reload", asy
           formula_summary: "rank(close)",
           research_kind: "factor_evaluation",
         }],
-        next_cursor: null,
+        total_count: 1,
       },
     });
   });
@@ -171,7 +171,7 @@ test("Research deletion uses an in-page decision instead of a browser dialog", a
     });
   });
   await page.route("**/api/research-runs?*", async (route) => {
-    await route.fulfill({ json: { items: [], next_cursor: null } });
+    await route.fulfill({ json: { items: [], total_count: 0 } });
   });
 
   await page.goto(`/research-runs/${runId}`);

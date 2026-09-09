@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 
 from thesistrace.entrypoints.http import create_app
 from thesistrace.research_run import (
-    ResearchRunInvalidCursor,
     ResearchRunTemporarilyUnavailable,
 )
 from thesistrace.researcher import ResearcherIdentity
@@ -39,11 +38,11 @@ class _FailingResearchRuns:
     def admit(self, _researcher_id: UUID, _command: object) -> object:
         raise self._error
 
-    def list(self, _researcher_id: UUID, **_filters: object) -> object:
+    def list_page(self, _researcher_id: UUID, **_filters: object) -> object:
         raise self._error
 
 
-def test_http_maps_only_owned_research_run_failures_to_400_or_503() -> None:
+def test_http_validates_pages_and_maps_owned_research_run_failures_to_503() -> None:
     app = _app()
     client = TestClient(
         app,
@@ -51,12 +50,14 @@ def test_http_maps_only_owned_research_run_failures_to_400_or_503() -> None:
         raise_server_exceptions=False,
     )
 
-    app.state.core_runtime = SimpleNamespace(
-        research_runs=_FailingResearchRuns(ResearchRunInvalidCursor("invalid cursor"))
-    )
-    invalid_cursor = client.get("/api/research-runs", params={"cursor": "invalid"})
-    assert invalid_cursor.status_code == 400
-    assert invalid_cursor.json() == {"detail": "invalid cursor"}
+    for params in ({"page": 0}, {"page_size": 0}, {"page_size": 51},
+                   {"sort_by": "unknown"}, {"sort_direction": "sideways"},
+                   {"metric_filters": "not-json"},
+                   {"metric_filters": '[{"metric":"created_at","operator":"gt","value":1}]'},
+                   {"metric_filters": '[{"metric":"sharpe","operator":"eq","value":1}]'},
+                   {"metric_filters": '[{"metric":"sharpe","operator":"gt","value":"NaN"}]'},
+                   {"metric_filters": '[{"metric":"sharpe","operator":"gt","value":true}]'}):
+        assert client.get("/api/research-runs", params=params).status_code == 422
 
     app.state.core_runtime = SimpleNamespace(
         research_runs=_FailingResearchRuns(
@@ -111,3 +112,27 @@ def _valid_command() -> dict[str, object]:
         "neutralization": "none",
         "research_kind": "factor_evaluation",
     }
+
+
+def test_http_passes_valid_metric_conditions_to_owned_listing() -> None:
+    from thesistrace.research_run import ResearchRunMetricFilter, ResearchRunPage
+
+    received = []
+
+    def list_page(researcher_id, **options):
+        received.append((researcher_id, options["metric_filters"]))
+        return ResearchRunPage(items=[], total_count=0)
+
+    app = _app()
+    app.state.core_runtime = SimpleNamespace(research_runs=SimpleNamespace(list_page=list_page))
+    response = TestClient(app, headers={"Origin": PUBLIC_ORIGIN}).get(
+        "/api/research-runs", params={"metric_filters":
+            '[{"metric":"annualized_excess_return","operator":"gt","value":0.1},'
+            '{"metric":"maximum_drawdown","operator":"lte","value":0.2}]'},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"items": [], "total_count": 0}
+    assert received == [(UUID("018f6f7e-8342-7c9a-a4df-9a86147d2e11"), [
+        ResearchRunMetricFilter(metric="annualized_excess_return", operator="gt", value=0.1),
+        ResearchRunMetricFilter(metric="maximum_drawdown", operator="lte", value=0.2),
+    ])]

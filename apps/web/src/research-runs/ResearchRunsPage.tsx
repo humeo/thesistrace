@@ -5,7 +5,7 @@ import {
   CaretUp,
   CaretUpDown,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { coreFetch } from "../auth/coreFetch";
 import { StrategyComparisonPanel } from "../analysis/StrategyComparisonPanel";
@@ -180,7 +180,7 @@ type StrategyBacktestKeyMetrics = {
   maximum_drawdown: number;
 };
 
-type ResearchRunList = { items: ResearchRun[]; next_cursor: string | null };
+type ResearchRunList = { items: ResearchRun[]; total_count: number };
 export type ResearchFolderOption = {
   id: string;
   name: string;
@@ -189,9 +189,9 @@ export type ResearchFolderOption = {
 type ResearchFolderList = { items: ResearchFolderOption[]; next_cursor: null };
 type LoadState = "loading" | "refreshing" | null;
 const FACTOR_HORIZONS = ["1", "5", "20"] as const;
-const ACTIVE_TRACK_LIMIT_DETAIL = "Active DailyTrack limit of 10 reached";
+const ACTIVE_TRACK_LIMIT_DETAIL = "Active DailyTrack limit of 3 reached";
 const ACTIVE_TRACK_LIMIT_MESSAGE =
-  "10 active or blocked DailyTracks already exist. Stop one before starting another.";
+  "3 active, blocked, or stopping DailyTracks already exist. Stop one before starting another.";
 const RESEARCH_RUN_PAGE_SIZE = 20;
 type ResearchKindFilter = "" | ResearchRun["research_kind"];
 
@@ -205,8 +205,9 @@ export function ResearchRunsPage({ researcherId, runId }: {
   const [folderFilter, setFolderFilter] = useState("");
   const [researchKindFilter, setResearchKindFilter] = useState<ResearchKindFilter>("");
   const [pageIndex, setPageIndex] = useState(0);
-  const [pageCursors, setPageCursors] = useState<Array<string | null>>([null]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [sort, setSort] = useState<ResearchRunSort>(DEFAULT_RESEARCH_RUN_SORT);
+  const [metricFilters, setMetricFilters] = useState<ResearchMetricFilter[]>([]);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
@@ -227,7 +228,6 @@ export function ResearchRunsPage({ researcherId, runId }: {
   const deleteGeneration = useRef(0);
   const deleteController = useRef<AbortController | null>(null);
   const deleteTrigger = useRef<HTMLButtonElement | null>(null);
-  const currentPageCursor = pageCursors[pageIndex] ?? null;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -254,7 +254,9 @@ export function ResearchRunsPage({ researcherId, runId }: {
     const path = runId
       ? `/api/research-runs/${runId}`
       : researchRunListPath({
-          cursor: currentPageCursor,
+          page: pageIndex + 1,
+          sort,
+          metricFilters,
           folderId: folderFilter,
           researchKind: researchKindFilter,
         });
@@ -280,7 +282,9 @@ export function ResearchRunsPage({ researcherId, runId }: {
           const nextItems = payload.items;
           if (generation !== loadGeneration.current) return;
           setItems(nextItems);
-          setNextCursor(payload.next_cursor);
+          setTotalCount(payload.total_count);
+          const lastPageIndex = Math.max(0, Math.ceil(payload.total_count / RESEARCH_RUN_PAGE_SIZE) - 1);
+          if (pageIndex > lastPageIndex) setPageIndex(lastPageIndex);
           if (
             nextItems.some(
               (item) =>
@@ -307,7 +311,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
       if (timeout !== undefined) window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [currentPageCursor, folderFilter, refreshGeneration, researchKindFilter, runId]);
+  }, [pageIndex, folderFilter, refreshGeneration, researchKindFilter, runId, sort, metricFilters]);
 
   useEffect(() => () => {
     cancelGeneration.current += 1;
@@ -335,8 +339,12 @@ export function ResearchRunsPage({ researcherId, runId }: {
     setItems([]);
     setLoadState("refreshing");
     setPageIndex(0);
-    setPageCursors([null]);
-    setNextCursor(null);
+    setTotalCount(null);
+  }
+
+  function changeSort(value: ResearchRunSort): void {
+    setSort(value);
+    resetListPage();
   }
 
   function changeFolderFilter(value: string): void {
@@ -346,6 +354,8 @@ export function ResearchRunsPage({ researcherId, runId }: {
 
   function changeResearchKindFilter(value: ResearchKindFilter): void {
     setResearchKindFilter(value);
+    setMetricFilters([]);
+    setSort(DEFAULT_RESEARCH_RUN_SORT);
     resetListPage();
   }
 
@@ -353,19 +363,13 @@ export function ResearchRunsPage({ researcherId, runId }: {
     if (pageIndex === 0) return;
     setItems([]);
     setLoadState("refreshing");
-    setNextCursor(null);
     setPageIndex((current) => current - 1);
   }
 
   function showNextPage(): void {
-    if (nextCursor === null) return;
+    if (totalCount === null || (pageIndex + 1) * RESEARCH_RUN_PAGE_SIZE >= totalCount) return;
     setItems([]);
     setLoadState("refreshing");
-    setPageCursors((current) => [
-      ...current.slice(0, pageIndex + 1),
-      nextCursor,
-    ]);
-    setNextCursor(null);
     setPageIndex((current) => current + 1);
   }
 
@@ -653,6 +657,10 @@ export function ResearchRunsPage({ researcherId, runId }: {
           </label>
         </div>
       </div>
+      {researchKindFilter !== "" && (
+        <ResearchMetricFilters key={`metric-filters-${researchKindFilter}`} researchKind={researchKindFilter}
+          onApply={(filters) => { setMetricFilters(filters); resetListPage(); }} />
+      )}
       {loadState === "refreshing" ? (
         <p className="research-run-list-status" role="status">Loading Research Runs…</p>
       ) : null}
@@ -663,9 +671,12 @@ export function ResearchRunsPage({ researcherId, runId }: {
         items={items ?? []}
         key={researchKindFilter || "all"}
         researchKind={researchKindFilter}
+        sort={sort}
+        onSortChange={changeSort}
       />
       <ResearchRunPagination
-        hasNextPage={nextCursor !== null}
+        totalCount={totalCount}
+        loading={loadState !== null || error !== null}
         onNextPage={showNextPage}
         onPreviousPage={showPreviousPage}
         pageIndex={pageIndex}
@@ -752,40 +763,49 @@ export function ResearchDeleteDialog({
 }
 
 export function researchRunListPath({
-  cursor,
+  page,
+  metricFilters = [],
+  sort,
   folderId,
   researchKind,
 }: {
-  cursor: string | null;
+  page: number;
+  metricFilters?: ResearchMetricFilter[];
+  sort: ResearchRunSort;
   folderId: string;
   researchKind: ResearchKindFilter;
 }): string {
-  const parameters = new URLSearchParams({ limit: String(RESEARCH_RUN_PAGE_SIZE) });
+  const parameters = new URLSearchParams({ page: String(page), page_size: String(RESEARCH_RUN_PAGE_SIZE), sort_by: sort.key, sort_direction: sort.direction });
+  if (metricFilters.length) parameters.set("metric_filters", JSON.stringify(metricFilters));
   if (folderId !== "") parameters.set("folder_id", folderId);
   if (researchKind !== "") parameters.set("research_kind", researchKind);
-  if (cursor !== null) parameters.set("cursor", cursor);
   return `/api/research-runs?${parameters.toString()}`;
 }
 
 export function ResearchRunPagination({
-  hasNextPage,
+  totalCount,
+  loading,
   onNextPage,
   onPreviousPage,
   pageIndex,
 }: {
-  hasNextPage: boolean;
+  totalCount: number | null;
+  loading: boolean;
   onNextPage: () => void;
   onPreviousPage: () => void;
   pageIndex: number;
 }) {
   return (
     <nav aria-label="Research Runs pages" className="research-run-pagination">
-      <button disabled={pageIndex === 0} onClick={onPreviousPage} type="button">
+      <button disabled={loading || pageIndex === 0} onClick={onPreviousPage} type="button">
         <CaretLeft aria-hidden="true" size={13} weight="bold" />
         Previous
       </button>
-      <span>Page {pageIndex + 1}</span>
-      <button disabled={!hasNextPage} onClick={onNextPage} type="button">
+      <span className="research-run-pagination-summary" aria-live="polite">
+        <span>{totalCount === null ? "Loading…" : `${totalCount} total · ${RESEARCH_RUN_PAGE_SIZE} per page`}</span>
+        {totalCount !== null && <span>{`Page ${totalCount === 0 ? 0 : pageIndex + 1} / ${Math.ceil(totalCount / RESEARCH_RUN_PAGE_SIZE)}`}</span>}
+      </span>
+      <button disabled={loading || totalCount === null || (pageIndex + 1) * RESEARCH_RUN_PAGE_SIZE >= totalCount} onClick={onNextPage} type="button">
         Next
         <CaretRight aria-hidden="true" size={13} weight="bold" />
       </button>
@@ -1139,47 +1159,102 @@ const STRATEGY_RESEARCH_RUN_METRICS: ResearchRunMetricColumn[] = [
   { key: "maximum_drawdown", label: "Max drawdown", shortLabel: "Drawdown" },
 ];
 
+export type ResearchMetricFilter = {
+  metric: Exclude<ResearchRunSortKey, "created_at">;
+  operator: "gt" | "gte" | "lt" | "lte";
+  value: number;
+};
+
+type MetricFilterDraft = Omit<ResearchMetricFilter, "value"> & { id: number; value: string };
+
+export function ResearchMetricFilters({ researchKind, onApply }: {
+  researchKind: Exclude<ResearchKindFilter, "">;
+  onApply: (filters: ResearchMetricFilter[]) => void;
+}) {
+  const columns = researchRunMetricColumns(researchKind);
+  const [rows, setRows] = useState<MetricFilterDraft[]>([]);
+  const [applied, setApplied] = useState("[]");
+  const nextId = useRef(0);
+  const dirty = JSON.stringify(rows) !== applied;
+  function update(id: number, values: Partial<MetricFilterDraft>) {
+    setRows(current => current.map(row => row.id === id ? { ...row, ...values } : row));
+  }
+  return (
+    <form className="research-metric-filters" aria-label="Metric filters" onSubmit={event => {
+      event.preventDefault();
+      onApply(rows.map(row => ({ metric: row.metric, operator: row.operator,
+        value: Number(row.value) / (isPercentMetric(row.metric) ? 100 : 1) })));
+      setApplied(JSON.stringify(rows));
+    }}>
+      <div className="research-metric-filter-actions">
+        <span>Metric filters</span>
+        <button type="button" disabled={rows.length >= 12} onClick={() => {
+          const id = nextId.current++;
+          setRows(current => [...current, { id, metric: columns[0].key, operator: "gt", value: "" }]);
+        }}>Add condition</button>
+        {(rows.length > 0 || applied !== "[]") && <>
+          <button type="submit" disabled={!dirty}>Apply filters</button>
+          <button type="button" onClick={() => { setRows([]); setApplied("[]"); onApply([]); }}>Clear filters</button>
+        </>}
+      </div>
+      {rows.length > 0 && <p>All conditions must match.{researchKind === "strategy_backtest" && " Percentage values: enter 10 for 10%."}</p>}
+      {rows.map((row, index) => (
+        <div className="research-metric-filter-row" key={row.id}>
+          <label>Metric
+            <select aria-label={`Metric ${index + 1}`} value={row.metric}
+              onChange={event => update(row.id, { metric: event.target.value as ResearchMetricFilter["metric"], value: "" })}>
+              {columns.map(column => <option key={column.key} value={column.key}>{column.label}</option>)}
+            </select>
+          </label>
+          <label>Comparison
+            <select aria-label={`Comparison ${index + 1}`} value={row.operator}
+              onChange={event => update(row.id, { operator: event.target.value as ResearchMetricFilter["operator"] })}>
+              <option value="gt">&gt;</option><option value="gte">≥</option>
+              <option value="lt">&lt;</option><option value="lte">≤</option>
+            </select>
+          </label>
+          <label>{isPercentMetric(row.metric) ? "Value (%)" : "Value"}
+            <input aria-label={`Threshold ${index + 1}`} type="number" step="any" required value={row.value}
+              onChange={event => update(row.id, { value: event.target.value })} />
+          </label>
+          <button type="button" aria-label={`Remove condition ${index + 1}`}
+            onClick={() => setRows(current => current.filter(item => item.id !== row.id))}>Remove</button>
+        </div>
+      ))}
+      {dirty && <p role="status">Changes not applied.</p>}
+    </form>
+  );
+}
+
+function isPercentMetric(metric: ResearchMetricFilter["metric"]): boolean {
+  return metric === "annualized_excess_return" || metric === "maximum_drawdown";
+}
+
 export function ResearchRunHistory({
   items,
   researchKind = "",
+  sort,
+  onSortChange,
 }: {
   items: ResearchRun[];
   researchKind?: ResearchKindFilter;
+  sort: ResearchRunSort;
+  onSortChange: (sort: ResearchRunSort) => void;
 }) {
-  const [sort, setSort] = useState<ResearchRunSort>(DEFAULT_RESEARCH_RUN_SORT);
   const metricColumns = researchRunMetricColumns(researchKind);
-  const sortedItems = useMemo(
-    () => sortResearchRuns(items, sort.key, sort.direction),
-    [items, sort.direction, sort.key],
-  );
 
   function changeSort(key: ResearchRunSortKey) {
-    setSort((current) => {
-      if (current.key === key) {
-        return {
-          key,
-          direction: current.direction === "ascending" ? "descending" : "ascending",
-        };
-      }
-      return {
-        key,
-        direction: defaultResearchRunSortDirection(key),
-      };
-    });
+    onSortChange({ key, direction: sort.key === key
+      ? (sort.direction === "ascending" ? "descending" : "ascending")
+      : defaultResearchRunSortDirection(key) });
   }
 
   function selectSort(key: ResearchRunSortKey) {
-    setSort({
-      key,
-      direction: defaultResearchRunSortDirection(key),
-    });
+    onSortChange({ key, direction: defaultResearchRunSortDirection(key) });
   }
 
   function toggleSortDirection() {
-    setSort((current) => ({
-      ...current,
-      direction: current.direction === "ascending" ? "descending" : "ascending",
-    }));
+    onSortChange({ ...sort, direction: sort.direction === "ascending" ? "descending" : "ascending" });
   }
 
   const MobileSortIcon = sort.direction === "ascending" ? CaretUp : CaretDown;
@@ -1246,7 +1321,7 @@ export function ResearchRunHistory({
           </tr>
         </thead>
         <tbody>
-          {sortedItems.map((item) => (
+          {items.map((item) => (
             <tr key={item.id}>
               <th scope="row">
                 <a href={`/research-runs/${item.id}`} onClick={followCoreLink}>{item.name}</a>
@@ -1335,23 +1410,6 @@ export function formatResearchRunCreatedAt(value: string): string {
   return `${iso.slice(0, 10)} ${iso.slice(11, 19)}`;
 }
 
-export function sortResearchRuns(
-  items: ResearchRun[],
-  key: ResearchRunSortKey,
-  direction: ResearchRunSortDirection,
-): ResearchRun[] {
-  return [...items].sort((left, right) => {
-    const leftValue = researchRunSortValue(left, key);
-    const rightValue = researchRunSortValue(right, key);
-    if (leftValue === null && rightValue === null) return compareCreatedDescending(left, right);
-    if (leftValue === null) return 1;
-    if (rightValue === null) return -1;
-    const comparison = leftValue - rightValue;
-    if (comparison === 0) return compareCreatedDescending(left, right);
-    return direction === "ascending" ? comparison : -comparison;
-  });
-}
-
 function researchRunSortValue(item: ResearchRun, key: ResearchRunSortKey): number | null {
   if (key === "created_at") {
     const value = new Date(item.created_at).getTime();
@@ -1372,11 +1430,6 @@ function formatResearchRunMetric(
   if (key === "annualized_excess_return") return formatSignedPercent(value);
   if (key === "maximum_drawdown") return formatPercent(value);
   return formatDecimal(value);
-}
-
-function compareCreatedDescending(left: ResearchRun, right: ResearchRun): number {
-  const comparison = new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
-  return comparison === 0 ? left.id.localeCompare(right.id) : comparison;
 }
 
 export function ResearchResultView({ result }: { result: ResearchResult }) {

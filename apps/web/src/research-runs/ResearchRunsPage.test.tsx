@@ -15,7 +15,6 @@ import {
   formatResearchRunCreatedAt,
   isTerminalResearch,
   researchRunListPath,
-  sortResearchRuns,
   type ResearchResult,
   type ResearchRun,
   type TerminalStrategyState,
@@ -463,7 +462,7 @@ describe("ResearchRunHistory", () => {
   ];
 
   it("shows type-labelled summaries for a mixed Research list", () => {
-    const markup = renderToStaticMarkup(<ResearchRunHistory items={items} />);
+    const markup = renderToStaticMarkup(<ResearchRunHistory sort={{ key: "created_at", direction: "descending" }} onSortChange={() => undefined} items={items} />);
 
     expect(markup).toContain(">Type</th>");
     expect(markup).toContain("Factor Evaluation");
@@ -485,7 +484,7 @@ describe("ResearchRunHistory", () => {
 
   it("uses comparable strategy metrics when the Type filter is narrowed", () => {
     const markup = renderToStaticMarkup(
-      <ResearchRunHistory items={items.filter((item) => item.research_kind === "strategy_backtest")} researchKind="strategy_backtest" />,
+      <ResearchRunHistory sort={{ key: "created_at", direction: "descending" }} onSortChange={() => undefined} items={items.filter((item) => item.research_kind === "strategy_backtest")} researchKind="strategy_backtest" />,
     );
 
     expect(markup).toContain("Annualized excess");
@@ -496,7 +495,7 @@ describe("ResearchRunHistory", () => {
 
   it("uses primary Rank IC across all Factor horizons when Type is Factor Evaluation", () => {
     const markup = renderToStaticMarkup(
-      <ResearchRunHistory items={[items[1]]} researchKind="factor_evaluation" />,
+      <ResearchRunHistory sort={{ key: "created_at", direction: "descending" }} onSortChange={() => undefined} items={[items[1]]} researchKind="factor_evaluation" />,
     );
 
     expect(markup).toContain("1-session Rank IC");
@@ -506,26 +505,9 @@ describe("ResearchRunHistory", () => {
     expect(markup).not.toContain("Annualized excess");
   });
 
-  it("sorts metrics with unavailable values last", () => {
-    expect(sortResearchRuns(items, "sharpe", "descending").map((item) => item.id)).toEqual([
-      "run_aaaaaaaa",
-      "run_cccccccc",
-      "run_bbbbbbbb",
-    ]);
-    expect(
-      sortResearchRuns(items, "maximum_drawdown", "ascending").map((item) => item.id),
-    ).toEqual([
-      "run_cccccccc",
-      "run_aaaaaaaa",
-      "run_bbbbbbbb",
-    ]);
-    expect(
-      sortResearchRuns(items, "five_session_rank_ic", "descending").map((item) => item.id),
-    ).toEqual([
-      "run_bbbbbbbb",
-      "run_aaaaaaaa",
-      "run_cccccccc",
-    ]);
+  it("preserves the globally sorted server page order", () => {
+    const markup = renderToStaticMarkup(<ResearchRunHistory items={[items[2], items[0]]} sort={{ key: "sharpe", direction: "descending" }} onSortChange={() => undefined} />);
+    expect(markup.indexOf(items[2].name)).toBeLessThan(markup.indexOf(items[0].name));
   });
 
   it("formats creation timestamps in UTC through whole seconds", () => {
@@ -537,27 +519,31 @@ describe("ResearchRunHistory", () => {
 });
 
 describe("Research Runs pagination", () => {
-  it("builds a bounded, filtered cursor request", () => {
+  it("builds a bounded, filtered page request", () => {
     expect(researchRunListPath({
-      cursor: "cursor+/=",
+      page: 2,
       folderId: "folder signals",
       researchKind: "factor_evaluation",
+      sort: { key: "five_session_rank_ic", direction: "descending" },
     })).toBe(
-      "/api/research-runs?limit=20&folder_id=folder+signals&research_kind=factor_evaluation&cursor=cursor%2B%2F%3D",
+      "/api/research-runs?page=2&page_size=20&sort_by=five_session_rank_ic&sort_direction=descending&folder_id=folder+signals&research_kind=factor_evaluation",
     );
   });
 
   it("keeps the current page and both navigation directions visible", () => {
     const markup = renderToStaticMarkup(
       <ResearchRunPagination
-        hasNextPage={false}
+        totalCount={21}
+        loading={false}
         onNextPage={() => undefined}
         onPreviousPage={() => undefined}
         pageIndex={1}
       />,
     );
 
-    expect(markup).toContain("Page 2");
+    expect(markup).toContain("Page 2 / 2");
+    expect(markup).toContain("21 total");
+    expect(markup).toContain("20 per page");
     expect(markup).toContain("Previous");
     expect(markup).toContain("Next");
     expect(markup).toContain("disabled");

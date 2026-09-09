@@ -160,3 +160,32 @@ for (const reducedMotion of ["no-preference", "reduce"] as const) {
     else expect(new Set(positions.filter((value) => value > 104).map(Math.round)).size).toBeGreaterThan(2);
   });
 }
+
+test("latest tool status stays visible when history is folded and highlights only while running", async ({ page }) => {
+  await page.getByRole("button", { name: "Start tool", exact: true }).click();
+  const activity = page.locator(".chat-current-activity");
+  await expect(activity).toContainText("Running submit research run");
+  await page.locator(".chat-work-history > summary").click();
+  await expect(activity).toBeVisible();
+  await expect(page.locator(".chat-work-history > summary")).toContainText("Working for");
+  await expect(activity.locator("span")).toHaveCSS("animation-name", "chat-activity-highlight");
+  const first = await activity.locator("span").evaluate(element => getComputedStyle(element).backgroundPosition);
+  await expect.poll(() => activity.locator("span").evaluate(element => getComputedStyle(element).backgroundPosition)).not.toBe(first);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(activity.locator("span")).toHaveCSS("animation-name", "none");
+  await expect(activity).toBeVisible();
+  await page.getByRole("button", { name: "Finish tool", exact: true }).click();
+  await expect(activity).toContainText("Preparing response");
+  await page.getByRole("button", { name: "Complete", exact: true }).click();
+  await expect(activity).toHaveCount(0);
+  await expect(page.locator(".chat-work-history > summary")).toContainText("Worked for");
+});
+
+test("renders Chinese punctuation emphasis while preserving code in a completed reply", async ({ page }) => {
+  await page.getByRole("button", { name: "Send next", exact: true }).click();
+  await page.getByRole("button", { name: "CJK reply", exact: true }).click();
+  const message = page.locator('[data-entry-id="sent-1-response"]');
+  await expect(message.locator("strong")).toHaveText("数据截至：");
+  await expect(message.locator("code")).toHaveText("**原文：**保持");
+  await expect(message).toContainText("2026-08-27");
+});

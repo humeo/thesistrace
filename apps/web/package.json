@@ -24,14 +24,15 @@
     "@lezer/highlight": "^1.2.3",
     "@lezer/lr": "^1.4.10",
     "@phosphor-icons/react": "^2.1.10",
+    "@thesistrace/contracts": "workspace:*",
     "better-auth": "1.7.2",
     "lightweight-charts": "5.2.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "10.1.0",
+    "remark-cjk-friendly": "2.3.1",
     "remark-gfm": "4.0.1",
-    "zod": "3.25.76",
-    "@thesistrace/contracts": "workspace:*"
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@lezer/generator": "^1.8.0",
