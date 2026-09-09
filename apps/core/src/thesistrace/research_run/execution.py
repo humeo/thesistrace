@@ -593,11 +593,8 @@ def _calculate_chunks(
             observations = calculation.strategy_daily_observations
             final_values = calculation.final_values
             del calculation, run_input, research_data
-        else:
-            lookback = immutable_input.alpha_admission.effective_lookback
-            continuation["rolling_tail_sessions"] = (
-                list(chunk_sessions[-lookback:]) if lookback else []
-            )
+        # Pure warmup chunks advance progress only. The first research chunk
+        # reads its complete lookback, including after checkpoint recovery.
         yield {
             "status": "chunk_succeeded",
             "child_peak_rss_bytes": _current_process_peak_rss_bytes(),

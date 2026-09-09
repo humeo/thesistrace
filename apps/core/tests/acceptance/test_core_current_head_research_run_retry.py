@@ -170,6 +170,65 @@ class _BlockedWorker:
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize("window", [60, 252])
+@pytest.mark.parametrize("research_kind", ["strategy_backtest", "factor_evaluation"])
+def test_rolling_warmup_chunks_complete_and_recover(
+    tmp_path: Path, window: int, research_kind: str,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = _weekday_sessions(date(2024, 1, 2), window + 30)
+    generation_id = _publish_head(settings, price_offset=0, sessions=sessions)
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        command = _run_command(
+            f"rolling-warmup-{window}-{research_kind}",
+            sessions=sessions[window - 1:], research_kind=research_kind,
+        )
+        command["formula"] = f"rank(close / ts_mean(close, {window}))"
+        accepted = client.post("/api/research-runs", json=command)
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()["id"]
+        assert runtime.research_runs.process_next() is True
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "succeeded", detail
+        assert detail["progress"]["completed_warmup_sessions"] == window - 1
+        assert detail["progress"]["completed_research_sessions"] == 31
+        stored = _stored_run(settings, run_id)
+        expected = _reference_result(
+            settings, generation_id, sessions=sessions[window - 1:],
+            research_kind=research_kind,
+            alpha_expression=stored["immutable_input"]["alpha_expression"],
+            effective_lookback=window - 1,
+        )
+        assert canonical_json_bytes(_read_result(runtime, stored)) == canonical_json_bytes(expected)
+
+        if window == 252:
+            command["request_id"] += "-restarted"
+            accepted = client.post("/api/research-runs", json=command)
+            assert accepted.status_code == 202, accepted.text
+            resumed_id = accepted.json()["id"]
+            with _blocked_worker(settings, resumed_id, after_checkpoint_count=2) as blocked:
+                blocked.wait_until_blocked()
+                progress = client.get(f"/api/research-runs/{resumed_id}").json()["progress"]
+                assert progress["phase"] == "warmup"
+                assert progress["completed_warmup_sessions"] > 0
+                assert progress["completed_research_sessions"] == 0
+                blocked.terminate()
+            _expire_live_attempt(settings, resumed_id)
+            completed = _run_worker_once(settings)
+            assert completed.returncode == 0, completed.stdout + completed.stderr
+            detail = client.get(f"/api/research-runs/{resumed_id}").json()
+            assert detail["status"] == "succeeded", detail
+            actual = _read_result(runtime, _stored_run(settings, resumed_id))
+            assert canonical_json_bytes(actual) == canonical_json_bytes(expected)
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 @pytest.mark.parametrize(
     "research_kind",
     ("strategy_backtest", "factor_evaluation"),
@@ -1008,6 +1067,8 @@ def _reference_result(
     *,
     sessions: tuple[str, ...] = SESSIONS,
     research_kind: str = "strategy_backtest",
+    alpha_expression: dict[str, object] | None = None,
+    effective_lookback: int = 0,
 ) -> dict[str, object]:
     store = MountedGenerationStore(settings.data_mount)
     canonical = open_complete_refresh_basis(store, generation_id)
@@ -1019,9 +1080,12 @@ def _reference_result(
     )
     run_input = RunInput(
         research_data=research_data,
-        alpha_expression={"kind": "field", "field_id": "price.close.adjusted"},
+        alpha_expression=(
+            {"kind": "field", "field_id": "price.close.adjusted"}
+            if alpha_expression is None else alpha_expression
+        ),
         field_bindings={"price.close.adjusted": "close"},
-        effective_alpha_lookback=0,
+        effective_alpha_lookback=effective_lookback,
         universe="top300",
         neutralization="none",
         research_kind=research_kind,
@@ -1044,7 +1108,7 @@ def _reference_result(
     if research_kind == "factor_evaluation":
         columnar = store.read_columnar_slice(
             generation_id,
-            sessions=list(sessions),
+            sessions=list(canonical["research_calendar"]) if effective_lookback else list(sessions),
             universe_name="top300",
             neutralization="none",
             field_bindings={"price.close.adjusted": "close"},
