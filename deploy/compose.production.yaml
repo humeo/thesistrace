@@ -1,4 +1,12 @@
 services:
+  research-worker:
+    deploy:
+      replicas: 3
+
+  batch-research-worker:
+    deploy:
+      replicas: 2
+
   web:
     environment:
       THESISTRACE_CADDY_HSTS_DIRECTIVE: 'header >Strict-Transport-Security "max-age=31536000"'

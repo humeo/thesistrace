@@ -24,6 +24,10 @@ THESISTRACE_ENV_FILE=/etc/thesistrace/production.env pnpm prod up
 pnpm prod status
 ```
 
+The production Compose overlay fixes three ordinary Research Workers and two
+Batch Research Workers for the 6-vCPU, 12-GB server. Each worker retains the
+configured CPU, memory, and execution limits; development keeps one of each.
+
 The production web container publishes ports 80 and 443 and persists Caddy's public
 origin certificates in `caddy-data`. With Cloudflare DNS proxying enabled, use
 Full (strict) after the origin certificate is issued. Only Cloudflare's documented
