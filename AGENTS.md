@@ -1,6 +1,6 @@
 ## rulers
-- Do not preserve backward compatibility. Remove obsolete paths instead of adding compatibility layers, fallbacks, or migrations.
-- ** 在开发过程中永远不要fallback，迁移和兼容 **
+- Do not add runtime fallbacks or multi-version compatibility paths. Applications use only the current contract.
+- 允许显式、版本化、可验证且保留数据的数据库迁移；每次迁移必须限定起止版本、记录执行结果，并验证失败回滚。迁移前备份，禁止自动清库或仅修改 schema 指纹绕过校验。
 
 ## Deployment Branch
 
@@ -32,7 +32,7 @@ Domain documentation uses a single-context layout. See `docs/agents/domain.md`.
 
 ## Testing
 
-当前项目处于开发阶段，采用硬切换。验证当前实现和契约，不为尚未存在的线上存量状态增加迁移、旧版本兼容或回滚流程。
+应用只支持当前实现和契约。数据库升级通过显式迁移保留数据；验证旧数据升级、失败回滚与重复执行，不添加运行时旧版本兼容分支。
 
 ### 选择验证
 

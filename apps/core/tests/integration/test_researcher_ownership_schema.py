@@ -457,7 +457,7 @@ def test_current_initializer_refuses_the_ownerless_six_schema_contract() -> None
                 """
             )
 
-        with pytest.raises(SchemaError, match="run pnpm dev:reset"):
+        with pytest.raises(SchemaError, match="explicit data-preserving upgrade"):
             initialize_core(database_url)
 
         with database.transaction() as transaction:
@@ -506,7 +506,7 @@ def test_current_initializer_refuses_a_legacy_fingerprint_without_mutation() -> 
                 """
             )
 
-        with pytest.raises(SchemaError, match="run pnpm dev:reset"):
+        with pytest.raises(SchemaError, match="explicit data-preserving upgrade"):
             initialize_core(database_url)
 
         with database.transaction() as transaction:

@@ -78,8 +78,8 @@ def _verify(
     expected = {*schemas, _METADATA_SCHEMA}
     if present != expected:
         raise SchemaError(
-            "unsupported existing Core schema; run pnpm dev:reset for the isolated "
-            "development environment"
+            "unsupported existing Core schema; see docs/database-migrations.md for an explicit "
+            "data-preserving upgrade"
         )
     row = transaction.execute(
         sql.SQL("SELECT fingerprint FROM {}.{} WHERE singleton = true").format(
@@ -88,8 +88,8 @@ def _verify(
     ).fetchone()
     if row is None or row["fingerprint"] != fingerprint:
         raise SchemaError(
-            "Core schema does not match this checkout; run pnpm dev:reset for the "
-            "isolated development environment"
+            "Core schema does not match this checkout; see docs/database-migrations.md for an "
+            "explicit data-preserving upgrade"
         )
 
 

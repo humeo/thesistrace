@@ -90,7 +90,7 @@ def test_schema_initialization_refuses_a_partial_or_old_database() -> None:
         with database.transaction() as transaction:
             transaction.execute("CREATE SCHEMA data")
             transaction.execute("CREATE TABLE data.legacy_state (value text)")
-        with pytest.raises(SchemaError, match="run pnpm dev:reset"):
+        with pytest.raises(SchemaError, match="explicit data-preserving upgrade"):
             initialize_core(settings.database_url)
         with database.transaction() as transaction:
             row = transaction.execute(
