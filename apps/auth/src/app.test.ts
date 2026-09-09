@@ -626,7 +626,6 @@ describe("Auth HTTP boundary", () => {
           as_of: "2026-08-11T18:00:00+08:00",
           idempotency_key: idempotencyKey,
           operation: "data.refresh.market.submit",
-          otp: "123456",
         }),
         headers: {
           "content-type": "application/json",
@@ -831,7 +830,6 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           ...request,
-          otp: "123456",
         }),
         headers: {
           "content-type": "application/json",
@@ -852,7 +850,6 @@ describe("Auth HTTP boundary", () => {
         asOf: request.as_of,
         idempotencyKey: request.idempotency_key,
         operation: request.operation,
-        otp: "123456",
       },
     );
 
@@ -896,7 +893,6 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           ...request,
-          otp: "123456",
         }),
         headers: {
           "content-type": "application/json",
@@ -917,7 +913,6 @@ describe("Auth HTTP boundary", () => {
         idempotencyKey: request.idempotency_key,
         observationThroughSession: request.observation_through_session,
         operation: request.operation,
-        otp: "123456",
       },
     );
 
@@ -961,7 +956,6 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           ...request,
-          otp: "123456",
         }),
         headers: {
           "content-type": "application/json",
@@ -982,7 +976,6 @@ describe("Auth HTTP boundary", () => {
         idempotencyKey: request.idempotency_key,
         observationThroughSession: request.observation_through_session,
         operation: request.operation,
-        otp: "123456",
       },
     );
 
@@ -1157,7 +1150,6 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           ...request,
-          otp: "123456",
         }),
         headers,
         method: "POST",
@@ -1197,7 +1189,6 @@ describe("Auth HTTP boundary", () => {
       {
         body: JSON.stringify({
           ...request,
-          otp: "123456",
         }),
         headers,
         method: "POST",
@@ -1231,7 +1222,6 @@ describe("Auth HTTP boundary", () => {
           as_of: "2026-08-11T18:00:00+08:00",
           idempotency_key: key,
           operation: "data.refresh.market.submit",
-          otp: "123456",
         }),
         headers: {
           "content-type": "application/json",

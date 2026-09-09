@@ -1,4 +1,3 @@
-import { OperatorCodeField } from "./OperatorCodeField";
 import { useEffect, useRef, useState } from "react";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
@@ -428,7 +427,6 @@ function IndustryRefreshDialog({
   const mounted = useRef(true);
   const phase = useRef<"idle" | "proof" | "submission">("idle");
   const activeRequest = useRef<AbortController | null>(null);
-  const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -461,11 +459,10 @@ function IndustryRefreshDialog({
       phase.current = "proof";
       const confirmed = await confirmIndustryRefreshProof(
         refreshRequest,
-        otp,
         controller.signal,
       );
       if (dismissed.current || !mounted.current) return;
-      setOtp("");
+
       phase.current = "submission";
       accepted = await submitIndustryRefresh(
         refreshRequest,
@@ -476,7 +473,7 @@ function IndustryRefreshDialog({
       if (phase.current === "submission" && submissionFailureIsUncertain(reason)) {
         if (!dismissed.current && mounted.current) uncertain = true;
       } else if (reason instanceof DOMException && reason.name === "AbortError") {
-        // Closing otp confirmation before Core submission has no mutation side effect.
+        // Closing request confirmation before Core submission has no mutation side effect.
       } else if (
         reason instanceof OperatorMutationError
         && (reason.code === "conflict" || reason.code === "request-invalid")
@@ -492,7 +489,6 @@ function IndustryRefreshDialog({
       phase.current = "idle";
       activeRequest.current = null;
       if (mounted.current) {
-        setOtp("");
         setSubmitting(false);
       }
     }
@@ -529,7 +525,7 @@ function IndustryRefreshDialog({
         event.preventDefault();
         void submit();
       }}>
-        <header><p className="eyebrow">Email confirmation</p><h2 id="operator-industry-refresh-title">Submit Industry Refresh?</h2></header>
+        <header><p className="eyebrow">Confirm update</p><h2 id="operator-industry-refresh-title">Submit Industry Refresh?</h2></header>
         <p id="operator-industry-refresh-description">Confirm the exact CLI-equivalent collection boundary before queuing.</p>
         <dl className="operator-confirmation-target">
           <div><dt>Kind</dt><dd><strong>Industry</strong></dd></div>
@@ -540,7 +536,6 @@ function IndustryRefreshDialog({
           <span>Effect</span>
           <p>The operation enters the shared durable FIFO. Collection and publication happen later in the Data Operator Worker.</p>
         </div>
-        <OperatorCodeField value={otp} onChange={setOtp} disabled={submitting} />
         {error === null ? null : <p className="inline-status inline-status-error" role="alert">{error}</p>}
         <footer className="operator-confirmation-actions">
           <button onClick={dismiss} type="button">Cancel</button>

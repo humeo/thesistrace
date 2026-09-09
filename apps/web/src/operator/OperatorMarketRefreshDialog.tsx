@@ -1,4 +1,3 @@
-import { OperatorCodeField } from "./OperatorCodeField";
 import { useEffect, useRef, useState } from "react";
 
 import { OperatorPageNotFoundError } from "./operatorDirectoryClient";
@@ -31,7 +30,6 @@ export function OperatorMarketRefreshDialog({
   const mounted = useRef(true);
   const phase = useRef<"idle" | "proof" | "submission">("idle");
   const request = useRef<AbortController | null>(null);
-  const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -65,11 +63,10 @@ export function OperatorMarketRefreshDialog({
       phase.current = "proof";
       const confirmed = await confirmMarketRefreshProof(
         refreshRequest,
-        otp,
         controller.signal,
       );
       if (dismissed.current || !mounted.current) return;
-      setOtp("");
+
       phase.current = "submission";
       accepted = await submitMarketRefresh(
         refreshRequest,
@@ -102,7 +99,6 @@ export function OperatorMarketRefreshDialog({
       phase.current = "idle";
       request.current = null;
       if (mounted.current) {
-        setOtp("");
         setSubmitting(false);
       }
     }
@@ -150,11 +146,11 @@ export function OperatorMarketRefreshDialog({
         }}
       >
         <header>
-          <p className="eyebrow">Email confirmation</p>
+          <p className="eyebrow">Confirm update</p>
           <h2 id="operator-market-refresh-title">Submit Market Refresh?</h2>
         </header>
         <p id="operator-market-refresh-description">
-          Confirm the exact CLI-equivalent target before queuing this operation.
+          Review the update date before submitting.
         </p>
         <dl className="operator-confirmation-target">
           <div>
@@ -177,7 +173,6 @@ export function OperatorMarketRefreshDialog({
             later only if the Worker validates and publishes a changed Dataset.
           </p>
         </div>
-        <OperatorCodeField value={otp} onChange={setOtp} disabled={submitting} />
         {error === null ? null : (
           <p className="inline-status inline-status-error" role="alert">{error}</p>
         )}

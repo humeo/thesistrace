@@ -35,6 +35,7 @@ import {
   isIsoResearchSession,
   isMarketRefreshIdempotencyKey,
   isRefreshActionTarget,
+  type OperatorProofConfirmationRequest,
   type OperatorProofRequest,
 } from "./operator-proof.js";
 import { OperatorSessionTargetProtectedError } from "./operator-session-revocation.js";
@@ -68,7 +69,6 @@ const operatorProofSchema = z.union([
       as_of: z.string().min(1).max(128).refine((value) => value === value.trim()),
       idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       operation: z.literal("data.refresh.market.submit"),
-      otp: z.string().regex(/^\d{6}$/),
     })
     .strict(),
   z
@@ -76,7 +76,6 @@ const operatorProofSchema = z.union([
       idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       observation_through_session: z.string().refine(isIsoResearchSession),
       operation: z.literal("data.refresh.financial.submit"),
-      otp: z.string().regex(/^\d{6}$/),
     })
     .strict(),
   z
@@ -84,7 +83,6 @@ const operatorProofSchema = z.union([
       idempotency_key: z.string().refine(isMarketRefreshIdempotencyKey),
       observation_through_session: z.string().refine(isIsoResearchSession),
       operation: z.literal("data.refresh.industry.submit"),
-      otp: z.string().regex(/^\d{6}$/),
     })
     .strict(),
   z
@@ -233,7 +231,7 @@ export type AuthAppDependencies = Readonly<{
   sendOperatorCode?: (principal: OperatorPrincipal) => Promise<void>;
   confirmOperatorProof: (
     principal: OperatorPrincipal,
-    input: OperatorProofRequest & Readonly<{ otp: string }>,
+    input: OperatorProofConfirmationRequest,
   ) => Promise<Readonly<{ expiresAt: string; proof: string }>>;
   consumeOperatorProof: (
     principal: OperatorPrincipal,
@@ -518,7 +516,6 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
                 asOf: body.as_of,
                 idempotencyKey: body.idempotency_key,
                 operation: body.operation,
-                otp: body.otp,
               }
             : body.operation === "data.refresh.financial.submit"
               || body.operation === "data.refresh.industry.submit"
@@ -526,7 +523,6 @@ export function createAuthApp(dependencies: AuthAppDependencies, mcpRoutes?: Ret
                   idempotencyKey: body.idempotency_key,
                   observationThroughSession: body.observation_through_session,
                   operation: body.operation,
-                  otp: body.otp,
                 }
               : body.operation === "data.refresh.cancel"
                 ? {

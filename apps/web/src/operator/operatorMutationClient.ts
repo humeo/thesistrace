@@ -210,7 +210,6 @@ export async function confirmSessionRevocationProof(
 
 export async function confirmMarketRefreshProof(
   request: MarketRefreshRequest,
-  otp: string,
   signal: AbortSignal,
 ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
   const value = await operatorPost(
@@ -219,7 +218,6 @@ export async function confirmMarketRefreshProof(
       as_of: request.asOf,
       idempotency_key: request.idempotencyKey,
       operation: "data.refresh.market.submit",
-      otp,
     },
     signal,
   );
@@ -266,7 +264,6 @@ export async function loadMarketRefresh(
 
 export async function confirmFinancialRefreshProof(
   request: FinancialRefreshRequest,
-  otp: string,
   signal: AbortSignal,
 ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
   const value = await operatorPost(
@@ -275,7 +272,6 @@ export async function confirmFinancialRefreshProof(
       idempotency_key: request.idempotencyKey,
       observation_through_session: request.observationThroughSession,
       operation: "data.refresh.financial.submit",
-      otp,
     },
     signal,
   );
@@ -322,7 +318,6 @@ export async function loadFinancialRefresh(
 
 export async function confirmIndustryRefreshProof(
   request: IndustryRefreshRequest,
-  otp: string,
   signal: AbortSignal,
 ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
   const value = await operatorPost(
@@ -331,7 +326,6 @@ export async function confirmIndustryRefreshProof(
       idempotency_key: request.idempotencyKey,
       observation_through_session: request.observationThroughSession,
       operation: "data.refresh.industry.submit",
-      otp,
     },
     signal,
   );

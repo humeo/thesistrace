@@ -109,6 +109,13 @@ export type OperatorProofRequest =
       target: string;
     }>;
 
+type DataRefreshSubmitRequest = Extract<OperatorProofRequest, {
+  operation: "data.refresh.market.submit" | "data.refresh.financial.submit" | "data.refresh.industry.submit";
+}>;
+export type OperatorProofConfirmationRequest =
+  | DataRefreshSubmitRequest
+  | (Exclude<OperatorProofRequest, DataRefreshSubmitRequest> & Readonly<{ otp: string }>);
+
 export type OperatorProofClaim = Readonly<{
   claimedAt: Date;
   id: string;
@@ -183,12 +190,16 @@ export class OperatorProofService {
 
   async confirm(
     principal: OperatorPrincipal,
-    input: OperatorProofRequest & Readonly<{ otp: string }>,
+    input: OperatorProofConfirmationRequest,
   ): Promise<Readonly<{ expiresAt: string; proof: string }>> {
     assertPrincipal(principal);
     const request = normalizeProofRequest(input);
-    if (!this.#verifyCode) throw new OperatorCodeInvalidError();
-    await this.#verifyCode(principal, input.otp);
+    if (input.operation !== "data.refresh.market.submit"
+      && input.operation !== "data.refresh.financial.submit"
+      && input.operation !== "data.refresh.industry.submit") {
+      if (!this.#verifyCode) throw new OperatorCodeInvalidError();
+      await this.#verifyCode(principal, input.otp);
+    }
     const proofId = this.#createId();
     const proof = createOpaqueToken(proofId, this.#randomBytes);
     const parsedProof = parseOpaqueToken(proof);

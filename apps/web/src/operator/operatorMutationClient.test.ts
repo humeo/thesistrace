@@ -215,7 +215,6 @@ describe("Operator mutation client", () => {
   });
 
   it("binds a Market proof to the exact free-form target and key without forwarding otp", async () => {
-    const otp = "123456";
     const request = {
       asOf: "2026-08-11T18:00:00+08:00",
       idempotencyKey: "market-20260811T180000+0800",
@@ -243,7 +242,6 @@ describe("Operator mutation client", () => {
 
     const confirmation = await confirmMarketRefreshProof(
       request,
-      otp,
       signal,
     );
     const operation = await submitMarketRefresh(
@@ -265,7 +263,6 @@ describe("Operator mutation client", () => {
           as_of: request.asOf,
           idempotency_key: request.idempotencyKey,
           operation: "data.refresh.market.submit",
-          otp,
         }),
       }),
     );
@@ -280,11 +277,10 @@ describe("Operator mutation client", () => {
         }),
       }),
     );
-    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(otp);
+    expect(JSON.parse(fetchMock.mock.calls[0]![1]!.body as string)).not.toHaveProperty("otp");
   });
 
   it("binds a Financial proof and parses the safe degraded receipt", async () => {
-    const otp = "123456";
     const request = {
       idempotencyKey: "financial-20260814-custom",
       observationThroughSession: "2026-08-14",
@@ -322,7 +318,6 @@ describe("Operator mutation client", () => {
 
     const confirmation = await confirmFinancialRefreshProof(
       request,
-      otp,
       signal,
     );
     const submitted = await submitFinancialRefresh(
@@ -346,7 +341,6 @@ describe("Operator mutation client", () => {
           idempotency_key: request.idempotencyKey,
           observation_through_session: request.observationThroughSession,
           operation: "data.refresh.financial.submit",
-          otp,
         }),
       }),
     );
@@ -361,11 +355,10 @@ describe("Operator mutation client", () => {
         }),
       }),
     );
-    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(otp);
+    expect(JSON.parse(fetchMock.mock.calls[0]![1]!.body as string)).not.toHaveProperty("otp");
   });
 
   it("binds an Industry proof and parses the safe no-change receipt", async () => {
-    const otp = "123456";
     const request = {
       idempotencyKey: "industry-20260814-custom",
       observationThroughSession: "2026-08-14",
@@ -395,7 +388,6 @@ describe("Operator mutation client", () => {
 
     const confirmation = await confirmIndustryRefreshProof(
       request,
-      otp,
       signal,
     );
     const submitted = await submitIndustryRefresh(
@@ -419,7 +411,6 @@ describe("Operator mutation client", () => {
           idempotency_key: request.idempotencyKey,
           observation_through_session: request.observationThroughSession,
           operation: "data.refresh.industry.submit",
-          otp,
         }),
       }),
     );
@@ -434,7 +425,7 @@ describe("Operator mutation client", () => {
         }),
       }),
     );
-    expect(JSON.stringify(fetchMock.mock.calls[1])).not.toContain(otp);
+    expect(JSON.parse(fetchMock.mock.calls[0]![1]!.body as string)).not.toHaveProperty("otp");
   });
 
   it("round-trips a Python-valid boundary FEFF Market key", async () => {

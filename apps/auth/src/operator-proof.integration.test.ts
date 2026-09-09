@@ -6,6 +6,7 @@ import { OperatorAssignmentService } from "./operator-assignment.js";
 import {
   OperatorCodeInvalidError,
   OperatorProofInvalidError,
+  OperatorProofNotFoundError,
   OperatorProofService,
   type OperatorProofClaim,
 } from "./operator-proof.js";
@@ -70,6 +71,32 @@ describe.sequential("Auth Operator Proof", () => {
     await runtimePool.end();
     await owner.query("DROP SCHEMA IF EXISTS auth CASCADE");
     await owner.end();
+  });
+
+  it("authorizes refresh submissions without email while rejecting a revoked Operator", async () => {
+    const proofService = new OperatorProofService({
+      clock: () => now,
+      pool: runtimePool,
+      verifyCode: async () => { throw new OperatorCodeInvalidError(); },
+    });
+    const requests = [
+      { operation: "data.refresh.market.submit", asOf: "2026-08-11T18:00:00+08:00", idempotencyKey: "market-no-email" },
+      { operation: "data.refresh.financial.submit", observationThroughSession: "2026-08-11", idempotencyKey: "financial-no-email" },
+      { operation: "data.refresh.industry.submit", observationThroughSession: "2026-08-11", idempotencyKey: "industry-no-email" },
+    ] as const;
+    for (const request of requests) {
+      const confirmed = await proofService.confirm(principal(), request);
+      await expect(proofService.consumeExternal(principal(), {
+        ...request, proof: confirmed.proof,
+      })).resolves.toBe("consumed");
+    }
+    await expect(proofService.confirm(principal(), {
+      operation: "invitation.issue", email: "new@example.com", otp: "000000",
+    })).rejects.toBeInstanceOf(OperatorCodeInvalidError);
+    await owner.query("DELETE FROM auth.operator_assignment");
+    for (const request of requests) {
+      await expect(proofService.confirm(principal(), request)).rejects.toBeInstanceOf(OperatorProofNotFoundError);
+    }
   });
 
   it("binds a 60-second opaque proof to canonical request, operation, and Login Session", async () => {
@@ -154,7 +181,6 @@ describe.sequential("Auth Operator Proof", () => {
     };
     const confirmed = await proofService.confirm(principal(), {
       ...request,
-      otp: "123456",
     });
 
     await expect(
@@ -209,7 +235,6 @@ describe.sequential("Auth Operator Proof", () => {
     };
     const confirmed = await proofService.confirm(principal(), {
       ...request,
-      otp: "123456",
     });
 
     await expect(
@@ -239,7 +264,6 @@ describe.sequential("Auth Operator Proof", () => {
     };
     const earliestConfirmed = await proofService.confirm(principal(), {
       ...earliestPythonDate,
-      otp: "123456",
     });
     await expect(
       proofService.consumeExternal(principal(), {
@@ -253,7 +277,6 @@ describe.sequential("Auth Operator Proof", () => {
         ...earliestPythonDate,
         idempotencyKey: "financial-year-zero",
         observationThroughSession: "0000-01-01",
-        otp: "123456",
       }),
     ).rejects.toEqual(new OperatorProofInvalidError());
   });
@@ -267,7 +290,6 @@ describe.sequential("Auth Operator Proof", () => {
     };
     const confirmed = await proofService.confirm(principal(), {
       ...request,
-      otp: "123456",
     });
 
     await expect(
