@@ -142,6 +142,15 @@ test("applies percentage and factor conditions globally and clears them on Type 
   const form = page.getByRole("form", { name: "Metric filters" });
   expect(await form.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: "../../.scratch/research-global-sort/metric-filters-mobile.png", fullPage: true });
+  for (const metric of ["one_session_rank_ic", "five_session_rank_ic", "twenty_session_rank_ic"]) {
+    await page.getByLabel("Metric 2", { exact: true }).selectOption(metric);
+    await page.getByLabel("Threshold 2", { exact: true }).fill("0.05");
+    await page.getByRole("button", { name: "Apply filters", exact: true }).click();
+    await expect.poll(() => requests.at(-1)?.get("metric_filters")).toBe(JSON.stringify([
+      { metric: "annualized_excess_return", operator: "gt", value: 0.1 },
+      { metric, operator: "lt", value: 0.05 },
+    ]));
+  }
   await page.getByLabel("Filter by Type", { exact: true }).selectOption("factor_evaluation");
   await expect.poll(() => requests.at(-1)?.has("metric_filters")).toBe(false);
   await expect(page.getByLabel("Threshold 1", { exact: true })).toHaveCount(0);

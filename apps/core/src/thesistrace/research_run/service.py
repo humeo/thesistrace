@@ -4161,6 +4161,14 @@ def _start_tracking_fingerprint(run_id: str) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
+class _StrategyFilterMetrics(StrategyBacktestResearchRunKeyMetrics):
+    """Persist factor metrics for SQL filtering without expanding the visible summary."""
+
+    one_session_rank_ic: float | int | None
+    five_session_rank_ic: float | int | None
+    twenty_session_rank_ic: float | int | None
+
+
 def _summary(row: object) -> ResearchRunSummary:
     assert isinstance(row, dict)
     immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
@@ -4168,6 +4176,11 @@ def _summary(row: object) -> ResearchRunSummary:
     formula_summary = (
         compact_formula if len(compact_formula) <= 120 else f"{compact_formula[:117]}..."
     )
+    key_metrics = row.get("key_metrics")
+    if isinstance(key_metrics, dict) and immutable_input.research_kind == "strategy_backtest":
+        key_metrics = {key: value for key, value in key_metrics.items()
+                       if key not in {"one_session_rank_ic", "five_session_rank_ic",
+                                      "twenty_session_rank_ic"}}
     return ResearchRunSummary.model_validate(
         {
             "id": row["id"],
@@ -4179,7 +4192,7 @@ def _summary(row: object) -> ResearchRunSummary:
             "end_date": row["requested_end_date"],
             "formula_summary": formula_summary,
             "research_kind": immutable_input.research_kind,
-            "key_metrics": row.get("key_metrics"),
+            "key_metrics": key_metrics,
             "failure_reason": row.get("failure_reason"),
         }
     )
@@ -4220,9 +4233,11 @@ def _result_key_metrics(
     if not isinstance(maximum_drawdown, Mapping):
         raise ResearchResultError("Final Research values have no Maximum Drawdown")
     try:
-        return StrategyBacktestResearchRunKeyMetrics.model_validate(
+        factor_metrics = _result_key_metrics(final_values, "factor_evaluation")
+        return _StrategyFilterMetrics.model_validate(
             {
                 "research_kind": research_kind,
+                **factor_metrics.model_dump(exclude={"research_kind"}),
                 "annualized_excess_return": annualized_excess_return,
                 "sharpe": metrics.get("sharpe"),
                 "maximum_drawdown": maximum_drawdown.get("value"),

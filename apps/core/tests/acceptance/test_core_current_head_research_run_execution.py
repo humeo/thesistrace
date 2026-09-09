@@ -794,6 +794,22 @@ def test_research_kinds_publish_identical_factor_evidence_when_strategy_changes(
             else:
                 assert detail["research_kind"] == "strategy_backtest"
                 strategy_payloads.append(bundle.payloads["strategy_summary"].content)
+                assert not any("rank_ic" in key for key in detail["key_metrics"])
+                factor_metrics = json.loads(factor_payloads[-1])["horizons"]
+                for name, horizon in (("one", "1"), ("five", "5"), ("twenty", "20")):
+                    metric = f"{name}_session_rank_ic"
+                    value = factor_metrics[horizon]["summary"]["rank_ic"]["mean"]
+                    assert value is not None
+                    response = client.get("/api/research-runs", params={
+                        "research_kind": "strategy_backtest",
+                        "metric_filters": json.dumps([
+                            {"metric": metric, "operator": "gte", "value": value},
+                            {"metric": metric, "operator": "lte", "value": value},
+                        ]),
+                    })
+                    assert response.status_code == 200, response.text
+                    assert run_id in {item["id"] for item in response.json()["items"]}
+
 
         assert factor_payloads[0] == factor_payloads[1] == factor_payloads[2]
         assert canonical_json_bytes(public_factors[0]) == canonical_json_bytes(

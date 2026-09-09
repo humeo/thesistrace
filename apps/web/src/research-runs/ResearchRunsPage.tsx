@@ -1171,7 +1171,9 @@ export function ResearchMetricFilters({ researchKind, onApply }: {
   researchKind: Exclude<ResearchKindFilter, "">;
   onApply: (filters: ResearchMetricFilter[]) => void;
 }) {
-  const columns = researchRunMetricColumns(researchKind);
+  const columns = researchKind === "strategy_backtest"
+    ? [...STRATEGY_RESEARCH_RUN_METRICS, ...FACTOR_RESEARCH_RUN_METRICS]
+    : FACTOR_RESEARCH_RUN_METRICS;
   const [rows, setRows] = useState<MetricFilterDraft[]>([]);
   const [applied, setApplied] = useState("[]");
   const nextId = useRef(0);
