@@ -1,0 +1,78 @@
+[
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-full3000-20260908-c4-run-0",
+      "folder_id": "folder_default",
+      "name": "STRESS-FULL3000 c4 single-0",
+      "formula": "rank(close)",
+      "start_date": "2010-01-04",
+      "end_date": "2026-08-27",
+      "universe": "top3000",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 50,
+      "rebalance_every_sessions": 5
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-full3000-20260908-c4-run-1",
+      "folder_id": "folder_default",
+      "name": "STRESS-FULL3000 c4 single-1",
+      "formula": "rank(close)",
+      "start_date": "2010-01-04",
+      "end_date": "2026-08-27",
+      "universe": "top3000",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 50,
+      "rebalance_every_sessions": 5
+    }
+  },
+  {
+    "tool": "submit_research_batch",
+    "arguments": {
+      "request_id": "stress-full3000-20260908-c4-batch-0",
+      "start_date": "2010-01-04",
+      "end_date": "2026-08-27",
+      "universe": "top3000",
+      "neutralization": "none",
+      "batch_kind": "strategy_sweep",
+      "alpha": {
+        "formula": "rank(close)"
+      },
+      "strategies": [
+        {
+          "item_key": "equivalent",
+          "name": "STRESS-FULL3000 c4 batch-0",
+          "holdings_count": 50,
+          "rebalance_every_sessions": 5
+        }
+      ]
+    }
+  },
+  {
+    "tool": "submit_research_batch",
+    "arguments": {
+      "request_id": "stress-full3000-20260908-c4-batch-1",
+      "start_date": "2010-01-04",
+      "end_date": "2026-08-27",
+      "universe": "top3000",
+      "neutralization": "none",
+      "batch_kind": "strategy_sweep",
+      "alpha": {
+        "formula": "rank(close)"
+      },
+      "strategies": [
+        {
+          "item_key": "equivalent",
+          "name": "STRESS-FULL3000 c4 batch-1",
+          "holdings_count": 50,
+          "rebalance_every_sessions": 5
+        }
+      ]
+    }
+  }
+]

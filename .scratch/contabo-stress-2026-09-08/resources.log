@@ -1,0 +1,750 @@
+2026-09-08T13:44:52Z
+1.72 1.32 1.10 2/532 1095063
+MemAvailable:    9243560 kB
+thesistrace-agent-1 13.77% 243.4MiB / 4GiB
+thesistrace-auth-1 16.73% 191.9MiB / 11.68GiB
+thesistrace-web-1 0.00% 19.27MiB / 11.68GiB
+thesistrace-batch-research-worker-1 103.77% 594MiB / 2GiB
+thesistrace-research-worker-1 0.01% 121.5MiB / 2GiB
+thesistrace-api-1 0.39% 444.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 8.05% 69.62MiB / 11.68GiB
+thesistrace-rustfs-1 4.41% 145.8MiB / 11.68GiB
+2026-09-08T13:45:04Z
+2.08 1.42 1.13 9/568 1095976
+MemAvailable:    9224520 kB
+thesistrace-agent-1 0.04% 243.4MiB / 4GiB
+thesistrace-auth-1 0.82% 192MiB / 11.68GiB
+thesistrace-web-1 1.01% 19.06MiB / 11.68GiB
+thesistrace-batch-research-worker-1 107.60% 594MiB / 2GiB
+thesistrace-research-worker-1 0.01% 121.5MiB / 2GiB
+thesistrace-api-1 15.15% 444.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.02% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 8.24% 72.03MiB / 11.68GiB
+thesistrace-rustfs-1 4.37% 145.8MiB / 11.68GiB
+2026-09-08T13:45:16Z
+2.48 1.52 1.17 7/545 1096925
+MemAvailable:    9220480 kB
+thesistrace-agent-1 5.52% 246.6MiB / 4GiB
+thesistrace-auth-1 0.03% 192MiB / 11.68GiB
+thesistrace-web-1 4.09% 19.32MiB / 11.68GiB
+thesistrace-batch-research-worker-1 106.35% 594MiB / 2GiB
+thesistrace-research-worker-1 0.01% 121.5MiB / 2GiB
+thesistrace-api-1 0.27% 444.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 1.02% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 8.31% 74.23MiB / 11.68GiB
+thesistrace-rustfs-1 6.24% 145.8MiB / 11.68GiB
+2026-09-08T13:45:29Z
+2.35 1.54 1.18 2/533 1097884
+MemAvailable:    9217192 kB
+thesistrace-agent-1 0.09% 243.4MiB / 4GiB
+thesistrace-auth-1 1.38% 192MiB / 11.68GiB
+thesistrace-web-1 3.74% 19.32MiB / 11.68GiB
+thesistrace-batch-research-worker-1 105.05% 613.4MiB / 2GiB
+thesistrace-research-worker-1 0.00% 121.5MiB / 2GiB
+thesistrace-api-1 14.77% 444.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 2.76% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 8.32% 69.8MiB / 11.68GiB
+thesistrace-rustfs-1 4.90% 145.8MiB / 11.68GiB
+2026-09-08T13:45:41Z
+2.14 1.52 1.18 2/534 1098854
+MemAvailable:    9229168 kB
+thesistrace-agent-1 14.37% 243.4MiB / 4GiB
+thesistrace-auth-1 1.24% 192MiB / 11.68GiB
+thesistrace-web-1 4.23% 19.32MiB / 11.68GiB
+thesistrace-batch-research-worker-1 103.95% 614.4MiB / 2GiB
+thesistrace-research-worker-1 0.00% 121.5MiB / 2GiB
+thesistrace-api-1 0.43% 444.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 1.31% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 10.03% 69.8MiB / 11.68GiB
+thesistrace-rustfs-1 5.50% 146MiB / 11.68GiB
+2026-09-08T13:45:53Z
+2.11 1.55 1.19 3/548 1099958
+MemAvailable:    9116624 kB
+thesistrace-batch-research-worker-2 64.59% 122.9MiB / 2GiB
+thesistrace-agent-1 0.10% 243.4MiB / 4GiB
+thesistrace-auth-1 15.70% 192MiB / 11.68GiB
+thesistrace-web-1 3.66% 19.32MiB / 11.68GiB
+thesistrace-batch-research-worker-1 106.36% 614.4MiB / 2GiB
+thesistrace-research-worker-1 0.01% 121.5MiB / 2GiB
+thesistrace-api-1 16.64% 444.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 2.24% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 12.41% 72.1MiB / 11.68GiB
+thesistrace-rustfs-1 5.47% 145.8MiB / 11.68GiB
+2026-09-08T13:46:06Z
+2.18 1.58 1.21 3/559 1100876
+MemAvailable:    9092800 kB
+thesistrace-batch-research-worker-2 0.01% 122.9MiB / 2GiB
+thesistrace-agent-1 19.16% 243.4MiB / 4GiB
+thesistrace-auth-1 5.53% 196.1MiB / 11.68GiB
+thesistrace-web-1 7.70% 19.32MiB / 11.68GiB
+thesistrace-batch-research-worker-1 106.61% 622.8MiB / 2GiB
+thesistrace-research-worker-1 0.77% 121.5MiB / 2GiB
+thesistrace-api-1 0.77% 444.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 10.63% 71.88MiB / 11.68GiB
+thesistrace-rustfs-1 5.01% 145.8MiB / 11.68GiB
+2026-09-08T13:46:18Z
+2.44 1.66 1.24 3/553 1101851
+MemAvailable:    9096672 kB
+thesistrace-batch-research-worker-2 0.01% 122.9MiB / 2GiB
+thesistrace-agent-1 0.05% 243.4MiB / 4GiB
+thesistrace-auth-1 0.02% 192MiB / 11.68GiB
+thesistrace-web-1 4.32% 23.37MiB / 11.68GiB
+thesistrace-batch-research-worker-1 105.51% 622.9MiB / 2GiB
+thesistrace-research-worker-1 0.01% 121.5MiB / 2GiB
+thesistrace-api-1 0.21% 444.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 6.97% 72.09MiB / 11.68GiB
+thesistrace-rustfs-1 4.26% 145.9MiB / 11.68GiB
+2026-09-08T13:46:30Z
+2.34 1.68 1.25 2/553 1102827
+MemAvailable:    9075340 kB
+thesistrace-batch-research-worker-2 0.98% 122.9MiB / 2GiB
+thesistrace-agent-1 14.60% 243.4MiB / 4GiB
+thesistrace-auth-1 15.57% 192MiB / 11.68GiB
+thesistrace-web-1 0.60% 19.48MiB / 11.68GiB
+thesistrace-batch-research-worker-1 103.63% 622.9MiB / 2GiB
+thesistrace-research-worker-1 0.01% 121.5MiB / 2GiB
+thesistrace-api-1 35.35% 445.1MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 7.71% 72.31MiB / 11.68GiB
+thesistrace-rustfs-1 4.14% 145.9MiB / 11.68GiB
+2026-09-08T13:46:43Z
+2.14 1.65 1.25 4/563 1103787
+MemAvailable:    9124904 kB
+thesistrace-batch-research-worker-2 115.77% 383MiB / 2GiB
+thesistrace-agent-1 0.01% 243.4MiB / 4GiB
+thesistrace-auth-1 0.02% 192MiB / 11.68GiB
+thesistrace-web-1 0.28% 19.32MiB / 11.68GiB
+thesistrace-batch-research-worker-1 105.77% 622.9MiB / 2GiB
+thesistrace-research-worker-1 0.01% 121.5MiB / 2GiB
+thesistrace-api-1 0.25% 285.8MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 13.82% 74.16MiB / 11.68GiB
+thesistrace-rustfs-1 5.30% 145.9MiB / 11.68GiB
+2026-09-08T13:46:55Z
+2.31 1.72 1.28 2/558 1104772
+MemAvailable:    9152408 kB
+thesistrace-batch-research-worker-2 0.01% 129.1MiB / 2GiB
+thesistrace-agent-1 17.07% 243.4MiB / 4GiB
+thesistrace-auth-1 1.68% 192MiB / 11.68GiB
+thesistrace-web-1 0.39% 19.4MiB / 11.68GiB
+thesistrace-batch-research-worker-1 105.22% 623.4MiB / 2GiB
+thesistrace-research-worker-1 0.00% 146.5MiB / 2GiB
+thesistrace-api-1 13.59% 309.6MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 1.04% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 16.49% 78.73MiB / 11.68GiB
+thesistrace-rustfs-1 15.38% 164.2MiB / 11.68GiB
+2026-09-08T13:47:07Z
+3.50 1.99 1.37 7/565 1105802
+MemAvailable:    8723852 kB
+thesistrace-batch-research-worker-2 77.79% 349.9MiB / 2GiB
+thesistrace-agent-1 0.02% 243.4MiB / 4GiB
+thesistrace-auth-1 14.53% 192.6MiB / 11.68GiB
+thesistrace-web-1 0.01% 19.52MiB / 11.68GiB
+thesistrace-batch-research-worker-1 108.07% 623.4MiB / 2GiB
+thesistrace-research-worker-1 46.55% 147.3MiB / 2GiB
+thesistrace-api-1 11.61% 313.7MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 26.32% 76.39MiB / 11.68GiB
+thesistrace-rustfs-1 33.98% 185.2MiB / 11.68GiB
+2026-09-08T13:47:20Z
+3.38 2.04 1.40 4/555 1106798
+MemAvailable:    9055780 kB
+thesistrace-batch-research-worker-2 0.00% 152.9MiB / 2GiB
+thesistrace-agent-1 0.02% 243.4MiB / 4GiB
+thesistrace-auth-1 1.34% 192.6MiB / 11.68GiB
+thesistrace-web-1 0.03% 19.81MiB / 11.68GiB
+thesistrace-batch-research-worker-1 105.21% 623.4MiB / 2GiB
+thesistrace-research-worker-1 0.00% 147.4MiB / 2GiB
+thesistrace-api-1 0.60% 261.3MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 3.14% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.19MiB / 512MiB
+thesistrace-postgres-1 9.60% 76.66MiB / 11.68GiB
+thesistrace-rustfs-1 29.60% 187.6MiB / 11.68GiB
+2026-09-08T13:47:32Z
+3.25 2.06 1.41 6/569 1107766
+MemAvailable:    8672280 kB
+thesistrace-batch-research-worker-2 104.11% 452.7MiB / 2GiB
+thesistrace-agent-1 0.05% 243.4MiB / 4GiB
+thesistrace-auth-1 13.03% 192.6MiB / 11.68GiB
+thesistrace-web-1 0.00% 19.84MiB / 11.68GiB
+thesistrace-batch-research-worker-1 104.14% 579.9MiB / 2GiB
+thesistrace-research-worker-1 0.01% 147.5MiB / 2GiB
+thesistrace-api-1 15.65% 261.3MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.69% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 9.69% 76.79MiB / 11.68GiB
+thesistrace-rustfs-1 25.34% 189.8MiB / 11.68GiB
+2026-09-08T13:47:44Z
+3.67 2.22 1.47 2/555 1108830
+MemAvailable:    9142924 kB
+thesistrace-batch-research-worker-2 0.00% 153.4MiB / 2GiB
+thesistrace-agent-1 15.02% 243.4MiB / 4GiB
+thesistrace-auth-1 19.36% 192.6MiB / 11.68GiB
+thesistrace-web-1 0.00% 19.84MiB / 11.68GiB
+thesistrace-batch-research-worker-1 104.64% 580.7MiB / 2GiB
+thesistrace-research-worker-1 108.68% 204.2MiB / 2GiB
+thesistrace-api-1 0.41% 261.3MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 11.66% 77.07MiB / 11.68GiB
+thesistrace-rustfs-1 30.75% 188.1MiB / 11.68GiB
+2026-09-08T13:47:56Z
+3.41 2.21 1.48 4/577 1109799
+MemAvailable:    9192112 kB
+thesistrace-batch-research-worker-2 90.90% 370.9MiB / 2GiB
+thesistrace-agent-1 5.96% 250.9MiB / 4GiB
+thesistrace-auth-1 0.01% 192.6MiB / 11.68GiB
+thesistrace-web-1 0.00% 19.84MiB / 11.68GiB
+thesistrace-batch-research-worker-1 104.72% 401.4MiB / 2GiB
+thesistrace-research-worker-1 0.00% 147.6MiB / 2GiB
+thesistrace-api-1 20.77% 261.3MiB / 11.68GiB
+thesistrace-data-operator-worker-1 1.16% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 20.31% 78.46MiB / 11.68GiB
+thesistrace-rustfs-1 29.57% 193MiB / 11.68GiB
+2026-09-08T13:48:09Z
+3.70 2.33 1.53 4/562 1110742
+MemAvailable:    9073144 kB
+thesistrace-batch-research-worker-2 84.31% 402.6MiB / 2GiB
+thesistrace-agent-1 7.74% 243.4MiB / 4GiB
+thesistrace-auth-1 18.33% 192.6MiB / 11.68GiB
+thesistrace-web-1 4.95% 19.87MiB / 11.68GiB
+thesistrace-batch-research-worker-1 104.54% 404.6MiB / 2GiB
+thesistrace-research-worker-1 0.01% 147.6MiB / 2GiB
+thesistrace-api-1 8.03% 261.3MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 121.8MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 23.16% 81.13MiB / 11.68GiB
+thesistrace-rustfs-1 29.88% 191.3MiB / 11.68GiB
+2026-09-08T13:48:21Z
+3.42 2.32 1.53 2/556 1111756
+MemAvailable:    9635712 kB
+thesistrace-batch-research-worker-2 0.01% 158.4MiB / 2GiB
+thesistrace-agent-1 14.76% 243.4MiB / 4GiB
+thesistrace-auth-1 16.04% 192.7MiB / 11.68GiB
+thesistrace-web-1 4.84% 19.86MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 135.7MiB / 2GiB
+thesistrace-research-worker-1 0.02% 147.6MiB / 2GiB
+thesistrace-api-1 18.87% 261.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 5.91% 122.3MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 7.86% 83.98MiB / 11.68GiB
+thesistrace-rustfs-1 27.74% 189.6MiB / 11.68GiB
+2026-09-08T13:48:33Z
+3.11 2.30 1.54 4/548 1112810
+MemAvailable:    9668264 kB
+thesistrace-batch-research-worker-2 0.81% 158.4MiB / 2GiB
+thesistrace-agent-1 0.04% 243.4MiB / 4GiB
+thesistrace-auth-1 0.06% 192.6MiB / 11.68GiB
+thesistrace-web-1 3.98% 19.91MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136MiB / 2GiB
+thesistrace-research-worker-1 0.55% 148MiB / 2GiB
+thesistrace-api-1 0.48% 262MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 122.3MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 5.39% 81.72MiB / 11.68GiB
+thesistrace-rustfs-1 43.12% 183.3MiB / 11.68GiB
+2026-09-08T13:48:45Z
+2.86 2.27 1.54 1/547 1113797
+MemAvailable:    9663100 kB
+thesistrace-batch-research-worker-2 0.00% 158.4MiB / 2GiB
+thesistrace-agent-1 17.77% 243.4MiB / 4GiB
+thesistrace-auth-1 19.20% 192.6MiB / 11.68GiB
+thesistrace-web-1 3.63% 19.91MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.01% 136MiB / 2GiB
+thesistrace-research-worker-1 0.00% 148MiB / 2GiB
+thesistrace-api-1 0.53% 262MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 122.3MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 6.09% 81.63MiB / 11.68GiB
+thesistrace-rustfs-1 69.27% 178.4MiB / 11.68GiB
+2026-09-08T13:48:58Z
+2.42 2.20 1.53 1/547 1114747
+MemAvailable:    9646256 kB
+thesistrace-batch-research-worker-2 0.00% 158.4MiB / 2GiB
+thesistrace-agent-1 0.08% 243.4MiB / 4GiB
+thesistrace-auth-1 29.78% 192.6MiB / 11.68GiB
+thesistrace-web-1 4.02% 20MiB / 11.68GiB
+thesistrace-batch-research-worker-1 7.30% 136MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 24.55% 262MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 2.91% 122.3MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 10.92% 81.95MiB / 11.68GiB
+thesistrace-rustfs-1 44.87% 178.2MiB / 11.68GiB
+2026-09-08T13:49:10Z
+2.41 2.21 1.54 2/563 1115827
+MemAvailable:    9682220 kB
+thesistrace-batch-research-worker-2 0.00% 158.4MiB / 2GiB
+thesistrace-agent-1 9.81% 243.4MiB / 4GiB
+thesistrace-auth-1 1.87% 192.6MiB / 11.68GiB
+thesistrace-web-1 5.94% 20.09MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 7.13% 258.8MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 4.54% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 8.95% 82.12MiB / 11.68GiB
+thesistrace-rustfs-1 43.61% 162.2MiB / 11.68GiB
+2026-09-08T13:49:22Z
+2.11 2.15 1.53 4/554 1116781
+MemAvailable:    9707140 kB
+thesistrace-batch-research-worker-2 6.63% 158.4MiB / 2GiB
+thesistrace-agent-1 0.44% 245MiB / 4GiB
+thesistrace-auth-1 0.42% 192.7MiB / 11.68GiB
+thesistrace-web-1 4.20% 20.08MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136MiB / 2GiB
+thesistrace-research-worker-1 4.34% 148MiB / 2GiB
+thesistrace-api-1 4.57% 258.8MiB / 11.68GiB
+thesistrace-data-operator-worker-1 1.49% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 4.63% 82.34MiB / 11.68GiB
+thesistrace-rustfs-1 4.87% 163.7MiB / 11.68GiB
+2026-09-08T13:49:35Z
+2.33 2.19 1.55 1/547 1117763
+MemAvailable:    9703132 kB
+thesistrace-batch-research-worker-2 0.00% 158.4MiB / 2GiB
+thesistrace-agent-1 2.63% 243.5MiB / 4GiB
+thesistrace-auth-1 16.58% 192.7MiB / 11.68GiB
+thesistrace-web-1 4.02% 20.07MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.01% 136MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 15.95% 258.6MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 6.61% 82.43MiB / 11.68GiB
+thesistrace-rustfs-1 73.04% 161.9MiB / 11.68GiB
+2026-09-08T13:49:47Z
+2.53 2.24 1.57 5/550 1118689
+MemAvailable:    9699700 kB
+thesistrace-batch-research-worker-2 0.01% 158.4MiB / 2GiB
+thesistrace-agent-1 4.76% 244.8MiB / 4GiB
+thesistrace-auth-1 0.02% 192.7MiB / 11.68GiB
+thesistrace-web-1 0.00% 20.07MiB / 11.68GiB
+thesistrace-batch-research-worker-1 51.36% 136.3MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 0.29% 257.7MiB / 11.68GiB
+thesistrace-data-operator-worker-1 1.33% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 2.85% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 7.24% 82.41MiB / 11.68GiB
+thesistrace-rustfs-1 48.12% 160.6MiB / 11.68GiB
+2026-09-08T13:49:59Z
+2.24 2.19 1.57 2/547 1119787
+MemAvailable:    9684924 kB
+thesistrace-batch-research-worker-2 0.00% 158.5MiB / 2GiB
+thesistrace-agent-1 0.23% 243.5MiB / 4GiB
+thesistrace-auth-1 0.01% 192.7MiB / 11.68GiB
+thesistrace-web-1 14.35% 20.15MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136.3MiB / 2GiB
+thesistrace-research-worker-1 0.00% 148MiB / 2GiB
+thesistrace-api-1 53.59% 257.7MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 4.14% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 23.40% 82.43MiB / 11.68GiB
+thesistrace-rustfs-1 57.04% 161.9MiB / 11.68GiB
+2026-09-08T13:50:12Z
+3.52 2.46 1.67 3/568 1120705
+MemAvailable:    9692072 kB
+thesistrace-batch-research-worker-2 4.61% 158.5MiB / 2GiB
+thesistrace-agent-1 4.38% 243.7MiB / 4GiB
+thesistrace-auth-1 17.69% 192.7MiB / 11.68GiB
+thesistrace-web-1 4.19% 20.08MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136.3MiB / 2GiB
+thesistrace-research-worker-1 0.58% 148MiB / 2GiB
+thesistrace-api-1 0.28% 257.7MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.99% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 6.14% 84.84MiB / 11.68GiB
+thesistrace-rustfs-1 5.66% 163MiB / 11.68GiB
+2026-09-08T13:50:25Z
+3.05 2.41 1.66 1/530 1121784
+MemAvailable:    9865568 kB
+thesistrace-agent-1 16.64% 243.5MiB / 4GiB
+thesistrace-auth-1 1.11% 192.7MiB / 11.68GiB
+thesistrace-web-1 3.54% 20.09MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.47% 136.3MiB / 2GiB
+thesistrace-research-worker-1 0.00% 148MiB / 2GiB
+thesistrace-api-1 15.54% 257.7MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 4.28% 82.56MiB / 11.68GiB
+thesistrace-rustfs-1 46.98% 161.1MiB / 11.68GiB
+2026-09-08T13:50:37Z
+2.95 2.41 1.67 1/531 1122744
+MemAvailable:    9845572 kB
+thesistrace-agent-1 0.02% 243.5MiB / 4GiB
+thesistrace-auth-1 15.94% 192.7MiB / 11.68GiB
+thesistrace-web-1 8.15% 20.13MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.01% 136.3MiB / 2GiB
+thesistrace-research-worker-1 0.00% 148MiB / 2GiB
+thesistrace-api-1 0.29% 259MiB / 11.68GiB
+thesistrace-data-operator-worker-1 5.15% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 8.44% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 13.36% 79.73MiB / 11.68GiB
+thesistrace-rustfs-1 20.28% 160.8MiB / 11.68GiB
+2026-09-08T13:50:49Z
+2.44 2.33 1.65 2/532 1123709
+MemAvailable:    9791796 kB
+thesistrace-agent-1 2.83% 243.5MiB / 4GiB
+thesistrace-auth-1 16.36% 192.7MiB / 11.68GiB
+thesistrace-web-1 1.65% 20.18MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136.3MiB / 2GiB
+thesistrace-research-worker-1 0.00% 148MiB / 2GiB
+thesistrace-api-1 68.70% 316.7MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 4.09% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 7.70% 80.68MiB / 11.68GiB
+thesistrace-rustfs-1 38.17% 161.1MiB / 11.68GiB
+2026-09-08T13:51:02Z
+2.81 2.41 1.69 8/551 1124668
+MemAvailable:    9502380 kB
+thesistrace-agent-1 0.02% 243.5MiB / 4GiB
+thesistrace-auth-1 0.06% 192.8MiB / 11.68GiB
+thesistrace-web-1 0.00% 20.2MiB / 11.68GiB
+thesistrace-batch-research-worker-1 105.92% 421.5MiB / 2GiB
+thesistrace-research-worker-1 5.13% 148MiB / 2GiB
+thesistrace-api-1 17.29% 316.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.76% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 2.60% 81.44MiB / 11.68GiB
+thesistrace-rustfs-1 5.49% 162.2MiB / 11.68GiB
+2026-09-08T13:51:14Z
+2.91 2.46 1.72 7/559 1125617
+MemAvailable:    9550800 kB
+thesistrace-agent-1 16.48% 243.5MiB / 4GiB
+thesistrace-auth-1 21.07% 192.8MiB / 11.68GiB
+thesistrace-web-1 4.26% 20.2MiB / 11.68GiB
+thesistrace-batch-research-worker-1 43.97% 136.3MiB / 2GiB
+thesistrace-research-worker-1 3.38% 148MiB / 2GiB
+thesistrace-api-1 17.06% 316.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 15.01% 80.95MiB / 11.68GiB
+thesistrace-rustfs-1 40.03% 160.5MiB / 11.68GiB
+2026-09-08T13:51:27Z
+2.69 2.42 1.71 2/541 1126593
+MemAvailable:    9482732 kB
+thesistrace-agent-1 14.58% 243.5MiB / 4GiB
+thesistrace-auth-1 16.73% 192.8MiB / 11.68GiB
+thesistrace-web-1 0.35% 20.21MiB / 11.68GiB
+thesistrace-batch-research-worker-1 103.98% 421.9MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 1.98% 316.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 3.27% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 10.34% 85.17MiB / 11.68GiB
+thesistrace-rustfs-1 4.14% 159.6MiB / 11.68GiB
+2026-09-08T13:51:39Z
+2.39 2.37 1.71 10/562 1127538
+MemAvailable:    9538812 kB
+thesistrace-agent-1 0.33% 243.5MiB / 4GiB
+thesistrace-auth-1 0.45% 193.1MiB / 11.68GiB
+thesistrace-web-1 0.67% 20.22MiB / 11.68GiB
+thesistrace-batch-research-worker-1 20.66% 136.3MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 22.97% 317MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.92% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 44.28% 82.93MiB / 11.68GiB
+thesistrace-rustfs-1 5.05% 159.5MiB / 11.68GiB
+2026-09-08T13:51:51Z
+2.10 2.31 1.69 1/532 1128571
+MemAvailable:    9789544 kB
+thesistrace-agent-1 62.98% 243.2MiB / 4GiB
+thesistrace-auth-1 0.86% 193.1MiB / 11.68GiB
+thesistrace-web-1 0.04% 20.22MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136.4MiB / 2GiB
+thesistrace-research-worker-1 4.31% 148MiB / 2GiB
+thesistrace-api-1 0.42% 316.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 15.29% 79.36MiB / 11.68GiB
+thesistrace-rustfs-1 4.64% 159.5MiB / 11.68GiB
+2026-09-08T13:52:04Z
+2.25 2.34 1.72 2/532 1129520
+MemAvailable:    9802628 kB
+thesistrace-agent-1 0.01% 243.2MiB / 4GiB
+thesistrace-auth-1 23.12% 193.1MiB / 11.68GiB
+thesistrace-web-1 0.00% 20.28MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136.4MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 23.73% 316.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 8.45% 79.7MiB / 11.68GiB
+thesistrace-rustfs-1 4.28% 160.2MiB / 11.68GiB
+2026-09-08T13:52:16Z
+2.45 2.38 1.74 1/532 1130514
+MemAvailable:    9786264 kB
+thesistrace-agent-1 17.44% 243.3MiB / 4GiB
+thesistrace-auth-1 0.74% 193.1MiB / 11.68GiB
+thesistrace-web-1 1.64% 20.4MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136.4MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 0.53% 316.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.02% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 13.00% 79.77MiB / 11.68GiB
+thesistrace-rustfs-1 4.56% 161.3MiB / 11.68GiB
+2026-09-08T13:52:28Z
+2.44 2.38 1.75 9/579 1131586
+MemAvailable:    9776216 kB
+thesistrace-agent-1 0.02% 243.2MiB / 4GiB
+thesistrace-auth-1 14.47% 193.1MiB / 11.68GiB
+thesistrace-web-1 7.20% 20.53MiB / 11.68GiB
+thesistrace-batch-research-worker-1 4.15% 136.4MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 18.16% 316.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.29% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 5.66% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 8.17% 79.82MiB / 11.68GiB
+thesistrace-rustfs-1 5.97% 159.1MiB / 11.68GiB
+thesistrace-batch-research-worker-2 111.90% 54.52MiB / 2GiB
+2026-09-08T13:52:40Z
+2.37 2.36 1.75 3/558 1132629
+MemAvailable:    9641480 kB
+thesistrace-batch-research-worker-2 0.00% 122.5MiB / 2GiB
+thesistrace-agent-1 21.74% 243.2MiB / 4GiB
+thesistrace-auth-1 21.63% 193.1MiB / 11.68GiB
+thesistrace-web-1 5.89% 20.53MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.01% 136.4MiB / 2GiB
+thesistrace-research-worker-1 5.20% 148MiB / 2GiB
+thesistrace-api-1 0.69% 316.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 11.28% 81.89MiB / 11.68GiB
+thesistrace-rustfs-1 57.73% 161.4MiB / 11.68GiB
+2026-09-08T13:52:53Z
+2.00 2.29 1.73 2/552 1133551
+MemAvailable:    9671596 kB
+thesistrace-batch-research-worker-2 0.01% 122.5MiB / 2GiB
+thesistrace-agent-1 0.03% 243.2MiB / 4GiB
+thesistrace-auth-1 0.03% 193.1MiB / 11.68GiB
+thesistrace-web-1 6.88% 20.54MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.01% 136.4MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 11.60% 316.9MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.77% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 3.42% 82MiB / 11.68GiB
+thesistrace-rustfs-1 6.96% 161.7MiB / 11.68GiB
+2026-09-08T13:53:05Z
+2.37 2.37 1.76 3/554 1134550
+MemAvailable:    9658152 kB
+thesistrace-batch-research-worker-2 85.85% 168.6MiB / 2GiB
+thesistrace-agent-1 7.61% 243.2MiB / 4GiB
+thesistrace-auth-1 0.03% 193.1MiB / 11.68GiB
+thesistrace-web-1 3.70% 20.54MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136.4MiB / 2GiB
+thesistrace-research-worker-1 0.00% 148MiB / 2GiB
+thesistrace-api-1 9.95% 331.1MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 15.17% 82.88MiB / 11.68GiB
+thesistrace-rustfs-1 4.46% 161.1MiB / 11.68GiB
+2026-09-08T13:53:17Z
+3.34 2.57 1.84 6/575 1135519
+MemAvailable:    9032412 kB
+thesistrace-batch-research-worker-2 103.50% 447.5MiB / 2GiB
+thesistrace-agent-1 11.29% 257.6MiB / 4GiB
+thesistrace-auth-1 17.72% 193.1MiB / 11.68GiB
+thesistrace-web-1 2.93% 24.96MiB / 11.68GiB
+thesistrace-batch-research-worker-1 103.87% 412.2MiB / 2GiB
+thesistrace-research-worker-1 0.00% 148MiB / 2GiB
+thesistrace-api-1 10.99% 323.4MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.67% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 6.73% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 10.72% 84.76MiB / 11.68GiB
+thesistrace-rustfs-1 44.67% 160.6MiB / 11.68GiB
+2026-09-08T13:53:30Z
+3.37 2.61 1.86 2/554 1136452
+MemAvailable:    9646356 kB
+thesistrace-batch-research-worker-2 0.00% 124MiB / 2GiB
+thesistrace-agent-1 2.57% 243.2MiB / 4GiB
+thesistrace-auth-1 1.15% 193.1MiB / 11.68GiB
+thesistrace-web-1 0.01% 20.54MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.01% 136.4MiB / 2GiB
+thesistrace-research-worker-1 5.08% 148MiB / 2GiB
+thesistrace-api-1 19.51% 323.4MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.01% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 8.03% 85.2MiB / 11.68GiB
+thesistrace-rustfs-1 49.52% 160.3MiB / 11.68GiB
+2026-09-08T13:53:42Z
+2.92 2.54 1.85 1/555 1137402
+MemAvailable:    9642572 kB
+thesistrace-batch-research-worker-2 0.01% 124.4MiB / 2GiB
+thesistrace-agent-1 1.56% 246.4MiB / 4GiB
+thesistrace-auth-1 16.01% 193.1MiB / 11.68GiB
+thesistrace-web-1 0.74% 20.55MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.01% 136.4MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 0.93% 323.4MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 5.16% 85.52MiB / 11.68GiB
+thesistrace-rustfs-1 45.39% 161MiB / 11.68GiB
+2026-09-08T13:53:54Z
+3.67 2.72 1.92 1/554 1138427
+MemAvailable:    9654828 kB
+thesistrace-batch-research-worker-2 0.01% 124.4MiB / 2GiB
+thesistrace-agent-1 19.13% 243.2MiB / 4GiB
+thesistrace-auth-1 1.76% 193.1MiB / 11.68GiB
+thesistrace-web-1 0.09% 20.54MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136.4MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 17.13% 323.4MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 13.55% 87.91MiB / 11.68GiB
+thesistrace-rustfs-1 4.92% 161MiB / 11.68GiB
+2026-09-08T13:54:07Z
+3.26 2.67 1.91 1/553 1139353
+MemAvailable:    9629296 kB
+thesistrace-batch-research-worker-2 0.59% 124.4MiB / 2GiB
+thesistrace-agent-1 0.02% 243.2MiB / 4GiB
+thesistrace-auth-1 14.09% 193.1MiB / 11.68GiB
+thesistrace-web-1 0.00% 20.54MiB / 11.68GiB
+thesistrace-batch-research-worker-1 7.15% 136.4MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 1.18% 323.4MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 5.49% 85.55MiB / 11.68GiB
+thesistrace-rustfs-1 8.77% 161.2MiB / 11.68GiB
+2026-09-08T13:54:19Z
+2.54 2.53 1.88 1/553 1140307
+MemAvailable:    9642188 kB
+thesistrace-batch-research-worker-2 0.00% 124.4MiB / 2GiB
+thesistrace-agent-1 18.50% 243.2MiB / 4GiB
+thesistrace-auth-1 1.39% 193.1MiB / 11.68GiB
+thesistrace-web-1 0.01% 20.55MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136.4MiB / 2GiB
+thesistrace-research-worker-1 6.58% 148MiB / 2GiB
+thesistrace-api-1 18.63% 323.4MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 7.61% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 5.66% 85.57MiB / 11.68GiB
+thesistrace-rustfs-1 78.88% 162.6MiB / 11.68GiB
+2026-09-08T13:54:31Z
+2.30 2.48 1.87 1/553 1141277
+MemAvailable:    9661552 kB
+thesistrace-batch-research-worker-2 0.00% 124.4MiB / 2GiB
+thesistrace-agent-1 0.03% 243.2MiB / 4GiB
+thesistrace-auth-1 1.65% 193.1MiB / 11.68GiB
+thesistrace-web-1 0.00% 20.25MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136.4MiB / 2GiB
+thesistrace-research-worker-1 8.26% 148MiB / 2GiB
+thesistrace-api-1 0.23% 323.4MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 6.76% 85.59MiB / 11.68GiB
+thesistrace-rustfs-1 6.00% 164.9MiB / 11.68GiB
+2026-09-08T13:54:44Z
+2.19 2.44 1.86 1/552 1142262
+MemAvailable:    9652520 kB
+thesistrace-batch-research-worker-2 0.00% 124.4MiB / 2GiB
+thesistrace-agent-1 20.44% 243.2MiB / 4GiB
+thesistrace-auth-1 22.26% 193.2MiB / 11.68GiB
+thesistrace-web-1 0.80% 20.41MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136.4MiB / 2GiB
+thesistrace-research-worker-1 0.01% 148MiB / 2GiB
+thesistrace-api-1 43.84% 323.4MiB / 11.68GiB
+thesistrace-data-operator-worker-1 2.07% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 11.99% 85.56MiB / 11.68GiB
+thesistrace-rustfs-1 4.98% 162.1MiB / 11.68GiB
+2026-09-08T13:54:56Z
+2.17 2.43 1.86 1/552 1143194
+MemAvailable:    9645764 kB
+thesistrace-batch-research-worker-2 6.50% 124.4MiB / 2GiB
+thesistrace-agent-1 0.04% 243.2MiB / 4GiB
+thesistrace-auth-1 0.02% 193.2MiB / 11.68GiB
+thesistrace-web-1 4.71% 20.27MiB / 11.68GiB
+thesistrace-batch-research-worker-1 6.77% 136.4MiB / 2GiB
+thesistrace-research-worker-1 0.00% 148MiB / 2GiB
+thesistrace-api-1 0.26% 323.4MiB / 11.68GiB
+thesistrace-data-operator-worker-1 0.00% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.01% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 6.62% 85.64MiB / 11.68GiB
+thesistrace-rustfs-1 4.07% 165.5MiB / 11.68GiB
+2026-09-08T13:55:08Z
+2.40 2.47 1.89 1/553 1144174
+MemAvailable:    9663472 kB
+thesistrace-batch-research-worker-2 0.01% 124.4MiB / 2GiB
+thesistrace-agent-1 0.06% 243.2MiB / 4GiB
+thesistrace-auth-1 2.77% 197.5MiB / 11.68GiB
+thesistrace-web-1 4.67% 20.27MiB / 11.68GiB
+thesistrace-batch-research-worker-1 0.00% 136.4MiB / 2GiB
+thesistrace-research-worker-1 0.00% 148MiB / 2GiB
+thesistrace-api-1 48.47% 323.4MiB / 11.68GiB
+thesistrace-data-operator-worker-1 6.09% 159.2MiB / 11.68GiB
+thesistrace-tracking-worker-1 0.00% 122.4MiB / 1GiB
+thesistrace-model-model-gateway-1 0.00% 48.2MiB / 512MiB
+thesistrace-postgres-1 15.60% 85.72MiB / 11.68GiB
+thesistrace-rustfs-1 12.34% 165.4MiB / 11.68GiB

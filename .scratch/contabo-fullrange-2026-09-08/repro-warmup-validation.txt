@@ -1,0 +1,2 @@
+{'rolling_tail_sessions': [], 'validation': 'passed'}
+{'rolling_tail_sessions': ['2010-01-05'], 'validation': 'failed', 'error': 'Alpha-and-Factor continuation is invalid'}

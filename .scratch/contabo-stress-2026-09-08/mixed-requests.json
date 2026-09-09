@@ -1,0 +1,773 @@
+[
+  {
+    "tool": "submit_research_batch",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-mixed-0",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top300",
+      "neutralization": "none",
+      "batch_kind": "factor_evaluation",
+      "factors": [
+        {
+          "item_key": "momentum-5",
+          "name": "STRESS-6C12G mixed-0 momentum 5",
+          "formula": "rank(close / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "reversal-5",
+          "name": "STRESS-6C12G mixed-0 reversal 5",
+          "formula": "-rank(close / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "volume-5",
+          "name": "STRESS-6C12G mixed-0 volume 5",
+          "formula": "rank(volume / ts_mean(volume, 5))"
+        },
+        {
+          "item_key": "volatility-5",
+          "name": "STRESS-6C12G mixed-0 volatility 5",
+          "formula": "-rank(ts_std(close, 5) / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "momentum-10",
+          "name": "STRESS-6C12G mixed-0 momentum 10",
+          "formula": "rank(close / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "reversal-10",
+          "name": "STRESS-6C12G mixed-0 reversal 10",
+          "formula": "-rank(close / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "volume-10",
+          "name": "STRESS-6C12G mixed-0 volume 10",
+          "formula": "rank(volume / ts_mean(volume, 10))"
+        },
+        {
+          "item_key": "volatility-10",
+          "name": "STRESS-6C12G mixed-0 volatility 10",
+          "formula": "-rank(ts_std(close, 10) / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "momentum-20",
+          "name": "STRESS-6C12G mixed-0 momentum 20",
+          "formula": "rank(close / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "reversal-20",
+          "name": "STRESS-6C12G mixed-0 reversal 20",
+          "formula": "-rank(close / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "volume-20",
+          "name": "STRESS-6C12G mixed-0 volume 20",
+          "formula": "rank(volume / ts_mean(volume, 20))"
+        },
+        {
+          "item_key": "volatility-20",
+          "name": "STRESS-6C12G mixed-0 volatility 20",
+          "formula": "-rank(ts_std(close, 20) / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "momentum-40",
+          "name": "STRESS-6C12G mixed-0 momentum 40",
+          "formula": "rank(close / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "reversal-40",
+          "name": "STRESS-6C12G mixed-0 reversal 40",
+          "formula": "-rank(close / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "volume-40",
+          "name": "STRESS-6C12G mixed-0 volume 40",
+          "formula": "rank(volume / ts_mean(volume, 40))"
+        },
+        {
+          "item_key": "volatility-40",
+          "name": "STRESS-6C12G mixed-0 volatility 40",
+          "formula": "-rank(ts_std(close, 40) / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "momentum-60",
+          "name": "STRESS-6C12G mixed-0 momentum 60",
+          "formula": "rank(close / ts_mean(close, 60))"
+        },
+        {
+          "item_key": "reversal-60",
+          "name": "STRESS-6C12G mixed-0 reversal 60",
+          "formula": "-rank(close / ts_mean(close, 60))"
+        },
+        {
+          "item_key": "volume-60",
+          "name": "STRESS-6C12G mixed-0 volume 60",
+          "formula": "rank(volume / ts_mean(volume, 60))"
+        },
+        {
+          "item_key": "volatility-60",
+          "name": "STRESS-6C12G mixed-0 volatility 60",
+          "formula": "-rank(ts_std(close, 60) / ts_mean(close, 60))"
+        }
+      ]
+    }
+  },
+  {
+    "tool": "submit_research_batch",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-mixed-1",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top300",
+      "neutralization": "none",
+      "batch_kind": "strategy_sweep",
+      "alpha": {
+        "formula": "rank(close / ts_mean(close, 20))"
+      },
+      "strategies": [
+        {
+          "item_key": "h5-r1",
+          "name": "STRESS-6C12G mixed-1 H5 R1",
+          "holdings_count": 5,
+          "rebalance_every_sessions": 1
+        },
+        {
+          "item_key": "h5-r5",
+          "name": "STRESS-6C12G mixed-1 H5 R5",
+          "holdings_count": 5,
+          "rebalance_every_sessions": 5
+        },
+        {
+          "item_key": "h5-r10",
+          "name": "STRESS-6C12G mixed-1 H5 R10",
+          "holdings_count": 5,
+          "rebalance_every_sessions": 10
+        },
+        {
+          "item_key": "h5-r20",
+          "name": "STRESS-6C12G mixed-1 H5 R20",
+          "holdings_count": 5,
+          "rebalance_every_sessions": 20
+        },
+        {
+          "item_key": "h10-r1",
+          "name": "STRESS-6C12G mixed-1 H10 R1",
+          "holdings_count": 10,
+          "rebalance_every_sessions": 1
+        },
+        {
+          "item_key": "h10-r5",
+          "name": "STRESS-6C12G mixed-1 H10 R5",
+          "holdings_count": 10,
+          "rebalance_every_sessions": 5
+        },
+        {
+          "item_key": "h10-r10",
+          "name": "STRESS-6C12G mixed-1 H10 R10",
+          "holdings_count": 10,
+          "rebalance_every_sessions": 10
+        },
+        {
+          "item_key": "h10-r20",
+          "name": "STRESS-6C12G mixed-1 H10 R20",
+          "holdings_count": 10,
+          "rebalance_every_sessions": 20
+        },
+        {
+          "item_key": "h20-r1",
+          "name": "STRESS-6C12G mixed-1 H20 R1",
+          "holdings_count": 20,
+          "rebalance_every_sessions": 1
+        },
+        {
+          "item_key": "h20-r5",
+          "name": "STRESS-6C12G mixed-1 H20 R5",
+          "holdings_count": 20,
+          "rebalance_every_sessions": 5
+        },
+        {
+          "item_key": "h20-r10",
+          "name": "STRESS-6C12G mixed-1 H20 R10",
+          "holdings_count": 20,
+          "rebalance_every_sessions": 10
+        },
+        {
+          "item_key": "h20-r20",
+          "name": "STRESS-6C12G mixed-1 H20 R20",
+          "holdings_count": 20,
+          "rebalance_every_sessions": 20
+        },
+        {
+          "item_key": "h50-r1",
+          "name": "STRESS-6C12G mixed-1 H50 R1",
+          "holdings_count": 50,
+          "rebalance_every_sessions": 1
+        },
+        {
+          "item_key": "h50-r5",
+          "name": "STRESS-6C12G mixed-1 H50 R5",
+          "holdings_count": 50,
+          "rebalance_every_sessions": 5
+        },
+        {
+          "item_key": "h50-r10",
+          "name": "STRESS-6C12G mixed-1 H50 R10",
+          "holdings_count": 50,
+          "rebalance_every_sessions": 10
+        },
+        {
+          "item_key": "h50-r20",
+          "name": "STRESS-6C12G mixed-1 H50 R20",
+          "holdings_count": 50,
+          "rebalance_every_sessions": 20
+        },
+        {
+          "item_key": "h100-r1",
+          "name": "STRESS-6C12G mixed-1 H100 R1",
+          "holdings_count": 100,
+          "rebalance_every_sessions": 1
+        },
+        {
+          "item_key": "h100-r5",
+          "name": "STRESS-6C12G mixed-1 H100 R5",
+          "holdings_count": 100,
+          "rebalance_every_sessions": 5
+        },
+        {
+          "item_key": "h100-r10",
+          "name": "STRESS-6C12G mixed-1 H100 R10",
+          "holdings_count": 100,
+          "rebalance_every_sessions": 10
+        },
+        {
+          "item_key": "h100-r20",
+          "name": "STRESS-6C12G mixed-1 H100 R20",
+          "holdings_count": 100,
+          "rebalance_every_sessions": 20
+        }
+      ]
+    }
+  },
+  {
+    "tool": "submit_research_batch",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-mixed-2",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top1000",
+      "neutralization": "none",
+      "batch_kind": "factor_evaluation",
+      "factors": [
+        {
+          "item_key": "momentum-5",
+          "name": "STRESS-6C12G mixed-2 momentum 5",
+          "formula": "rank(close / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "reversal-5",
+          "name": "STRESS-6C12G mixed-2 reversal 5",
+          "formula": "-rank(close / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "volume-5",
+          "name": "STRESS-6C12G mixed-2 volume 5",
+          "formula": "rank(volume / ts_mean(volume, 5))"
+        },
+        {
+          "item_key": "volatility-5",
+          "name": "STRESS-6C12G mixed-2 volatility 5",
+          "formula": "-rank(ts_std(close, 5) / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "momentum-10",
+          "name": "STRESS-6C12G mixed-2 momentum 10",
+          "formula": "rank(close / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "reversal-10",
+          "name": "STRESS-6C12G mixed-2 reversal 10",
+          "formula": "-rank(close / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "volume-10",
+          "name": "STRESS-6C12G mixed-2 volume 10",
+          "formula": "rank(volume / ts_mean(volume, 10))"
+        },
+        {
+          "item_key": "volatility-10",
+          "name": "STRESS-6C12G mixed-2 volatility 10",
+          "formula": "-rank(ts_std(close, 10) / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "momentum-20",
+          "name": "STRESS-6C12G mixed-2 momentum 20",
+          "formula": "rank(close / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "reversal-20",
+          "name": "STRESS-6C12G mixed-2 reversal 20",
+          "formula": "-rank(close / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "volume-20",
+          "name": "STRESS-6C12G mixed-2 volume 20",
+          "formula": "rank(volume / ts_mean(volume, 20))"
+        },
+        {
+          "item_key": "volatility-20",
+          "name": "STRESS-6C12G mixed-2 volatility 20",
+          "formula": "-rank(ts_std(close, 20) / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "momentum-40",
+          "name": "STRESS-6C12G mixed-2 momentum 40",
+          "formula": "rank(close / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "reversal-40",
+          "name": "STRESS-6C12G mixed-2 reversal 40",
+          "formula": "-rank(close / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "volume-40",
+          "name": "STRESS-6C12G mixed-2 volume 40",
+          "formula": "rank(volume / ts_mean(volume, 40))"
+        },
+        {
+          "item_key": "volatility-40",
+          "name": "STRESS-6C12G mixed-2 volatility 40",
+          "formula": "-rank(ts_std(close, 40) / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "momentum-60",
+          "name": "STRESS-6C12G mixed-2 momentum 60",
+          "formula": "rank(close / ts_mean(close, 60))"
+        },
+        {
+          "item_key": "reversal-60",
+          "name": "STRESS-6C12G mixed-2 reversal 60",
+          "formula": "-rank(close / ts_mean(close, 60))"
+        },
+        {
+          "item_key": "volume-60",
+          "name": "STRESS-6C12G mixed-2 volume 60",
+          "formula": "rank(volume / ts_mean(volume, 60))"
+        },
+        {
+          "item_key": "volatility-60",
+          "name": "STRESS-6C12G mixed-2 volatility 60",
+          "formula": "-rank(ts_std(close, 60) / ts_mean(close, 60))"
+        }
+      ]
+    }
+  },
+  {
+    "tool": "submit_research_batch",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-mixed-3",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top1000",
+      "neutralization": "none",
+      "batch_kind": "strategy_sweep",
+      "alpha": {
+        "formula": "rank(close / ts_mean(close, 20))"
+      },
+      "strategies": [
+        {
+          "item_key": "h5-r1",
+          "name": "STRESS-6C12G mixed-3 H5 R1",
+          "holdings_count": 5,
+          "rebalance_every_sessions": 1
+        },
+        {
+          "item_key": "h5-r5",
+          "name": "STRESS-6C12G mixed-3 H5 R5",
+          "holdings_count": 5,
+          "rebalance_every_sessions": 5
+        },
+        {
+          "item_key": "h5-r10",
+          "name": "STRESS-6C12G mixed-3 H5 R10",
+          "holdings_count": 5,
+          "rebalance_every_sessions": 10
+        },
+        {
+          "item_key": "h5-r20",
+          "name": "STRESS-6C12G mixed-3 H5 R20",
+          "holdings_count": 5,
+          "rebalance_every_sessions": 20
+        },
+        {
+          "item_key": "h10-r1",
+          "name": "STRESS-6C12G mixed-3 H10 R1",
+          "holdings_count": 10,
+          "rebalance_every_sessions": 1
+        },
+        {
+          "item_key": "h10-r5",
+          "name": "STRESS-6C12G mixed-3 H10 R5",
+          "holdings_count": 10,
+          "rebalance_every_sessions": 5
+        },
+        {
+          "item_key": "h10-r10",
+          "name": "STRESS-6C12G mixed-3 H10 R10",
+          "holdings_count": 10,
+          "rebalance_every_sessions": 10
+        },
+        {
+          "item_key": "h10-r20",
+          "name": "STRESS-6C12G mixed-3 H10 R20",
+          "holdings_count": 10,
+          "rebalance_every_sessions": 20
+        },
+        {
+          "item_key": "h20-r1",
+          "name": "STRESS-6C12G mixed-3 H20 R1",
+          "holdings_count": 20,
+          "rebalance_every_sessions": 1
+        },
+        {
+          "item_key": "h20-r5",
+          "name": "STRESS-6C12G mixed-3 H20 R5",
+          "holdings_count": 20,
+          "rebalance_every_sessions": 5
+        },
+        {
+          "item_key": "h20-r10",
+          "name": "STRESS-6C12G mixed-3 H20 R10",
+          "holdings_count": 20,
+          "rebalance_every_sessions": 10
+        },
+        {
+          "item_key": "h20-r20",
+          "name": "STRESS-6C12G mixed-3 H20 R20",
+          "holdings_count": 20,
+          "rebalance_every_sessions": 20
+        },
+        {
+          "item_key": "h50-r1",
+          "name": "STRESS-6C12G mixed-3 H50 R1",
+          "holdings_count": 50,
+          "rebalance_every_sessions": 1
+        },
+        {
+          "item_key": "h50-r5",
+          "name": "STRESS-6C12G mixed-3 H50 R5",
+          "holdings_count": 50,
+          "rebalance_every_sessions": 5
+        },
+        {
+          "item_key": "h50-r10",
+          "name": "STRESS-6C12G mixed-3 H50 R10",
+          "holdings_count": 50,
+          "rebalance_every_sessions": 10
+        },
+        {
+          "item_key": "h50-r20",
+          "name": "STRESS-6C12G mixed-3 H50 R20",
+          "holdings_count": 50,
+          "rebalance_every_sessions": 20
+        },
+        {
+          "item_key": "h100-r1",
+          "name": "STRESS-6C12G mixed-3 H100 R1",
+          "holdings_count": 100,
+          "rebalance_every_sessions": 1
+        },
+        {
+          "item_key": "h100-r5",
+          "name": "STRESS-6C12G mixed-3 H100 R5",
+          "holdings_count": 100,
+          "rebalance_every_sessions": 5
+        },
+        {
+          "item_key": "h100-r10",
+          "name": "STRESS-6C12G mixed-3 H100 R10",
+          "holdings_count": 100,
+          "rebalance_every_sessions": 10
+        },
+        {
+          "item_key": "h100-r20",
+          "name": "STRESS-6C12G mixed-3 H100 R20",
+          "holdings_count": 100,
+          "rebalance_every_sessions": 20
+        }
+      ]
+    }
+  },
+  {
+    "tool": "submit_research_batch",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-mixed-4",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top1000",
+      "neutralization": "industry",
+      "batch_kind": "factor_evaluation",
+      "factors": [
+        {
+          "item_key": "momentum-5",
+          "name": "STRESS-6C12G mixed-4 momentum 5",
+          "formula": "rank(close / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "reversal-5",
+          "name": "STRESS-6C12G mixed-4 reversal 5",
+          "formula": "-rank(close / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "volume-5",
+          "name": "STRESS-6C12G mixed-4 volume 5",
+          "formula": "rank(volume / ts_mean(volume, 5))"
+        },
+        {
+          "item_key": "volatility-5",
+          "name": "STRESS-6C12G mixed-4 volatility 5",
+          "formula": "-rank(ts_std(close, 5) / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "momentum-10",
+          "name": "STRESS-6C12G mixed-4 momentum 10",
+          "formula": "rank(close / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "reversal-10",
+          "name": "STRESS-6C12G mixed-4 reversal 10",
+          "formula": "-rank(close / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "volume-10",
+          "name": "STRESS-6C12G mixed-4 volume 10",
+          "formula": "rank(volume / ts_mean(volume, 10))"
+        },
+        {
+          "item_key": "volatility-10",
+          "name": "STRESS-6C12G mixed-4 volatility 10",
+          "formula": "-rank(ts_std(close, 10) / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "momentum-20",
+          "name": "STRESS-6C12G mixed-4 momentum 20",
+          "formula": "rank(close / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "reversal-20",
+          "name": "STRESS-6C12G mixed-4 reversal 20",
+          "formula": "-rank(close / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "volume-20",
+          "name": "STRESS-6C12G mixed-4 volume 20",
+          "formula": "rank(volume / ts_mean(volume, 20))"
+        },
+        {
+          "item_key": "volatility-20",
+          "name": "STRESS-6C12G mixed-4 volatility 20",
+          "formula": "-rank(ts_std(close, 20) / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "momentum-40",
+          "name": "STRESS-6C12G mixed-4 momentum 40",
+          "formula": "rank(close / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "reversal-40",
+          "name": "STRESS-6C12G mixed-4 reversal 40",
+          "formula": "-rank(close / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "volume-40",
+          "name": "STRESS-6C12G mixed-4 volume 40",
+          "formula": "rank(volume / ts_mean(volume, 40))"
+        },
+        {
+          "item_key": "volatility-40",
+          "name": "STRESS-6C12G mixed-4 volatility 40",
+          "formula": "-rank(ts_std(close, 40) / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "momentum-60",
+          "name": "STRESS-6C12G mixed-4 momentum 60",
+          "formula": "rank(close / ts_mean(close, 60))"
+        },
+        {
+          "item_key": "reversal-60",
+          "name": "STRESS-6C12G mixed-4 reversal 60",
+          "formula": "-rank(close / ts_mean(close, 60))"
+        },
+        {
+          "item_key": "volume-60",
+          "name": "STRESS-6C12G mixed-4 volume 60",
+          "formula": "rank(volume / ts_mean(volume, 60))"
+        },
+        {
+          "item_key": "volatility-60",
+          "name": "STRESS-6C12G mixed-4 volatility 60",
+          "formula": "-rank(ts_std(close, 60) / ts_mean(close, 60))"
+        }
+      ]
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-single-0",
+      "folder_id": "folder_default",
+      "name": "STRESS-6C12G single-0",
+      "formula": "-rank(close / ts_mean(close, 5))",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top300",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 10,
+      "rebalance_every_sessions": 1
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-single-1",
+      "folder_id": "folder_default",
+      "name": "STRESS-6C12G single-1",
+      "formula": "rank(close / ts_mean(close, 5))",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top300",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 20,
+      "rebalance_every_sessions": 2
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-single-2",
+      "folder_id": "folder_default",
+      "name": "STRESS-6C12G single-2",
+      "formula": "-rank(close / ts_mean(close, 5))",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top300",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 30,
+      "rebalance_every_sessions": 3
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-single-3",
+      "folder_id": "folder_default",
+      "name": "STRESS-6C12G single-3",
+      "formula": "rank(close / ts_mean(close, 5))",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top300",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 40,
+      "rebalance_every_sessions": 4
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-single-4",
+      "folder_id": "folder_default",
+      "name": "STRESS-6C12G single-4",
+      "formula": "-rank(close / ts_mean(close, 5))",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top300",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 50,
+      "rebalance_every_sessions": 5
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-single-5",
+      "folder_id": "folder_default",
+      "name": "STRESS-6C12G single-5",
+      "formula": "rank(close / ts_mean(close, 5))",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top300",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 60,
+      "rebalance_every_sessions": 1
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-single-6",
+      "folder_id": "folder_default",
+      "name": "STRESS-6C12G single-6",
+      "formula": "-rank(close / ts_mean(close, 5))",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top300",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 70,
+      "rebalance_every_sessions": 2
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-single-7",
+      "folder_id": "folder_default",
+      "name": "STRESS-6C12G single-7",
+      "formula": "rank(close / ts_mean(close, 5))",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top300",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 80,
+      "rebalance_every_sessions": 3
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-single-8",
+      "folder_id": "folder_default",
+      "name": "STRESS-6C12G single-8",
+      "formula": "-rank(close / ts_mean(close, 5))",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top300",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 90,
+      "rebalance_every_sessions": 4
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-single-9",
+      "folder_id": "folder_default",
+      "name": "STRESS-6C12G single-9",
+      "formula": "rank(close / ts_mean(close, 5))",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top300",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 100,
+      "rebalance_every_sessions": 5
+    }
+  }
+]

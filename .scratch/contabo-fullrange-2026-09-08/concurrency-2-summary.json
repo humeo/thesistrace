@@ -1,0 +1,47 @@
+{
+  "file": "concurrency-2.jsonl",
+  "jobs": [
+    {
+      "id": "run_bffa89140127422ba451",
+      "status": "succeeded",
+      "elapsed": 220.249136,
+      "progress": {
+        "phase": "succeeded",
+        "completed_warmup_sessions": 0,
+        "total_warmup_sessions": 0,
+        "completed_research_sessions": 4044,
+        "total_research_sessions": 4044,
+        "committed_chunk_count": 64,
+        "last_completed_warmup_session": null,
+        "last_completed_research_session": "2026-08-27",
+        "remaining_duration_estimate_seconds": null,
+        "duration_is_estimate": true
+      }
+    },
+    {
+      "id": "run_686f5bc45d3e4add8260",
+      "status": "succeeded",
+      "elapsed": 219.309833,
+      "progress": {
+        "phase": "succeeded",
+        "completed_warmup_sessions": 0,
+        "total_warmup_sessions": 0,
+        "completed_research_sessions": 4044,
+        "total_research_sessions": 4044,
+        "committed_chunk_count": 64,
+        "last_completed_warmup_session": null,
+        "last_completed_research_session": "2026-08-27",
+        "remaining_duration_estimate_seconds": null,
+        "duration_is_estimate": true
+      }
+    }
+  ],
+  "makespanSeconds": 220.249,
+  "jobsPerHour": 32.690273281604,
+  "samples": 22,
+  "cpuMean": 52.47738721361208,
+  "cpuP95": 56.374329700743814,
+  "minAvailableGiB": 7.933563232421875,
+  "apiP95": 0.042671,
+  "probeErrors": 0
+}

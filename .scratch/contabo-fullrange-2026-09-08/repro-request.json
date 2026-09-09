@@ -1,0 +1,34 @@
+[
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-full3000-20260908-repro-60",
+      "folder_id": "folder_default",
+      "name": "STRESS warmup repro 60",
+      "formula": "rank(volume / ts_mean(volume, 60))",
+      "start_date": "2010-04-06",
+      "end_date": "2010-04-30",
+      "universe": "top3000",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 50,
+      "rebalance_every_sessions": 5
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-full3000-20260908-repro-20",
+      "folder_id": "folder_default",
+      "name": "STRESS warmup repro 20",
+      "formula": "rank(volume / ts_mean(volume, 20))",
+      "start_date": "2010-04-06",
+      "end_date": "2010-04-30",
+      "universe": "top3000",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 50,
+      "rebalance_every_sessions": 5
+    }
+  }
+]

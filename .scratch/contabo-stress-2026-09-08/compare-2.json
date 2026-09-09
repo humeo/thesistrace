@@ -1,0 +1,228 @@
+[
+  {
+    "tool": "submit_research_batch",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-compare-2-0",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top1000",
+      "neutralization": "none",
+      "batch_kind": "factor_evaluation",
+      "factors": [
+        {
+          "item_key": "momentum-5",
+          "name": "STRESS-6C12G compare-2-0 momentum 5",
+          "formula": "rank(close / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "reversal-5",
+          "name": "STRESS-6C12G compare-2-0 reversal 5",
+          "formula": "-rank(close / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "volume-5",
+          "name": "STRESS-6C12G compare-2-0 volume 5",
+          "formula": "rank(volume / ts_mean(volume, 5))"
+        },
+        {
+          "item_key": "volatility-5",
+          "name": "STRESS-6C12G compare-2-0 volatility 5",
+          "formula": "-rank(ts_std(close, 5) / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "momentum-10",
+          "name": "STRESS-6C12G compare-2-0 momentum 10",
+          "formula": "rank(close / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "reversal-10",
+          "name": "STRESS-6C12G compare-2-0 reversal 10",
+          "formula": "-rank(close / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "volume-10",
+          "name": "STRESS-6C12G compare-2-0 volume 10",
+          "formula": "rank(volume / ts_mean(volume, 10))"
+        },
+        {
+          "item_key": "volatility-10",
+          "name": "STRESS-6C12G compare-2-0 volatility 10",
+          "formula": "-rank(ts_std(close, 10) / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "momentum-20",
+          "name": "STRESS-6C12G compare-2-0 momentum 20",
+          "formula": "rank(close / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "reversal-20",
+          "name": "STRESS-6C12G compare-2-0 reversal 20",
+          "formula": "-rank(close / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "volume-20",
+          "name": "STRESS-6C12G compare-2-0 volume 20",
+          "formula": "rank(volume / ts_mean(volume, 20))"
+        },
+        {
+          "item_key": "volatility-20",
+          "name": "STRESS-6C12G compare-2-0 volatility 20",
+          "formula": "-rank(ts_std(close, 20) / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "momentum-40",
+          "name": "STRESS-6C12G compare-2-0 momentum 40",
+          "formula": "rank(close / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "reversal-40",
+          "name": "STRESS-6C12G compare-2-0 reversal 40",
+          "formula": "-rank(close / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "volume-40",
+          "name": "STRESS-6C12G compare-2-0 volume 40",
+          "formula": "rank(volume / ts_mean(volume, 40))"
+        },
+        {
+          "item_key": "volatility-40",
+          "name": "STRESS-6C12G compare-2-0 volatility 40",
+          "formula": "-rank(ts_std(close, 40) / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "momentum-60",
+          "name": "STRESS-6C12G compare-2-0 momentum 60",
+          "formula": "rank(close / ts_mean(close, 60))"
+        },
+        {
+          "item_key": "reversal-60",
+          "name": "STRESS-6C12G compare-2-0 reversal 60",
+          "formula": "-rank(close / ts_mean(close, 60))"
+        },
+        {
+          "item_key": "volume-60",
+          "name": "STRESS-6C12G compare-2-0 volume 60",
+          "formula": "rank(volume / ts_mean(volume, 60))"
+        },
+        {
+          "item_key": "volatility-60",
+          "name": "STRESS-6C12G compare-2-0 volatility 60",
+          "formula": "-rank(ts_std(close, 60) / ts_mean(close, 60))"
+        }
+      ]
+    }
+  },
+  {
+    "tool": "submit_research_batch",
+    "arguments": {
+      "request_id": "stress-6c12g-20260908-compare-2-1",
+      "start_date": "2026-08-03",
+      "end_date": "2026-08-27",
+      "universe": "top1000",
+      "neutralization": "none",
+      "batch_kind": "factor_evaluation",
+      "factors": [
+        {
+          "item_key": "momentum-5",
+          "name": "STRESS-6C12G compare-2-1 momentum 5",
+          "formula": "rank(close / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "reversal-5",
+          "name": "STRESS-6C12G compare-2-1 reversal 5",
+          "formula": "-rank(close / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "volume-5",
+          "name": "STRESS-6C12G compare-2-1 volume 5",
+          "formula": "rank(volume / ts_mean(volume, 5))"
+        },
+        {
+          "item_key": "volatility-5",
+          "name": "STRESS-6C12G compare-2-1 volatility 5",
+          "formula": "-rank(ts_std(close, 5) / ts_mean(close, 5))"
+        },
+        {
+          "item_key": "momentum-10",
+          "name": "STRESS-6C12G compare-2-1 momentum 10",
+          "formula": "rank(close / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "reversal-10",
+          "name": "STRESS-6C12G compare-2-1 reversal 10",
+          "formula": "-rank(close / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "volume-10",
+          "name": "STRESS-6C12G compare-2-1 volume 10",
+          "formula": "rank(volume / ts_mean(volume, 10))"
+        },
+        {
+          "item_key": "volatility-10",
+          "name": "STRESS-6C12G compare-2-1 volatility 10",
+          "formula": "-rank(ts_std(close, 10) / ts_mean(close, 10))"
+        },
+        {
+          "item_key": "momentum-20",
+          "name": "STRESS-6C12G compare-2-1 momentum 20",
+          "formula": "rank(close / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "reversal-20",
+          "name": "STRESS-6C12G compare-2-1 reversal 20",
+          "formula": "-rank(close / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "volume-20",
+          "name": "STRESS-6C12G compare-2-1 volume 20",
+          "formula": "rank(volume / ts_mean(volume, 20))"
+        },
+        {
+          "item_key": "volatility-20",
+          "name": "STRESS-6C12G compare-2-1 volatility 20",
+          "formula": "-rank(ts_std(close, 20) / ts_mean(close, 20))"
+        },
+        {
+          "item_key": "momentum-40",
+          "name": "STRESS-6C12G compare-2-1 momentum 40",
+          "formula": "rank(close / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "reversal-40",
+          "name": "STRESS-6C12G compare-2-1 reversal 40",
+          "formula": "-rank(close / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "volume-40",
+          "name": "STRESS-6C12G compare-2-1 volume 40",
+          "formula": "rank(volume / ts_mean(volume, 40))"
+        },
+        {
+          "item_key": "volatility-40",
+          "name": "STRESS-6C12G compare-2-1 volatility 40",
+          "formula": "-rank(ts_std(close, 40) / ts_mean(close, 40))"
+        },
+        {
+          "item_key": "momentum-60",
+          "name": "STRESS-6C12G compare-2-1 momentum 60",
+          "formula": "rank(close / ts_mean(close, 60))"
+        },
+        {
+          "item_key": "reversal-60",
+          "name": "STRESS-6C12G compare-2-1 reversal 60",
+          "formula": "-rank(close / ts_mean(close, 60))"
+        },
+        {
+          "item_key": "volume-60",
+          "name": "STRESS-6C12G compare-2-1 volume 60",
+          "formula": "rank(volume / ts_mean(volume, 60))"
+        },
+        {
+          "item_key": "volatility-60",
+          "name": "STRESS-6C12G compare-2-1 volatility 60",
+          "formula": "-rank(ts_std(close, 60) / ts_mean(close, 60))"
+        }
+      ]
+    }
+  }
+]

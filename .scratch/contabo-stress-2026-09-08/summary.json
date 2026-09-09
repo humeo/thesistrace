@@ -1,0 +1,65 @@
+{
+  "researchRuns": 210,
+  "batches": 10,
+  "succeeded": 210,
+  "failed": 0,
+  "serialSeconds": 45.318,
+  "parallelSeconds": 21.886,
+  "speedup": 2.070638764506991,
+  "sampledFactorResultsIdentical": true,
+  "negationIcPassed": true,
+  "resources": {
+    "minAvailableKB": 8672280,
+    "maxLoad1": 3.7,
+    "workers": {
+      "thesistrace-agent-1": {
+        "maxCpu": 62.98,
+        "maxMemoryMiB": 257.6
+      },
+      "thesistrace-auth-1": {
+        "maxCpu": 29.78,
+        "maxMemoryMiB": 197.5
+      },
+      "thesistrace-web-1": {
+        "maxCpu": 14.35,
+        "maxMemoryMiB": 24.96
+      },
+      "thesistrace-batch-research-worker-1": {
+        "maxCpu": 108.07,
+        "maxMemoryMiB": 623.4
+      },
+      "thesistrace-research-worker-1": {
+        "maxCpu": 108.68,
+        "maxMemoryMiB": 204.2
+      },
+      "thesistrace-api-1": {
+        "maxCpu": 68.7,
+        "maxMemoryMiB": 445.1
+      },
+      "thesistrace-data-operator-worker-1": {
+        "maxCpu": 6.09,
+        "maxMemoryMiB": 159.2
+      },
+      "thesistrace-tracking-worker-1": {
+        "maxCpu": 8.44,
+        "maxMemoryMiB": 122.4
+      },
+      "thesistrace-model-model-gateway-1": {
+        "maxCpu": 0,
+        "maxMemoryMiB": 48.2
+      },
+      "thesistrace-postgres-1": {
+        "maxCpu": 44.28,
+        "maxMemoryMiB": 87.91
+      },
+      "thesistrace-rustfs-1": {
+        "maxCpu": 78.88,
+        "maxMemoryMiB": 193
+      },
+      "thesistrace-batch-research-worker-2": {
+        "maxCpu": 115.77,
+        "maxMemoryMiB": 452.7
+      }
+    }
+  }
+}

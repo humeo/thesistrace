@@ -1,0 +1,87 @@
+{
+  "file": "concurrency-5.jsonl",
+  "jobs": [
+    {
+      "id": "run_6abef1b12cdf45b78b9a",
+      "status": "succeeded",
+      "elapsed": 256.014208,
+      "progress": {
+        "phase": "succeeded",
+        "completed_warmup_sessions": 0,
+        "total_warmup_sessions": 0,
+        "completed_research_sessions": 4044,
+        "total_research_sessions": 4044,
+        "committed_chunk_count": 64,
+        "last_completed_warmup_session": null,
+        "last_completed_research_session": "2026-08-27",
+        "remaining_duration_estimate_seconds": null,
+        "duration_is_estimate": true
+      }
+    },
+    {
+      "id": "run_cc411569399245cbbd66",
+      "status": "succeeded",
+      "elapsed": 251.225936,
+      "progress": {
+        "phase": "succeeded",
+        "completed_warmup_sessions": 0,
+        "total_warmup_sessions": 0,
+        "completed_research_sessions": 4044,
+        "total_research_sessions": 4044,
+        "committed_chunk_count": 64,
+        "last_completed_warmup_session": null,
+        "last_completed_research_session": "2026-08-27",
+        "remaining_duration_estimate_seconds": null,
+        "duration_is_estimate": true
+      }
+    },
+    {
+      "id": "run_46b96ca3e7ab4b74b0ec",
+      "status": "succeeded",
+      "elapsed": 249.49711,
+      "progress": {
+        "phase": "succeeded",
+        "completed_warmup_sessions": 0,
+        "total_warmup_sessions": 0,
+        "completed_research_sessions": 4044,
+        "total_research_sessions": 4044,
+        "committed_chunk_count": 64,
+        "last_completed_warmup_session": null,
+        "last_completed_research_session": "2026-08-27",
+        "remaining_duration_estimate_seconds": null,
+        "duration_is_estimate": true
+      }
+    },
+    {
+      "id": "batch_5ae9ad20644e4eed97f2",
+      "status": "succeeded",
+      "elapsed": 473.94,
+      "progress": {
+        "shared_alpha_factor_status": "succeeded",
+        "completed_strategy_tasks": 1,
+        "total_strategy_tasks": 1
+      }
+    },
+    {
+      "id": "batch_64c800126de943469b4a",
+      "status": "succeeded",
+      "elapsed": 457.076845,
+      "progress": {
+        "shared_alpha_factor_status": "succeeded",
+        "completed_strategy_tasks": 1,
+        "total_strategy_tasks": 1
+      }
+    }
+  ],
+  "makespanSeconds": 499.907,
+  "jobsPerHour": 36.0066972456877,
+  "samples": 50,
+  "overlapSamples": 22,
+  "overlapCpuMean": 93.73430393757727,
+  "overlapCpuP95": 94.6646079945102,
+  "cpuMean": 81.84802444172264,
+  "cpuP95": 94.62585034013605,
+  "minAvailableGiB": 4.726837158203125,
+  "apiP95": 0.059108,
+  "probeErrors": 0
+}

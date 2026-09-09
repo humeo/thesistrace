@@ -1,0 +1,517 @@
+{
+  "selectedConfig": {
+    "researchWorkers": 3,
+    "batchResearchWorkers": 2,
+    "cpusEach": 2,
+    "memoryBytesEach": 2147483648,
+    "calculationThreadsEach": 2,
+    "executionMemoryBytesEach": 1610612736,
+    "runtimeOnly": true
+  },
+  "total": 20,
+  "statusCounts": {
+    "succeeded": 18,
+    "failed": 2
+  },
+  "phases": [
+    {
+      "file": "baseline-progress.jsonl",
+      "jobs": [
+        {
+          "id": "run_e8ea3b5edc7c450d8840",
+          "status": "succeeded",
+          "created_at": "2026-09-08T14:02:59.385138Z",
+          "started_at": "2026-09-08T14:03:04.083433Z",
+          "finished_at": "2026-09-08T14:07:07.844696Z",
+          "elapsed_seconds": 243.761263,
+          "is_final": true,
+          "queue_seconds": 4.698,
+          "progress": {
+            "phase": "succeeded",
+            "completed_warmup_sessions": 0,
+            "total_warmup_sessions": 0,
+            "completed_research_sessions": 4044,
+            "total_research_sessions": 4044,
+            "committed_chunk_count": 64,
+            "last_completed_warmup_session": null,
+            "last_completed_research_session": "2026-08-27",
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        }
+      ]
+    },
+    {
+      "file": "concurrency-2.jsonl",
+      "jobs": [
+        {
+          "id": "run_bffa89140127422ba451",
+          "status": "succeeded",
+          "created_at": "2026-09-08T14:08:22.219496Z",
+          "started_at": "2026-09-08T14:08:23.301835Z",
+          "finished_at": "2026-09-08T14:12:03.550971Z",
+          "elapsed_seconds": 220.249136,
+          "is_final": true,
+          "queue_seconds": 1.082,
+          "progress": {
+            "phase": "succeeded",
+            "completed_warmup_sessions": 0,
+            "total_warmup_sessions": 0,
+            "completed_research_sessions": 4044,
+            "total_research_sessions": 4044,
+            "committed_chunk_count": 64,
+            "last_completed_warmup_session": null,
+            "last_completed_research_session": "2026-08-27",
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        },
+        {
+          "id": "run_686f5bc45d3e4add8260",
+          "status": "succeeded",
+          "created_at": "2026-09-08T14:08:23.722549Z",
+          "started_at": "2026-09-08T14:08:24.073125Z",
+          "finished_at": "2026-09-08T14:12:03.382958Z",
+          "elapsed_seconds": 219.309833,
+          "is_final": true,
+          "queue_seconds": 0.351,
+          "progress": {
+            "phase": "succeeded",
+            "completed_warmup_sessions": 0,
+            "total_warmup_sessions": 0,
+            "completed_research_sessions": 4044,
+            "total_research_sessions": 4044,
+            "committed_chunk_count": 64,
+            "last_completed_warmup_session": null,
+            "last_completed_research_session": "2026-08-27",
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        }
+      ]
+    },
+    {
+      "file": "concurrency-4.jsonl",
+      "jobs": [
+        {
+          "id": "run_7879fb971341499a81c1",
+          "status": "succeeded",
+          "created_at": "2026-09-08T14:12:52.779789Z",
+          "started_at": "2026-09-08T14:12:54.304686Z",
+          "finished_at": "2026-09-08T14:16:47.540353Z",
+          "elapsed_seconds": 233.235667,
+          "is_final": true,
+          "queue_seconds": 1.525,
+          "progress": {
+            "phase": "succeeded",
+            "completed_warmup_sessions": 0,
+            "total_warmup_sessions": 0,
+            "completed_research_sessions": 4044,
+            "total_research_sessions": 4044,
+            "committed_chunk_count": 64,
+            "last_completed_warmup_session": null,
+            "last_completed_research_session": "2026-08-27",
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        },
+        {
+          "id": "run_582966164e64471185f9",
+          "status": "succeeded",
+          "created_at": "2026-09-08T14:12:53.379034Z",
+          "started_at": "2026-09-08T14:12:54.871860Z",
+          "finished_at": "2026-09-08T14:16:47.490054Z",
+          "elapsed_seconds": 232.618194,
+          "is_final": true,
+          "queue_seconds": 1.492,
+          "progress": {
+            "phase": "succeeded",
+            "completed_warmup_sessions": 0,
+            "total_warmup_sessions": 0,
+            "completed_research_sessions": 4044,
+            "total_research_sessions": 4044,
+            "committed_chunk_count": 64,
+            "last_completed_warmup_session": null,
+            "last_completed_research_session": "2026-08-27",
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        },
+        {
+          "id": "batch_80a1049699b94a5e9202",
+          "status": "succeeded",
+          "children": [
+            {
+              "id": "run_aa2fcf7d6ece4fe3b0bb",
+              "status": "succeeded"
+            }
+          ],
+          "created_at": "2026-09-08T14:13:08.881994Z",
+          "started_at": "2026-09-08T14:13:14.692267Z",
+          "finished_at": "2026-09-08T14:20:56.502790Z",
+          "elapsed_seconds": 461.810523,
+          "is_final": true,
+          "queue_seconds": 5.811,
+          "progress": {
+            "shared_alpha_factor_status": "succeeded",
+            "completed_strategy_tasks": 1,
+            "total_strategy_tasks": 1
+          }
+        },
+        {
+          "id": "batch_daae5a3839274370b709",
+          "status": "succeeded",
+          "children": [
+            {
+              "id": "run_2c917d1502e94c82abab",
+              "status": "succeeded"
+            }
+          ],
+          "created_at": "2026-09-08T14:13:24.352767Z",
+          "started_at": "2026-09-08T14:13:29.969768Z",
+          "finished_at": "2026-09-08T14:21:01.946323Z",
+          "elapsed_seconds": 451.976555,
+          "is_final": true,
+          "queue_seconds": 5.617,
+          "progress": {
+            "shared_alpha_factor_status": "succeeded",
+            "completed_strategy_tasks": 1,
+            "total_strategy_tasks": 1
+          }
+        }
+      ]
+    },
+    {
+      "file": "concurrency-5.jsonl",
+      "jobs": [
+        {
+          "id": "run_6abef1b12cdf45b78b9a",
+          "status": "succeeded",
+          "created_at": "2026-09-08T14:22:45.117838Z",
+          "started_at": "2026-09-08T14:22:45.427614Z",
+          "finished_at": "2026-09-08T14:27:01.441822Z",
+          "elapsed_seconds": 256.014208,
+          "is_final": true,
+          "queue_seconds": 0.31,
+          "progress": {
+            "phase": "succeeded",
+            "completed_warmup_sessions": 0,
+            "total_warmup_sessions": 0,
+            "completed_research_sessions": 4044,
+            "total_research_sessions": 4044,
+            "committed_chunk_count": 64,
+            "last_completed_warmup_session": null,
+            "last_completed_research_session": "2026-08-27",
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        },
+        {
+          "id": "run_cc411569399245cbbd66",
+          "status": "succeeded",
+          "created_at": "2026-09-08T14:22:45.783735Z",
+          "started_at": "2026-09-08T14:22:48.973336Z",
+          "finished_at": "2026-09-08T14:27:00.199272Z",
+          "elapsed_seconds": 251.225936,
+          "is_final": true,
+          "queue_seconds": 3.19,
+          "progress": {
+            "phase": "succeeded",
+            "completed_warmup_sessions": 0,
+            "total_warmup_sessions": 0,
+            "completed_research_sessions": 4044,
+            "total_research_sessions": 4044,
+            "committed_chunk_count": 64,
+            "last_completed_warmup_session": null,
+            "last_completed_research_session": "2026-08-27",
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        },
+        {
+          "id": "run_46b96ca3e7ab4b74b0ec",
+          "status": "succeeded",
+          "created_at": "2026-09-08T14:22:46.387487Z",
+          "started_at": "2026-09-08T14:22:50.448195Z",
+          "finished_at": "2026-09-08T14:26:59.945305Z",
+          "elapsed_seconds": 249.49711,
+          "is_final": true,
+          "queue_seconds": 4.061,
+          "progress": {
+            "phase": "succeeded",
+            "completed_warmup_sessions": 0,
+            "total_warmup_sessions": 0,
+            "completed_research_sessions": 4044,
+            "total_research_sessions": 4044,
+            "committed_chunk_count": 64,
+            "last_completed_warmup_session": null,
+            "last_completed_research_session": "2026-08-27",
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        },
+        {
+          "id": "batch_5ae9ad20644e4eed97f2",
+          "status": "succeeded",
+          "children": [
+            {
+              "id": "run_57b2c7b546194ef4919f",
+              "status": "succeeded"
+            }
+          ],
+          "created_at": "2026-09-08T14:23:05.935354Z",
+          "started_at": "2026-09-08T14:23:11.011071Z",
+          "finished_at": "2026-09-08T14:31:04.951071Z",
+          "elapsed_seconds": 473.94,
+          "is_final": true,
+          "queue_seconds": 5.076,
+          "progress": {
+            "shared_alpha_factor_status": "succeeded",
+            "completed_strategy_tasks": 1,
+            "total_strategy_tasks": 1
+          }
+        },
+        {
+          "id": "batch_64c800126de943469b4a",
+          "status": "succeeded",
+          "children": [
+            {
+              "id": "run_e9f68ffd4fcf47b6b8dc",
+              "status": "succeeded"
+            }
+          ],
+          "created_at": "2026-09-08T14:23:23.717032Z",
+          "started_at": "2026-09-08T14:23:28.257555Z",
+          "finished_at": "2026-09-08T14:31:05.334400Z",
+          "elapsed_seconds": 457.076845,
+          "is_final": true,
+          "queue_seconds": 4.54,
+          "progress": {
+            "shared_alpha_factor_status": "succeeded",
+            "completed_strategy_tasks": 1,
+            "total_strategy_tasks": 1
+          }
+        }
+      ]
+    },
+    {
+      "file": "rolling.jsonl",
+      "jobs": [
+        {
+          "id": "run_4060bcc0dfe04346b3cb",
+          "status": "succeeded",
+          "created_at": "2026-09-08T14:28:21.513583Z",
+          "started_at": "2026-09-08T14:28:24.587199Z",
+          "finished_at": "2026-09-08T14:33:26.261731Z",
+          "elapsed_seconds": 301.674532,
+          "is_final": true,
+          "queue_seconds": 3.074,
+          "progress": {
+            "phase": "succeeded",
+            "completed_warmup_sessions": 19,
+            "total_warmup_sessions": 19,
+            "completed_research_sessions": 4024,
+            "total_research_sessions": 4024,
+            "committed_chunk_count": 64,
+            "last_completed_warmup_session": "2010-01-29",
+            "last_completed_research_session": "2026-08-27",
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        },
+        {
+          "id": "run_f65649cf3d8c411ebf1f",
+          "status": "failed",
+          "created_at": "2026-09-08T14:28:22.170779Z",
+          "started_at": "2026-09-08T14:28:24.610380Z",
+          "finished_at": "2026-09-08T14:28:25.961638Z",
+          "elapsed_seconds": 1.351258,
+          "is_final": true,
+          "queue_seconds": 2.44,
+          "progress": {
+            "phase": "queued",
+            "completed_warmup_sessions": 0,
+            "total_warmup_sessions": 59,
+            "completed_research_sessions": 0,
+            "total_research_sessions": 3984,
+            "committed_chunk_count": 0,
+            "last_completed_warmup_session": null,
+            "last_completed_research_session": null,
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        },
+        {
+          "id": "run_bcf4f2c2ad4e4914925b",
+          "status": "succeeded",
+          "created_at": "2026-09-08T14:28:22.792351Z",
+          "started_at": "2026-09-08T14:28:24.708817Z",
+          "finished_at": "2026-09-08T14:36:23.408582Z",
+          "elapsed_seconds": 478.699765,
+          "is_final": true,
+          "queue_seconds": 1.916,
+          "progress": {
+            "phase": "succeeded",
+            "completed_warmup_sessions": 19,
+            "total_warmup_sessions": 19,
+            "completed_research_sessions": 4024,
+            "total_research_sessions": 4024,
+            "committed_chunk_count": 67,
+            "last_completed_warmup_session": "2010-01-29",
+            "last_completed_research_session": "2026-08-27",
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        },
+        {
+          "id": "batch_26516a552e2b46fa8c6b",
+          "status": "succeeded",
+          "children": [
+            {
+              "id": "run_10f71974dc764484aff4",
+              "status": "succeeded"
+            }
+          ],
+          "created_at": "2026-09-08T14:28:40.690726Z",
+          "started_at": "2026-09-08T14:31:11.563378Z",
+          "finished_at": "2026-09-08T14:39:47.675629Z",
+          "elapsed_seconds": 516.112251,
+          "is_final": true,
+          "queue_seconds": 150.873,
+          "progress": {
+            "shared_alpha_factor_status": "succeeded",
+            "completed_strategy_tasks": 1,
+            "total_strategy_tasks": 1
+          }
+        },
+        {
+          "id": "batch_21661f02fb3646a48f75",
+          "status": "succeeded",
+          "children": [
+            {
+              "id": "run_d965a5ea10534f2b9c65",
+              "status": "succeeded"
+            }
+          ],
+          "created_at": "2026-09-08T14:28:58.343822Z",
+          "started_at": "2026-09-08T14:31:12.665059Z",
+          "finished_at": "2026-09-08T14:39:48.073703Z",
+          "elapsed_seconds": 515.408644,
+          "is_final": true,
+          "queue_seconds": 134.322,
+          "progress": {
+            "shared_alpha_factor_status": "succeeded",
+            "completed_strategy_tasks": 1,
+            "total_strategy_tasks": 1
+          }
+        }
+      ]
+    },
+    {
+      "file": "repro.jsonl",
+      "jobs": [
+        {
+          "id": "run_5a19cf4e23b74cdd8b1e",
+          "status": "succeeded",
+          "created_at": "2026-09-08T14:32:58.028349Z",
+          "started_at": "2026-09-08T14:33:00.432239Z",
+          "finished_at": "2026-09-08T14:33:05.432182Z",
+          "elapsed_seconds": 4.999943,
+          "is_final": true,
+          "queue_seconds": 2.404,
+          "progress": {
+            "phase": "succeeded",
+            "completed_warmup_sessions": 59,
+            "total_warmup_sessions": 59,
+            "completed_research_sessions": 19,
+            "total_research_sessions": 19,
+            "committed_chunk_count": 2,
+            "last_completed_warmup_session": "2010-04-02",
+            "last_completed_research_session": "2010-04-30",
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        },
+        {
+          "id": "run_feeb783ad5114e378fb4",
+          "status": "succeeded",
+          "created_at": "2026-09-08T14:32:58.574972Z",
+          "started_at": "2026-09-08T14:33:10.534310Z",
+          "finished_at": "2026-09-08T14:33:14.183587Z",
+          "elapsed_seconds": 3.649277,
+          "is_final": true,
+          "queue_seconds": 11.96,
+          "progress": {
+            "phase": "succeeded",
+            "completed_warmup_sessions": 19,
+            "total_warmup_sessions": 19,
+            "completed_research_sessions": 19,
+            "total_research_sessions": 19,
+            "committed_chunk_count": 1,
+            "last_completed_warmup_session": "2010-04-02",
+            "last_completed_research_session": "2010-04-30",
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        }
+      ]
+    },
+    {
+      "file": "repeat60.jsonl",
+      "jobs": [
+        {
+          "id": "run_9d6f1f1fc3094f2aa636",
+          "status": "failed",
+          "created_at": "2026-09-08T14:34:27.188831Z",
+          "started_at": "2026-09-08T14:34:30.681031Z",
+          "finished_at": "2026-09-08T14:34:31.958035Z",
+          "elapsed_seconds": 1.277004,
+          "is_final": true,
+          "queue_seconds": 3.493,
+          "progress": {
+            "phase": "queued",
+            "completed_warmup_sessions": 0,
+            "total_warmup_sessions": 59,
+            "completed_research_sessions": 0,
+            "total_research_sessions": 3984,
+            "committed_chunk_count": 0,
+            "last_completed_warmup_session": null,
+            "last_completed_research_session": null,
+            "remaining_duration_estimate_seconds": null,
+            "duration_is_estimate": true
+          }
+        }
+      ]
+    }
+  ],
+  "equality": {
+    "factor": {
+      "count": 12,
+      "uniqueResults": 1
+    },
+    "strategy_summary": {
+      "count": 12,
+      "uniqueResults": 1
+    }
+  },
+  "resources": {
+    "samples": 236,
+    "started": "2026-09-08T14:02:18.229637+00:00",
+    "finished": "2026-09-08T14:41:28.465183+00:00",
+    "maxCpu": 95.14204067910573,
+    "minAvailableGiB": 4.726837158203125,
+    "apiProbeP95Seconds": 0.062386,
+    "apiProbeErrors": 0
+  },
+  "rollingEquality": {
+    "factor": true,
+    "strategy_summary": true
+  },
+  "health": {
+    "restarts": 0,
+    "oomKills": 0,
+    "cgroupMaxCounterBatchWorker2": 79,
+    "cgroupMaxCounterAttribution": "cumulative; initial value unavailable"
+  },
+  "monitorStopped": true
+}

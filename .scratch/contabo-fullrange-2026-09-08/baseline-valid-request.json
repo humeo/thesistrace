@@ -1,0 +1,18 @@
+[
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-full3000-20260908-baseline-raw",
+      "folder_id": "folder_default",
+      "name": "STRESS-FULL3000 full-period rank-close",
+      "formula": "rank(close)",
+      "start_date": "2010-01-04",
+      "end_date": "2026-08-27",
+      "universe": "top3000",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 50,
+      "rebalance_every_sessions": 5
+    }
+  }
+]

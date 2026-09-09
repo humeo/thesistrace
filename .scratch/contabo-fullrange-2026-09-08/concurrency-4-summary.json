@@ -1,0 +1,70 @@
+{
+  "file": "concurrency-4.jsonl",
+  "jobs": [
+    {
+      "id": "run_7879fb971341499a81c1",
+      "status": "succeeded",
+      "elapsed": 233.235667,
+      "progress": {
+        "phase": "succeeded",
+        "completed_warmup_sessions": 0,
+        "total_warmup_sessions": 0,
+        "completed_research_sessions": 4044,
+        "total_research_sessions": 4044,
+        "committed_chunk_count": 64,
+        "last_completed_warmup_session": null,
+        "last_completed_research_session": "2026-08-27",
+        "remaining_duration_estimate_seconds": null,
+        "duration_is_estimate": true
+      }
+    },
+    {
+      "id": "run_582966164e64471185f9",
+      "status": "succeeded",
+      "elapsed": 232.618194,
+      "progress": {
+        "phase": "succeeded",
+        "completed_warmup_sessions": 0,
+        "total_warmup_sessions": 0,
+        "completed_research_sessions": 4044,
+        "total_research_sessions": 4044,
+        "committed_chunk_count": 64,
+        "last_completed_warmup_session": null,
+        "last_completed_research_session": "2026-08-27",
+        "remaining_duration_estimate_seconds": null,
+        "duration_is_estimate": true
+      }
+    },
+    {
+      "id": "batch_80a1049699b94a5e9202",
+      "status": "succeeded",
+      "elapsed": 461.810523,
+      "progress": {
+        "shared_alpha_factor_status": "succeeded",
+        "completed_strategy_tasks": 1,
+        "total_strategy_tasks": 1
+      }
+    },
+    {
+      "id": "batch_daae5a3839274370b709",
+      "status": "succeeded",
+      "elapsed": 451.976555,
+      "progress": {
+        "shared_alpha_factor_status": "succeeded",
+        "completed_strategy_tasks": 1,
+        "total_strategy_tasks": 1
+      }
+    }
+  ],
+  "makespanSeconds": 487.642,
+  "jobsPerHour": 29.529860020260767,
+  "samples": 49,
+  "overlapSamples": 19,
+  "overlapCpuMean": 82.12953462712667,
+  "overlapCpuP95": 84.82417207237965,
+  "cpuMean": 64.84333788729796,
+  "cpuP95": 83.44792024750774,
+  "minAvailableGiB": 5.11492919921875,
+  "apiP95": 0.073031,
+  "probeErrors": 0
+}

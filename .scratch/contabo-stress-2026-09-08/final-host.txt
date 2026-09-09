@@ -1,0 +1,20 @@
+thesistrace-batch-research-worker-2 Up 4 minutes
+thesistrace-agent-1 Up 2 hours (healthy)
+thesistrace-auth-1 Up 2 hours (healthy)
+thesistrace-web-1 Up 2 hours (healthy)
+thesistrace-batch-research-worker-1 Up 3 hours
+thesistrace-research-worker-1 Up 3 hours
+thesistrace-api-1 Up 3 hours (healthy)
+thesistrace-data-operator-worker-1 Up 3 hours
+thesistrace-tracking-worker-1 Up 3 hours
+thesistrace-model-model-gateway-1 Up 4 hours
+thesistrace-postgres-1 Up 4 hours (healthy)
+thesistrace-rustfs-1 Up 4 hours (healthy)
+/thesistrace-batch-research-worker-1 restarts=0 oom=false
+/thesistrace-batch-research-worker-2 restarts=0 oom=false
+/thesistrace-research-worker-1 restarts=0 oom=false
+               total        used        free      shared  buff/cache   available
+Mem:           11960        2563        7875          25        1893        9396
+Swap:              0           0           0
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1       193G   31G  163G  16% /

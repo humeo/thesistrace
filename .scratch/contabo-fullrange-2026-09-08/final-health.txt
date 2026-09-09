@@ -1,0 +1,49 @@
+thesistrace-research-worker-3 Up 19 minutes
+thesistrace-research-worker-2 Up 33 minutes
+thesistrace-batch-research-worker-2 Up 49 minutes
+thesistrace-agent-1 Up 2 hours (healthy)
+thesistrace-auth-1 Up 2 hours (healthy)
+thesistrace-web-1 Up 2 hours (healthy)
+thesistrace-batch-research-worker-1 Up 4 hours
+thesistrace-research-worker-1 Up 4 hours
+thesistrace-api-1 Up 4 hours (healthy)
+thesistrace-data-operator-worker-1 Up 4 hours
+thesistrace-tracking-worker-1 Up 4 hours
+thesistrace-model-model-gateway-1 Up 5 hours
+thesistrace-postgres-1 Up 5 hours (healthy)
+thesistrace-rustfs-1 Up 5 hours (healthy)
+/thesistrace-research-worker-1 image=sha256:b231daa5287c6268c1a9c01983242160fc76ec37e31d5b56807d05359cd1ceca cpu=2000000000 memory=2147483648 restarts=0 oom=false
+low 0
+high 0
+max 0
+oom 0
+oom_kill 0
+oom_group_kill 0
+/thesistrace-research-worker-2 image=sha256:8c97881f938ffbe33047f1ec342d879b6287d6e3c06d57b2b2ad0686b15d6df7 cpu=2000000000 memory=2147483648 restarts=0 oom=false
+low 0
+high 0
+max 0
+oom 0
+oom_kill 0
+oom_group_kill 0
+/thesistrace-research-worker-3 image=sha256:8c97881f938ffbe33047f1ec342d879b6287d6e3c06d57b2b2ad0686b15d6df7 cpu=2000000000 memory=2147483648 restarts=0 oom=false
+low 0
+high 0
+max 0
+oom 0
+oom_kill 0
+oom_group_kill 0
+/thesistrace-batch-research-worker-1 image=sha256:9af577730e1b7cefddaf836cb17f5439d9b6f2391a417d45d26ec6eee574d2d7 cpu=2000000000 memory=2147483648 restarts=0 oom=false
+low 0
+high 0
+max 0
+oom 0
+oom_kill 0
+oom_group_kill 0
+/thesistrace-batch-research-worker-2 image=sha256:c32c3bd71f691bf4e3e9f2f6897c36d1f94e39c172a7d6962ff56719794e2228 cpu=2000000000 memory=2147483648 restarts=0 oom=false
+low 0
+high 0
+max 79
+oom 0
+oom_kill 0
+oom_group_kill 0

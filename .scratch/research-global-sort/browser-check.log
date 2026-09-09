@@ -1,0 +1,12 @@
+$ playwright test --config playwright.browser.config.ts research-pagination.spec.ts
+
+Running 3 tests using 1 worker
+
+(node:83296) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[1/3] browser/research-pagination.spec.ts:37:3 › pagination totals, filters and last page at 1080px
+[2/3] browser/research-pagination.spec.ts:37:3 › pagination totals, filters and last page at 390px
+[3/3] browser/research-pagination.spec.ts:72:1 › sorts all Research on the server before paging and keeps sorting across pages
+  3 passed (6.3s)

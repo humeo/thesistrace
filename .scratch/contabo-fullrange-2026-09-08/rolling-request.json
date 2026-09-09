@@ -1,0 +1,94 @@
+[
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-full3000-20260908-rolling-single-0",
+      "folder_id": "folder_default",
+      "name": "STRESS-FULL3000 rolling single-0",
+      "formula": "rank(close / ts_mean(close, 20))",
+      "start_date": "2010-02-01",
+      "end_date": "2026-08-27",
+      "universe": "top3000",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 50,
+      "rebalance_every_sessions": 5
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-full3000-20260908-rolling-single-1",
+      "folder_id": "folder_default",
+      "name": "STRESS-FULL3000 rolling single-1",
+      "formula": "rank(volume / ts_mean(volume, 60))",
+      "start_date": "2010-04-06",
+      "end_date": "2026-08-27",
+      "universe": "top3000",
+      "neutralization": "none",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 50,
+      "rebalance_every_sessions": 5
+    }
+  },
+  {
+    "tool": "submit_research_run",
+    "arguments": {
+      "request_id": "stress-full3000-20260908-rolling-single-2",
+      "folder_id": "folder_default",
+      "name": "STRESS-FULL3000 rolling volatility industry",
+      "formula": "-rank(ts_std(close, 20) / ts_mean(close, 20))",
+      "start_date": "2010-02-01",
+      "end_date": "2026-08-27",
+      "universe": "top3000",
+      "neutralization": "industry",
+      "research_kind": "strategy_backtest",
+      "holdings_count": 50,
+      "rebalance_every_sessions": 5
+    }
+  },
+  {
+    "tool": "submit_research_batch",
+    "arguments": {
+      "request_id": "stress-full3000-20260908-rolling-batch-0",
+      "start_date": "2010-02-01",
+      "end_date": "2026-08-27",
+      "universe": "top3000",
+      "neutralization": "none",
+      "batch_kind": "strategy_sweep",
+      "alpha": {
+        "formula": "rank(close / ts_mean(close, 20))"
+      },
+      "strategies": [
+        {
+          "item_key": "h50",
+          "name": "STRESS-FULL3000 rolling batch-0 H50",
+          "holdings_count": 50,
+          "rebalance_every_sessions": 5
+        }
+      ]
+    }
+  },
+  {
+    "tool": "submit_research_batch",
+    "arguments": {
+      "request_id": "stress-full3000-20260908-rolling-batch-1",
+      "start_date": "2010-02-01",
+      "end_date": "2026-08-27",
+      "universe": "top3000",
+      "neutralization": "industry",
+      "batch_kind": "strategy_sweep",
+      "alpha": {
+        "formula": "rank(close / ts_mean(close, 20))"
+      },
+      "strategies": [
+        {
+          "item_key": "h50",
+          "name": "STRESS-FULL3000 rolling batch-1 H50",
+          "holdings_count": 50,
+          "rebalance_every_sessions": 5
+        }
+      ]
+    }
+  }
+]

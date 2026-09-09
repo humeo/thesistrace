@@ -1,0 +1,54 @@
+{
+  "minAvailableKB": 8672280,
+  "maxLoad1": 3.7,
+  "workers": {
+    "thesistrace-agent-1": {
+      "maxCpu": 19.16,
+      "maxMemoryMiB": 250.9
+    },
+    "thesistrace-auth-1": {
+      "maxCpu": 29.78,
+      "maxMemoryMiB": 196.1
+    },
+    "thesistrace-web-1": {
+      "maxCpu": 14.35,
+      "maxMemoryMiB": 23.37
+    },
+    "thesistrace-batch-research-worker-1": {
+      "maxCpu": 108.07,
+      "maxMemoryMiB": 623.4
+    },
+    "thesistrace-research-worker-1": {
+      "maxCpu": 108.68,
+      "maxMemoryMiB": 204.2
+    },
+    "thesistrace-api-1": {
+      "maxCpu": 68.7,
+      "maxMemoryMiB": 445.1
+    },
+    "thesistrace-data-operator-worker-1": {
+      "maxCpu": 5.15,
+      "maxMemoryMiB": 159.2
+    },
+    "thesistrace-tracking-worker-1": {
+      "maxCpu": 8.44,
+      "maxMemoryMiB": 122.4
+    },
+    "thesistrace-model-model-gateway-1": {
+      "maxCpu": 0,
+      "maxMemoryMiB": 48.2
+    },
+    "thesistrace-postgres-1": {
+      "maxCpu": 26.32,
+      "maxMemoryMiB": 84.84
+    },
+    "thesistrace-rustfs-1": {
+      "maxCpu": 73.04,
+      "maxMemoryMiB": 193
+    },
+    "thesistrace-batch-research-worker-2": {
+      "maxCpu": 115.77,
+      "maxMemoryMiB": 452.7
+    }
+  }
+}

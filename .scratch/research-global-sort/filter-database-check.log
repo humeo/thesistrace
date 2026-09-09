@@ -1,0 +1,23 @@
+Test run: 20260909t041600z-88806-a2f3cf88
+Compose project: thesistrace-test-20260909t041600z-88806-a2f3cf88
+ Network thesistrace-test-20260909t041600z-88806-a2f3cf88_default Creating 
+ Network thesistrace-test-20260909t041600z-88806-a2f3cf88_default Created 
+ Volume thesistrace-test-20260909t041600z-88806-a2f3cf88_postgres-data Creating 
+ Volume thesistrace-test-20260909t041600z-88806-a2f3cf88_postgres-data Created 
+ Container thesistrace-test-20260909t041600z-88806-a2f3cf88-postgres-1 Creating 
+ Container thesistrace-test-20260909t041600z-88806-a2f3cf88-postgres-1 Created 
+ Container thesistrace-test-20260909t041600z-88806-a2f3cf88-postgres-1 Starting 
+ Container thesistrace-test-20260909t041600z-88806-a2f3cf88-postgres-1 Started 
+ Container thesistrace-test-20260909t041600z-88806-a2f3cf88-postgres-1 Waiting 
+ Container thesistrace-test-20260909t041600z-88806-a2f3cf88-postgres-1 Healthy 
+........                                                                 [100%]
+- generated xml file: /Users/koltenluca/code-github/thesistrace/.local/test-runs/20260909t041600z-88806-a2f3cf88/evidence/pytest.xml -
+8 passed in 6.30s
+ Container thesistrace-test-20260909t041600z-88806-a2f3cf88-postgres-1 Stopping 
+ Container thesistrace-test-20260909t041600z-88806-a2f3cf88-postgres-1 Stopped 
+ Container thesistrace-test-20260909t041600z-88806-a2f3cf88-postgres-1 Removing 
+ Container thesistrace-test-20260909t041600z-88806-a2f3cf88-postgres-1 Removed 
+ Volume thesistrace-test-20260909t041600z-88806-a2f3cf88_postgres-data Removing 
+ Network thesistrace-test-20260909t041600z-88806-a2f3cf88_default Removing 
+ Network thesistrace-test-20260909t041600z-88806-a2f3cf88_default Removed 
+ Volume thesistrace-test-20260909t041600z-88806-a2f3cf88_postgres-data Removed 
