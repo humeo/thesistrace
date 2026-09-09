@@ -100,7 +100,7 @@ describe("Auth HTTP boundary", () => {
     const path = "/internal/researchers/00000000-0000-4000-8000-000000000001/quota-policy";
     expect(await (await app.request(`http://auth.test${path}`)).json()).toEqual({ timezone: "Asia/Shanghai", daily_model_budget_nanodollars: null, daily_run_limit: null, active_daily_track_limit: null });
     isOperator.mockResolvedValueOnce(false);
-    expect(await (await app.request(`http://auth.test${path}`)).json()).toEqual({ timezone: "Asia/Shanghai", daily_model_budget_nanodollars: 1_000_000_000, daily_run_limit: 10, active_daily_track_limit: 10 });
+    expect(await (await app.request(`http://auth.test${path}`)).json()).toEqual({ timezone: "Asia/Shanghai", daily_model_budget_nanodollars: 1_000_000_000, daily_run_limit: 10, active_daily_track_limit: 3 });
     isOperator.mockRejectedValueOnce(new Error("database unavailable"));
     expect((await app.request(`http://auth.test${path}`)).status).toBe(503);
     expect((await app.request("http://auth.test/internal/researchers/invalid/quota-policy")).status).toBe(400);

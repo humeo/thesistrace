@@ -2,5 +2,5 @@
   "timezone": "Asia/Shanghai",
   "daily_model_budget_usd": 1,
   "daily_run_limit": 10,
-  "active_daily_track_limit": 10
+  "active_daily_track_limit": 3
 }

@@ -3303,12 +3303,7 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
 
     with TestClient(create_app(settings)) as client:
         run_ids: list[str] = []
-        for index in range(11):
-            if index == 10:
-                # Track capacity spans days; these seeds were submitted yesterday.
-                with client.app.state.core_runtime.database.transaction() as transaction:
-                    transaction.execute("""UPDATE research_runs.run_ownership
-                        SET created_at = created_at - interval '1 day'""")
+        for index in range(4):
             accepted = client.post(
                 "/api/research-runs",
                 json=_run_command(f"current-track-capacity-{index}"),
@@ -3365,21 +3360,21 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
         assert client.get("/api/daily-tracks").json()["items"] == [first_track]
 
         tracks: list[dict[str, object]] = [first_track]
-        for index, run_id in enumerate(run_ids[1:9], start=1):
+        for index, run_id in enumerate(run_ids[1:2], start=1):
             started = client.post(
                 f"/api/research-runs/{run_id}/daily-tracks",
                 json={"request_id": f"current-track-capacity-start-{index}"},
             )
             assert started.status_code == 201
             tracks.append(started.json())
-        assert len(client.get("/api/daily-tracks").json()["items"]) == 9
+        assert len(client.get("/api/daily-tracks").json()["items"]) == 2
 
         capacity_barrier = Barrier(2)
 
         def race_capacity(index: int):
             capacity_barrier.wait(timeout=10)
             return client.post(
-                f"/api/research-runs/{run_ids[9 + index]}/daily-tracks",
+                f"/api/research-runs/{run_ids[2 + index]}/daily-tracks",
                 json={"request_id": f"current-track-capacity-race-{index}"},
             )
 
@@ -3395,9 +3390,9 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             for index, response in enumerate(capacity_responses)
             if response.status_code == 409
         )
-        rejected_run_id = run_ids[9 + rejected_index]
+        rejected_run_id = run_ids[2 + rejected_index]
         assert capacity_responses[rejected_index].json() == {
-            "detail": "Active DailyTrack limit of 10 reached"
+            "detail": "Active DailyTrack limit of 3 reached"
         }
         assert (
             len(
@@ -3407,7 +3402,7 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
                     if item["status"] in {"active", "blocked"}
                 ]
             )
-            == 10
+            == 3
         )
 
         _publish_head(
@@ -3478,7 +3473,7 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
         )
         assert admitted.status_code == 201
         final_tracks = client.get("/api/daily-tracks").json()["items"]
-        assert len(final_tracks) == 11
+        assert len(final_tracks) == 4
         assert (
             len(
                 [
@@ -3487,7 +3482,7 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
                     if item["status"] in {"active", "blocked", "stopping"}
                 ]
             )
-            == 10
+            == 3
         )
 
         # The same public service permits an Operator to exceed business capacity.
@@ -3507,7 +3502,7 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
         assert operator_runs.start_tracking(TEST_RESEARCHER.researcher_id, extra_id,
             StartTrackingCommand(request_id="operator-extra-track")) is not None
         assert sum(track["status"] in {"active", "blocked", "stopping"}
-            for track in client.get("/api/daily-tracks").json()["items"]) == 11
+            for track in client.get("/api/daily-tracks").json()["items"]) == 4
 
 
 @pytest.mark.skipif(
