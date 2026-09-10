@@ -1,4 +1,4 @@
-import { SignOut, UserCircle } from "@phosphor-icons/react";
+import { CaretRight, CaretUpDown, SignOut } from "@phosphor-icons/react";
 import {
   useRef,
   useState,
@@ -36,6 +36,18 @@ export function AccountMenuContent({
   const [message, setMessage] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const summaryRef = useRef<HTMLElement>(null);
+  const initials = session.displayLabel.trim().split(/\s+/u)
+    .map((part) => Array.from(part)[0]).slice(0, 2).join("").toLocaleUpperCase();
+
+  const identity = (
+    <>
+      <span className="account-avatar" aria-hidden="true">{initials}</span>
+      <span className="account-identity-copy">
+        <strong>{session.displayLabel}</strong>
+        <span title={session.email}>{session.email}</span>
+      </span>
+    </>
+  );
 
   function handleMenuKeyDown(event: KeyboardEvent<HTMLDetailsElement>): void {
     if (!open) return;
@@ -92,13 +104,12 @@ export function AccountMenuContent({
         aria-label="Account menu"
         ref={summaryRef}
       >
-        <UserCircle aria-hidden="true" size={18} />
-        <span>{session.displayLabel}</span>
+        {identity}
+        <CaretUpDown className="account-trigger-chevron" aria-hidden="true" size={18} />
       </summary>
       <div className="account-menu-panel" ref={panelRef}>
         <div className="account-identity">
-          <strong>{session.displayLabel}</strong>
-          <span>{session.email}</span>
+          {identity}
         </div>
         {message !== null ? <p className="account-message" role="status">{message}</p> : null}
         <a
@@ -107,8 +118,9 @@ export function AccountMenuContent({
           target="_blank"
           rel="noopener noreferrer"
         >
-          <img src="/brand/discord-symbol-white.svg" alt="" width={16} height={12} />
-          Join Discord
+          <img src="/brand/discord-symbol-white.svg" alt="" width={20} height={16} />
+          <span>Join Discord</span>
+          <CaretRight className="account-action-chevron" aria-hidden="true" size={16} />
         </a>
         <button
           className="account-action"
@@ -116,8 +128,9 @@ export function AccountMenuContent({
           onClick={() => void submitSignOut()}
           type="button"
         >
-          <SignOut aria-hidden="true" size={16} />
-          {signingOut ? "Logging out…" : "Log out"}
+          <SignOut aria-hidden="true" size={20} />
+          <span>{signingOut ? "Logging out…" : "Log out"}</span>
+          <CaretRight className="account-action-chevron" aria-hidden="true" size={16} />
         </button>
       </div>
     </details>
