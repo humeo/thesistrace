@@ -137,6 +137,27 @@ services:
         - path: ../.dockerignore
           action: rebuild
 
+  publication-maintenance-worker:
+    develop:
+      watch:
+        - path: ../apps/core/src
+          action: sync+restart
+          target: /app/src
+          initial_sync: true
+          ignore:
+            - thesistrace/entrypoints/http.py
+            - thesistrace/entrypoints/initialize.py
+        - path: ../apps/core/pyproject.toml
+          action: rebuild
+        - path: ../apps/core/uv.lock
+          action: rebuild
+        - path: ../apps/core/Dockerfile
+          action: rebuild
+        - path: ../apps/core/README.md
+          action: rebuild
+        - path: ../.dockerignore
+          action: rebuild
+
   tracking-worker:
     develop:
       watch:

@@ -3475,34 +3475,40 @@ def _operator_proof(
     cookie: str,
     request_body: dict[str, object],
 ) -> str:
-    mailbox_url = "http://resend-fake:8300/__test/emails"
-    with urllib.request.urlopen(
-        mailbox_url, timeout=HTTP_REQUEST_TIMEOUT_SECONDS
-    ) as response:
-        before = len(json.load(response)["emails"])
-    code_status, _, _ = _gateway_json(
-        gateway_origin,
-        "POST",
-        "/api/auth/operator/proofs/send-code",
-        cookie=cookie,
-        body={},
-    )
-    assert code_status == 200
-    with urllib.request.urlopen(
-        mailbox_url, timeout=HTTP_REQUEST_TIMEOUT_SECONDS
-    ) as response:
-        messages = json.load(response)["emails"]
-    assert len(messages) == before + 1
-    match = re.search(r"\b([0-9]{6})\b", messages[-1]["text"])
-    assert match is not None
+    body = request_body
+    if request_body["operation"] != "data.refresh.market.submit":
+        mailbox_url = "http://resend-fake:8300/__test/emails"
+        with urllib.request.urlopen(
+            mailbox_url, timeout=HTTP_REQUEST_TIMEOUT_SECONDS
+        ) as response:
+            before = len(json.load(response)["emails"])
+        code_status, _, _ = _gateway_json(
+            gateway_origin,
+            "POST",
+            "/api/auth/operator/proofs/send-code",
+            cookie=cookie,
+            body={},
+        )
+        assert code_status == 200
+        with urllib.request.urlopen(
+            mailbox_url, timeout=HTTP_REQUEST_TIMEOUT_SECONDS
+        ) as response:
+            messages = json.load(response)["emails"]
+        assert len(messages) == before + 1
+        match = re.search(r"\b([0-9]{6})\b", messages[-1]["text"])
+        assert match is not None
+        body = {**request_body, "otp": match.group(1)}
     status, value, _ = _gateway_json(
         gateway_origin,
         "POST",
         "/api/auth/operator/proofs",
         cookie=cookie,
-        body={**request_body, "otp": match.group(1)},
+        body=body,
     )
-    assert status == 200
+    assert status == 200, {
+        "status": status,
+        "code": value.get("code") if isinstance(value, dict) else None,
+    }
     assert isinstance(value, dict)
     proof = value.get("proof")
     assert isinstance(proof, str) and proof

@@ -81,6 +81,10 @@ services:
       - ${THESISTRACE_TEST_EVIDENCE_DIR}:/qualification-evidence
       - ../apps/core/benchmarks:/qualification:ro
       - ../apps/core/benchmarks:/benchmarks:ro
+  publication-maintenance-worker:
+    environment:
+      THESISTRACE_S3_ACCESS_KEY_ID: observability-access-canary
+      THESISTRACE_S3_SECRET_ACCESS_KEY: observability-secret-canary
   tracking-worker:
     environment:
       THESISTRACE_S3_ACCESS_KEY_ID: observability-access-canary

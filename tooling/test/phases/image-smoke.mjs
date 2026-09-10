@@ -11,7 +11,7 @@ export async function imageSmoke(run) {
   await run.phase("image-smoke-bootstrap-replay", () => run.composeRun(["initialize", "python", "/smoke/tests/e2e/support/prepare_image_smoke_bootstrap_replay.py", "--input", "/smoke/tests/fixtures/tushare-financial-product-replay.json", "--output", run.bootstrap_replay]));
   await run.phase("image-smoke-operator-bootstrap", () => run.composeRun(["initialize", "thesistrace-data-operator", "bootstrap", "--idempotency-key", "financial-release-bootstrap", "--as-of", "2026-08-05T18:00:00+08:00", "--start-date", "2010-01-04", "--replay", run.bootstrap_replay]));
   await run.phase("image-smoke-prepare-data", () => run.composeRun(["initialize", "python", "/smoke/tests/e2e/support/prepare_image_smoke_data.py"]));
-  await run.phase("image-smoke-application", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "300", "auth", "agent", "api", "web", "research-worker", "batch-research-worker", "tracking-worker", "data-operator-worker"]));
+  await run.phase("image-smoke-application", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "300", "auth", "agent", "api", "web", "research-worker", "batch-research-worker", "tracking-worker", "publication-maintenance-worker", "data-operator-worker"]));
   run.postgres_port = await run.mappedPort("postgres", "5432");
   run.s3_port = await run.mappedPort("rustfs", "9000");
   await run.phase("image-smoke-auth-session", () => run.provisionAuth());

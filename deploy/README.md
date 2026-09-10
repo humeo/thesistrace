@@ -27,6 +27,15 @@ pnpm prod status
 The production Compose overlay fixes three ordinary Research Workers and two
 Batch Research Workers for the 6-vCPU, 12-GB server. Each worker retains the
 configured CPU, memory, and execution limits; development keeps one of each.
+Publication cleanup runs in one separate `publication-maintenance-worker`, capped
+at 0.5 CPU and 256 MiB, without Dataset mounts. PostgreSQL coordinates duplicate
+instances. It drains at most ten explicit deletions per step and scans at most one
+1,000-object page per minute, resting at least fifteen minutes after a full sweep.
+Product Workers do not list objects while idle. Structured maintenance events
+report counts, duration, backoff, full-sweep age and oldest queued-deletion age.
+The heartbeat health check proves the loop is alive; inspect failed step events
+separately for storage access or backlog problems. This release requires
+[explicit migration 0002](../docs/database-migrations.md#0002-bounded-publication-maintenance).
 
 The production web container publishes ports 80 and 443 and persists Caddy's public
 origin certificates in `caddy-data`. With Cloudflare DNS proxying enabled, use

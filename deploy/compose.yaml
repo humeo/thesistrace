@@ -227,6 +227,28 @@ services:
       retries: 60
     restart: unless-stopped
 
+  publication-maintenance-worker:
+    <<: *backend
+    deploy:
+      replicas: 1
+    logging: *bounded-logging
+    volumes: []
+    command: ["thesistrace-publication-maintenance"]
+    cpus: 0.5
+    mem_limit: 256m
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+      rustfs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "thesistrace-publication-maintenance", "--health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    stop_grace_period: 30s
+    restart: unless-stopped
+
   research-worker:
     <<: *backend
     deploy:

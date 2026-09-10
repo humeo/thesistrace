@@ -17,6 +17,10 @@ export async function imageQualification(run) {
   await run.phase("image-smoke-rustfs-s3-ready", () => run.waitForS3(true));
   await run.phase("image-smoke-initializers", () => run.compose(["up", "--detach", "--no-build", "initialize", "auth-initialize"]));
   await run.phase("image-smoke-initialization", () => run.compose(["wait", "initialize", "auth-initialize"]));
+  await run.phase("image-publication-maintenance-full-page", () => run.composeRun([
+    "publication-maintenance-worker", "python", "-c",
+    readFileSync(`${run.repo_root}/tests/production_publication_maintenance.py`, 'utf8'),
+  ], {stdoutFile: `${run.evidence_dir}/publication-full-page.json`, stderrFile: `${run.evidence_dir}/publication-full-page.stderr.log`}));
   await run.phase("image-smoke-bootstrap-replay", () => run.composeRun(["initialize", "python", "/smoke/tests/e2e/support/prepare_image_smoke_bootstrap_replay.py", "--input", "/smoke/tests/fixtures/tushare-financial-product-replay.json", "--output", run.bootstrap_replay]));
   await run.phase("image-smoke-operator-bootstrap", () => run.composeRun(["initialize", "thesistrace-data-operator", "bootstrap", "--idempotency-key", "financial-release-bootstrap", "--as-of", "2026-08-05T18:00:00+08:00", "--start-date", "2010-01-04", "--replay", run.bootstrap_replay]));
   await run.phase("image-smoke-prepare-data", () => run.composeRun(["initialize", "python", "/smoke/tests/e2e/support/prepare_image_smoke_data.py"]));
@@ -35,7 +39,7 @@ export async function imageQualification(run) {
   await run.phase("image-smoke-operator-fixture", () => run.host(["uv", "run", "python", "apps/core/tests/acceptance/qualify_operator_image_smoke.py", "provision", run.operator_sessions_file], {stdoutFile: run.evidence_dir + "/operator-provision.json", stderrFile: run.evidence_dir + "/operator-provision.stderr.log"}));
   await run.phase("image-smoke-operator-worker-unavailable", () => run.composeRun(["-e", "THESISTRACE_TEST_API_ORIGIN=http://api:8100", "-e", "THESISTRACE_TEST_WEB_ORIGIN=http://web:" + run.caddy_port, "-e", "THESISTRACE_TEST_OPERATOR_SESSION_FILE=/smoke-secrets/operator-sessions.json", "-e", "THESISTRACE_TEST_SMOKE_STATE=" + run.smoke_state, "initialize", "python", "/smoke/tests/production_image_smoke.py", "operator-unavailable"], {stdoutFile: run.evidence_dir + "/operator-unavailable.json", stderrFile: run.evidence_dir + "/operator-unavailable.stderr.log"}));
   await run.phase("image-smoke-data-operator-secret-rejection", () => run.check("verify_data_operator_worker_secret_rejection", []));
-  await run.phase("image-smoke-workers", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "120", "research-worker", "batch-research-worker", "tracking-worker", "data-operator-worker"]));
+  await run.phase("image-smoke-workers", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "120", "research-worker", "batch-research-worker", "tracking-worker", "publication-maintenance-worker", "data-operator-worker"]));
   await run.phase("image-smoke-single-data-operator-worker", () => run.check("verify_single_data_operator_worker", []));
   await run.phase("image-smoke-tushare-secret-scope", () => run.check("verify_tushare_secret_scope", []));
   await run.phase("image-smoke-operator-processed", () => run.composeRun(["-e", "THESISTRACE_TEST_API_ORIGIN=http://api:8100", "-e", "THESISTRACE_TEST_WEB_ORIGIN=http://web:" + run.caddy_port, "-e", "THESISTRACE_TEST_OPERATOR_SESSION_FILE=/smoke-secrets/operator-sessions.json", "-e", "THESISTRACE_TEST_SMOKE_STATE=" + run.smoke_state, "initialize", "python", "/smoke/tests/production_image_smoke.py", "operator-processed"], {stdoutFile: run.evidence_dir + "/operator-processed.json", stderrFile: run.evidence_dir + "/operator-processed.stderr.log"}));
@@ -68,10 +72,10 @@ export async function imageQualification(run) {
   await run.phase("image-smoke-checkpointed", () => run.composeRun(["-e", "THESISTRACE_TEST_API_ORIGIN=http://api:8100", "-e", "THESISTRACE_TEST_WEB_ORIGIN=http://web:" + run.caddy_port, "-e", "THESISTRACE_TEST_SMOKE_STATE=" + run.smoke_state, "initialize", "python", "/smoke/tests/production_image_smoke.py", "checkpointed"], {stdoutFile: run.evidence_dir + "/smoke-checkpointed.json", stderrFile: run.evidence_dir + "/smoke-checkpointed.stderr.log"}));
   await run.phase("image-smoke-worker-reopen", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "120", "research-worker"]));
   await run.phase("image-smoke-recovered", () => run.composeRun(["-e", "THESISTRACE_TEST_API_ORIGIN=http://api:8100", "-e", "THESISTRACE_TEST_WEB_ORIGIN=http://web:" + run.caddy_port, "-e", "THESISTRACE_TEST_SMOKE_STATE=" + run.smoke_state, "initialize", "python", "/smoke/tests/production_image_smoke.py", "recovered"], {stdoutFile: run.evidence_dir + "/smoke-recovered.json", stderrFile: run.evidence_dir + "/smoke-recovered.stderr.log"}));
-  await run.phase("image-smoke-application-restart", () => run.compose(["restart", "api", "research-worker", "batch-research-worker", "tracking-worker", "data-operator-worker"]));
+  await run.phase("image-smoke-application-restart", () => run.compose(["restart", "api", "research-worker", "batch-research-worker", "tracking-worker", "publication-maintenance-worker", "data-operator-worker"]));
   await run.phase("image-smoke-database-restart", () => run.compose(["restart", "postgres"]));
-  await run.phase("image-smoke-post-database-restart", () => run.compose(["restart", "api", "research-worker", "batch-research-worker", "tracking-worker", "data-operator-worker"]));
-  await run.phase("image-smoke-reopen", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "120", "api", "research-worker", "batch-research-worker", "tracking-worker", "data-operator-worker"]));
+  await run.phase("image-smoke-post-database-restart", () => run.compose(["restart", "api", "research-worker", "batch-research-worker", "tracking-worker", "publication-maintenance-worker", "data-operator-worker"]));
+  await run.phase("image-smoke-reopen", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "120", "api", "research-worker", "batch-research-worker", "tracking-worker", "publication-maintenance-worker", "data-operator-worker"]));
   await run.phase("image-smoke-persisted", () => run.composeRun(["-e", "THESISTRACE_TEST_API_ORIGIN=http://api:8100", "-e", "THESISTRACE_TEST_WEB_ORIGIN=http://web:" + run.caddy_port, "-e", "THESISTRACE_TEST_SMOKE_STATE=" + run.smoke_state, "initialize", "python", "/smoke/tests/production_image_smoke.py", "persisted"], {stdoutFile: run.evidence_dir + "/smoke-persisted.json", stderrFile: run.evidence_dir + "/smoke-persisted.stderr.log"}));
   await run.phase("image-smoke-rustfs-outage", () => run.compose(["stop", "rustfs"]));
   await run.phase("image-smoke-publish-transient-target", () => run.composeRun(["initialize", "python", "/smoke/tests/e2e/support/prepare_image_smoke_data.py", "lagged"], {stdoutFile: run.evidence_dir + "/transient-target.json", stderrFile: run.evidence_dir + "/transient-target.stderr.log"}));
@@ -95,7 +99,7 @@ export async function imageQualification(run) {
   await run.phase("image-smoke-mcp-api-stop", () => run.compose(["stop", "--timeout", "30", "api"]));
   await run.phase("image-smoke-mcp-api-stopped", () => run.check("capture_stopped_api_state", []));
   await run.phase("image-smoke-mcp-api-reopen", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "120", "api"]));
-  await run.phase("image-smoke-mcp-workers", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "120", "research-worker", "batch-research-worker", "tracking-worker", "data-operator-worker"]));
+  await run.phase("image-smoke-mcp-workers", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "120", "research-worker", "batch-research-worker", "tracking-worker", "publication-maintenance-worker", "data-operator-worker"]));
   await run.phase("image-smoke-mcp-http-after", () => run.check("run_mcp_image_smoke", ["http-after"], {stdoutFile: run.evidence_dir + "/mcp-http-after.json", stderrFile: run.evidence_dir + "/mcp-http-after.stderr.log"}));
   await run.phase("image-smoke-mcp-stdio", () => run.check("run_mcp_image_smoke", ["stdio"], {stdoutFile: run.evidence_dir + "/mcp-stdio.json", stderrFile: run.evidence_dir + "/mcp-stdio.stderr.log"}));
   await run.phase("image-smoke-mcp-api-logs", () => captureLogs(run, ["api-events.jsonl"]));
@@ -112,7 +116,7 @@ export async function imageQualification(run) {
   await run.phase("image-smoke-operator-browser-worker", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "120", "data-operator-worker"]));
   await run.phase("image-smoke-operator-browser-market-baseline", () => run.composeRun(["initialize", "python", "/smoke/tests/e2e/support/publish_financial_track_head.py", "lagged"]));
   await run.phase("image-smoke-operator-browser-financial-baseline", () => run.composeRun(["initialize", "python", "/smoke/tests/e2e/support/publish_financial_track_head.py", "recovered"]));
-  await run.phase("image-smoke-operator-browser-application", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "300", "auth", "auth-fixture-control", "api", "research-worker", "batch-research-worker", "tracking-worker", "data-operator-worker", "web"]));
+  await run.phase("image-smoke-operator-browser-application", () => run.compose(["up", "--detach", "--no-build", "--wait", "--wait-timeout", "300", "auth", "auth-fixture-control", "api", "research-worker", "batch-research-worker", "tracking-worker", "publication-maintenance-worker", "data-operator-worker", "web"]));
   run.auth_fixture_port = await run.mappedPort("auth-fixture-control", "8260");
   run.auth_fixture_origin = "http://127.0.0.1:" + run.auth_fixture_port;
   await run.phase("image-smoke-operator-browser-auth-fixture-ready", () => run.waitForAuthFixture());

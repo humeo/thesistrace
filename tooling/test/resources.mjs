@@ -8,7 +8,7 @@ import { execute } from './commands.mjs';
 import { fixtureValues, composeEnvironment, deterministicEnvironment, hostEnvironment } from './environment.mjs';
 import { runPhase } from './phase.mjs';
 
-export const imageServices = ['api', 'research-worker', 'batch-research-worker', 'tracking-worker', 'data-operator-worker', 'initialize', 'agent', 'auth', 'web'];
+export const imageServices = ['api', 'research-worker', 'batch-research-worker', 'tracking-worker', 'publication-maintenance-worker', 'data-operator-worker', 'initialize', 'agent', 'auth', 'web'];
 export const projectPattern = /^thesistrace-test-\d{8}t\d{6}z-\d+-[a-f0-9]{8}$/;
 export function runId() {
   return `${new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'z').replace('T', 't')}-${process.pid}-${randomBytes(4).toString('hex')}`;
@@ -146,7 +146,7 @@ export class TestRun {
       return;
     }
     await this.compose(['build', 'initialize', 'auth-initialize', 'agent', 'web']);
-    for (const service of ['api', 'research-worker', 'batch-research-worker', 'tracking-worker', 'data-operator-worker']) await this.exec('docker', ['image', 'tag', `${this.project_name}-initialize`, `${this.project_name}-${service}`]);
+    for (const service of ['api', 'research-worker', 'batch-research-worker', 'tracking-worker', 'publication-maintenance-worker', 'data-operator-worker']) await this.exec('docker', ['image', 'tag', `${this.project_name}-initialize`, `${this.project_name}-${service}`]);
   }
   async provisionAuth() {
     if (!this.auth_session_file) throw new CommandError('missing private Auth session path', 2);
@@ -159,7 +159,7 @@ export class TestRun {
     await this.provisionAuth();
   }
   async resetProductState() {
-    const services = ['auth', 'auth-fixture-control', 'api', 'research-worker', 'batch-research-worker', 'tracking-worker', 'data-operator-worker', 'postgres', 'rustfs'];
+    const services = ['auth', 'auth-fixture-control', 'api', 'research-worker', 'batch-research-worker', 'tracking-worker', 'publication-maintenance-worker', 'data-operator-worker', 'postgres', 'rustfs'];
     await this.compose(['stop', ...services], { quiet: true });
     await this.compose(['rm', '--force', ...services, 'auth-initialize', 'initialize'], { quiet: true });
     await this.exec(`${root}/tooling/dev/product-state-volumes.mjs`, ['reset', this.project_name]);

@@ -1939,6 +1939,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
         "research-worker",
         "batch-research-worker",
         "tracking-worker",
+        "publication-maintenance-worker",
         "data-operator-worker",
     ):
         assert (
@@ -1957,7 +1958,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
         "research-worker batch-research-worker tracking-worker "
-        "data-operator-worker\n" in commands
+        "publication-maintenance-worker data-operator-worker\n" in commands
     )
     assert "production_mcp_image_smoke.py preflight" in commands
     assert "production_mcp_image_smoke.py http-before" in commands
@@ -1976,7 +1977,7 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
         "api research-worker batch-research-worker tracking-worker "
-        "data-operator-worker\n" in commands
+        "publication-maintenance-worker data-operator-worker\n" in commands
     )
     provision_lines = [
         line for line in commands.splitlines() if "provision_image_smoke_auth.py" in line
