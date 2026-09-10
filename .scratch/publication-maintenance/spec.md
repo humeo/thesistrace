@@ -1,9 +1,9 @@
 # Publication 清理调度修复方案
 
-Status: ready-for-agent
+Status: complete
 
 日期：2026-09-10。当前基线：`66f11c6db9f43184f685773d3847047b29041a52`。
-实现与隔离验证进行中；生产尚未迁移或部署。
+实现、隔离验证、main 集成、显式迁移与生产发布均已完成；25 分钟采样达到验收目标，详见 [验收记录](release-verification.md)。
 
 ## 目标与依据
 

@@ -1,6 +1,6 @@
 # 03 main 集成、部署与生产资源验收
 
-Status: ready-for-agent
+Status: complete
 
 依赖：01、02。执行 [方案](../spec.md) 的 main → Deployment 发布流程，发布前确认用户的实施/上线授权。备份并验证数据库、配置；执行显式迁移及服务更新，保留回退材料。
 
@@ -13,3 +13,5 @@ Status: ready-for-agent
 25 分钟采样平均 0.076 核，业务 Worker 零 Publication LIST；维护 11 次 LIST，最多 1,000 条，最短 60.831 秒，完整一轮后休息 904.272 秒；无维护失败及抓包丢失。受控 Research 成功且 Result 可读，旧结果内容及全部既有引用、manifest、Dataset Head 保留。
 
 详见 [完整验收记录](../release-verification.md)。发布脚本与记录已审查；最终健康核验遗漏停止容器的检查窗口已修复并复审关闭，生产重验通过。
+
+生产验收已独立提交：`8bbd858`。
