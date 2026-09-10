@@ -50,6 +50,8 @@ def main() -> None:
             if not isinstance(chunk, dict):
                 raise SystemExit(65)
             command = json.loads(commands.get())
+            if command == {"command": "cancel"}:
+                raise SystemExit(0)
             expected = "acknowledge" if chunk.get("final") is True else "acknowledge_chunk"
             if command != {"command": expected}:
                 raise SystemExit(65)
