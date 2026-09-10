@@ -35,11 +35,11 @@ _DURATION_REGRESSION_FACTOR = 3
 _PEAK_MEMORY_REGRESSION_FACTOR = 2
 
 
-def is_research_execution_child_started_event(
+def is_research_execution_chunk_received_event(
     event: Mapping[str, object], run_id: str
 ) -> bool:
     return (
-        event.get("event") == "research_execution_child_started"
+        event.get("event") == "research_execution_chunk_received"
         and event.get("run_id") == run_id
     )
 
@@ -638,7 +638,7 @@ __all__ = (
     "assert_long_research_qualification",
     "assert_long_research_sample",
     "derive_repository_budgets",
-    "is_research_execution_child_started_event",
+    "is_research_execution_chunk_received_event",
     "long_research_qualification_outcome",
     "long_research_qualification_summary",
     "long_research_sample_qualification",

@@ -5,7 +5,9 @@ import hashlib
 import json
 import math
 import os
+import select
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -13,6 +15,7 @@ from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from threading import Event
+from unittest.mock import patch
 
 import boto3
 from benchmark_financial_io import build_market_benchmark_stream
@@ -20,7 +23,9 @@ from benchmark_financial_io import build_market_benchmark_stream
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.generation_store import MountedGenerationStore
 from thesistrace.data.io_benchmark import (
-    is_research_execution_child_started_event,
+    LONG_RESEARCH_CANCELLATION_LIMIT_MS,
+    LONG_RESEARCH_FIRST_CHECKPOINT_LIMIT_MS,
+    is_research_execution_chunk_received_event,
     long_research_qualification_outcome,
     long_research_qualification_summary,
     long_research_sample_qualification,
@@ -61,6 +66,8 @@ def main() -> None:
     cancel.add_argument("--research-kind", choices=_RESEARCH_KINDS, required=True)
     cancel.add_argument("--log", type=Path, required=True)
     cancel.add_argument("--output", type=Path, required=True)
+    cancel_worker = subparsers.add_parser("cancel-worker")
+    cancel_worker.add_argument("--run-id", required=True)
     assemble = subparsers.add_parser("assemble")
     assemble.add_argument("--samples", type=Path, required=True)
     assemble.add_argument("--image-revision", required=True)
@@ -92,6 +99,8 @@ def main() -> None:
             arguments.output,
             _cancel_sample(arguments.log, research_kind=arguments.research_kind),
         )
+    elif arguments.command == "cancel-worker":
+        _run_cancellation_worker(arguments.run_id)
     else:
         evidence = _assemble(arguments.samples, arguments.image_revision)
         outcome = long_research_qualification_outcome(evidence)
@@ -317,15 +326,21 @@ def _cancel_sample(log_path: Path, *, research_kind: str) -> dict[str, object]:
         request_id=f"qualification-{research_kind}-cancel",
     )
     run_id = str(accepted["id"])
-    process = _start_worker(log_path, cold=False)
-    _wait_for_child_start(run_id, log_path, process)
+    process = _start_worker(log_path, cold=False, cancellation_run_id=run_id)
+    _wait_for_first_chunk(run_id, log_path, process)
     started = time.perf_counter()
-    cancelled = _request_json(
-        api_origin,
-        "POST",
-        f"/api/research-runs/{run_id}/cancel",
-        {"request_id": f"qualification-{research_kind}-cancel-command"},
-    )
+    try:
+        cancelled = _request_json(
+            api_origin,
+            "POST",
+            f"/api/research-runs/{run_id}/cancel",
+            {"request_id": f"qualification-{research_kind}-cancel-command"},
+        )
+    finally:
+        assert process.stdin is not None
+        process.stdin.write(b"release\n")
+        process.stdin.flush()
+        process.stdin.close()
     if cancelled["status"] not in {"cancelling", "cancelled"}:
         raise RuntimeError(f"qualification cancellation was not accepted: {cancelled}")
     detail = _wait_for_public_status(api_origin, run_id, "cancelled", timeout=5)
@@ -548,7 +563,55 @@ def _admit(
     return accepted
 
 
-def _start_worker(log_path: Path, *, cold: bool) -> subprocess.Popen[bytes]:
+def _worker_arguments() -> list[str]:
+    return [
+        "--role",
+        "research",
+        "--once",
+        "--cpu-count",
+        "2",
+        "--memory-bytes",
+        str(2 * 1024 * 1024 * 1024),
+        "--execution-memory-bytes",
+        str(1536 * 1024 * 1024),
+        "--calculation-threads",
+        "2",
+    ]
+
+
+def _run_cancellation_worker(run_id: str) -> None:
+    from thesistrace.entrypoints import worker
+
+    process_one_poll = worker.process_one_poll
+    held = False
+    released = False
+
+    def gated_poll(runtime, configuration, *, emit) -> None:
+        def gated_emit(event) -> None:
+            nonlocal held, released
+            emit(event)
+            if held or not is_research_execution_chunk_received_event(event, run_id):
+                return
+            held = True
+            # Hold the first Chunk before the Worker can acknowledge the next one.
+            ready, _, _ = select.select(
+                [sys.stdin], [], [], LONG_RESEARCH_CANCELLATION_LIMIT_MS / 1000
+            )
+            if not ready or sys.stdin.buffer.readline() != b"release\n":
+                raise RuntimeError("qualification cancellation barrier was not released")
+            released = True
+
+        process_one_poll(runtime, configuration, emit=gated_emit)
+
+    with patch.object(worker, "process_one_poll", gated_poll):
+        worker.main(_worker_arguments())
+    if not released:
+        raise RuntimeError("qualification cancellation did not release a ready Worker")
+
+
+def _start_worker(
+    log_path: Path, *, cold: bool, cancellation_run_id: str | None = None
+) -> subprocess.Popen[bytes]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log = log_path.open("wb")
     environment = dict(os.environ)
@@ -556,21 +619,20 @@ def _start_worker(log_path: Path, *, cold: bool) -> subprocess.Popen[bytes]:
         environment["THESISTRACE_QUALIFICATION_COLD_DATA_READS"] = "1"
     else:
         environment.pop("THESISTRACE_QUALIFICATION_COLD_DATA_READS", None)
-    process = subprocess.Popen(
+    command = (
         [
-            "thesistrace-core-worker",
-            "--role",
-            "research",
-            "--once",
-            "--cpu-count",
-            "2",
-            "--memory-bytes",
-            str(2 * 1024 * 1024 * 1024),
-            "--execution-memory-bytes",
-            str(1536 * 1024 * 1024),
-            "--calculation-threads",
-            "2",
-        ],
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "cancel-worker",
+            "--run-id",
+            cancellation_run_id,
+        ]
+        if cancellation_run_id is not None
+        else ["thesistrace-core-worker", *_worker_arguments()]
+    )
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE if cancellation_run_id is not None else None,
         stdout=log,
         stderr=subprocess.STDOUT,
         env=environment,
@@ -660,22 +722,23 @@ def _observe_run(run_id: str, process: subprocess.Popen[bytes]) -> dict[str, obj
     }
 
 
-def _wait_for_child_start(
+def _wait_for_first_chunk(
     run_id: str,
     log_path: Path,
     process: subprocess.Popen[bytes],
 ) -> None:
-    deadline = time.monotonic() + 30
+    timeout = LONG_RESEARCH_FIRST_CHECKPOINT_LIMIT_MS / 1000
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if any(
-            is_research_execution_child_started_event(event, run_id)
+            is_research_execution_chunk_received_event(event, run_id)
             for event in _read_events(log_path)
         ):
             return
         if process.poll() is not None:
-            raise RuntimeError("qualification Worker exited before child start")
+            raise RuntimeError("qualification Worker exited before first Chunk")
         _POLL_EVENT.wait(_POLL_SECONDS)
-    raise TimeoutError("qualification child did not start within 30 seconds")
+    raise TimeoutError(f"qualification first Chunk did not arrive within {timeout:g} seconds")
 
 
 def _wait_for_public_status(

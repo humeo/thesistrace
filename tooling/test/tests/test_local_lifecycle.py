@@ -1862,7 +1862,7 @@ def test_performance_reprovisions_an_authenticated_researcher_after_each_reset(
     assert "_ensure_researcher_bootstrap(api_origin)" in qualification
     assert 'headers = {"Cookie": _auth_session()["cookie"]}' in qualification
     assert 'headers["Origin"]' in qualification
-    assert "is_research_execution_child_started_event(event, run_id)" in qualification
+    assert "is_research_execution_chunk_received_event(event, run_id)" in qualification
     assert 'event.get("resource_id") == run_id' not in qualification
 
 
