@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gc
 import json
 import signal
+import weakref
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -98,13 +100,19 @@ def test_live_worker_rejects_missing_or_placeholder_tushare_token_before_databas
     }
 
 
-def test_long_running_worker_releases_lease_on_sigterm(
+@pytest.mark.parametrize("operation_outcome", ["idle", "succeeded", "failed"])
+def test_long_running_worker_releases_attempt_memory_and_lease_on_sigterm(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
+    operation_outcome: str,
 ) -> None:
     lifecycle: list[str] = []
     original_handler = signal.getsignal(signal.SIGTERM)
+    payloads: list[weakref.ReferenceType] = []
+
+    class AttemptPayload:
+        pass
 
     class FakeDatabase:
         def __init__(self, _url: str) -> None:
@@ -143,11 +151,17 @@ def test_long_running_worker_releases_lease_on_sigterm(
 
         @staticmethod
         def process_next(*_arguments: object, **_keywords: object) -> bool:
+            if operation_outcome != "idle":
+                payload = AttemptPayload()
+                payload.cycle = payload
+                payloads.append(weakref.ref(payload))
             handler = signal.getsignal(signal.SIGTERM)
             assert callable(handler)
             handler(signal.SIGTERM, None)
             lifecycle.append("stop-requested")
-            return False
+            if operation_outcome == "failed":
+                raise DataRefreshError("TEST_REFRESH_FAILURE")
+            return operation_outcome == "succeeded"
 
     class FakeReplayBundle:
         def __init__(self, _paths: list[Path]) -> None:
@@ -177,7 +191,15 @@ def test_long_running_worker_releases_lease_on_sigterm(
     monkeypatch.setattr(data_operator, "TushareDataSource", lambda **_keywords: object())
     monkeypatch.setattr(data_operator, "TushareBenchmarkSource", lambda _provider: object())
 
-    data_operator.main(["worker", "--replay", str(tmp_path / "replay.json")])
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        data_operator.main(["worker", "--replay", str(tmp_path / "replay.json")])
+        assert all(reference() is None for reference in payloads)
+    finally:
+        if was_enabled:
+            gc.enable()
+        gc.collect()
 
     assert json.loads(capsys.readouterr().out) == {"status": "stopped"}
     assert lifecycle == [
@@ -185,7 +207,7 @@ def test_long_running_worker_releases_lease_on_sigterm(
         "lease-acquired",
         "lease-owned",
         "stop-requested",
-        "lease-owned",
+        *(["lease-owned"] if operation_outcome != "failed" else []),
         "lease-released",
         "database-closed",
     ]

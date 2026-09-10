@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import hashlib
 import json
+import tracemalloc
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -61,7 +62,7 @@ FULL_EXECUTABLE_FIELDS = (
 )
 
 
-def _materialized_candidate(tmp_path: Path):
+def _materialized_candidate(tmp_path: Path, *, extra_income_versions: int = 0):
     market_manifest = _market_generation(tmp_path)
     batches = RawFinancialBatchStore(tmp_path)
     checkpoints: list[FinancialShardCheckpoint] = []
@@ -121,6 +122,20 @@ def _materialized_candidate(tmp_path: Path):
             ["000001.SZ", "20100420", "20100421", "20091231", "2", "2", "4", "200", "0"],
             ["000001.SZ", "20100420", "", "20091231", "1", "1", "4", "101", "1"],
             ["000001.SZ", "", "", "20100331", "1", "1", "1", "25", "0"],
+            *[
+                [
+                    "000001.SZ",
+                    "20100420",
+                    "",
+                    "20091231",
+                    "1",
+                    "1",
+                    "4",
+                    str(10000 + index),
+                    "1",
+                ]
+                for index in range(extra_income_versions)
+            ],
         ],
         datetime(2026, 4, 24, 8, tzinfo=UTC),
         shard="complete-history",
@@ -667,6 +682,30 @@ def test_financial_series_read_projects_requested_columns_and_instruments(
             ("2009-04-27", "2010-01-04"),
             frozenset({"equity:000001.SZ"}),
         )
+
+
+def test_financial_table_read_keeps_python_memory_bounded(tmp_path: Path) -> None:
+    store, candidate, _repeated, _snapshot = _materialized_candidate(
+        tmp_path, extra_income_versions=12000
+    )
+    # Arrow owns the data buffers. A projected read must not also retain a
+    # Python string/dict representation of every historical version.
+    gc.collect()
+    tracemalloc.start()
+    try:
+        table = store.read_financial_table(
+            candidate.manifest_sha256,
+            "income",
+            ("instrument_id", "effective_available_session", "revenue"),
+            ("2010-04-21", "2010-04-22"),
+            frozenset({"equity:000001.SZ"}),
+        )
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert table.num_rows >= 12000
+    assert peak < 4 * 1024**2, f"Projected read allocated {peak} Python bytes"
 
 
 def test_financial_series_read_compacts_superseded_pre_window_versions(tmp_path: Path) -> None:

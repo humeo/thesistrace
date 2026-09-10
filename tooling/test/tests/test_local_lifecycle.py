@@ -779,6 +779,7 @@ def test_core_has_one_operational_output_schema_and_no_log_files() -> None:
         "entrypoints/live_tushare.py",
         "entrypoints/research_child.py",
         "entrypoints/tracking_child.py",
+        "migrations/rank_ic_0001.py",  # Explicit migration CLI JSON receipt.
     }
     assert not [
         path.relative_to(source_root).as_posix()

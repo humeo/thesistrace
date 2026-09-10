@@ -105,6 +105,12 @@ def test_factor_batch_prepares_one_shared_chunk_and_releases_it_before_yield(
         return SimpleNamespace(
             continuation={"completed_research_session_count": completed[ordinal]},
             final_values={"factor_summary": {}} if final_chunk else None,
+            phase_seconds={
+                "alpha_and_pending": 0.0,
+                "factor": 0.0,
+                "strategy": 0.0,
+                "finalize": 0.0,
+            },
         )
 
     monkeypatch.setattr(execution, "execute_research_chunk", execute_distinct)

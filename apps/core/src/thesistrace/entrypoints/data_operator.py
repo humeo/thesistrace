@@ -15,6 +15,7 @@ from threading import Event
 from types import FrameType
 from typing import NoReturn
 
+from thesistrace._memory import release_unused_memory
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.cninfo_financial_announcements import (
     AkshareCninfoFinancialAnnouncementSource,
@@ -397,6 +398,8 @@ def _run(
             with DataRefreshWorkerLease(database).maintain() as worker_owner:
                 while not worker_stop.is_set():
                     worker_owner.assert_owned()
+                    processed = False
+                    failed = False
                     try:
                         processed = refresh_service.process_next(
                             source,
@@ -408,8 +411,15 @@ def _run(
                             industry_source_target_selector=industry_source_target_selector,
                         )
                     except DataRefreshError:
+                        failed = True
                         if parsed.once:
                             raise
+                    finally:
+                        # The operation and any handled exception frames have
+                        # ended before reclaiming their temporary allocations.
+                        if processed or failed:
+                            release_unused_memory()
+                    if failed:
                         worker_stop.wait(5)
                         continue
                     worker_owner.assert_owned()

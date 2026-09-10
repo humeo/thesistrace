@@ -1,19 +1,17 @@
 from __future__ import annotations
 
-import ctypes
-import gc
 import os
 import resource
 import subprocess
 import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
 
 import numpy as np
-import pyarrow as pa
 
+from thesistrace._memory import release_unused_memory as _release_chunk_memory
 from thesistrace.data import GenerationStoreError, MountedGenerationStore
 from thesistrace.publication.serialization import parquet_bytes
 from thesistrace.research_batch.models import ResearchBatchKind
@@ -91,6 +89,7 @@ class _FactorItemState:
     final_values: dict[str, object] | None = None
     error: Exception | None = None
     calculation_seconds: float = 0.0
+    phase_seconds: dict[str, float] = field(default_factory=lambda: _empty_phase_seconds())
 
 
 class _SharedFactorResearchData:
@@ -695,6 +694,7 @@ def _execute_factor_batch_messages(
     common = first_item.immutable_input
     for window in research_windows:
         chunk_started = monotonic()
+        chunk_phase_seconds = _empty_phase_seconds()
         data_read_started = monotonic()
         try:
             research_data = _read_shared_window(
@@ -710,10 +710,16 @@ def _execute_factor_batch_messages(
             )
             data_read_seconds = monotonic() - data_read_started
             total_data_read_seconds += data_read_seconds
+            labels_started = monotonic()
             forward_labels = prepare_columnar_forward_labels(
                 research_data,
                 cancellation_check=lambda: None,
             )
+            # Shared label preparation belongs to the first item only.
+            labels_seconds = monotonic() - labels_started
+            states[first_item.ordinal].calculation_seconds += labels_seconds
+            states[first_item.ordinal].phase_seconds["input"] += labels_seconds
+            chunk_phase_seconds["input"] += labels_seconds
         except (MemoryError, ResearchExecutionResourceExhausted):
             raise
         except Exception as error:
@@ -738,6 +744,9 @@ def _execute_factor_batch_messages(
                         ),
                         semantic_versions=item.immutable_input.semantic_versions,
                     )
+                input_seconds = monotonic() - calculation_started
+                state.phase_seconds["input"] += input_seconds
+                chunk_phase_seconds["input"] += input_seconds
                 calculation = execute_research_chunk(
                     run_input=run_input,
                     binding=state.binding,
@@ -751,6 +760,9 @@ def _execute_factor_batch_messages(
                 state.continuation = calculation.continuation
                 state.final_values = calculation.final_values
                 state.calculation_seconds += monotonic() - calculation_started
+                for name, seconds in calculation.phase_seconds.items():
+                    state.phase_seconds[name] += seconds
+                    chunk_phase_seconds[name] += seconds
                 del calculation, run_input
             except (MemoryError, ResearchExecutionResourceExhausted):
                 raise
@@ -772,7 +784,7 @@ def _execute_factor_batch_messages(
                 "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
                 "child_chunk_seconds": monotonic() - chunk_started,
                 "child_data_read_seconds": data_read_seconds,
-                "child_calculation_phase_seconds": _empty_phase_seconds(),
+                "child_calculation_phase_seconds": chunk_phase_seconds,
                 "alpha_factor_task_started": False,
                 "alpha_factor_task_completed": False,
                 "task_role": "factor",
@@ -818,7 +830,7 @@ def _execute_factor_batch_messages(
             "child_data_read_seconds": (
                 total_data_read_seconds if item.ordinal == first_item.ordinal else 0.0
             ),
-            "child_calculation_phase_seconds": _empty_phase_seconds(),
+            "child_calculation_phase_seconds": dict(state.phase_seconds),
             "alpha_factor_task_started": False,
             "alpha_factor_task_completed": True,
             "task_role": "factor",
@@ -888,9 +900,9 @@ def _execute_strategy_sweep_messages(
                 calendar=calendar,
                 research_sessions=first_window.research_sessions,
                 universe=shared_input.universe,
-                neutralization=shared_input.neutralization,
-                field_bindings=union_bindings,
-                effective_lookback=shared_input.alpha_admission.effective_lookback,
+                neutralization="none",
+                field_bindings={},
+                effective_lookback=0,
                 fact_instrument_ids=frozenset(),
             )
             binding = AlphaFactorExecutionBinding.from_run_input(
@@ -1122,15 +1134,18 @@ def _execute_strategy_item_messages(
             for window, stored in zip(research_windows, reader, strict=True):
                 _require_artifact_window(stored, window)
                 data_read_started = monotonic()
+                # Scores and Factor state are frozen in the shared artifact.
+                # Load only execution facts, retaining the continuation context
+                # and held instruments needed across Strategy window boundaries.
                 research_data = _read_shared_window(
                     store,
                     generation_id=generation_id,
                     calendar=calendar,
                     research_sessions=window.research_sessions,
                     universe=item.immutable_input.universe,
-                    neutralization=item.immutable_input.neutralization,
-                    field_bindings=item.immutable_input.field_bindings,
-                    effective_lookback=(item.immutable_input.alpha_admission.effective_lookback),
+                    neutralization="none",
+                    field_bindings={},
+                    effective_lookback=0,
                     fact_instrument_ids=_continuation_instrument_ids(strategy_continuation),
                 )
                 data_read_seconds += monotonic() - data_read_started
@@ -1379,25 +1394,6 @@ def _empty_phase_seconds() -> dict[str, float]:
         "strategy": 0.0,
         "finalize": 0.0,
     }
-
-
-def _release_chunk_memory() -> None:
-    gc.collect()
-    pa.default_memory_pool().release_unused()
-    allocator = ctypes.CDLL(None)
-    if sys.platform == "darwin":
-        pressure_relief = allocator.malloc_zone_pressure_relief
-        pressure_relief.argtypes = (ctypes.c_void_p, ctypes.c_size_t)
-        pressure_relief.restype = ctypes.c_size_t
-        pressure_relief(None, 0)
-        return
-    if sys.platform.startswith("linux"):
-        trim = allocator.malloc_trim
-        trim.argtypes = (ctypes.c_size_t,)
-        trim.restype = ctypes.c_int
-        trim(0)
-        return
-    raise RuntimeError("Research Batch allocator pressure relief is unsupported")
 
 
 def _item_failed_message(

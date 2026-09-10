@@ -2570,12 +2570,23 @@ def _overlay_financial_rows(
 def _overlay_financial_table(table: pa.Table, schema: pa.Schema) -> pa.Table:
     if table.num_rows == 0:
         return pa.Table.from_batches([], schema=schema)
-    overlaid: dict[str, dict[str, object]] = {}
-    for row in table.to_pylist():
-        source_row_sha256 = str(row["source_row_sha256"])
-        _require_sha256(source_row_sha256)
-        overlaid[source_row_sha256] = row
-    return pa.Table.from_pylist(list(overlaid.values()), schema=schema)
+    keys = table["source_row_sha256"]
+    valid = pc.fill_null(pc.match_substring_regex(keys, "^[0-9a-f]{64}$"), False)
+    if not pc.all(valid).as_py():
+        raise FinancialCandidateError("FINANCIAL_SHA256_INVALID")
+    positions = pa.table(
+        {
+            "source_row_sha256": keys,
+            "_ordinal": pa.array(range(table.num_rows), type=pa.int64()),
+        }
+    )
+    grouped = positions.group_by("source_row_sha256", use_threads=False).aggregate(
+        [("_ordinal", "min"), ("_ordinal", "max")]
+    )
+    # Preserve first-key ordering and last-row precedence across immutable
+    # objects without materializing each historical row as Python objects.
+    ordered = grouped.sort_by([("_ordinal_min", "ascending")])
+    return table.take(ordered["_ordinal_max"])
 
 
 def _validate_contract(contract: FinancialCollectionContract) -> None:

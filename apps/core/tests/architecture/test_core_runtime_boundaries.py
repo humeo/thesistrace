@@ -86,6 +86,7 @@ def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
 
 def test_internal_import_graph_is_layered_and_acyclic() -> None:
     allowed = {
+        "_memory": set(),
         "_postgres": set(),
         "_paging": set(),
         "benchmark": set(),
@@ -130,6 +131,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_batch": {
+            "_memory",
             "researcher",
             "_paging",
             "_postgres",
@@ -161,6 +163,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "fixture": {"data"},
         "adapters": {"benchmark", "data", "fixture", "operational_events"},
         "entrypoints": {
+            "_memory",
             "_postgres",
             "alpha_language",
             "adapters",
@@ -178,6 +181,9 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "researcher",
         },
         "operational_events": set(),
+        # Versioned migration CLIs may inspect the target schema; application
+        # packages above deliberately cannot import migrations at runtime.
+        "migrations": {"_postgres", "entrypoints", "publication", "research_run"},
     }
 
     graph: dict[str, set[str]] = {}
@@ -900,7 +906,8 @@ def test_obsolete_authoring_contract_cannot_reenter_the_active_runtime() -> None
     assert "compile_formula" not in worker_source
     assert "/definitions" not in web_source
     assert "definition-list" not in web_source
-    assert not (package / "migrations").exists()
+    # Explicit migration CLIs are governed by the one-way import graph above;
+    # their presence does not reintroduce the obsolete authoring runtime.
     assert not (ROOT / "migrations").exists()
 
     active_authoring = "\n".join(
