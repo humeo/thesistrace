@@ -1,6 +1,6 @@
 # 02 接入独立维护 Worker 并移除业务轮询扫描
 
-Status: completed
+Status: complete
 
 依赖：01。按 [方案](../spec.md) 接入 `publication-maintenance-worker`、最小运行时、启动及 Compose 配置。移除 Research / Batch / Tracking 中的 Publication 清理调用，保留各自本地执行文件的清理。添加每步计数、耗时、退避及完整扫描年龄事件。
 
@@ -16,3 +16,5 @@ Status: completed
 完整资格首轮发现既有 Operator 刷新测试仍发送已删除的 otp 字段；按当前 Auth 契约修正测试，不修改 Auth 生产逻辑。复跑通过：`20260910t081222z-62926-535e8cf8`；后续 Auth、Agent、Caddy 独立镜像检查整条命令退出码 0。
 
 资源限额下真实 1,001 对象验证：首步 1,000 条、续步 1 条，最终资格运行首步 0.116 s，进程峰值约 161.5 MiB；旧游标、冷却与恢复已由真实依赖回归覆盖。
+
+部署单元已提交：`0157e21`。
