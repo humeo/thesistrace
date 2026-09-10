@@ -1,0 +1,147 @@
+{
+  "base_revision": "ad16ea9bd8e369c20270d187499cb089b7b7069e",
+  "source_revision": "8af1b76",
+  "performance_harness_revision": "1f6ead9",
+  "cancellation_protocol_revision": "420af5f",
+  "source_sha256": {
+    "apps/core/src/thesistrace/_memory.py": "8511e7559f93660f5d884ec77bdab487f542184f67365a7f4c4091976017684b",
+    "apps/core/src/thesistrace/data/financial_candidate.py": "c68e880b6e70f6ab4ebfed6e5bee2d450fe3d8c2ed4ab6b57fd09f10fe18e704",
+    "apps/core/src/thesistrace/entrypoints/data_operator.py": "812455dd169ce7ff009e43e71d1f42adab15658df6e9145d8abfd932012ca7f2",
+    "apps/core/src/thesistrace/research_batch/execution.py": "00919076d68a67ac51dc0c4a499b384869d310956ab4bf9dbeb23b4946d68351"
+  },
+  "tool_versions": {
+    "python": "3.12.11",
+    "node": "24.14.0",
+    "pnpm": "11.9.0"
+  },
+  "quick": {
+    "command": "pnpm test",
+    "exit_code": 0,
+    "python_passed": 1209,
+    "agent_passed": 648,
+    "auth_passed": 200,
+    "web_passed": 353,
+    "lint_and_typecheck": "passed"
+  },
+  "core_integration": {
+    "run_id": "20260910t033612z-77377-2febc8ac",
+    "entrypoint": "node .local/run-server-fix-integration.mjs",
+    "scope": "existing Core runner, selected Data and Batch test files; all six existing restart phases",
+    "regular_passed": 145,
+    "restart_passed": 6,
+    "exit_code": 0,
+    "cleanup_exit_code": 0
+  },
+  "image": {
+    "run_id": "20260910t034148z-87889-3c053612",
+    "scope": "all existing imageSmoke phases",
+    "smoke_phase_exit_codes": 0,
+    "extra_memory_probe_initial_exit_code": 2,
+    "extra_probe_initial_failure": "diagnostic script was not mounted; application imageSmoke phases had passed",
+    "extra_memory_probe_rerun_exit_code": 0,
+    "cleanup_exit_code": 0
+  },
+  "performance_before": {
+    "run_id": "20260910t031047z-61791-b7175f73",
+    "completed_cold_factor_samples": 5,
+    "completed_cold_strategy_samples": 1,
+    "exit_code": 130,
+    "reason": "baseline intentionally ended after six successful control samples",
+    "cleanup_exit_code": 0
+  },
+  "performance_after": {
+    "run_id": "20260910t034535z-89273-3e9e79f9",
+    "command": "pnpm check:performance",
+    "status": "failed_at_cancellation_qualification",
+    "exit_code": 1,
+    "cleanup_exit_code": 0,
+    "samples_passed": 20,
+    "samples_total": 20,
+    "failure_reason": "strategy cancellation used supported SIGTERM exit -15 before child readiness; qualification requires cooperative exit 0",
+    "image_source_sha256_matches_committed_runtime_files": true,
+    "image_source_verification_exit_code": 0,
+    "timing_comparison_limit": "other browser and development workloads were active; whole-run timings are not a controlled before-after speed comparison",
+    "factor_summary_equal_to_six_baseline_samples": true,
+    "factor_summary_sha256": "331264d99131736a561859ad989ad2ddfae81956008ce9ec31d441a81b4ca9d6",
+    "maximum_peak_rss_bytes": 629387264
+  },
+  "performance_cancellation_rerun": {
+    "run_id": "20260910t050950z-8741-519968a1",
+    "command": "node .local/run-server-fix-cancellation.mjs",
+    "status": "failed_at_cancellation_protocol_qualification",
+    "exit_code": 1,
+    "cleanup_exit_code": 0,
+    "failure_reason": "both kinds correctly cancelled and cleaned but child exit was 65; waiting-for-ACK branch omitted the valid cancel command",
+    "reuse": "twenty unchanged successful samples plus preload, each copied with SHA256 provenance",
+    "scope": "two cancellation cases after adding a benchmark-only first-Chunk synchronization barrier, then full qualification assembly",
+    "unit_and_runner_tests_passed": 30,
+    "barrier_pipe_tests_passed": 2,
+    "review_finding_resolved": "P2 log polling could miss the cooperative boundary; explicit callback barrier now prevents next-Chunk acknowledgement"
+  },
+  "performance_cancellation_final": {
+    "run_id": "20260910t051824z-11327-8aa5bd56",
+    "command": "node .local/run-server-fix-cancellation.mjs",
+    "status": "passed",
+    "scope": "repeat the two cancellation cases with corrected protocol and assemble all preserved samples",
+    "real_subprocess_regressions_passed": 2,
+    "review_findings": 0,
+    "exit_code": 0,
+    "cleanup_exit_code": 0,
+    "image_source_verified": true,
+    "summary": {
+      "factor_evaluation": {
+        "cancellation_latency_ms": 258.507,
+        "cold_max_duration_ms": 177961.901,
+        "first_checkpoint_latency_ms": 3779.894,
+        "peak_rss_bytes": 603934720,
+        "warm_max_duration_ms": 178253.879
+      },
+      "strategy_backtest": {
+        "cancellation_latency_ms": 243.243,
+        "cold_max_duration_ms": 231149.216,
+        "first_checkpoint_latency_ms": 4269.583,
+        "peak_rss_bytes": 629387264,
+        "warm_max_duration_ms": 217046.328
+      }
+    },
+    "qualification": {
+      "failure_reason": null,
+      "status": "passed"
+    }
+  },
+  "review": {
+    "standards_findings": 0,
+    "spec_findings": 0,
+    "architecture_followup_findings": 0
+  },
+  "production_changed": false,
+  "cancellation_source_sha256": {
+    "apps/core/src/thesistrace/entrypoints/research_child.py": "380d9ac7ec55b51e489991cc3a00d5f7ab19c106bb5c92f4f85ee6e6966e68dc"
+  },
+  "main_verification": {
+    "revision": "420af5f7035e33760572098b0ac62047116ab599",
+    "python_source_path_verified": "/Users/koltenluca/code-github/thesistrace/apps/core/src",
+    "tests_passed": 157,
+    "seconds": 34.94,
+    "exit_code": 0,
+    "ruff": "passed",
+    "scope": "all changed Core test files plus affected operational-output and performance-runner lifecycle assertions"
+  },
+  "resource_cleanup": {
+    "checked_test_run_ids": [
+      "20260910t031047z-61791-b7175f73",
+      "20260910t033612z-77377-2febc8ac",
+      "20260910t034148z-87889-3c053612",
+      "20260910t034535z-89273-3e9e79f9",
+      "20260910t050950z-8741-519968a1",
+      "20260910t051824z-11327-8aa5bd56"
+    ],
+    "remaining": {
+      "containers": [],
+      "volumes": [],
+      "networks": []
+    },
+    "memory_probe_image_removed": true,
+    "production_changed": false
+  }
+}

@@ -1,0 +1,171 @@
+{
+  "source_run_id": "20260910t034535z-89273-3e9e79f9",
+  "source_image": "sha256:d6443ffd07b5e1123bbc437278a96bbc2172d7e0c0589d65f28266fb0759bb51",
+  "reason": "reuse twenty successful samples and preload; rerun cancellation after fixing benchmark readiness",
+  "files": [
+    {
+      "file": "factor_evaluation-cold-0.json",
+      "sha256": "ac7210394687a10505b069afc39b69661017856199c4abc9e2f82b4298a5e670"
+    },
+    {
+      "file": "factor_evaluation-cold-0.log",
+      "sha256": "a7e58fa49b3174a2bfc67f058da28c539a017f0c9e9b04e0babbfcca4928a107"
+    },
+    {
+      "file": "factor_evaluation-cold-1.json",
+      "sha256": "8a249a3e9da8327d254f6876d87bcc19a50e9a667a50c8346a7868c87860e6ac"
+    },
+    {
+      "file": "factor_evaluation-cold-1.log",
+      "sha256": "3ad5f8f8e38f27703d31e0afdbce3c89a4c1fbfe13043cba15bd50c320e2f6ea"
+    },
+    {
+      "file": "factor_evaluation-cold-2.json",
+      "sha256": "c2cf54abe54bb6b1ec01a34e8fcbc2a3814970d6c068720450e7874998e8e227"
+    },
+    {
+      "file": "factor_evaluation-cold-2.log",
+      "sha256": "9e6dbae8eaa75affb0711ea0373f8cec5fe365be51c7520dd49622c868eb368a"
+    },
+    {
+      "file": "factor_evaluation-cold-3.json",
+      "sha256": "eae93b4987a1d79b636a201f63370888914c4046fa5d76d9d71596d159dc8360"
+    },
+    {
+      "file": "factor_evaluation-cold-3.log",
+      "sha256": "0be3c084682603efdb15b61e1df5dd80ac06e2386d1849110c7dd68b0944078b"
+    },
+    {
+      "file": "factor_evaluation-cold-4.json",
+      "sha256": "a9544bf7132b711c4d5d561956e26b2768fc49f1490030c9b4497089af7493ee"
+    },
+    {
+      "file": "factor_evaluation-cold-4.log",
+      "sha256": "0c1900d5da8c3c9cce4637220c9e2f0a1dd1d7a36242904e710ed7d58959902d"
+    },
+    {
+      "file": "factor_evaluation-warm-0.json",
+      "sha256": "6b33bda4e3662ec78eebe2130d87a9fb7d564ae3208c11b35ef9ca9d57f1710c"
+    },
+    {
+      "file": "factor_evaluation-warm-0.log",
+      "sha256": "5f96e564794852952be960c704255be53a6fb8136c682ded16dcfc94c853c31f"
+    },
+    {
+      "file": "factor_evaluation-warm-1.json",
+      "sha256": "be77715be7b690741447325afa67c1f365209a1428b692edc6df4f671c791de4"
+    },
+    {
+      "file": "factor_evaluation-warm-1.log",
+      "sha256": "be65501b10e4d4bf3ef26258a24a6f53893115efb118b60d36c2ad78b4064a7c"
+    },
+    {
+      "file": "factor_evaluation-warm-2.json",
+      "sha256": "ebe909fcce77563f710c3c75bc2c40c2cf072a276e68d934f39312b381fb9e52"
+    },
+    {
+      "file": "factor_evaluation-warm-2.log",
+      "sha256": "511c9f4bb4e25aea5246539be2e0ed4d974e524611efd9d24a97cc640e6870c6"
+    },
+    {
+      "file": "factor_evaluation-warm-3.json",
+      "sha256": "144e43e6b8497f33e2affd45fa3282f194f43a7ee9581cceb0c15242966dae0d"
+    },
+    {
+      "file": "factor_evaluation-warm-3.log",
+      "sha256": "6782dd94b4cfb4b002c722c790a894b2199a95fa350fb45d8fde21f98cdbafe2"
+    },
+    {
+      "file": "factor_evaluation-warm-4.json",
+      "sha256": "0cf6d12e8bd94c84431fce4221f19433278b2a2eb23aeeaf52a84b51dc60785a"
+    },
+    {
+      "file": "factor_evaluation-warm-4.log",
+      "sha256": "9349a96d2709b881b2a6fa21a7a9c35fbe9c52cefc17145ab1ff1051e0b15073"
+    },
+    {
+      "file": "preload.json",
+      "sha256": "5b054dc7847fd77307aad4e9eaa6950d909cf7f9eee1c793f431be993f8938e8"
+    },
+    {
+      "file": "strategy_backtest-cold-0.json",
+      "sha256": "2e306816381fe697bb98f6ea88135b919f442b0a6ecb2a4409a362487fd25e6a"
+    },
+    {
+      "file": "strategy_backtest-cold-0.log",
+      "sha256": "58a7d69968b39aa7f80b2610c52e09958321ed4c660a24382b9578bbb84cd513"
+    },
+    {
+      "file": "strategy_backtest-cold-1.json",
+      "sha256": "87bc0f26d6605e4935f6d5c1c35387b212f260517f6fd6949d499d09e0d243d0"
+    },
+    {
+      "file": "strategy_backtest-cold-1.log",
+      "sha256": "759c66248620121fa3fb108b2041405e06f2de41a2697d31302a87ae8027049d"
+    },
+    {
+      "file": "strategy_backtest-cold-2.json",
+      "sha256": "1118c514df1fdd6c1612007068b87dd19d5e74318596beecbca99d2c8f1933e9"
+    },
+    {
+      "file": "strategy_backtest-cold-2.log",
+      "sha256": "4c0111a7409c58a6f0283ebca0d89a810e1dab224b23f3cf09ed49c97e5e119d"
+    },
+    {
+      "file": "strategy_backtest-cold-3.json",
+      "sha256": "7e68201642f8c8a671363dcbbeda13baabc526de00f8e5dc9b8fdbd04b9539f7"
+    },
+    {
+      "file": "strategy_backtest-cold-3.log",
+      "sha256": "236a2824b2a3beb16cb6824c6c71ee6767987905ea94142f95e9215ec7fa294d"
+    },
+    {
+      "file": "strategy_backtest-cold-4.json",
+      "sha256": "880b9edb0ffd78510011754f3ab890a9cebb42c554963d530a6ffdf058e391ea"
+    },
+    {
+      "file": "strategy_backtest-cold-4.log",
+      "sha256": "d077154911e762bb95276bd80cd67102adab0fc2b9ca76fa5eec21296a3eeb61"
+    },
+    {
+      "file": "strategy_backtest-warm-0.json",
+      "sha256": "9d13f82c9f99990b8cc9c143493ed5e312b4ddfb125730fd76c1a9cc204a2841"
+    },
+    {
+      "file": "strategy_backtest-warm-0.log",
+      "sha256": "e34c9885d639d39433bf775746f45641df2e65df0d8110a1dd18f58839862f10"
+    },
+    {
+      "file": "strategy_backtest-warm-1.json",
+      "sha256": "07795f61d0fe446c7b007358e5c3c7bccfe3794192d31f19e4a64684c3e4041e"
+    },
+    {
+      "file": "strategy_backtest-warm-1.log",
+      "sha256": "e177197e4297d44fa0fb31730ea4088cab5af219890314f6671dc2874613ae43"
+    },
+    {
+      "file": "strategy_backtest-warm-2.json",
+      "sha256": "7d5188e4a65cf3bb77710ec1599eeb0673841e82b38ca854c2641840aa55d2eb"
+    },
+    {
+      "file": "strategy_backtest-warm-2.log",
+      "sha256": "b5e276b61b990d5d722b4c654ea1c376fb2036fff0129ef13e5eb25cee1d54d9"
+    },
+    {
+      "file": "strategy_backtest-warm-3.json",
+      "sha256": "79fcb82b446be91ccd1d4be07573fac75a4c6b2a0c897593df68d392ec93f4e4"
+    },
+    {
+      "file": "strategy_backtest-warm-3.log",
+      "sha256": "e77ff9e9ccf0007cd519480b42532b13f02d05c6a127b47ea669f368f581d71f"
+    },
+    {
+      "file": "strategy_backtest-warm-4.json",
+      "sha256": "e34037e348f04620ddf4056f2ed61c2601db003e7f3d42bd9c51a75e62678c60"
+    },
+    {
+      "file": "strategy_backtest-warm-4.log",
+      "sha256": "42d05fc4c07573a5d13675f58296cff0c69140a775ae30ecbbc0621c63054980"
+    }
+  ]
+}

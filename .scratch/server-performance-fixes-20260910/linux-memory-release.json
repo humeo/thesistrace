@@ -1,0 +1,1 @@
+{"initial_rss_bytes": 55042048, "cycles": [{"before_release_bytes": 290934784, "after_release_bytes": 55664640, "returned_bytes": 235270144}, {"before_release_bytes": 290934784, "after_release_bytes": 55664640, "returned_bytes": 235270144}, {"before_release_bytes": 290934784, "after_release_bytes": 55664640, "returned_bytes": 235270144}], "passed": true}
