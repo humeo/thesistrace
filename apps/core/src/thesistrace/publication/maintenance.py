@@ -22,6 +22,7 @@ PREFIX = "publication/v1/sha256/"
 PAGE_SIZE = 1000
 DELETE_LIMIT = 10
 STEP_SECONDS = 10
+SWEEP_REST_SECONDS = 3600
 
 
 class PublicationMaintenance:
@@ -59,7 +60,7 @@ class PublicationMaintenance:
             try:
                 if state["job"] == "orphan_scan":
                     result = self._scan(connection, state, started + STEP_SECONDS)
-                    delay = 900 if result["sweep_completed"] else 60
+                    delay = SWEEP_REST_SECONDS if result["sweep_completed"] else 60
                 else:
                     delay = 5
                     result = self._queued(connection, started + STEP_SECONDS)
@@ -194,8 +195,9 @@ class PublicationMaintenance:
                 connection.execute(
                     "UPDATE publication.maintenance_state SET last_key = '', cutoff = NULL, "
                     "sweep_started_at = NULL, last_sweep_completed_at = clock_timestamp(), "
-                    "next_due_at = clock_timestamp() + interval '15 minutes' "
-                    "WHERE job = 'orphan_scan'"
+                    "next_due_at = clock_timestamp() + %s "
+                    "WHERE job = 'orphan_scan'",
+                    (timedelta(seconds=SWEEP_REST_SECONDS),),
                 )
             else:
                 connection.execute(

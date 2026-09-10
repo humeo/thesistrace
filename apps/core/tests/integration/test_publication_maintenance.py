@@ -63,7 +63,11 @@ def test_empty_store_scan_has_a_durable_cooldown(maintenance_dependencies):
         row = tx.execute(
             "SELECT next_due_at FROM publication.maintenance_state WHERE job = 'orphan_scan'"
         ).fetchone()
-    assert row["next_due_at"] > datetime.now(UTC) + timedelta(minutes=14)
+    assert (
+        datetime.now(UTC) + timedelta(minutes=59)
+        < row["next_due_at"]
+        < (datetime.now(UTC) + timedelta(minutes=61))
+    )
 
 
 def test_orphan_budget_resumes_after_deleted_cursor_without_skipping(maintenance_dependencies):

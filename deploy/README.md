@@ -68,3 +68,5 @@ archive checksum and mounted Dataset Head on the destination. Initialize the ser
 product databases independently; research data transfer does not require copying
 local accounts, sessions or user results. Never overwrite an active Dataset Head or
 copy a live PostgreSQL data directory.
+
+Publication 孤儿维护每分钟最多检查一页 1,000 个对象，一轮完成后休息 60 分钟；明确删除队列仍独立运行。延长休息时间会推迟遗留对象的回收，不延迟研究结果发布。
