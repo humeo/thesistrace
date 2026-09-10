@@ -317,7 +317,7 @@ def test_tracking_cache_warning_keeps_worker_component_and_role() -> None:
         (WorkerRole.TRACKING, 1),
     ),
 )
-def test_idle_worker_reclaims_at_most_one_publication_and_only_tracking_caches(
+def test_idle_worker_leaves_publication_to_maintenance_and_only_tracking_caches(
     role: WorkerRole,
     expected_cache_calls: int,
 ) -> None:
@@ -334,10 +334,10 @@ def test_idle_worker_reclaims_at_most_one_publication_and_only_tracking_caches(
 
     process_one_poll(runtime, _configuration(role), emit=events.append)
 
-    assert publication.calls == 1
+    assert publication.calls == 0
     assert tracking.cache_calls == expected_cache_calls
     if role is WorkerRole.RESEARCH:
-        assert events == [{"event": "publication_object_deleted", "role": "research"}]
+        assert events == []
 
 
 def test_worker_capacity_rejects_smaller_cgroup_limits(tmp_path: Path) -> None:

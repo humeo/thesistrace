@@ -68,6 +68,12 @@ class PostgresDatabase:
 
     @contextmanager
     def try_session_advisory_lock(self, name: str) -> Iterator[bool]:
+        with self.try_session_advisory_connection(name) as connection:
+            yield connection is not None
+
+    @contextmanager
+    def try_session_advisory_connection(self, name: str) -> Iterator[PostgresTransaction | None]:
+        """Keep control transactions on the connection that owns the session lock."""
         if not name:
             raise ValueError("Advisory lock name must be non-empty")
         with self._pool.connection() as connection:
@@ -82,9 +88,9 @@ class PostgresDatabase:
                 connection.close()
                 raise
             try:
-                yield acquired
+                yield connection if acquired else None
             finally:
-                if acquired:
+                if acquired and not connection.closed:
                     self._release_session_locks(connection, (name,), shared=False)
 
     @contextmanager

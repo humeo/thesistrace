@@ -83,6 +83,13 @@ _STRING_FIELDS = frozenset(
 )
 _INTEGER_FIELDS = frozenset(
     {
+        "full_sweep_age_seconds",
+        "oldest_deletion_age_seconds",
+        "listed_count",
+        "processed_count",
+        "deleted_count",
+        "skipped_count",
+        "retry_seconds",
         "attempt_number",
         "duration_ms",
         "status_code",
@@ -106,6 +113,7 @@ _NONNEGATIVE_NUMBER_FIELDS = frozenset(
 )
 _BOOLEAN_FIELDS = frozenset(
     {
+        "sweep_completed",
         "acknowledged",
         "alpha_factor_task_started",
         "alpha_factor_task_completed",

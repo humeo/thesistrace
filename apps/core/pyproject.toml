@@ -19,6 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
+thesistrace-publication-maintenance = "thesistrace.entrypoints.publication_maintenance:main"
 thesistrace-core-api = "thesistrace.entrypoints.http:main"
 thesistrace-core-access-inspect = "thesistrace.entrypoints.access_operator:main"
 thesistrace-core-diagnose = "thesistrace.entrypoints.diagnose:main"

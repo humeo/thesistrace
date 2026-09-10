@@ -13,11 +13,10 @@ from botocore.exceptions import ClientError
 
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import (
-    PUBLICATION_REQUEST_TIMEOUT_SECONDS,
     CoreRuntime,
     CoreSettings,
-    publication_request_config,
 )
+from thesistrace.publication import PUBLICATION_REQUEST_TIMEOUT_SECONDS, publication_request_config
 
 ROOT = Path(__file__).resolve().parents[4]
 CORE_PACKAGES = (
@@ -346,6 +345,9 @@ def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> Non
     scripts = project["project"]["scripts"]
 
     assert scripts == {
+        "thesistrace-publication-maintenance": (
+            "thesistrace.entrypoints.publication_maintenance:main"
+        ),
         "thesistrace-core-api": "thesistrace.entrypoints.http:main",
         "thesistrace-core-access-inspect": "thesistrace.entrypoints.access_operator:main",
         "thesistrace-core-diagnose": "thesistrace.entrypoints.diagnose:main",

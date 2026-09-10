@@ -8,7 +8,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import boto3
-from botocore.config import Config
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
@@ -33,7 +32,10 @@ from thesistrace.entrypoints.quota_policy import quota_policy_lookup
 from thesistrace.entrypoints.readiness import CoreReadiness
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.operational_events import emit_operational_event_data
-from thesistrace.publication import Publication
+from thesistrace.publication import (
+    Publication,
+    publication_request_config,
+)
 from thesistrace.research_authoring import ResearchAuthoringService
 from thesistrace.research_batch import (
     ResearchBatchService,
@@ -61,15 +63,6 @@ CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_BENCHMARK_MOUNT",
     "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY",
 )
-PUBLICATION_REQUEST_TIMEOUT_SECONDS = 5.0
-
-
-def publication_request_config() -> Config:
-    return Config(
-        connect_timeout=PUBLICATION_REQUEST_TIMEOUT_SECONDS,
-        read_timeout=PUBLICATION_REQUEST_TIMEOUT_SECONDS,
-        retries={"total_max_attempts": 1, "mode": "standard"},
-    )
 
 
 @dataclass(frozen=True)
@@ -96,9 +89,7 @@ class CoreSettings:
             "s3_bucket": "THESISTRACE_S3_BUCKET",
             "data_mount": "THESISTRACE_DATA_MOUNT",
             "benchmark_mount": "THESISTRACE_BENCHMARK_MOUNT",
-            "batch_attempt_control_directory": (
-                "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY"
-            ),
+            "batch_attempt_control_directory": ("THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY"),
         }
         values: dict[str, str] = {}
         missing: list[str] = []
@@ -134,12 +125,8 @@ class CoreSettings:
             )
         except ValueError as error:
             raise RuntimeError(str(error)) from error
-        batch_attempt_control_directory = Path(
-            values["batch_attempt_control_directory"]
-        )
-        if batch_attempt_control_directory.resolve().is_relative_to(
-            data_mount.resolve()
-        ):
+        batch_attempt_control_directory = Path(values["batch_attempt_control_directory"])
+        if batch_attempt_control_directory.resolve().is_relative_to(data_mount.resolve()):
             raise RuntimeError(
                 "THESISTRACE_BATCH_ATTEMPT_CONTROL_DIRECTORY must be outside THESISTRACE_DATA_MOUNT"
             )
@@ -208,9 +195,7 @@ def open_worker_runtime(
 ) -> Iterator[CoreRuntime]:
     with _open_runtime(
         settings,
-        annualized_excess_calculator=RemoteAnnualizedExcessCalculator(
-            internal_api_origin
-        ),
+        annualized_excess_calculator=RemoteAnnualizedExcessCalculator(internal_api_origin),
         strategy_comparison=None,
         include_data_overview=False,
         auth_readiness_origin=None,

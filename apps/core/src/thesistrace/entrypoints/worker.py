@@ -5,7 +5,6 @@ import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -158,7 +157,7 @@ def process_one_poll(
             raise WorkerCapacityError(
                 "Research Worker execution memory cannot fit frozen planning capacity"
             )
-        product_worked = runtime.research_runs.process_next(
+        runtime.research_runs.process_next(
             on_claim=claim,
             on_execution_event=execution_event,
         )
@@ -170,7 +169,7 @@ def process_one_poll(
             raise WorkerCapacityError(
                 "Batch Research Worker execution memory cannot fit planning capacity"
             )
-        product_worked = runtime.research_batches.process_next(
+        runtime.research_batches.process_next(
             on_claim=claim,
             on_execution_event=execution_event,
         )
@@ -182,7 +181,7 @@ def process_one_poll(
             raise WorkerCapacityError(
                 "Tracking Worker execution memory cannot fit planning capacity"
             )
-        product_worked = _process_tracking(runtime, claim, execution_event)
+        _process_tracking(runtime, claim, execution_event)
     if configuration.role is WorkerRole.TRACKING:
         removed_caches = runtime.daily_tracks.reconcile_working_cache(
             lifecycle_event=non_blocking_operational_event_sink(
@@ -211,9 +210,6 @@ def process_one_poll(
                     "removed_file_count": removed_attempt_files,
                 }
             )
-    if product_worked:
-        return
-    _collect_one_publication(runtime, emit=emit, role=configuration.role)
 
 
 def main(arguments: Sequence[str] | None = None) -> None:
@@ -402,50 +398,6 @@ def _process_tracking(
         )
     except DailyTrackProgressionFailed:
         return True
-
-
-def _collect_one_publication(
-    runtime: CoreRuntime,
-    *,
-    emit: WorkerEventSink,
-    role: WorkerRole,
-) -> None:
-    from thesistrace.publication import (
-        PublicationPreparationError,
-        PublicationUnavailableError,
-    )
-
-    try:
-        removed = runtime.publication.collect_one_pending_deletion()
-    except (PublicationPreparationError, PublicationUnavailableError):
-        emit(
-            {
-                "event": "publication_deletion_deferred",
-                "level": "WARNING",
-                "role": role.value,
-                "failure_code": "PUBLICATION_UNAVAILABLE",
-            }
-        )
-        return
-    if removed:
-        emit({"event": "publication_object_deleted", "role": role.value})
-        return
-    try:
-        orphan_removed = runtime.publication.collect_one_orphan(
-            uploaded_before=datetime.now(UTC) - timedelta(hours=1)
-        )
-    except (PublicationPreparationError, PublicationUnavailableError):
-        emit(
-            {
-                "event": "publication_orphan_deletion_deferred",
-                "level": "WARNING",
-                "role": role.value,
-                "failure_code": "PUBLICATION_UNAVAILABLE",
-            }
-        )
-        return
-    if orphan_removed:
-        emit({"event": "publication_orphan_deleted", "role": role.value})
 
 
 def _emit_event(event: dict[str, object]) -> None:

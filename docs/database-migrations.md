@@ -42,3 +42,30 @@ Do not restart an old application against an upgraded database. If restoration i
 needed after commit, stop writers and use the verified backup and matching release.
 
 Testing policy and isolated test entry points: [AGENTS.md](../AGENTS.md#testing).
+
+## 0002: Bounded Publication maintenance
+
+- Source: `c11a7990cddff9a0346faca65d8f69dab299a615c02539ca8b2b45c4d28a5e48`
+- Target: `6f04fe84573259465442c092856b69714ed339c2093d51dcf67ba4b68aaa359f`
+- Preflight: `python -m thesistrace.migrations.publication_maintenance_0002`.
+- Apply: the same command with `--apply`, using the database owner URL.
+
+This migration adds two durable maintenance jobs, verifies the complete new table
+shape and grants access to the existing Core runtime role. Existing Publication,
+Research and Dataset records are preserved. Drain and stop Core writers and the
+maintenance service before applying, after taking and validating a database backup.
+Start the new Core services only after the migration receipt succeeds. Initialization
+verifies the new schema; it does not perform this migration automatically.
+
+For whole-Core rollback, stop Core and maintenance, run the new image's migration
+with `--reverse` (preflight), then `--reverse --apply`. The reverse transaction
+archives both maintenance job states in `thesistrace_meta.maintenance_rollback_archive`,
+drops only the added table, records the reverse event and restores the source
+contract. Then start the matching old image. A failed forward or reverse migration
+rolls back its DDL, history and fingerprint together. Reapplying after reversal
+starts fresh maintenance jobs; archived progress remains available for inspection.
+
+A maintenance-only incident can be contained by stopping
+`publication-maintenance-worker`; product Workers no longer run orphan scans.
+Delayed garbage collection does not prevent reading existing Results. Do not
+change the fingerprint manually or restart old Core code on the new schema.

@@ -2,7 +2,6 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
 
 import boto3
 import pytest
@@ -16,6 +15,7 @@ from thesistrace.entrypoints.schema import CORE_SCHEMAS, initialize_core
 from thesistrace.publication import (
     JsonPayload,
     Publication,
+    PublicationMaintenance,
     PublicationNotFoundError,
     PublicationUnavailableError,
     PublicationVerificationError,
@@ -38,9 +38,6 @@ def test_record_joins_the_callers_transaction_and_read_starts_from_commit(
             kind="research.result",
             payloads={"summary": JsonPayload({"annualized_return": 0.12})},
             provenance={"run_id": "run-001", "data_generation_id": "generation-001"},
-        )
-        assert prepared.payload_sha256s["summary"] not in runtime.publication.find_orphan_sha256s(
-            uploaded_before=datetime.now(UTC) - timedelta(minutes=5)
         )
 
         with runtime.database.transaction() as transaction:
@@ -86,6 +83,7 @@ def test_record_joins_the_callers_transaction_and_read_starts_from_commit(
 
 def test_rollback_leaves_an_invisible_orphan_and_preserves_previous_reference(
     core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
 ) -> None:
     with open_core_runtime(core_settings) as runtime:
         _reset_product_probe(runtime.database)
@@ -131,30 +129,22 @@ def test_rollback_leaves_an_invisible_orphan_and_preserves_previous_reference(
         assert row == {"manifest_sha256": baseline_ref.manifest_sha256}
         with pytest.raises(PublicationNotFoundError):
             runtime.publication.read(candidate_ref)
-        assert candidate.payload_sha256s["canonical"] in runtime.publication.find_orphan_sha256s(
-            uploaded_before=datetime.now(UTC) + timedelta(minutes=5)
+        key = _find_key_with_content(
+            rustfs_admin, core_settings.s3_bucket, canonical_json_bytes({"release": 2})
         )
-        assert (
-            runtime.publication.collect_one_orphan(
-                uploaded_before=datetime.now(UTC) - timedelta(minutes=5)
-            )
-            is False
-        )
-        cutoff = datetime.now(UTC) + timedelta(minutes=5)
-        for _ in range(20):
-            if candidate.payload_sha256s["canonical"] not in (
-                runtime.publication.find_orphan_sha256s(uploaded_before=cutoff)
-            ):
-                break
-            assert runtime.publication.collect_one_orphan(uploaded_before=cutoff) is True
-        assert candidate.payload_sha256s["canonical"] not in (
-            runtime.publication.find_orphan_sha256s(uploaded_before=cutoff)
-        )
+        _ready_orphan_scan(runtime.database)
+        result = PublicationMaintenance(
+            runtime.database, rustfs_admin, bucket=core_settings.s3_bucket
+        ).run_once()
+        assert result["deleted"] >= 1
+        with pytest.raises(ClientError):
+            rustfs_admin.head_object(Bucket=core_settings.s3_bucket, Key=key)
         assert runtime.publication.read(baseline_ref).provenance == {"sequence": 1}
 
 
 def test_orphan_collection_rechecks_a_new_reference_under_the_mutation_lock(
     core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
 ) -> None:
     with open_core_runtime(core_settings) as runtime:
         _reset_product_probe(runtime.database)
@@ -163,12 +153,15 @@ def test_orphan_collection_rechecks_a_new_reference_under_the_mutation_lock(
             payloads={"canonical": JsonPayload({"race": "record-before-delete"})},
             provenance={"owner": "new-reference"},
         )
+        _ready_orphan_scan(runtime.database)
+        maintenance = PublicationMaintenance(
+            runtime.database, rustfs_admin, bucket=core_settings.s3_bucket
+        )
         with ThreadPoolExecutor(max_workers=1) as pool:
             with runtime.database.transaction() as transaction:
                 lock_publication_mutation(transaction)
                 collection = pool.submit(
-                    runtime.publication.collect_one_orphan,
-                    uploaded_before=datetime.now(UTC) + timedelta(minutes=5),
+                    maintenance.run_once,
                 )
                 published = runtime.publication.record(transaction, prepared)
             collection.result(timeout=10)
@@ -182,14 +175,16 @@ def test_orphan_collection_fails_closed_when_the_bucket_is_missing(
     rustfs_admin: BaseClient,
 ) -> None:
     database = PostgresDatabase(core_settings.database_url)
-    publication = Publication(
-        database,
-        rustfs_admin,
-        bucket=f"{core_settings.s3_bucket}-missing",
-    )
-
-    with pytest.raises(PublicationUnavailableError):
-        publication.collect_one_orphan(uploaded_before=datetime.now(UTC) + timedelta(minutes=5))
+    database.open()
+    try:
+        _ready_orphan_scan(database)
+        result = PublicationMaintenance(
+            database, rustfs_admin, bucket=f"{core_settings.s3_bucket}-missing"
+        ).run_once()
+        assert result["status"] == "failed"
+        assert result["failure_code"] == "PUBLICATION_BUCKET_MISSING"
+    finally:
+        database.close()
 
 
 def test_release_collects_only_after_the_last_manifest_reference(
@@ -340,13 +335,16 @@ def test_failed_object_deletion_remains_durable_until_worker_retry(
             == 200
         )
 
+        with runtime.database.transaction() as tx:
+            tx.execute(
+                "UPDATE publication.maintenance_state SET next_due_at = now() + interval '1 day' "
+                "WHERE job = 'orphan_scan'"
+            )
     completed = subprocess.run(
         [
             sys.executable,
             "-m",
-            "thesistrace.entrypoints.worker",
-            "--role",
-            "research",
+            "thesistrace.entrypoints.publication_maintenance",
             "--once",
         ],
         check=False,
@@ -463,3 +461,47 @@ def _find_key_with_content(s3: BaseClient, bucket: str, expected: bytes) -> str:
         if body == expected:
             return str(key)
     raise AssertionError("test object was not uploaded")
+
+
+def _ready_orphan_scan(database):
+    with database.transaction() as tx:
+        tx.execute(
+            "UPDATE publication.maintenance_state SET next_due_at = now(), "
+            "last_key = '', cutoff = now() + interval '5 minutes', "
+            "sweep_started_at = now() WHERE job = 'orphan_scan'"
+        )
+        tx.execute(
+            "UPDATE publication.maintenance_state SET next_due_at = now() + interval '1 day' "
+            "WHERE job = 'queued_deletions'"
+        )
+
+
+def test_six_idle_product_processes_never_list_publication_objects(core_settings):
+    _reset_core_schemas(core_settings)
+    program = """
+import boto3
+from thesistrace.entrypoints.worker import main
+original = boto3.client
+def client(*args, **kwargs):
+    result = original(*args, **kwargs)
+    def reject(**unused):
+        raise RuntimeError('idle product Worker attempted an object listing')
+    result.meta.events.register('before-call.s3.ListObjectsV2', reject)
+    return result
+boto3.client = client
+main()
+"""
+
+    def poll(role):
+        result = subprocess.run(
+            [sys.executable, "-c", program, "--role", role, "--once"],
+            env={**os.environ, "THESISTRACE_INTERNAL_API_ORIGIN": "http://127.0.0.1:1"},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "attempted an object listing" not in result.stderr
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(poll, ["research"] * 3 + ["batch-research"] * 2 + ["tracking"]))

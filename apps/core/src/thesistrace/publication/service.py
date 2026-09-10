@@ -4,10 +4,10 @@ import hashlib
 import json
 import os
 import re
+import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -567,44 +567,6 @@ class Publication:
             raise PublicationVerificationError("PublishedRef provenance does not match manifest")
         return manifest
 
-    def find_orphan_sha256s(self, *, uploaded_before: datetime) -> tuple[str, ...]:
-        if uploaded_before.tzinfo is None or uploaded_before.utcoffset() is None:
-            raise ValueError("orphan cutoff must be timezone-aware")
-        uploaded: set[str] = set()
-        try:
-            paginator = self._s3.get_paginator("list_objects_v2")
-            for page in paginator.paginate(
-                Bucket=self._bucket,
-                Prefix="publication/v1/sha256/",
-            ):
-                for item in page.get("Contents", []):
-                    last_modified = item.get("LastModified")
-                    if not isinstance(last_modified, datetime):
-                        raise PublicationVerificationError(
-                            "Publication object listing has no modification time"
-                        )
-                    if last_modified > uploaded_before:
-                        continue
-                    digest = _digest_from_object_key(str(item["Key"]))
-                    if digest is not None:
-                        uploaded.add(digest)
-        except ClientError as error:
-            raise PublicationUnavailableError(
-                "Publication object listing is temporarily unavailable"
-            ) from error
-        except TRANSIENT_S3_ERRORS as error:
-            raise PublicationUnavailableError(
-                "Publication object listing is temporarily unavailable"
-            ) from error
-        # Read committed truth after the object snapshot to narrow the race with
-        # a concurrent record. Cleanup must still use an aged cutoff and recheck.
-        with self._database.transaction() as transaction:
-            recorded = {
-                str(row["sha256"])
-                for row in transaction.execute("SELECT sha256 FROM publication.objects").fetchall()
-            }
-        return tuple(sorted(uploaded - recorded))
-
     def release_manifest_in_transaction(
         self,
         transaction: PostgresTransaction,
@@ -648,72 +610,63 @@ class Publication:
                 (digest, digest),
             )
 
-    def collect_one_orphan(self, *, uploaded_before: datetime) -> bool:
-        """Delete one aged upload that still has no committed Publication record."""
-
-        orphan_sha256s = self.find_orphan_sha256s(uploaded_before=uploaded_before)
-        for digest in orphan_sha256s:
-            with self._database.transaction() as transaction:
-                lock_publication_mutation(transaction)
-                recorded = transaction.execute(
-                    "SELECT 1 FROM publication.objects WHERE sha256 = %s",
-                    (digest,),
-                ).fetchone()
-                if recorded is not None:
-                    continue
-                self._delete_immutable(digest)
-                return True
-        return False
-
     def collect_one_pending_deletion(self) -> bool:
-        """Delete one unreferenced immutable object with a durable retry record."""
+        """Delete one queued object after checking its committed references."""
         with self._database.transaction() as transaction:
-            lock_publication_mutation(transaction)
-            row = transaction.execute(
-                """
-                SELECT object_sha256
-                FROM publication.object_deletions
-                ORDER BY created_at, object_sha256
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-                """
-            ).fetchone()
-            if row is None:
-                return False
-            digest = str(row["object_sha256"])
-            referenced = transaction.execute(
-                """
-                SELECT 1
-                FROM publication.manifest_objects
-                WHERE object_sha256 = %s
-                LIMIT 1
-                """,
-                (digest,),
-            ).fetchone()
-            if referenced is not None:
-                transaction.execute(
-                    "DELETE FROM publication.object_deletions WHERE object_sha256 = %s",
-                    (digest,),
-                )
-                return True
-            self._delete_immutable(digest)
+            return self.collect_pending_deletion_in_transaction(transaction) is not None
+
+    def collect_pending_deletion_in_transaction(
+        self, transaction: PostgresTransaction, *, deadline: float | None = None
+    ) -> str | None:
+        """Use the caller's maintenance connection and per-object transaction."""
+        lock_publication_mutation(transaction)
+        row = transaction.execute(
+            """
+            SELECT object_sha256
+            FROM publication.object_deletions
+            ORDER BY created_at, object_sha256
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        digest = str(row["object_sha256"])
+        referenced = transaction.execute(
+            """
+            SELECT 1
+            FROM publication.manifest_objects
+            WHERE object_sha256 = %s
+            LIMIT 1
+            """,
+            (digest,),
+        ).fetchone()
+        if referenced is not None:
             transaction.execute(
                 "DELETE FROM publication.object_deletions WHERE object_sha256 = %s",
                 (digest,),
             )
-            transaction.execute(
-                """
-                DELETE FROM publication.objects
-                WHERE sha256 = %s
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM publication.manifest_objects
-                    WHERE object_sha256 = %s
-                  )
-                """,
-                (digest, digest),
-            )
-        return True
+            return "retained"
+        if deadline is not None and time.monotonic() >= deadline:
+            return None
+        self._delete_immutable(digest)
+        transaction.execute(
+            "DELETE FROM publication.object_deletions WHERE object_sha256 = %s",
+            (digest,),
+        )
+        transaction.execute(
+            """
+            DELETE FROM publication.objects
+            WHERE sha256 = %s
+              AND NOT EXISTS (
+                SELECT 1
+                FROM publication.manifest_objects
+                WHERE object_sha256 = %s
+              )
+            """,
+            (digest, digest),
+        )
+        return "deleted"
 
     @staticmethod
     def _verify_recorded_links(
