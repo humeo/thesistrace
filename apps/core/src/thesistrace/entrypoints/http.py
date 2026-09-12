@@ -114,7 +114,6 @@ from thesistrace.research_folder import (
 from thesistrace.research_run import (
     OrganizeResearchRunCommand,
     ResearchKind,
-    ResearchRunAdmissionCommand,
     ResearchRunAdmissionConflict,
     ResearchRunAdmissionRejected,
     ResearchRunAdmissionRejection,
@@ -129,6 +128,7 @@ from thesistrace.research_run import (
     ResearchRunSortDirection,
     ResearchRunSortKey,
     ResearchRunStartTrackingConflict,
+    ResearchRunSubmissionCommand,
     ResearchRunSummary,
     ResearchRunTemporarilyUnavailable,
     ResearchRunTrackingTemporarilyUnavailable,
@@ -1100,7 +1100,7 @@ def create_app(
     )
     def admit_research_run(
         request: Request,
-        command: ResearchRunAdmissionCommand,
+        command: ResearchRunSubmissionCommand,
     ) -> ResearchRunSummary | JSONResponse:
         try:
             return _runtime(request).research_runs.admit(_researcher_id(request), command)

@@ -1793,9 +1793,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "b2e07b435f83492f0a58d6abeb1cfd24ca284b28ee3541e513904219651c8af8"
+        "4d25b5f2a9887b26a666085ef36464a4bdb99d83d89074bf52e2dd9b4a4d0b18"
     )
-    assert len(canonical) == 218830
+    assert len(canonical) == 223611
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -2120,9 +2120,17 @@ async def _exercise_in_memory_protocol() -> None:
                 discriminator = (
                     "batch_kind" if tool.name == "submit_research_batch" else "research_kind"
                 )
-                assert tool.input_schema["discriminator"]["propertyName"] == discriminator
-                assert len(tool.input_schema["oneOf"]) == 2
-                for branch in tool.input_schema["oneOf"]:
+                schema = tool.input_schema
+                if tool.name == "submit_research_run":
+                    assert len(schema["anyOf"]) == 2
+                    source = schema["$defs"]["CurrentDataRerunCommand"]
+                    assert source["additionalProperties"] is False
+                    assert set(source["required"]) == {"request_id", "folder_id", "rerun_source"}
+                    assert "rerun_source" in tool.description
+                    schema = schema["$defs"]["ResearchRunAdmissionCommand"]
+                assert schema["discriminator"]["propertyName"] == discriminator
+                assert len(schema["oneOf"]) == 2
+                for branch in schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
                     assert definition["additionalProperties"] is False
             elif tool.name in {"get_research_run_result", "get_daily_track_result"}:
@@ -2195,7 +2203,7 @@ async def _exercise_in_memory_protocol() -> None:
         assert "get_research_run" in (tools["submit_research_run"].description or "")
         strategy_ref = next(
             branch["$ref"]
-            for branch in submit_schema["oneOf"]
+            for branch in submit_schema["$defs"]["ResearchRunAdmissionCommand"]["oneOf"]
             if "StrategyBacktest" in branch["$ref"]
         )
         strategy_schema = submit_schema["$defs"][strategy_ref.rsplit("/", 1)[-1]]
@@ -2228,6 +2236,10 @@ async def _exercise_in_memory_protocol() -> None:
             assert schema["properties"]["limit"]["maximum"] == 50
             assert schema["properties"]["cursor"]["anyOf"][0]["maxLength"] == 1024
         track_result_output_schema = str(tools["get_daily_track_result"].output_schema).lower()
+        # One public opaque checkpoint identity is required to pin explicit reruns.
+        track_result_output_schema = track_result_output_schema.replace(
+            "checkpoint_manifest_sha256", "",
+        ).replace("checkpoint manifest sha256", "")
         for private_name in (
             "generation_id",
             "manifest",
@@ -3149,3 +3161,32 @@ def test_registry_whole_spec_diagnosis_is_read_only_and_uses_formal_validation()
     assert result.error is None
     assert result.result.valid is False
     assert result.result.issues[0].field == "exposure_expression"
+
+
+@pytest.mark.parametrize("source,read_scope", [
+    ({"kind": "research_run", "run_id": "run_test"}, ResearchAgentScope.RESEARCH_READ),
+    ({"kind": "daily_track", "track_id": "track_test",
+      "checkpoint_manifest_sha256": "a" * 64, "through_session": "2026-08-03"},
+     ResearchAgentScope.TRACKING_READ),
+])
+def test_source_rerun_mcp_requires_source_read_authority(source, read_scope):
+    async def exercise():
+        for permitted in (False, True):
+            scopes = {ResearchAgentScope.RESEARCH_EXECUTE}
+            if permitted:
+                scopes.add(read_scope)
+            authority = ResearchAgentAuthority(
+                subject="rerun-agent", researcher_id=TEST_RESEARCHER_ID,
+                scopes=frozenset(scopes),
+            )
+            async with Client(_server(_registry(authority), events=[])) as client:
+                result = await client.call_tool("submit_research_run", {
+                    "request_id": "source-rerun", "folder_id": "folder_default",
+                    "rerun_source": source,
+                })
+            assert result.is_error is not permitted
+            if permitted:
+                assert result.structured_content["outcome"] == "accepted"
+            else:
+                assert result.structured_content["code"] == "FORBIDDEN"
+    anyio.run(exercise)

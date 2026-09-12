@@ -509,6 +509,7 @@ class DailyTrackService:
             "daily_track_id": track_id,
             "seed_run_id": origin.seed_run_id,
             "boundary_session": boundary,
+            "data_generation_id": origin.seed_data_generation_id,
             "calculation_contracts": origin.calculation_contracts,
         }
         prepared = self._publication.prepare(
@@ -1808,6 +1809,25 @@ class DailyTrackService:
             raise DailyTrackResultReadFailed("DailyTrack Result could not be verified") from error
         return result
 
+    def read_research_source(
+        self, researcher_id: UUID, track_id: str, checkpoint_manifest_sha256: str,
+    ) -> dict[str, object] | None:
+        """Resolve owned frozen research values without loading old data or an old engine."""
+        snapshot = self._session_coordinates.load_read_snapshot(
+            researcher_id, track_id, checkpoint_limit=0,
+            manifest_sha256=checkpoint_manifest_sha256,
+        )
+        if snapshot is None:
+            return None
+        origin = snapshot["origin"]
+        return {
+            "immutable_input": origin["immutable_input"],
+            "source_run_id": origin["seed_run_id"],
+            "source_result_manifest_sha256": origin["verified_result"]["result_checksum_sha256"],
+            "source_provenance": snapshot["current_checkpoint_provenance"],
+            "completed_session": snapshot["current_strategy_session"],
+        }
+
     def _get_holding_section(self, researcher_id: UUID, query: HoldingQuery):
         with self._database.transaction() as transaction:
             secret = _cursor_secret(transaction)
@@ -2115,6 +2135,7 @@ class DailyTrackService:
                     },
                     "origin_data_through_session": origin.seed_data_through_session,
                     "tracking_strategy_session": current_session,
+                    "checkpoint_manifest_sha256": current_manifest,
                     "calculation_contracts": origin.calculation_contracts,
                     "semantic_versions": dict(semantic_versions),
                 }
@@ -2356,6 +2377,7 @@ class DailyTrackService:
             )
             return DailyTrackDetail.model_validate(
                 {
+                    "checkpoint_manifest_sha256": row["current_checkpoint_manifest_sha256"],
                     "id": str(row["id"]),
                     "status": row["status"],
                     "origin": {

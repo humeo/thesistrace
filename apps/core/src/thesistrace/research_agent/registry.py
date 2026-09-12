@@ -104,8 +104,9 @@ from thesistrace.research_batch import (
 )
 from thesistrace.research_folder.models import ResearchFolderList
 from thesistrace.research_run import (
+    CurrentDataRerunCommand,
+    DailyTrackRerunSource,
     ResearchRunAdmissionAccepted,
-    ResearchRunAdmissionCommand,
     ResearchRunAdmissionConflict,
     ResearchRunAdmissionOutcome,
     ResearchRunCancelCommand,
@@ -121,6 +122,7 @@ from thesistrace.research_run import (
     ResearchRunResultUnavailable,
     ResearchRunStartTrackingConflict,
     ResearchRunStartTrackingOutcome,
+    ResearchRunSubmissionCommand,
     ResearchRunTemporarilyUnavailable,
     ResearchRunTrackingTemporarilyUnavailable,
     ResearchRunTrackingUnavailable,
@@ -184,7 +186,7 @@ class ResearchRunReader(Protocol):
     def admit_with_outcome(
         self,
         researcher_id: UUID,
-        command: ResearchRunAdmissionCommand,
+        command: ResearchRunSubmissionCommand,
     ) -> ResearchRunAdmissionOutcome: ...
 
     def start_tracking_with_outcome(
@@ -679,13 +681,22 @@ class ResearchAgentCapabilityRegistry:
             ResearchAgentCapability(
                 name="submit_research_run",
                 description=(
-                    "Submit a fully specified Factor Evaluation or Strategy Backtest; requires "
+                    "Submit a fully specified Factor Evaluation or Strategy Backtest, or "
+                    "explicitly "
+                    "rerun an owned Strategy Run/Track with rerun_source and a new request_id. "
+                    "A rerun uses current data and rules; results may differ. It preserves source "
+                    "parameters and records rerun_origin without replacing the source. Track "
+                    "sources require checkpoint_manifest_sha256 from provenance "
+                    "and through_session; "
+                    "they run from the original research start. Source reruns additionally require "
+                    "research:read (Run) or tracking:read (Track). Reading expired holdings does "
+                    "not submit a rerun. All submissions require "
                     "research:execute, is non-destructive, and is idempotent by request_id. "
                     "Invalid research is a successful structured rejected outcome; after "
                     "acceptance, poll get_research_run using retry_after_seconds until terminal."
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_EXECUTE,
-                input_model=ResearchRunAdmissionCommand,
+                input_model=ResearchRunSubmissionCommand,
                 output_model=SubmitResearchRunOutcome,
                 annotations=EFFECTFUL_TOOL_ANNOTATIONS,
                 handler=self.submit_research_run,
@@ -1259,7 +1270,13 @@ class ResearchAgentCapabilityRegistry:
 
     def submit_research_run(self, **command_fields: object) -> BaseModel:
         self._require(ResearchAgentScope.RESEARCH_EXECUTE)
-        command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(command_fields)
+        command = TypeAdapter(ResearchRunSubmissionCommand).validate_python(command_fields)
+        if isinstance(command, CurrentDataRerunCommand):
+            source_scope = (ResearchAgentScope.TRACKING_READ
+                            if isinstance(command.rerun_source, DailyTrackRerunSource)
+                            else ResearchAgentScope.RESEARCH_READ)
+            if not self._authority.permits(source_scope):
+                raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.FORBIDDEN)
         try:
             outcome = self._modules.research_runs.admit_with_outcome(
                 self._authority.researcher_id,

@@ -173,6 +173,7 @@ def test_complete_provenance_with_maximum_text_preserves_every_character_under_b
         execution=dict(calculation_contracts={}, semantic_versions={}),
     )
     track = DailyTrackProvenanceResultSection(
+        checkpoint_manifest_sha256="a" * 64,
         track_id="track_" + "a" * 20,
         origin_research_run_id=run.run_id,
         origin_result_checksum_sha256="a" * 64,

@@ -273,6 +273,56 @@ type ResearchRunAdmissionCommand = Annotated[
 ]
 
 
+class ResearchRunRerunSource(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    kind: Literal["research_run"]
+    run_id: str = Field(min_length=1, max_length=200)
+
+
+class DailyTrackRerunSource(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    kind: Literal["daily_track"]
+    track_id: str = Field(min_length=1, max_length=200)
+    checkpoint_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    through_session: NaturalDate
+
+
+type CurrentDataRerunSource = Annotated[
+    ResearchRunRerunSource | DailyTrackRerunSource, Field(discriminator="kind"),
+]
+
+
+class CurrentDataRerunCommand(_ResearchRunSubmission):
+    """Explicitly resolve an owned frozen strategy into a new current-data Run."""
+
+    rerun_source: CurrentDataRerunSource
+
+
+type ResearchRunSubmissionCommand = ResearchRunAdmissionCommand | CurrentDataRerunCommand
+
+
+class CurrentDataRerunOrigin(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_run_id: str = Field(min_length=1, max_length=200)
+    source_result_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_data_generation_id: str = Field(min_length=1, max_length=200)
+    source_calculation_contracts: dict[str, object]
+    through_session: NaturalDate
+    source_track_id: str | None = Field(default=None, min_length=1, max_length=200)
+    source_checkpoint_manifest_sha256: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$",
+    )
+
+    @model_validator(mode="after")
+    def track_source_is_complete(self) -> CurrentDataRerunOrigin:
+        if (self.source_track_id is None) != (self.source_checkpoint_manifest_sha256 is None):
+            raise ValueError("Track rerun origin requires both Track and Checkpoint identity")
+        return self
+
+
 class ResearchRunAdmissionIssue(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -376,6 +426,7 @@ class ImmutableRunInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    rerun_origin: CurrentDataRerunOrigin | None = None
     formula_source: str
     alpha_expression: dict[str, object]
     hypothesis: ResearchHypothesis | None
@@ -396,6 +447,8 @@ class ImmutableRunInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_research_kind_contract(self) -> ImmutableRunInput:
+        if self.rerun_origin is not None and self.research_kind != "strategy_backtest":
+            raise ValueError("Only Strategy Backtest can have a rerun origin")
         strategy_values = (self.strategy, self.costs, self.risk_free_rate)
         if self.research_kind == "factor_evaluation" and any(
             value is not None for value in strategy_values
@@ -429,6 +482,8 @@ class ImmutableRunInput(BaseModel):
 
     def canonical_value(self) -> dict[str, object]:
         value = self.model_dump(mode="json")
+        if self.rerun_origin is None:
+            value.pop("rerun_origin")
         if self.research_kind == "factor_evaluation":
             for name in ("strategy", "costs", "risk_free_rate"):
                 value.pop(name)
@@ -471,6 +526,9 @@ class ResearchRunSummary(BaseModel):
     end_date: date
     formula_summary: Annotated[str, Field(max_length=120)]
     research_kind: ResearchKind
+    rerun_origin: CurrentDataRerunOrigin | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     key_metrics: ResearchRunKeyMetrics | None = Field(
         default=None,
         exclude_if=lambda value: value is None,

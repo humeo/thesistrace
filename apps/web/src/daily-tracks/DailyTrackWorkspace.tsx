@@ -86,7 +86,11 @@ export function DailyTrackWorkspace({ track, actions, notices }: {
       </div>
       <div className="track-supporting">
         <StrategyEvents key={track.id} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/events/query`} />
-        <DailyHoldings key={track.id} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/holdings/query`} />
+        <DailyHoldings key={track.id} rerun={{ folderId: "folder_default", source: {
+          kind: "daily_track", track_id: track.id,
+          checkpoint_manifest_sha256: track.checkpoint_manifest_sha256,
+          through_session: track.strategy_session,
+        } }} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/holdings/query`} />
         <CommonInputObservations key={`${track.id}:${track.strategy_session}`} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/common-input-observations`} />
         <details className="track-disclosure"><summary>Update details <span>{trackStatusLabel(track)}</span></summary>
           <div className="track-disclosure-content"><TrackingProgressView progress={track.progress} /></div></details>

@@ -17,6 +17,7 @@ type DailyTrackSummary = {
 };
 
 export type DailyTrackDetail = {
+  checkpoint_manifest_sha256: string;
   id: string;
   status: "active" | "blocked" | "stopping" | "stopped";
   origin: {

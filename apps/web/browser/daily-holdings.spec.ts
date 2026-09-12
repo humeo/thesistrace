@@ -96,3 +96,61 @@ test("expired holdings, empty holdings and request failures remain distinct", as
   await expect(page.getByText("No holdings on this page.")).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
+
+
+test("expired holdings rerun only on request and reuse identity after a lost response", async ({ page }) => {
+  const submissions: Record<string, unknown>[] = [];
+  await page.route("https://holdings.test/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/" || path === "/research-runs/run_new") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    const body = route.request().postDataJSON() as Record<string, unknown>;
+    if (path === "/api/research-runs") {
+      submissions.push(body);
+      return submissions.length === 1 ? route.abort("failed") : route.fulfill({ status: 202, json: { id: "run_new" } });
+    }
+    return route.fulfill({ json: { status: "recorded", units: [{ ...unit, status: "expired" }], next_cursor: null } });
+  });
+  await page.goto("https://holdings.test/");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await page.getByRole("button", { name: "Daily holdings", exact: false }).click();
+  const rerun = page.getByRole("button", { name: "Rerun to generate holdings" });
+  await expect(rerun).toBeVisible();
+  expect(submissions).toHaveLength(0);
+  await rerun.click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  expect(submissions).toHaveLength(1);
+  expect(submissions[0]).toMatchObject({ folder_id: "folder_default", rerun_source: { kind: "research_run", run_id: "run_holdings" } });
+  await rerun.click();
+  await expect(page).toHaveURL("https://holdings.test/research-runs/run_new");
+  expect(submissions).toHaveLength(2);
+  expect(submissions[1]).toEqual(submissions[0]);
+});
+
+test("Track rerun pins the checkpoint and investigates the selected period from research start", async ({ page }) => {
+  let submitted: Record<string, unknown> | null = null;
+  await page.route("https://holdings.test/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/" || path === "/research-runs/run_track_rerun") return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    if (path === "/api/research-runs") {
+      submitted = route.request().postDataJSON() as Record<string, unknown>;
+      return route.fulfill({ status: 202, json: { id: "run_track_rerun" } });
+    }
+    return route.fulfill({ json: { status: "recorded", units: [{ ...unit, status: "expired", source_kind: "daily_track" }], next_cursor: null } });
+  });
+  await page.goto("https://holdings.test/?track");
+  await page.addStyleTag({ content: styles });
+  await page.addScriptTag({ content: script });
+  await expect(page.getByRole("link", { name: "Source Research Run" })).toHaveAttribute("href", "/research-runs/run_original");
+  await page.getByRole("button", { name: "Daily holdings", exact: false }).click();
+  await expect(page.getByText("Runs from the original research start through 2026-08-04.", { exact: false })).toBeVisible();
+  expect(submitted).toBeNull();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: "../../.local/browser-tests/expired-holdings-rerun.png", fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.getByRole("button", { name: "Rerun to generate holdings" }).click();
+  await expect(page).toHaveURL("https://holdings.test/research-runs/run_track_rerun");
+  expect(submitted).toMatchObject({ rerun_source: {
+    kind: "daily_track", track_id: "track_holdings", checkpoint_manifest_sha256: "a".repeat(64), through_session: "2026-08-04",
+  } });
+});

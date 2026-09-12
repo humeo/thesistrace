@@ -659,6 +659,7 @@ class DailyTrackProvenanceResultSection(BaseModel):
     frozen_research_input: DailyTrackFrozenResearchInput
     origin_data_through_session: date
     tracking_strategy_session: date
+    checkpoint_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     calculation_contracts: dict[str, object]
     semantic_versions: dict[str, str]
 
@@ -749,6 +750,8 @@ class DailyTrackObservation(BaseModel):
 
 class DailyTrackDetail(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    checkpoint_manifest_sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 
     id: str
     status: Literal["active", "blocked", "stopping", "stopped"]

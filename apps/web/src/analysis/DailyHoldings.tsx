@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { CurrentDataRerun, type RerunSource } from "./CurrentDataRerun";
 import { coreFetch } from "../auth/coreFetch";
 import "./strategy-events.css";
 import "./daily-holdings.css";
@@ -9,7 +10,10 @@ type Row = { session: string; instrument_id: string; execution_shares: number; a
 type Details = { status: "available" | "expired" | "not_recorded"; unit: Unit | null; rows: Row[]; coverage: { session_count: number } | null; next_cursor: string | null };
 type Filters = { start_session?: string; end_session?: string; instrument_id?: string };
 
-export function DailyHoldings({ endpoint }: { endpoint: string }) {
+export function DailyHoldings({ endpoint, rerun }: {
+  endpoint: string;
+  rerun?: { folderId: string; source: RerunSource };
+}) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<StatusPage | null>(null);
   const [unitId, setUnitId] = useState("");
@@ -104,6 +108,10 @@ export function DailyHoldings({ endpoint }: { endpoint: string }) {
       {busy && <p role="status">Loading…</p>}
       {error && <p role="alert">{error}</p>}
       {details?.status === "expired" && <p>These holdings have expired. Permanent results and trading events remain available.</p>}
+      {rerun && selectedUnit?.status === "expired" && <CurrentDataRerun
+        key={`${unitId}:${JSON.stringify(rerun.source)}`} folderId={rerun.folderId}
+        source={rerun.source.kind === "daily_track"
+          ? { ...rerun.source, through_session: selectedUnit.last_session } : rerun.source} />}
       {details?.status === "not_recorded" && <p>Daily holdings were not recorded for this period.</p>}
       {details?.status === "available" && <>
         <p>{details.coverage?.session_count ?? 0} Research Sessions covered.</p>

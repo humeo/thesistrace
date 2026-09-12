@@ -1,3 +1,4 @@
+import { CurrentDataRerunOrigin, type RerunOrigin } from "../analysis/CurrentDataRerun";
 import { DailyHoldings } from "../analysis/DailyHoldings";
 import { StrategyEvents } from "../analysis/StrategyEvents";
 import { SelectionEligibilityView, type SelectionEligibility } from "../research/SelectionEligibility";
@@ -157,6 +158,7 @@ export type ResearchRunExecutionTiming = {
 };
 
 export type ResearchRun = {
+  rerun_origin?: RerunOrigin;
   id: string;
   status: "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
   name: string;
@@ -592,6 +594,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
           <p role="status">Refreshing ResearchRun…</p>
         ) : null}
         <ResearchRunFacts run={run} />
+        {run.rerun_origin && <CurrentDataRerunOrigin origin={run.rerun_origin} />}
         {!terminal ? progressView : null}
         {deleting ? null : folderError !== null ? (
           <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
@@ -615,7 +618,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
             <ResearchResultView result={run.result} />
             {"factor" in run.result ? <FactorEvidence key={`factor:${run.id}`} runId={run.id} /> : null}
             {"strategy" in run.result && <StrategyEvents key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/events/query`} />}
-            {"strategy" in run.result && <DailyHoldings key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/holdings/query`} />}
+            {"strategy" in run.result && <DailyHoldings key={run.id} rerun={{ folderId: run.folder_id, source: { kind: "research_run", run_id: run.id } }} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/holdings/query`} />}
             <CommonInputObservations key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/common-input-observations`} />
           </>
         ) : null}

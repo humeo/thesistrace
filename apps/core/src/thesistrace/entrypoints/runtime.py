@@ -264,6 +264,7 @@ def _open_runtime(
             generation_store=generation_store,
             publication=publication,
             activate_track=daily_tracks.activate,
+            read_track_research_source=daily_tracks.read_research_source,
             compile_formula=alpha_language.compile,
             current_dataset=dataset_admission.current,
             track_references_result=daily_tracks.references_result_manifest,

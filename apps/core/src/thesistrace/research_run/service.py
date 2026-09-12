@@ -6,7 +6,7 @@ import math
 from base64 import urlsafe_b64encode
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from threading import Event, Thread
 from time import monotonic
@@ -110,6 +110,9 @@ from thesistrace.research_run.failure_policy import (
 from thesistrace.research_run.models import (
     CommonInputObservationsResultSection,
     CommonInputObservationsResultSectionInput,
+    CurrentDataRerunCommand,
+    CurrentDataRerunOrigin,
+    DailyTrackRerunSource,
     DataAdmissionFacts,
     ExpressionAdmissionFacts,
     FactorEvaluationResearchRunKeyMetrics,
@@ -147,12 +150,14 @@ from thesistrace.research_run.models import (
     ResearchRunSortDirection,
     ResearchRunSortKey,
     ResearchRunStartTrackingOutcome,
+    ResearchRunSubmissionCommand,
     ResearchRunSummary,
     ResearchSpec,
     ResearchSpecDiagnostics,
     ResultDataProvenance,
     ResultExecutionProvenance,
     StartTrackingCommand,
+    StrategyBacktestAdmissionCommand,
     StrategyBacktestResearchRunKeyMetrics,
     StrategyBacktestResearchRunResult,
     StrategyBacktestSpec,
@@ -405,6 +410,9 @@ class ResearchRunService:
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
         activate_track: ActivateTrack | None = None,
+        read_track_research_source: Callable[
+            [UUID, str, str], Mapping[str, object] | None
+        ] | None = None,
         compile_formula: CompileFormula | None = None,
         current_dataset: CurrentDataset | None = None,
         track_references_result: TrackReferencesResult | None = None,
@@ -426,6 +434,7 @@ class ResearchRunService:
         self._progress = progress or (lambda _stage, _run_id: None)
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
+        self._read_track_research_source = read_track_research_source
         self._activate_track = activate_track
         self._compile_formula = compile_formula
         self._current_dataset = current_dataset
@@ -1148,7 +1157,7 @@ class ResearchRunService:
     def admit(
         self,
         researcher_id: UUID,
-        command: ResearchRunAdmissionCommand,
+        command: ResearchRunSubmissionCommand,
     ) -> ResearchRunSummary:
         outcome = self.admit_with_outcome(researcher_id, command)
         if isinstance(outcome, ResearchRunAdmissionRejectedOutcome):
@@ -1158,7 +1167,7 @@ class ResearchRunService:
     def admit_with_outcome(
         self,
         researcher_id: UUID,
-        command: ResearchRunAdmissionCommand,
+        command: ResearchRunSubmissionCommand,
     ) -> ResearchRunAdmissionOutcome:
         try:
             return self._admit_with_outcome(researcher_id, command)
@@ -1182,7 +1191,7 @@ class ResearchRunService:
     def _admit_with_outcome(
         self,
         researcher_id: UUID,
-        command: ResearchRunAdmissionCommand,
+        command: ResearchRunSubmissionCommand,
     ) -> ResearchRunAdmissionOutcome:
         if self._compile_formula is None or self._current_dataset is None:
             raise RuntimeError("ResearchRun admission dependencies are not configured")
@@ -1200,11 +1209,20 @@ class ResearchRunService:
                     replayed=True,
                 )
         try:
+            admission_command, rerun_origin = (
+                self._resolve_rerun_source(researcher_id, command)
+                if isinstance(command, CurrentDataRerunCommand) else (command, None)
+            )
             prepared = self.prepare_child_admission(
                 researcher_id,
-                command,
+                admission_command,
                 dataset=self.current_admission_dataset(),
             )
+            if rerun_origin is not None:
+                prepared = replace(prepared, immutable_input=ImmutableRunInput.model_validate({
+                    **prepared.immutable_input.canonical_value(),
+                    "rerun_origin": rerun_origin.model_dump(mode="json"),
+                }))
         except ResearchRunAdmissionRejected as error:
             return self._record_admission_rejection(
                 researcher_id,
@@ -1270,10 +1288,110 @@ class ResearchRunService:
         assert row is not None
         return _accepted_admission_outcome(row, replayed=False)
 
+    def _resolve_rerun_source(
+        self, researcher_id: UUID, command: CurrentDataRerunCommand,
+    ) -> tuple[StrategyBacktestAdmissionCommand, CurrentDataRerunOrigin]:
+        source = command.rerun_source
+        if isinstance(source, DailyTrackRerunSource):
+            if self._read_track_research_source is None:
+                raise RuntimeError("Track research source reader is not configured")
+            try:
+                selected = self._read_track_research_source(
+                    researcher_id, source.track_id, source.checkpoint_manifest_sha256,
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
+                    code="RERUN_SOURCE_INVALID", field="rerun_source", message=str(error),
+                )]) from error
+        else:
+            with self._database.transaction() as transaction:
+                row = transaction.execute(
+                    "SELECT id, immutable_input, result_manifest_sha256, result_provenance "
+                    "FROM research_runs.runs WHERE researcher_id = %s AND id = %s "
+                    "AND status = 'succeeded'", (researcher_id, source.run_id),
+                ).fetchone()
+            selected = None if row is None else {
+                "immutable_input": row["immutable_input"],
+                "source_run_id": row["id"],
+                "source_result_manifest_sha256": row["result_manifest_sha256"],
+                "source_provenance": row["result_provenance"],
+            }
+        if selected is None:
+            raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
+                code="RERUN_SOURCE_NOT_FOUND", field="rerun_source",
+                message="Owned completed research source was not found",
+            )])
+        try:
+            immutable = selected["immutable_input"]
+            if immutable["research_kind"] != "strategy_backtest":
+                raise ValueError("Rerun source must be a Strategy Backtest")
+            strategy = immutable["strategy"]
+            # Retain supported simulation settings exactly. Unsupported old settings
+            # are diagnosed; never substitute current defaults for a different model.
+            for field, value, supported in (
+                ("strategy.kind", strategy["kind"], FIXED_STRATEGY_KIND),
+                ("strategy.execution", strategy["execution"], FIXED_EXECUTION),
+                ("costs", immutable["costs"], FIXED_COSTS),
+                ("risk_free_rate", immutable["risk_free_rate"], "0"),
+            ):
+                if value != supported:
+                    raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
+                        code="RERUN_SOURCE_INVALID", field=field,
+                        message=(
+                            "Original simulation setting is unsupported in the current contract"
+                        ),
+                    )])
+            through = (source.through_session.isoformat()
+                       if isinstance(source, DailyTrackRerunSource)
+                       else immutable["requested_end_date"])
+            if (isinstance(source, DailyTrackRerunSource)
+                    and through > selected["completed_session"]):
+                raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
+                    code="RERUN_SOURCE_INVALID", field="rerun_source.through_session",
+                    message="Investigation date exceeds the selected published Checkpoint",
+                )])
+            projected = StrategyBacktestAdmissionCommand.model_validate({
+                "request_id": command.request_id, "folder_id": command.folder_id,
+                "name": command.name, "research_kind": "strategy_backtest",
+                "formula": immutable["formula_source"], "hypothesis": immutable["hypothesis"],
+                "start_date": immutable["requested_start_date"], "end_date": through,
+                "universe": immutable["universe"], "neutralization": immutable["neutralization"],
+                "initial_cash_cny": strategy["initial_cash_cny"],
+                "holdings_count": strategy["holdings_count"],
+                "selection_every_sessions": strategy["selection_every_sessions"],
+                "exposure_expression": strategy["exposure_source"],
+                "weighting": strategy["weighting"],
+                "volatility_window": strategy["volatility_window"],
+            })
+            provenance = selected["source_provenance"]
+            origin = CurrentDataRerunOrigin.model_validate({
+                "source_run_id": selected["source_run_id"],
+                "source_result_manifest_sha256": selected["source_result_manifest_sha256"],
+                "source_data_generation_id": provenance["data_generation_id"],
+                "source_calculation_contracts": provenance["calculation_contracts"],
+                "through_session": through,
+                **({"source_track_id": source.track_id,
+                    "source_checkpoint_manifest_sha256": source.checkpoint_manifest_sha256}
+                   if isinstance(source, DailyTrackRerunSource) else {}),
+            })
+            return projected, origin
+        except ResearchRunAdmissionRejected:
+            raise
+        except ValidationError as error:
+            raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
+                code="RERUN_SOURCE_INVALID",
+                field=".".join(map(str, item["loc"])) or "rerun_source",
+                message=item["msg"],
+            ) for item in error.errors()]) from error
+        except (KeyError, TypeError, ValueError) as error:
+            raise ResearchRunAdmissionRejected([ResearchRunAdmissionIssue(
+                code="RERUN_SOURCE_INVALID", field="rerun_source", message=str(error),
+            )]) from error
+
     def _record_admission_rejection(
         self,
         researcher_id: UUID,
-        command: ResearchRunAdmissionCommand,
+        command: ResearchRunSubmissionCommand,
         *,
         request_fingerprint: str,
         issues: list[ResearchRunAdmissionIssue],
@@ -4508,7 +4626,7 @@ def _admitted_input(
     )
 
 
-def _admission_fingerprint(command: ResearchRunAdmissionCommand) -> str:
+def _admission_fingerprint(command: ResearchRunSubmissionCommand) -> str:
     value = {
         "action": "research-runs.admit/v1",
         "command": command.model_dump(mode="json", exclude={"request_id"}),
@@ -4696,6 +4814,7 @@ def _summary(row: object) -> ResearchRunSummary:
             "end_date": row["requested_end_date"],
             "formula_summary": formula_summary,
             "research_kind": immutable_input.research_kind,
+            "rerun_origin": immutable_input.rerun_origin,
             "key_metrics": key_metrics,
             "failure_reason": row.get("failure_reason"),
         }
