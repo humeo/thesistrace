@@ -61,7 +61,7 @@ Agent 还需要查看实际持仓及交易以解释结果。将每天每只股�
 - StrategySpec 包含 SignalSpec、`holdings_count`、`selection_every_sessions`、Portfolio Weighting 与 `exposure_expression`。SimulationSpec 表示 Simulation Conditions，冻结 `initial_cash_cny`、现有成本、数量、执行及估值合同。两者是 Run 内不可变值，不是新增可编辑资源。
 - 对外维持一份规范化定义：沿用现有公共日期、Universe、`formula`、`neutralization` 等字段，在 Strategy 分支增加本金、配权和 Exposure，重命名选股周期；Core 可用上述值对象组织实现，不同时维护重复的嵌套和扁平请求。接受、复用草稿、读取来源及 Track 继承使用相同定义。
 - `holdings_count` 保持整数 1–100；`selection_every_sessions` 保持整数 1–20，替代公开字段 `rebalance_every_sessions`。新合同不接受旧名或双写别名；存量输入由显式迁移处理。
-- Initial Cash 是必填的有限正数 CNY 金额，使用精确十进制、最多两位小数；允许不足买入一手的金额，由正常数量/现金规则产生现金账户。禁止只缩放显示收益。已有固定 1000 万元输入在迁移时保留原金额，不替换成用户此次研究偏好的 10 万元。
+- Initial Cash 是必填的 0.01–1,000,000,000 CNY 金额，使用精确十进制、最多两位小数；允许不足买入一手的金额，由正常数量/现金规则产生现金账户。禁止只缩放显示收益。已有固定 1000 万元输入在迁移时保留原金额，不替换成用户此次研究偏好的 10 万元。
 - 新策略配权默认等权，Exposure 默认常量 1；准入时显式规范化并冻结默认值。逆波动窗口默认 20、合法整数范围沿用窗口约束 1–252。目录公布默认值、范围、表达式资源限制及实际启用模型，不暴露未实现形态。
 - `get_research_context` 和 `get_alpha_catalog` 继续作为共享发现入口，扩展输入作用域、结果类型、适用运算、依赖、共同指标口径及可用范围。网页与 Agent 使用同一目录，不依赖页面提供 Agent 契约。
 

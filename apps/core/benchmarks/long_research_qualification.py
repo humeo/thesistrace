@@ -554,6 +554,7 @@ def _admit(
     if research_kind == "strategy_backtest":
         payload.update(
             {
+                "initial_cash_cny": "10000000",
                 "holdings_count": 100,
                 "rebalance_every_sessions": 5,
             }

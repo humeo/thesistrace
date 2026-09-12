@@ -5035,6 +5035,7 @@ def _run_command(
     if research_kind == "strategy_backtest":
         command.update(
             {
+                "initial_cash_cny": "10000000",
                 "holdings_count": holdings_count,
                 "rebalance_every_sessions": rebalance_every_sessions,
             }

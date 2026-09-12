@@ -274,7 +274,6 @@ class ResearchRunAdmissionRejected(ValueError):
 
 
 FIXED_STRATEGY_KIND = "long_only_top_n_equal_weight"
-FIXED_INITIAL_CASH_CNY = "10000000"
 FIXED_EXECUTION = "next_open_full_fill"
 FIXED_COSTS = {
     "commission_rate_all_in": "0.0003",
@@ -2894,7 +2893,6 @@ class ResearchRunService:
         strategy_contract_mismatch = immutable_input.research_kind == "strategy_backtest" and (
             strategy is None
             or strategy.get("kind") != FIXED_STRATEGY_KIND
-            or strategy.get("initial_cash_cny") != FIXED_INITIAL_CASH_CNY
             or strategy.get("execution") != FIXED_EXECUTION
             or immutable_input.costs != FIXED_COSTS
             or immutable_input.risk_free_rate != "0"
@@ -3948,7 +3946,7 @@ def _admitted_input(
                 "kind": FIXED_STRATEGY_KIND,
                 "holdings_count": command.holdings_count,
                 "rebalance_every_sessions": command.rebalance_every_sessions,
-                "initial_cash_cny": FIXED_INITIAL_CASH_CNY,
+                "initial_cash_cny": command.initial_cash_cny,
                 "execution": FIXED_EXECUTION,
             },
             "costs": FIXED_COSTS,
@@ -4296,6 +4294,7 @@ def _authorable_input(row: object) -> ResearchRunAuthorableInput:
     if immutable_input.research_kind == "strategy_backtest":
         assert immutable_input.strategy is not None
         strategy_values = {
+            "initial_cash_cny": str(immutable_input.strategy["initial_cash_cny"]),
             "holdings_count": int(immutable_input.strategy["holdings_count"]),
             "rebalance_every_sessions": int(immutable_input.strategy["rebalance_every_sessions"]),
         }

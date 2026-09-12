@@ -144,6 +144,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
     terminal = resume_daily[-1]
     metric_state = advance_strategy_metric_state(
         None,
+        initial_cash=Decimal("10000000"),
         daily=resume_daily,
         turnover_events=resume["metrics"]["turnover"]["events"],
         cumulative_cost=Decimal(str(terminal["cumulative_transaction_cost"])),

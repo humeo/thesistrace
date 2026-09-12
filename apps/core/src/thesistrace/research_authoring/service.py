@@ -7,6 +7,7 @@ from thesistrace.alpha_language.language import (
 )
 from thesistrace.research_authoring.models import (
     FormulaAuthoringConstraints,
+    InitialCashConstraints,
     IntegerRange,
     ResearchAuthoringConstraints,
 )
@@ -15,6 +16,7 @@ from thesistrace.research_batch.models import (
     MIN_RESEARCH_BATCH_ITEMS,
     RESEARCH_BATCH_KINDS,
 )
+from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
 from thesistrace.research_run.models import (
     MAX_HOLDINGS_COUNT,
     MAX_REBALANCE_INTERVAL,
@@ -29,6 +31,7 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
     research_kinds=RESEARCH_KINDS,
     universes=RESEARCH_UNIVERSES,
     neutralizations=RESEARCH_NEUTRALIZATIONS,
+    initial_cash_cny=InitialCashConstraints(maximum=str(MAX_INITIAL_CASH_CNY)),
     holdings_count=IntegerRange(
         minimum=MIN_HOLDINGS_COUNT,
         maximum=MAX_HOLDINGS_COUNT,

@@ -22,7 +22,6 @@ from thesistrace.alpha_language import AlphaAuthoringCatalog, FormulaDiagnostics
 from thesistrace.daily_track import (
     DAILY_TRACK_RESULT_SECTIONS,
     DailyTrackDetailUnavailable,
-    DailyTrackFactorResultSection,
     DailyTrackInvalidCursor,
     DailyTrackList,
     DailyTrackPollingDetail,
@@ -38,6 +37,7 @@ from thesistrace.daily_track import (
     DailyTrackStopConflict,
     DailyTrackStopOutcome,
     DailyTrackStopUnavailable,
+    DailyTrackStrategyObservationsResultSection,
     DailyTrackSummary,
     DailyTrackTemporarilyUnavailable,
     RefreshDailyTrackCommand,
@@ -337,7 +337,7 @@ class _DailyTrackReader:
         self.list_filters: dict[str, object] | None = None
         self.polling_detail: DailyTrackPollingDetail | None = _daily_track_polling_detail()
         self.result_section: DailyTrackResultSectionResponse | None = (
-            _daily_track_factor_result_section()
+            _daily_track_observations_result_section()
         )
         self.result_query: DailyTrackResultSectionInput | None = None
         self.retry_outcome: DailyTrackRetryOutcome | None = DailyTrackRetryOutcome(
@@ -670,11 +670,11 @@ def _factor_result_section() -> FactorResultSection:
     )
 
 
-def _daily_track_factor_result_section() -> DailyTrackFactorResultSection:
-    return DailyTrackFactorResultSection(
+def _daily_track_observations_result_section() -> DailyTrackStrategyObservationsResultSection:
+    return DailyTrackStrategyObservationsResultSection(
         track_id="track_test",
-        strategy_session=date(2024, 1, 31),
-        factor=_factor_result_section().factor.model_dump(mode="python"),
+        items=[],
+        next_cursor=None,
     )
 
 
@@ -1470,14 +1470,16 @@ def test_registry_maps_daily_track_refresh_retry_stop_outcomes_authority_and_err
 
     result = default.invoke(
         "get_daily_track_result",
-        {"track_id": "track_test", "section": "factor"},
+        {"track_id": "track_test", "section": "strategy_observations"},
         trace_id="trace_track_result",
     )
-    assert result.result == _daily_track_factor_result_section()
+    assert result.result == _daily_track_observations_result_section()
     assert reader.result_query is not None
     assert reader.result_query.model_dump(mode="json") == {
         "track_id": "track_test",
-        "section": "factor",
+        "section": "strategy_observations",
+        "cursor": None,
+        "limit": 20,
     }
 
     for failure, code in (
@@ -1488,7 +1490,7 @@ def test_registry_maps_daily_track_refresh_retry_stop_outcomes_authority_and_err
         reader.failure = failure
         failed_result = default.invoke(
             "get_daily_track_result",
-            {"track_id": "track_test", "section": "factor"},
+            {"track_id": "track_test", "section": "strategy_observations"},
             trace_id=f"trace_track_result_{code.lower()}",
         )
         assert failed_result.error is not None
@@ -1498,12 +1500,12 @@ def test_registry_maps_daily_track_refresh_retry_stop_outcomes_authority_and_err
     reader.result_section = None
     missing_result = default.invoke(
         "get_daily_track_result",
-        {"track_id": "track_missing", "section": "factor"},
+        {"track_id": "track_missing", "section": "strategy_observations"},
         trace_id="trace_track_result_missing",
     )
     assert missing_result.error is not None
     assert missing_result.error.code == "NOT_FOUND"
-    reader.result_section = _daily_track_factor_result_section()
+    reader.result_section = _daily_track_observations_result_section()
 
     refreshed = default.invoke(
         "refresh_daily_track",
@@ -1790,9 +1792,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "e00ef7bf365b978fbe071083e2e09428e64f0309bd2907d547dca0fa09b89979"
+        "5778467e06d96e0dd53965a889c242749680f8f2295dfc911317aa4502099eff"
     )
-    assert len(canonical) == 146969
+    assert len(canonical) == 144138
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -2122,7 +2124,7 @@ async def _exercise_in_memory_protocol() -> None:
             elif tool.name in {"get_research_run_result", "get_daily_track_result"}:
                 assert tool.annotations.read_only_hint is True
                 assert tool.input_schema["discriminator"]["propertyName"] == "section"
-                expected_section_count = 6 if tool.name == "get_research_run_result" else 5
+                expected_section_count = 6 if tool.name == "get_research_run_result" else 4
                 assert len(tool.input_schema["oneOf"]) == expected_section_count
                 for branch in tool.input_schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
@@ -2192,7 +2194,10 @@ async def _exercise_in_memory_protocol() -> None:
             if "StrategyBacktest" in branch["$ref"]
         )
         strategy_schema = submit_schema["$defs"][strategy_ref.rsplit("/", 1)[-1]]
-        assert {"holdings_count", "rebalance_every_sessions"} <= set(strategy_schema["required"])
+        assert {"initial_cash_cny", "holdings_count", "rebalance_every_sessions"} <= set(
+            strategy_schema["required"]
+        )
+        assert strategy_schema["properties"]["initial_cash_cny"]["type"] == "string"
         result_schema = tools["get_research_run_result"].input_schema
         collection_schemas = [
             result_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
@@ -2231,9 +2236,7 @@ async def _exercise_in_memory_protocol() -> None:
         ):
             assert private_name not in track_result_output_schema
         track_result_definitions = tools["get_daily_track_result"].output_schema["$defs"]
-        assert track_result_definitions["DailyTrackFactorMetrics"][
-            "additionalProperties"
-        ] is False
+        assert "DailyTrackFactorMetrics" not in track_result_definitions
         assert track_result_definitions["DailyTrackStrategyMetrics"][
             "additionalProperties"
         ] is False
@@ -2345,19 +2348,19 @@ async def _exercise_in_memory_protocol() -> None:
         assert invalid_section_fields.is_error is True
         assert invalid_section_fields.structured_content["code"] == "INVALID_INPUT"
 
-        track_factor_result = await client.call_tool(
+        track_observations_result = await client.call_tool(
             "get_daily_track_result",
-            {"track_id": "track_test", "section": "factor"},
+            {"track_id": "track_test", "section": "strategy_observations"},
         )
-        assert track_factor_result.is_error is False
+        assert track_observations_result.is_error is False
         validate(
-            track_factor_result.structured_content,
+            track_observations_result.structured_content,
             tools["get_daily_track_result"].output_schema,
         )
-        assert track_factor_result.structured_content["strategy_session"] == "2024-01-31"
+        assert track_observations_result.structured_content["items"] == []
         invalid_track_section_fields = await client.call_tool(
             "get_daily_track_result",
-            {"track_id": "track_test", "section": "factor", "limit": 20},
+            {"track_id": "track_test", "section": "strategy_observations", "limit": 51},
         )
         assert invalid_track_section_fields.is_error is True
         assert invalid_track_section_fields.structured_content["code"] == "INVALID_INPUT"

@@ -549,6 +549,7 @@ function researchCommand(options: Readonly<{
     research_kind: strategy ? "strategy_backtest" : "factor_evaluation",
     ...(strategy
       ? {
+          initial_cash_cny: "100000",
           holdings_count: holdingsCount,
           rebalance_every_sessions: rebalanceEverySessions,
         }

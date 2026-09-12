@@ -10,6 +10,7 @@ from statistics import stdev
 
 from thesistrace.research_kernel.numeric import (
     ACCOUNTING_CONTEXT,
+    MAX_INITIAL_CASH_CNY,
     canonical_decimal,
     require_finite_decimal,
 )
@@ -22,8 +23,6 @@ from thesistrace.research_series import (
     PriceLimit,
     slice_research_sessions,
 )
-
-INITIAL_CASH = Decimal("10000000")
 
 
 class StrategyCalculationError(RuntimeError):
@@ -317,8 +316,23 @@ def _execute_strategy(
     rebalance_interval = int(strategy["rebalance_interval"])
     if not 1 <= holdings_count <= 100 or not 1 <= rebalance_interval <= 20:
         raise StrategyCalculationError("invalid Strategy breadth or schedule")
-    if Decimal(str(strategy["initial_cash_cny"])) != INITIAL_CASH:
+    initial_cash = Decimal(str(strategy["initial_cash_cny"]))
+    if (
+        not initial_cash.is_finite() or initial_cash <= 0
+        or initial_cash > MAX_INITIAL_CASH_CNY or initial_cash.as_tuple().exponent < -2
+    ):
         raise StrategyCalculationError("invalid Initial Cash")
+    if continuation is not None:
+        metric_state = continuation.get("metric_state")
+        prior_initial_cash = (
+            metric_state["initial_cash_cny"]
+            if isinstance(metric_state, Mapping)
+            else continuation["initial_cash_cny"]
+        )
+        if Decimal(str(prior_initial_cash)) != initial_cash:
+            raise StrategyCalculationError(
+                "continuation Initial Cash differs from account baseline"
+            )
     costs = {name: Decimal(str(value)) for name, value in definition["costs"].items()}
     skipped_sessions = skip_execution_sessions or set()
 
@@ -334,8 +348,8 @@ def _execute_strategy(
     )
     if continuation is None:
         positions: dict[str, Position] = {}
-        gross_cash = INITIAL_CASH
-        net_cash = INITIAL_CASH
+        gross_cash = initial_cash
+        net_cash = initial_cash
         cumulative_cost = Decimal(0)
         daily: list[dict[str, object]] = []
         fills: list[dict[str, object]] = []
@@ -755,7 +769,7 @@ def _execute_strategy(
     positions_payload = _position_payload(positions)
     payload = {
         "alpha_checksum": alpha_matrix["checksum"],
-        "initial_cash_cny": canonical_decimal(INITIAL_CASH),
+        "initial_cash_cny": canonical_decimal(initial_cash),
         "daily": daily,
         "positions": positions_payload,
         "orders": orders,
@@ -781,6 +795,7 @@ def _strategy_publication_result(execution: _StrategyExecution) -> dict[str, obj
         assert isinstance(daily, list)
         assert isinstance(rejections, list)
         metrics = strategy_metrics(
+            initial_cash=Decimal(str(execution.payload["initial_cash_cny"])),
             daily=daily,
             turnover_events=list(execution.turnover_events),
             cumulative_cost=execution.cumulative_cost,
@@ -815,6 +830,7 @@ def _strategy_metric_state(execution: _StrategyExecution) -> dict[str, object]:
     assert isinstance(rejections, list)
     return advance_strategy_metric_state(
         execution.prior_metric_state,
+        initial_cash=Decimal(str(execution.payload["initial_cash_cny"])),
         daily=daily[execution.prior_daily_count :],
         turnover_events=list(execution.turnover_events),
         cumulative_cost=execution.cumulative_cost,
@@ -1058,6 +1074,7 @@ def affordable_quantity(
 
 def strategy_metrics(
     *,
+    initial_cash: Decimal,
     daily: list[dict[str, object]],
     turnover_events: list[dict[str, object]],
     cumulative_cost: Decimal,
@@ -1071,10 +1088,10 @@ def strategy_metrics(
     )
     investment_intervals = len(daily) - entry_index - 1
     report_intervals = len(daily) - 1
-    gross_cumulative = float(gross_nav[-1] / INITIAL_CASH - 1)
-    net_cumulative = float(net_nav[-1] / INITIAL_CASH - 1)
-    gross_cagr = cagr(gross_nav[-1] / INITIAL_CASH, investment_intervals)
-    net_cagr = cagr(net_nav[-1] / INITIAL_CASH, investment_intervals)
+    gross_cumulative = float(gross_nav[-1] / initial_cash - 1)
+    net_cumulative = float(net_nav[-1] / initial_cash - 1)
+    gross_cagr = cagr(gross_nav[-1] / initial_cash, investment_intervals)
+    net_cagr = cagr(net_nav[-1] / initial_cash, investment_intervals)
     net_returns = [
         float(net_nav[index] / net_nav[index - 1] - 1) for index in range(1, len(net_nav))
     ]
@@ -1121,7 +1138,7 @@ def strategy_metrics(
         },
         "transaction_costs": {
             "cumulative_amount": float(cumulative_cost),
-            "ratio": float(cumulative_cost / INITIAL_CASH),
+            "ratio": float(cumulative_cost / initial_cash),
             "return_drag": gross_cumulative - net_cumulative,
         },
         "holdings_count": {
@@ -1228,12 +1245,18 @@ def _integer_sqrt_fraction_round_to_odd(
 def advance_strategy_metric_state(
     prior_state: dict[str, object] | None,
     *,
+    initial_cash: Decimal,
     daily: list[dict[str, object]],
     turnover_events: list[dict[str, object]],
     cumulative_cost: Decimal,
     rejections: list[dict[str, object]],
 ) -> dict[str, object]:
     state = dict(prior_state or {})
+    if prior_state is not None and Decimal(str(state["initial_cash_cny"])) != initial_cash:
+        raise StrategyCalculationError(
+                "continuation Initial Cash differs from account baseline"
+            )
+    state["initial_cash_cny"] = canonical_decimal(initial_cash)
     rejection_counts = {
         "upper_limit_buy": int(state.get("upper_limit_buy_rejections", 0)),
         "lower_limit_sell": int(state.get("lower_limit_sell_rejections", 0)),
@@ -1366,6 +1389,9 @@ def advance_strategy_metric_state(
 def strategy_metrics_from_state(
     state: dict[str, object],
 ) -> dict[str, object]:
+    initial_cash = Decimal(str(state["initial_cash_cny"]))
+    if not initial_cash.is_finite() or initial_cash <= 0:
+        raise StrategyCalculationError("invalid Initial Cash in metric state")
     report_intervals = int(state["session_count"]) - 1
     entry_ordinal = state.get("entry_session_ordinal")
     investment_intervals = (
@@ -1375,10 +1401,10 @@ def strategy_metrics_from_state(
     )
     last_gross_nav = Decimal(str(state["last_gross_nav"]))
     last_net_nav = Decimal(str(state["last_net_nav"]))
-    gross_cumulative = float(last_gross_nav / INITIAL_CASH - 1)
-    net_cumulative = float(last_net_nav / INITIAL_CASH - 1)
-    gross_cagr = cagr(last_gross_nav / INITIAL_CASH, investment_intervals)
-    net_cagr = cagr(last_net_nav / INITIAL_CASH, investment_intervals)
+    gross_cumulative = float(last_gross_nav / initial_cash - 1)
+    net_cumulative = float(last_net_nav / initial_cash - 1)
+    gross_cagr = cagr(last_gross_nav / initial_cash, investment_intervals)
+    net_cagr = cagr(last_net_nav / initial_cash, investment_intervals)
     return_count = int(state["return_count"])
     return_sum = _fraction_from_state(state, "return_sum")
     return_square_sum = _fraction_from_state(
@@ -1434,7 +1460,7 @@ def strategy_metrics_from_state(
         },
         "transaction_costs": {
             "cumulative_amount": float(cumulative_cost),
-            "ratio": float(cumulative_cost / INITIAL_CASH),
+            "ratio": float(cumulative_cost / initial_cash),
             "return_drag": gross_cumulative - net_cumulative,
         },
         "holdings_count": {

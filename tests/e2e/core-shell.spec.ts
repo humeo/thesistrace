@@ -357,6 +357,14 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await factorEvaluation.focus();
     await page.keyboard.press("ArrowRight");
     await expect(strategyBacktest).toBeChecked();
+    const initialCash = page.getByLabel("Initial cash (CNY)");
+    await initialCash.fill("0");
+    await expect(initialCash).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByRole("button", { name: "Run research", exact: true })).toBeDisabled();
+    await initialCash.fill("100000.001");
+    await expect(initialCash).toHaveAttribute("aria-invalid", "true");
+    await initialCash.fill("100000");
+    await expect(initialCash).toHaveAttribute("aria-invalid", "false");
     const holdingsCount = page.getByLabel("Holdings count");
     await expect(holdingsCount).toBeVisible();
     await expect(page.getByLabel("Rebalance sessions")).toBeVisible();
@@ -412,6 +420,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.getByLabel("Research end date").fill("2026-08-05");
     await page.getByLabel("Universe").selectOption("top300");
     await page.getByLabel("Neutralization").selectOption("none");
+    await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
     await page.getByLabel("Rebalance sessions").fill("2");
 
@@ -421,6 +430,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.getByLabel("Holdings count")).toHaveCount(0);
     await expect(page.getByLabel("Rebalance sessions")).toHaveCount(0);
     await strategyBacktest.check();
+    await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
     await page.getByLabel("Rebalance sessions").fill("2");
 
@@ -1059,6 +1069,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     expect(commands[1].formula).toBe("ts_mean(close, 2)");
     expect(commands[1]).toMatchObject({
       research_kind: "strategy_backtest",
+      initial_cash_cny: "100000",
       holdings_count: 10,
       rebalance_every_sessions: 2,
     });
@@ -1178,6 +1189,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
     await expect(page.getByRole("button", { name: "Run research", exact: true })).toBeDisabled();
     await page.getByLabel("Research name").fill("Converted Factor Strategy");
+    await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
     await page.getByLabel("Rebalance sessions").fill("2");
     await page.getByRole("button", { name: "Run research", exact: true }).click();
@@ -1448,6 +1460,7 @@ async function fillCompleteDraft(
   await page.getByLabel("Universe").selectOption("top300");
   await page.getByLabel("Neutralization").selectOption("none");
   if (researchKind === "strategy_backtest") {
+    await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
     await page.getByLabel("Rebalance sessions").fill("2");
   } else {

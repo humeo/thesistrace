@@ -53,6 +53,7 @@ def _strategy_command(request_id: str) -> dict[str, object]:
         **factor_command(request_id),
         "name": "Strategy Test",
         "research_kind": "strategy_backtest",
+        "initial_cash_cny": "10000000",
         "holdings_count": 10,
         "rebalance_every_sessions": 5,
     }

@@ -155,6 +155,10 @@ def research_context_payload() -> dict[str, object]:
                 "research_kinds": ("factor_evaluation", "strategy_backtest"),
                 "universes": ("top300", "top1000", "top2000", "top3000"),
                 "neutralizations": ("none", "industry"),
+                "initial_cash_cny": {"currency": "CNY", "encoding": "decimal_string",
+                                     "exclusive_minimum": "0", "maximum": "1000000000",
+                                     "maximum_decimal_places": 2,
+                                     "required": True},
                 "holdings_count": {"minimum": 1, "maximum": 100},
                 "rebalance_every_sessions": {"minimum": 1, "maximum": 20},
                 "batch_items": {"minimum": 1, "maximum": 20},
@@ -212,7 +216,9 @@ def run_polling_payload(
         "research_kind": research_kind,
     }
     if research_kind == "strategy_backtest":
-        input_payload.update({"holdings_count": 10, "rebalance_every_sessions": 5})
+        input_payload.update({
+            "initial_cash_cny": "10000000", "holdings_count": 10, "rebalance_every_sessions": 5,
+        })
     phase = "queued" if status == "queued" else "research"
     completed_sessions = 0 if status == "queued" else 10
     committed_chunks = 0 if status == "queued" else 1
@@ -230,7 +236,6 @@ def run_polling_payload(
             ("factor", "provenance")
             if research_kind == "factor_evaluation"
             else (
-                "factor",
                 "strategy_summary",
                 "strategy_observations",
                 "terminal_strategy_state",
@@ -404,7 +409,6 @@ def daily_track_payload(
             "stop": True,
         },
         "available_result_sections": [
-            "factor",
             "strategy_summary",
             "strategy_observations",
             "origin",

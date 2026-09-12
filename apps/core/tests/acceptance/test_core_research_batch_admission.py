@@ -72,6 +72,7 @@ def test_batch_admission_rejects_all_invalid_computation_before_product_state(
                     "strategies": [
                         {
                             "item_key": "invalid",
+                            "initial_cash_cny": "10000000",
                             "holdings_count": 0,
                             "rebalance_every_sessions": 1,
                         }
@@ -181,11 +182,13 @@ def test_batch_admission_rejects_all_invalid_computation_before_product_state(
                 "strategies": [
                     {
                         "item_key": "first",
+                        "initial_cash_cny": "10000000",
                         "holdings_count": 1,
                         "rebalance_every_sessions": 1,
                     },
                     {
                         "item_key": "second",
+                        "initial_cash_cny": "10000000",
                         "holdings_count": 1,
                         "rebalance_every_sessions": 1,
                     },
@@ -589,12 +592,14 @@ def _strategy_command(request_id: str) -> dict[str, object]:
             {
                 "item_key": "focused",
                 "name": "Focused",
+                "initial_cash_cny": "10000000",
                 "holdings_count": 1,
                 "rebalance_every_sessions": 1,
             },
             {
                 "item_key": "broad",
                 "name": "Broad",
+                "initial_cash_cny": "10000000",
                 "holdings_count": 2,
                 "rebalance_every_sessions": 2,
             },

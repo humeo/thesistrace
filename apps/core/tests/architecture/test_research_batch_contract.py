@@ -90,6 +90,7 @@ def test_strategy_sweep_has_one_shared_alpha_and_one_to_twenty_parameter_items()
             "strategies": [
                 {
                     "item_key": f"strategy-{ordinal}",
+                    "initial_cash_cny": "10000000",
                     "holdings_count": ordinal,
                     "rebalance_every_sessions": ordinal,
                 }
@@ -113,6 +114,7 @@ def test_strategy_sweep_has_one_shared_alpha_and_one_to_twenty_parameter_items()
                     *command.model_dump(mode="json")["strategies"],
                     {
                         "item_key": "strategy-21",
+                        "initial_cash_cny": "10000000",
                         "holdings_count": 21,
                         "rebalance_every_sessions": 1,
                     },

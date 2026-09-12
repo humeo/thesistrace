@@ -11,6 +11,7 @@ import {
   finishResearchRun,
   hasUnexecutedChanges,
   isCompleteResearchInputs,
+  isValidInitialCash,
   loadResearchDraft,
   persistResearchDraft,
   researchDraftKey,
@@ -130,17 +131,20 @@ describe("browser Research Draft", () => {
       ...emptyResearchDraft(),
       researchKind: "strategy_backtest" as const,
       holdingsCount: "25",
+      initialCashCny: "100000",
       rebalanceEverySessions: "5",
     };
 
     expect(selectResearchKind(strategy, "factor_evaluation")).toMatchObject({
       researchKind: "factor_evaluation",
       holdingsCount: "",
+      initialCashCny: "",
       rebalanceEverySessions: "",
     });
     expect(selectResearchKind(emptyResearchDraft(), "strategy_backtest")).toMatchObject({
       researchKind: "strategy_backtest",
       holdingsCount: "",
+      initialCashCny: "",
       rebalanceEverySessions: "",
     });
   });
@@ -160,6 +164,7 @@ describe("browser Research Draft", () => {
     const strategy = {
       ...incompleteStrategy,
       holdingsCount: "10",
+      initialCashCny: "100000",
       rebalanceEverySessions: "2",
     };
     expect(isCompleteResearchInputs(strategy)).toBe(true);
@@ -168,6 +173,7 @@ describe("browser Research Draft", () => {
       request_id: "strategy-request",
       research_kind: "strategy_backtest",
       holdings_count: 10,
+      initial_cash_cny: "100000",
       rebalance_every_sessions: 2,
     });
   });
@@ -223,6 +229,7 @@ describe("browser Research Draft", () => {
       neutralization: "industry",
       research_kind: "strategy_backtest",
       holdings_count: 25,
+      initial_cash_cny: "100000",
       rebalance_every_sessions: 5,
     }, confirmDiscard);
 
@@ -237,6 +244,7 @@ describe("browser Research Draft", () => {
       universe: "top1000",
       neutralization: "industry",
       holdingsCount: "25",
+      initialCashCny: "100000",
       rebalanceEverySessions: "5",
       editor: { anchor: 18, head: 18 },
       pendingAdmission: null,
@@ -250,6 +258,7 @@ describe("browser Research Draft", () => {
       ...emptyResearchDraft(),
       researchKind: "strategy_backtest",
       holdingsCount: "25",
+      initialCashCny: "100000",
       rebalanceEverySessions: "5",
     });
 
@@ -266,6 +275,7 @@ describe("browser Research Draft", () => {
       researchKind: "factor_evaluation",
       formula: "rank(close)",
       holdingsCount: "",
+      initialCashCny: "",
       rebalanceEverySessions: "",
       pendingAdmission: null,
     });
@@ -283,6 +293,7 @@ describe("browser Research Draft", () => {
       neutralization: "industry",
       research_kind: "strategy_backtest",
       holdings_count: 25,
+      initial_cash_cny: "100000",
       rebalance_every_sessions: 5,
     }, () => true)).toBe(true);
 
@@ -295,6 +306,7 @@ describe("browser Research Draft", () => {
       universe: "top1000",
       neutralization: "industry",
       holdingsCount: "25",
+      initialCashCny: "100000",
       rebalanceEverySessions: "5",
       pendingAdmission: null,
     });
@@ -318,6 +330,7 @@ describe("browser Research Draft", () => {
       neutralization: "none",
       research_kind: "strategy_backtest",
       holdings_count: 10,
+      initial_cash_cny: "100000",
       rebalance_every_sessions: 2,
     }, confirmDiscard);
 
@@ -337,6 +350,7 @@ describe("browser Research Draft", () => {
       neutralization: "none",
       researchKind: "strategy_backtest" as const,
       holdingsCount: "10",
+      initialCashCny: "100000",
       rebalanceEverySessions: "2",
     };
     const first = beginResearchRun(initial, "folder_default", () => "run-request-1");
@@ -354,6 +368,7 @@ describe("browser Research Draft", () => {
       neutralization: "none",
       research_kind: "strategy_backtest",
       holdings_count: 10,
+      initial_cash_cny: "100000",
       rebalance_every_sessions: 2,
     });
 
@@ -375,6 +390,7 @@ describe("browser Research Draft", () => {
       universe: "top300",
       neutralization: "none",
       holdingsCount: "10",
+      initialCashCny: "100000",
       rebalanceEverySessions: "2",
     };
     const begun = beginResearchRun(initial, folder.id, () => "run-request-1");
@@ -430,7 +446,7 @@ describe("browser Research Draft", () => {
     expect(hasUnexecutedChanges({ ...emptyResearchDraft(), formula: "close" })).toBe(true);
     const admitted = { ...emptyResearchDraft(), formula: "close" };
     expect(hasUnexecutedChanges({ ...admitted, lastAdmittedBaseline: {
-      researchKind: "factor_evaluation", name: "", formula: "close", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "", holdingsCount: "", rebalanceEverySessions: "",
+      researchKind: "factor_evaluation", name: "", formula: "close", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "", initialCashCny: "", holdingsCount: "", rebalanceEverySessions: "",
     } })).toBe(false);
   });
 
@@ -518,6 +534,7 @@ describe("browser Research Draft", () => {
       universe: "top300",
       neutralization: "none",
       holdingsCount: "10",
+      initialCashCny: "100000",
       rebalanceEverySessions: "2",
     });
 
@@ -587,3 +604,12 @@ describe("formula diagnostics scheduling", () => {
 async function flushPromises(): Promise<void> {
   for (let index = 0; index < 5; index += 1) await Promise.resolve();
 }
+
+
+it.each([
+  ["0.01", true], ["1000000000.00", true], ["00100000.00", true],
+  ["0", false], ["1000000000.01", false], ["1.001", false],
+  ["10000000000000000000000000000000001", false],
+])("validates exact CNY amount %s", (cash, valid) => {
+  expect(isValidInitialCash(cash as string)).toBe(valid);
+});

@@ -380,7 +380,7 @@ test("uses the same entry for a model-owned Strategy Backtest", async () => {
       case "get_research_run": return pollingDetail(
         input,
         "succeeded",
-        ["factor", "strategy_summary", "provenance"],
+        ["strategy_summary", "provenance"],
       );
       case "get_research_run_result": return strategyResult();
       default: throw new Error(`Unexpected Tool call: ${name}`);
@@ -389,6 +389,7 @@ test("uses the same entry for a model-owned Strategy Backtest", async () => {
 
   expect(trajectory.calls.find((call) => call.name === "submit_research_run")?.input)
     .toMatchObject({
+      initial_cash_cny: "100000",
       holdings_count: 10,
       rebalance_every_sessions: 5,
       research_kind: "strategy_backtest",

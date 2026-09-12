@@ -375,6 +375,7 @@ def _legal_result() -> dict[str, object]:
             "contract": "strategy-metric-state-v2",
             "entry_session": "2024-01-02",
             "entry_session_ordinal": 1,
+            "initial_cash_cny": "1e+7",
             "first_gross_nav": "1e+7",
             "first_net_nav": "1e+7",
             "peak_net_nav": "1e+7",

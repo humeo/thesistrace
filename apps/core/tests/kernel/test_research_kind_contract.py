@@ -28,6 +28,7 @@ def test_research_run_admission_is_discriminated_by_research_kind() -> None:
         {
             **common,
             "research_kind": "strategy_backtest",
+            "initial_cash_cny": "100000",
             "holdings_count": 10,
             "rebalance_every_sessions": 5,
         }
@@ -55,7 +56,8 @@ def test_research_run_admission_is_discriminated_by_research_kind() -> None:
             {
                 **common,
                 "research_kind": "factor_evaluation",
-                "holdings_count": 10,
+                "initial_cash_cny": "100000",
+            "holdings_count": 10,
                 "rebalance_every_sessions": 5,
             }
         )

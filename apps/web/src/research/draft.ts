@@ -12,6 +12,7 @@ export type ResearchInputs = {
   endDate: string;
   universe: string;
   neutralization: string;
+  initialCashCny: string;
   holdingsCount: string;
   rebalanceEverySessions: string;
 };
@@ -38,6 +39,7 @@ export type ResearchRunAdmissionCommand = CommonResearchRunAdmissionCommand & ({
   research_kind: "factor_evaluation";
 } | {
   research_kind: "strategy_backtest";
+  initial_cash_cny: string;
   holdings_count: number;
   rebalance_every_sessions: number;
 });
@@ -55,6 +57,7 @@ export type FrozenResearchAuthorableInput = CommonFrozenResearchAuthorableInput 
   research_kind: "factor_evaluation";
 } | {
   research_kind: "strategy_backtest";
+  initial_cash_cny: string;
   holdings_count: number;
   rebalance_every_sessions: number;
 });
@@ -80,6 +83,7 @@ export function emptyResearchDraft(): ResearchDraft {
     endDate: "",
     universe: "",
     neutralization: "",
+    initialCashCny: "",
     holdingsCount: "",
     rebalanceEverySessions: "",
     editor: { anchor: 0, head: 0 },
@@ -139,6 +143,7 @@ export function selectResearchKind(
   return researchKind === "factor_evaluation" ? {
     ...draft,
     researchKind,
+    initialCashCny: "",
     holdingsCount: "",
     rebalanceEverySessions: "",
   } : {
@@ -183,6 +188,7 @@ export function beginResearchRun(
       universe: pending.inputs.universe,
       neutralization: pending.inputs.neutralization,
       research_kind: "strategy_backtest",
+      initial_cash_cny: pending.inputs.initialCashCny,
       holdings_count: Number(pending.inputs.holdingsCount),
       rebalance_every_sessions: Number(pending.inputs.rebalanceEverySessions),
     },
@@ -214,6 +220,12 @@ export function finishResearchRun(
   return accepted;
 }
 
+export function isValidInitialCash(value: string): boolean {
+  if (!/^[0-9]+(?:\.[0-9]{1,2})?$/.test(value) || !/[1-9]/.test(value)) return false;
+  const [whole, fraction = ""] = value.split(".");
+  return BigInt(whole + fraction.padEnd(2, "0")) <= 100000000000n;
+}
+
 export function isCompleteResearchInputs(inputs: ResearchInputs): boolean {
   const holdingsCount = Number(inputs.holdingsCount);
   const rebalanceEverySessions = Number(inputs.rebalanceEverySessions);
@@ -225,6 +237,7 @@ export function isCompleteResearchInputs(inputs: ResearchInputs): boolean {
     ["top300", "top1000", "top2000", "top3000"].includes(inputs.universe) &&
     ["none", "industry"].includes(inputs.neutralization);
   return commonComplete && (inputs.researchKind === "factor_evaluation" || (
+    isValidInitialCash(inputs.initialCashCny) &&
     Number.isInteger(holdingsCount) && holdingsCount >= 1 && holdingsCount <= 100 &&
     Number.isInteger(rebalanceEverySessions) &&
     rebalanceEverySessions >= 1 && rebalanceEverySessions <= 20
@@ -256,6 +269,7 @@ export function useResearchAsDraft(
     universe: input.universe,
     neutralization: input.neutralization,
     researchKind: input.research_kind,
+    initialCashCny: input.research_kind === "strategy_backtest" ? input.initial_cash_cny : "",
     holdingsCount: input.research_kind === "strategy_backtest"
       ? String(input.holdings_count)
       : "",
@@ -290,6 +304,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "universe",
     "neutralization",
     "researchKind",
+    "initialCashCny",
     "holdingsCount",
     "rebalanceEverySessions",
   ] as const;
@@ -346,6 +361,7 @@ function readInputs(value: unknown): ResearchInputs | null {
     "endDate",
     "universe",
     "neutralization",
+    "initialCashCny",
     "holdingsCount",
     "rebalanceEverySessions",
   ] as const;

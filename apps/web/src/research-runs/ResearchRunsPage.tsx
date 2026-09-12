@@ -909,6 +909,7 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
           </p>
           {input.research_kind === "strategy_backtest" ? (
             <>
+              <p><strong>Initial cash (CNY)</strong> {input.initial_cash_cny}</p>
               <p><strong>Holdings count</strong> {input.holdings_count}</p>
               <p>
                 <strong>Rebalance</strong>{" "}

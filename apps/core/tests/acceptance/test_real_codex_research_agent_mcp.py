@@ -2012,6 +2012,7 @@ def _submission_calls_for_failure_test(
     common = {
         "hypothesis": "fixture-hypothesis-canary",
         "research_kind": "strategy_backtest",
+        "initial_cash_cny": "10000000",
         "holdings_count": 51,
         "rebalance_every_sessions": 1,
     }
@@ -2112,6 +2113,7 @@ def test_trajectory_evidence_is_derived_from_tool_arguments_and_results() -> Non
         "formula": "ts_mean(close, 5)",
         "hypothesis": "fixture-hypothesis-canary",
         "research_kind": "strategy_backtest",
+        "initial_cash_cny": "10000000",
         "holdings_count": 51,
         "rebalance_every_sessions": 1,
         "request_id": "codex-real-acceptance-test",
@@ -2227,6 +2229,7 @@ def test_submission_trajectory_accepts_structured_rejection_recovery() -> None:
     common = {
         "hypothesis": "fixture-hypothesis-canary",
         "research_kind": "strategy_backtest",
+        "initial_cash_cny": "10000000",
         "holdings_count": 51,
         "rebalance_every_sessions": 1,
     }

@@ -248,6 +248,7 @@ def _activate_benchmark_track(runtime: object, sessions: tuple[str, ...], suffix
             formula="close + assets",
             universe="top300",
             neutralization="none",
+            initial_cash_cny="10000000",
             holdings_count=10,
             rebalance_every_sessions=1,
             start_date=sessions[-22],

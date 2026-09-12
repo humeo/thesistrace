@@ -1916,6 +1916,7 @@ class DailyTrackService:
                         "end_date": immutable["requested_end_date"],
                         "universe": immutable["universe"],
                         "neutralization": immutable["neutralization"],
+                        "initial_cash_cny": strategy["initial_cash_cny"],
                         "holdings_count": strategy["holdings_count"],
                         "rebalance_every_sessions": strategy["rebalance_every_sessions"],
                     },

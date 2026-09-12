@@ -29,6 +29,7 @@ test.each([
   expect(items).toHaveLength(2);
   expect(new Set(items.map((item) => item.item_key)).size).toBe(2);
   if (mode === "strategy_sweep") {
+    expect(items.map((item) => item.initial_cash_cny)).toEqual(["100000", "100000"]);
     expect(items.map((item) => item.holdings_count)).toEqual([10, 20]);
     expect(items.map((item) => item.rebalance_every_sessions)).toEqual([5, 5]);
   } else expect(items.map((item) => item.formula)).toEqual(["rank(close)", "-rank(close)"]);

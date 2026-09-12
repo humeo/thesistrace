@@ -25,6 +25,7 @@ import {
   finishResearchRun,
   hasUnexecutedChanges,
   isCompleteResearchInputs,
+  isValidInitialCash,
   MAX_HYPOTHESIS_LENGTH,
   loadResearchDraft,
   persistResearchDraft,
@@ -651,6 +652,20 @@ export function ResearchDraftWorkspace({
             </label>
             {draft.researchKind === "strategy_backtest" ? (
               <>
+                <label>Initial cash (CNY)
+                  <input
+                    aria-describedby="initial-cash-help"
+                    aria-invalid={draft.initialCashCny !== "" && !isValidInitialCash(draft.initialCashCny)}
+                    inputMode="decimal"
+                    onChange={(event) => updateDraft((current) => ({ ...current, initialCashCny: event.target.value }))}
+                    placeholder="100000.00"
+                    type="text"
+                    value={draft.initialCashCny}
+                  />
+                  <small id="initial-cash-help">{draft.initialCashCny !== "" && !isValidInitialCash(draft.initialCashCny)
+                    ? "Enter 0.01–1,000,000,000 CNY, with up to two decimal places."
+                    : "0.01–1,000,000,000 CNY, up to two decimal places."}</small>
+                </label>
                 <ResearchNumberStepper
                   actionLabel="number of holdings"
                   id="research-holdings-count"

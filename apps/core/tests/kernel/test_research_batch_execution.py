@@ -22,7 +22,6 @@ from thesistrace.research_run.planning import plan_research_chunks
 from thesistrace.research_run.service import (
     FIXED_COSTS,
     FIXED_EXECUTION,
-    FIXED_INITIAL_CASH_CNY,
     FIXED_STRATEGY_KIND,
     SEMANTIC_VERSIONS,
 )
@@ -162,7 +161,7 @@ def _batch_request(tmp_path: Path, *, kind: str) -> dict[str, object]:
                 "kind": FIXED_STRATEGY_KIND,
                 "holdings_count": holdings,
                 "rebalance_every_sessions": rebalance,
-                "initial_cash_cny": FIXED_INITIAL_CASH_CNY,
+                "initial_cash_cny": "10000000",
                 "execution": FIXED_EXECUTION,
             }
             if strategy

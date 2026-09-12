@@ -15,6 +15,7 @@ from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
 from thesistrace.research_run.models import (
     Formula,
     HoldingsCount,
+    InitialCash,
     NaturalDate,
     RebalanceInterval,
     RequestId,
@@ -97,6 +98,7 @@ class StrategySweepItem(BaseModel):
 
     item_key: ItemKey
     name: ResearchName | None = None
+    initial_cash_cny: InitialCash
     holdings_count: HoldingsCount
     rebalance_every_sessions: RebalanceInterval
 

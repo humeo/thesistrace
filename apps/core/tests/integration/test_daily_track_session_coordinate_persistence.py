@@ -638,6 +638,7 @@ def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
     )
     metric_state = advance_strategy_metric_state(
         None,
+        initial_cash=Decimal("10000000"),
         daily=[last_daily],
         turnover_events=[],
         cumulative_cost=Decimal(0),

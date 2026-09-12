@@ -210,6 +210,7 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
         sessions = {str(row["session"]) for row in chunk}
         metric_state = advance_strategy_metric_state(
             metric_state,
+            initial_cash=Decimal("10000000"),
             daily=chunk,
             turnover_events=[
                 event

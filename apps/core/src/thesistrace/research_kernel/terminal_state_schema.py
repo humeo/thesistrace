@@ -81,6 +81,7 @@ class StrategyMetricState(TerminalStateModel):
     contract: StrictStr
     entry_session: StrictStr | None
     entry_session_ordinal: StrictInt | None
+    initial_cash_cny: StrictStr
     first_gross_nav: StrictStr
     first_net_nav: StrictStr
     return_count: StrictInt

@@ -148,6 +148,7 @@ def test_complete_provenance_with_maximum_text_preserves_every_character_under_b
         end_date=date(2024, 1, 31),
         universe="top300",
         neutralization="none",
+        initial_cash_cny="10000000",
         holdings_count=100,
         rebalance_every_sessions=20,
     )
@@ -178,7 +179,10 @@ def test_complete_provenance_with_maximum_text_preserves_every_character_under_b
         tracking_strategy_session=date(2024, 2, 1),
         calculation_contracts={
             "numeric_execution_contract": "float64",
-            "strategy": {"holdings_count": 100, "rebalance_every_sessions": 20},
+            "strategy": {
+                "initial_cash_cny": "10000000", "holdings_count": 100,
+                "rebalance_every_sessions": 20,
+            },
             "costs": {
                 "commission_rate_all_in": "0.0003",
                 "commission_min_cny": "5",

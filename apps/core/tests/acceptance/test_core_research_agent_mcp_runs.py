@@ -712,6 +712,7 @@ async def _assert_first_semantic_result_pages(
         "universe": strategy_command["universe"],
         "neutralization": strategy_command["neutralization"],
         "research_kind": "strategy_backtest",
+        "initial_cash_cny": "10000000",
         "holdings_count": 51,
         "rebalance_every_sessions": 1,
     }
@@ -1095,5 +1096,7 @@ def _command(request_id: str, *, research_kind: str = "strategy_backtest") -> di
         "research_kind": research_kind,
     }
     if research_kind == "strategy_backtest":
-        command.update({"holdings_count": 1, "rebalance_every_sessions": 1})
+        command.update({
+            "initial_cash_cny": "10000000", "holdings_count": 1, "rebalance_every_sessions": 1,
+        })
     return command

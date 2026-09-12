@@ -655,6 +655,7 @@ def _terminal_strategy_state(
         "last_daily_observation": copy.deepcopy(dict(terminal)),
         "metric_state": advance_strategy_metric_state(
             None,
+            initial_cash=Decimal(str(strategy["initial_cash_cny"])),
             daily=[dict(item) for item in daily],
             turnover_events=[dict(item) for item in turnover_value["events"]],
             cumulative_cost=Decimal(str(terminal["cumulative_transaction_cost"])),

@@ -206,8 +206,8 @@ function batchCommand(context: JsonRecord, mode: BatchMode, requestId: string): 
     ...common,
     alpha: { formula: "rank(close)", hypothesis: "Compare portfolio breadth while holding the price-rank Alpha and rebalance schedule fixed." },
     strategies: [
-      { item_key: "focused-holdings", name: "Focused holdings", holdings_count: focused, rebalance_every_sessions: rebalance },
-      { item_key: "broad-holdings", name: "Broad holdings", holdings_count: broad, rebalance_every_sessions: rebalance },
+      { item_key: "focused-holdings", name: "Focused holdings", initial_cash_cny: "100000", holdings_count: focused, rebalance_every_sessions: rebalance },
+      { item_key: "broad-holdings", name: "Broad holdings", initial_cash_cny: "100000", holdings_count: broad, rebalance_every_sessions: rebalance },
     ],
   };
 }

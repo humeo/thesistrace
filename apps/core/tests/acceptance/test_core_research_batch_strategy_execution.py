@@ -1442,6 +1442,7 @@ def test_strategy_sweep_isolates_one_strategy_failure_and_keeps_order(
                     command["strategies"][1],
                     {
                         "item_key": "later",
+                        "initial_cash_cny": "10000000",
                         "holdings_count": 3,
                         "rebalance_every_sessions": 1,
                     },
@@ -1517,6 +1518,7 @@ def test_strategy_sweep_one_and_twenty_items_use_the_same_ordered_contract(
         strategies = [
             {
                 "item_key": f"strategy-{ordinal}",
+                "initial_cash_cny": "10000000",
                 "holdings_count": ordinal,
                 "rebalance_every_sessions": ordinal,
             }
@@ -1795,6 +1797,7 @@ def _ordinary_strategy_command(
         "universe": "top300",
         "neutralization": "none",
         "research_kind": "strategy_backtest",
+        "initial_cash_cny": "10000000",
         "holdings_count": holdings_count,
         "rebalance_every_sessions": rebalance_every_sessions,
     }

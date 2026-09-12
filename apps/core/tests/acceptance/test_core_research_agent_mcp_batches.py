@@ -529,6 +529,7 @@ def _strategy_batch_command(request_id: str, *, end_date: str) -> dict[str, obje
             {
                 "item_key": "focused",
                 "name": "Focused Strategy",
+                "initial_cash_cny": "10000000",
                 "holdings_count": 1,
                 "rebalance_every_sessions": 1,
             }

@@ -12,6 +12,8 @@ from decimal import (
     localcontext,
 )
 
+MAX_INITIAL_CASH_CNY = Decimal("1000000000")
+
 NUMERIC_CONTRACT_ID = "thesistrace-numeric-v1"
 
 ACCOUNTING_CONTEXT = Context(

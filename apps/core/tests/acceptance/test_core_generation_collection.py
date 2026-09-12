@@ -51,6 +51,7 @@ def test_private_collection_removes_retired_input_without_losing_run_or_track(
                 "universe": "top300",
                 "neutralization": "none",
                 "research_kind": "strategy_backtest",
+                "initial_cash_cny": "10000000",
                 "holdings_count": 1,
                 "rebalance_every_sessions": 1,
             },

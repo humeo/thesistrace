@@ -533,6 +533,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "universe": "top300",
             "neutralization": "none",
             "research_kind": "strategy_backtest",
+            "initial_cash_cny": "10000000",
             "holdings_count": 1,
             "rebalance_every_sessions": 1,
         }
@@ -808,6 +809,7 @@ def _valid_command(
     if research_kind == "strategy_backtest":
         command.update(
             {
+                "initial_cash_cny": "10000000",
                 "holdings_count": 1,
                 "rebalance_every_sessions": 1,
             }

@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** done
+**Status:** complete
 
 - [x] Research Kind 决定实际执行计划、Chunk 完成条件、Result 与续算状态；Factor Run 只生成评价，Strategy Run 保留必要 Signal 并生成账户，不提供 include_factor 或空的另一类结果占位。
 - [x] 没有 Factor 摘要、未来标签或标签成熟状态的成功 Strategy Result 可以创建并推进 DailyTrack；本票仍使用当前账户时点，末日合同由 03 修改。

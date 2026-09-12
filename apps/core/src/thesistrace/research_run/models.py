@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Literal
 
 from pydantic import (
@@ -11,6 +12,7 @@ from pydantic import (
     Field,
     StrictFloat,
     StrictInt,
+    TypeAdapter,
     field_validator,
     model_validator,
 )
@@ -20,6 +22,7 @@ from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
 from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
 from thesistrace.daily_track.models import DailyTrackSummary
 from thesistrace.data.models import FinancialResearchReadiness
+from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
 from thesistrace.research_run.result_schema import StrategyMetrics
 
 
@@ -65,6 +68,27 @@ MIN_HOLDINGS_COUNT = 1
 MAX_HOLDINGS_COUNT = 100
 MIN_REBALANCE_INTERVAL = 1
 MAX_REBALANCE_INTERVAL = 20
+def _normalize_initial_cash(value: str) -> str:
+    amount = Decimal(value)
+    if amount <= 0 or amount > MAX_INITIAL_CASH_CNY:
+        raise ValueError("Initial Cash must be positive and at most 1000000000 CNY")
+    whole, separator, fraction = format(amount, "f").partition(".")
+    fraction = fraction.rstrip("0")
+    return whole + ("." + fraction if separator and fraction else "")
+
+
+InitialCash = Annotated[
+    str,
+    Field(
+        strict=True, pattern=r"^[0-9]+(?:\.[0-9]{1,2})?$",
+        description=(
+            "CNY decimal string, greater than 0 and at most 1000000000, up to 2 decimal places."
+        ),
+    ),
+    AfterValidator(_normalize_initial_cash),
+]
+
+
 HoldingsCount = Annotated[
     int,
     Field(strict=True, ge=MIN_HOLDINGS_COUNT, le=MAX_HOLDINGS_COUNT),
@@ -182,6 +206,7 @@ class FactorEvaluationAdmissionCommand(_ResearchRunAdmissionBase):
 
 class StrategyBacktestAdmissionCommand(_ResearchRunAdmissionBase):
     research_kind: Literal["strategy_backtest"]
+    initial_cash_cny: InitialCash
     holdings_count: HoldingsCount
     rebalance_every_sessions: RebalanceInterval
 
@@ -317,6 +342,8 @@ class ImmutableRunInput(BaseModel):
             value is None for value in strategy_values
         ):
             raise ValueError("Strategy Backtest immutable input requires Strategy values")
+        if self.strategy is not None:
+            TypeAdapter(InitialCash).validate_python(self.strategy.get("initial_cash_cny"))
         return self
 
     def canonical_value(self) -> dict[str, object]:
@@ -421,6 +448,9 @@ class ResearchRunAuthorableInput(BaseModel):
     universe: ResearchUniverse
     neutralization: ResearchNeutralization
     research_kind: ResearchKind
+    initial_cash_cny: InitialCash | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     holdings_count: int | None = Field(default=None, exclude_if=lambda value: value is None)
     rebalance_every_sessions: int | None = Field(
         default=None,
@@ -429,7 +459,9 @@ class ResearchRunAuthorableInput(BaseModel):
 
     @model_validator(mode="after")
     def validate_research_kind_contract(self) -> ResearchRunAuthorableInput:
-        strategy_values = (self.holdings_count, self.rebalance_every_sessions)
+        strategy_values = (
+            self.initial_cash_cny, self.holdings_count, self.rebalance_every_sessions,
+        )
         if self.research_kind == "factor_evaluation" and any(
             value is not None for value in strategy_values
         ):

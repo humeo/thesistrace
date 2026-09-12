@@ -71,6 +71,7 @@ const STRATEGY_RUN: ResearchRun = {
     neutralization: "industry",
     research_kind: "strategy_backtest",
     holdings_count: 10,
+    initial_cash_cny: "100000",
     rebalance_every_sessions: 2,
   },
 };
@@ -637,6 +638,7 @@ describe("UseAsDraftPanel", () => {
           neutralization: "none",
           research_kind: "strategy_backtest",
           holdings_count: 10,
+          initial_cash_cny: "100000",
           rebalance_every_sessions: 2,
         }}
         confirmDiscard={() => true}

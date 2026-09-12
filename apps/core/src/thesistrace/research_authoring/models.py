@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 
 from thesistrace.research_batch.models import ResearchBatchKind
@@ -25,12 +27,24 @@ class FormulaAuthoringConstraints(BaseModel):
     maximum_estimated_work: int
 
 
+class InitialCashConstraints(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    currency: Literal["CNY"] = "CNY"
+    encoding: Literal["decimal_string"] = "decimal_string"
+    exclusive_minimum: str = "0"
+    maximum: str
+    maximum_decimal_places: int = 2
+    required: Literal[True] = True
+
+
 class ResearchAuthoringConstraints(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     research_kinds: tuple[ResearchKind, ...]
     universes: tuple[ResearchUniverse, ...]
     neutralizations: tuple[ResearchNeutralization, ...]
+    initial_cash_cny: InitialCashConstraints
     holdings_count: IntegerRange
     rebalance_every_sessions: IntegerRange
     batch_items: IntegerRange

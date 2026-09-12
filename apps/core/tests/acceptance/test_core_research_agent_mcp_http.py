@@ -1957,6 +1957,7 @@ def _strategy_command(request_id: str) -> dict[str, object]:
     return {
         **_research_command(request_id),
         "research_kind": "strategy_backtest",
+        "initial_cash_cny": "10000000",
         "holdings_count": 1,
         "rebalance_every_sessions": 1,
     }

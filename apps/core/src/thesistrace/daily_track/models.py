@@ -554,6 +554,7 @@ class DailyTrackFrozenResearchInput(BaseModel):
     end_date: date
     universe: str
     neutralization: str
+    initial_cash_cny: str
     holdings_count: int
     rebalance_every_sessions: int
 
