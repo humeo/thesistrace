@@ -137,14 +137,24 @@ def test_bounded_partition_planner_selects_only_page_and_lookahead_rows() -> Non
     ) == ("positions-1", "positions-2")
 
 
-def test_factor_evaluation_result_codec_requires_exactly_factor_summary() -> None:
-    factor_result = {"factor_summary": _legal_factor_summary()}
+def test_factor_evaluation_result_codec_requires_daily_evidence(accepted_calculation_case) -> None:
+    factor_result, rows = _factor_result_with_evidence(accepted_calculation_case)
     payloads = result_publication_payloads(
         factor_result,
         research_kind="factor_evaluation",
+        factor_observations=rows,
     )
 
-    assert set(payloads) == {"factor_summary"}
+    assert {
+        "factor_summary", "factor_daily_observations", "factor_period_statistics"
+    } < set(payloads)
+    with pytest.raises(ResearchResultError, match="requires daily evidence"):
+        result_publication_payloads(factor_result, research_kind="factor_evaluation")
+    with pytest.raises(ResearchResultError, match="evidence is invalid"):
+        read_result_bundle(
+            _verified_bundle({"factor_summary": payloads["factor_summary"]}),
+            research_kind="factor_evaluation",
+        )
     assert (
         read_result_bundle(
             _verified_bundle(payloads),
@@ -160,7 +170,7 @@ def test_factor_evaluation_result_codec_requires_exactly_factor_summary() -> Non
         )
 
     verified = _verified_bundle(payloads)
-    with pytest.raises(ResearchResultError, match="only Factor Summary"):
+    with pytest.raises(ResearchResultError, match="evidence is invalid"):
         read_result_bundle(
             VerifiedBundle(
                 kind=verified.kind,
@@ -433,7 +443,9 @@ def _legal_result() -> dict[str, object]:
     }
 
 
-def test_factor_result_keeps_staged_common_observations_in_its_result_bundle():
+def test_factor_result_keeps_staged_common_observations_in_its_result_bundle(
+    accepted_calculation_case,
+):
     from hashlib import sha256
 
     from thesistrace.publication import StagedPayload
@@ -462,7 +474,8 @@ def test_factor_result_keeps_staged_common_observations_in_its_result_bundle():
             "writer_contract": common.contract.descriptor(),
         },
     )
-    summary = _legal_factor_summary()
+    factor_result, rows = _factor_result_with_evidence(accepted_calculation_case)
+    summary = factor_result["factor_summary"]
     payloads = result_publication_payloads_from_staged(
         {"factor_summary": summary},
         [],
@@ -471,6 +484,23 @@ def test_factor_result_keeps_staged_common_observations_in_its_result_bundle():
     )
     part_name = next(name for name, value in payloads.items() if value is staged)
     payloads[part_name] = common
+    payloads.update(result_publication_payloads(
+        factor_result, research_kind="factor_evaluation", factor_observations=rows,
+    ))
     result = read_result_bundle(_verified_bundle(payloads), research_kind="factor_evaluation")
     assert result["factor_summary"] == summary
     assert result["common_input_observations"] == [row]
+
+
+def _factor_result_with_evidence(case):
+    from thesistrace.research_kernel.factor_periods import FactorPeriodAccumulator
+
+    rows = [
+        row for h in (1, 5, 20)
+        for row in case["factor_evaluation"]["horizons"][str(h)]["daily"]
+    ]
+    accumulator = FactorPeriodAccumulator()
+    accumulator.add(rows)
+    return {"factor_summary": accumulator.full_summary(
+        alpha_checksums={h: "a" * 64 for h in (1, 5, 20)},
+    )}, rows

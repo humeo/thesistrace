@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from pydantic import (
@@ -181,3 +182,84 @@ class StrategyDailyObservationsValue(RootModel[list[StrategyDailyObservation]]):
 
 
 STRATEGY_METRIC_KEYS = frozenset(StrategyMetrics.model_fields)
+
+
+class FactorPeriodCoverage(FactorCoverage):
+    first_signal_session: StrictStr
+    last_signal_session: StrictStr
+    label_evaluable_session_count: StrictInt
+    first_evaluable_signal_session: StrictStr | None
+    last_evaluable_signal_session: StrictStr | None
+    right_censored_session_count: StrictInt
+    sample_available_session_count: StrictInt
+    alpha_candidate_count: StrictInt
+    alpha_sample_count: StrictInt
+    sample_count: StrictInt
+    alpha_exclusions: dict[StrictStr, StrictInt]
+    label_exclusions: dict[StrictStr, StrictInt]
+
+
+class FactorPeriodStatistic(DurableResultModel):
+    horizon: Literal[1, 5, 20]
+    granularity: Literal["all", "month", "year"]
+    period: StrictStr
+    summary: FactorMetrics
+    coverage: FactorPeriodCoverage
+
+    @model_validator(mode="after")
+    def validate_period_evidence(self) -> FactorPeriodStatistic:
+        coverage = self.coverage
+        for value in coverage.model_dump().values():
+            if isinstance(value, int) and value < 0:
+                raise ValueError("Factor period count is negative")
+        if (
+            coverage.label_evaluable_session_count + coverage.right_censored_session_count
+            != coverage.signal_session_count
+            or not 0
+            <= coverage.sample_available_session_count
+            <= coverage.label_evaluable_session_count
+            or coverage.ic_valid_session_count > coverage.sample_available_session_count
+            or coverage.rank_ic_valid_session_count > coverage.sample_available_session_count
+            or coverage.quantile_valid_session_count > coverage.sample_available_session_count
+            or coverage.alpha_candidate_count
+            != coverage.alpha_sample_count + sum(coverage.alpha_exclusions.values())
+            or coverage.alpha_sample_count
+            != coverage.sample_count + sum(coverage.label_exclusions.values())
+            or any(
+                count <= 0
+                for count in (
+                    *coverage.alpha_exclusions.values(),
+                    *coverage.label_exclusions.values(),
+                )
+            )
+        ):
+            raise ValueError("Factor period coverage is inconsistent")
+        first, last = coverage.first_signal_session, coverage.last_signal_session
+        if (
+            date.fromisoformat(first).isoformat() != first
+            or date.fromisoformat(last).isoformat() != last
+            or first > last
+        ):
+            raise ValueError("Factor period signal range is invalid")
+        if self.granularity == "all":
+            valid_period = self.period == "all"
+        else:
+            width = 7 if self.granularity == "month" else 4
+            valid_period = first[:width] == self.period == last[:width]
+        if not valid_period:
+            raise ValueError("Factor period must follow signal dates")
+        evaluable = coverage.first_evaluable_signal_session, coverage.last_evaluable_signal_session
+        if coverage.label_evaluable_session_count == 0:
+            if evaluable != (None, None):
+                raise ValueError("Unevaluable period cannot have an evaluation range")
+        elif (
+            any(value is None for value in evaluable)
+            or not first <= evaluable[0] <= evaluable[1] <= last
+        ):
+            raise ValueError("Factor period evaluation range is invalid")
+        if (
+            self.summary.ic.valid_session_count != coverage.ic_valid_session_count
+            or self.summary.rank_ic.valid_session_count != coverage.rank_ic_valid_session_count
+        ):
+            raise ValueError("Factor period metric coverage is inconsistent")
+        return self

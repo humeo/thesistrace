@@ -785,6 +785,15 @@ def _execute_factor_batch_messages(
                     )
                     yield _common_input_chunk_message(item, window, common_rows)
                     del common_rows
+                yield {
+                    "status": "item_factor_evidence_succeeded",
+                    "item_ordinal": item.ordinal,
+                    "item_key": item.item_key,
+                    "run_id": item.run_id,
+                    "chunk_ordinal": window.ordinal,
+                    "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+                    "factor_daily_observations": list(calculation.factor_daily_observations),
+                }
                 del calculation, run_input
             except (MemoryError, ResearchExecutionResourceExhausted):
                 raise
@@ -1524,6 +1533,7 @@ def _read_message(
         "item_started",
         "item_strategy_chunk_succeeded",
         "item_common_input_chunk_succeeded",
+        "item_factor_evidence_succeeded",
         "item_chunk_succeeded",
         "item_failed",
         "batch_succeeded",

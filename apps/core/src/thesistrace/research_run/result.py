@@ -35,6 +35,15 @@ from thesistrace.research_kernel.terminal_state_schema import (
     METRIC_STATE_KEYS,
     TerminalStrategyStateValue,
 )
+from thesistrace.research_run.factor_result import (
+    FACTOR_SUMMARY_PAYLOAD_NAMES,
+    FactorEvidencePublication,
+    factor_daily_payload,
+    factor_partition_descriptors,
+    read_factor_daily_page,
+    read_factor_period_page,
+    read_factor_summary_bundle,
+)
 from thesistrace.research_run.result_schema import (
     STRATEGY_METRIC_KEYS,
     FactorSummaryValue,
@@ -159,10 +168,21 @@ def result_publication_payloads(
     result: Mapping[str, object],
     *,
     research_kind: str,
-) -> dict[str, JsonPayload | ParquetRowsPayload]:
+    factor_observations: Sequence[Mapping[str, object]] = (),
+) -> dict[str, JsonPayload | ParquetRowsPayload | StagedPayload]:
     _validate_result_values(result, research_kind=research_kind)
     if research_kind == "factor_evaluation":
-        return {"factor_summary": JsonPayload(copy.deepcopy(result["factor_summary"]))}
+        if not factor_observations:
+            raise ResearchResultError("Factor Result requires daily evidence")
+        builder = FactorEvidencePublication()
+        rows = [dict(row) for row in factor_observations]
+        for start in range(0, len(rows), RESULT_DAILY_PARTITION_SESSION_COUNT):
+            part = rows[start : start + RESULT_DAILY_PARTITION_SESSION_COUNT]
+            builder.add(factor_daily_payload(part), part)
+        return {
+            "factor_summary": JsonPayload(copy.deepcopy(result["factor_summary"])),
+            **builder.finish(summary=result["factor_summary"]),
+        }
     observations = result.get("strategy_daily_observations")
     if (
         not isinstance(observations, list)
@@ -292,10 +312,14 @@ def read_result_bundle(
     if bundle.kind != "research.result":
         raise ResearchResultError("Result Bundle kind is invalid")
     if research_kind == "factor_evaluation":
-        if set(bundle.payloads) != FACTOR_RESULT_VALUE_NAMES | _common_payload_names(bundle):
-            raise ResearchResultError("Factor Evaluation Result must contain only Factor Summary")
-        result = {"factor_summary": _read_json_value(bundle, "factor_summary")}
-        _validate_result_values(result, research_kind=research_kind)
+        try:
+            parts = factor_partition_descriptors(bundle)
+            expected = FACTOR_SUMMARY_PAYLOAD_NAMES | {part["name"] for part in parts}
+            if set(bundle.payloads) != expected | _common_payload_names(bundle):
+                raise ValueError("Factor Result evidence inventory is incomplete")
+            result = {"factor_summary": read_factor_summary_bundle(bundle)}
+        except ValueError as error:
+            raise ResearchResultError("Factor Result evidence is invalid") from error
         if "common_input_observations" in bundle.payloads:
             result["common_input_observations"] = _read_common_result_observations(bundle)
         return result
@@ -324,10 +348,36 @@ def read_semantic_result_section(
     *,
     research_kind: str,
     section: str,
+    granularity: str | None = None,
+    horizon: int | None = None,
+    start_session: str | None = None,
+    end_session: str | None = None,
     has_common_inputs: bool = False,
     after: str | None = None,
     limit: int = 20,
 ) -> SemanticResultSectionRead:
+    if section == "factor_periods":
+        if research_kind != "factor_evaluation":
+            raise ResearchResultError("Factor periods require Factor Evaluation")
+        try:
+            items, next_after = read_factor_period_page(
+                publication, published_ref, horizon=horizon, granularity=granularity,
+                after=after, limit=limit,
+            )
+        except ValueError as error:
+            raise ResearchResultError("Factor period statistics are invalid") from error
+        return SemanticResultSectionRead(value=items, next_after=next_after)
+    if section == "factor_observations":
+        if research_kind != "factor_evaluation":
+            raise ResearchResultError("Factor observations require Factor Evaluation")
+        try:
+            items, next_after = read_factor_daily_page(
+                publication, published_ref, horizon=horizon,
+                start_session=start_session, end_session=end_session, after=after, limit=limit,
+            )
+        except ValueError as error:
+            raise ResearchResultError("Factor observations are invalid") from error
+        return SemanticResultSectionRead(value=items, next_after=next_after)
     if section == "common_input_observations":
         if not has_common_inputs:
             return SemanticResultSectionRead(value=[])
@@ -341,14 +391,11 @@ def read_semantic_result_section(
     if section == "factor":
         if research_kind != "factor_evaluation":
             raise ResearchResultError("Factor Result section requires Factor Evaluation")
-        bundle = publication.read_selected(published_ref, frozenset({"factor_summary"}))
-        _require_result_bundle_identity(bundle)
-        value = _read_json_value(bundle, "factor_summary")
+        bundle = publication.read_selected(published_ref, FACTOR_SUMMARY_PAYLOAD_NAMES)
         try:
-            validated = FactorSummaryValue.model_validate(value)
-        except ValidationError as error:
+            return SemanticResultSectionRead(value=read_factor_summary_bundle(bundle))
+        except ValueError as error:
             raise ResearchResultError("Factor Result section is invalid") from error
-        return SemanticResultSectionRead(value=validated.model_dump(mode="json", by_alias=True))
     if research_kind != "strategy_backtest":
         raise ResearchResultError("Strategy Result section requires Strategy Backtest")
     if section == "strategy_summary":

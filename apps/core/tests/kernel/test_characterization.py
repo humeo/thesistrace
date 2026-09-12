@@ -6,14 +6,14 @@ from thesistrace.research_kernel.numeric import canonical_binary64_bytes, canoni
 EXPECTED_CHECKSUMS = {
     "alpha": "2408e4eb856b85d9fa26261ec25b49cdeb4900c3f99ce863701a5fa9926f72a7",
     "labels": {
-        "1": "ecdafbd877477678e9f8109f2ebedc02d652e83b31fe67a183b2cd71fbe23703",
-        "5": "779e6534d8c197eeb19e3accd1e4013f357f71e577a3faabdc8f46f642ed0ea2",
-        "20": "0a26cfe3b21ccaaf3562f36278ab2e0538dcf1fe3f3a5ecfed22196b863f3df7",
+        "1": "ae47482d2e9b7d85caba094956d14df635f44321aee989331bd82d159d226de3",
+        "5": "1b4d181a5b45b562811abe5a35588fde7b9629605945381df60b4e6b40eabc1c",
+        "20": "96373ffe671a19200c90fbafa98ec8dd9fd0299bef7adb836945be1c1a31e8a8",
     },
     "factor": {
-        "1": "fa7a104727c4684d78d58b815eb93513e48ce2bb24b2f1000b49555a66a24ec3",
-        "5": "f3a1105c1b77af3999b0da993348e6707fadd1b4863941e03ca478b372e555b5",
-        "20": "c4f4a77935c35417c95d66edbcff6b761afb212eef9698e9704f563892ad3a73",
+        "1": "e6665363300a2fc54d78d1659647f95895d72ad541053b78cc653e851cec03e3",
+        "5": "c108d8430db5949afce51e5f17a6f88242a15164b834e5358ebb4517880cc691",
+        "20": "ba3006a470cefea9bf194baef1328bc4e3343d9f1c32b8ccd14c96fac43c8b5e",
     },
     "strategy": "3bbec290d6262443bbfe60a74df679b3de98430ed788ba48bc179b3afa5821be",
 }
@@ -144,6 +144,7 @@ def test_independent_edge_fixture_freezes_numeric_and_missing_order() -> None:
             "q4": 3.0,
             "q5": 4.0,
         },
+        "quantile_counts": {"q1": 6, "q2": 6, "q3": 6, "q4": 6, "q5": 6},
         "top_bottom_return": 4.0,
         "quantile_reason": None,
     }

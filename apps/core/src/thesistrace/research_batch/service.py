@@ -80,8 +80,13 @@ from thesistrace.research_batch.private_artifact import (
     validate_private_alpha_factor_artifact,
 )
 from thesistrace.research_folder import BATCH_RESEARCH_FOLDER_ID
+from thesistrace.research_kernel.factor_evidence import (
+    factor_resolution_coordinates,
+    validate_factor_observations,
+)
 from thesistrace.research_kernel.research_chunks import AlphaFactorExecutionBinding
 from thesistrace.research_run.execution import ResearchExecutionResourceExhausted
+from thesistrace.research_run.factor_result import FactorEvidencePublication, factor_daily_payload
 from thesistrace.research_run.models import (
     FactorEvaluationAdmissionCommand,
     ResearchRunAdmissionCommand,
@@ -369,6 +374,10 @@ class ResearchBatchService:
         common_partitions: dict[int, list[tuple[StagedPayload, int, str, str]]] = {
             ordinal: [] for ordinal, _key, _run in claim.items
         }
+        factor_evidence = {
+            ordinal: FactorEvidencePublication() for ordinal, _key, _run in claim.items
+        }
+        factor_chunk_counts = {ordinal: 0 for ordinal, _key, _run in claim.items}
         execution: SupervisedResearchBatchExecution | None = None
         private_artifact_path: Path | None = None
         try:
@@ -451,6 +460,37 @@ class ResearchBatchService:
                     ):
                         raise RuntimeError("Factor Batch child item identity is invalid")
                     if message.get("status") == "item_started":
+                        execution.advance("acknowledge_progress")
+                        continue
+                    if message.get("status") == "item_factor_evidence_succeeded":
+                        if claim.batch_kind != "factor_evaluation":
+                            raise RuntimeError("Factor evidence requires a Factor Batch")
+                        chunk_ordinal = message.get("chunk_ordinal")
+                        rows = message.get("factor_daily_observations")
+                        if (
+                            type(chunk_ordinal) is not int
+                            or chunk_ordinal != factor_chunk_counts[ordinal] + 1
+                            or not isinstance(rows, list)
+                        ):
+                            raise RuntimeError("Factor Batch evidence order is invalid")
+                        plan = run_claim.immutable_input.execution_plan
+                        sessions = tuple(day.isoformat() for day in
+                                         plan.calculation_sessions[plan.research_session_offset:])
+                        before = (chunk_ordinal - 1) * plan.chunk_session_count
+                        after = min(len(sessions), before + plan.chunk_session_count)
+                        expected = factor_resolution_coordinates(
+                            sessions, before=before, after=after, final=after == len(sessions),
+                        )
+                        values = validate_factor_observations(rows)
+                        if [(row["horizon"], row["session"]) for row in values] != expected:
+                            raise RuntimeError("Factor Batch evidence coverage is incomplete")
+                        if values:
+                            staged = self._publication.stage(
+                                factor_daily_payload(values),
+                                staging_authority=lambda: self._authorize_claim_staging(claim),
+                            )
+                            factor_evidence[ordinal].add(staged, values)
+                        factor_chunk_counts[ordinal] = chunk_ordinal
                         execution.advance("acknowledge_progress")
                         continue
                     if message.get("status") == "item_common_input_chunk_succeeded":
@@ -560,6 +600,7 @@ class ResearchBatchService:
                         self._research_runs.complete_batch_owned_factor_item(
                             run_claim,
                             chunk,
+                            factor_evidence=factor_evidence[ordinal],
                             staged_common_partitions=common_partitions[ordinal],
                             authorize_batch=lambda transaction: (
                                 self._authorize_claim_in_transaction(transaction, claim)

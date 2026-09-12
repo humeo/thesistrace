@@ -7,6 +7,7 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useRef, useState } from "react";
 
+import { FactorEvidence } from "../analysis/FactorEvidence";
 import { CommonInputObservations } from "../analysis/CommonInputObservations";
 import { coreFetch } from "../auth/coreFetch";
 import { StrategyComparisonPanel } from "../analysis/StrategyComparisonPanel";
@@ -605,6 +606,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
         {run.status === "succeeded" && run.result ? (
           <>
             <ResearchResultView result={run.result} />
+            {"factor" in run.result ? <FactorEvidence key={`factor:${run.id}`} runId={run.id} /> : null}
             <CommonInputObservations key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/common-input-observations`} />
           </>
         ) : null}

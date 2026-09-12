@@ -136,10 +136,15 @@ from thesistrace.research_run import (
 from thesistrace.research_run.models import (
     CommonInputObservationsResultSection,
     CommonInputObservationsResultSectionInput,
+    FactorObservationsResultSection,
+    FactorObservationsResultSectionInput,
+    FactorPeriodsResultSection,
+    FactorPeriodsResultSectionInput,
 )
 from thesistrace.research_run.service import (
     ResearchRunInvalidCursor,
     ResearchRunResultReadFailed,
+    ResearchRunResultSectionIncompatible,
 )
 from thesistrace.researcher import ResearcherBootstrapResult, ResearcherIdentity
 
@@ -1164,6 +1169,93 @@ def create_app(
         if run is None:
             raise HTTPException(status_code=404, detail="ResearchRun not found")
         return run
+
+    @app.get(
+        "/api/research-runs/{run_id}/factor-periods",
+        response_model=FactorPeriodsResultSection,
+    )
+    def get_run_factor_periods(
+        request: Request,
+        run_id: str,
+        horizon: int = Query(...),
+        granularity: str = Query(...),
+        cursor: str | None = Query(default=None, min_length=1, max_length=1024),
+        limit: int = Query(default=20, ge=1, le=50),
+    ) -> FactorPeriodsResultSection:
+        try:
+            result = _runtime(request).research_runs.get_result_section(
+                _researcher_id(request),
+                FactorPeriodsResultSectionInput(
+                    run_id=run_id,
+                    section="factor_periods",
+                    horizon=horizon, granularity=granularity,
+                    cursor=cursor,
+                    limit=limit,
+                ),
+            )
+        except ValidationError as error:
+            raise HTTPException(status_code=422, detail="Invalid Factor query") from error
+        except ResearchRunResultSectionIncompatible as error:
+            raise HTTPException(
+                status_code=400, detail="Factor section requires Factor Evaluation"
+            ) from error
+        except ResearchRunInvalidCursor as error:
+            raise HTTPException(status_code=400, detail="Invalid result cursor") from error
+        except ResearchRunResultUnavailable as error:
+            raise HTTPException(
+                status_code=409, detail="ResearchRun result is not available"
+            ) from error
+        except (ResearchRunResultReadFailed, ResearchRunTemporarilyUnavailable) as error:
+            raise HTTPException(
+                status_code=503, detail="ResearchRun result is unavailable"
+            ) from error
+        if result is None:
+            raise HTTPException(status_code=404, detail="ResearchRun not found")
+        return result
+
+    @app.get(
+        "/api/research-runs/{run_id}/factor-observations",
+        response_model=FactorObservationsResultSection,
+    )
+    def get_run_factor_observations(
+        request: Request,
+        run_id: str,
+        horizon: int = Query(...),
+        start_session: str | None = Query(default=None),
+        end_session: str | None = Query(default=None),
+        cursor: str | None = Query(default=None, min_length=1, max_length=1024),
+        limit: int = Query(default=20, ge=1, le=50),
+    ) -> FactorObservationsResultSection:
+        try:
+            result = _runtime(request).research_runs.get_result_section(
+                _researcher_id(request),
+                FactorObservationsResultSectionInput(
+                    run_id=run_id,
+                    section="factor_observations",
+                    horizon=horizon, start_session=start_session, end_session=end_session,
+                    cursor=cursor,
+                    limit=limit,
+                ),
+            )
+        except ValidationError as error:
+            raise HTTPException(status_code=422, detail="Invalid Factor query") from error
+        except ResearchRunResultSectionIncompatible as error:
+            raise HTTPException(
+                status_code=400, detail="Factor section requires Factor Evaluation"
+            ) from error
+        except ResearchRunInvalidCursor as error:
+            raise HTTPException(status_code=400, detail="Invalid result cursor") from error
+        except ResearchRunResultUnavailable as error:
+            raise HTTPException(
+                status_code=409, detail="ResearchRun result is not available"
+            ) from error
+        except (ResearchRunResultReadFailed, ResearchRunTemporarilyUnavailable) as error:
+            raise HTTPException(
+                status_code=503, detail="ResearchRun result is unavailable"
+            ) from error
+        if result is None:
+            raise HTTPException(status_code=404, detail="ResearchRun not found")
+        return result
 
     @app.get(
         "/api/research-runs/{run_id}/common-input-observations",

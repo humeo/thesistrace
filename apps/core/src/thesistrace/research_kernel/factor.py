@@ -26,6 +26,8 @@ _LABEL_INVALID_ZERO_ENTRY = np.uint8(2)
 _LABEL_INVALID_ENTRY = np.uint8(3)
 _LABEL_INVALID_EXIT = np.uint8(4)
 _LABEL_INVALID_NON_FINITE = np.uint8(5)
+_LABEL_CENSORED = np.uint8(6)
+_LABEL_DATA_UNAVAILABLE = np.uint8(7)
 
 
 @dataclass(frozen=True)
@@ -42,16 +44,11 @@ class PreparedColumnarForwardLabels:
         signal_sessions_by_horizon: dict[int, Sequence[str]],
         cancellation_check: Callable[[], None],
     ) -> dict[str, list[dict[str, object]]]:
-        session_positions = {
-            session: index for index, session in enumerate(self.sessions)
-        }
+        session_positions = {session: index for index, session in enumerate(self.sessions)}
         instrument_positions = {
-            instrument_id: index
-            for index, instrument_id in enumerate(self.instrument_ids)
+            instrument_id: index for index, instrument_id in enumerate(self.instrument_ids)
         }
-        alpha_by_session = {
-            str(item["session"]): item for item in alpha_matrix["sessions"]
-        }
+        alpha_by_session = {str(item["session"]): item for item in alpha_matrix["sessions"]}
         days_by_horizon: dict[str, list[dict[str, object]]] = {}
         for horizon, signal_sessions in signal_sessions_by_horizon.items():
             labels = self.labels_by_horizon[horizon]
@@ -62,9 +59,7 @@ class PreparedColumnarForwardLabels:
                 signal_session = str(signal_session)
                 signal_index = session_positions[signal_session]
                 alpha_values = list(alpha_by_session[signal_session]["values"])
-                instrument_ids = tuple(
-                    str(value["instrument_id"]) for value in alpha_values
-                )
+                instrument_ids = tuple(str(value["instrument_id"]) for value in alpha_values)
                 positions = np.fromiter(
                     (instrument_positions[instrument_id] for instrument_id in instrument_ids),
                     dtype=np.intp,
@@ -95,11 +90,35 @@ class PreparedColumnarForwardLabels:
                 selected_labels = labels[positions, signal_index][included]
                 included_alpha = alpha_array[included]
                 days.append(
-                    {
-                        "session": signal_session,
-                        "sample_count": len(included_alpha),
-                        **_factor_array_values(included_alpha, selected_labels),
-                    }
+                    _factor_observation(
+                        session=signal_session,
+                        horizon=horizon,
+                        entry_session=(
+                            self.sessions[signal_index + 1]
+                            if signal_index + 1 < len(self.sessions)
+                            else None
+                        ),
+                        exit_session=(
+                            self.sessions[signal_index + 1 + horizon]
+                            if signal_index + 1 + horizon < len(self.sessions)
+                            else None
+                        ),
+                        alpha_count=len(alpha_values),
+                        alpha_exclusions=dict(
+                            alpha_by_session[signal_session]["coverage_loss"]
+                        ),
+                        label_exclusions={
+                            reason: int(np.count_nonzero(selected_states == code))
+                            for code, reason in (
+                                (_LABEL_UNAVAILABLE, "confirmed_market_open_unavailable"),
+                                (_LABEL_CENSORED, "right_censored_by_research_period_end"),
+                                (_LABEL_DATA_UNAVAILABLE, "data_unavailable"),
+                            )
+                            if np.any(selected_states == code)
+                        },
+                        sample_count=len(included_alpha),
+                        metrics=_factor_array_values(included_alpha, selected_labels),
+                    )
                 )
                 cancellation_check()
             days_by_horizon[str(horizon)] = days
@@ -118,7 +137,7 @@ def prepare_columnar_forward_labels(
     # Classify each missing coordinate once, across all horizons. A terminal
     # delisting is unavailable on entry, but a total loss after a valid entry.
     missing_reason = np.zeros(adjusted_opens.shape, dtype=np.uint8)
-    terminal_delisting, unexplained = 1, 2
+    terminal_delisting, unexplained, data_unavailable = 1, 2, 3
     for index, session in enumerate(sessions):
         cancellation_check()
         for position in np.flatnonzero(~finite[:, index]):
@@ -133,12 +152,14 @@ def prepare_columnar_forward_labels(
                 missing_reason[position, index] = terminal_delisting
             elif reason == "unexplained_missing_or_invalid_data":
                 missing_reason[position, index] = unexplained
+            elif reason == "data_unavailable":
+                missing_reason[position, index] = data_unavailable
     labels_by_horizon: dict[int, np.ndarray] = {}
     states_by_horizon: dict[int, np.ndarray] = {}
     for horizon in HORIZONS:
         cancellation_check()
         labels = np.full(adjusted_opens.shape, np.nan, dtype=np.float64)
-        states = np.full(adjusted_opens.shape, _LABEL_UNAVAILABLE, dtype=np.uint8)
+        states = np.full(adjusted_opens.shape, _LABEL_CENSORED, dtype=np.uint8)
         width = max(0, len(sessions) - horizon - 1)
         entry_opens = adjusted_opens[:, 1 : 1 + width]
         exit_opens = adjusted_opens[:, 1 + horizon : 1 + horizon + width]
@@ -148,16 +169,21 @@ def prepare_columnar_forward_labels(
         exit_reason = missing_reason[:, 1 + horizon : 1 + horizon + width]
         projected_labels = labels[:, :width]
         projected_states = states[:, :width]
+        projected_states[:] = _LABEL_UNAVAILABLE
         zero_entry = valid_entry & (entry_opens == 0.0)
         projected_states[zero_entry] = _LABEL_INVALID_ZERO_ENTRY
         valid = valid_entry & valid_exit & ~zero_entry
         projected_labels[valid] = exit_opens[valid] / entry_opens[valid] - 1.0
         projected_states[valid] = 0
+        projected_states[~valid_entry & (entry_reason == data_unavailable)] = (
+            _LABEL_DATA_UNAVAILABLE
+        )
         projected_states[~valid_entry & (entry_reason == unexplained)] = _LABEL_INVALID_ENTRY
         missing_exit = valid_entry & ~valid_exit & ~zero_entry
         terminal = missing_exit & (exit_reason == terminal_delisting)
         projected_labels[terminal] = -1.0
         projected_states[terminal] = 0
+        projected_states[missing_exit & (exit_reason == data_unavailable)] = _LABEL_DATA_UNAVAILABLE
         projected_states[missing_exit & (exit_reason == unexplained)] = _LABEL_INVALID_EXIT
         non_finite = (projected_states == 0) & ~np.isfinite(projected_labels)
         projected_states[non_finite] = _LABEL_INVALID_NON_FINITE
@@ -193,7 +219,9 @@ def _raise_selected_label_error(
         session = (
             entry_session
             if code in {_LABEL_INVALID_ZERO_ENTRY, _LABEL_INVALID_ENTRY}
-            else exit_session if code == _LABEL_INVALID_EXIT else signal_session
+            else exit_session
+            if code == _LABEL_INVALID_EXIT
+            else signal_session
         )
         raise FactorDataError(f"{message} for {instrument_id} on {session}")
 
@@ -331,6 +359,11 @@ def build_forward_labels(
                     "session": signal_session,
                     "signal_session": signal_session,
                     "alpha_values": alpha_values,
+                    "alpha_coverage_loss": dict(
+                        alpha_by_session[signal_session]["coverage_loss"]
+                    ),
+                    "entry_session": calendar[entry_index] if entry_index < len(calendar) else None,
+                    "exit_session": calendar[exit_index] if exit_index < len(calendar) else None,
                     "samples": samples,
                     "resolutions": resolutions,
                     "unavailable": dict(sorted(unavailable.items())),
@@ -386,14 +419,7 @@ def evaluate_factor(labels: dict[str, object]) -> dict[str, object]:
     for horizon, label_artifact in labels["horizons"].items():
         daily: list[dict[str, object]] = []
         for item in label_artifact["sessions"]:
-            metrics = factor_day(item["samples"])
-            daily.append(
-                {
-                    "session": item["session"],
-                    "sample_count": len(item["samples"]),
-                    **metrics,
-                }
-            )
+            daily.append(factor_observation_from_labels(item, horizon=int(horizon)))
         horizons[horizon] = factor_horizon_from_daily(
             horizon=int(horizon),
             alpha_checksum=str(labels["alpha_checksum"]),
@@ -401,6 +427,53 @@ def evaluate_factor(labels: dict[str, object]) -> dict[str, object]:
             daily=daily,
         )
     return {"horizons": horizons}
+
+
+def factor_observation_from_labels(item: dict[str, object], *, horizon: int) -> dict[str, object]:
+    return _factor_observation(
+        session=str(item["session"]),
+        horizon=horizon,
+        entry_session=item["entry_session"],
+        exit_session=item["exit_session"],
+        alpha_count=len(item["alpha_values"]),
+        alpha_exclusions=dict(item["alpha_coverage_loss"]),
+        label_exclusions=dict(item["unavailable"]),
+        sample_count=len(item["samples"]),
+        metrics=factor_day(item["samples"]),
+    )
+
+
+def _factor_observation(
+    *,
+    session: str,
+    horizon: int,
+    entry_session: str | None,
+    exit_session: str | None,
+    alpha_count: int,
+    alpha_exclusions: dict[str, int],
+    label_exclusions: dict[str, int],
+    sample_count: int,
+    metrics: dict[str, object],
+) -> dict[str, object]:
+    if sample_count + sum(label_exclusions.values()) != alpha_count:
+        raise FactorDataError("Factor label sample accounting is inconsistent")
+    return {
+        "session": session,
+        "horizon": horizon,
+        "label_entry_session": entry_session,
+        "label_exit_session": exit_session,
+        "label_status": (
+            "right_censored_by_research_period_end"
+            if exit_session is None
+            else "within_research_period"
+        ),
+        "alpha_candidate_count": alpha_count + sum(alpha_exclusions.values()),
+        "alpha_sample_count": alpha_count,
+        "alpha_exclusions": dict(sorted(alpha_exclusions.items())),
+        "sample_count": sample_count,
+        "label_exclusions": dict(sorted(label_exclusions.items())),
+        **metrics,
+    }
 
 
 def factor_horizon_from_daily(
@@ -475,6 +548,7 @@ def _factor_array_values(
             "rank_ic": None,
             "correlation_reason": "sample_insufficient",
             "quantile_returns": empty_quantiles(),
+            "quantile_counts": {f"q{group}": 0 for group in range(1, 6)},
             "top_bottom_return": None,
             "quantile_reason": "sample_insufficient",
         }
@@ -486,8 +560,7 @@ def _factor_array_values(
     count = len(alpha)
     groups = np.minimum(5, ((alpha_ranks - 1) * 5 / count).astype(np.int8) + 1)
     quantiles = {
-        f"q{group}": mean_or_none(label[groups == group].tolist())
-        for group in range(1, 6)
+        f"q{group}": mean_or_none(label[groups == group].tolist()) for group in range(1, 6)
     }
     top_bottom = (
         None
@@ -499,6 +572,9 @@ def _factor_array_values(
         "rank_ic": rank_ic,
         "correlation_reason": reason,
         "quantile_returns": quantiles,
+        "quantile_counts": {
+            f"q{group}": int(np.count_nonzero(groups == group)) for group in range(1, 6)
+        },
         "top_bottom_return": top_bottom,
         "quantile_reason": None,
     }
@@ -535,9 +611,7 @@ def _average_ranks_array(array: np.ndarray) -> np.ndarray:
         raise FactorDataError("Factor rank values must be finite")
     order = np.argsort(array, kind="stable")
     ordered = array[order]
-    starts = np.flatnonzero(
-        np.concatenate((np.asarray([True]), ordered[1:] != ordered[:-1]))
-    )
+    starts = np.flatnonzero(np.concatenate((np.asarray([True]), ordered[1:] != ordered[:-1])))
     ends = np.concatenate((starts[1:], np.asarray([len(array)])))
     group_ranks = (starts + 1 + ends) / 2
     sorted_ranks = np.repeat(group_ranks, ends - starts)

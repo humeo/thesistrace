@@ -234,7 +234,10 @@ def run_polling_payload(
         finished_at = datetime(2024, 2, 1, 0, 0, 20, tzinfo=UTC)
         elapsed_seconds = 20.0
         sections = (
-            ("factor", "provenance", "common_input_observations")
+            (
+                "factor", "factor_observations", "factor_periods",
+                "provenance", "common_input_observations",
+            )
             if research_kind == "factor_evaluation"
             else (
                 "strategy_summary",

@@ -16,9 +16,10 @@ from thesistrace.research_kernel.alpha import (
 from thesistrace.research_kernel.factor import (
     HORIZONS,
     PreparedColumnarForwardLabels,
-    factor_day,
+    factor_observation_from_labels,
     prepared_forward_factor_days_by_horizon,
 )
+from thesistrace.research_kernel.factor_evidence import validate_factor_observations
 from thesistrace.research_kernel.kernel_run import RunInput, calculation_definition
 from thesistrace.research_kernel.numeric import (
     canonical_decimal,
@@ -161,6 +162,7 @@ class AlphaFactorChunkOutcome:
     _continuation: dict[str, object]
     _alpha_matrix: dict[str, object]
     _factor_summary: dict[str, object] | None
+    _factor_daily_observations: list[dict[str, object]]
     _phase_seconds: tuple[tuple[str, float], ...]
     binding_checksum: str
     completed_research_session_count: int
@@ -173,6 +175,7 @@ class AlphaFactorChunkOutcome:
         continuation: dict[str, object],
         alpha_matrix: dict[str, object],
         factor_summary: dict[str, object] | None,
+        factor_daily_observations: list[dict[str, object]],
         phase_seconds: Mapping[str, float],
     ) -> AlphaFactorChunkOutcome:
         expected_phases = {"alpha_and_pending", "factor", "finalize"}
@@ -188,6 +191,7 @@ class AlphaFactorChunkOutcome:
         object.__setattr__(instance, "_continuation", continuation)
         object.__setattr__(instance, "_alpha_matrix", alpha_matrix)
         object.__setattr__(instance, "_factor_summary", factor_summary)
+        object.__setattr__(instance, "_factor_daily_observations", factor_daily_observations)
         object.__setattr__(instance, "binding_checksum", binding.checksum)
         object.__setattr__(
             instance,
@@ -216,6 +220,9 @@ class AlphaFactorChunkOutcome:
             for row in self._alpha_matrix["sessions"] if "common_inputs" in row
         )
 
+    def factor_daily_observations_snapshot(self) -> list[dict[str, object]]:
+        return deepcopy(self._factor_daily_observations)
+
     def factor_summary_snapshot(self) -> dict[str, object] | None:
         return deepcopy(self._factor_summary)
 
@@ -229,7 +236,8 @@ class AlphaFactorChunkOutcome:
                 "continuation": self._continuation,
                 "alpha_matrix": self._alpha_matrix,
                 **(
-                    {"factor_summary": self._factor_summary}
+                    {"factor_summary": self._factor_summary,
+                     "factor_daily_observations": self._factor_daily_observations}
                     if self.binding_snapshot()["research_kind"] == "factor_evaluation" else {}
                 ),
                 "phase_seconds": dict(self._phase_seconds),
@@ -257,7 +265,8 @@ class AlphaFactorChunkOutcome:
                     "continuation",
                     "alpha_matrix",
                     "phase_seconds",
-                } | ({"factor_summary"} if binding.research_kind == "factor_evaluation" else set())
+                } | ({"factor_summary", "factor_daily_observations"}
+                     if binding.research_kind == "factor_evaluation" else set())
                 or compact.get("schema_version") != "alpha-factor-chunk-outcome-v1"
                 or compact.get("binding_checksum") != binding.checksum
                 or not isinstance(continuation_value, Mapping)
@@ -296,11 +305,16 @@ class AlphaFactorChunkOutcome:
                     alpha_checksum=str(alpha_checksum),
                 )
             )
+            factor_daily = (
+                validate_factor_observations(compact["factor_daily_observations"])
+                if binding.research_kind == "factor_evaluation" else []
+            )
             return cls._from_validated(
                 binding=binding,
                 continuation=continuation,
                 alpha_matrix=alpha_matrix,
                 factor_summary=factor_summary,
+                factor_daily_observations=factor_daily,
                 phase_seconds={
                     str(name): float(seconds) for name, seconds in phase_seconds.items()
                 },
@@ -401,6 +415,7 @@ class StrategyChunkOutcome:
 @dataclass(frozen=True)
 class ResearchChunkCalculation:
     common_input_sessions: tuple[dict[str, object], ...]
+    factor_daily_observations: tuple[dict[str, object], ...]
     continuation: dict[str, object]
     strategy_daily_observations: tuple[dict[str, object], ...]
     final_values: dict[str, object] | None
@@ -465,6 +480,7 @@ def execute_research_chunk(
         return ResearchChunkCalculation(
             continuation=state,
             common_input_sessions=(),
+            factor_daily_observations=(),
             strategy_daily_observations=(),
             final_values=None,
             phase_seconds={
@@ -501,6 +517,7 @@ def execute_research_chunk(
         return ResearchChunkCalculation(
             continuation=state,
             common_input_sessions=common_input_sessions,
+            factor_daily_observations=tuple(alpha_factor.factor_daily_observations_snapshot()),
             strategy_daily_observations=(),
             final_values=(None if factor_summary is None else {"factor_summary": factor_summary}),
             phase_seconds={
@@ -524,6 +541,7 @@ def execute_research_chunk(
     return ResearchChunkCalculation(
         continuation=state,
         common_input_sessions=common_input_sessions,
+        factor_daily_observations=(),
         strategy_daily_observations=(strategy_outcome._daily_observations_for_current_process()),
         final_values=strategy_outcome._final_values_for_current_process(),
         phase_seconds={
@@ -780,6 +798,7 @@ def _execute_alpha_factor_chunk_from_validated(
         "checksum": state["alpha_checksum"],
     }
     factor_seconds = 0.0
+    factor_daily_observations: list[dict[str, object]] = []
     if run_input.research_kind == "factor_evaluation":
         if forward_labels is None:
             raise ValueError("Factor Evaluation requires forward labels")
@@ -806,6 +825,9 @@ def _execute_alpha_factor_chunk_from_validated(
             signal_sessions_by_horizon=signal_sessions_by_horizon,
             cancellation_check=cancellation_check,
         )
+        factor_daily_observations = validate_factor_observations([
+            row for horizon in HORIZONS for row in daily_by_horizon[str(horizon)]
+        ])
         state["factor_state"] = advance_factor_state_from_daily(
             _mapping(state["factor_state"], "Factor state"),
             daily_by_horizon,
@@ -846,6 +868,7 @@ def _execute_alpha_factor_chunk_from_validated(
         continuation=state,
         alpha_matrix=matrix,
         factor_summary=summary,
+        factor_daily_observations=factor_daily_observations,
         phase_seconds={
             "alpha_and_pending": alpha_and_pending_seconds,
             "factor": factor_seconds,
@@ -958,11 +981,7 @@ def advance_factor_state(
             if not isinstance(samples, list):
                 raise ValueError("Label samples are invalid")
             daily_by_horizon[str(horizon)].append(
-                {
-                    "session": str(session["session"]),
-                    "sample_count": len(samples),
-                    **factor_day([dict(value) for value in samples]),
-                }
+                factor_observation_from_labels(dict(session), horizon=horizon)
             )
     return advance_factor_state_from_daily(prior, daily_by_horizon)
 

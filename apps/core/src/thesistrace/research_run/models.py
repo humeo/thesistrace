@@ -23,8 +23,9 @@ from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
 from thesistrace.daily_track.models import DailyTrackSummary
 from thesistrace.data.models import FinancialResearchReadiness
 from thesistrace.research_kernel.common_observations import CommonInputObservation
+from thesistrace.research_kernel.factor_evidence import FactorDailyObservation
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
-from thesistrace.research_run.result_schema import StrategyMetrics
+from thesistrace.research_run.result_schema import FactorPeriodStatistic, StrategyMetrics
 
 
 def _normalized_request_id(value: str) -> str:
@@ -104,6 +105,8 @@ type ResearchRunStatus = Literal[
 ]
 type ResearchRunResultSection = Literal[
     "factor",
+    "factor_observations",
+    "factor_periods",
     "strategy_summary",
     "strategy_observations",
     "terminal_strategy_state",
@@ -117,6 +120,8 @@ RESEARCH_RUN_ACTIVE_STATUSES = frozenset({"queued", "running", "cancelling"})
 RESEARCH_RUN_POLL_RETRY_SECONDS = 2
 FACTOR_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
     "factor",
+    "factor_observations",
+    "factor_periods",
     "provenance",
     "common_input_observations",
 )
@@ -682,6 +687,50 @@ class FactorResultSectionInput(_ResearchRunResultSectionInput):
     section: Literal["factor"]
 
 
+class FactorObservationsResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["factor_observations"]
+    horizon: Literal[1, 5, 20]
+    start_session: str | None = None
+    end_session: str | None = None
+    cursor: ResultCursor | None = None
+    limit: ResultPageLimit = 20
+
+    @field_validator("horizon", mode="before")
+    @classmethod
+    def require_integer_horizon(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("horizon must be an integer")
+        return value
+
+    @field_validator("start_session", "end_session")
+    @classmethod
+    def require_signal_date(cls, value: str | None) -> str | None:
+        if value is not None and date.fromisoformat(value).isoformat() != value:
+            raise ValueError("signal date must be canonical")
+        return value
+
+    @model_validator(mode="after")
+    def require_ordered_dates(self):
+        if self.start_session and self.end_session and self.start_session > self.end_session:
+            raise ValueError("signal date range is reversed")
+        return self
+
+
+class FactorPeriodsResultSectionInput(_ResearchRunResultSectionInput):
+    section: Literal["factor_periods"]
+    horizon: Literal[1, 5, 20]
+    granularity: Literal["all", "month", "year"]
+    cursor: ResultCursor | None = None
+    limit: ResultPageLimit = 20
+
+    @field_validator("horizon", mode="before")
+    @classmethod
+    def require_integer_horizon(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("horizon must be an integer")
+        return value
+
+
 class StrategySummaryResultSectionInput(_ResearchRunResultSectionInput):
     section: Literal["strategy_summary"]
 
@@ -714,6 +763,8 @@ class ProvenanceResultSectionInput(_ResearchRunResultSectionInput):
 
 type ResearchRunResultSectionInput = Annotated[
     FactorResultSectionInput
+    | FactorObservationsResultSectionInput
+    | FactorPeriodsResultSectionInput
     | StrategySummaryResultSectionInput
     | StrategyObservationsResultSectionInput
     | TerminalStrategyStateResultSectionInput
@@ -750,6 +801,37 @@ class FactorResultSection(BaseModel):
     factor: FactorResult
     units: FactorMetricUnits = FactorMetricUnits()
     missing_values: FactorMissingValueSemantics = FactorMissingValueSemantics()
+
+
+class FactorObservationsResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    section: Literal["factor_observations"] = "factor_observations"
+    run_id: str
+    research_kind: Literal["factor_evaluation"] = "factor_evaluation"
+    horizon: Literal[1, 5, 20]
+    start_session: str | None
+    end_session: str | None
+    items: list[FactorDailyObservation]
+    next_cursor: str | None
+    units: FactorMetricUnits = FactorMetricUnits()
+    missing_values: FactorMissingValueSemantics = FactorMissingValueSemantics()
+    return_basis: Literal["forward_open_labels_before_costs"] = "forward_open_labels_before_costs"
+
+
+class FactorPeriodsResultSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    section: Literal["factor_periods"] = "factor_periods"
+    run_id: str
+    research_kind: Literal["factor_evaluation"] = "factor_evaluation"
+    horizon: Literal[1, 5, 20]
+    granularity: Literal["all", "month", "year"]
+    items: list[FactorPeriodStatistic]
+    next_cursor: str | None
+    units: FactorMetricUnits = FactorMetricUnits()
+    missing_values: FactorMissingValueSemantics = FactorMissingValueSemantics()
+    return_basis: Literal["forward_open_labels_before_costs"] = "forward_open_labels_before_costs"
 
 
 class StrategySummaryResultSection(BaseModel):
@@ -840,6 +922,8 @@ class ProvenanceResultSection(BaseModel):
 
 type ResearchRunResultSectionResponse = Annotated[
     FactorResultSection
+    | FactorObservationsResultSection
+    | FactorPeriodsResultSection
     | StrategySummaryResultSection
     | StrategyObservationsResultSection
     | TerminalStrategyStateResultSection

@@ -205,7 +205,9 @@ def _validate_canonical_table(table: pa.Table, contract: ParquetWriterContract) 
     for field in contract.schema:
         if pa.types.is_floating(field.type):
             finite = pc.all(pc.is_finite(table[field.name])).as_py()
-            if finite is not True:
+            # Arrow returns None when every value is null; nullable evidence
+            # then contains no non-finite observations to reject.
+            if finite is False:
                 raise ParquetContractError("Parquet Table has a non-finite value")
     if table.num_rows < 2:
         return

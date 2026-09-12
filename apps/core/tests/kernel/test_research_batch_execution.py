@@ -233,3 +233,24 @@ def test_batch_streams_common_statistics_for_every_item_and_research_session(tmp
     assert first[0]["session"] == immutable["data_admission"]["first_research_session"]
     assert first[-1]["session"] == immutable["data_admission"]["last_research_session"]
     assert all(row["identifier"] == "universe_advancing_fraction" for row in first)
+
+
+def test_factor_batch_streams_daily_evidence_for_each_item_and_horizon(tmp_path):
+    request = _batch_request(tmp_path, kind="factor_evaluation")
+    messages = list(execute_research_batch_messages(request))
+    streams = {ordinal: [] for ordinal in (1, 2, 3)}
+    for message in messages:
+        if message["status"] == "item_factor_evidence_succeeded":
+            streams[message["item_ordinal"]].extend(message["factor_daily_observations"])
+    for ordinal, rows in streams.items():
+        assert rows, (ordinal, messages)
+        sessions = {
+            h: [row["session"] for row in rows if row["horizon"] == h]
+            for h in (1, 5, 20)
+        }
+        assert sessions[1] == sessions[5] == sessions[20]
+        assert sessions[1] == sorted(set(sessions[1]))
+        assert all(
+            [row for row in rows if row["horizon"] == h][-1]["label_exit_session"] is None
+            for h in (1, 5, 20)
+        )

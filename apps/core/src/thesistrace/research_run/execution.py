@@ -504,6 +504,7 @@ def _calculate_chunks(
                 "continuation": continuation,
                 "strategy_daily_observations": [],
                 "common_input_observations": [],
+                "factor_daily_observations": [],
                 "final_values": dict(resume_from.final_values),
                 "final": True,
                 "reused_checkpoint": True,
@@ -533,6 +534,7 @@ def _calculate_chunks(
         final_chunk = chunk.ordinal == len(plan.chunks)
         observations: tuple[dict[str, object], ...] = ()
         common_observations: list[dict[str, object]] = []
+        factor_observations: list[dict[str, object]] = []
         final_values: dict[str, object] | None = None
         if research_sessions:
             fact_instrument_ids = _continuation_instrument_ids(continuation)
@@ -596,6 +598,7 @@ def _calculate_chunks(
             }
             continuation = calculation.continuation
             observations = calculation.strategy_daily_observations
+            factor_observations = list(calculation.factor_daily_observations)
             if calculation.common_input_sessions:
                 common_observations = common_input_observation_rows(
                     {"sessions": list(calculation.common_input_sessions)},
@@ -626,6 +629,7 @@ def _calculate_chunks(
                 "continuation": continuation,
                 "strategy_daily_observations": list(observations),
                 "common_input_observations": common_observations,
+                "factor_daily_observations": factor_observations,
                 "final_values": final_values,
                 "final": final_chunk,
                 "reused_checkpoint": False,
@@ -829,6 +833,7 @@ def _chunk_from_response(
         "continuation",
         "strategy_daily_observations",
         "common_input_observations",
+        "factor_daily_observations",
         "final_values",
         "final",
         "reused_checkpoint",

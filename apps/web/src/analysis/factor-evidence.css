@@ -1,0 +1,19 @@
+.factor-evidence { border-top: 1px solid var(--line); margin-top: 20px; min-width: 0; }
+.factor-evidence > summary { cursor: pointer; padding: 16px 0; color: var(--ink-muted); font-size: 13px; }
+.factor-evidence-content > p { color: var(--ink-muted); font-size: 12px; line-height: 1.6; max-width: 90ch; }
+.factor-evidence-controls { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.factor-evidence-controls label { display: grid; gap: 6px; font-size: 12px; color: var(--ink-muted); }
+.factor-evidence-controls input, .factor-evidence-controls select { min-height: 36px; padding: 6px 10px; }
+.factor-evidence-table { overflow-x: auto; max-width: 100%; }
+.factor-evidence-table table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.factor-evidence-table caption { text-align: left; padding: 8px 0; color: var(--ink-muted); }
+.factor-evidence-table th, .factor-evidence-table td { text-align: right; border-bottom: 1px solid var(--line); padding: 12px; vertical-align: top; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.factor-evidence-table th { color: var(--ink-muted); font-weight: 500; }
+.factor-evidence-table td:first-child, .factor-evidence-table th:first-child, .factor-evidence-table td:last-child { text-align: left; }
+.factor-evidence-table small, .factor-exclusion { display: block; color: var(--ink-muted); margin-top: 4px; }
+.factor-evidence-table details { min-width: 130px; max-width: 300px; white-space: normal; }
+.factor-evidence-table summary { cursor: pointer; }
+.factor-evidence-content nav { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 12px 0; color: var(--ink-muted); font-size: 12px; }
+@media (pointer: coarse) { .factor-evidence button, .factor-evidence input, .factor-evidence select, .factor-evidence summary { min-height: 44px; } }
+.factor-evidence-table th:last-child { text-align: left; }
+.factor-evidence :is(summary, input, select, button):focus-visible { outline: 2px solid var(--primary-focus); outline-offset: 2px; }

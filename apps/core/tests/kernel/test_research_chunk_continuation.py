@@ -74,7 +74,12 @@ def _label_session(session: str, offset: float) -> dict[str, object]:
     return {
         "session": session,
         "signal_session": session,
-        "alpha_values": [],
+        "alpha_values": [
+            {"instrument_id": row["instrument_id"], "value": row["alpha"]} for row in samples
+        ],
+        "alpha_coverage_loss": {},
+        "entry_session": session,
+        "exit_session": session,
         "samples": samples,
         "resolutions": [],
         "unavailable": {},
@@ -397,6 +402,21 @@ def test_alpha_factor_chunk_outcome_is_bound_immutable_and_chunk_equivalent() ->
         cancellation_check=lambda: None,
     )
 
+    combined_daily = sorted(
+        [*first.factor_daily_observations_snapshot(), *second.factor_daily_observations_snapshot()],
+        key=lambda row: (row["horizon"], row["session"]),
+    )
+    assert combined_daily == uninterrupted.factor_daily_observations_snapshot()
+    assert len(combined_daily) == len(research_sessions) * 3
+    restored = AlphaFactorChunkOutcome.from_compact_for_reuse(
+        second.compact_for_reuse(), binding=binding,
+    )
+    assert (
+        restored.factor_daily_observations_snapshot() == second.factor_daily_observations_snapshot()
+    )
+    exposed_daily = second.factor_daily_observations_snapshot()
+    exposed_daily.clear()
+    assert second.factor_daily_observations_snapshot()
     assert second.factor_summary_snapshot() == uninterrupted.factor_summary_snapshot()
     assert second.binding_snapshot() == binding.value_snapshot()
     assert second.binding_snapshot()["label_horizons"] == [1, 5, 20]

@@ -63,6 +63,10 @@ from thesistrace.research_kernel.common_inputs import (
     common_input_references,
     requires_common_industry,
 )
+from thesistrace.research_kernel.factor_evidence import (
+    factor_resolution_coordinates,
+    validate_factor_observations,
+)
 from thesistrace.research_kernel.numeric import (
     NUMERIC_CONTRACT_ID,
     NumericContractError,
@@ -81,6 +85,15 @@ from thesistrace.research_run.execution import (
     SupervisedResearchExecution,
     SupervisedResearchExecutor,
 )
+from thesistrace.research_run.factor_result import (
+    FACTOR_DAILY_CONTRACT,
+    FACTOR_SUMMARY_PAYLOAD_NAMES,
+    FactorEvidencePublication,
+    factor_daily_payload,
+    factor_evidence_publication_payloads,
+    read_factor_daily_partition,
+    read_factor_summary_bundle,
+)
 from thesistrace.research_run.failure_policy import (
     RETRYABLE_ATTEMPT_FAILURES,
     attempt_failure_code,
@@ -93,6 +106,10 @@ from thesistrace.research_run.models import (
     DataAdmissionFacts,
     FactorEvaluationResearchRunKeyMetrics,
     FactorEvaluationResearchRunResult,
+    FactorObservationsResultSection,
+    FactorObservationsResultSectionInput,
+    FactorPeriodsResultSection,
+    FactorPeriodsResultSectionInput,
     FactorResultSection,
     FactorResultSectionInput,
     ImmutableRunInput,
@@ -594,6 +611,7 @@ class ResearchRunService:
         claim: ResearchRunExecutionClaim,
         final_chunk: Mapping[str, object],
         *,
+        factor_evidence: FactorEvidencePublication,
         staged_common_partitions: Sequence[tuple[StagedPayload, int, str, str]],
         authorize_batch: BatchExecutionAuthorization,
         complete_batch_item: BatchItemCompletion,
@@ -604,14 +622,14 @@ class ResearchRunService:
         _validate_batch_common_partitions(claim.immutable_input, staged_common_partitions)
         provenance = _result_provenance(claim)
         key_metrics = _result_key_metrics(final_values, "factor_evaluation")
+        payloads = result_publication_payloads_from_staged(
+            final_values, [], research_kind="factor_evaluation",
+            common_partitions=staged_common_partitions,
+        )
+        payloads.update(factor_evidence.finish(summary=final_values["factor_summary"]))
         prepared = self._publication.prepare(
             kind="research.result",
-            payloads=result_publication_payloads_from_staged(
-                final_values,
-                [],
-                research_kind="factor_evaluation",
-                common_partitions=staged_common_partitions,
-            ),
+            payloads=payloads,
             provenance=provenance,
             staging_authority=lambda: self._authorize_batch_result_staging(
                 claim,
@@ -2224,14 +2242,19 @@ class ResearchRunService:
         ):
             raise ResearchRunResultUnavailable
         try:
-            bundle = self._publication.read(
-                PublishedRef(
-                    manifest_sha256=manifest_sha256,
-                    kind="research.result",
-                    provenance=dict(provenance),
-                )
+            published_ref = PublishedRef(
+                manifest_sha256=manifest_sha256,
+                kind="research.result",
+                provenance=dict(provenance),
             )
-            stored_result = read_result_bundle(bundle, research_kind=summary.research_kind)
+            if summary.research_kind == "factor_evaluation":
+                bundle = self._publication.read_selected(
+                    published_ref, FACTOR_SUMMARY_PAYLOAD_NAMES,
+                )
+                stored_result = {"factor_summary": read_factor_summary_bundle(bundle)}
+            else:
+                bundle = self._publication.read(published_ref)
+                stored_result = read_result_bundle(bundle, research_kind=summary.research_kind)
             result = _public_result(
                 stored_result,
                 dict(provenance),
@@ -2402,6 +2425,15 @@ class ResearchRunService:
                 order="session_asc",
                 manifest_sha256=manifest_sha256,
             )
+        elif isinstance(
+            query, (FactorObservationsResultSectionInput, FactorPeriodsResultSectionInput)
+        ):
+            limit = query.limit
+            after = _decode_result_cursor(
+                query.cursor, secret=cursor_secret, researcher_id=researcher_id,
+                run_id=query.run_id, section=query.section, order=_factor_query_order(query),
+                manifest_sha256=manifest_sha256,
+            )
         elif isinstance(query, CommonInputObservationsResultSectionInput):
             limit = query.limit
             after = _decode_result_cursor(
@@ -2426,6 +2458,24 @@ class ResearchRunService:
                 published_ref,
                 research_kind=immutable_input.research_kind,
                 section=query.section,
+                granularity=(
+                    query.granularity
+                    if isinstance(query, FactorPeriodsResultSectionInput) else None
+                ),
+                horizon=(
+                    query.horizon
+                    if isinstance(query, (
+                        FactorObservationsResultSectionInput, FactorPeriodsResultSectionInput,
+                    )) else None
+                ),
+                start_session=(
+                    query.start_session
+                    if isinstance(query, FactorObservationsResultSectionInput) else None
+                ),
+                end_session=(
+                    query.end_session
+                    if isinstance(query, FactorObservationsResultSectionInput) else None
+                ),
                 has_common_inputs=bool(common_input_references(immutable_input.alpha_expression)),
                 after=after,
                 limit=limit,
@@ -2967,29 +3017,10 @@ class ResearchRunService:
                 completed_research += plan_chunk.research_session_count
                 observation_value = row["observation_payload"]
                 common_value = row["common_observation_payload"]
+                factor_value = row["factor_observation_payload"]
                 final_values_value = row["final_values_payload"]
-                binding = _checkpoint_binding(
-                    immutable_input=claim.immutable_input,
-                    run_id=claim.run_id,
-                    creator_attempt_id=str(row["attempt_id"]),
-                    creator_fence=int(row["creator_fence"]),
-                    data_generation_id=str(row["data_generation_id"]),
-                    ordinal=int(row["ordinal"]),
-                    boundary_session=row["boundary_session"].isoformat(),
-                    phase=str(row["phase"]),
-                    completed_warmup_sessions=int(row["completed_warmup_sessions"]),
-                    completed_research_sessions=int(row["completed_research_sessions"]),
-                    continuation_payload=dict(row["continuation_payload"]),
-                    observation_payload=(
-                        None if observation_value is None else dict(observation_value)
-                    ),
-                    common_observation_payload=(
-                        None if common_value is None else dict(common_value)
-                    ),
-                    final_values_payload=(
-                        None if final_values_value is None else dict(final_values_value)
-                    ),
-                    prior_chain_sha256=prior_chain,
+                binding = _checkpoint_row_binding(
+                    claim.immutable_input, claim.run_id, row, prior_chain,
                 )
                 chain_sha256 = hashlib.sha256(canonical_json_bytes(binding)).hexdigest()
                 is_final = expected_ordinal == len(claim.immutable_input.execution_plan.chunks)
@@ -3023,6 +3054,8 @@ class ResearchRunService:
                     expected_payload_names.add("strategy_daily_observations")
                 if common_value is not None:
                     expected_payload_names.add("common_input_observations")
+                if factor_value is not None:
+                    expected_payload_names.add("factor_daily_observations")
                 if final_values_value is not None:
                     expected_payload_names.add("final_values")
                 if set(bundle.payloads) != expected_payload_names:
@@ -3068,6 +3101,18 @@ class ResearchRunService:
                 validate_common_chunk_observations(
                     common_rows, expression=claim.immutable_input.alpha_expression,
                     sessions=_checkpoint_research_sessions(claim.immutable_input, expected_ordinal),
+                )
+                factor_rows = []
+                if factor_value is not None:
+                    factor_payload = bundle.payloads["factor_daily_observations"]
+                    if factor_payload.serialization != {
+                        "format": "canonical-parquet",
+                        "writer_contract": FACTOR_DAILY_CONTRACT.descriptor(),
+                    } or factor_payload.media_type != "application/vnd.apache.parquet":
+                        raise ResearchCheckpointIntegrityError
+                    factor_rows = read_factor_daily_partition(factor_payload.content)
+                _validate_factor_checkpoint_rows(
+                    claim.immutable_input, expected_ordinal, factor_rows,
                 )
                 prior_chain = chain_sha256
             latest = rows[-1]
@@ -3181,14 +3226,20 @@ class ResearchRunService:
                 _staged_payload(row["common_observation_payload"]),
                 len(sessions) * input_count, sessions[0], sessions[-1],
             ))
+        payloads = result_publication_payloads_from_staged(
+            final_values,
+            partitions,
+            research_kind=claim.immutable_input.research_kind,
+            common_partitions=common_partitions,
+        )
+        if claim.immutable_input.research_kind == "factor_evaluation":
+            payloads.update(factor_evidence_publication_payloads(
+                self._factor_checkpoint_partitions(claim),
+                summary=final_values["factor_summary"],
+            ))
         prepared = self._publication.prepare(
             kind="research.result",
-            payloads=result_publication_payloads_from_staged(
-                final_values,
-                partitions,
-                research_kind=claim.immutable_input.research_kind,
-                common_partitions=common_partitions,
-            ),
+            payloads=payloads,
             provenance=provenance,
             staging_authority=lambda: self._authorize_result_staging(claim),
         )
@@ -3199,6 +3250,47 @@ class ResearchRunService:
             int(progress["completed_research_sessions"]),
         )
         return prepared, provenance, key_metrics
+
+    def _factor_checkpoint_partitions(
+        self, claim: ResearchRunExecutionClaim,
+    ) -> Iterator[tuple[StagedPayload, list[dict[str, object]]]]:
+        assert self._publication is not None
+        with self._database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT checkpoint.*, attempt.fence AS creator_fence,
+                       attempt.data_generation_id
+                FROM research_runs.execution_checkpoints AS checkpoint
+                JOIN research_runs.attempts AS attempt
+                  ON attempt.id = checkpoint.attempt_id
+                WHERE checkpoint.run_id = %s
+                ORDER BY checkpoint.ordinal
+                """,
+                (claim.run_id,),
+            ).fetchall()
+        prior_chain = None
+        for row in rows:
+            binding = _checkpoint_row_binding(
+                claim.immutable_input, claim.run_id, row, prior_chain,
+            )
+            prior_chain = str(row["chain_sha256"])
+            if hashlib.sha256(canonical_json_bytes(binding)).hexdigest() != prior_chain:
+                raise ResearchCheckpointIntegrityError
+            if row["factor_observation_payload"] is None:
+                continue
+            bundle = self._publication.read_selected(
+                PublishedRef(
+                    manifest_sha256=str(row["checkpoint_manifest_sha256"]),
+                    kind="research.execution-checkpoint",
+                    provenance=binding,
+                ),
+                frozenset({"factor_daily_observations"}),
+            )
+            daily = read_factor_daily_partition(
+                bundle.payloads["factor_daily_observations"].content
+            )
+            _validate_factor_checkpoint_rows(claim.immutable_input, int(row["ordinal"]), daily)
+            yield _staged_payload(row["factor_observation_payload"]), daily
 
     def _commit_execution_chunk(
         self,
@@ -3214,6 +3306,7 @@ class ResearchRunService:
         continuation = chunk.get("continuation")
         observations = chunk.get("strategy_daily_observations")
         common_rows = chunk.get("common_input_observations")
+        factor_rows = chunk.get("factor_daily_observations")
         final_values = chunk.get("final_values")
         try:
             plan_chunk = claim.immutable_input.execution_plan.chunks[ordinal - 1]
@@ -3260,6 +3353,13 @@ class ResearchRunService:
         validate_common_chunk_observations(
             common_rows, expression=claim.immutable_input.alpha_expression,
             sessions=_checkpoint_research_sessions(claim.immutable_input, ordinal),
+        )
+        _validate_factor_checkpoint_rows(claim.immutable_input, ordinal, factor_rows)
+        factor_payload = (
+            self._publication.stage(
+                factor_daily_payload(factor_rows),
+                staging_authority=lambda: self._authorize_result_staging(claim),
+            ) if factor_rows else None
         )
         common_payload = (
             self._publication.stage(
@@ -3331,6 +3431,9 @@ class ResearchRunService:
             common_observation_payload=(
                 _staged_payload_value(common_payload) if common_payload is not None else None
             ),
+            factor_observation_payload=(
+                _staged_payload_value(factor_payload) if factor_payload is not None else None
+            ),
             final_values_payload=final_values_value,
             prior_chain_sha256=expected_prior_chain,
         )
@@ -3339,6 +3442,10 @@ class ResearchRunService:
             kind="research.execution-checkpoint",
             payloads={
                 "continuation": continuation_payload,
+                **(
+                    {"factor_daily_observations": factor_payload}
+                    if factor_payload is not None else {}
+                ),
                 **(
                     {"common_input_observations": common_payload}
                     if common_payload is not None else {}
@@ -3387,11 +3494,11 @@ class ResearchRunService:
                     id, run_id, attempt_id, ordinal, boundary_session, phase,
                     completed_warmup_sessions, completed_research_sessions,
                     continuation_payload, observation_payload, common_observation_payload,
-                    final_values_payload,
+                    factor_observation_payload, final_values_payload,
                     observation_row_count, observation_first_session,
                     observation_last_session, checkpoint_manifest_sha256,
                     chain_sha256
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     f"checkpoint_{uuid4().hex[:20]}",
@@ -3406,6 +3513,8 @@ class ResearchRunService:
                     Jsonb(observation_value) if observation_value is not None else None,
                     (Jsonb(_staged_payload_value(common_payload))
                      if common_payload is not None else None),
+                    (Jsonb(_staged_payload_value(factor_payload))
+                     if factor_payload is not None else None),
                     Jsonb(final_values_value) if final_values_value is not None else None,
                     len(observations),
                     observations[0]["session"] if observations else None,
@@ -4487,6 +4596,44 @@ def _staged_payload(value: object) -> StagedPayload:
     )
 
 
+def _checkpoint_row_binding(
+    immutable_input: ImmutableRunInput,
+    run_id: str,
+    row: Mapping[str, object],
+    prior_chain: str | None,
+) -> dict[str, object]:
+    return _checkpoint_binding(
+        immutable_input=immutable_input,
+        run_id=run_id,
+        creator_attempt_id=str(row["attempt_id"]),
+        creator_fence=int(row["creator_fence"]),
+        data_generation_id=str(row["data_generation_id"]),
+        ordinal=int(row["ordinal"]),
+        boundary_session=row["boundary_session"].isoformat(),
+        phase=str(row["phase"]),
+        completed_warmup_sessions=int(row["completed_warmup_sessions"]),
+        completed_research_sessions=int(row["completed_research_sessions"]),
+        continuation_payload=dict(row["continuation_payload"]),
+        observation_payload=(
+            None if row["observation_payload"] is None else dict(row["observation_payload"])
+        ),
+        common_observation_payload=(
+            None
+            if row["common_observation_payload"] is None
+            else dict(row["common_observation_payload"])
+        ),
+        factor_observation_payload=(
+            None
+            if row["factor_observation_payload"] is None
+            else dict(row["factor_observation_payload"])
+        ),
+        final_values_payload=(
+            None if row["final_values_payload"] is None else dict(row["final_values_payload"])
+        ),
+        prior_chain_sha256=prior_chain,
+    )
+
+
 def _checkpoint_binding(
     *,
     immutable_input: ImmutableRunInput,
@@ -4502,6 +4649,7 @@ def _checkpoint_binding(
     continuation_payload: Mapping[str, object],
     observation_payload: Mapping[str, object] | None,
     common_observation_payload: Mapping[str, object] | None,
+    factor_observation_payload: Mapping[str, object] | None,
     final_values_payload: Mapping[str, object] | None,
     prior_chain_sha256: str | None,
 ) -> dict[str, object]:
@@ -4548,6 +4696,9 @@ def _checkpoint_binding(
         "observation_payload": (None if observation_payload is None else dict(observation_payload)),
         "common_observation_payload": (
             None if common_observation_payload is None else dict(common_observation_payload)
+        ),
+        "factor_observation_payload": (
+            None if factor_observation_payload is None else dict(factor_observation_payload)
         ),
         "final_values_payload": (
             None if final_values_payload is None else dict(final_values_payload)
@@ -4655,6 +4806,38 @@ def _result_section_response(
                 "comparison": comparison,
             }
         )
+    if isinstance(query, FactorPeriodsResultSectionInput):
+        page = FactorPeriodsResultSection.model_validate({
+            "run_id": run_id, "research_kind": research_kind, "horizon": query.horizon,
+            "granularity": query.granularity,
+            "items": section_read.value, "next_cursor": None,
+        })
+        return fit_page(page.items, lambda kept: page.model_copy(update={
+            "items": kept,
+            "next_cursor": _encode_result_cursor(
+                kept[-1].period, secret=cursor_secret, researcher_id=researcher_id,
+                run_id=run_id, section=query.section, order=_factor_query_order(query),
+                manifest_sha256=manifest_sha256,
+            ) if kept and (
+                len(kept) < len(page.items) or section_read.next_after is not None
+            ) else None,
+        }))
+    if isinstance(query, FactorObservationsResultSectionInput):
+        page = FactorObservationsResultSection.model_validate({
+            "run_id": run_id, "research_kind": research_kind, "horizon": query.horizon,
+            "start_session": query.start_session, "end_session": query.end_session,
+            "items": section_read.value, "next_cursor": None,
+        })
+        return fit_page(page.items, lambda kept: page.model_copy(update={
+            "items": kept,
+            "next_cursor": _encode_result_cursor(
+                kept[-1].session, secret=cursor_secret, researcher_id=researcher_id,
+                run_id=run_id, section=query.section, order=_factor_query_order(query),
+                manifest_sha256=manifest_sha256,
+            ) if kept and (
+                len(kept) < len(page.items) or section_read.next_after is not None
+            ) else None,
+        }))
     if isinstance(query, CommonInputObservationsResultSectionInput):
         page = CommonInputObservationsResultSection.model_validate(
             {
@@ -4738,6 +4921,20 @@ def _result_section_response(
             ),
         )
     raise ResearchRunResultSectionIncompatible("Unsupported ResearchRun Result section")
+
+
+def _factor_query_order(
+    query: FactorObservationsResultSectionInput | FactorPeriodsResultSectionInput,
+) -> str:
+    if isinstance(query, FactorPeriodsResultSectionInput):
+        return json.dumps({
+            "order": "period_asc", "horizon": query.horizon, "granularity": query.granularity,
+        }, sort_keys=True, separators=(",", ":"))
+    # The existing encrypted order binding also fixes the full Factor selection scope.
+    return json.dumps({
+        "order": "signal_session_asc", "horizon": query.horizon,
+        "start_session": query.start_session, "end_session": query.end_session,
+    }, sort_keys=True, separators=(",", ":"))
 
 
 def _encode_result_cursor(
@@ -4980,3 +5177,33 @@ def _validate_batch_common_partitions(
             )
     if [(count, first, last) for _payload, count, first, last in partitions] != expected:
         raise ResearchResultError("Batch common observation partitions are incomplete")
+
+
+def _validate_factor_checkpoint_rows(
+    immutable_input: ImmutableRunInput, ordinal: int, rows: object,
+) -> None:
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ResearchResultError("Factor Chunk observations are invalid")
+    try:
+        values = validate_factor_observations(rows)
+        expected = _factor_checkpoint_coordinates(immutable_input, ordinal)
+        if [(row["horizon"], row["session"]) for row in values] != expected:
+            raise ValueError("Factor Chunk signal coverage is incomplete")
+    except ValueError as error:
+        raise ResearchResultError("Factor Chunk evidence is invalid") from error
+
+
+def _factor_checkpoint_coordinates(
+    immutable_input: ImmutableRunInput, ordinal: int,
+) -> list[tuple[int, str]]:
+    if immutable_input.research_kind != "factor_evaluation":
+        return []
+    plan = immutable_input.execution_plan
+    sessions = tuple(
+        day.isoformat() for day in plan.calculation_sessions[plan.research_session_offset:]
+    )
+    before = sum(chunk.research_session_count for chunk in plan.chunks[:ordinal - 1])
+    after = before + plan.chunks[ordinal - 1].research_session_count
+    return factor_resolution_coordinates(
+        sessions, before=before, after=after, final=ordinal == len(plan.chunks),
+    )

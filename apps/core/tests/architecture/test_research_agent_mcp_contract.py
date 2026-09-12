@@ -1792,9 +1792,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "8b46196bcc587f34f354b0ec5bd15b1d17970db5bb5530fd163859725bbf7e2e"
+        "b6ee47950327b5624dc5c71d96ebcce38181f9d619ddb2a7e971cb08396f5bbc"
     )
-    assert len(canonical) == 150402
+    assert len(canonical) == 161626
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -2124,7 +2124,7 @@ async def _exercise_in_memory_protocol() -> None:
             elif tool.name in {"get_research_run_result", "get_daily_track_result"}:
                 assert tool.annotations.read_only_hint is True
                 assert tool.input_schema["discriminator"]["propertyName"] == "section"
-                expected_section_count = 7 if tool.name == "get_research_run_result" else 5
+                expected_section_count = 9 if tool.name == "get_research_run_result" else 5
                 assert len(tool.input_schema["oneOf"]) == expected_section_count
                 for branch in tool.input_schema["oneOf"]:
                     definition = tool.input_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
@@ -2202,9 +2202,9 @@ async def _exercise_in_memory_protocol() -> None:
         collection_schemas = [
             result_schema["$defs"][branch["$ref"].rsplit("/", 1)[-1]]
             for branch in result_schema["oneOf"]
-            if "Observations" in branch["$ref"] or "Positions" in branch["$ref"]
+            if any(name in branch["$ref"] for name in ("Observations", "Positions", "Periods"))
         ]
-        assert len(collection_schemas) == 3
+        assert len(collection_schemas) == 5
         assert all(schema["properties"]["limit"]["default"] == 20 for schema in collection_schemas)
         assert all(schema["properties"]["limit"]["maximum"] == 50 for schema in collection_schemas)
         assert all(

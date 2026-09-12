@@ -106,6 +106,7 @@ def test_factor_batch_prepares_one_shared_chunk_and_releases_it_before_yield(
         return SimpleNamespace(
             continuation={"completed_research_session_count": completed[ordinal]},
             final_values={"factor_summary": {}} if final_chunk else None,
+            factor_daily_observations=(),
             phase_seconds={
                 "alpha_and_pending": 0.0,
                 "factor": 0.0,
@@ -131,6 +132,9 @@ def test_factor_batch_prepares_one_shared_chunk_and_releases_it_before_yield(
         union_bindings={"close": "close_adj"},
     )
 
+    responses = (
+        message for message in responses if message["status"] != "item_factor_evidence_succeeded"
+    )
     assert next(responses)["status"] == "item_started"
     assert reads == []
     first_chunk = next(responses)

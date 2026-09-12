@@ -81,6 +81,7 @@ def test_columnar_factor_days_are_binary64_equal_to_row_reference() -> None:
         "sessions": [
             {
                 "session": session,
+                "coverage_loss": {},
                 "values": [
                     {"instrument_id": instrument_id, "value": float(index // 5)}
                     for index, instrument_id in enumerate(instrument_ids)
@@ -106,13 +107,7 @@ def test_columnar_factor_days_are_binary64_equal_to_row_reference() -> None:
         signal_sessions=(sessions[0],),
         horizons=(1,),
     )
-    expected = [
-        {
-            "session": sessions[0],
-            "sample_count": len(labels["horizons"]["1"]["sessions"][0]["samples"]),
-            **factor_day(labels["horizons"]["1"]["sessions"][0]["samples"]),
-        }
-    ]
+    expected = evaluate_factor(labels)["horizons"]["1"]["daily"]
     fixture = _ColumnarFactorFixture(
         sessions=sessions,
         instruments=instruments,
@@ -128,6 +123,14 @@ def test_columnar_factor_days_are_binary64_equal_to_row_reference() -> None:
         cancellation_check=lambda: None,
     )["1"]
 
+    assert actual[0]["alpha_sample_count"] == 35
+    assert actual[0]["sample_count"] == 33
+    assert actual[0]["label_exclusions"] == {
+        "data_unavailable": 1, "confirmed_market_open_unavailable": 1,
+    }
+    assert actual[0]["label_status"] == "within_research_period"
+    assert actual[0]["label_entry_session"] == sessions[1]
+    assert actual[0]["label_exit_session"] == sessions[2]
     assert equivalence_bytes(actual) == equivalence_bytes(expected)
 
 
@@ -151,6 +154,7 @@ def test_columnar_factor_days_preserve_multi_horizon_ties_and_order() -> None:
         "sessions": [
             {
                 "session": session,
+                "coverage_loss": {},
                 "values": [
                     {"instrument_id": instrument_id, "value": float(index // 4)}
                     for index, instrument_id in enumerate(instrument_ids)
@@ -177,15 +181,8 @@ def test_columnar_factor_days_preserve_multi_horizon_ties_and_order() -> None:
         signal_sessions=signal_sessions,
     )
     expected = {
-        horizon: [
-            {
-                "session": item["session"],
-                "sample_count": len(item["samples"]),
-                **factor_day(item["samples"]),
-            }
-            for item in labels["horizons"][horizon]["sessions"]
-        ]
-        for horizon in ("1", "5", "20")
+        horizon: result["daily"]
+        for horizon, result in evaluate_factor(labels)["horizons"].items()
     }
     fixture = _ColumnarFactorFixture(
         sessions=sessions,
@@ -271,7 +268,10 @@ def test_columnar_labels_preserve_entry_exit_and_censoring_rules(
     )
     matrix = {
         "sessions": [
-            {"session": session, "values": [{"instrument_id": instrument, "value": 1.0}]}
+            {
+                "session": session, "coverage_loss": {},
+                "values": [{"instrument_id": instrument, "value": 1.0}],
+            }
             for session in sessions
         ]
     }
@@ -324,7 +324,10 @@ def test_invalid_label_entry_is_rejected_even_when_exit_is_missing(state, listed
     matrix = {
         "checksum": "a" * 64,
         "sessions": [
-            {"session": "s0", "values": [{"instrument_id": instrument, "value": 1.0}]},
+            {
+                "session": "s0", "coverage_loss": {},
+                "values": [{"instrument_id": instrument, "value": 1.0}],
+            },
         ],
     }
     with pytest.raises(FactorDataError, match="invalid Label entry Open"):
@@ -414,6 +417,7 @@ def test_labels_distinguish_terminal_delisting_from_suspended_exit() -> None:
         "sessions": [
             {
                 "session": session,
+                "coverage_loss": {},
                 "values": (
                     [
                         {"instrument_id": "equity:X.SH", "value": 1.0},
@@ -461,6 +465,7 @@ def test_labels_report_data_unavailable_without_failing_the_run() -> None:
         "sessions": [
             {
                 "session": session,
+                "coverage_loss": {},
                 "values": (
                     [{"instrument_id": instrument_id, "value": 1.0}]
                     if session == sessions[0]
@@ -501,6 +506,7 @@ def test_unexplained_label_open_is_a_hard_data_failure() -> None:
         "sessions": [
             {
                 "session": session,
+                "coverage_loss": {},
                 "values": [{"instrument_id": "equity:X.SH", "value": 1.0}],
             }
             for session in canonical["research_calendar"]
