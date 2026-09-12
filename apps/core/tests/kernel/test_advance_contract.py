@@ -72,16 +72,11 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     assert prior.session_count == len(canonical["research_calendar"])
     assert [item["session"] for item in output["alpha_matrix"]["sessions"]] == (expected_sessions)
     assert [item["session"] for item in output["strategy_backtest"]["daily"]] == (expected_sessions)
-    for horizon in ("1", "5", "20"):
-        assert [
-            item["session"] for item in output["forward_labels"]["horizons"][horizon]["sessions"]
-        ] == expected_sessions
-        assert [
-            item["session"] for item in output["factor_evaluation"]["horizons"][horizon]["daily"]
-        ] == expected_sessions
+    assert "factor_evaluation" not in output
+    assert "forward_labels" not in output
     bounded = continuation_snapshot(result)
     assert len(bounded["pending_alpha"]) <= 21
-    assert len(bounded["rolling_factor"]) <= 3 * 504
+    assert set(bounded) == {"schema_version", "pending_alpha"}
 
 
 def test_kernel_advance_rejects_static_contract_replacement(
@@ -144,9 +139,6 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
 
     compact_output = prior.output_snapshot()
     compact_output["alpha_matrix"]["sessions"] = []
-    compact_output["forward_labels"] = {"horizons": {}}
-    for horizon in compact_output["factor_evaluation"]["horizons"].values():
-        horizon["daily"] = []
     resume = prior.strategy_resume_snapshot()
     resume_daily = resume["daily"]
     terminal = resume_daily[-1]
@@ -182,11 +174,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
     assert continuation_snapshot(actual) == continuation_snapshot(expected)
     actual_output = actual.output_snapshot()
     expected_output = expected.output_snapshot()
-    for horizon in ("1", "5", "20"):
-        assert (
-            actual_output["factor_evaluation"]["horizons"][horizon]["summary"]
-            == expected_output["factor_evaluation"]["horizons"][horizon]["summary"]
-        )
+    assert "factor_evaluation" not in actual_output
     for key in ("daily", "positions"):
         assert actual_output["strategy_backtest"][key] == expected_output["strategy_backtest"][key]
     assert _compact_metrics(actual_output["strategy_backtest"]["metrics"]) == (
@@ -202,7 +190,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
         )
 
 
-def test_compact_advance_retains_exact_latest_504_factor_sessions() -> None:
+def test_compact_advance_retains_only_bounded_strategy_alpha() -> None:
     _, canonical = build_fixture(session_count=525)
     definition = {
         "alpha": {"expression": CLOSE_ADJUSTED},
@@ -265,13 +253,12 @@ def test_compact_advance_retains_exact_latest_504_factor_sessions() -> None:
         )
     )
 
-    horizons = advanced.output_snapshot()["factor_evaluation"]["horizons"]
-    for horizon in ("1", "5", "20"):
-        assert [item["session"] for item in horizons[horizon]["daily"]] == calendar[-504:]
-        assert len(horizons[horizon]["daily"]) == 504
+    assert "factor_evaluation" not in advanced.output_snapshot()
+    assert len(continuation_snapshot(advanced)["pending_alpha"]) == 21
+    assert advanced.boundary_session == calendar[-1]
 
 
-def test_warm_continuation_keeps_504_factor_sessions_with_a_short_data_slice() -> None:
+def test_warm_continuation_with_short_data_slice_has_no_factor_state() -> None:
     _, canonical = build_fixture(session_count=526)
     definition = {
         "alpha": {"expression": CLOSE_ADJUSTED},
@@ -321,9 +308,9 @@ def test_warm_continuation_keeps_504_factor_sessions_with_a_short_data_slice() -
         )
     )
 
-    horizons = advanced.output_snapshot()["factor_evaluation"]["horizons"]
-    for horizon in ("1", "5", "20"):
-        assert [item["session"] for item in horizons[horizon]["daily"]] == calendar[-504:]
+    assert "factor_evaluation" not in advanced.output_snapshot()
+    assert len(continuation_snapshot(advanced)["pending_alpha"]) == 21
+    assert advanced.boundary_session == calendar[-1]
 
 
 def test_cold_continuation_rebuild_uses_lookback_before_504_retained_sessions() -> None:
@@ -409,7 +396,7 @@ def test_cold_continuation_rebuild_is_identical_when_data_is_read_in_bounded_chu
     assert actual == expected
 
 
-def test_kernel_rebuilds_only_bounded_alpha_and_factor_continuation(
+def test_kernel_rebuilds_only_bounded_alpha_continuation(
     accepted_calculation_case: dict[str, object],
     accepted_kernel_state: KernelState,
 ) -> None:
@@ -438,10 +425,7 @@ def test_kernel_rebuilds_only_bounded_alpha_and_factor_continuation(
 
     assert rebuilt == continuation_snapshot(expected)
     assert len(rebuilt["pending_alpha"]) == 21
-    expected_factor_sessions = len(
-        expected.output_snapshot()["factor_evaluation"]["horizons"]["1"]["daily"]
-    )
-    assert len(rebuilt["rolling_factor"]) == 3 * expected_factor_sessions
+    assert set(rebuilt) == {"schema_version", "pending_alpha"}
 
 
 def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(

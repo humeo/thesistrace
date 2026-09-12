@@ -77,7 +77,7 @@ export function DailyTrackWorkspace({ track, actions, notices }: {
             <TrackingReturnChart observation={track.observation} originSession={track.origin.strategy_session} />
             <div className="track-performance-footnote"><span>{track.observation.session_count} trading sessions observed</span>
               <span>{formatMoney(track.observation.transaction_cost_cny)} tracking costs</span></div>
-          </> : <DailyTrackAnalysisView analysis={{ strategy: track.strategy, factor: track.factor }} />}
+          </> : <DailyTrackAnalysisView analysis={{ strategy: track.strategy }} />}
         </> : view === "Holdings" ? <CurrentHoldings observation={track.observation} />
           : <RebalanceSchedule observation={track.observation} isStopped={track.status === "stopped" || track.status === "stopping"} isBehind={track.lag_sessions > 0} />}
       </div>

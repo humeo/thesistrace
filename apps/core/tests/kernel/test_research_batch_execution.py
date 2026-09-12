@@ -34,6 +34,12 @@ def test_strategy_sweep_needs_no_alpha_source_columns_after_shared_calculation(
     monkeypatch,
     reuse_private_artifact: bool,
 ) -> None:
+    from thesistrace.research_batch import execution
+
+    def forbidden_labels(*_args, **_kwargs):
+        raise AssertionError("Strategy Batch must not prepare future labels")
+
+    monkeypatch.setattr(execution, "prepare_columnar_forward_labels", forbidden_labels)
     request = _batch_request(tmp_path, kind="strategy_sweep")
     reference = list(execute_research_batch_messages(request))
     expected = _completed_chunks(reference)

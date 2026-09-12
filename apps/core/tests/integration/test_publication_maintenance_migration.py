@@ -8,11 +8,15 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from thesistrace._postgres import PostgresDatabase, SchemaDefinition, initialize_schemas
-from thesistrace.entrypoints.schema import CORE_SCHEMA_DEFINITIONS
 
 
 @pytest.fixture
-def historical_database(core_settings):
+def historical_database(core_settings, monkeypatch, rank_ic_migration_target_schemas):
+    from thesistrace.migrations import publication_maintenance_0002
+
+    monkeypatch.setattr(
+        publication_maintenance_0002, "CORE_SCHEMA_DEFINITIONS", rank_ic_migration_target_schemas,
+    )
     assert os.environ["THESISTRACE_TEST_PROJECT_NAME"].startswith("thesistrace-test-")
     name = "maintenance_migration_" + uuid4().hex
     admin = psycopg.connect(core_settings.database_url, autocommit=True)
@@ -24,7 +28,7 @@ def historical_database(core_settings):
     source = files("thesistrace.migrations").joinpath("0002_source_publication.sql").read_text()
     definitions = tuple(
         SchemaDefinition(d.name, source) if d.name == "publication" else d
-        for d in CORE_SCHEMA_DEFINITIONS
+        for d in rank_ic_migration_target_schemas
     )
     try:
         initialize_schemas(database, definitions)

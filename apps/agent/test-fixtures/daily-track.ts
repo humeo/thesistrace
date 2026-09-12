@@ -19,7 +19,7 @@ export function dailyTrackDetail(status = "active", phase = "up_to_date", sessio
       retry: status === "blocked",
       stop: ["active", "blocked"].includes(status),
     },
-    available_result_sections: ["factor", "strategy_summary", "strategy_observations", "origin", "provenance"],
+    available_result_sections: ["strategy_summary", "strategy_observations", "origin", "provenance"],
     retry_after_seconds: status === "blocked" || status === "stopped" ? null : phase === "up_to_date" ? 30 : 2,
     private_checkpoint: "private-daily-track-provenance",
   };

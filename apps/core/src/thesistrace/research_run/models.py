@@ -94,7 +94,6 @@ FACTOR_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
     "provenance",
 )
 STRATEGY_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
-    "factor",
     "strategy_summary",
     "strategy_observations",
     "terminal_strategy_state",
@@ -621,7 +620,6 @@ class FactorEvaluationResearchRunResult(BaseModel):
 class StrategyBacktestResearchRunResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    factor: FactorResult
     strategy: StrategyResult
     terminal_strategy_state: TerminalStrategyStateView
     provenance: StrategyBacktestResultProvenance

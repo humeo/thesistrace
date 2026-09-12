@@ -21,7 +21,6 @@ FENCE = 7
 CONTINUATION = {
     "schema_version": "daily-track-working-state-v1",
     "pending_alpha": [{"session": "2026-08-03"}],
-    "rolling_factor": [{"session": "2026-08-03"}],
 }
 
 
@@ -88,7 +87,6 @@ def test_worker_loads_the_cache_verified_by_the_published_predecessor(
             canonical_json_bytes(CONTINUATION)
         ).hexdigest(),
         "pending_alpha_sessions": 1,
-        "rolling_factor_rows": 1,
     }
 
     loaded = service._load_current_working_cache(
@@ -120,7 +118,6 @@ def _load(cache: _DailyTrackWorkingCache) -> Mapping[str, object] | None:
         fence=FENCE,
         continuation_sha256=continuation_sha256,
         pending_alpha_sessions=1,
-        rolling_factor_rows=1,
     )
 
 

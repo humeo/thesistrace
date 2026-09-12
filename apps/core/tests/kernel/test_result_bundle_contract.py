@@ -51,7 +51,7 @@ def test_result_bundle_budget_rejects_non_positive_session_counts(
         result_bundle_byte_budget(session_count)
 
 
-def test_four_value_result_codec_is_deterministic_and_reopens_parquet_rows() -> None:
+def test_three_value_result_codec_is_deterministic_and_reopens_parquet_rows() -> None:
     result = _legal_result()
     first = result_publication_payloads(result, research_kind="strategy_backtest")
     second = result_publication_payloads(result, research_kind="strategy_backtest")
@@ -138,7 +138,7 @@ def test_bounded_partition_planner_selects_only_page_and_lookahead_rows() -> Non
 
 
 def test_factor_evaluation_result_codec_requires_exactly_factor_summary() -> None:
-    factor_result = {"factor_summary": _legal_result()["factor_summary"]}
+    factor_result = {"factor_summary": _legal_factor_summary()}
     payloads = result_publication_payloads(
         factor_result,
         research_kind="factor_evaluation",
@@ -189,7 +189,7 @@ def test_factor_evaluation_result_codec_requires_exactly_factor_summary() -> Non
         "diagnostics",
     ],
 )
-def test_four_value_result_codec_rejects_nested_transient_values(
+def test_three_value_result_codec_rejects_nested_transient_values(
     forbidden_key: str,
 ) -> None:
     result = _legal_result()
@@ -294,7 +294,7 @@ def _verified_bundle(
     )
 
 
-def _legal_result() -> dict[str, object]:
+def _legal_factor_summary() -> dict[str, object]:
     correlation = {
         "icir": None,
         "mean": None,
@@ -323,6 +323,10 @@ def _legal_result() -> dict[str, object]:
         }
         for horizon in (1, 5, 20)
     }
+    return {"horizons": horizons}
+
+
+def _legal_result() -> dict[str, object]:
     metrics = {name: None for name in STRATEGY_METRIC_KEYS}
     metrics.update(
         {
@@ -389,7 +393,6 @@ def _legal_result() -> dict[str, object]:
         }
     )
     return {
-        "factor_summary": {"horizons": horizons},
         "strategy_summary": {
             "alpha_checksum": "a" * 64,
             "entry_session": "2024-01-02",

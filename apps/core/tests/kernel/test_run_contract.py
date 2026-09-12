@@ -26,6 +26,29 @@ FIELD_BINDINGS = {
 }
 
 
+def test_strategy_run_does_not_require_future_labels(
+    accepted_calculation_case: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable_labels(*args, **kwargs):
+        raise AssertionError("Strategy must not evaluate future returns")
+
+    monkeypatch.setattr(
+        "thesistrace.research_kernel.kernel_run.build_forward_labels", unavailable_labels,
+    )
+    result = run(_run_input(
+        accepted_calculation_case["canonical"], accepted_calculation_case["definition"],
+    ))
+    artifacts = result.artifacts_snapshot()
+    assert "forward_labels" not in artifacts
+    assert "factor_evaluation" not in artifacts
+    assert artifacts["strategy_backtest"] == accepted_calculation_case["strategy_backtest"]
+    payload = build_result_payload(
+        result, research_kind="strategy_backtest", rebalance_interval=5,
+    )
+    assert "factor_summary" not in payload
+
+
 def test_kernel_run_matches_the_complete_characterization_baseline(
     accepted_calculation_case: dict[str, object],
     accepted_kernel_run: RunOutput,
@@ -36,8 +59,8 @@ def test_kernel_run_matches_the_complete_characterization_baseline(
     assert isinstance(run_output, RunOutput)
     assert isinstance(run_output.track_state, KernelState)
     assert output["alpha_matrix"] == accepted_calculation_case["alpha_matrix"]
-    assert output["forward_labels"] == accepted_calculation_case["forward_labels"]
-    assert output["factor_evaluation"] == accepted_calculation_case["factor_evaluation"]
+    assert "forward_labels" not in output
+    assert "factor_evaluation" not in output
     assert output["strategy_backtest"] == accepted_calculation_case["strategy_backtest"]
     assert output["diagnostics"] == accepted_calculation_case["diagnostics"]
     assert not isinstance(run_output, dict)
@@ -63,7 +86,6 @@ def test_strategy_ledger_is_transient_and_rejected_from_product_state(
         rebalance_interval=5,
     )
     assert set(result) == {
-        "factor_summary",
         "strategy_summary",
         "strategy_daily_observations",
         "terminal_strategy_state",

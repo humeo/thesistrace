@@ -85,7 +85,9 @@ class AlphaFactorExecutionBinding:
         value = {
             "data_generation_id": data_generation_id,
             **run_contract,
-            "label_horizons": list(HORIZONS),
+            "label_horizons": (
+                list(HORIZONS) if run_input.research_kind == "factor_evaluation" else []
+            ),
             "numeric_execution_contract": numeric_execution_contract,
             "semantic_versions": dict(semantic_versions),
         }
@@ -95,6 +97,10 @@ class AlphaFactorExecutionBinding:
         object.__setattr__(instance, "_run_contract", run_contract)
         object.__setattr__(instance, "checksum", hashlib.sha256(encoded).hexdigest())
         return instance
+
+    @property
+    def research_kind(self) -> str:
+        return str(self._run_contract["research_kind"])
 
     def value_snapshot(self) -> dict[str, object]:
         return _json_mapping(self._value_json, "Alpha-and-Factor binding")
@@ -108,6 +114,7 @@ class AlphaFactorExecutionBinding:
             "data_generation_id",
             "alpha",
             "research_period",
+            "research_kind",
             "universe",
             "neutralization",
             "label_horizons",
@@ -124,13 +131,16 @@ class AlphaFactorExecutionBinding:
             or not data_generation_id
             or not isinstance(semantic_versions, Mapping)
             or not semantic_versions
-            or value.get("label_horizons") != list(HORIZONS)
+            or value.get("research_kind") not in {"factor_evaluation", "strategy_backtest"}
+            or value.get("label_horizons") != (
+                list(HORIZONS) if value.get("research_kind") == "factor_evaluation" else []
+            )
         ):
             raise ValueError("Alpha-and-Factor binding snapshot is invalid")
         require_current_numeric_contract(numeric_contract)
         run_contract = {
             name: deepcopy(value[name])
-            for name in ("alpha", "research_period", "universe", "neutralization")
+            for name in ("alpha", "research_period", "research_kind", "universe", "neutralization")
         }
         encoded = canonical_json_bytes(value)
         instance = object.__new__(cls)
@@ -211,7 +221,10 @@ class AlphaFactorChunkOutcome:
                 "binding_checksum": self.binding_checksum,
                 "continuation": self._continuation,
                 "alpha_matrix": self._alpha_matrix,
-                "factor_summary": self._factor_summary,
+                **(
+                    {"factor_summary": self._factor_summary}
+                    if self.binding_snapshot()["research_kind"] == "factor_evaluation" else {}
+                ),
                 "phase_seconds": dict(self._phase_seconds),
             }
         )
@@ -236,9 +249,8 @@ class AlphaFactorChunkOutcome:
                     "binding_checksum",
                     "continuation",
                     "alpha_matrix",
-                    "factor_summary",
                     "phase_seconds",
-                }
+                } | ({"factor_summary"} if binding.research_kind == "factor_evaluation" else set())
                 or compact.get("schema_version") != "alpha-factor-chunk-outcome-v1"
                 or compact.get("binding_checksum") != binding.checksum
                 or not isinstance(continuation_value, Mapping)
@@ -250,7 +262,9 @@ class AlphaFactorChunkOutcome:
                 )
             ):
                 raise ValueError
-            continuation = validated_alpha_factor_continuation(continuation_value)
+            continuation = validated_alpha_factor_continuation(
+                continuation_value, research_kind=binding.research_kind,
+            )
             if continuation["binding_checksum"] != binding.checksum:
                 raise ValueError
             alpha_checksum = continuation.get("alpha_checksum")
@@ -385,14 +399,16 @@ class ResearchChunkCalculation:
     phase_seconds: dict[str, float]
 
 
-def empty_alpha_factor_continuation() -> dict[str, object]:
+def empty_alpha_factor_continuation(
+    research_kind: str = "factor_evaluation",
+) -> dict[str, object]:
     return {
         "binding_checksum": None,
         "completed_research_session_count": 0,
         "rolling_tail_sessions": [],
         "pending_alpha": [],
         "alpha_checksum": None,
-        "factor_state": empty_factor_state(),
+        **({"factor_state": empty_factor_state()} if research_kind == "factor_evaluation" else {}),
     }
 
 
@@ -413,7 +429,7 @@ def empty_research_continuation(
     continuation: dict[str, object] = {
         "schema_version": "research-chunk-continuation-v2",
         "research_kind": research_kind,
-        **empty_alpha_factor_continuation(),
+        **empty_alpha_factor_continuation(research_kind),
     }
     if research_kind == "strategy_backtest":
         continuation.update(empty_strategy_continuation())
@@ -425,7 +441,7 @@ def execute_research_chunk(
     run_input: RunInput,
     binding: AlphaFactorExecutionBinding,
     research_data: ColumnarResearchSeries,
-    forward_labels: PreparedColumnarForwardLabels,
+    forward_labels: PreparedColumnarForwardLabels | None,
     research_sessions: tuple[str, ...],
     final_chunk: bool,
     continuation: Mapping[str, object],
@@ -456,7 +472,7 @@ def execute_research_chunk(
         forward_labels=forward_labels,
         research_sessions=research_sessions,
         final_chunk=final_chunk,
-        state={name: state[name] for name in _ALPHA_FACTOR_CONTINUATION_KEYS},
+        state={name: state[name] for name in _alpha_continuation_keys(run_input.research_kind)},
         cancellation_check=cancellation_check,
     )
     state.update(alpha_factor._continuation_for_current_process())
@@ -618,14 +634,10 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
             if isinstance(metric, dict):
                 metric.pop(history_name, None)
         terminal = dict(strategy["daily"][-1])
-        factor_summary = alpha_factor_outcome._factor_summary_for_current_process()
-        if factor_summary is None:
-            raise ValueError("Final Alpha-and-Factor outcome is incomplete")
         entry_session = metric_state.get("entry_session")
         if not isinstance(entry_session, str):
             raise ValueError("Final Strategy has no investable Entry Open")
         final_values = {
-            "factor_summary": factor_summary,
             "strategy_summary": {
                 "alpha_checksum": str(
                     alpha_factor_outcome._continuation_for_current_process()["alpha_checksum"]
@@ -679,13 +691,13 @@ def execute_alpha_factor_chunk(
     run_input: RunInput,
     binding: AlphaFactorExecutionBinding,
     research_data: ColumnarResearchSeries,
-    forward_labels: PreparedColumnarForwardLabels,
+    forward_labels: PreparedColumnarForwardLabels | None,
     research_sessions: tuple[str, ...],
     final_chunk: bool,
     continuation: Mapping[str, object],
     cancellation_check: Callable[[], None],
 ) -> AlphaFactorChunkOutcome:
-    state = validated_alpha_factor_continuation(continuation)
+    state = validated_alpha_factor_continuation(continuation, research_kind=run_input.research_kind)
     return _execute_alpha_factor_chunk_from_validated(
         run_input=run_input,
         binding=binding,
@@ -703,7 +715,7 @@ def _execute_alpha_factor_chunk_from_validated(
     run_input: RunInput,
     binding: AlphaFactorExecutionBinding,
     research_data: ColumnarResearchSeries,
-    forward_labels: PreparedColumnarForwardLabels,
+    forward_labels: PreparedColumnarForwardLabels | None,
     research_sessions: tuple[str, ...],
     final_chunk: bool,
     state: dict[str, object],
@@ -740,7 +752,10 @@ def _execute_alpha_factor_chunk_from_validated(
     pending = state["pending_alpha"]
     if not isinstance(pending, list):
         raise ValueError("Pending Alpha continuation is invalid")
-    pending.extend(_compact_pending_alpha(row, research_data) for row in new_alpha)
+    pending.extend(
+        _compact_pending_alpha(row, research_data, research_kind=run_input.research_kind)
+        for row in new_alpha
+    )
     if len(pending) > _MAX_PENDING_ALPHA_SESSIONS + len(research_sessions):
         raise ValueError("Pending Alpha continuation exceeded its bound")
 
@@ -756,47 +771,54 @@ def _execute_alpha_factor_chunk_from_validated(
         "sessions": matrix_rows,
         "checksum": state["alpha_checksum"],
     }
-    last_new_index = calendar.index(research_sessions[-1])
-    signal_sessions_by_horizon: dict[int, list[str]] = {}
-    for horizon in HORIZONS:
-        resolvable: list[str] = []
-        for value in pending:
-            item = _mapping(value, "Pending Alpha")
-            remaining = item.get("remaining_horizons")
-            if not isinstance(remaining, list) or horizon not in remaining:
-                continue
-            signal_session = str(item.get("session"))
-            signal_index = calendar.index(signal_session)
-            if final_chunk or signal_index + 1 + horizon <= last_new_index:
-                resolvable.append(signal_session)
-                remaining.remove(horizon)
-        signal_sessions_by_horizon[horizon] = resolvable
-    alpha_and_pending_seconds = monotonic() - alpha_started
-    factor_started = monotonic()
-    daily_by_horizon = prepared_forward_factor_days_by_horizon(
-        forward_labels,
-        matrix,
-        signal_sessions_by_horizon=signal_sessions_by_horizon,
-        cancellation_check=cancellation_check,
-    )
-    state["factor_state"] = advance_factor_state_from_daily(
-        _mapping(state["factor_state"], "Factor state"),
-        daily_by_horizon,
-    )
-    state["pending_alpha"] = [
-        value for value in pending if _mapping(value, "Pending Alpha")["remaining_horizons"]
-    ]
-    if len(state["pending_alpha"]) > _MAX_PENDING_ALPHA_SESSIONS:
-        raise ValueError("Pending Alpha continuation exceeded its bound")
+    factor_seconds = 0.0
+    if run_input.research_kind == "factor_evaluation":
+        if forward_labels is None:
+            raise ValueError("Factor Evaluation requires forward labels")
+        last_new_index = calendar.index(research_sessions[-1])
+        signal_sessions_by_horizon: dict[int, list[str]] = {}
+        for horizon in HORIZONS:
+            resolvable: list[str] = []
+            for value in pending:
+                item = _mapping(value, "Pending Alpha")
+                remaining = item.get("remaining_horizons")
+                if not isinstance(remaining, list) or horizon not in remaining:
+                    continue
+                signal_session = str(item.get("session"))
+                signal_index = calendar.index(signal_session)
+                if final_chunk or signal_index + 1 + horizon <= last_new_index:
+                    resolvable.append(signal_session)
+                    remaining.remove(horizon)
+            signal_sessions_by_horizon[horizon] = resolvable
+        alpha_and_pending_seconds = monotonic() - alpha_started
+        factor_started = monotonic()
+        daily_by_horizon = prepared_forward_factor_days_by_horizon(
+            forward_labels,
+            matrix,
+            signal_sessions_by_horizon=signal_sessions_by_horizon,
+            cancellation_check=cancellation_check,
+        )
+        state["factor_state"] = advance_factor_state_from_daily(
+            _mapping(state["factor_state"], "Factor state"),
+            daily_by_horizon,
+        )
+        state["pending_alpha"] = [
+            value for value in pending if _mapping(value, "Pending Alpha")["remaining_horizons"]
+        ]
+        if len(state["pending_alpha"]) > _MAX_PENDING_ALPHA_SESSIONS:
+            raise ValueError("Pending Alpha continuation exceeded its bound")
 
-    factor_seconds = monotonic() - factor_started
+        factor_seconds = monotonic() - factor_started
+    else:
+        state["pending_alpha"] = pending[-1:]
+        alpha_and_pending_seconds = monotonic() - alpha_started
     completed_count = int(state["completed_research_session_count"]) + len(research_sessions)
     state["completed_research_session_count"] = completed_count
     lookback = max(run_input.alpha_execution_plan().effective_lookback, 2)
     state["rolling_tail_sessions"] = list(calendar[-lookback:])
     finalize_started = monotonic()
     factor_summary: dict[str, object] | None = None
-    if final_chunk:
+    if final_chunk and run_input.research_kind == "factor_evaluation":
         if state["pending_alpha"]:
             raise ValueError("Final Research Chunk has unresolved Alpha Labels")
         factor_summary = finalize_factor_state(
@@ -827,6 +849,8 @@ def _execute_alpha_factor_chunk_from_validated(
 def _compact_pending_alpha(
     row: Mapping[str, object],
     research_data: ColumnarResearchSeries,
+    *,
+    research_kind: str,
 ) -> dict[str, object]:
     session = str(row["session"])
     members = tuple(sorted(research_data.universe_members.get(session, ())))
@@ -857,7 +881,7 @@ def _compact_pending_alpha(
         "session": session,
         "values": compact_values,
         "coverage_loss": dict(coverage_loss),
-        "remaining_horizons": list(HORIZONS),
+        **({"remaining_horizons": list(HORIZONS)} if research_kind == "factor_evaluation" else {}),
     }
 
 
@@ -1167,6 +1191,8 @@ def validated_research_continuation(
         "alpha_checksum",
         "factor_state",
     }
+    if research_kind == "strategy_backtest":
+        common_keys.remove("factor_state")
     expected_keys = (
         common_keys | _STRATEGY_CONTINUATION_KEYS
         if research_kind == "strategy_backtest"
@@ -1181,7 +1207,8 @@ def validated_research_continuation(
     ):
         raise ValueError("Research Chunk continuation is invalid")
     common = _validated_alpha_factor_continuation_mapping(
-        {name: copied[name] for name in _ALPHA_FACTOR_CONTINUATION_KEYS}
+        {name: copied[name] for name in _alpha_continuation_keys(research_kind)},
+        research_kind=research_kind,
     )
     copied.update(common)
     if research_kind == "strategy_backtest":
@@ -1194,13 +1221,15 @@ def validated_research_continuation(
 
 def validated_alpha_factor_continuation(
     value: Mapping[str, object],
+    *,
+    research_kind: str = "factor_evaluation",
 ) -> dict[str, object]:
     try:
         copied = _json_mapping(
             canonical_json_bytes(value),
             "Alpha-and-Factor continuation",
         )
-        return _validated_alpha_factor_continuation_mapping(copied)
+        return _validated_alpha_factor_continuation_mapping(copied, research_kind=research_kind)
     except (TypeError, ValueError):
         raise ValueError("Alpha-and-Factor continuation is invalid") from None
 
@@ -1327,10 +1356,20 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
     return state
 
 
+def _alpha_continuation_keys(research_kind: str) -> set[str]:
+    if research_kind == "factor_evaluation":
+        return _ALPHA_FACTOR_CONTINUATION_KEYS
+    if research_kind == "strategy_backtest":
+        return _ALPHA_FACTOR_CONTINUATION_KEYS - {"factor_state"}
+    raise ValueError("Research Kind is invalid")
+
+
 def _validated_alpha_factor_continuation_mapping(
     copied: dict[str, object],
+    *,
+    research_kind: str,
 ) -> dict[str, object]:
-    if set(copied) != _ALPHA_FACTOR_CONTINUATION_KEYS:
+    if set(copied) != _alpha_continuation_keys(research_kind):
         raise ValueError("Alpha-and-Factor continuation is invalid")
     binding_checksum = copied.get("binding_checksum")
     completed = copied.get("completed_research_session_count")
@@ -1355,16 +1394,17 @@ def _validated_alpha_factor_continuation_mapping(
                 or any(character not in "0123456789abcdef" for character in alpha_checksum)
             )
         )
-        or not isinstance(factor_state, dict)
+        or (research_kind == "factor_evaluation" and not isinstance(factor_state, dict))
     ):
         raise ValueError("Alpha-and-Factor continuation is invalid")
-    copied["factor_state"] = _validated_factor_state_mapping(factor_state)
+    if research_kind == "factor_evaluation":
+        copied["factor_state"] = _validated_factor_state_mapping(factor_state)
     if binding_checksum is None and (
         completed != 0
         or rolling
         or pending
         or alpha_checksum is not None
-        or copied["factor_state"] != empty_factor_state()
+        or (research_kind == "factor_evaluation" and copied["factor_state"] != empty_factor_state())
     ):
         raise ValueError("Alpha-and-Factor continuation is invalid")
     return copied

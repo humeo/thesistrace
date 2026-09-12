@@ -868,7 +868,7 @@ def _execute_strategy_sweep_messages(
     plan = shared_input.execution_plan
     research_start = shared_input.data_admission.first_research_session.isoformat()
     research_end = shared_input.data_admission.last_research_session.isoformat()
-    alpha_continuation = empty_alpha_factor_continuation()
+    alpha_continuation = empty_alpha_factor_continuation("strategy_backtest")
     binding: AlphaFactorExecutionBinding | None = None
     # This is a disk-size guard, not resident-memory admission. Each payload was
     # already created under the child memory limit, so total history may grow the
@@ -946,10 +946,7 @@ def _execute_strategy_sweep_messages(
                         fact_instrument_ids=frozenset(),
                     )
                     phase_seconds["input"] += monotonic() - input_started
-                    forward_labels = prepare_columnar_forward_labels(
-                        research_data,
-                        cancellation_check=lambda: None,
-                    )
+                    forward_labels = None
                     run_input = _strategy_run_input(
                         shared_input,
                         research_data,

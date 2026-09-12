@@ -43,7 +43,6 @@ def project_tracking_checkpoint(
     strategy_input = _strategy_input(run_input)
     output = state.output_snapshot()
     alpha = _mapping(output.get("alpha_matrix"), "Alpha Matrix")
-    factor = _mapping(output.get("factor_evaluation"), "Factor Evaluation")
     strategy = _mapping(output.get("strategy_backtest"), "Strategy Backtest")
     continuation = continuation_snapshot(state)
     continuation_bytes = canonical_json_bytes(continuation)
@@ -78,11 +77,9 @@ def project_tracking_checkpoint(
             "effective_lookback": alpha["effective_lookback"],
             "neutralization": alpha["neutralization"],
         },
-        "factor_summary": _factor_summary(factor),
         "strategy_state": strategy_state,
         "continuation_sha256": hashlib.sha256(continuation_bytes).hexdigest(),
         "pending_alpha_sessions": len(continuation["pending_alpha"]),
-        "rolling_factor_rows": len(continuation["rolling_factor"]),
     }
 
 
@@ -119,10 +116,6 @@ def restore_tracking_checkpoint(
     sessions = research_sessions(research_data)
     if not sessions or sessions[-1] != str(value["boundary_session"]):
         raise KernelRunError("DailyTrack Checkpoint boundary does not match Research Data")
-    factor_summary = _mapping(value.get("factor_summary"), "Factor Summary")
-    factor_horizons = _mapping(factor_summary.get("horizons"), "Factor horizons")
-    if set(factor_horizons) != {"1", "5", "20"}:
-        raise KernelRunError("DailyTrack Factor Summary horizons are invalid")
     strategy_state = _mapping(value.get("strategy_state"), "Strategy state")
     terminal = _mapping(strategy_state.get("terminal"), "Terminal Strategy State")
     resume_observation = _mapping(
@@ -149,13 +142,6 @@ def restore_tracking_checkpoint(
             "alpha_matrix": {
                 **dict(_mapping(value.get("alpha_state"), "Alpha state")),
                 "sessions": [],
-            },
-            "forward_labels": {"horizons": {}},
-            "factor_evaluation": {
-                "horizons": {
-                    str(horizon): {**dict(_mapping(item, "Factor horizon")), "daily": []}
-                    for horizon, item in factor_horizons.items()
-                }
             },
             "strategy_backtest": {
                 "daily": [dict(item) for item in retained_delta if isinstance(item, Mapping)],
@@ -194,20 +180,6 @@ def restore_tracking_origin(
     metric_state = terminal.metric_state.model_dump(mode="json", exclude_unset=True)
     last_daily = terminal.last_daily_observation.model_dump(mode="json")
     positions = [item.model_dump(mode="json") for item in terminal.positions]
-    factor_horizons = {
-        str(horizon): {
-            "horizon": horizon,
-            "summary": {},
-            "coverage": {
-                "signal_session_count": 0,
-                "ic_valid_session_count": 0,
-                "rank_ic_valid_session_count": 0,
-                "quantile_valid_session_count": 0,
-            },
-            "daily": [],
-        }
-        for horizon in (1, 5, 20)
-    }
     return KernelState(
         run_input=run_input,
         output={
@@ -217,8 +189,6 @@ def restore_tracking_origin(
                 "neutralization": run_input.neutralization,
                 "sessions": [],
             },
-            "forward_labels": {"horizons": {}},
-            "factor_evaluation": {"horizons": factor_horizons},
             "strategy_backtest": {
                 "daily": [last_daily],
                 "positions": positions,
@@ -317,32 +287,6 @@ def _origin_run_input(
             transfer_fee_rate=str(costs["transfer_fee_rate"]),
         ),
     )
-
-
-def _factor_summary(factor: Mapping[str, object]) -> dict[str, object]:
-    horizons = _mapping(factor.get("horizons"), "Factor horizons")
-    if set(horizons) != {"1", "5", "20"}:
-        raise KernelRunError("Factor result must contain horizons 1, 5, and 20")
-    projected: dict[str, object] = {}
-    for horizon in ("1", "5", "20"):
-        value = _mapping(horizons[horizon], "Factor horizon")
-        summary = copy.deepcopy(dict(_mapping(value.get("summary"), "Factor summary")))
-        daily = _rows(value.get("daily"), "Factor daily observations")
-        ic = _mapping(summary.get("ic"), "Factor IC summary")
-        rank_ic = _mapping(summary.get("rank_ic"), "Factor Rank IC summary")
-        projected[horizon] = {
-            "horizon": int(value["horizon"]),
-            "summary": summary,
-            "coverage": {
-                "signal_session_count": len(daily),
-                "ic_valid_session_count": int(ic["valid_session_count"]),
-                "rank_ic_valid_session_count": int(rank_ic["valid_session_count"]),
-                "quantile_valid_session_count": sum(
-                    observation.get("quantile_reason") is None for observation in daily
-                ),
-            },
-        }
-    return {"horizons": projected}
 
 
 def _strategy_state(

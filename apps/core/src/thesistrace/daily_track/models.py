@@ -18,14 +18,12 @@ from thesistrace.daily_track.observation_state import TrackingObservationState
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 type DailyTrackResultSection = Literal[
-    "factor",
     "strategy_summary",
     "strategy_observations",
     "origin",
     "provenance",
 ]
 DAILY_TRACK_RESULT_SECTIONS: tuple[DailyTrackResultSection, ...] = (
-    "factor",
     "strategy_summary",
     "strategy_observations",
     "origin",
@@ -41,8 +39,6 @@ class _DailyTrackResultSectionInput(BaseModel):
     track_id: Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 
 
-class DailyTrackFactorResultSectionInput(_DailyTrackResultSectionInput):
-    section: Literal["factor"]
 
 
 class DailyTrackStrategySummaryResultSectionInput(_DailyTrackResultSectionInput):
@@ -66,8 +62,7 @@ class DailyTrackProvenanceResultSectionInput(_DailyTrackResultSectionInput):
 
 
 type DailyTrackResultSectionInput = Annotated[
-    DailyTrackFactorResultSectionInput
-    | DailyTrackStrategySummaryResultSectionInput
+    DailyTrackStrategySummaryResultSectionInput
     | DailyTrackStrategyObservationsResultSectionInput
     | DailyTrackOriginResultSectionInput
     | DailyTrackProvenanceResultSectionInput,
@@ -350,60 +345,20 @@ class DailyTrackOriginView(BaseModel):
     terminal_account: DailyTrackOriginAccount
 
 
-class DailyTrackFactorCoverage(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    signal_session_count: int
-    ic_valid_session_count: int
-    rank_ic_valid_session_count: int
-    quantile_valid_session_count: int
 
 
 type DailyTrackStrictNumber = StrictInt | StrictFloat
 type DailyTrackOptionalNumber = DailyTrackStrictNumber | None
 
 
-class DailyTrackFactorCorrelation(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    icir: DailyTrackOptionalNumber
-    mean: DailyTrackOptionalNumber
-    positive_fraction: DailyTrackOptionalNumber
-    sample_deviation: DailyTrackOptionalNumber
-    valid_session_count: StrictInt
 
 
-class DailyTrackFactorQuantileReturns(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    q1: DailyTrackOptionalNumber
-    q2: DailyTrackOptionalNumber
-    q3: DailyTrackOptionalNumber
-    q4: DailyTrackOptionalNumber
-    q5: DailyTrackOptionalNumber
 
 
-class DailyTrackFactorMetrics(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    ic: DailyTrackFactorCorrelation
-    quantile_returns: DailyTrackFactorQuantileReturns
-    rank_ic: DailyTrackFactorCorrelation
-    top_bottom_return: DailyTrackOptionalNumber
 
 
-class DailyTrackFactorHorizon(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    horizon: Literal[1, 5, 20]
-    summary: DailyTrackFactorMetrics
-    coverage: DailyTrackFactorCoverage
 
 
-class DailyTrackFactorResult(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    horizons: dict[str, DailyTrackFactorHorizon]
 
 
 class DailyTrackStrategyObservation(BaseModel):
@@ -429,14 +384,6 @@ class DailyTrackStrategyResult(BaseModel):
     comparison: StrategyComparison
 
 
-class DailyTrackFactorMetricUnits(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    horizon: Literal["research_sessions"] = "research_sessions"
-    ic: Literal["correlation"] = "correlation"
-    rank_ic: Literal["rank_correlation"] = "rank_correlation"
-    quantile_returns: Literal["decimal_return"] = "decimal_return"
-    top_bottom_return: Literal["decimal_return"] = "decimal_return"
 
 
 class DailyTrackMissingValueSemantics(BaseModel):
@@ -446,15 +393,6 @@ class DailyTrackMissingValueSemantics(BaseModel):
     observed_zero_is_missing: Literal[False] = False
 
 
-class DailyTrackFactorResultSection(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    section: Literal["factor"] = "factor"
-    track_id: str
-    strategy_session: date
-    factor: DailyTrackFactorResult
-    units: DailyTrackFactorMetricUnits = DailyTrackFactorMetricUnits()
-    missing_values: DailyTrackMissingValueSemantics = DailyTrackMissingValueSemantics()
 
 
 class DailyTrackStrategyMetricUnits(BaseModel):
@@ -637,8 +575,7 @@ class DailyTrackProvenanceResultSection(BaseModel):
 
 
 type DailyTrackResultSectionResponse = Annotated[
-    DailyTrackFactorResultSection
-    | DailyTrackStrategySummaryResultSection
+    DailyTrackStrategySummaryResultSection
     | DailyTrackStrategyObservationsResultSection
     | DailyTrackOriginResultSection
     | DailyTrackProvenanceResultSection,
@@ -723,7 +660,6 @@ class DailyTrackDetail(BaseModel):
     progress: DailyTrackProgress
     blocked_reason: str | None
     observation: DailyTrackObservation
-    factor: DailyTrackFactorResult
     strategy: DailyTrackStrategyResult
 
 
@@ -756,11 +692,9 @@ class KernelStateCheckpoint(BaseModel):
     boundary_session: str
     run_input: KernelRunInputSnapshot
     alpha_state: dict[str, object]
-    factor_summary: dict[str, object]
     strategy_state: dict[str, object]
     continuation_sha256: str
     pending_alpha_sessions: int
-    rolling_factor_rows: int
 
 
     @model_validator(mode="after")

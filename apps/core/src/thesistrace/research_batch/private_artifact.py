@@ -137,7 +137,9 @@ class PrivateAlphaFactorArtifactWriter:
         if self._closed:
             raise ValueError("Private Alpha-and-Factor artifact writer is closed")
         try:
-            continuation = validated_alpha_factor_continuation(final_alpha_continuation)
+            continuation = validated_alpha_factor_continuation(
+                final_alpha_continuation, research_kind=self._binding.research_kind,
+            )
             if (
                 not self._final_seen
                 or self._chunk_count <= 0
@@ -355,7 +357,10 @@ class PrivateAlphaFactorArtifactReader:
             or not self._final_seen
         ):
             raise ValueError
-        continuation = validated_alpha_factor_continuation(descriptor["final_alpha_continuation"])
+        continuation = validated_alpha_factor_continuation(
+            descriptor["final_alpha_continuation"],
+            research_kind=self._expected_binding.research_kind,
+        )
         if (
             continuation["binding_checksum"] != self._expected_binding.checksum
             or int(continuation["completed_research_session_count"])

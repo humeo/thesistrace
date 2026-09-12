@@ -25,3 +25,26 @@ def rustfs_admin(core_settings: CoreSettings) -> BaseClient:
         aws_secret_access_key=core_settings.s3_secret_access_key,
         region_name=core_settings.s3_region,
     )
+
+
+@pytest.fixture
+def rank_ic_migration_target_schemas():
+    """Keep existing migration tests on their historical target, not today's schema."""
+    from importlib.resources import files
+
+    from thesistrace._postgres import SchemaDefinition
+    from thesistrace.entrypoints.schema import CORE_SCHEMA_DEFINITIONS
+
+    constraint = files("thesistrace.migrations").joinpath("0001_target.sql").read_text().strip()
+    definitions = []
+    for definition in CORE_SCHEMA_DEFINITIONS:
+        if definition.name != "research_runs":
+            definitions.append(definition)
+            continue
+        statement = definition.statement
+        start = statement.index("CONSTRAINT runs_key_metrics_check")
+        end = statement.index(",\n    CONSTRAINT runs_status_check", start)
+        definitions.append(SchemaDefinition(
+            name=definition.name, statement=statement[:start] + constraint + statement[end:],
+        ))
+    return tuple(definitions)

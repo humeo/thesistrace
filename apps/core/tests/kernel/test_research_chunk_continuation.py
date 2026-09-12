@@ -330,6 +330,32 @@ def _strategy_input(
     )
 
 
+def test_strategy_chunk_has_no_factor_work_or_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    fixture, factor_input = _minimal_alpha_factor_case()
+    strategy_input = _strategy_input(factor_input, holdings_count=5, rebalance_interval=5)
+
+    def forbidden_labels(*args, **kwargs):
+        raise AssertionError("Strategy chunks must not evaluate future returns")
+
+    monkeypatch.setattr(
+        research_chunks_module, "prepared_forward_factor_days_by_horizon", forbidden_labels,
+    )
+    result = execute_research_chunk(
+        run_input=strategy_input,
+        binding=_alpha_factor_binding(strategy_input),
+        research_data=fixture,
+        forward_labels=None,
+        research_sessions=fixture.sessions,
+        final_chunk=True,
+        continuation=empty_research_continuation("strategy_backtest"),
+        cancellation_check=lambda: None,
+    )
+    assert "factor_state" not in result.continuation
+    assert "factor_summary" not in result.final_values
+    assert result.final_values["terminal_strategy_state"]["session"] == fixture.sessions[-1]
+    assert all("remaining_horizons" not in row for row in result.continuation["pending_alpha"])
+
+
 def test_alpha_factor_chunk_outcome_is_bound_immutable_and_chunk_equivalent() -> None:
     fixture, factor_input = _minimal_alpha_factor_case()
     binding = _alpha_factor_binding(factor_input)
@@ -401,7 +427,8 @@ def test_alpha_factor_chunk_outcome_is_bound_immutable_and_chunk_equivalent() ->
         research_start_session=research_sessions[0],
         research_end_session=research_sessions[-1],
     )
-    assert _alpha_factor_binding(strategy_input).checksum == binding.checksum
+    assert _alpha_factor_binding(strategy_input).checksum != binding.checksum
+    assert _alpha_factor_binding(strategy_input).value_snapshot()["label_horizons"] == []
 
 
 def test_alpha_factor_chunk_rejects_contract_mismatch_and_non_finite_state() -> None:
@@ -587,18 +614,18 @@ def test_alpha_factor_outcome_hot_path_has_a_performance_regression_gate(
 
 def test_one_alpha_factor_outcome_produces_independent_strategy_outcomes() -> None:
     fixture, factor_input = _minimal_alpha_factor_case()
+    factor_input = _strategy_input(factor_input, holdings_count=5, rebalance_interval=5)
     binding = _alpha_factor_binding(factor_input)
     shared = execute_alpha_factor_chunk(
         run_input=factor_input,
         binding=binding,
         research_data=fixture,
-        forward_labels=_forward_labels(fixture),
+        forward_labels=None,
         research_sessions=fixture.sessions,
         final_chunk=True,
-        continuation=empty_alpha_factor_continuation(),
+        continuation=empty_alpha_factor_continuation("strategy_backtest"),
         cancellation_check=lambda: None,
     )
-    factor_before = shared.factor_summary_snapshot()
     continuation_before = shared.continuation_snapshot()
 
     concentrated = execute_strategy_chunk_from_alpha_factor_outcome(
@@ -628,10 +655,10 @@ def test_one_alpha_factor_outcome_produces_independent_strategy_outcomes() -> No
         cancellation_check=lambda: None,
     )
 
-    assert shared.factor_summary_snapshot() == factor_before
+    assert shared.factor_summary_snapshot() is None
     assert shared.continuation_snapshot() == continuation_before
-    assert concentrated.final_values_snapshot()["factor_summary"] == factor_before
-    assert diversified.final_values_snapshot()["factor_summary"] == factor_before
+    assert "factor_summary" not in concentrated.final_values_snapshot()
+    assert "factor_summary" not in diversified.final_values_snapshot()
     assert (
         concentrated.final_values_snapshot()["strategy_summary"]
         != (diversified.final_values_snapshot()["strategy_summary"])
@@ -647,8 +674,8 @@ def test_one_alpha_factor_outcome_produces_independent_strategy_outcomes() -> No
         )
 
     exposed = concentrated.final_values_snapshot()
-    exposed["factor_summary"]["horizons"] = {}
-    assert concentrated.final_values_snapshot()["factor_summary"] == factor_before
+    exposed["strategy_summary"]["metrics"] = {}
+    assert concentrated.final_values_snapshot()["strategy_summary"]["metrics"]
 
 
 def test_alpha_factor_outcome_compact_reuse_is_exact_and_binding_scoped() -> None:
@@ -787,15 +814,16 @@ def test_private_alpha_factor_artifact_is_streamed_complete_and_batch_scoped(
 
 def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None:
     fixture, factor_input = _minimal_alpha_factor_case()
+    factor_input = _strategy_input(factor_input, holdings_count=5, rebalance_interval=5)
     binding = _alpha_factor_binding(factor_input)
     shared = execute_alpha_factor_chunk(
         run_input=factor_input,
         binding=binding,
         research_data=fixture,
-        forward_labels=_forward_labels(fixture),
+        forward_labels=None,
         research_sessions=fixture.sessions,
         final_chunk=True,
-        continuation=empty_alpha_factor_continuation(),
+        continuation=empty_alpha_factor_continuation("strategy_backtest"),
         cancellation_check=lambda: None,
     )
     strategy_input = _strategy_input(
@@ -905,10 +933,10 @@ def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None
         run_input=factor_input,
         binding=next_binding,
         research_data=fixture,
-        forward_labels=_forward_labels(fixture),
+        forward_labels=None,
         research_sessions=fixture.sessions,
         final_chunk=True,
-        continuation=empty_alpha_factor_continuation(),
+        continuation=empty_alpha_factor_continuation("strategy_backtest"),
         cancellation_check=lambda: None,
     )
     with pytest.raises(
@@ -943,15 +971,16 @@ def test_repeated_strategy_consumption_has_a_shared_stage_performance_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture, factor_input = _minimal_alpha_factor_case(session_count=80)
+    factor_input = _strategy_input(factor_input, holdings_count=5, rebalance_interval=5)
     binding = _alpha_factor_binding(factor_input)
     shared = execute_alpha_factor_chunk(
         run_input=factor_input,
         binding=binding,
         research_data=fixture,
-        forward_labels=_forward_labels(fixture),
+        forward_labels=None,
         research_sessions=fixture.sessions,
         final_chunk=True,
-        continuation=empty_alpha_factor_continuation(),
+        continuation=empty_alpha_factor_continuation("strategy_backtest"),
         cancellation_check=lambda: None,
     )
     original_serialize = research_chunks_module.canonical_json_bytes
@@ -1172,7 +1201,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         assert equivalence_bytes(chunked_result) == equivalence_bytes(legacy)
         strategy_state = final.continuation["strategy_state"]
         assert len(strategy_state["daily"]) == 1
-        assert "daily" not in repr(final.continuation["factor_state"])
+        assert "factor_state" not in final.continuation
 
     factor_run_input = RunInput(
         research_data=fixture,
@@ -1188,6 +1217,10 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         strategy=None,
         research_start_session=sessions[20],
         research_end_session=sessions[-1],
+    )
+    factor_reference = build_result_payload(
+        run_columnar_chunk(factor_run_input, cancellation_check=lambda: None),
+        research_kind="factor_evaluation",
     )
     factor_uninterrupted = execute_research_chunk(
         run_input=factor_run_input,
@@ -1231,14 +1264,12 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         assert equivalence_bytes(
             (factor_final.final_values or {})["factor_summary"]
         ) == equivalence_bytes(factor_uninterrupted.final_values["factor_summary"])
-        assert equivalence_bytes(
-            (factor_final.final_values or {})["factor_summary"]
-        ) == equivalence_bytes(uninterrupted.final_values["factor_summary"])
+        assert "factor_summary" not in uninterrupted.final_values
         for horizon in ("1", "5", "20"):
             chunked_horizon = (factor_final.final_values or {})["factor_summary"]["horizons"][
                 horizon
             ]
-            reference_horizon = legacy["factor_summary"]["horizons"][horizon]
+            reference_horizon = factor_reference["factor_summary"]["horizons"][horizon]
             assert chunked_horizon["coverage"] == reference_horizon["coverage"]
             assert chunked_horizon["alpha_checksum"] == reference_horizon["alpha_checksum"]
             assert chunked_horizon["label_checksum"] == reference_horizon["label_checksum"]

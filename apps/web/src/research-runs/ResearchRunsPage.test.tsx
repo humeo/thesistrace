@@ -115,7 +115,7 @@ describe("ResearchRunFacts", () => {
 describe("ResearchRunProgressView", () => {
   it.each([
     ["preparing_data", "Preparing data"],
-    ["shared_alpha_factor", "Computing shared Alpha and Factor"],
+    ["shared_alpha_factor", "Computing shared Alpha"],
     ["waiting_for_execution", "Waiting for earlier research in this batch"],
     ["strategy", "Running strategy"],
     ["recovering", "Waiting for execution recovery"],
@@ -258,36 +258,7 @@ const TERMINAL_STATE: TerminalStrategyState = {
 
 describe("ResearchResultView", () => {
   it("keeps result summaries and coverage while removing low-value detail sections", () => {
-    const correlation = {
-      mean: 0.1,
-      sample_deviation: 0,
-      icir: 1,
-      positive_fraction: 1,
-      valid_session_count: 1,
-    };
-    const horizon = {
-      horizon: 1 as const,
-      summary: {
-        ic: correlation,
-        rank_ic: correlation,
-        quantile_returns: { q1: null, q2: null, q3: null, q4: null, q5: null },
-        top_bottom_return: null,
-      },
-      coverage: {
-        signal_session_count: 2,
-        ic_valid_session_count: 1,
-        rank_ic_valid_session_count: 1,
-        quantile_valid_session_count: 0,
-      },
-    };
     const result = {
-      factor: {
-        horizons: {
-          "1": horizon,
-          "5": { ...horizon, horizon: 5 },
-          "20": { ...horizon, horizon: 20 },
-        },
-      },
       strategy: {
         summary: {
           alpha_checksum: "a",
@@ -369,9 +340,9 @@ describe("ResearchResultView", () => {
     } satisfies ResearchResult;
     const markup = renderToStaticMarkup(<ResearchResultView result={result} />);
 
-    expect(markup).toContain("Factor Summary");
+    expect(markup).not.toContain("Factor Summary");
     expect(markup).toContain("Strategy Summary");
-    expect(markup).toContain("Rank IC coverage 1/2");
+    expect(markup).not.toContain("Rank IC");
     expect(markup).toContain("CSI 300");
     expect(markup).not.toContain("沪深300");
     expect(markup).not.toContain("Fixed Strategy Benchmark");

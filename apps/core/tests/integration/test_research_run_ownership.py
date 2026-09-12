@@ -301,7 +301,6 @@ def _drop_core_schemas(database_url: str) -> None:
 
 @pytest.mark.parametrize("sort_by", [
     "annualized_excess_return", "sharpe", "maximum_drawdown",
-    "one_session_rank_ic", "five_session_rank_ic", "twenty_session_rank_ic",
 ])
 def test_strategy_metric_sorting_precedes_pagination(ownership_database, sort_by):
     ResearcherService(ownership_database).bootstrap(RESEARCHER_A)
@@ -330,8 +329,6 @@ def test_strategy_metric_sorting_precedes_pagination(ownership_database, sort_by
         metrics = None if score is None else Jsonb({
             "research_kind": "strategy_backtest", "annualized_excess_return": score,
             "sharpe": score, "maximum_drawdown": score,
-            "one_session_rank_ic": score, "five_session_rank_ic": score,
-            "twenty_session_rank_ic": score,
         })
         with ownership_database.transaction() as transaction:
             transaction.execute(

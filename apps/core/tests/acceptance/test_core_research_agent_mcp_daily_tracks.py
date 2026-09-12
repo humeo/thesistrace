@@ -283,7 +283,7 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
             corrupted = await client.call_tool("get_daily_track", {"track_id": track_id})
             corrupted_result = await client.call_tool(
                 "get_daily_track_result",
-                {"track_id": track_id, "section": "factor"},
+                {"track_id": track_id, "section": "strategy_summary"},
             )
         finally:
             _restore_track_origin(settings, track_id, original_origin)
@@ -348,7 +348,7 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         assert isinstance(stale_observation_cursor, str)
         missing_result = await client.call_tool(
             "get_daily_track_result",
-            {"track_id": "track_missing", "section": "factor"},
+            {"track_id": "track_missing", "section": "strategy_summary"},
         )
         assert missing_result.is_error is True
         assert missing_result.structured_content["code"] == "NOT_FOUND"
@@ -412,11 +412,11 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         }
         assert blocked.structured_content["retry_after_seconds"] is None
         _assert_compact_track(blocked.structured_content, refresh=False, retry=True)
-        blocked_factor = await client.call_tool(
+        blocked_summary = await client.call_tool(
             "get_daily_track_result",
-            {"track_id": concurrent_track_id, "section": "factor"},
+            {"track_id": concurrent_track_id, "section": "strategy_summary"},
         )
-        assert blocked_factor.is_error is False
+        assert blocked_summary.is_error is False
         second_blocked = await client.call_tool(
             "get_daily_track",
             {"track_id": track_id},
@@ -658,13 +658,10 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
             "get_daily_track_result",
             {"track_id": transient_track_id, "section": "provenance"},
         )
-        assert factor_result.is_error is False
+        assert factor_result.is_error is True
+        assert factor_result.structured_content["code"] == "INVALID_INPUT"
         assert summary_result.is_error is False
         assert provenance_result.is_error is False
-        assert (
-            factor_result.structured_content["strategy_session"]
-            == (transient_advanced.structured_content["progress"]["head_session"])
-        )
         assert summary_result.structured_content["origin_session"] == "2026-08-10"
         assert (
             summary_result.structured_content["strategy_session"]
@@ -678,7 +675,6 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         assert set(summary_result.structured_content["summary"]) == (
             transient_seed_summary_keys
         )
-        _assert_finite_result(factor_result.structured_content)
         _assert_finite_result(summary_result.structured_content)
         serialized_provenance = json.dumps(
             provenance_result.structured_content,
@@ -848,13 +844,17 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         assert stop_conflict.is_error is True
         assert stop_conflict.structured_content["code"] == "IDEMPOTENCY_CONFLICT"
 
-    _seed_active_capacity_clones(settings, source_track_id=track_id, count=8)
+    # Auth allows three active tracks; the transient track occupies one slot.
+    # Leave exactly one slot for the two concurrent starts.
+    _seed_active_capacity_clones(settings, source_track_id=track_id, count=1)
     capacity = await _concurrent_capacity_start(
         settings,
         tmp_path,
         run_ids=(strategy_runs[2], strategy_runs[4]),
     )
-    assert sorted(result.is_error for result in capacity) == [False, True]
+    assert sorted(result.is_error for result in capacity) == [False, True], [
+        result.structured_content for result in capacity
+    ]
     accepted_capacity = next(result for result in capacity if not result.is_error)
     rejected_capacity = next(result for result in capacity if result.is_error)
     assert accepted_capacity.structured_content["status"] == "active"
@@ -1215,7 +1215,7 @@ async def _assert_transient_daily_track_reads(
                 )
                 transient_result = await client.call_tool(
                     "get_daily_track_result",
-                    {"track_id": track_id, "section": "factor"},
+                    {"track_id": track_id, "section": "strategy_summary"},
                 )
             for transient in (transient_list, transient_get, transient_result):
                 assert transient.is_error is True
@@ -1685,7 +1685,6 @@ def _assert_compact_track(
 ) -> None:
     serialized = str(payload).lower()
     assert payload["available_result_sections"] == [
-        "factor",
         "strategy_summary",
         "strategy_observations",
         "origin",

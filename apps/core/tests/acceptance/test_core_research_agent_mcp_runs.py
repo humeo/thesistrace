@@ -168,7 +168,6 @@ async def _exercise_research_runs(
         assert factor_detail["available_result_sections"] == ["factor", "provenance"]
         assert strategy_detail["result_available"] is True
         assert strategy_detail["available_result_sections"] == [
-            "factor",
             "strategy_summary",
             "strategy_observations",
             "terminal_strategy_state",
@@ -651,8 +650,8 @@ async def _assert_first_semantic_result_pages(
         "get_research_run_result",
         {"run_id": strategy_run_id, "section": "factor"},
     )
-    assert strategy_factor.is_error is False
-    assert strategy_factor.structured_content["research_kind"] == "strategy_backtest"
+    assert strategy_factor.is_error is True
+    assert strategy_factor.structured_content["code"] == "STATE_CONFLICT"
 
     summary = await client.call_tool(
         "get_research_run_result",

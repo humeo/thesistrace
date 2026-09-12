@@ -97,8 +97,20 @@ def run_input(data, source, neutralization, holdings=10, rebalance=5):
     ("ts_mean(close, 3) + ts_mean(close, 3)", "industry", 5, 3),
 ])
 def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
-    source, neutralization, holdings, rebalance,
+    source, neutralization, holdings, rebalance, monkeypatch,
 ) -> None:
+    from thesistrace.research_kernel import factor, kernel_advance, tracking_advance
+
+    def forbidden_labels(*_args, **_kwargs):
+        raise AssertionError("Tracking must not calculate future labels")
+
+    monkeypatch.setattr(factor, "build_forward_labels", forbidden_labels)
+    monkeypatch.setattr(factor, "prepare_columnar_forward_labels", forbidden_labels)
+    # Also guard consumer bindings used by from-import calls.
+    monkeypatch.setattr(kernel_advance, "build_forward_labels", forbidden_labels, raising=False)
+    monkeypatch.setattr(
+        tracking_advance, "prepare_columnar_forward_labels", forbidden_labels, raising=False,
+    )
     _, canonical = build_fixture(session_count=68)
     row = aligned_market_data(canonical, neutralization=neutralization)
     calendar = list(row.sessions)
@@ -111,7 +123,7 @@ def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
     )
     continuation = continuation_snapshot(prior)
     # Include a revised historical fact. Stored Alpha stays frozen; new Alpha
-    # sees the corrected lookback and newly matured labels see current opens.
+    # sees the corrected lookback without computing future labels.
     corrected = copy.deepcopy(canonical)
     for price in corrected["prices"]:
         if price["session"] == calendar[40]:
@@ -174,7 +186,7 @@ def test_columnar_cold_rebuild_matches_row_reference_with_504_day_rollover(windo
         )
         assert actual == expected
     assert len(actual["pending_alpha"]) == 21
-    assert len(actual["rolling_factor"]) == 3 * 504
+    assert set(actual) == {"schema_version", "pending_alpha"}
 
 
 def test_columnar_tracking_preserves_aligned_financial_missingness_and_updates() -> None:

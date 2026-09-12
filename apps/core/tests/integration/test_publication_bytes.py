@@ -1,4 +1,3 @@
-import copy
 import hashlib
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -164,9 +163,8 @@ def test_research_result_preparation_uses_bounded_collection_objects(
 
         assert first.manifest_sha256 == second.manifest_sha256
         assert first.payload_sha256s == second.payload_sha256s
-        assert first.object_count == 6
+        assert first.object_count == 5
         assert set(first.payload_sha256s) == {
-            "factor_summary",
             "strategy_summary",
             "strategy_daily_observations",
             f"{RESULT_DAILY_PARTITION_PREFIX}000000",
@@ -228,14 +226,14 @@ def test_semantic_result_sections_read_only_bounded_real_rustfs_objects(
         )
         payload_digests = prepared.payload_sha256s
         try:
-            factor = read_semantic_result_section(
+            summary = read_semantic_result_section(
                 publication,
                 published_ref,
                 research_kind="strategy_backtest",
-                section="factor",
+                section="strategy_summary",
             )
-            assert factor.next_after is None
-            assert observed_digests == [payload_digests["factor_summary"]]
+            assert summary.next_after is None
+            assert observed_digests == [payload_digests["strategy_summary"]]
 
             observed_digests.clear()
             terminal = read_semantic_result_section(
@@ -634,34 +632,6 @@ def _collect_pending_deletion_after_transient_failure(publication: Publication) 
 
 
 def _legal_result() -> dict[str, object]:
-    correlation = {
-        "icir": None,
-        "mean": None,
-        "positive_fraction": None,
-        "sample_deviation": None,
-        "valid_session_count": 0,
-    }
-    horizons = {
-        str(horizon): {
-            "horizon": horizon,
-            "alpha_checksum": "a" * 64,
-            "label_checksum": "b" * 64,
-            "source_checksum": "c" * 64,
-            "summary": {
-                "ic": copy.deepcopy(correlation),
-                "quantile_returns": {name: None for name in ("q1", "q2", "q3", "q4", "q5")},
-                "rank_ic": copy.deepcopy(correlation),
-                "top_bottom_return": None,
-            },
-            "coverage": {
-                "signal_session_count": 1,
-                "ic_valid_session_count": 0,
-                "rank_ic_valid_session_count": 0,
-                "quantile_valid_session_count": 0,
-            },
-        }
-        for horizon in (1, 5, 20)
-    }
     metrics = {name: None for name in STRATEGY_METRIC_KEYS}
     metrics.update(
         {
@@ -728,7 +698,6 @@ def _legal_result() -> dict[str, object]:
         }
     )
     return {
-        "factor_summary": {"horizons": horizons},
         "strategy_summary": {
             "alpha_checksum": "a" * 64,
             "entry_session": "2024-01-02",

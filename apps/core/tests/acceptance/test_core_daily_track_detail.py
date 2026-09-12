@@ -138,10 +138,7 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
     assert [item["session"] for item in observations] == expected_window
     assert detail["strategy_session"] == sessions[-1]
     assert detail["data_through_session"] == sessions[-1]
-    for horizon in ("1", "5", "20"):
-        assert detail["factor"]["horizons"][horizon]["coverage"][
-            "signal_session_count"
-        ] == 504
+    assert "factor" not in detail
 
     # One share lot is bought on the second session at a constant CNY 10 open.
     # The hand-calculated oracle is independent of the batch Kernel and proves

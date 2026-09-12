@@ -237,9 +237,7 @@ def _execute_sample(
         "chunk_count": observation["chunk_count"],
         "attempt_id": observation["attempt_id"],
         "phase_timings_seconds": phase_timings,
-        "strategy_continuation_present": any(
-            value is True for value in strategy_continuations
-        ),
+        "strategy_continuation_present": any(value is True for value in strategy_continuations),
         "strategy_observation_count": strategy_observation_count,
         **result,
         "fresh_product_state_verified": fresh_product_state is not None,
@@ -264,9 +262,7 @@ def _require_fresh_product_state() -> dict[str, int]:
         s3.close()
         database.close()
     if any(observed.values()):
-        raise RuntimeError(
-            f"qualification sample would reuse Product State: {observed}"
-        )
+        raise RuntimeError(f"qualification sample would reuse Product State: {observed}")
     return observed
 
 
@@ -436,8 +432,12 @@ def _result_evidence(run_id: str, *, research_kind: str) -> dict[str, object]:
     return {
         "result_payload_names": sorted(bundle.payloads),
         "result_object_names": sorted(result),
-        "factor_summary_sha256": hashlib.sha256(
-            canonical_json_bytes(result["factor_summary"])
+        "result_summary_sha256": hashlib.sha256(
+            canonical_json_bytes(
+                result[
+                    "factor_summary" if research_kind == "factor_evaluation" else "strategy_summary"
+                ]
+            )
         ).hexdigest(),
         "checkpoint_count_after_success": int(row["checkpoint_count"]),
         "active_pin_count_after_success": int(row["active_pin_count"]),
@@ -474,12 +474,10 @@ def _assemble(samples_path: Path, image_revision: str) -> dict[str, object]:
     all_samples: list[dict[str, object]] = []
     for research_kind in _RESEARCH_KINDS:
         cold = [
-            _read_json(samples_path / f"{research_kind}-cold-{index}.json")
-            for index in range(5)
+            _read_json(samples_path / f"{research_kind}-cold-{index}.json") for index in range(5)
         ]
         warm = [
-            _read_json(samples_path / f"{research_kind}-warm-{index}.json")
-            for index in range(5)
+            _read_json(samples_path / f"{research_kind}-warm-{index}.json") for index in range(5)
         ]
         cancellation = _read_json(samples_path / f"{research_kind}-cancellation.json")
         all_samples.extend((*cold, *warm))
@@ -490,10 +488,18 @@ def _assemble(samples_path: Path, image_revision: str) -> dict[str, object]:
         }
     generation_ids = {str(item["generation_manifest_sha256"]) for item in all_samples}
     plans = {(int(item["chunk_session_count"]), int(item["chunk_count"])) for item in all_samples}
-    factor_summary_ids = {str(item["factor_summary_sha256"]) for item in all_samples}
+    summary_ids_by_kind = {
+        kind: sorted(
+            {
+                str(item["result_summary_sha256"])
+                for item in all_samples
+                if item["research_kind"] == kind
+            }
+        )[0]
+        for kind in research_kinds
+    }
     generation_manifest_sha256 = sorted(generation_ids)[0]
     chunk_session_count, chunk_count = sorted(plans)[0]
-    factor_summary_sha256 = sorted(factor_summary_ids)[0]
     preload = _read_json(samples_path / "preload.json")
     evidence = {
         "format": "thesistrace-long-research-qualification",
@@ -518,7 +524,7 @@ def _assemble(samples_path: Path, image_revision: str) -> dict[str, object]:
         "warm_preload": preload,
         "research_kinds": research_kinds,
         "scientific_equivalence": {
-            "factor_summary_sha256": factor_summary_sha256,
+            "result_summary_sha256_by_kind": summary_ids_by_kind,
             "sample_count": len(all_samples),
         },
     }
@@ -672,14 +678,10 @@ def _observe_run(run_id: str, process: subprocess.Popen[bytes]) -> dict[str, obj
                 ).fetchone()
             if row is not None:
                 last = dict(row)
-                if (
-                    attempt_visible_at is None
-                    and isinstance(row.get("started_at"), datetime)
-                ):
+                if attempt_visible_at is None and isinstance(row.get("started_at"), datetime):
                     attempt_visible_at = time.perf_counter()
-                if (
-                    first_checkpoint_visible_at is None
-                    and isinstance(row.get("first_checkpoint_at"), datetime)
+                if first_checkpoint_visible_at is None and isinstance(
+                    row.get("first_checkpoint_at"), datetime
                 ):
                     first_checkpoint_visible_at = time.perf_counter()
                 if row["status"] in _TERMINAL:

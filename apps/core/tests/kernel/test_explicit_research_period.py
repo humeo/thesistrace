@@ -51,10 +51,16 @@ def test_explicit_research_period_accepts_any_positive_session_count(session_cou
 
     expected_sessions = list(SESSIONS[:session_count])
     assert [row["session"] for row in output["alpha_matrix"]["sessions"]] == expected_sessions
-    assert output["forward_labels"]["report_session_count"] == session_count
+    factor_output = run(_run_input(
+        canonical, expression=CLOSE_ADJUSTED, start=SESSIONS[0],
+        end=SESSIONS[session_count - 1], research_kind="factor_evaluation",
+    )).artifacts_snapshot()
+    assert factor_output["forward_labels"]["report_session_count"] == session_count
+    assert "strategy_backtest" not in factor_output
+    assert "factor_evaluation" not in output
     assert [row["session"] for row in output["strategy_backtest"]["daily"]] == expected_sessions
     for horizon in ("1", "5", "20"):
-        summary = output["factor_evaluation"]["horizons"][horizon]["summary"]
+        summary = factor_output["factor_evaluation"]["horizons"][horizon]["summary"]
         assert summary["ic"]["mean"] is None
         assert summary["ic"]["valid_session_count"] == 0
     if session_count == 1:
@@ -65,7 +71,7 @@ def test_explicit_research_period_accepts_any_positive_session_count(session_cou
 
 
 @pytest.mark.parametrize("session_count", [1, 2, 4])
-def test_explicit_research_period_projects_four_variable_length_result_values(
+def test_explicit_research_period_projects_three_variable_length_result_values(
     session_count: int,
 ) -> None:
     output = run(
@@ -87,7 +93,6 @@ def test_explicit_research_period_projects_four_variable_length_result_values(
     )
 
     assert set(result) == {
-        "factor_summary",
         "strategy_summary",
         "strategy_daily_observations",
         "terminal_strategy_state",
@@ -155,12 +160,18 @@ def test_calculation_warmup_is_derived_and_excluded_from_every_reported_session(
     assert [row["session"] for row in output["alpha_matrix"]["sessions"]] == period
     assert [row["session"] for row in output["diagnostics"]["alpha_coverage"]] == period
     assert [row["session"] for row in output["strategy_backtest"]["daily"]] == period
+    factor_output = run(_run_input(
+        canonical, expression=expression, start=SESSIONS[1], end=SESSIONS[3],
+        research_kind="factor_evaluation",
+    )).artifacts_snapshot()
     for horizon in ("1", "5", "20"):
         assert [
-            row["session"] for row in output["forward_labels"]["horizons"][horizon]["sessions"]
+            row["session"]
+            for row in factor_output["forward_labels"]["horizons"][horizon]["sessions"]
         ] == period
         assert [
-            row["session"] for row in output["factor_evaluation"]["horizons"][horizon]["daily"]
+            row["session"]
+            for row in factor_output["factor_evaluation"]["horizons"][horizon]["daily"]
         ] == period
 
 
@@ -182,7 +193,8 @@ def test_incomplete_derived_warmup_fails_without_moving_the_period() -> None:
         )
 
 
-def test_forward_labels_and_results_never_read_after_the_period_end() -> None:
+@pytest.mark.parametrize("research_kind", ["factor_evaluation", "strategy_backtest"])
+def test_forward_labels_and_results_never_read_after_the_period_end(research_kind: str) -> None:
     canonical = _canonical(session_count=4)
     changed_future = copy.deepcopy(canonical)
     for row in changed_future["prices"]:
@@ -197,11 +209,13 @@ def test_forward_labels_and_results_never_read_after_the_period_end() -> None:
             expression=CLOSE_ADJUSTED,
             start=SESSIONS[0],
             end=SESSIONS[1],
+            research_kind=research_kind,
         )
     ).artifacts_snapshot()
     changed = run(
         _run_input(
             changed_future,
+            research_kind=research_kind,
             expression=CLOSE_ADJUSTED,
             start=SESSIONS[0],
             end=SESSIONS[1],
@@ -209,9 +223,12 @@ def test_forward_labels_and_results_never_read_after_the_period_end() -> None:
     ).artifacts_snapshot()
 
     assert changed == baseline
-    for horizon in ("1", "5", "20"):
-        last = baseline["forward_labels"]["horizons"][horizon]["sessions"][-1]
-        assert last["samples"] == []
+    if research_kind == "factor_evaluation":
+        for horizon in ("1", "5", "20"):
+            last = baseline["forward_labels"]["horizons"][horizon]["sessions"][-1]
+            assert last["samples"] == []
+    else:
+        assert "forward_labels" not in baseline
 
 
 def test_terminal_valuation_retains_holdings_without_a_final_order() -> None:
@@ -324,11 +341,7 @@ def test_explicit_period_advance_rebuilds_the_same_bounded_continuation() -> Non
     assert continuation_snapshot(actual) == continuation_snapshot(expected)
     actual_output = actual.output_snapshot()
     expected_output = expected.output_snapshot()
-    for horizon in ("1", "5", "20"):
-        assert (
-            actual_output["factor_evaluation"]["horizons"][horizon]["summary"]
-            == expected_output["factor_evaluation"]["horizons"][horizon]["summary"]
-        )
+    assert "factor_evaluation" not in actual_output
     assert actual_output["strategy_backtest"] == expected_output["strategy_backtest"]
     assert actual.strategy_resume_snapshot() == expected.strategy_resume_snapshot()
 
@@ -392,10 +405,7 @@ def test_bounded_continuation_preserves_full_explicit_period_results(
         first_divergence(actual_evidence, expected_evidence)
     )
     assert len(actual.output_snapshot()["alpha_matrix"]["sessions"]) == len(sessions)
-    for horizon in ("1", "5", "20"):
-        assert len(
-            actual.output_snapshot()["factor_evaluation"]["horizons"][horizon]["daily"]
-        ) == len(sessions)
+    assert "factor_evaluation" not in actual.output_snapshot()
 
 
 def _retained_evidence(state: KernelState) -> dict[str, object]:
@@ -415,9 +425,6 @@ def _compact_for_continuation(
     bounded = continuation_snapshot(state)
     output = state.output_snapshot()
     output["alpha_matrix"]["sessions"] = []
-    output["forward_labels"] = {"horizons": {}}
-    for horizon in output["factor_evaluation"]["horizons"].values():
-        horizon["daily"] = []
     compact = KernelState(
         run_input=state.run_input_with_research_data(state.research_data_snapshot()),
         output=output,
@@ -434,6 +441,7 @@ def _run_input(
     expression: dict[str, object],
     start: str | None,
     end: str | None,
+    research_kind: str = "strategy_backtest",
 ) -> RunInput:
     return RunInput(
         research_data=(_research_data(canonical) if isinstance(canonical, dict) else canonical),
@@ -444,8 +452,8 @@ def _run_input(
         ).effective_lookback,
         universe="manual",
         neutralization="none",
-        research_kind="strategy_backtest",
-        strategy=StrategyRunInput(
+        research_kind=research_kind,
+        strategy=None if research_kind == "factor_evaluation" else StrategyRunInput(
             holdings_count=1,
             rebalance_interval=1,
             initial_cash_cny="10000000",

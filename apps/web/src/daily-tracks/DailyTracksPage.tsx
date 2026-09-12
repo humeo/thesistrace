@@ -45,7 +45,6 @@ export type DailyTrackDetail = {
   };
   blocked_reason: string | null;
   observation: DailyTrackObservation;
-  factor: DailyTrackAnalysis["factor"];
   strategy: DailyTrackAnalysis["strategy"];
 };
 

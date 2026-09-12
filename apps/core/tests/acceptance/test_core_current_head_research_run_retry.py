@@ -330,7 +330,6 @@ def test_worker_loss_retry_resumes_committed_chunks_on_the_frozen_generation(
             {"factor_summary"}
             if research_kind == "factor_evaluation"
             else {
-                "factor_summary",
                 "strategy_summary",
                 "strategy_daily_observations",
                 "terminal_strategy_state",

@@ -132,19 +132,13 @@ CREATE TABLE research_runs.runs (
                     AND key_metrics ?& ARRAY[
                         'annualized_excess_return',
                         'sharpe',
-                        'maximum_drawdown',
-                        'one_session_rank_ic',
-                        'five_session_rank_ic',
-                        'twenty_session_rank_ic'
+                        'maximum_drawdown'
                     ]
                     AND key_metrics - ARRAY[
                         'research_kind',
                         'annualized_excess_return',
                         'sharpe',
-                        'maximum_drawdown',
-                        'one_session_rank_ic',
-                        'five_session_rank_ic',
-                        'twenty_session_rank_ic'
+                        'maximum_drawdown'
                     ] = '{}'::jsonb
                 )
             )

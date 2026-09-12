@@ -51,10 +51,9 @@ def _long_research_evidence() -> dict[str, object]:
             "generation_manifest_sha256": "c" * 64,
             "chunk_session_count": 21,
             "chunk_count": 207,
-            "factor_summary_sha256": "f" * 64,
+            "result_summary_sha256": "f" * 64,
             "result_object_names": (
                 [
-                    "factor_summary",
                     "strategy_daily_observations",
                     "strategy_summary",
                     "terminal_strategy_state",
@@ -64,7 +63,6 @@ def _long_research_evidence() -> dict[str, object]:
             ),
             "result_payload_names": (
                 [
-                    "factor_summary",
                     "strategy_daily_observations",
                     "strategy_daily_observations.part-000000",
                     "strategy_summary",
@@ -80,7 +78,7 @@ def _long_research_evidence() -> dict[str, object]:
                 "calculation": 2.0,
                 "input": 0.1,
                 "alpha_and_pending": 0.4,
-                "factor": 0.5,
+                "factor": 0.0 if strategy else 0.5,
                 "strategy": 0.5 if strategy else 0.0,
                 "finalize": 0.1,
                 "checkpoint_commit": 0.2,
@@ -143,7 +141,10 @@ def _long_research_evidence() -> dict[str, object]:
             for research_kind in ("factor_evaluation", "strategy_backtest")
         },
         "scientific_equivalence": {
-            "factor_summary_sha256": "f" * 64,
+            "result_summary_sha256_by_kind": {
+                "factor_evaluation": "f" * 64,
+                "strategy_backtest": "f" * 64,
+            },
             "sample_count": 20,
         },
     }
@@ -261,14 +262,14 @@ def test_long_research_qualification_accepts_only_the_exact_release_workload() -
         (
             lambda value: _qualification_sample(value, "strategy_backtest", "warm", 0)[
                 "result_payload_names"
-            ].append("factor_summary"),
+            ].append("strategy_summary"),
             "payload evidence is invalid",
         ),
         (
             lambda value: _qualification_sample(value, "strategy_backtest", "cold", 0).update(
-                factor_summary_sha256="e" * 64
+                result_summary_sha256="e" * 64
             ),
-            "Factor Summary equivalent",
+            "Summary equivalent",
         ),
         (
             lambda value: value["summary"]["factor_evaluation"].update(cold_max_duration_ms=0),
@@ -337,7 +338,9 @@ def test_long_research_sample_qualification_is_reportable_before_fail_fast() -> 
 
 def test_long_research_final_qualification_failure_is_reportable() -> None:
     evidence = _long_research_evidence()
-    evidence["scientific_equivalence"]["factor_summary_sha256"] = "e" * 64
+    evidence["scientific_equivalence"]["result_summary_sha256_by_kind"]["factor_evaluation"] = (
+        "e" * 64
+    )
 
     assert long_research_qualification_outcome(evidence) == {
         "status": "failed",

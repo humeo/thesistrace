@@ -2,30 +2,6 @@ import { StrategyComparisonPanel } from "../analysis/StrategyComparisonPanel";
 import type { StrategyComparison } from "../analysis/strategyComparison";
 import { STRATEGY_BENCHMARK_DISPLAY_NAME } from "../benchmark";
 
-type CorrelationSummary = {
-  mean: number | null;
-  sample_deviation: number | null;
-  icir: number | null;
-  positive_fraction: number | null;
-  valid_session_count: number;
-};
-
-type DailyTrackFactorHorizon = {
-  horizon: 1 | 5 | 20;
-  summary: {
-    ic: CorrelationSummary;
-    rank_ic: CorrelationSummary;
-    quantile_returns: Record<"q1" | "q2" | "q3" | "q4" | "q5", number | null>;
-    top_bottom_return: number | null;
-  };
-  coverage: {
-    signal_session_count: number;
-    ic_valid_session_count: number;
-    rank_ic_valid_session_count: number;
-    quantile_valid_session_count: number;
-  };
-};
-
 type DailyTrackStrategyObservation = {
   session: string;
   gross_nav: string;
@@ -40,9 +16,6 @@ type DailyTrackStrategyObservation = {
 };
 
 export type DailyTrackAnalysis = {
-  factor: {
-    horizons: Record<"1" | "5" | "20", DailyTrackFactorHorizon>;
-  };
   strategy: {
     summary: {
       metrics: {
@@ -60,26 +33,10 @@ export type DailyTrackAnalysis = {
   };
 };
 
-const FACTOR_HORIZONS = ["1", "5", "20"] as const;
-
 export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnalysis }) {
   const metrics = analysis.strategy.summary.metrics;
   return (
     <div className="research-result">
-      <details className="track-factor-details">
-        <summary>Factor analysis</summary>
-        <section className="research-result-section">
-        <div className="section-heading">
-          <h2>Factor Summary</h2>
-        </div>
-        <div className="factor-horizons">
-          {FACTOR_HORIZONS.map((name) => (
-            <FactorHorizonView horizon={analysis.factor.horizons[name]} key={name} />
-          ))}
-        </div>
-        </section>
-      </details>
-
       <section className="research-result-section">
         <StrategyComparisonPanel comparison={analysis.strategy.comparison} />
         <div className="section-heading">
@@ -107,22 +64,6 @@ export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnaly
         </div>
       </section>
     </div>
-  );
-}
-
-function FactorHorizonView({ horizon }: { horizon: DailyTrackFactorHorizon }) {
-  return (
-    <section aria-label={`${horizon.horizon}-session Factor`}>
-      <strong>{horizon.horizon}-session</strong>
-      <Metric label="Rank IC" value={formatDecimal(horizon.summary.rank_ic.mean)} />
-      <Metric label="Rank ICIR" value={formatDecimal(horizon.summary.rank_ic.icir)} />
-      <Metric label="IC" value={formatDecimal(horizon.summary.ic.mean)} />
-      <Metric label="ICIR" value={formatDecimal(horizon.summary.ic.icir)} />
-      <p className="factor-coverage">
-        Rank IC coverage {horizon.coverage.rank_ic_valid_session_count}/
-        {horizon.coverage.signal_session_count}
-      </p>
-    </section>
   );
 }
 

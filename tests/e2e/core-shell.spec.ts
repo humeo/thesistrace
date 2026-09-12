@@ -1080,6 +1080,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     ).toContainText("2 / 2");
     await expect(page.locator("body")).not.toContainText(/checkpoint|staged payload/i);
     await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Factor Summary" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Final Portfolio" })).toHaveCount(0);
     await expect(page.getByText("Retained account at the Research Period boundary", { exact: true })).toHaveCount(0);
     await expect(page.getByText("No pending signal at this boundary.", { exact: true })).toHaveCount(0);
@@ -1101,6 +1102,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     });
     await page.reload();
     await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Factor Summary" })).toHaveCount(0);
 
     const acceptedHistory = await page.request.get("/api/research-runs");
     expect(acceptedHistory.ok()).toBeTruthy();
@@ -1186,6 +1188,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
     await expect(page.locator(".research-run-facts")).toContainText("Research type Strategy Backtest");
     await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Factor Summary" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Daily Observations" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Final Portfolio" })).toHaveCount(0);
     const convertedDetail = await page.request.get(`/api/research-runs/${convertedRunId}`);

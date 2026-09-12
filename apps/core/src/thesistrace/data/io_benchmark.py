@@ -35,12 +35,9 @@ _DURATION_REGRESSION_FACTOR = 3
 _PEAK_MEMORY_REGRESSION_FACTOR = 2
 
 
-def is_research_execution_chunk_received_event(
-    event: Mapping[str, object], run_id: str
-) -> bool:
+def is_research_execution_chunk_received_event(event: Mapping[str, object], run_id: str) -> bool:
     return (
-        event.get("event") == "research_execution_chunk_received"
-        and event.get("run_id") == run_id
+        event.get("event") == "research_execution_chunk_received" and event.get("run_id") == run_id
     )
 
 
@@ -230,7 +227,7 @@ def assert_long_research_qualification(
     if set(kinds) != set(LONG_RESEARCH_KINDS):
         raise AssertionError("long Research Kind set is invalid")
     summary = long_research_qualification_summary(evidence)
-    factor_summary_ids: set[str] = set()
+    summary_ids_by_kind: dict[str, str] = {}
     sample_generation_ids: set[str] = set()
     sample_plans: set[tuple[int, int]] = set()
     sample_run_ids: set[str] = set()
@@ -243,13 +240,15 @@ def assert_long_research_qualification(
         warm = _qualification_samples(
             kind_evidence.get("warm"), phase="warm", research_kind=research_kind
         )
-        factor_summary_ids.update(str(item["factor_summary_sha256"]) for item in (*cold, *warm))
+        summary_ids = {str(item["result_summary_sha256"]) for item in (*cold, *warm)}
+        if len(summary_ids) != 1:
+            raise AssertionError(f"{research_kind} samples are not Summary equivalent")
+        summary_ids_by_kind[research_kind] = next(iter(summary_ids))
         sample_generation_ids.update(
             str(item["generation_manifest_sha256"]) for item in (*cold, *warm)
         )
         sample_plans.update(
-            (int(item["chunk_session_count"]), int(item["chunk_count"]))
-            for item in (*cold, *warm)
+            (int(item["chunk_session_count"]), int(item["chunk_count"])) for item in (*cold, *warm)
         )
         sample_run_ids.update(str(item["run_id"]) for item in (*cold, *warm))
         sample_attempt_ids.update(str(item["attempt_id"]) for item in (*cold, *warm))
@@ -270,11 +269,9 @@ def assert_long_research_qualification(
         or len(sample_attempt_ids) != expected_sample_count
     ):
         raise AssertionError("long Research samples did not use fresh Runs and Attempts")
-    if len(factor_summary_ids) != 1:
-        raise AssertionError("Research Kinds are not Factor Summary equivalent")
     scientific = _mapping(evidence.get("scientific_equivalence"), "scientific equivalence")
     if scientific != {
-        "factor_summary_sha256": next(iter(factor_summary_ids)),
+        "result_summary_sha256_by_kind": summary_ids_by_kind,
         "sample_count": expected_sample_count,
     }:
         raise AssertionError("scientific equivalence evidence is inconsistent")
@@ -291,26 +288,18 @@ def long_research_qualification_summary(
     summary: dict[str, dict[str, int | float]] = {}
     for research_kind in LONG_RESEARCH_KINDS:
         kind = _mapping(kinds.get(research_kind), research_kind)
-        cold = _qualification_samples(
-            kind.get("cold"), phase="cold", research_kind=research_kind
-        )
-        warm = _qualification_samples(
-            kind.get("warm"), phase="warm", research_kind=research_kind
-        )
+        cold = _qualification_samples(kind.get("cold"), phase="cold", research_kind=research_kind)
+        warm = _qualification_samples(kind.get("warm"), phase="warm", research_kind=research_kind)
         all_samples = (*cold, *warm)
         cancellation = _mapping(kind.get("cancellation"), f"{research_kind} cancellation")
         summary[research_kind] = {
             "cold_max_duration_ms": max(_number(item, "duration_ms") for item in cold),
             "warm_max_duration_ms": max(_number(item, "duration_ms") for item in warm),
-            "peak_rss_bytes": max(
-                _number(item, "peak_rss_bytes") for item in all_samples
-            ),
+            "peak_rss_bytes": max(_number(item, "peak_rss_bytes") for item in all_samples),
             "first_checkpoint_latency_ms": max(
                 _number(item, "first_checkpoint_latency_ms") for item in all_samples
             ),
-            "cancellation_latency_ms": _number(
-                cancellation, "cancellation_latency_ms"
-            ),
+            "cancellation_latency_ms": _number(cancellation, "cancellation_latency_ms"),
         }
     return summary
 
@@ -342,11 +331,7 @@ def assert_long_research_sample(
     phase: str,
     index: int,
 ) -> None:
-    if (
-        research_kind not in LONG_RESEARCH_KINDS
-        or phase not in {"cold", "warm"}
-        or index < 0
-    ):
+    if research_kind not in LONG_RESEARCH_KINDS or phase not in {"cold", "warm"} or index < 0:
         raise AssertionError("long Research sample identity is invalid")
     required = {
         "duration_ms",
@@ -372,7 +357,7 @@ def assert_long_research_sample(
         "chunk_count",
         "result_payload_names",
         "result_object_names",
-        "factor_summary_sha256",
+        "result_summary_sha256",
         "phase_timings_seconds",
         "strategy_continuation_present",
         "strategy_observation_count",
@@ -406,9 +391,9 @@ def assert_long_research_sample(
     manifest = sample["result_manifest_sha256"]
     if not isinstance(manifest, str) or len(manifest) != 64:
         raise AssertionError("long Research Result manifest identity is invalid")
-    factor_summary_sha256 = sample["factor_summary_sha256"]
-    if not isinstance(factor_summary_sha256, str) or len(factor_summary_sha256) != 64:
-        raise AssertionError("long Research Factor Summary identity is invalid")
+    result_summary_sha256 = sample["result_summary_sha256"]
+    if not isinstance(result_summary_sha256, str) or len(result_summary_sha256) != 64:
+        raise AssertionError("long Research Result Summary identity is invalid")
     _validate_kind_specific_sample(sample, research_kind)
     if (
         sample["checkpoint_count_after_success"] != 0
@@ -428,7 +413,7 @@ def assert_long_research_sample(
         "chunk_count",
         "result_payload_names",
         "result_object_names",
-        "factor_summary_sha256",
+        "result_summary_sha256",
         "phase_timings_seconds",
         "strategy_continuation_present",
         "fresh_product_state_verified",
@@ -439,25 +424,18 @@ def assert_long_research_sample(
         _number(sample, metric)
     duration_ms = _number(sample, "duration_ms")
     duration_limit_ms = (
-        LONG_RESEARCH_COLD_MAX_LIMIT_MS
-        if phase == "cold"
-        else LONG_RESEARCH_WARM_MAX_LIMIT_MS
+        LONG_RESEARCH_COLD_MAX_LIMIT_MS if phase == "cold" else LONG_RESEARCH_WARM_MAX_LIMIT_MS
     )
     if duration_ms > duration_limit_ms:
         limit = "ten minutes" if phase == "cold" else "five minutes"
         raise AssertionError(f"{research_kind} {phase} sample {index} exceeds {limit}")
     if _number(sample, "peak_rss_bytes") > LONG_RESEARCH_PEAK_RSS_LIMIT_BYTES:
         raise AssertionError(
-            f"{research_kind} {phase} sample {index} "
-            "exceeds the 1.5 GiB execution budget"
+            f"{research_kind} {phase} sample {index} exceeds the 1.5 GiB execution budget"
         )
-    if (
-        _number(sample, "first_checkpoint_latency_ms")
-        > LONG_RESEARCH_FIRST_CHECKPOINT_LIMIT_MS
-    ):
+    if _number(sample, "first_checkpoint_latency_ms") > LONG_RESEARCH_FIRST_CHECKPOINT_LIMIT_MS:
         raise AssertionError(
-            f"{research_kind} {phase} sample {index} "
-            "first Checkpoint exceeds 45 seconds"
+            f"{research_kind} {phase} sample {index} first Checkpoint exceeds 45 seconds"
         )
 
 
@@ -492,9 +470,7 @@ def _qualification_outcome(check: Callable[[], object]) -> dict[str, str | None]
     return {"status": "passed", "failure_reason": None}
 
 
-def _validate_kind_specific_sample(
-    sample: Mapping[str, object], research_kind: str
-) -> None:
+def _validate_kind_specific_sample(sample: Mapping[str, object], research_kind: str) -> None:
     timings = _mapping(sample.get("phase_timings_seconds"), "phase timings")
     expected_phases = {
         "data_read",
@@ -510,20 +486,20 @@ def _validate_kind_specific_sample(
         raise AssertionError("long Research phase timing set is invalid")
     for phase in expected_phases:
         _number(timings, phase)
-    if any(_number(timings, phase) <= 0 for phase in expected_phases - {"strategy"}):
+    if any(_number(timings, phase) <= 0 for phase in expected_phases - {"strategy", "factor"}):
         raise AssertionError("long Research phase timing is empty")
     payload_names = sample.get("result_payload_names")
     object_names = sample.get("result_object_names")
     if not isinstance(payload_names, list) or not isinstance(object_names, list):
         raise AssertionError("long Research Result object evidence is invalid")
-    if (
-        any(not isinstance(name, str) for name in payload_names)
-        or len(payload_names) != len(set(payload_names))
+    if any(not isinstance(name, str) for name in payload_names) or len(payload_names) != len(
+        set(payload_names)
     ):
         raise AssertionError("long Research Result payload evidence is invalid")
     if research_kind == "factor_evaluation":
         if (
             _number(timings, "strategy") != 0
+            or _number(timings, "factor") <= 0
             or sample.get("strategy_continuation_present") is not False
             or sample.get("strategy_observation_count") != 0
             or payload_names != ["factor_summary"]
@@ -532,7 +508,6 @@ def _validate_kind_specific_sample(
             raise AssertionError("Factor Evaluation performed or published Strategy work")
         return
     expected_objects = [
-        "factor_summary",
         "strategy_daily_observations",
         "strategy_summary",
         "terminal_strategy_state",
@@ -547,6 +522,7 @@ def _validate_kind_specific_sample(
     )
     if (
         _number(timings, "strategy") <= 0
+        or _number(timings, "factor") != 0
         or sample.get("strategy_continuation_present") is not True
         or _number(sample, "strategy_observation_count") <= 0
         or object_names != expected_objects

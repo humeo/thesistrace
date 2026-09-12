@@ -13,7 +13,6 @@ from thesistrace.publication.serialization import canonical_json_bytes
 
 MAX_WORKING_CACHE_BYTES = 2_097_152
 MAX_PENDING_ALPHA_SESSIONS = 21
-MAX_ROLLING_FACTOR_ROWS = 3 * 504
 _CACHE_SCHEMA_VERSION = 1
 _CACHE_KEYS = {
     "continuation_bytes",
@@ -22,7 +21,6 @@ _CACHE_KEYS = {
     "fence",
     "head_manifest_sha256",
     "pending_alpha_sessions",
-    "rolling_factor_rows",
     "schema_version",
     "track_id",
 }
@@ -67,7 +65,6 @@ class _DailyTrackWorkingCache:
         fence: int,
         continuation_sha256: str,
         pending_alpha_sessions: int,
-        rolling_factor_rows: int,
     ) -> Mapping[str, object] | None:
         path = self.path(track_id)
         try:
@@ -85,7 +82,6 @@ class _DailyTrackWorkingCache:
                 "fence": fence,
                 "continuation_sha256": continuation_sha256,
                 "pending_alpha_sessions": pending_alpha_sessions,
-                "rolling_factor_rows": rolling_factor_rows,
             }
             if any(entry.get(key) != value for key, value in expected.items()):
                 raise ValueError("Working Cache basis is stale")
@@ -106,10 +102,7 @@ class _DailyTrackWorkingCache:
             value = json.loads(payload)
             if not isinstance(value, Mapping):
                 raise ValueError("Working Cache continuation state is invalid")
-            if _continuation_counts(value) != (
-                pending_alpha_sessions,
-                rolling_factor_rows,
-            ):
+            if _pending_alpha_count(value) != pending_alpha_sessions:
                 raise ValueError("Working Cache continuation counts are invalid")
             return value
         except FileNotFoundError:
@@ -128,7 +121,7 @@ class _DailyTrackWorkingCache:
     ) -> bool:
         path = self.path(track_id)
         continuation = canonical_json_bytes(verified_continuation)
-        pending_count, factor_count = _continuation_counts(verified_continuation)
+        pending_count = _pending_alpha_count(verified_continuation)
         entry = {
             "schema_version": _CACHE_SCHEMA_VERSION,
             "track_id": track_id,
@@ -137,7 +130,6 @@ class _DailyTrackWorkingCache:
             "continuation_bytes": len(continuation),
             "continuation_sha256": hashlib.sha256(continuation).hexdigest(),
             "pending_alpha_sessions": pending_count,
-            "rolling_factor_rows": factor_count,
             "continuation_zlib_base64": base64.b64encode(
                 zlib.compress(continuation, level=9)
             ).decode("ascii"),
@@ -159,18 +151,17 @@ class _DailyTrackWorkingCache:
         return True
 
 
-def _continuation_counts(value: Mapping[str, object]) -> tuple[int, int]:
-    if set(value) != {"schema_version", "pending_alpha", "rolling_factor"}:
+def _pending_alpha_count(value: Mapping[str, object]) -> int:
+    if set(value) != {"schema_version", "pending_alpha"}:
         raise ValueError("Working Cache continuation shape is invalid")
     if value.get("schema_version") != "daily-track-working-state-v1":
         raise ValueError("Working Cache continuation version is invalid")
     pending = value.get("pending_alpha")
-    rolling = value.get("rolling_factor")
     if not isinstance(pending, list) or len(pending) > MAX_PENDING_ALPHA_SESSIONS:
         raise ValueError("Working Cache Pending Alpha bound is invalid")
-    if not isinstance(rolling, list) or len(rolling) > MAX_ROLLING_FACTOR_ROWS:
-        raise ValueError("Working Cache rolling Factor bound is invalid")
-    return len(pending), len(rolling)
+    if any(not isinstance(item, Mapping) for item in pending):
+        raise ValueError("Working Cache Pending Alpha row is invalid")
+    return len(pending)
 
 
 def _bounded_decompress(compressed: bytes, expected_bytes: int) -> bytes:

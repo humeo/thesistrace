@@ -735,17 +735,17 @@ async def _exercise_http_contract(
                 == (strategy.structured_content["run_id"])
             )
             _assert_compact_track(track_detail.structured_content)
-            track_factor_result = await client.call_tool(
+            track_strategy_result = await client.call_tool(
                 "get_daily_track_result",
                 {
                     "track_id": daily_track.structured_content["track_id"],
-                    "section": "factor",
+                    "section": "strategy_summary",
                 },
             )
-            assert track_factor_result.is_error is False
-            assert track_factor_result.structured_content["section"] == "factor"
+            assert track_strategy_result.is_error is False
+            assert track_strategy_result.structured_content["section"] == "strategy_summary"
             assert (
-                track_factor_result.structured_content["track_id"]
+                track_strategy_result.structured_content["track_id"]
                 == (daily_track.structured_content["track_id"])
             )
             duplicate_origin = await client.call_tool(
@@ -1965,7 +1965,6 @@ def _strategy_command(request_id: str) -> dict[str, object]:
 def _assert_compact_track(payload: dict[str, object]) -> None:
     serialized = str(payload).lower()
     assert payload["available_result_sections"] == [
-        "factor",
         "strategy_summary",
         "strategy_observations",
         "origin",

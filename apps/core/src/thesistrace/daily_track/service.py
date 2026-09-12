@@ -48,8 +48,6 @@ from thesistrace.daily_track.failure_policy import (
 from thesistrace.daily_track.models import (
     DAILY_TRACK_RESULT_SECTIONS,
     DailyTrackDetail,
-    DailyTrackFactorResultSection,
-    DailyTrackFactorResultSectionInput,
     DailyTrackList,
     DailyTrackOriginAccount,
     DailyTrackOriginResultSection,
@@ -1781,13 +1779,6 @@ class DailyTrackService:
         track_snapshot = snapshot
         current_session = track_snapshot.current_strategy_session
         current_manifest = track_snapshot.current_checkpoint_manifest_sha256
-        if isinstance(query, DailyTrackFactorResultSectionInput):
-            factor_value = self._current_factor_value(origin, track_snapshot)
-            return DailyTrackFactorResultSection(
-                track_id=query.track_id,
-                strategy_session=current_session,
-                factor=_public_factor(factor_value),
-            )
         if isinstance(query, DailyTrackStrategySummaryResultSectionInput):
             detail = self.get(researcher_id, query.track_id)
             if detail is None:
@@ -1936,32 +1927,6 @@ class DailyTrackService:
             )
         raise DailyTrackResultUnavailable("DailyTrack Result section is unsupported")
 
-    def _current_factor_value(
-        self,
-        origin: TrackingOrigin,
-        snapshot: DailyTrackResultSnapshot,
-    ) -> Mapping[str, object]:
-        assert self._publication is not None
-        if snapshot.current_checkpoint_is_seed:
-            section = self._read_semantic_result_section(
-                self._publication,
-                _seed_result_ref(origin),
-                research_kind="strategy_backtest",
-                section="factor",
-            )
-            return _mapping_value(section.value, "Tracking Factor Result")
-        checkpoint = snapshot.current_checkpoint
-        value = _read_publication_json(
-            self._publication,
-            PublishedRef(
-                manifest_sha256=checkpoint.manifest_sha256,
-                kind="daily-track.checkpoint",
-                provenance=checkpoint.provenance,
-            ),
-            payload_name="checkpoint",
-        )
-        return _mapping_value(value.get("factor_summary"), "Checkpoint Factor Summary")
-
     def _bounded_strategy_observations(
         self,
         origin: TrackingOrigin,
@@ -2079,16 +2044,11 @@ class DailyTrackService:
             if self._read_semantic_result_section is None:
                 raise RuntimeError("DailyTrack semantic Result reader is unavailable")
             if row["current_checkpoint_is_seed"]:
-                factor_value = _mapping_value(self._read_semantic_result_section(
-                    self._publication, _seed_result_ref(origin),
-                    research_kind="strategy_backtest", section="factor",
-                ).value, "Factor Summary")
                 projected_strategy_summary = _mapping_value(self._read_semantic_result_section(
                     self._publication, _seed_result_ref(origin),
                     research_kind="strategy_backtest", section="strategy_summary",
                 ).value, "Strategy Summary")
             else:
-                factor_value = _mapping_value(latest["factor_summary"], "Factor Summary")
                 projected_strategy_summary = {"metrics": dict(_mapping_value(
                     _mapping_value(latest["strategy_state"], "Strategy State")["summary"],
                     "Strategy Summary",
@@ -2122,7 +2082,6 @@ class DailyTrackService:
                 raise RuntimeError("Tracking observation window is incomplete")
             recent_observations = [observations_by_session[session]
                                    for session in recent_strategy_sessions]
-            factor = _public_factor(factor_value)
             terminal_observation = recent_observations[-1]
             if self._strategy_comparison is None:
                 raise RuntimeError("Strategy comparison service is not configured")
@@ -2214,7 +2173,6 @@ class DailyTrackService:
                         }),
                         observations=recent_observations,
                     ),
-                    "factor": factor,
                     "strategy": {
                         "summary": projected_strategy_summary,
                         "observations": recent_observations,
@@ -3209,7 +3167,6 @@ class DailyTrackService:
                 fence=claim.fence - 1,
                 continuation_sha256=str(predecessor["continuation_sha256"]),
                 pending_alpha_sessions=int(predecessor["pending_alpha_sessions"]),
-                rolling_factor_rows=int(predecessor["rolling_factor_rows"]),
             )
         except (KeyError, TypeError, ValueError):
             self._working_cache.delete(claim.track_id)
@@ -3888,28 +3845,6 @@ def _collect_publication_deletions(
                 "failure_code": "PUBLICATION_UNAVAILABLE",
             }
         )
-
-
-def _public_factor(value: Mapping[str, object]) -> dict[str, object]:
-    horizons = _mapping_value(value.get("horizons"), "Factor horizons")
-    if set(horizons) != {"1", "5", "20"}:
-        raise RuntimeError("Factor horizons are invalid")
-    return {
-        "horizons": {
-            name: {
-                "horizon": _mapping_value(horizons[name], "Factor horizon").get("horizon"),
-                "summary": _mapping_value(
-                    _mapping_value(horizons[name], "Factor horizon").get("summary"),
-                    "Factor summary",
-                ),
-                "coverage": _mapping_value(
-                    _mapping_value(horizons[name], "Factor horizon").get("coverage"),
-                    "Factor coverage",
-                ),
-            }
-            for name in ("1", "5", "20")
-        }
-    }
 
 
 def _inject_comparison_metrics(

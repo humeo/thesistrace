@@ -149,6 +149,7 @@ class RunInput:
             raise KernelRunError("Alpha-and-Factor Research Period is incomplete")
         plan = self.alpha_execution_plan()
         return {
+            "research_kind": self.research_kind,
             "alpha": {
                 "expression": self.alpha_expression_snapshot(),
                 "field_bindings": self.field_bindings_snapshot(),
@@ -390,8 +391,6 @@ def _calculate(
     origin_session: str,
     period_sessions: list[str],
 ) -> RunOutput:
-    alpha_expression = run_input.alpha_expression_snapshot()
-    definition = calculation_definition(run_input, alpha_expression)
     matrix = evaluate_alpha_matrix(
         research_data,
         compiled_alpha=run_input.compiled_alpha_snapshot(),
@@ -401,7 +400,6 @@ def _calculate(
         run_input,
         research_data,
         matrix,
-        definition,
         origin_session=origin_session,
         period_sessions=period_sessions,
     )
@@ -415,8 +413,6 @@ def _calculate_columnar(
     period_sessions: list[str],
     cancellation_check: Callable[[], None],
 ) -> RunOutput:
-    alpha_expression = run_input.alpha_expression_snapshot()
-    definition = calculation_definition(run_input, alpha_expression)
     matrix = evaluate_columnar_alpha_matrix(
         research_data,
         compiled_alpha=run_input.compiled_alpha_snapshot(),
@@ -427,7 +423,6 @@ def _calculate_columnar(
         run_input,
         research_data,
         matrix,
-        definition,
         origin_session=origin_session,
         period_sessions=period_sessions,
         cancellation_check=cancellation_check,
@@ -438,7 +433,6 @@ def _calculate_from_matrix(
     run_input: RunInput,
     research_data: AlignedResearchData | ColumnarResearchSeries,
     matrix: dict[str, object],
-    definition: dict[str, object],
     *,
     origin_session: str,
     period_sessions: list[str],
@@ -451,17 +445,33 @@ def _calculate_from_matrix(
         session for session in matrix["sessions"] if str(session["session"]) in selected
     ]
     matrix["checksum"] = alpha_matrix_checksum(matrix["sessions"])
-    labels = build_forward_labels(
-        research_data,
-        matrix,
-        signal_sessions=period_sessions,
-        cancellation_check=cancellation_check,
-    )
-    if cancellation_check is not None:
-        cancellation_check()
-    factor = evaluate_factor(labels)
-    if cancellation_check is not None:
-        cancellation_check()
+    if run_input.research_kind == "factor_evaluation":
+        labels = build_forward_labels(
+            research_data,
+            matrix,
+            signal_sessions=period_sessions,
+            cancellation_check=cancellation_check,
+        )
+        if cancellation_check is not None:
+            cancellation_check()
+        artifacts = {
+            "alpha_matrix": matrix,
+            "forward_labels": labels,
+            "factor_evaluation": evaluate_factor(labels),
+        }
+        if cancellation_check is not None:
+            cancellation_check()
+        return RunOutput(
+            artifacts=artifacts,
+            strategy_ledger=(),
+            track_state=KernelState(
+                run_input=run_input,
+                output=artifacts,
+                strategy_resume={},
+                origin_session=origin_session,
+            ),
+        )
+    definition = calculation_definition(run_input)
     strategy = (
         transition_strategy(
             research_data,
@@ -480,7 +490,7 @@ def _calculate_from_matrix(
     )
     if cancellation_check is not None:
         cancellation_check()
-    artifacts = compose_output(matrix, labels, factor, strategy.finalized)
+    artifacts = compose_output(matrix, strategy.finalized)
     track_state = KernelState(
         run_input=run_input,
         output=artifacts,
@@ -527,14 +537,10 @@ def calculation_definition(
 
 def compose_output(
     matrix: dict[str, object],
-    labels: dict[str, object],
-    factor: dict[str, object],
     strategy: dict[str, object],
 ) -> dict[str, dict[str, object]]:
     return {
         "alpha_matrix": matrix,
-        "forward_labels": labels,
-        "factor_evaluation": factor,
         "strategy_backtest": strategy,
         "strategy_time_series": {"daily": strategy["daily"]},
         "strategy_events": {

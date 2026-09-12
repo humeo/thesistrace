@@ -4161,14 +4161,6 @@ def _start_tracking_fingerprint(run_id: str) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
-class _StrategyFilterMetrics(StrategyBacktestResearchRunKeyMetrics):
-    """Persist factor metrics for SQL filtering without expanding the visible summary."""
-
-    one_session_rank_ic: float | int | None
-    five_session_rank_ic: float | int | None
-    twenty_session_rank_ic: float | int | None
-
-
 def _summary(row: object) -> ResearchRunSummary:
     assert isinstance(row, dict)
     immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
@@ -4177,10 +4169,6 @@ def _summary(row: object) -> ResearchRunSummary:
         compact_formula if len(compact_formula) <= 120 else f"{compact_formula[:117]}..."
     )
     key_metrics = row.get("key_metrics")
-    if isinstance(key_metrics, dict) and immutable_input.research_kind == "strategy_backtest":
-        key_metrics = {key: value for key, value in key_metrics.items()
-                       if key not in {"one_session_rank_ic", "five_session_rank_ic",
-                                      "twenty_session_rank_ic"}}
     return ResearchRunSummary.model_validate(
         {
             "id": row["id"],
@@ -4233,11 +4221,9 @@ def _result_key_metrics(
     if not isinstance(maximum_drawdown, Mapping):
         raise ResearchResultError("Final Research values have no Maximum Drawdown")
     try:
-        factor_metrics = _result_key_metrics(final_values, "factor_evaluation")
-        return _StrategyFilterMetrics.model_validate(
+        return StrategyBacktestResearchRunKeyMetrics.model_validate(
             {
                 "research_kind": research_kind,
-                **factor_metrics.model_dump(exclude={"research_kind"}),
                 "annualized_excess_return": annualized_excess_return,
                 "sharpe": metrics.get("sharpe"),
                 "maximum_drawdown": maximum_drawdown.get("value"),
@@ -4681,28 +4667,9 @@ def _public_result(
 ) -> ResearchRunResult:
     if not isinstance(stored, Mapping):
         raise ResearchRunResultUnavailable
-    factor = stored.get("factor_summary")
-    if not isinstance(factor, Mapping) or provenance.get("research_kind") != research_kind:
+    if provenance.get("research_kind") != research_kind:
         raise ResearchRunResultUnavailable
-    stored_horizons = factor.get("horizons")
-    if not isinstance(stored_horizons, Mapping) or set(stored_horizons) != {
-        "1",
-        "5",
-        "20",
-    }:
-        raise ResearchRunResultUnavailable
-    horizons: dict[str, object] = {}
-    for name in ("1", "5", "20"):
-        horizon = stored_horizons[name]
-        if not isinstance(horizon, Mapping):
-            raise ResearchRunResultUnavailable
-        horizons[name] = {
-            "horizon": horizon.get("horizon"),
-            "summary": horizon.get("summary"),
-            "coverage": horizon.get("coverage"),
-        }
     public: dict[str, object] = {
-        "factor": {"horizons": horizons},
         "provenance": {
             name: provenance[name]
             for name in (
@@ -4716,6 +4683,27 @@ def _public_result(
         },
     }
     if research_kind == "factor_evaluation":
+        factor = stored.get("factor_summary")
+        if not isinstance(factor, Mapping):
+            raise ResearchRunResultUnavailable
+        stored_horizons = factor.get("horizons")
+        if not isinstance(stored_horizons, Mapping) or set(stored_horizons) != {
+            "1",
+            "5",
+            "20",
+        }:
+            raise ResearchRunResultUnavailable
+        horizons: dict[str, object] = {}
+        for name in ("1", "5", "20"):
+            horizon = stored_horizons[name]
+            if not isinstance(horizon, Mapping):
+                raise ResearchRunResultUnavailable
+            horizons[name] = {
+                "horizon": horizon.get("horizon"),
+                "summary": horizon.get("summary"),
+                "coverage": horizon.get("coverage"),
+            }
+        public["factor"] = {"horizons": horizons}
         return FactorEvaluationResearchRunResult.model_validate(public)
     strategy_summary = stored.get("strategy_summary")
     observations = stored.get("strategy_daily_observations")

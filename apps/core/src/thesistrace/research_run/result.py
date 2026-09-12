@@ -67,7 +67,6 @@ RESULT_TERMINAL_POSITION_PARTITION_PREFIX = "terminal_positions.part-"
 FACTOR_RESULT_VALUE_NAMES = frozenset({"factor_summary"})
 STRATEGY_RESULT_VALUE_NAMES = frozenset(
     {
-        "factor_summary",
         "strategy_summary",
         "strategy_daily_observations",
         "terminal_strategy_state",
@@ -75,7 +74,6 @@ STRATEGY_RESULT_VALUE_NAMES = frozenset(
 )
 STRATEGY_RESULT_BASE_PAYLOAD_NAMES = frozenset(
     {
-        "factor_summary",
         "strategy_summary",
         "strategy_daily_observations",
         "terminal_strategy_state",
@@ -175,7 +173,6 @@ def result_publication_payloads(
         result["terminal_strategy_state"]
     )
     payloads: dict[str, JsonPayload | ParquetRowsPayload] = {
-        "factor_summary": JsonPayload(copy.deepcopy(result["factor_summary"])),
         "strategy_summary": JsonPayload(copy.deepcopy(result["strategy_summary"])),
         "terminal_strategy_state": JsonPayload(terminal_state),
     }
@@ -225,13 +222,11 @@ def result_publication_payloads_from_staged(
             raise ResearchResultError("Factor Evaluation Result is invalid") from error
         return {"factor_summary": JsonPayload(copy.deepcopy(final_values["factor_summary"]))}
     if research_kind != "strategy_backtest" or set(final_values) != {
-        "factor_summary",
         "strategy_summary",
         "terminal_strategy_state",
     }:
         raise ResearchResultError("Final Research values are incomplete")
     try:
-        FactorSummaryValue.model_validate(final_values["factor_summary"])
         StrategySummaryValue.model_validate(final_values["strategy_summary"])
         TerminalStrategyStateValue.model_validate(final_values["terminal_strategy_state"])
     except ValidationError as error:
@@ -242,7 +237,6 @@ def result_publication_payloads_from_staged(
         final_values["terminal_strategy_state"]
     )
     payloads: dict[str, JsonPayload | ParquetRowsPayload | StagedPayload] = {
-        "factor_summary": JsonPayload(copy.deepcopy(final_values["factor_summary"])),
         "strategy_summary": JsonPayload(copy.deepcopy(final_values["strategy_summary"])),
         "terminal_strategy_state": JsonPayload(terminal_state),
     }
@@ -304,7 +298,6 @@ def read_result_bundle(
     ):
         raise ResearchResultError("Strategy Backtest Result is incomplete")
     result = {
-        "factor_summary": _read_json_value(bundle, "factor_summary"),
         "strategy_summary": _read_json_value(bundle, "strategy_summary"),
         "strategy_daily_observations": _read_daily_observations(bundle),
         "terminal_strategy_state": {
@@ -331,6 +324,8 @@ def read_semantic_result_section(
         _require_result_bundle_identity(bundle)
         return SemanticResultSectionRead(value=bundle.provenance)
     if section == "factor":
+        if research_kind != "factor_evaluation":
+            raise ResearchResultError("Factor Result section requires Factor Evaluation")
         bundle = publication.read_selected(published_ref, frozenset({"factor_summary"}))
         _require_result_bundle_identity(bundle)
         value = _read_json_value(bundle, "factor_summary")
@@ -494,8 +489,8 @@ def build_result_payload(
 ) -> dict[str, object]:
     """Project transient Kernel output into the bounded durable Result contract."""
     artifacts = output.artifacts_snapshot()
-    factor = _mapping(artifacts, "factor_evaluation")
     if research_kind == "factor_evaluation":
+        factor = _mapping(artifacts, "factor_evaluation")
         return {"factor_summary": _factor_summary(factor)}
     if research_kind != "strategy_backtest" or rebalance_interval is None:
         raise ResearchResultError("Strategy Backtest Result inputs are incomplete")
@@ -504,7 +499,6 @@ def build_result_payload(
     if not daily:
         raise ResearchResultError("Result requires a positive Research Period")
     return {
-        "factor_summary": _factor_summary(factor),
         "strategy_summary": _strategy_summary(strategy),
         "strategy_daily_observations": _strategy_daily_observations(strategy),
         "terminal_strategy_state": _terminal_strategy_state(
@@ -966,9 +960,8 @@ def _validate_result_values(result: Mapping[str, object], *, research_kind: str)
             ) from error
         return
     if research_kind != "strategy_backtest" or set(result) != STRATEGY_RESULT_VALUE_NAMES:
-        raise ResearchResultError("Strategy Backtest Result must contain four durable values")
+        raise ResearchResultError("Strategy Backtest Result must contain three durable values")
     try:
-        FactorSummaryValue.model_validate(result["factor_summary"])
         StrategySummaryValue.model_validate(result["strategy_summary"])
         StrategyDailyObservationsValue.model_validate(result["strategy_daily_observations"])
         TerminalStrategyStateValue.model_validate(result["terminal_strategy_state"])

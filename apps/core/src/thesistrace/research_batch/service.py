@@ -2798,7 +2798,9 @@ class ResearchBatchService:
                 or binding.get("numeric_execution_contract") != immutable.numeric_execution_contract
                 or binding.get("semantic_versions") != immutable.semantic_versions
                 or binding.get("semantic_versions") != SEMANTIC_VERSIONS
-                or binding.get("label_horizons") != [1, 5, 20]
+                or binding.get("research_kind") != immutable.research_kind
+                or binding.get("label_horizons")
+                != ([1, 5, 20] if immutable.research_kind == "factor_evaluation" else [])
             ):
                 raise ValueError
             metadata = validate_private_alpha_factor_artifact(

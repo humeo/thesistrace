@@ -260,7 +260,11 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
             research_kind="factor_evaluation",
         )
         assert canonical_json_bytes(factor_result["factor_summary"]) == (
-            canonical_json_bytes(actual["factor_summary"])
+            canonical_json_bytes(
+                _reference_result(
+                    settings, generation_id, runtime.database, factor_run_id
+                )["factor_summary"]
+            )
         )
         factor_track = client.post(
             f"/api/research-runs/{factor_run_id}/daily-tracks",
@@ -719,7 +723,7 @@ def test_phase_completion_is_emitted_once_for_a_multi_chunk_phase(tmp_path: Path
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_research_kinds_publish_identical_factor_evidence_when_strategy_changes(
+def test_research_kinds_publish_separate_evidence_when_strategy_changes(
     tmp_path: Path,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
@@ -783,16 +787,18 @@ def test_research_kinds_publish_identical_factor_evidence_when_strategy_changes(
                     provenance=stored["result_provenance"],
                 )
             )
-            factor_payloads.append(bundle.payloads["factor_summary"].content)
             detail = client.get(f"/api/research-runs/{run_id}").json()
             assert detail["status"] == "succeeded"
-            public_factors.append(detail["result"]["factor"])
             if index == 0:
+                factor_payloads.append(bundle.payloads["factor_summary"].content)
+                public_factors.append(detail["result"]["factor"])
                 assert set(bundle.payloads) == {"factor_summary"}
                 assert detail["research_kind"] == "factor_evaluation"
                 assert set(detail["result"]) == {"factor", "provenance"}
             else:
                 assert detail["research_kind"] == "strategy_backtest"
+                assert "factor_summary" not in bundle.payloads
+                assert "factor" not in detail["result"]
                 strategy_payloads.append(bundle.payloads["strategy_summary"].content)
                 assert not any("rank_ic" in key for key in detail["key_metrics"])
                 factor_metrics = json.loads(factor_payloads[-1])["horizons"]
@@ -808,13 +814,10 @@ def test_research_kinds_publish_identical_factor_evidence_when_strategy_changes(
                         ]),
                     })
                     assert response.status_code == 200, response.text
-                    assert run_id in {item["id"] for item in response.json()["items"]}
+                    assert run_id not in {item["id"] for item in response.json()["items"]}
 
 
-        assert factor_payloads[0] == factor_payloads[1] == factor_payloads[2]
-        assert canonical_json_bytes(public_factors[0]) == canonical_json_bytes(
-            public_factors[1]
-        ) == canonical_json_bytes(public_factors[2])
+        assert len(factor_payloads) == len(public_factors) == 1
         assert strategy_payloads[0] != strategy_payloads[1]
 
         factor_summary = json.loads(factor_payloads[0])
@@ -2580,7 +2583,6 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         assert public_run["execution_timing"]["elapsed_seconds"] >= 0
         assert public_run["execution_timing"]["is_final"] is True
         assert set(public_run["result"]) == {
-            "factor",
             "strategy",
             "terminal_strategy_state",
             "provenance",
@@ -3974,7 +3976,8 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         assert cache_processor.process_next() is True
         intact_detail = restarted.get(f"/api/daily-tracks/{first_track['id']}").json()
         cache_detail = restarted.get(f"/api/daily-tracks/{control_track['id']}").json()
-        assert intact_detail["factor"] == cache_detail["factor"]
+        assert "factor" not in intact_detail
+        assert "factor" not in cache_detail
         assert intact_detail["strategy"] == cache_detail["strategy"]
         assert cache_detail["strategy_session"] == cache_sessions[-1]
         assert [item["session"] for item in cache_detail["strategy"]["observations"]] == list(
@@ -4727,29 +4730,29 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
             {"factor_summary"}
             if research_kind == "factor_evaluation"
             else {
-                "factor_summary",
                 "strategy_summary",
                 "strategy_daily_observations",
                 "terminal_strategy_state",
             }
         )
         assert set(result) == expected_result_names
-        for horizon in result["factor_summary"]["horizons"].values():
-            assert horizon["summary"]["ic"]["mean"] is None
-            assert horizon["summary"]["ic"]["icir"] is None
-            assert horizon["summary"]["rank_ic"]["mean"] is None
-            assert horizon["summary"]["rank_ic"]["icir"] is None
-            assert horizon["summary"]["quantile_returns"] == {
-                "q1": None,
-                "q2": None,
-                "q3": None,
-                "q4": None,
-                "q5": None,
-            }
-            assert horizon["summary"]["top_bottom_return"] is None
-            assert horizon["coverage"]["ic_valid_session_count"] == 0
-            assert horizon["coverage"]["rank_ic_valid_session_count"] == 0
-            assert horizon["coverage"]["quantile_valid_session_count"] == 0
+        if research_kind == "factor_evaluation":
+            for horizon in result["factor_summary"]["horizons"].values():
+                assert horizon["summary"]["ic"]["mean"] is None
+                assert horizon["summary"]["ic"]["icir"] is None
+                assert horizon["summary"]["rank_ic"]["mean"] is None
+                assert horizon["summary"]["rank_ic"]["icir"] is None
+                assert horizon["summary"]["quantile_returns"] == {
+                    "q1": None,
+                    "q2": None,
+                    "q3": None,
+                    "q4": None,
+                    "q5": None,
+                }
+                assert horizon["summary"]["top_bottom_return"] is None
+                assert horizon["coverage"]["ic_valid_session_count"] == 0
+                assert horizon["coverage"]["rank_ic_valid_session_count"] == 0
+                assert horizon["coverage"]["quantile_valid_session_count"] == 0
         listed = client.get("/api/research-runs").json()["items"]
         assert len(listed) == 1
         if research_kind == "factor_evaluation":
@@ -5742,8 +5745,8 @@ def _reference_result(
                 effective_alpha_lookback=immutable.alpha_admission.effective_lookback,
                 universe=immutable.universe,
                 neutralization=immutable.neutralization,
-                research_kind="strategy_backtest",
-                strategy=StrategyRunInput(
+                research_kind=immutable.research_kind,
+                strategy=None if strategy is None else StrategyRunInput(
                     holdings_count=int(strategy["holdings_count"]),
                     rebalance_interval=int(strategy["rebalance_every_sessions"]),
                     initial_cash_cny=str(strategy["initial_cash_cny"]),
@@ -5756,8 +5759,8 @@ def _reference_result(
                 research_end_session=selected[-1],
             )
         ),
-        research_kind="strategy_backtest",
-        rebalance_interval=int(strategy["rebalance_every_sessions"]),
+        research_kind=immutable.research_kind,
+        rebalance_interval=None if strategy is None else int(strategy["rebalance_every_sessions"]),
     )
 
 
@@ -6459,7 +6462,12 @@ def _release_claim_barrier_worker(process: subprocess.Popen[str]) -> None:
     assert process.stdin is not None
     process.stdin.write("release\n")
     process.stdin.flush()
-    stdout, stderr = process.communicate(timeout=30)
+    try:
+        stdout, stderr = process.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        stdout, stderr = process.communicate(timeout=10)
+        pytest.fail(f"Claim barrier Worker did not exit after release:\n{stdout}\n{stderr}")
     assert process.returncode == 0, stdout + stderr
 
 

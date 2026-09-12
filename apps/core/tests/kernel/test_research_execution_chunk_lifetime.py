@@ -14,6 +14,8 @@ class _ChunkPayload:
 
 
 class _KernelInput:
+    research_kind = "strategy_backtest"
+
     def __init__(self, payload: _ChunkPayload) -> None:
         self.payload = payload
 
@@ -87,11 +89,10 @@ def test_completed_chunk_releases_large_calculation_inputs_before_yield(monkeypa
         "from_run_input",
         lambda *_args, **_kwargs: object(),
     )
-    monkeypatch.setattr(
-        execution,
-        "prepare_columnar_forward_labels",
-        lambda *_args, **_kwargs: object(),
-    )
+    def forbidden_labels(*_args, **_kwargs):
+        raise AssertionError("Strategy execution must not prepare future labels")
+
+    monkeypatch.setattr(execution, "prepare_columnar_forward_labels", forbidden_labels)
     monkeypatch.setattr(
         execution,
         "execute_research_chunk",

@@ -575,10 +575,10 @@ def _calculate_chunks(
                 run_input=run_input,
                 binding=alpha_factor_binding,
                 research_data=research_data,
-                forward_labels=prepare_columnar_forward_labels(
+                forward_labels=(prepare_columnar_forward_labels(
                     research_data,
                     cancellation_check=lambda: _require_not_cancelled(cancel_requested),
-                ),
+                ) if run_input.research_kind == "factor_evaluation" else None),
                 research_sessions=research_sessions,
                 final_chunk=final_chunk,
                 continuation=continuation,

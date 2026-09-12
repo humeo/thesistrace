@@ -107,7 +107,6 @@ type FactorEvaluationResearchResult = {
 };
 
 type StrategyBacktestResearchResult = {
-  factor: { horizons: Record<"1" | "5" | "20", FactorHorizon> };
   strategy: {
     summary: {
       alpha_checksum: string;
@@ -933,7 +932,7 @@ function progressLabel(
   if (status === "failed") return "Execution failed";
   if (status === "succeeded") return "Execution complete";
   if (phase === "preparing_data") return "Preparing data";
-  if (phase === "shared_alpha_factor") return "Computing shared Alpha and Factor";
+  if (phase === "shared_alpha_factor") return "Computing shared Alpha";
   if (phase === "waiting_for_execution") return "Waiting for earlier research in this batch";
   if (phase === "recovering") return "Waiting for execution recovery";
   return phase === "finalizing" ? "Finalizing result" : `Running ${phase}`;
@@ -1172,7 +1171,7 @@ export function ResearchMetricFilters({ researchKind, onApply }: {
   onApply: (filters: ResearchMetricFilter[]) => void;
 }) {
   const columns = researchKind === "strategy_backtest"
-    ? [...STRATEGY_RESEARCH_RUN_METRICS, ...FACTOR_RESEARCH_RUN_METRICS]
+    ? STRATEGY_RESEARCH_RUN_METRICS
     : FACTOR_RESEARCH_RUN_METRICS;
   const [rows, setRows] = useState<MetricFilterDraft[]>([]);
   const [applied, setApplied] = useState("[]");
@@ -1436,18 +1435,19 @@ function formatResearchRunMetric(
 
 export function ResearchResultView({ result }: { result: ResearchResult }) {
   const strategyResult = "strategy" in result ? result : null;
+  const factorResult = "factor" in result ? result : null;
   return (
     <div className="research-result">
-      <section className="research-result-section">
+      {factorResult !== null ? <section className="research-result-section">
         <div className="section-heading">
           <h2>Factor Summary</h2>
         </div>
         <div className="factor-horizons">
           {FACTOR_HORIZONS.map((name) => (
-            <FactorHorizonView horizon={result.factor.horizons[name]} key={name} />
+            <FactorHorizonView horizon={factorResult.factor.horizons[name]} key={name} />
           ))}
         </div>
-      </section>
+      </section> : null}
 
       {strategyResult !== null ? <section className="research-result-section">
         <div className="section-heading">
