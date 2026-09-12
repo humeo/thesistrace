@@ -510,3 +510,38 @@ def _factor_result_with_evidence(case):
     return {"factor_summary": accumulator.full_summary(
         alpha_checksums={h: "a" * 64 for h in (1, 5, 20)},
     )}, rows
+
+
+def test_result_budget_accounts_for_permanent_events_separately_from_daily_metrics():
+    # 64 sessions with 100-name daily rotation already exceed the former 1 MiB total.
+    event_rows = 64 + 3 * 12500
+    assert result_bundle_byte_budget(64, strategy_event_count=event_rows) > 3_271_978
+    assert enforce_result_bundle_budget(
+        3_271_978, 64, strategy_event_count=event_rows,
+    ) == 3_271_978
+    with pytest.raises(ResearchResultError, match="event count"):
+        result_bundle_byte_budget(64, strategy_event_count=-1)
+
+
+def test_strategy_reporting_does_not_download_permanent_event_history():
+    from thesistrace.research_run.result import read_strategy_reporting_bundle
+
+    original = _verified_bundle(result_publication_payloads(
+        _legal_result(), research_kind="strategy_backtest",
+    ))
+    event_names = {
+        "strategy_targets", "strategy_orders", "strategy_child_orders",
+        "strategy_fills", "strategy_adjustments", "strategy_fills.part-000000",
+    }
+
+    class ReportingPublication:
+        def payload_names(self, _reference):
+            return frozenset(original.payloads) | event_names
+
+        def read_selected(self, _reference, names):
+            assert not set(names) & event_names
+            assert set(names) == set(original.payloads)
+            return original
+
+    bundle = read_strategy_reporting_bundle(ReportingPublication(), object())
+    assert read_result_bundle(bundle, research_kind="strategy_backtest") == _legal_result()

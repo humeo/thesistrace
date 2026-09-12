@@ -504,6 +504,7 @@ def _calculate_chunks(
                 "completed_research_sessions": resume_from.completed_research_sessions,
                 "continuation": continuation,
                 "strategy_daily_observations": [],
+                "strategy_events": {},
                 "common_input_observations": [],
                 "factor_daily_observations": [],
                 "final_values": dict(resume_from.final_values),
@@ -534,6 +535,7 @@ def _calculate_chunks(
         )
         final_chunk = chunk.ordinal == len(plan.chunks)
         observations: tuple[dict[str, object], ...] = ()
+        strategy_events: dict[str, list[dict[str, object]]] = {}
         common_observations: list[dict[str, object]] = []
         factor_observations: list[dict[str, object]] = []
         final_values: dict[str, object] | None = None
@@ -599,6 +601,7 @@ def _calculate_chunks(
             }
             continuation = calculation.continuation
             observations = calculation.strategy_daily_observations
+            strategy_events = calculation.strategy_events
             factor_observations = list(calculation.factor_daily_observations)
             if calculation.common_input_sessions:
                 common_observations = common_input_observation_rows(
@@ -629,6 +632,7 @@ def _calculate_chunks(
                 ),
                 "continuation": continuation,
                 "strategy_daily_observations": list(observations),
+                "strategy_events": strategy_events,
                 "common_input_observations": common_observations,
                 "factor_daily_observations": factor_observations,
                 "final_values": final_values,
@@ -836,7 +840,7 @@ def _chunk_from_response(
         "completed_research_sessions",
         "continuation",
         "strategy_daily_observations",
-        "common_input_observations",
+        "strategy_events",        "common_input_observations",
         "factor_daily_observations",
         "final_values",
         "final",

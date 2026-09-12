@@ -11,6 +11,7 @@ from threading import Thread
 
 from thesistrace.data.io_metrics import cold_file_reads, measure_data_io
 from thesistrace.research_batch.execution import execute_research_batch_messages
+from thesistrace.strategy_event_wire import print_strategy_event_message
 
 
 def main() -> None:
@@ -65,7 +66,7 @@ def main() -> None:
             raise SystemExit(65)
         for response in execute_research_batch_messages(request):
             response["data_io"] = measurement.snapshot()
-            print(json.dumps(response, sort_keys=True, separators=(",", ":")), flush=True)
+            print_strategy_event_message(response, acknowledge=lambda: {"command": commands.get()})
             status = response.get("status")
             if status == "failed":
                 raise SystemExit(1)

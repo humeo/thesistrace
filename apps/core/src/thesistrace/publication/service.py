@@ -428,6 +428,17 @@ class Publication:
         with self._database.transaction() as transaction:
             return self.read_in_transaction(transaction, published_ref)
 
+    def payload_names(self, published_ref: PublishedRef) -> frozenset[str]:
+        """Inspect verified manifest inventory without downloading payload bodies."""
+        with self._database.transaction() as transaction:
+            return self.payload_names_in_transaction(transaction, published_ref)
+
+    def payload_names_in_transaction(
+        self, transaction: PostgresTransaction, published_ref: PublishedRef,
+    ) -> frozenset[str]:
+        manifest = self._validated_published_manifest(transaction, published_ref)
+        return frozenset(_object_descriptor(item)[0] for item in _manifest_objects(manifest))
+
     def read_selected(
         self,
         published_ref: PublishedRef,

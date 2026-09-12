@@ -12,8 +12,10 @@ from threading import Event, Lock, RLock, Thread
 from time import monotonic
 
 from thesistrace.research_kernel.numeric import NumericContractError
+from thesistrace.strategy_event_wire import EventMessageAssembler
 
 ExecutionEvent = Callable[[dict[str, object]], None]
+
 _MAX_PROTOCOL_LINE_BYTES = 64 * 1024 * 1024
 _THREAD_ENVIRONMENT_NAMES = (
     "OMP_NUM_THREADS",
@@ -56,6 +58,7 @@ class TrackingExecutionRequest:
 
 @dataclass(frozen=True)
 class TrackingExecutionResult:
+    strategy_events: dict[str, list[dict[str, object]]]
     checkpoint: dict[str, object]
     terminal_strategy_state: dict[str, object]
     continuation: dict[str, object]
@@ -215,6 +218,10 @@ class _ChildHeartbeat:
         )
         self._thread.start()
 
+    def acknowledge_event_frame(self) -> None:
+        with self._stdin_lock:
+            self._write('{"command":"acknowledge_event_frame"}\n')
+
     def acknowledge(self) -> None:
         self._stopped.set()
         self._thread.join(timeout=2)
@@ -337,6 +344,7 @@ class SupervisedTrackingExecutor:
                 emit=emit,
                 authority_lost=authority_lost,
                 stop_requested=stop_requested,
+                acknowledge_event_frame=heartbeat.acknowledge_event_frame,
             )
             result = _result_from_response(response)
             if result.child_peak_rss_bytes > self._execution_memory_bytes:
@@ -423,11 +431,14 @@ def _read_message(
     emit: ExecutionEvent,
     authority_lost: Event,
     stop_requested: Callable[[], bool],
+    acknowledge_event_frame: Callable[[], None],
 ) -> dict[str, object]:
     if process.stdout is None:
         raise TrackingExecutionError("Tracking execution child has no output pipe")
     selector = selectors.DefaultSelector()
     selector.register(process.stdout, selectors.EVENT_READ)
+    assembler = EventMessageAssembler()
+    pending = b""
     try:
         while True:
             if stop_requested():
@@ -436,15 +447,27 @@ def _read_message(
                 raise TrackingExecutionOwnershipLost(
                     "Tracking execution ownership was lost"
                 )
-            if selector.select(timeout=0.05):
-                line = process.stdout.readline(_MAX_PROTOCOL_LINE_BYTES + 1)
-                if len(line.encode()) > _MAX_PROTOCOL_LINE_BYTES:
-                    raise TrackingExecutionError("Tracking execution response is too large")
-                if not line:
+            if b"\n" not in pending and selector.select(timeout=0.05):
+                received = os.read(process.stdout.fileno(), 64 * 1024)
+                if not received:
                     break
+                pending += received
+                if len(pending) > _MAX_PROTOCOL_LINE_BYTES and b"\n" not in pending:
+                    raise TrackingExecutionError("Tracking execution response is too large")
+            if b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                if len(line) > _MAX_PROTOCOL_LINE_BYTES:
+                    raise TrackingExecutionError("Tracking execution response is too large")
                 value = json.loads(line)
                 if not isinstance(value, dict):
                     raise TrackingExecutionError("Tracking execution response is invalid")
+                try:
+                    value = assembler.accept(value)
+                except ValueError as error:
+                    raise TrackingExecutionError(str(error)) from error
+                if value is None:
+                    acknowledge_event_frame()
+                    continue
                 if value.get("status") == "progress":
                     phase = value.get("phase")
                     current_session = value.get("current_session")
@@ -528,6 +551,9 @@ def _enforce_stop_deadline(
 
 
 def _result_from_response(value: Mapping[str, object]) -> TrackingExecutionResult:
+    strategy_events = value.get("strategy_events")
+    if not isinstance(strategy_events, dict):
+        raise TrackingExecutionError("Tracking execution event evidence is invalid")
     checkpoint = value.get("checkpoint")
     terminal = value.get("terminal_strategy_state")
     continuation = value.get("continuation")
@@ -540,6 +566,7 @@ def _result_from_response(value: Mapping[str, object]) -> TrackingExecutionResul
     if peak <= 0:
         raise TrackingExecutionError("Tracking execution result metadata is invalid")
     return TrackingExecutionResult(
+        strategy_events=strategy_events,
         checkpoint=dict(checkpoint),
         terminal_strategy_state=dict(terminal),
         continuation=dict(continuation),

@@ -19,9 +19,23 @@ from thesistrace.research_kernel.common_inputs import common_input_references
 from thesistrace.research_kernel.common_observations import CommonInputObservation
 from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting, VolatilityWindow
 from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
+from thesistrace.strategy_evidence import (
+    StrategyAdjustmentsPage,
+    StrategyAdjustmentsQuery,
+    StrategyChildOrdersPage,
+    StrategyChildOrdersQuery,
+    StrategyFillsPage,
+    StrategyFillsQuery,
+    StrategyOrdersPage,
+    StrategyOrdersQuery,
+    StrategyTargetsPage,
+    StrategyTargetsQuery,
+)
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 type DailyTrackResultSection = Literal[
+    "strategy_targets", "strategy_orders", "strategy_child_orders",
+    "strategy_fills", "strategy_adjustments",
     "strategy_summary",
     "strategy_observations",
     "origin",
@@ -29,6 +43,8 @@ type DailyTrackResultSection = Literal[
     "common_input_observations",
 ]
 DAILY_TRACK_RESULT_SECTIONS: tuple[DailyTrackResultSection, ...] = (
+    "strategy_targets", "strategy_orders", "strategy_child_orders",
+    "strategy_fills", "strategy_adjustments",
     "strategy_summary",
     "strategy_observations",
     "origin",
@@ -73,12 +89,37 @@ class DailyTrackProvenanceResultSectionInput(_DailyTrackResultSectionInput):
     section: Literal["provenance"]
 
 
+class TrackStrategyTargetsInput(_DailyTrackResultSectionInput, StrategyTargetsQuery):
+    pass
+
+
+class TrackStrategyOrdersInput(_DailyTrackResultSectionInput, StrategyOrdersQuery):
+    pass
+
+
+class TrackStrategyChildOrdersInput(_DailyTrackResultSectionInput, StrategyChildOrdersQuery):
+    pass
+
+
+class TrackStrategyFillsInput(_DailyTrackResultSectionInput, StrategyFillsQuery):
+    pass
+
+
+class TrackStrategyAdjustmentsInput(_DailyTrackResultSectionInput, StrategyAdjustmentsQuery):
+    pass
+
+
 type DailyTrackResultSectionInput = Annotated[
     DailyTrackStrategySummaryResultSectionInput
     | DailyTrackStrategyObservationsResultSectionInput
     | DailyTrackOriginResultSectionInput
     | DailyTrackProvenanceResultSectionInput
-    | DailyTrackCommonInputObservationsResultSectionInput,
+    | DailyTrackCommonInputObservationsResultSectionInput
+    | TrackStrategyTargetsInput
+    | TrackStrategyOrdersInput
+    | TrackStrategyChildOrdersInput
+    | TrackStrategyFillsInput
+    | TrackStrategyAdjustmentsInput,
     Field(discriminator="section"),
 ]
 
@@ -611,7 +652,12 @@ type DailyTrackResultSectionResponse = Annotated[
     | DailyTrackStrategyObservationsResultSection
     | DailyTrackOriginResultSection
     | DailyTrackProvenanceResultSection
-    | DailyTrackCommonInputObservationsResultSection,
+    | DailyTrackCommonInputObservationsResultSection
+    | StrategyTargetsPage
+    | StrategyOrdersPage
+    | StrategyChildOrdersPage
+    | StrategyFillsPage
+    | StrategyAdjustmentsPage,
     Field(discriminator="section"),
 ]
 

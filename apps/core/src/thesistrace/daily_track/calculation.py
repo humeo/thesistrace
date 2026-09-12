@@ -20,6 +20,7 @@ from thesistrace.research_kernel import (
 )
 from thesistrace.research_kernel.common_inputs import requires_common_industry
 from thesistrace.research_kernel.numeric import require_current_numeric_contract
+from thesistrace.research_kernel.strategy_events import strategy_event_rows
 from thesistrace.research_kernel.tracking_advance import (
     advance_tracking,
     advance_tracking_continuation,
@@ -191,6 +192,9 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
             prior_observation_state=TrackingObservationState.model_validate(
                 predecessor["tracking_observation_state"],
             ),
+        ),
+        "strategy_events": strategy_event_rows(
+            state.output_snapshot()["strategy_backtest"], sessions=target_sessions,
         ),
         "terminal_strategy_state": terminal_strategy_state(state),
         "continuation": continuation_snapshot(state),

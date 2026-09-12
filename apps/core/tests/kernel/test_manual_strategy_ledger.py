@@ -320,7 +320,7 @@ def test_manual_rejections_never_create_false_fills_or_discard_a_holding() -> No
     assert _fills(rejected_buy) == []
     assert rejected_buy["rejections"] == [
         {
-            "order_id": 0,
+            "order_id": rejected_buy["orders"][0]["order_id"],
             "session": SESSIONS[1],
             "instrument_id": A,
             "side": "buy",
@@ -477,7 +477,7 @@ def test_manual_delisting_writes_off_the_holding_without_a_false_sale() -> None:
         "session": SESSIONS[2],
         "instrument_id": A,
         "type": "terminal_delisting_writeoff",
-    } in result["daily"][2]["valuation_events"]
+    }.items() <= result["daily"][2]["valuation_events"][0].items()
     assert all(fill[1] != A or fill[2] != "sell" for fill in _fills(result))
     assert _position_ledger(canonical, matrix)[SESSIONS[2]] == ()
     assert _daily_ledger(result)[2]["net_cash"] == Decimal("901.24")
@@ -496,7 +496,7 @@ def test_manual_delisting_writes_off_the_holding_without_a_false_sale() -> None:
         "session": SESSIONS[2],
         "instrument_id": A,
         "type": "terminal_delisting_writeoff",
-    } in kernel_ledger[2]["valuation_events"]
+    }.items() <= kernel_ledger[2]["valuation_events"][0].items()
     assert kernel_ledger[2]["positions"] == []
     _assert_ledger_reconciles(kernel_ledger)
 
@@ -1144,3 +1144,163 @@ def test_empty_inverse_selection_keeps_exposure_and_records_eligibility(exposure
     assert result['target_exposure'] == exposure
     assert result['positions'] == result['orders'] == []
     assert Decimal(result['daily'][-1]['net_cash']) == Decimal('100000')
+
+
+def test_trade_evidence_uses_research_settlement_and_stable_parent_relationships() -> None:
+    canonical = _canonical(opens={
+        SESSIONS[0]: {A: "10", B: "20"},
+        SESSIONS[1]: {A: "10", B: "20"},
+        SESSIONS[2]: {A: ("5", "10"), B: "20"},
+        SESSIONS[3]: {A: ("5", "10"), B: "20"},
+    })
+    matrix = _alpha_matrix({
+        SESSIONS[0]: ((A, 2), (B, 1)),
+        **{session: ((B, 2), (A, 1)) for session in SESSIONS[1:]},
+    })
+    result = _run(canonical, matrix)
+    from thesistrace.research_kernel.strategy_events import strategy_event_rows
+
+    evidence = strategy_event_rows(result, sessions=SESSIONS)
+    assert len(evidence["strategy_targets"]) == 4
+    assert len(evidence["strategy_fills"]) == len(result["fills"])
+    targets = {row["target_id"]: row for row in result["target_events"]}
+    orders = {row["order_id"]: row for row in result["orders"]}
+    children = {row["child_order_id"]: row for row in result["child_orders"]}
+    assert len(targets) == 4  # The last Close remains a real pending decision.
+    assert all(isinstance(key, str) for key in orders)
+    for fill in result["fills"]:
+        order = orders[fill["order_id"]]
+        child = children[fill["child_order_id"]]
+        assert child["order_id"] == order["order_id"]
+        assert fill["target_id"] == order["target_id"] == child["target_id"]
+        assert targets[fill["target_id"]]["decision_session"] == fill["decision_session"]
+        assert fill["decision_session"] < fill["session"]
+    sale = next(row for row in result["fills"] if row["side"] == "sell")
+    assert Decimal(sale["raw_notional"]) == Decimal("4998000")
+    assert Decimal(sale["research_settlement"]) == Decimal("9996000")
+    assert sale["execution_shares_delta"] == -999600
+    assert Decimal(sale["adjusted_units_delta"]) == -999600
+    assert Decimal(sale["net_cash_delta"]) == Decimal("9996000") - Decimal(sale["cost"])
+    for day in result["daily"]:
+        fills = [row for row in result["fills"] if row["session"] <= day["session"]]
+        assert Decimal(day["net_cash"]) == Decimal("10000000") + sum(
+            (Decimal(row["net_cash_delta"]) for row in fills), Decimal(0),
+        )
+    # Dropping old transient order arrays at a checkpoint cannot alter new identities.
+    prefix = copy.deepcopy(canonical)
+    prefix["research_calendar"] = list(SESSIONS[:2])
+    for key in ("prices", "trading_states", "price_limits"):
+        prefix[key] = [row for row in prefix[key] if row["session"] in SESSIONS[:2]]
+    prefix["liquidity_universes"]["manual"] = [
+        row for row in prefix["liquidity_universes"]["manual"] if row["session"] in SESSIONS[:2]
+    ]
+    prefix_matrix = _alpha_matrix({key: value for key, value in {
+        SESSIONS[0]: ((A, 2), (B, 1)), SESSIONS[1]: ((B, 2), (A, 1)),
+    }.items()})
+    first = _run(prefix, prefix_matrix)
+    for key in ("orders", "child_orders", "fills", "rejections", "target_events"):
+        first[key] = []
+    resumed = run_strategy(
+        aligned_market_data(copy.deepcopy(canonical), universe="manual"), matrix,
+        _definition(), origin_session=SESSIONS[0], continuation=first,
+    )
+    assert resumed["orders"] == [row for row in result["orders"] if row["session"] > SESSIONS[1]]
+    assert resumed["fills"] == [row for row in result["fills"] if row["session"] > SESSIONS[1]]
+
+
+def test_split_fill_evidence_reconciles_the_actual_order_mutation() -> None:
+    canonical = _canonical(opens={session: {A: "1", B: "2"} for session in SESSIONS})
+    matrix = _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS})
+    result = _run(canonical, matrix, selection_interval=20)
+    assert len(result["fills"]) > 1
+    assert len({row["fill_id"] for row in result["fills"]}) == len(result["fills"])
+    assert len({row["child_order_id"] for row in result["fills"]}) == len(result["fills"])
+    assert sum(row["execution_shares_delta"] for row in result["fills"]) == (
+        result["positions"][0]["execution_shares"]
+    )
+    assert sum(Decimal(row["adjusted_units_delta"]) for row in result["fills"]) == Decimal(
+        result["positions"][0]["adjusted_units"]
+    )
+    assert Decimal("10000000") + sum(
+        Decimal(row["net_cash_delta"]) for row in result["fills"]
+    ) == Decimal(result["daily"][-1]["net_cash"])
+    assert all(Decimal(row["cash_rounding_delta"]) == 0 for row in result["fills"])
+    for row in result["fills"]:
+        assert Decimal(row["net_cash_delta"]) == (
+            Decimal(row["gross_cash_delta"]) - Decimal(row["cost"])
+        )
+
+
+def test_delisting_evidence_records_removed_units_without_cash_or_fill() -> None:
+    canonical = _canonical(opens={
+        SESSIONS[0]: {A: "10", B: "20"},
+        SESSIONS[1]: {A: "10", B: "20"},
+        SESSIONS[2]: {A: None, B: "20"},
+        SESSIONS[3]: {A: None, B: "20"},
+    }, universes={
+        SESSIONS[0]: (A, B), SESSIONS[1]: (A, B),
+        SESSIONS[2]: (B,), SESSIONS[3]: (B,),
+    })
+    canonical["instruments"][0]["listed_to"] = SESSIONS[2]
+    matrix = _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS})
+    result = _run(canonical, matrix, selection_interval=20)
+    events = result["daily"][2]["valuation_events"]
+    assert len(events) == 1
+    adjustment = events[0]
+    assert adjustment["type"] == "terminal_delisting_writeoff"
+    assert adjustment["execution_shares_delta"] == -999600
+    assert Decimal(adjustment["adjusted_units_delta"]) == -999600
+    assert Decimal(adjustment["valuation_delta"]) == -9996000
+    assert Decimal(adjustment["net_cash_delta"]) == 0
+    assert all(row["side"] == "buy" for row in result["fills"])
+
+
+def test_strategy_evidence_partitions_round_trip_typed_events_and_zero_sections() -> None:
+    from thesistrace.publication.serialization import parquet_bytes
+    from thesistrace.research_kernel.strategy_events import strategy_event_rows
+    from thesistrace.strategy_evidence import (
+        StrategyEvidencePublication,
+        read_strategy_event_partition,
+        strategy_event_payload,
+    )
+
+    canonical = _canonical(opens={session: {A: "1", B: "2"} for session in SESSIONS})
+    matrix = _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS})
+    result = _run(canonical, matrix, selection_interval=20)
+    evidence = strategy_event_rows(result, sessions=SESSIONS)
+    publication = StrategyEvidencePublication()
+    for section, rows in evidence.items():
+        if rows:
+            payload = strategy_event_payload(section, rows)
+            content = parquet_bytes(payload.rows, payload.contract)
+            assert read_strategy_event_partition(section, content) == rows
+            publication.add(section, payload, rows)
+    assert publication.finish()["strategy_adjustments"].value["status"] == "recorded"
+    assert publication.finish()["strategy_adjustments"].value["partitions"] == []
+    targets = evidence["strategy_targets"]
+    with pytest.raises(ValueError, match="overlap"):
+        publication.add(
+            "strategy_targets", strategy_event_payload("strategy_targets", targets), targets,
+        )
+
+
+def test_publication_rejects_orphaned_or_mismatched_trade_evidence() -> None:
+    from thesistrace.research_kernel.strategy_events import strategy_event_rows
+    from thesistrace.strategy_evidence import strategy_evidence_payloads
+
+    canonical = _canonical(opens={session: {A: "1", B: "2"} for session in SESSIONS})
+    matrix = _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS})
+    evidence = strategy_event_rows(_run(canonical, matrix), sessions=SESSIONS)
+    assert strategy_evidence_payloads(evidence, sessions=SESSIONS)
+    for mutation in ("orphan_fill", "missing_child", "wrong_target", "wrong_quantity"):
+        broken = copy.deepcopy(evidence)
+        if mutation == "orphan_fill":
+            broken["strategy_fills"][0]["child_order_id"] = "child_missing"
+        elif mutation == "missing_child":
+            broken["strategy_child_orders"].pop()
+        elif mutation == "wrong_target":
+            broken["strategy_orders"][0]["target_id"] = "target_missing"
+        else:
+            broken["strategy_child_orders"][0]["quantity"] += 100
+        with pytest.raises(ValueError, match="relationship"):
+            strategy_evidence_payloads(broken, sessions=SESSIONS)

@@ -9,6 +9,7 @@ from threading import Condition, Thread
 from time import monotonic
 
 from thesistrace.daily_track.calculation import execute_tracking_target
+from thesistrace.strategy_event_wire import print_strategy_event_message
 
 
 def main() -> None:
@@ -49,6 +50,9 @@ def main() -> None:
                 continue
             if command == {"command": "cancel"}:
                 os._exit(76)
+            if command == {"command": "acknowledge_event_frame"}:
+                commands.put(command_line)
+                continue
             with watchdog:
                 terminal_command_received = True
                 watchdog.notify_all()
@@ -105,7 +109,7 @@ def main() -> None:
             flush=True,
         )
         raise SystemExit(1) from error
-    print(json.dumps(response, sort_keys=True, separators=(",", ":")), flush=True)
+    print_strategy_event_message(response, acknowledge=lambda: json.loads(commands.get()))
     if json.loads(commands.get()) != {"command": "acknowledge"}:
         raise SystemExit(65)
 

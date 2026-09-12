@@ -82,7 +82,14 @@ class PendingTarget(TargetSelection):
 class ValuationEvent(TerminalStateModel):
     session: StrictStr
     instrument_id: StrictStr
-    type: StrictStr
+    type: Literal["valuation_carry", "terminal_delisting_writeoff"]
+    adjustment_id: StrictStr
+    execution_shares_delta: StrictInt
+    adjusted_units_delta: StrictStr
+    net_cash_delta: StrictStr
+    gross_cash_delta: StrictStr
+    valuation_delta: StrictStr
+    last_adjusted_price: StrictStr
 
 
 class LastDailyObservation(TerminalStateModel):

@@ -34,6 +34,7 @@ from thesistrace.research_kernel.strategy import (
     run_strategy_with_metric_state,
     strategy_metrics_from_state,
 )
+from thesistrace.research_kernel.strategy_events import strategy_event_rows
 from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
 from thesistrace.research_series import ColumnarResearchSeries
 
@@ -346,6 +347,7 @@ class AlphaFactorChunkOutcome:
 
 @dataclass(frozen=True, init=False)
 class StrategyChunkOutcome:
+    _strategy_events: dict[str, list[dict[str, object]]]
     _continuation: dict[str, object]
     _daily_observations: tuple[dict[str, object], ...]
     _final_values: dict[str, object] | None
@@ -362,6 +364,7 @@ class StrategyChunkOutcome:
         run_input: RunInput,
         continuation: dict[str, object],
         daily_observations: list[dict[str, object]],
+        strategy_events: dict[str, list[dict[str, object]]],
         common_input_sessions: tuple[dict[str, object], ...],
         final_values: dict[str, object] | None,
         phase_seconds: Mapping[str, float],
@@ -376,6 +379,7 @@ class StrategyChunkOutcome:
             raise ValueError("Strategy phase timing is invalid")
         instance = object.__new__(cls)
         object.__setattr__(instance, "common_input_sessions", common_input_sessions)
+        object.__setattr__(instance, "_strategy_events", strategy_events)
         object.__setattr__(instance, "_continuation", continuation)
         object.__setattr__(instance, "_daily_observations", tuple(daily_observations))
         object.__setattr__(instance, "_final_values", final_values)
@@ -394,6 +398,9 @@ class StrategyChunkOutcome:
 
     def continuation_snapshot(self) -> dict[str, object]:
         return deepcopy(self._continuation)
+
+    def strategy_events_snapshot(self) -> dict[str, list[dict[str, object]]]:
+        return deepcopy(self._strategy_events)
 
     def daily_observations_snapshot(self) -> list[dict[str, object]]:
         return deepcopy(list(self._daily_observations))
@@ -421,6 +428,7 @@ class StrategyChunkOutcome:
 
 @dataclass(frozen=True)
 class ResearchChunkCalculation:
+    strategy_events: dict[str, list[dict[str, object]]]
     common_input_sessions: tuple[dict[str, object], ...]
     factor_daily_observations: tuple[dict[str, object], ...]
     continuation: dict[str, object]
@@ -489,6 +497,7 @@ def execute_research_chunk(
             common_input_sessions=(),
             factor_daily_observations=(),
             strategy_daily_observations=(),
+            strategy_events={},
             final_values=None,
             phase_seconds={
                 "alpha_and_pending": monotonic() - alpha_started,
@@ -526,6 +535,7 @@ def execute_research_chunk(
             common_input_sessions=common_input_sessions,
             factor_daily_observations=tuple(alpha_factor.factor_daily_observations_snapshot()),
             strategy_daily_observations=(),
+            strategy_events={},
             final_values=(None if factor_summary is None else {"factor_summary": factor_summary}),
             phase_seconds={
                 "alpha_and_pending": alpha_and_pending_seconds,
@@ -550,6 +560,7 @@ def execute_research_chunk(
         common_input_sessions=strategy_outcome.common_input_sessions,
         factor_daily_observations=(),
         strategy_daily_observations=(strategy_outcome._daily_observations_for_current_process()),
+        strategy_events=strategy_outcome.strategy_events_snapshot(),
         final_values=strategy_outcome._final_values_for_current_process(),
         phase_seconds={
             "alpha_and_pending": alpha_and_pending_seconds,
@@ -719,6 +730,9 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
         run_input=run_input,
         continuation=continuation,
         daily_observations=observations,
+        strategy_events=strategy_event_rows(
+            strategy, sessions=tuple(row["session"] for row in new_daily),
+        ),
         common_input_sessions=merge_common_input_sessions(
             alpha_factor_outcome._alpha_matrix_for_current_process()["sessions"],
             exposure_observations, tuple(row["session"] for row in new_daily),

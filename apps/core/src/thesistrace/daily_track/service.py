@@ -118,6 +118,16 @@ from thesistrace.research_series import (
     slice_research_sessions,
 )
 from thesistrace.researcher.quota import QuotaPolicyLookup, unavailable_quota_policy
+from thesistrace.strategy_evidence import (
+    StrategyEventPageRead,
+    StrategyEventQuery,
+    StrategyEvidencePublication,
+    StrategyEvidenceSource,
+    event_cursor_after,
+    read_strategy_event_page,
+    strategy_event_response,
+    strategy_evidence_payloads,
+)
 
 Progress = Callable[[str, str, str], None]
 
@@ -501,6 +511,7 @@ class DailyTrackService:
         prepared = self._publication.prepare(
             kind="daily-track.checkpoint",
             payloads={
+                **StrategyEvidencePublication().finish(),
                 "checkpoint": CompressedJsonPayload(
                     {
                         "schema_version": "daily-track-activation-checkpoint-v3",
@@ -1669,6 +1680,8 @@ class DailyTrackService:
     ) -> DailyTrackResultSectionResponse | None:
         if self._publication is None:
             raise RuntimeError("DailyTrack Result is not configured")
+        if isinstance(query, StrategyEventQuery):
+            return self._get_strategy_event_section(researcher_id, query)
         after: str | None = None
         cursor_snapshot_identity: str | None = None
         limit = 20
@@ -1788,6 +1801,98 @@ class DailyTrackService:
         ) as error:
             raise DailyTrackResultReadFailed("DailyTrack Result could not be verified") from error
         return result
+
+    def _get_strategy_event_section(self, researcher_id: UUID, query: StrategyEventQuery):
+        assert self._publication is not None
+        with self._database.transaction() as transaction:
+            secret = _cursor_secret(transaction)
+        after, manifest = _decode_result_cursor(
+            query.cursor, secret=secret, researcher_id=researcher_id, track_id=query.track_id,
+            section=query.section, order=query.cursor_order(),
+        )
+        lower = query.start_session
+        if after is not None:
+            try:
+                position = json.loads(after)
+                if not isinstance(position, list) or len(position) != 2:
+                    raise ValueError("Invalid event position")
+                lower = max(lower or position[0], position[0])
+            except (TypeError, ValueError) as error:
+                raise DailyTrackInvalidCursor(
+                    "DailyTrack event cursor position is invalid"
+                ) from error
+        checkpoint_after = None
+        if lower is not None and date.fromisoformat(lower) > date.min:
+            checkpoint_after = (date.fromisoformat(lower) - timedelta(days=1)).isoformat()
+        snapshot = self._session_coordinates.load_read_snapshot(
+            researcher_id, query.track_id, after=checkpoint_after,
+            checkpoint_limit=1, manifest_sha256=manifest,
+        )
+        if snapshot is None:
+            if manifest is not None:
+                raise DailyTrackInvalidCursor("DailyTrack event snapshot is unavailable")
+            return None
+        manifest = str(snapshot["current_checkpoint_manifest_sha256"])
+        origin = TrackingOrigin.model_validate(snapshot["origin"])
+        rows = []
+        has_more = False
+        status = "recorded"
+        try:
+            refs = []
+            if lower is None or lower <= origin.initial_strategy_state.session:
+                refs.append(_seed_result_ref(origin))
+            while True:
+                checkpoints = snapshot["observation_checkpoints"]
+                refs.extend(PublishedRef(
+                    manifest_sha256=item["manifest_sha256"], kind="daily-track.checkpoint",
+                    provenance=item["provenance"],
+                ) for item in checkpoints)
+                for reference in refs:
+                    read = read_strategy_event_page(
+                        self._publication, reference,
+                        query=query.model_copy(update={
+                            "limit": min(50, query.limit + 1 - len(rows)),
+                        }),
+                        after=after,
+                    )
+                    if read.status == "not_recorded":
+                        status, rows = "not_recorded", []
+                        break
+                    rows.extend(read.rows)
+                    has_more = len(rows) > query.limit or read.next_after is not None
+                    if has_more:
+                        break
+                if status == "not_recorded" or has_more or not checkpoints:
+                    break
+                checkpoint_after = str(checkpoints[-1]["boundary_session"])
+                if (checkpoint_after >= str(snapshot["current_strategy_session"])
+                    or (query.end_session is not None and checkpoint_after >= query.end_session)):
+                    break
+                snapshot = self._session_coordinates.load_read_snapshot(
+                    researcher_id, query.track_id, after=checkpoint_after,
+                    checkpoint_limit=1, manifest_sha256=manifest,
+                )
+                if snapshot is None:
+                    raise DailyTrackResultUnavailable("DailyTrack event snapshot was removed")
+                refs = []
+            rows = rows[:query.limit]
+            return strategy_event_response(
+                query, StrategyEventPageRead(
+                    status=status, rows=rows,
+                    next_after=(event_cursor_after(query.section, rows[-1])
+                                if has_more and rows else None),
+                ),
+                source=StrategyEvidenceSource.for_publication(
+                    kind="daily_track", id=query.track_id, manifest_sha256=manifest,
+                ),
+                encode_cursor=lambda position: _next_daily_track_result_cursor(
+                    position, secret=secret, researcher_id=researcher_id, track_id=query.track_id,
+                    section=query.section, order=query.cursor_order(), snapshot_identity=manifest,
+                ),
+            )
+        except (KeyError, TypeError, ValueError, PublicationNotFoundError,
+                PublicationVerificationError) as error:
+            raise DailyTrackResultReadFailed("DailyTrack events could not be verified") from error
 
     def _daily_track_result_section(
         self,
@@ -3306,7 +3411,12 @@ class DailyTrackService:
         }
         prepared = self._publication.prepare(
             kind="daily-track.checkpoint",
-            payloads={"checkpoint": CompressedJsonPayload(checkpoint.model_dump(mode="json"))},
+            payloads={
+                "checkpoint": CompressedJsonPayload(checkpoint.model_dump(mode="json")),
+                **strategy_evidence_payloads(
+                    result.strategy_events, sessions=claim.target_sessions,
+                ),
+            },
             provenance=provenance,
         )
         return prepared, provenance
@@ -3992,7 +4102,7 @@ def _read_publication_json(
     *,
     payload_name: str,
 ) -> Mapping[str, object]:
-    bundle = publication.read(published_ref)
+    bundle = publication.read_selected(published_ref, frozenset({payload_name}))
     payload = bundle.payloads.get(payload_name)
     if payload is None:
         raise RuntimeError("DailyTrack product payload is missing")

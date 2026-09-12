@@ -1230,6 +1230,7 @@ def _execute_strategy_item_messages(
                     yield _common_input_chunk_message(item, window, common_rows)
                 strategy_continuation = outcome.continuation_snapshot()
                 observations = outcome.daily_observations_snapshot()
+                strategy_events = outcome.strategy_events_snapshot()
                 final_values = outcome.final_values_snapshot()
                 strategy_seconds += outcome.phase_seconds["strategy"]
                 finalize_seconds += outcome.phase_seconds["finalize"]
@@ -1269,6 +1270,7 @@ def _execute_strategy_item_messages(
                         item.immutable_input.execution_plan.research_session_count
                     ),
                     "strategy_partition": partition,
+                    "strategy_events": strategy_events,
                 }
             if reader.final_alpha_continuation != dict(final_alpha_continuation):
                 raise ValueError("Strategy Sweep private artifact continuation changed")

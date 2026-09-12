@@ -197,9 +197,10 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
         == sorted(event["side_order"], key=lambda side: 0 if side == "sell" else 1)
         for event in result["rebalance_events"]
     )
-    assert all(order["order_id"] == index for index, order in enumerate(result["orders"]))
+    orders_by_id = {order["order_id"]: order for order in result["orders"]}
+    assert len(orders_by_id) == len(result["orders"])
     assert all(
-        result["orders"][child["order_id"]]["instrument_id"] == child["instrument_id"]
+        orders_by_id[child["order_id"]]["instrument_id"] == child["instrument_id"]
         for child in result["child_orders"]
     )
     assert result["rebalance_events"][0]["target_weights"]
@@ -317,7 +318,7 @@ def test_suspended_holding_carries_valuation() -> None:
         "session": suspended_session,
         "instrument_id": held_candidate,
         "type": "valuation_carry",
-    } in result["daily"][2]["valuation_events"]
+    }.items() <= result["daily"][2]["valuation_events"][0].items()
 
 
 def test_suspended_new_target_creates_one_logical_rejection_without_children() -> None:
@@ -352,7 +353,7 @@ def test_suspended_new_target_creates_one_logical_rejection_without_children() -
         if item["session"] == execution_session and item["instrument_id"] == target
     )
     assert rejection["reason"] == "suspension"
-    assert rejection["order_id"] == result["orders"][rejection["order_id"]]["order_id"]
+    assert rejection["order_id"] in {row["order_id"] for row in result["orders"]}
     assert all(child["order_id"] != rejection["order_id"] for child in result["child_orders"])
 
 
@@ -434,7 +435,7 @@ def test_terminal_delisting_writes_off_without_an_order_or_cost() -> None:
         "instrument_id": held_candidate,
         "type": "terminal_delisting_writeoff",
     }
-    assert event in result["daily"][2]["valuation_events"]
+    assert any(event.items() <= row.items() for row in result["daily"][2]["valuation_events"])
     assert all(
         not (order["session"] == delist_session and order["instrument_id"] == held_candidate)
         for order in result["orders"]

@@ -48,6 +48,7 @@ from thesistrace.daily_track import (
 from thesistrace.daily_track.models import (
     DailyTrackCommonInputObservationsResultSection,
     DailyTrackCommonInputObservationsResultSectionInput,
+    DailyTrackResultSectionInput,
 )
 from thesistrace.daily_track.service import DailyTrackResultReadFailed, DailyTrackResultUnavailable
 from thesistrace.data import (
@@ -140,6 +141,7 @@ from thesistrace.research_run.models import (
     FactorObservationsResultSectionInput,
     FactorPeriodsResultSection,
     FactorPeriodsResultSectionInput,
+    ResearchRunResultSectionInput,
     ResearchSpec,
     ResearchSpecDiagnostics,
 )
@@ -149,6 +151,7 @@ from thesistrace.research_run.service import (
     ResearchRunResultSectionIncompatible,
 )
 from thesistrace.researcher import ResearcherBootstrapResult, ResearcherIdentity
+from thesistrace.strategy_evidence import StrategyEventPageResponse, StrategyEventQueryInput
 
 _HEALTH_PATHS = frozenset({"/health/live", "/health/ready"})
 _JSON_CONTENT_TYPE = re.compile(
@@ -1269,6 +1272,31 @@ def create_app(
             raise HTTPException(status_code=404, detail="ResearchRun not found")
         return result
 
+    @app.post(
+        "/api/research-runs/{run_id}/events/query", response_model=StrategyEventPageResponse,
+    )
+    def query_run_events(request: Request, run_id: str, query: StrategyEventQueryInput):
+        owned = TypeAdapter(ResearchRunResultSectionInput).validate_python({
+            **query.model_dump(), "run_id": run_id,
+        })
+        try:
+            result = _runtime(request).research_runs.get_result_section(
+                _researcher_id(request), owned,
+            )
+        except ResearchRunResultSectionIncompatible as error:
+            raise HTTPException(
+                status_code=400, detail="Events require Strategy Backtest",
+            ) from error
+        except ResearchRunInvalidCursor as error:
+            raise HTTPException(status_code=400, detail="Invalid result cursor") from error
+        except ResearchRunResultUnavailable as error:
+            raise HTTPException(status_code=409, detail="Result is not available") from error
+        except (ResearchRunResultReadFailed, ResearchRunTemporarilyUnavailable) as error:
+            raise HTTPException(status_code=503, detail="Result is unavailable") from error
+        if result is None:
+            raise HTTPException(status_code=404, detail="ResearchRun not found")
+        return result
+
     @app.get(
         "/api/research-runs/{run_id}/common-input-observations",
         response_model=CommonInputObservationsResultSection,
@@ -1396,6 +1424,27 @@ def create_app(
         if track is None:
             raise HTTPException(status_code=404, detail="DailyTrack not found")
         return track
+
+    @app.post(
+        "/api/daily-tracks/{track_id}/events/query", response_model=StrategyEventPageResponse,
+    )
+    def query_track_events(request: Request, track_id: str, query: StrategyEventQueryInput):
+        owned = TypeAdapter(DailyTrackResultSectionInput).validate_python({
+            **query.model_dump(), "track_id": track_id,
+        })
+        try:
+            result = _runtime(request).daily_tracks.get_result_section(
+                _researcher_id(request), owned,
+            )
+        except DailyTrackInvalidCursor as error:
+            raise HTTPException(status_code=400, detail="Invalid result cursor") from error
+        except DailyTrackResultUnavailable as error:
+            raise HTTPException(status_code=409, detail="Result is not available") from error
+        except (DailyTrackResultReadFailed, DailyTrackTemporarilyUnavailable) as error:
+            raise HTTPException(status_code=503, detail="Result is unavailable") from error
+        if result is None:
+            raise HTTPException(status_code=404, detail="DailyTrack not found")
+        return result
 
     @app.get(
         "/api/daily-tracks/{track_id}/common-input-observations",

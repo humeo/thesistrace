@@ -92,6 +92,8 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "alpha_language": {"data", "research_kernel"},
         "publication": {"_postgres"},
         "research_series": set(),
+        "strategy_evidence": {"_paging", "publication", "research_kernel", "strategy_event_wire"},
+        "strategy_event_wire": set(),
         "research_kernel": {"research_series"},
         "data": {
             "_postgres",
@@ -105,6 +107,8 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "research_folder": {"_postgres"},
         "researcher": {"_postgres", "research_folder"},
         "daily_track": {
+            "strategy_event_wire",
+            "strategy_evidence",
             "researcher",
             "_paging",
             "_postgres",
@@ -116,6 +120,8 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_run": {
+            "strategy_event_wire",
+            "strategy_evidence",
             "researcher",
             "_paging",
             "_postgres",
@@ -130,6 +136,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "research_series",
         },
         "research_batch": {
+            "strategy_evidence",
             "_memory",
             "researcher",
             "_paging",
@@ -163,6 +170,8 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "fixture": {"data"},
         "adapters": {"benchmark", "data", "fixture", "operational_events"},
         "entrypoints": {
+            "strategy_event_wire",
+            "strategy_evidence",
             "_memory",
             "_postgres",
             "alpha_language",
@@ -447,12 +456,14 @@ def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None
         ("get", "/api/research-runs/{run_id}/common-input-observations"),
         ("get", "/api/research-runs/{run_id}/factor-observations"),
         ("get", "/api/research-runs/{run_id}/factor-periods"),
+        ("post", "/api/research-runs/{run_id}/events/query"),
         ("post", "/api/research-runs/{run_id}/cancel"),
         ("post", "/api/research-runs/{run_id}/daily-tracks"),
         ("get", "/api/daily-tracks"),
         ("get", "/api/daily-tracks/{track_id}"),
         ("get", "/api/daily-tracks/{track_id}/common-input-observations"),
         ("delete", "/api/daily-tracks/{track_id}"),
+        ("post", "/api/daily-tracks/{track_id}/events/query"),
         ("post", "/api/daily-tracks/{track_id}/refresh"),
         ("post", "/api/daily-tracks/{track_id}/retry"),
         ("post", "/api/daily-tracks/{track_id}/stop"),

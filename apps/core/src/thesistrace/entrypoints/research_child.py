@@ -9,6 +9,7 @@ from threading import Event, Thread
 
 from thesistrace.data.io_metrics import cold_file_reads, measure_data_io
 from thesistrace.research_run.execution import execute_request_chunks
+from thesistrace.strategy_event_wire import print_strategy_event_message
 
 
 def main() -> None:
@@ -41,7 +42,7 @@ def main() -> None:
     with measure_data_io() as measurement, read_context:
         for response in execute_request_chunks(request, cancel_requested=cancellation.is_set):
             response["data_io"] = measurement.snapshot()
-            print(json.dumps(response, sort_keys=True, separators=(",", ":")), flush=True)
+            print_strategy_event_message(response, acknowledge=lambda: json.loads(commands.get()))
             if response.get("status") == "cancelled":
                 raise SystemExit(0)
             if response.get("status") != "chunk_succeeded":

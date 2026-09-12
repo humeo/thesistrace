@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 
+from thesistrace.strategy_event_wire import EventMessageAssembler
+
 MAX_PROTOCOL_LINE_BYTES = 16 * 1024 * 1024
 CANCEL_COOPERATIVE_GRACE_SECONDS = 1.0
 CANCEL_CHILD_EXIT_BUDGET_SECONDS = 3.0
@@ -62,6 +64,25 @@ class SupervisedChildTransport:
         self.process.stdin.flush()
 
     def read(
+        self, *,
+        cancel_requested: Callable[[], bool] | None = None,
+        on_cancel: Callable[[], None] | None = None,
+        on_termination: Callable[[], None] | None = None,
+    ) -> dict[str, object]:
+        assembler = EventMessageAssembler()
+        while True:
+            try:
+                message = assembler.accept(self._read_frame(
+                    cancel_requested=cancel_requested, on_cancel=on_cancel,
+                    on_termination=on_termination,
+                ))
+            except ValueError as error:
+                raise ChildTransportError(str(error)) from error
+            if message is not None:
+                return message
+            self.write({"command": "acknowledge_event_frame"})
+
+    def _read_frame(
         self,
         *,
         cancel_requested: Callable[[], bool] | None = None,

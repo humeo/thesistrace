@@ -27,10 +27,13 @@ from thesistrace.entrypoints.schema import initialize_core
         ("close", "1", "99969.31"),
         ("if_else(close > 0 and not (close == 0), close, -close)", "7 / 10", "99978.3"),
         ("close", "0", "100000"),
-    ]
+    ],
 )
 def test_fixed_exposure_publishes_and_tracks_its_first_entry(
-    tmp_path: Path, formula, exposure, terminal_nav,
+    tmp_path: Path,
+    formula,
+    exposure,
+    terminal_nav,
 ):
     settings = replace(
         CoreSettings.from_environment(),
@@ -51,11 +54,14 @@ def test_fixed_exposure_publishes_and_tracks_its_first_entry(
     with TestClient(create_app(settings)) as client:
         command = {
             **_run_command("one-day", start_date=sessions[0], end_date=sessions[0]),
-            "initial_cash_cny": "100000", "formula": formula, "exposure_expression": exposure,
+            "initial_cash_cny": "100000",
+            "formula": formula,
+            "exposure_expression": exposure,
             "selection_every_sessions": 5,
         }
         spec = {
-            key: value for key, value in command.items()
+            key: value
+            for key, value in command.items()
             if key not in {"request_id", "folder_id", "name"}
         }
         runtime = client.app.state.core_runtime
@@ -72,7 +78,8 @@ def test_fixed_exposure_publishes_and_tracks_its_first_entry(
         assert diagnosis.status_code == 200, diagnosis.text
         assert diagnosis.json() == {"valid": True, "issues": []}
         rejected = client.post(
-            "/api/research/diagnostics", json={**spec, "exposure_expression": "1.1"},
+            "/api/research/diagnostics",
+            json={**spec, "exposure_expression": "1.1"},
         )
         assert rejected.status_code == 200, rejected.text
         assert rejected.json()["valid"] is False
@@ -87,9 +94,13 @@ def test_fixed_exposure_publishes_and_tracks_its_first_entry(
                     result = await agent.call_tool("diagnose_research_spec", {"spec": spec})
                     assert result.is_error is False, result
                     assert result.structured_content == {"valid": True, "issues": []}
-                    local = await agent.call_tool("diagnose_alpha_formula", {
-                        "source": exposure, "context": "exposure",
-                    })
+                    local = await agent.call_tool(
+                        "diagnose_alpha_formula",
+                        {
+                            "source": exposure,
+                            "context": "exposure",
+                        },
+                    )
                     assert local.is_error is False, local
                     assert local.structured_content["valid"] is True
 
@@ -147,17 +158,25 @@ def test_fixed_exposure_publishes_and_tracks_its_first_entry(
         ("close * universe_advancing_fraction()", ("universe_advancing_fraction",), "1"),
         (
             "close * (1 + universe_advancing_fraction() + universe_return())",
-            ("universe_advancing_fraction", "universe_return"), "1",
+            ("universe_advancing_fraction", "universe_return"),
+            "1",
         ),
         (
             "close * (1 + industry_return(801010) + industry_advancing_fraction(801010))",
-            ("industry_advancing_fraction", "industry_return"), "1",
+            ("industry_advancing_fraction", "industry_return"),
+            "1",
         ),
-        ("close", ("universe_return",),
-         "if_else(universe_return() > 0, 1, if_else(universe_return() > -0.15, 0.3, 0))"),
-        ("close", ("industry_return",),
-         "if_else(industry_return(801010) > 0, 1, "
-         "if_else(industry_return(801010) > -0.15, 0.3, 0))"),
+        (
+            "close",
+            ("universe_return",),
+            "if_else(universe_return() > 0, 1, if_else(universe_return() > -0.15, 0.3, 0))",
+        ),
+        (
+            "close",
+            ("industry_return",),
+            "if_else(industry_return(801010) > 0, 1, "
+            "if_else(industry_return(801010) > -0.15, 0.3, 0))",
+        ),
     ],
 )
 @pytest.mark.parametrize("weighting", ["rank_weight", "inverse_volatility"])
@@ -194,7 +213,8 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
 
                     price["close_raw"] = closes[sessions.index(price["session"])]
                     price["close_adj"] = adjusted_price_string(
-                        Decimal(price["close_raw"]), Decimal(price["adjustment_factor"]),
+                        Decimal(price["close_raw"]),
+                        Decimal(price["adjustment_factor"]),
                     )
             return canonical
 
@@ -213,9 +233,10 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
         published_at=datetime(2026, 8, 10, 8, tzinfo=UTC),
     )
     generation = _publish_head(
-        settings, sessions=(("2024-07-31", *sessions)
-                            if weighting == "inverse_volatility" else sessions),
-        expected_manifest=None, operation_id="common"
+        settings,
+        sessions=(("2024-07-31", *sessions) if weighting == "inverse_volatility" else sessions),
+        expected_manifest=None,
+        operation_id="common",
     )
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
@@ -223,8 +244,10 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
             json={
                 **_run_command("common-result", start_date=sessions[1], end_date=sessions[3]),
                 "initial_cash_cny": "100000",
-                "formula": formula, "exposure_expression": exposure,
-                "weighting": weighting, "volatility_window": 2,
+                "formula": formula,
+                "exposure_expression": exposure,
+                "weighting": weighting,
+                "volatility_window": 2,
                 "selection_every_sessions": 5,
             },
         )
@@ -296,6 +319,8 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
         assert cursor is None
         assert collected == values
 
+        event_pages = _assert_published_run_events(client, run_id)
+
         from thesistrace.daily_track.service import _read_publication_json
 
         started = client.post(
@@ -304,11 +329,45 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
         )
         assert started.status_code == 201, started.text
         track_id = started.json()["id"]
+        frozen_page = client.post(
+            f"/api/daily-tracks/{track_id}/events/query",
+            json={"section": "strategy_targets", "limit": 1},
+        )
+        assert frozen_page.status_code == 200, frozen_page.text
+        frozen_page = frozen_page.json()
+        earliest_page = client.post(
+            f"/api/daily-tracks/{track_id}/events/query",
+            json={"section": "strategy_targets", "limit": 1, "start_session": "0001-01-01"},
+        )
+        assert earliest_page.status_code == 200, earliest_page.text
+        assert earliest_page.json()["rows"] == frozen_page["rows"]
         _refresh_daily_track(client, track_id, "common-track-refresh")
         worker = _run_worker_once(settings, "tracking")
         assert worker.returncode == 0, worker.stdout + worker.stderr
         tracked = client.get(f"/api/daily-tracks/{track_id}").json()
         assert tracked["strategy_session"] == sessions[-1], tracked
+        if frozen_page["next_cursor"] is not None:
+            continued = client.post(
+                f"/api/daily-tracks/{track_id}/events/query",
+                json={
+                    "section": "strategy_targets",
+                    "limit": 1,
+                    "cursor": frozen_page["next_cursor"],
+                },
+            )
+            assert continued.status_code == 200, continued.text
+            assert continued.json()["source"] == frozen_page["source"]
+            assert all(row["decision_session"] <= sessions[3] for row in continued.json()["rows"])
+        current_events = client.post(
+            f"/api/daily-tracks/{track_id}/events/query",
+            json={"section": "strategy_targets"},
+        )
+        assert current_events.status_code == 200, current_events.text
+        assert current_events.json()["source"] != frozen_page["source"]
+        assert (
+            current_events.json()["rows"][: len(event_pages["strategy_targets"])]
+            == (event_pages["strategy_targets"])
+        )
         if dynamic:
             run_detail = client.get(f"/api/research-runs/{run_id}").json()
             terminal = run_detail["result"]["terminal_strategy_state"]
@@ -414,6 +473,19 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
                         cursor = page["next_cursor"]
                     assert cursor is None
                     assert received == expected
+                    response = await agent.call_tool(
+                        tool,
+                        {
+                            **identity,
+                            "section": "strategy_targets",
+                            "limit": 1,
+                        },
+                    )
+                    assert response.is_error is False, response
+                    assert response.structured_content["status"] == "recorded"
+                    assert (
+                        response.structured_content["rows"] == event_pages["strategy_targets"][:1]
+                    )
 
         anyio.run(read_native_common_results)
 
@@ -421,43 +493,156 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
 @pytest.mark.skipif(not core_environment_is_configured(), reason="isolated runtime required")
 def test_inverse_eligibility_is_published_and_preserved_in_track(tmp_path: Path):
     settings = replace(
-        CoreSettings.from_environment(), data_mount=tmp_path / 'data',
-        benchmark_mount=tmp_path / 'benchmark',
+        CoreSettings.from_environment(),
+        data_mount=tmp_path / "data",
+        benchmark_mount=tmp_path / "benchmark",
     )
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = _business_sessions(date(2024, 8, 1), count=5)
     BenchmarkSnapshotStore(settings.benchmark_mount).publish(
-        (BenchmarkLevel('2010-01-04', '3500'),
-         *(BenchmarkLevel(day, '4000') for day in sessions)),
+        (BenchmarkLevel("2010-01-04", "3500"), *(BenchmarkLevel(day, "4000") for day in sessions)),
         published_at=datetime(2026, 8, 10, 8, tzinfo=UTC),
     )
-    _publish_head(settings, sessions=sessions, expected_manifest=None, operation_id='eligibility')
+    _publish_head(settings, sessions=sessions, expected_manifest=None, operation_id="eligibility")
     with TestClient(create_app(settings)) as client:
-        accepted = client.post('/api/research-runs', json={
-            **_run_command('eligibility', start_date=sessions[1], end_date=sessions[2]),
-            'initial_cash_cny': '100000', 'weighting': 'inverse_volatility',
-            'volatility_window': 1, 'selection_every_sessions': 5,
-        })
+        accepted = client.post(
+            "/api/research-runs",
+            json={
+                **_run_command("eligibility", start_date=sessions[1], end_date=sessions[2]),
+                "initial_cash_cny": "100000",
+                "weighting": "inverse_volatility",
+                "volatility_window": 1,
+                "selection_every_sessions": 5,
+            },
+        )
         assert accepted.status_code == 202, accepted.text
-        run_id = accepted.json()['id']
+        run_id = accepted.json()["id"]
         assert client.app.state.core_runtime.research_runs.process_next()
-        detail = client.get(f'/api/research-runs/{run_id}').json()
-        assert detail['status'] == 'succeeded', detail
-        terminal = detail['result']['terminal_strategy_state']
-        selection = terminal['target_selection']
-        assert selection['eligibility_exclusions']['zero_volatility'] > 0
-        assert selection['selected_instrument_ids'] == []
-        assert terminal['target_exposure'] == 1
-        assert Decimal(terminal['net_cash']) == Decimal('100000')
-        started = client.post(f'/api/research-runs/{run_id}/daily-tracks',
-                              json={'request_id': 'eligibility-track'})
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "succeeded", detail
+        terminal = detail["result"]["terminal_strategy_state"]
+        selection = terminal["target_selection"]
+        assert selection["eligibility_exclusions"]["zero_volatility"] > 0
+        assert selection["selected_instrument_ids"] == []
+        assert terminal["target_exposure"] == 1
+        assert Decimal(terminal["net_cash"]) == Decimal("100000")
+        started = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks", json={"request_id": "eligibility-track"}
+        )
         assert started.status_code == 201, started.text
-        track_id = started.json()['id']
-        _refresh_daily_track(client, track_id, 'eligibility-refresh')
-        worker = _run_worker_once(settings, 'tracking')
+        track_id = started.json()["id"]
+        _refresh_daily_track(client, track_id, "eligibility-refresh")
+        worker = _run_worker_once(settings, "tracking")
         assert worker.returncode == 0, worker.stdout + worker.stderr
-        tracked = client.get(f'/api/daily-tracks/{track_id}').json()
-        assert tracked['observation']['target_selection'] == selection
-        assert tracked['observation']['holdings'] == []
-        assert tracked['observation']['target_exposure'] == 1
+        tracked = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert tracked["observation"]["target_selection"] == selection
+        assert tracked["observation"]["holdings"] == []
+        assert tracked["observation"]["target_exposure"] == 1
+
+
+def _assert_published_run_events(client, run_id):
+    from uuid import uuid4
+
+    from thesistrace.research_run.models import RunStrategyTargetsInput
+
+    path = f"/api/research-runs/{run_id}/events/query"
+    result = {}
+    manifest = None
+    for section in (
+        "strategy_targets",
+        "strategy_orders",
+        "strategy_child_orders",
+        "strategy_fills",
+        "strategy_adjustments",
+    ):
+        rows, cursor = [], None
+        for _ in range(100):
+            response = client.post(path, json={"section": section, "limit": 1, "cursor": cursor})
+            assert response.status_code == 200, response.text
+            page = response.json()
+            assert page["status"] == "recorded"
+            manifest = manifest or page["source"]["snapshot_id"]
+            assert page["source"] == {
+                "kind": "research_run",
+                "id": run_id,
+                "snapshot_id": manifest,
+            }
+            rows.extend(page["rows"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+            assert (
+                client.post(
+                    path,
+                    json={"section": section, "cursor": cursor, "instrument_id": "equity:other"},
+                ).status_code
+                == 400
+            )
+        else:
+            pytest.fail("Event cursor did not terminate")
+        result[section] = rows
+    targets = {row["target_id"]: row for row in result["strategy_targets"]}
+    orders = {row["order_id"]: row for row in result["strategy_orders"]}
+    children = {row["child_order_id"]: row for row in result["strategy_child_orders"]}
+    assert targets
+    if any(row["selected_instrument_ids"] for row in targets.values()):
+        assert orders and children
+    else:
+        assert not orders and not children and not result["strategy_fills"]
+    for order in orders.values():
+        assert order["target_id"] in targets
+        if order["rejection_reason"] is not None:
+            assert all(child["order_id"] != order["order_id"] for child in children.values())
+    for fill in result["strategy_fills"]:
+        assert children[fill["child_order_id"]]["order_id"] == fill["order_id"]
+        assert orders[fill["order_id"]]["target_id"] == fill["target_id"]
+        assert fill["decision_session"] < fill["session"]
+    terminal = client.get(f"/api/research-runs/{run_id}").json()["result"][
+        "terminal_strategy_state"
+    ]
+    assert Decimal("100000") + sum(
+        (Decimal(row["net_cash_delta"]) for row in result["strategy_fills"]),
+        Decimal(0),
+    ) + sum(
+        (Decimal(row["net_cash_delta"]) for row in result["strategy_adjustments"]), Decimal(0)
+    ) == Decimal(terminal["net_cash"])
+    from collections import defaultdict
+    from decimal import localcontext
+
+    shares = defaultdict(int)
+    with localcontext() as context:
+        context.prec = 80
+        units = defaultdict(Decimal)
+        for row in [*result["strategy_fills"], *result["strategy_adjustments"]]:
+            shares[row["instrument_id"]] += row["execution_shares_delta"]
+            units[row["instrument_id"]] += Decimal(row["adjusted_units_delta"])
+        assert {key: value for key, value in units.items() if value} == {
+            row["instrument_id"]: Decimal(row["adjusted_units"])
+            for row in terminal["positions"]
+        }
+    assert {key: value for key, value in shares.items() if value} == {
+        row["instrument_id"]: row["execution_shares"] for row in terminal["positions"]
+    }
+    first_target = next(iter(targets))
+    filtered = client.post(path, json={"section": "strategy_fills", "target_id": first_target})
+    assert filtered.status_code == 200, filtered.text
+    assert filtered.json()["rows"] == [
+        row for row in result["strategy_fills"] if row["target_id"] == first_target
+    ]
+    assert client.post(path, json={"section": "strategy_targets", "limit": 51}).status_code == 422
+    assert (
+        client.post(path, json={"section": "strategy_targets", "order_id": "bad"}).status_code
+        == 422
+    )
+    assert (
+        client.post(path, json={"section": "strategy_targets", "cursor": "bad"}).status_code == 400
+    )
+    assert (
+        client.app.state.core_runtime.research_runs.get_result_section(
+            uuid4(),
+            RunStrategyTargetsInput(run_id=run_id, section="strategy_targets"),
+        )
+        is None
+    )
+    return result

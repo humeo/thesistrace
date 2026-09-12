@@ -1,3 +1,4 @@
+import { StrategyEvents } from "../analysis/StrategyEvents";
 import { SelectionEligibilityView, type SelectionEligibility } from "../research/SelectionEligibility";
 import {
   CaretDown,
@@ -612,6 +613,7 @@ export function ResearchRunsPage({ researcherId, runId }: {
           <>
             <ResearchResultView result={run.result} />
             {"factor" in run.result ? <FactorEvidence key={`factor:${run.id}`} runId={run.id} /> : null}
+            {"strategy" in run.result && <StrategyEvents key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/events/query`} />}
             <CommonInputObservations key={run.id} endpoint={`/api/research-runs/${encodeURIComponent(run.id)}/common-input-observations`} />
           </>
         ) : null}

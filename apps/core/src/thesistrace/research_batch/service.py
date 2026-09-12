@@ -106,6 +106,10 @@ from thesistrace.research_run.service import (
     ResearchRunService,
 )
 from thesistrace.researcher.quota import QuotaPolicyUnavailable
+from thesistrace.strategy_evidence import (
+    StrategyEvidencePublication,
+    append_staged_strategy_evidence,
+)
 
 BATCH_ADMISSION_RETENTION_SECONDS = 15 * 60
 BATCH_ATTEMPT_LEASE_SECONDS = 15 * 60
@@ -374,6 +378,9 @@ class ResearchBatchService:
         common_partitions: dict[int, list[tuple[StagedPayload, int, str, str]]] = {
             ordinal: [] for ordinal, _key, _run in claim.items
         }
+        strategy_evidence = {
+            ordinal: StrategyEvidencePublication() for ordinal, _key, _run in claim.items
+        }
         factor_evidence = {
             ordinal: FactorEvidencePublication() for ordinal, _key, _run in claim.items
         }
@@ -524,6 +531,19 @@ class ResearchBatchService:
                         if claim.batch_kind != "strategy_sweep":
                             raise RuntimeError("Research Batch item response Kind is invalid")
                         self._stage_strategy_partition(claim, message)
+                        events = message.get("strategy_events")
+                        if not isinstance(events, dict):
+                            raise RuntimeError("Strategy Batch event evidence is missing")
+                        partition = message["strategy_partition"]
+                        plan = run_claim.immutable_input.execution_plan
+                        sessions = tuple(day.isoformat() for day in plan.calculation_sessions
+                                         if partition["first_session"] <= day.isoformat()
+                                         <= partition["last_session"])
+                        append_staged_strategy_evidence(
+                            strategy_evidence[ordinal], self._publication, events,
+                            sessions=sessions,
+                            staging_authority=lambda: self._authorize_claim_staging(claim),
+                        )
                         execution.advance("acknowledge_progress")
                         continue
                     if message.get("status") == "item_failed":
@@ -565,6 +585,7 @@ class ResearchBatchService:
                         self._research_runs.complete_batch_owned_strategy_item(
                             run_claim,
                             chunk,
+                            strategy_evidence=strategy_evidence[ordinal],
                             staged_common_partitions=common_partitions[ordinal],
                             staged_partitions=self._strategy_partitions(
                                 claim,

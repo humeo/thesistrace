@@ -82,6 +82,7 @@ class SessionCoordinateRepository:
     def load_read_snapshot(
         self, researcher_id: UUID, track_id: str, *, calendar: list[str] | None = None,
         after: str | None = None, checkpoint_limit: int | None = None,
+        manifest_sha256: str | None = None,
         transaction: PostgresTransaction | None = None,
     ) -> dict[str, object] | None:
         """One authority snapshot; historical accounts and completed attempts stay unread."""
@@ -134,7 +135,9 @@ class SessionCoordinateRepository:
                 JOIN daily_tracks.session_tracking_states AS state ON state.track_id = track.id
                 JOIN daily_tracks.session_checkpoints AS checkpoint
                   ON checkpoint.track_id = state.track_id
-                 AND checkpoint.manifest_sha256 = state.current_checkpoint_manifest_sha256
+                 AND checkpoint.manifest_sha256 = COALESCE(
+                     %s, state.current_checkpoint_manifest_sha256
+                 )
                 CROSS JOIN calendar
                 LEFT JOIN LATERAL (
                     SELECT progression.status,
@@ -160,7 +163,8 @@ class SessionCoordinateRepository:
                 ) AS unresolved ON true
                 WHERE track.researcher_id = %s AND track.id = %s
                 """,
-                (calendar, after, after, checkpoint_limit, researcher_id, track_id),
+                (calendar, after, after, checkpoint_limit,
+                 manifest_sha256, researcher_id, track_id),
             ).fetchone()
 
     def activate(

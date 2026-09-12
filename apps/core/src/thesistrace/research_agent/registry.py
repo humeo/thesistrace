@@ -475,7 +475,11 @@ class ResearchAgentCapabilityRegistry:
                 name="get_research_run_result",
                 description=(
                     "Read one bounded semantic Result section from a succeeded ResearchRun; "
-                    "collection sections use stable pagination and require research:read."
+                    "collection sections use stable pagination and require research:read. "
+                    "Strategy event sections expose targets, orders, child orders, fills and "
+                    "valuation adjustments, with supported date/instrument/parent-ID filters "
+                    "and at most 50 rows. Cash reconciles using Research Settlement, not raw "
+                    "notional. not_recorded differs from a recorded empty page."
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_READ,
                 input_model=ResearchRunResultSectionInput,
@@ -513,7 +517,11 @@ class ResearchAgentCapabilityRegistry:
                 description=(
                     "Read one bounded semantic DailyTrack Result section from its current "
                     "immutable checkpoint; observations and origin positions use stable "
-                    "opaque pagination and require tracking:read."
+                    "opaque pagination and require tracking:read. Strategy event sections "
+                    "page targets, orders, child orders, fills and valuation adjustments "
+                    "with supported date/instrument/parent-ID filters and at most 50 rows. "
+                    "Event cursors pin their publication across Refresh; restart without "
+                    "a cursor to see newly published events."
                 ),
                 required_scope=ResearchAgentScope.TRACKING_READ,
                 input_model=DailyTrackResultSectionInput,

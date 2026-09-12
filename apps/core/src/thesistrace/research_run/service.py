@@ -176,6 +176,7 @@ from thesistrace.research_run.result import (
     read_common_input_observation_partition,
     read_result_bundle,
     read_semantic_result_section,
+    read_strategy_reporting_bundle,
     result_publication_payloads_from_staged,
     validate_common_chunk_observations,
 )
@@ -183,6 +184,16 @@ from thesistrace.researcher.quota import (
     QuotaPolicyLookup,
     QuotaPolicyUnavailable,
     unavailable_quota_policy,
+)
+from thesistrace.strategy_evidence import (
+    StrategyEventQuery,
+    StrategyEvidencePublication,
+    StrategyEvidenceSource,
+    read_strategy_event_page,
+    stage_strategy_evidence,
+    strategy_event_record_count,
+    strategy_event_response,
+    verified_event_partitions,
 )
 
 ATTEMPT_LEASE_SECONDS = 15 * 60
@@ -642,7 +653,10 @@ class ResearchRunService:
         completed_sessions = sum(
             chunk.research_session_count for chunk in claim.immutable_input.execution_plan.chunks
         )
-        enforce_result_bundle_budget(prepared.exact_bytes, completed_sessions)
+        enforce_result_bundle_budget(
+            prepared.exact_bytes, completed_sessions,
+            strategy_event_count=strategy_event_record_count(payloads),
+        )
         with self._database.transaction() as transaction:
             lock_publication_mutation(transaction)
             authorize_batch(transaction)
@@ -755,6 +769,7 @@ class ResearchRunService:
         claim: ResearchRunExecutionClaim,
         final_chunk: Mapping[str, object],
         *,
+        strategy_evidence: StrategyEvidencePublication,
         staged_common_partitions: Sequence[tuple[StagedPayload, int, str, str]],
         staged_partitions: Sequence[tuple[StagedPayload, int, str, str]],
         authorize_batch: BatchExecutionAuthorization,
@@ -784,14 +799,13 @@ class ResearchRunService:
             != claim.immutable_input.data_admission.last_research_session.isoformat()
         ):
             raise ResearchResultError("Strategy Sweep observation partitions are incomplete")
+        payloads = result_publication_payloads_from_staged(
+            final_values, partitions, research_kind="strategy_backtest",
+            common_partitions=staged_common_partitions,
+        )
+        payloads.update(strategy_evidence.finish())
         prepared = self._publication.prepare(
-            kind="research.result",
-            payloads=result_publication_payloads_from_staged(
-                final_values,
-                partitions,
-                research_kind="strategy_backtest",
-                common_partitions=staged_common_partitions,
-            ),
+            kind="research.result", payloads=payloads,
             provenance=provenance,
             staging_authority=lambda: self._authorize_batch_result_staging(
                 claim,
@@ -799,7 +813,10 @@ class ResearchRunService:
             ),
         )
         completed_sessions = claim.immutable_input.execution_plan.research_session_count
-        enforce_result_bundle_budget(prepared.exact_bytes, completed_sessions)
+        enforce_result_bundle_budget(
+            prepared.exact_bytes, completed_sessions,
+            strategy_event_count=strategy_event_record_count(payloads),
+        )
         with self._database.transaction() as transaction:
             lock_publication_mutation(transaction)
             authorize_batch(transaction)
@@ -2273,7 +2290,7 @@ class ResearchRunService:
                 )
                 stored_result = {"factor_summary": read_factor_summary_bundle(bundle)}
             else:
-                bundle = self._publication.read(published_ref)
+                bundle = read_strategy_reporting_bundle(self._publication, published_ref)
                 stored_result = read_result_bundle(bundle, research_kind=summary.research_kind)
             result = _public_result(
                 stored_result,
@@ -2432,6 +2449,32 @@ class ResearchRunService:
             kind="research.result",
             provenance=selected_provenance,
         )
+        if isinstance(query, StrategyEventQuery):
+            after = _decode_result_cursor(
+                query.cursor, secret=cursor_secret, researcher_id=researcher_id,
+                run_id=query.run_id, section=query.section, order=query.cursor_order(),
+                manifest_sha256=manifest_sha256,
+            )
+            try:
+                read = read_strategy_event_page(
+                    self._publication, published_ref, query=query, after=after,
+                )
+                return strategy_event_response(
+                    query, read,
+                    source=StrategyEvidenceSource.for_publication(
+                        kind="research_run", id=query.run_id, manifest_sha256=manifest_sha256,
+                    ),
+                    encode_cursor=lambda position: _encode_result_cursor(
+                        position, secret=cursor_secret, researcher_id=researcher_id,
+                        run_id=query.run_id, section=query.section, order=query.cursor_order(),
+                        manifest_sha256=manifest_sha256,
+                    ),
+                )
+            except (KeyError, PublicationNotFoundError, PublicationVerificationError,
+                    ValidationError, ValueError) as error:
+                raise ResearchRunResultReadFailed(
+                    "Strategy event Result could not be verified"
+                ) from error
         after: str | None = None
         limit = 20
         if isinstance(query, StrategyObservationsResultSectionInput):
@@ -2503,7 +2546,7 @@ class ResearchRunService:
             comparison_summary = None
             if isinstance(query, StrategySummaryResultSectionInput):
                 stored_result = read_result_bundle(
-                    self._publication.read(published_ref),
+                    read_strategy_reporting_bundle(self._publication, published_ref),
                     research_kind=immutable_input.research_kind,
                 )
                 comparison_summary = strategy_comparison_summary(
@@ -2601,13 +2644,14 @@ class ResearchRunService:
             str,
         ):
             raise ResearchRunTrackingUnavailable
-        bundle = self._publication.read_in_transaction(
-            transaction,
+        bundle = read_strategy_reporting_bundle(
+            self._publication,
             PublishedRef(
                 manifest_sha256=manifest_sha256,
                 kind="research.result",
                 provenance=selected_provenance,
             ),
+            transaction=transaction,
         )
         stored_result = read_result_bundle(bundle, research_kind=immutable_input.research_kind)
         if not isinstance(stored_result, Mapping):
@@ -3081,7 +3125,10 @@ class ResearchRunService:
                         provenance=binding,
                     )
                 )
-                expected_payload_names = {"continuation"}
+                event_values = row["strategy_event_payloads"]
+                if not isinstance(event_values, dict):
+                    raise ResearchCheckpointIntegrityError
+                expected_payload_names = {"continuation", *event_values}
                 if observation_value is not None:
                     expected_payload_names.add("strategy_daily_observations")
                 if common_value is not None:
@@ -3091,6 +3138,15 @@ class ResearchRunService:
                 if final_values_value is not None:
                     expected_payload_names.add("final_values")
                 if set(bundle.payloads) != expected_payload_names:
+                    raise ResearchCheckpointIntegrityError
+                if event_values:
+                    for _ in verified_event_partitions(
+                        bundle, sessions=_checkpoint_research_sessions(
+                            claim.immutable_input, expected_ordinal,
+                        ),
+                    ):
+                        pass
+                elif expected_observation_count:
                     raise ResearchCheckpointIntegrityError
                 continuation = _checkpoint_json_payload(
                     bundle.payloads["continuation"],
@@ -3269,6 +3325,8 @@ class ResearchRunService:
                 self._factor_checkpoint_partitions(claim),
                 summary=final_values["factor_summary"],
             ))
+        if claim.immutable_input.research_kind == "strategy_backtest":
+            payloads.update(self._strategy_checkpoint_evidence(claim))
         prepared = self._publication.prepare(
             kind="research.result",
             payloads=payloads,
@@ -3280,8 +3338,55 @@ class ResearchRunService:
         enforce_result_bundle_budget(
             prepared.exact_bytes,
             int(progress["completed_research_sessions"]),
+            strategy_event_count=strategy_event_record_count(payloads),
         )
         return prepared, provenance, key_metrics
+
+    def _strategy_checkpoint_evidence(self, claim: ResearchRunExecutionClaim):
+        assert self._publication is not None
+        with self._database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT checkpoint.*, attempt.fence AS creator_fence,
+                       attempt.data_generation_id
+                FROM research_runs.execution_checkpoints AS checkpoint
+                JOIN research_runs.attempts AS attempt ON attempt.id = checkpoint.attempt_id
+                WHERE checkpoint.run_id = %s
+                ORDER BY checkpoint.ordinal
+                """,
+                (claim.run_id,),
+            ).fetchall()
+        builder = StrategyEvidencePublication()
+        prior_chain = None
+        for row in rows:
+            binding = _checkpoint_row_binding(
+                claim.immutable_input, claim.run_id, row, prior_chain,
+            )
+            prior_chain = str(row["chain_sha256"])
+            if hashlib.sha256(canonical_json_bytes(binding)).hexdigest() != prior_chain:
+                raise ResearchCheckpointIntegrityError
+            sessions = _checkpoint_research_sessions(claim.immutable_input, int(row["ordinal"]))
+            descriptors = row["strategy_event_payloads"]
+            if not sessions:
+                if descriptors != {}:
+                    raise ResearchCheckpointIntegrityError
+                continue
+            if not isinstance(descriptors, dict) or not descriptors:
+                raise ResearchCheckpointIntegrityError
+            bundle = self._publication.read_selected(
+                PublishedRef(
+                    manifest_sha256=str(row["checkpoint_manifest_sha256"]),
+                    kind="research.execution-checkpoint", provenance=binding,
+                ), frozenset(descriptors),
+            )
+            for section, name, event_rows in verified_event_partitions(bundle, sessions=sessions):
+                staged = _staged_payload(descriptors[name])
+                payload = bundle.payloads[name]
+                if (hashlib.sha256(payload.content).hexdigest() != staged.sha256
+                    or len(payload.content) != staged.byte_size):
+                    raise ResearchCheckpointIntegrityError
+                builder.add(section, staged, event_rows)
+        return builder.finish()
 
     def _factor_checkpoint_partitions(
         self, claim: ResearchRunExecutionClaim,
@@ -3387,6 +3492,18 @@ class ResearchRunService:
             sessions=_checkpoint_research_sessions(claim.immutable_input, ordinal),
         )
         _validate_factor_checkpoint_rows(claim.immutable_input, ordinal, factor_rows)
+        event_rows = chunk.get("strategy_events")
+        collect_events = (claim.immutable_input.research_kind == "strategy_backtest"
+                          and plan_chunk.research_session_count > 0)
+        if not isinstance(event_rows, dict) or (not collect_events and event_rows != {}):
+            raise ResearchResultError("Research Chunk event evidence is invalid")
+        event_payloads = (stage_strategy_evidence(
+            self._publication, event_rows,
+            sessions=_checkpoint_research_sessions(claim.immutable_input, ordinal),
+            staging_authority=lambda: self._authorize_result_staging(claim),
+        ) if collect_events else {})
+        event_values = {name: _staged_payload_value(payload)
+                        for name, payload in event_payloads.items()}
         factor_payload = (
             self._publication.stage(
                 factor_daily_payload(factor_rows),
@@ -3466,6 +3583,7 @@ class ResearchRunService:
             factor_observation_payload=(
                 _staged_payload_value(factor_payload) if factor_payload is not None else None
             ),
+            strategy_event_payloads=event_values,
             final_values_payload=final_values_value,
             prior_chain_sha256=expected_prior_chain,
         )
@@ -3474,6 +3592,7 @@ class ResearchRunService:
             kind="research.execution-checkpoint",
             payloads={
                 "continuation": continuation_payload,
+                **event_payloads,
                 **(
                     {"factor_daily_observations": factor_payload}
                     if factor_payload is not None else {}
@@ -3526,11 +3645,13 @@ class ResearchRunService:
                     id, run_id, attempt_id, ordinal, boundary_session, phase,
                     completed_warmup_sessions, completed_research_sessions,
                     continuation_payload, observation_payload, common_observation_payload,
-                    factor_observation_payload, final_values_payload,
+                    factor_observation_payload, strategy_event_payloads, final_values_payload,
                     observation_row_count, observation_first_session,
                     observation_last_session, checkpoint_manifest_sha256,
                     chain_sha256
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
                 """,
                 (
                     f"checkpoint_{uuid4().hex[:20]}",
@@ -3547,6 +3668,7 @@ class ResearchRunService:
                      if common_payload is not None else None),
                     (Jsonb(_staged_payload_value(factor_payload))
                      if factor_payload is not None else None),
+                    Jsonb(event_values),
                     Jsonb(final_values_value) if final_values_value is not None else None,
                     len(observations),
                     observations[0]["session"] if observations else None,
@@ -4692,6 +4814,7 @@ def _checkpoint_row_binding(
             if row["factor_observation_payload"] is None
             else dict(row["factor_observation_payload"])
         ),
+        strategy_event_payloads=dict(row["strategy_event_payloads"]),
         final_values_payload=(
             None if row["final_values_payload"] is None else dict(row["final_values_payload"])
         ),
@@ -4715,6 +4838,7 @@ def _checkpoint_binding(
     observation_payload: Mapping[str, object] | None,
     common_observation_payload: Mapping[str, object] | None,
     factor_observation_payload: Mapping[str, object] | None,
+    strategy_event_payloads: Mapping[str, object],
     final_values_payload: Mapping[str, object] | None,
     prior_chain_sha256: str | None,
 ) -> dict[str, object]:
@@ -4765,6 +4889,7 @@ def _checkpoint_binding(
         "factor_observation_payload": (
             None if factor_observation_payload is None else dict(factor_observation_payload)
         ),
+        "strategy_event_payloads": dict(strategy_event_payloads),
         "final_values_payload": (
             None if final_values_payload is None else dict(final_values_payload)
         ),

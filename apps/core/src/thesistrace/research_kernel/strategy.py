@@ -31,6 +31,11 @@ from thesistrace.research_series import (
 )
 
 
+def strategy_event_id(kind: str, *identity: object) -> str:
+    """Logical identity within a source Strategy execution, independent of chunking."""
+    return f"{kind}_" + hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+
+
 class StrategyCalculationError(RuntimeError):
     pass
 
@@ -431,6 +436,9 @@ def _execute_strategy(
         else:
             raise StrategyCalculationError("continuation metric state is invalid")
 
+    target_events = ([] if continuation is None else [
+        dict(item) for item in continuation.get("target_events", [])
+    ])
     for session in report_calendar:
         if cancellation_check is not None:
             cancellation_check()
@@ -465,6 +473,7 @@ def _execute_strategy(
             if pending_target["decision_session"] != signal_session:
                 raise StrategyCalculationError("Open target is not from the preceding Close")
             mode = pending_target["mode"]
+            target_id = strategy_event_id("target", contract_checksum, signal_session)
             candidates = list(pending_target["selected_instrument_ids"])
             if ledger is not None:
                 execution_signal = {
@@ -543,6 +552,9 @@ def _execute_strategy(
                 event_side_order.append("sell")
                 gross_cash, net_cash, cost = execute_order(
                     session=session,
+                    target_id=target_id,
+                    decision_session=signal_session,
+                    reason=mode,
                     instrument_id=instrument_id,
                     side="sell",
                     quantity=quantity,
@@ -599,9 +611,15 @@ def _execute_strategy(
                             if state == "full_session_suspension"
                             else "data_unavailable"
                         )
-                        order_id = len(orders)
+                        order_id = strategy_event_id(
+                            "order", target_id, session, instrument_id, "buy",
+                        )
                         orders.append(
                             {
+                                "target_id": target_id,
+                                "decision_session": signal_session,
+                                "reason": mode,
+                                "rejection_reason": rejection_reason,
                                 "order_id": order_id,
                                 "session": session,
                                 "instrument_id": instrument_id,
@@ -692,6 +710,9 @@ def _execute_strategy(
                 cash_before_buy = net_cash
                 gross_cash, net_cash, cost = execute_order(
                     session=session,
+                    target_id=target_id,
+                    decision_session=signal_session,
+                    reason=mode,
                     instrument_id=instrument_id,
                     side="buy",
                     quantity=quantity,
@@ -854,6 +875,11 @@ def _execute_strategy(
                 "execution": "next_research_session_open",
                 "exposure": next_exposure,
             }
+        if pending_target is not None:
+            target_events.append({
+                "target_id": strategy_event_id("target", contract_checksum, session),
+                **pending_target,
+            })
         exposure = next_exposure
         if cancellation_check is not None:
             cancellation_check()
@@ -867,6 +893,7 @@ def _execute_strategy(
         "initial_cash_cny": canonical_decimal(initial_cash),
         "daily": daily,
         "positions": positions_payload,
+        "target_events": target_events,
         "orders": orders,
         "child_orders": child_orders,
         "fills": fills,
@@ -971,17 +998,41 @@ def mark_positions(
                     "session": session,
                     "instrument_id": instrument_id,
                     "type": "valuation_carry",
+                    "adjustment_id": strategy_event_id(
+                        "adjustment", session, instrument_id, "valuation_carry",
+                    ),
+                    "execution_shares_delta": 0,
+                    "adjusted_units_delta": "0",
+                    "net_cash_delta": "0",
+                    "gross_cash_delta": "0",
+                    "valuation_delta": "0",
+                    "last_adjusted_price": canonical_decimal(
+                        positions[instrument_id].last_adjusted_price,
+                    ),
                 }
             )
             continue
         listed_to = instruments[instrument_id].listed_to
         if listed_to and listed_to <= session:
-            positions.pop(instrument_id)
+            removed_position = positions.pop(instrument_id)
             events.append(
                 {
                     "session": session,
                     "instrument_id": instrument_id,
                     "type": "terminal_delisting_writeoff",
+                    "adjustment_id": strategy_event_id(
+                        "adjustment", session, instrument_id, "terminal_delisting_writeoff",
+                    ),
+                    "execution_shares_delta": -removed_position.execution_shares,
+                    "adjusted_units_delta": canonical_decimal(
+                        removed_position.adjusted_units.copy_negate(),
+                    ),
+                    "net_cash_delta": "0",
+                    "gross_cash_delta": "0",
+                    "valuation_delta": canonical_decimal(
+                        -removed_position.adjusted_units * removed_position.last_adjusted_price,
+                    ),
+                    "last_adjusted_price": canonical_decimal(removed_position.last_adjusted_price),
                 }
             )
             continue
@@ -994,6 +1045,9 @@ def mark_positions(
 def execute_order(
     *,
     session: str,
+    target_id: str,
+    decision_session: str,
+    reason: str,
     instrument_id: str,
     side: str,
     quantity: int,
@@ -1027,9 +1081,14 @@ def execute_order(
         upper=upper,
         lower=lower,
     )
-    order_id = len(orders)
+    order_id = strategy_event_id("order", target_id, session, instrument_id, side)
+    event_context = {
+        "target_id": target_id, "decision_session": decision_session, "reason": reason,
+    }
     orders.append(
         {
+            **event_context,
+            "rejection_reason": rejection,
             "order_id": order_id,
             "session": session,
             "instrument_id": instrument_id,
@@ -1058,7 +1117,10 @@ def execute_order(
     board = instruments[instrument_id].board
     total_cost = Decimal(0)
     total_quantity = 0
+    fill_start = len(fills)
+    cash_before = gross_cash, net_cash
     position = positions.get(instrument_id)
+    units_before = Decimal(0) if position is None else position.adjusted_units
     complete_liquidation = (
         side == "sell" and position is not None and position.execution_shares == quantity
     )
@@ -1067,13 +1129,16 @@ def execute_order(
         quantity,
         complete_liquidation=complete_liquidation,
     ):
-        child_order_id = len(child_orders)
+        child_order_id = strategy_event_id(
+            "child", order_id, total_quantity, total_quantity + child_quantity,
+        )
         raw_notional = money(Decimal(child_quantity) * raw_open)
         child_cost = transaction_cost(raw_notional, side, costs)
         total_cost = money(total_cost + child_cost)
         total_quantity += child_quantity
         child_orders.append(
             {
+                **event_context,
                 "child_order_id": child_order_id,
                 "order_id": order_id,
                 "session": session,
@@ -1084,6 +1149,8 @@ def execute_order(
         )
         fills.append(
             {
+                "fill_id": strategy_event_id("fill", child_order_id),
+                **event_context,
                 "child_order_id": child_order_id,
                 "order_id": order_id,
                 "session": session,
@@ -1127,6 +1194,39 @@ def execute_order(
             position.execution_shares -= total_quantity
             position.adjusted_units = money(position.adjusted_units - removed_units)
             position.last_adjusted_price = adjusted_open
+    position_after = positions.get(instrument_id)
+    units_after = Decimal(0) if position_after is None else position_after.adjusted_units
+    # Allocate the actual order-level mutations, retaining any accounting-rounding
+    # residual explicitly. Child raw notionals are not the synthetic settlement.
+    with accounting_context():
+        deltas = (gross_cash - cash_before[0], net_cash - cash_before[1],
+                  units_after - units_before)
+        prior = (Decimal(0), Decimal(0), Decimal(0))
+        cumulative_net = Decimal(0)
+        cumulative_quantity = 0
+        for fill in fills[fill_start:]:
+            cumulative_quantity += fill["quantity"]
+            cumulative = (deltas if cumulative_quantity == total_quantity else tuple(
+                value * cumulative_quantity / total_quantity for value in deltas
+            ))
+            gross_delta, _, units_delta = (
+                value - before for value, before in zip(cumulative, prior, strict=True)
+            )
+            prior = cumulative
+            net_delta = (deltas[1] - cumulative_net if cumulative_quantity == total_quantity
+                         else gross_delta - Decimal(fill["cost"]))
+            cumulative_net += net_delta
+            fill.update({
+                "adjusted_open": canonical_decimal(adjusted_open),
+                "research_settlement": canonical_decimal(abs(gross_delta)),
+                "gross_cash_delta": canonical_decimal(gross_delta),
+                "net_cash_delta": canonical_decimal(net_delta),
+                "cash_rounding_delta": canonical_decimal(
+                    net_delta - gross_delta + Decimal(fill["cost"]),
+                ),
+                "execution_shares_delta": fill["quantity"] * (1 if side == "buy" else -1),
+                "adjusted_units_delta": canonical_decimal(units_delta),
+            })
     return gross_cash, net_cash, total_cost
 
 

@@ -29,6 +29,18 @@ from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
 from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting, VolatilityWindow
 from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
 from thesistrace.research_run.result_schema import FactorPeriodStatistic, StrategyMetrics
+from thesistrace.strategy_evidence import (
+    StrategyAdjustmentsPage,
+    StrategyAdjustmentsQuery,
+    StrategyChildOrdersPage,
+    StrategyChildOrdersQuery,
+    StrategyFillsPage,
+    StrategyFillsQuery,
+    StrategyOrdersPage,
+    StrategyOrdersQuery,
+    StrategyTargetsPage,
+    StrategyTargetsQuery,
+)
 
 
 def _normalized_request_id(value: str) -> str:
@@ -107,6 +119,8 @@ type ResearchRunStatus = Literal[
     "queued", "running", "cancelling", "succeeded", "failed", "cancelled"
 ]
 type ResearchRunResultSection = Literal[
+    "strategy_targets", "strategy_orders", "strategy_child_orders",
+    "strategy_fills", "strategy_adjustments",
     "factor",
     "factor_observations",
     "factor_periods",
@@ -129,6 +143,8 @@ FACTOR_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
     "common_input_observations",
 )
 STRATEGY_RESULT_SECTIONS: tuple[ResearchRunResultSection, ...] = (
+    "strategy_targets", "strategy_orders", "strategy_child_orders",
+    "strategy_fills", "strategy_adjustments",
     "strategy_summary",
     "strategy_observations",
     "terminal_strategy_state",
@@ -812,6 +828,26 @@ class ProvenanceResultSectionInput(_ResearchRunResultSectionInput):
     section: Literal["provenance"]
 
 
+class RunStrategyTargetsInput(_ResearchRunResultSectionInput, StrategyTargetsQuery):
+    pass
+
+
+class RunStrategyOrdersInput(_ResearchRunResultSectionInput, StrategyOrdersQuery):
+    pass
+
+
+class RunStrategyChildOrdersInput(_ResearchRunResultSectionInput, StrategyChildOrdersQuery):
+    pass
+
+
+class RunStrategyFillsInput(_ResearchRunResultSectionInput, StrategyFillsQuery):
+    pass
+
+
+class RunStrategyAdjustmentsInput(_ResearchRunResultSectionInput, StrategyAdjustmentsQuery):
+    pass
+
+
 type ResearchRunResultSectionInput = Annotated[
     FactorResultSectionInput
     | FactorObservationsResultSectionInput
@@ -821,7 +857,12 @@ type ResearchRunResultSectionInput = Annotated[
     | TerminalStrategyStateResultSectionInput
     | TerminalPositionsResultSectionInput
     | ProvenanceResultSectionInput
-    | CommonInputObservationsResultSectionInput,
+    | CommonInputObservationsResultSectionInput
+    | RunStrategyTargetsInput
+    | RunStrategyOrdersInput
+    | RunStrategyChildOrdersInput
+    | RunStrategyFillsInput
+    | RunStrategyAdjustmentsInput,
     Field(discriminator="section"),
 ]
 
@@ -982,7 +1023,12 @@ type ResearchRunResultSectionResponse = Annotated[
     | TerminalStrategyStateResultSection
     | TerminalPositionsResultSection
     | ProvenanceResultSection
-    | CommonInputObservationsResultSection,
+    | CommonInputObservationsResultSection
+    | StrategyTargetsPage
+    | StrategyOrdersPage
+    | StrategyChildOrdersPage
+    | StrategyFillsPage
+    | StrategyAdjustmentsPage,
     Field(discriminator="section"),
 ]
 

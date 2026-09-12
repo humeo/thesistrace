@@ -50,6 +50,7 @@ from thesistrace.research_run.result_schema import (
     StrategyDailyObservationsValue,
     StrategySummaryValue,
 )
+from thesistrace.strategy_evidence import EVENT_MODELS, event_partition_descriptors
 
 __all__ = (
     "LAST_DAILY_OBSERVATION_KEYS",
@@ -141,7 +142,26 @@ PUBLIC_TERMINAL_STATE_KEYS = frozenset(
 )
 
 
-def result_bundle_byte_budget(research_period_session_count: int) -> int:
+def read_strategy_reporting_bundle(
+    publication: Publication, published_ref: PublishedRef, *, transaction=None,
+) -> VerifiedBundle:
+    """Charts, summaries and Track activation do not consume trade evidence bodies."""
+    names = (publication.payload_names(published_ref) if transaction is None else
+             publication.payload_names_in_transaction(transaction, published_ref))
+    present = set(EVENT_MODELS) & names
+    if present and present != set(EVENT_MODELS):
+        raise ResearchResultError("Strategy event section set is incomplete")
+    reporting = frozenset(name for name in names if name not in EVENT_MODELS and not any(
+        name.startswith(f"{section}.part-") for section in EVENT_MODELS
+    ))
+    if transaction is None:
+        return publication.read_selected(published_ref, reporting)
+    return publication.read_selected_in_transaction(transaction, published_ref, reporting)
+
+
+def result_bundle_byte_budget(
+    research_period_session_count: int, *, strategy_event_count: int = 0,
+) -> int:
     if (
         isinstance(research_period_session_count, bool)
         or not isinstance(research_period_session_count, int)
@@ -151,14 +171,21 @@ def result_bundle_byte_budget(research_period_session_count: int) -> int:
     blocks = (
         research_period_session_count + RESULT_BUDGET_SESSION_BLOCK - 1
     ) // RESULT_BUDGET_SESSION_BLOCK
-    return blocks * RESULT_BUDGET_BYTE_BLOCK
+    from thesistrace.strategy_event_wire import MAX_EVENT_RECORD_BYTES
+
+    if type(strategy_event_count) is not int or strategy_event_count < 0:
+        raise ResearchResultError("Result budget requires a non-negative Strategy event count")
+    return blocks * RESULT_BUDGET_BYTE_BLOCK + strategy_event_count * MAX_EVENT_RECORD_BYTES
 
 
 def enforce_result_bundle_budget(
     exact_bytes: int,
     research_period_session_count: int,
+    *, strategy_event_count: int = 0,
 ) -> int:
-    budget = result_bundle_byte_budget(research_period_session_count)
+    budget = result_bundle_byte_budget(
+        research_period_session_count, strategy_event_count=strategy_event_count,
+    )
     if isinstance(exact_bytes, bool) or not isinstance(exact_bytes, int) or exact_bytes < 0:
         raise ResearchResultError("Result Bundle exact bytes are invalid")
     if exact_bytes > budget:
@@ -989,6 +1016,10 @@ def _require_exact_strategy_payload_names(bundle: VerifiedBundle) -> None:
     if not isinstance(observation_partitions, list):
         raise ResearchResultError("Strategy Daily Observations partitions are invalid")
     expected = set(STRATEGY_RESULT_BASE_PAYLOAD_NAMES) | _common_payload_names(bundle)
+    if any(section in bundle.payloads for section in EVENT_MODELS):
+        for section in EVENT_MODELS:
+            expected.add(section)
+            expected.update(part["name"] for part in event_partition_descriptors(bundle, section))
     expected.update(str(item["name"]) for item in observation_partitions)
     expected.update(str(item["name"]) for item in position_descriptor["partitions"])
     if set(bundle.payloads) != expected:
