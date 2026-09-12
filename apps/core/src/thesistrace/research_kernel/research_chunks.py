@@ -29,6 +29,7 @@ from thesistrace.research_kernel.strategy import (
     run_strategy_with_metric_state,
     strategy_metrics_from_state,
 )
+from thesistrace.research_kernel.terminal_state_schema import PendingSignal
 from thesistrace.research_series import ColumnarResearchSeries
 
 _STATISTIC_NAMES = (
@@ -585,7 +586,6 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
         alpha_factor_outcome._alpha_matrix_for_current_process(),
         calculation_definition(run_input),
         origin_session=str(run_input.research_start_session),
-        terminal_cutoff=final_chunk,
         continuation=strategy_continuation,
         cancellation_check=cancellation_check,
     )
@@ -618,6 +618,7 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
         "rejections": [],
         "diagnostics": [],
         "report_session_count": completed_count,
+        "pending_signal": strategy["pending_signal"],
         "metric_state": metric_state,
     }
     final_values: dict[str, object] | None = None
@@ -635,8 +636,6 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
                 metric.pop(history_name, None)
         terminal = dict(strategy["daily"][-1])
         entry_session = metric_state.get("entry_session")
-        if not isinstance(entry_session, str):
-            raise ValueError("Final Strategy has no investable Entry Open")
         final_values = {
             "strategy_summary": {
                 "alpha_checksum": str(
@@ -661,14 +660,7 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
                     "rebalance_interval": strategy_settings.rebalance_interval,
                     "completed_intervals": completed_count - 1,
                 },
-                "pending_signal": (
-                    {
-                        "signal_session": str(terminal["session"]),
-                        "execution": "next_research_session_open",
-                    }
-                    if (completed_count - 1) % strategy_settings.rebalance_interval == 0
-                    else None
-                ),
+                "pending_signal": strategy["pending_signal"],
                 "last_daily_observation": terminal,
                 "metric_state": metric_state,
             },
@@ -1283,6 +1275,7 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
         "diagnostics",
         "report_session_count",
         "metric_state",
+        "pending_signal",
     }
     daily = state.get("daily")
     positions = state.get("positions")
@@ -1324,6 +1317,8 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
     if not required_daily <= set(last_daily) or not isinstance(last_daily["session"], str):
         raise ValueError("Strategy continuation is invalid")
     try:
+        if state["pending_signal"] is not None:
+            PendingSignal.model_validate(state["pending_signal"])
         for name in required_daily - {"session"}:
             if not Decimal(str(last_daily[name])).is_finite():
                 raise ValueError("Strategy continuation is invalid")

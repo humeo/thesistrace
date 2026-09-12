@@ -1973,8 +1973,8 @@ class DailyTrackService:
                     session = str(observation["session"])
                     if after is None or session > after:
                         by_session[session] = dict(observation)
-                # A successor only replaces this checkpoint's boundary. Once the
-                # page ends before that boundary its values can no longer change.
+                # Checkpoints append immutable observations; once the page is
+                # full, later checkpoints cannot change any of its values.
                 if len(by_session) > limit:
                     break
         rows = list(by_session.values())
@@ -2086,12 +2086,14 @@ class DailyTrackService:
             terminal_observation = recent_observations[-1]
             if self._strategy_comparison is None:
                 raise RuntimeError("Strategy comparison service is not configured")
+            entry_session = row["terminal_strategy_state"]["metric_state"]["entry_session"]
             comparison = self._strategy_comparison.comparison(
                 StrategyComparisonFacts(
-                    entry_session=origin.strategy_entry_session,
+                    entry_session=entry_session,
                     terminal_session=str(terminal_observation["session"]),
                     session_interval_count=(
-                        current_index - calendar.index(origin.strategy_entry_session)
+                        current_index - calendar.index(entry_session)
+                        if entry_session is not None else 0
                     ),
                     initial_cash_cny=origin.strategy_initial_cash_cny,
                     terminal_net_nav=str(terminal_observation["net_nav"]),
@@ -3896,7 +3898,6 @@ def _read_publication_json(
         terminal = _mapping_value(value["terminal_strategy_state"], "Activation terminal state")
         if (
             state.boundary_session != terminal["session"]
-            or state.prefix_session is not None
             or Decimal(state.peak_net_nav) != Decimal(str(terminal["net_nav"]))
             or Decimal(state.maximum_drawdown) != 0
         ):

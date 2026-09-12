@@ -2525,7 +2525,8 @@ class ResearchRunService:
             not isinstance(initial_strategy_state, Mapping)
             or not isinstance(strategy_summary, Mapping)
             or not isinstance(calculation_contracts, Mapping)
-            or not isinstance(strategy_summary.get("entry_session"), str)
+            or (strategy_summary.get("entry_session") is not None
+                and not isinstance(strategy_summary["entry_session"], str))
             or not isinstance(strategy_summary.get("initial_cash_cny"), str)
         ):
             raise ResearchRunTrackingUnavailable
@@ -2543,7 +2544,7 @@ class ResearchRunService:
                     canonical_json_bytes(stored_result)
                 ).hexdigest(),
             },
-            strategy_entry_session=str(strategy_summary["entry_session"]),
+            strategy_entry_session=strategy_summary["entry_session"],
             strategy_initial_cash_cny=str(strategy_summary["initial_cash_cny"]),
             initial_strategy_state=dict(initial_strategy_state),
             calculation_contracts=dict(calculation_contracts),
@@ -4259,19 +4260,23 @@ def _strategy_comparison_facts(
     metric_state = terminal.get("metric_state")
     if not isinstance(metric_state, Mapping):
         raise ResearchResultError("Strategy comparison coordinate is missing")
+    entry_session = strategy_summary.get("entry_session")
     entry_session_ordinal = metric_state.get("entry_session_ordinal")
     session_count = metric_state.get("session_count")
-    if (
-        isinstance(entry_session_ordinal, bool)
-        or not isinstance(entry_session_ordinal, int)
-        or isinstance(session_count, bool)
-        or not isinstance(session_count, int)
-        or entry_session_ordinal < 1
-        or session_count < entry_session_ordinal
-    ):
+    if isinstance(session_count, bool) or not isinstance(session_count, int) or session_count < 1:
         raise ResearchResultError("Strategy comparison coordinate is invalid")
+    if entry_session is None:
+        if entry_session_ordinal is not None or metric_state.get("entry_session") is not None:
+            raise ResearchResultError("Unentered Strategy has an entry coordinate")
+        interval_count = 0
+    else:
+        if (not isinstance(entry_session, str)
+            or isinstance(entry_session_ordinal, bool)
+            or not isinstance(entry_session_ordinal, int)
+            or not 1 <= entry_session_ordinal <= session_count):
+            raise ResearchResultError("Strategy comparison coordinate is invalid")
+        interval_count = session_count - entry_session_ordinal
     facts = {
-        "entry_session": strategy_summary.get("entry_session"),
         "terminal_session": terminal.get("session"),
         "initial_cash_cny": strategy_summary.get("initial_cash_cny"),
         "terminal_net_nav": terminal.get("net_nav"),
@@ -4279,9 +4284,9 @@ def _strategy_comparison_facts(
     if any(not isinstance(value, str) for value in facts.values()):
         raise ResearchResultError("Strategy comparison facts are invalid")
     return StrategyComparisonFacts(
-        entry_session=str(facts["entry_session"]),
+        entry_session=entry_session,
         terminal_session=str(facts["terminal_session"]),
-        session_interval_count=session_count - entry_session_ordinal,
+        session_interval_count=interval_count,
         initial_cash_cny=str(facts["initial_cash_cny"]),
         terminal_net_nav=str(facts["terminal_net_nav"]),
     )

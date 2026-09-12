@@ -1376,11 +1376,11 @@ def _continuation_instrument_ids(
     positions = strategy.get("positions")
     if not isinstance(positions, list):
         raise ResearchExecutionInputInvalid("Research Strategy continuation is invalid")
-    return frozenset(
-        str(position["instrument_id"])
-        for position in positions
-        if isinstance(position, Mapping) and "instrument_id" in position
-    )
+    pending = strategy["pending_signal"]
+    pending_ids = pending["selected_instrument_ids"] if pending is not None else []
+    return frozenset([
+        *(str(position["instrument_id"]) for position in positions), *pending_ids,
+    ])
 
 
 def _empty_phase_seconds() -> dict[str, float]:

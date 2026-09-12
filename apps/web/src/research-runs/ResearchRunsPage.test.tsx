@@ -375,6 +375,22 @@ describe("ResearchResultView", () => {
     expect(unavailableMarkup).toContain("CSI 300 comparison unavailable");
     expect(unavailableMarkup).toContain("No comparison chart is shown");
     expect(unavailableMarkup).not.toContain("<figure");
+
+    const cashAccountMarkup = renderToStaticMarkup(
+      <ResearchResultView
+        result={{
+          ...result,
+          strategy: {
+            ...result.strategy,
+            summary: { ...result.strategy.summary, entry_session: null },
+            comparison: { status: "unavailable", reason: "no_entry_open" },
+          },
+        }}
+      />,
+    );
+    expect(cashAccountMarkup).toContain("has not reached its first scheduled trading Open");
+    expect(cashAccountMarkup).not.toContain("Snapshot is unavailable");
+    expect(cashAccountMarkup).not.toContain("<figure");
   });
 });
 

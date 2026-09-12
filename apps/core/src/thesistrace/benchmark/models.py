@@ -68,11 +68,11 @@ class AvailableStrategyComparison(AvailableStrategyComparisonSummary):
 
 class UnavailableStrategyComparison(ComparisonModel):
     status: Literal["unavailable"]
-    reason: Literal["benchmark_snapshot_unavailable"]
+    reason: Literal["benchmark_snapshot_unavailable", "no_entry_open"]
 
 
 class InternalAnnualizedExcessRequest(ComparisonModel):
-    entry_session: str
+    entry_session: str | None
     terminal_session: str
     session_interval_count: Annotated[int, Field(strict=True, ge=0)]
     initial_cash_cny: str

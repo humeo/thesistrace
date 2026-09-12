@@ -143,7 +143,6 @@ def test_continuation_keeps_initial_cash_without_reinjecting_it(runner) -> None:
         matrix,
         definition,
         origin_session=SESSIONS[0],
-        terminal_cutoff=False,
     )
     continued = runner(data, matrix, definition, continuation=prefix)
     complete = runner(data, matrix, definition, origin_session=SESSIONS[0])

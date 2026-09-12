@@ -119,20 +119,18 @@ def restore_tracking_checkpoint(
     strategy_state = _mapping(value.get("strategy_state"), "Strategy state")
     terminal = _mapping(strategy_state.get("terminal"), "Terminal Strategy State")
     resume_observation = _mapping(
-        terminal.get("continuation_observation"),
+        terminal.get("last_daily_observation"),
         "Strategy continuation observation",
     )
     positions = terminal.get("positions")
-    continuation_positions = terminal.get("continuation_positions")
     metric_state = _mapping(
-        terminal.get("continuation_metric_state"),
+        terminal.get("metric_state"),
         "Strategy metric continuation",
     )
     retained_delta = strategy_state.get("retained_delta")
     summary = _mapping(strategy_state.get("summary"), "Strategy summary")
     if (
         not isinstance(positions, list)
-        or not isinstance(continuation_positions, list)
         or not isinstance(retained_delta, list)
     ):
         raise KernelRunError("DailyTrack Strategy state is invalid")
@@ -144,9 +142,11 @@ def restore_tracking_checkpoint(
                 "sessions": [],
             },
             "strategy_backtest": {
-                "daily": [dict(item) for item in retained_delta if isinstance(item, Mapping)],
+                "daily": [dict(resume_observation)],
                 "positions": copy.deepcopy(positions),
                 "metrics": dict(summary),
+                "metric_state": dict(metric_state),
+                "pending_signal": copy.deepcopy(terminal["pending_signal"]),
                 "orders": [],
                 "child_orders": [],
                 "fills": [],
@@ -160,9 +160,10 @@ def restore_tracking_checkpoint(
         },
         strategy_resume={
             "daily": [dict(resume_observation)],
-            "positions": copy.deepcopy(continuation_positions),
-            "report_session_count": int(terminal["continuation_report_session_count"]),
+            "positions": copy.deepcopy(positions),
+            "report_session_count": int(terminal["rebalance_phase"]["report_session_count"]),
             "metric_state": dict(metric_state),
+            "pending_signal": copy.deepcopy(terminal["pending_signal"]),
         },
         origin_session=str(value["origin_session"]),
     )
@@ -193,6 +194,10 @@ def restore_tracking_origin(
                 "daily": [last_daily],
                 "positions": positions,
                 "metrics": strategy_metrics_from_state(metric_state),
+                "pending_signal": (
+                    terminal.pending_signal.model_dump(mode="json")
+                    if terminal.pending_signal is not None else None
+                ),
                 "metric_state": metric_state,
                 "orders": [],
                 "child_orders": [],
@@ -210,6 +215,10 @@ def restore_tracking_origin(
             "positions": positions,
             "report_session_count": terminal.rebalance_phase.report_session_count,
             "metric_state": metric_state,
+            "pending_signal": (
+                terminal.pending_signal.model_dump(mode="json")
+                if terminal.pending_signal is not None else None
+            ),
         },
         origin_session=terminal.rebalance_phase.origin_session,
     )
@@ -243,14 +252,7 @@ def terminal_strategy_state(state: KernelState) -> dict[str, object]:
             "rebalance_interval": rebalance_interval,
             "completed_intervals": session_count - 1,
         },
-        "pending_signal": (
-            {
-                "signal_session": str(terminal["session"]),
-                "execution": "next_research_session_open",
-            }
-            if (session_count - 1) % rebalance_interval == 0
-            else None
-        ),
+        "pending_signal": copy.deepcopy(strategy["pending_signal"]),
         "last_daily_observation": copy.deepcopy(dict(terminal)),
         "metric_state": copy.deepcopy(dict(metric_state)),
     }
@@ -301,7 +303,6 @@ def _strategy_state(
     metrics = _mapping(strategy.get("metrics"), "Strategy metrics")
     resume = state.strategy_resume_snapshot()
     resume_daily = _rows(resume.get("daily"), "Strategy resume observations")
-    resume_positions = _rows(resume.get("positions"), "Strategy resume positions")
     metric_state = resume.get("metric_state")
     if not isinstance(metric_state, Mapping):
         resume_metrics = _mapping(resume.get("metrics"), "Strategy resume metrics")
@@ -328,9 +329,8 @@ def _strategy_state(
     ]:
         raise KernelRunError("Strategy retained delta does not cover the Advance")
     finalized_terminal = daily[-1]
-    continuation_terminal = resume_daily[-1]
     report_count = int(metric_state["session_count"])
-    final_report_count = report_count + 1
+    final_report_count = report_count
     rebalance_interval = _strategy_input(
         state.run_input_with_research_data(state.research_data_snapshot())
     ).rebalance_interval
@@ -351,18 +351,9 @@ def _strategy_state(
                 "rebalance_interval": rebalance_interval,
                 "completed_intervals": final_report_count - 1,
             },
-            "pending_signal": (
-                {
-                    "signal_session": str(finalized_terminal["session"]),
-                    "execution": "next_research_session_open",
-                }
-                if (final_report_count - 1) % rebalance_interval == 0
-                else None
-            ),
-            "continuation_observation": _continuation_observation(continuation_terminal),
-            "continuation_positions": [copy.deepcopy(dict(item)) for item in resume_positions],
-            "continuation_report_session_count": report_count,
-            "continuation_metric_state": copy.deepcopy(dict(metric_state)),
+            "pending_signal": copy.deepcopy(strategy["pending_signal"]),
+            "last_daily_observation": copy.deepcopy(dict(finalized_terminal)),
+            "metric_state": copy.deepcopy(dict(metric_state)),
         },
     }
 
@@ -403,20 +394,6 @@ def _minimal_strategy_observations(
             }
         )
     return observations
-
-
-def _continuation_observation(value: Mapping[str, object]) -> dict[str, object]:
-    return {
-        key: copy.deepcopy(value[key])
-        for key in (
-            "session",
-            "gross_cash",
-            "net_cash",
-            "cumulative_transaction_cost",
-            "gross_nav",
-            "net_nav",
-        )
-    }
 
 
 def _compact_strategy_metrics(metrics: Mapping[str, object]) -> dict[str, object]:

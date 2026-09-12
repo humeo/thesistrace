@@ -623,7 +623,7 @@ def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
     last_daily.update(
         {
             "cumulative_transaction_cost": "0",
-            "cycle_type": "terminal_valuation",
+            "cycle_type": "open",
             "execution_rounding_residual": "0",
             "gross_cash": net_nav,
             "gross_nav": net_nav,
@@ -668,6 +668,8 @@ def _state_with_mismatched_coordinate(coordinate: str) -> dict[str, object]:
     state = _strategy_state("2026-08-04", "10001000")
     if coordinate == "pending_signal":
         state["pending_signal"] = {
+            "selected_instrument_ids": [], "relative_weights": {},
+            "signal_checksum": "0" * 64, "contract_checksum": "0" * 64,
             "signal_session": "2026-08-03",
             "execution": "next_research_session_open",
         }

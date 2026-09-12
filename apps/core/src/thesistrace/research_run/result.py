@@ -566,7 +566,7 @@ def _strategy_summary(
     daily = _rows(strategy, "daily")
     entry_session = next(
         (str(row["session"]) for row in daily if row.get("rebalance") is True),
-        str(daily[-1]["session"]),
+        None,
     )
     return {
         "alpha_checksum": str(strategy["alpha_checksum"]),
@@ -629,14 +629,7 @@ def _terminal_strategy_state(
         turnover_value.get("events"), list
     ):
         raise ResearchResultError("Strategy turnover continuation is missing")
-    pending_signal = (
-        {
-            "signal_session": str(terminal["session"]),
-            "execution": "next_research_session_open",
-        }
-        if (len(daily) - 1) % rebalance_interval == 0
-        else None
-    )
+    pending_signal = copy.deepcopy(strategy["pending_signal"])
     return {
         "session": str(terminal["session"]),
         "gross_cash": str(terminal["gross_cash"]),

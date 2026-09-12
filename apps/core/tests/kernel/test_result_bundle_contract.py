@@ -356,7 +356,7 @@ def _legal_result() -> dict[str, object]:
     last_daily.update(
         {
             "cumulative_transaction_cost": "0",
-            "cycle_type": "terminal_valuation",
+            "cycle_type": "open",
             "execution_rounding_residual": "0",
             "gross_cash": "1e+7",
             "gross_nav": "1e+7",

@@ -188,7 +188,7 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
         "status": "succeeded",
         "checkpoint": state_payload(
             state,
-            retained_strategy_sessions=[current_session, *target_sessions],
+            retained_strategy_sessions=list(target_sessions),
             prior_observation_state=TrackingObservationState.model_validate(
                 predecessor["tracking_observation_state"],
             ),
@@ -265,7 +265,9 @@ def _predecessor_instrument_ids(predecessor: Mapping[str, object]) -> frozenset[
             strategy_state.get("terminal"),
             "Tracking Terminal Strategy State",
         )
-    positions = terminal.get("continuation_positions", terminal.get("positions"))
+    positions = terminal.get("positions")
     if not isinstance(positions, list) or any(not isinstance(item, Mapping) for item in positions):
         raise RuntimeError("Tracking predecessor Positions are invalid")
-    return frozenset(str(item["instrument_id"]) for item in positions)
+    pending = terminal["pending_signal"]
+    pending_ids = pending["selected_instrument_ids"] if pending is not None else []
+    return frozenset([*(str(item["instrument_id"]) for item in positions), *pending_ids])

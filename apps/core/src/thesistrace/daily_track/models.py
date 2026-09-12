@@ -124,7 +124,7 @@ class TrackingOrigin(BaseModel):
     seed_data_generation_id: str
     seed_data_through_session: str
     verified_result: VerifiedResultOrigin
-    strategy_entry_session: str
+    strategy_entry_session: str | None
     strategy_initial_cash_cny: str
     initial_strategy_state: InitialStrategyState
     calculation_contracts: dict[str, object]
@@ -317,6 +317,10 @@ class DailyTrackOriginPendingSignal(BaseModel):
 
     signal_session: str
     execution: Literal["next_research_session_open"]
+    selected_instrument_ids: list[str]
+    relative_weights: dict[str, float]
+    signal_checksum: str
+    contract_checksum: str
 
 
 class DailyTrackOriginAccount(BaseModel):

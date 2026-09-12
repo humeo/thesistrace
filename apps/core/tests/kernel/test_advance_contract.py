@@ -156,6 +156,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
         strategy_resume={
             "daily": resume_daily[-504:],
             "positions": resume["positions"],
+            "pending_signal": resume["pending_signal"],
             "report_session_count": metric_state["session_count"],
             "metric_state": metric_state,
         },
@@ -291,12 +292,15 @@ def test_warm_continuation_with_short_data_slice_has_no_factor_state() -> None:
     checkpoint = project_tracking_checkpoint(
         prior,
         prior_observation_state=initial_tracking_observation_state(
-            prior.boundary_session, "10000000",
+            calendar[-3], prior.output_snapshot()["strategy_backtest"]["daily"][-2]["net_nav"],
         ),
         retained_strategy_sessions=[prior.boundary_session],
     )
     short_prior_data = slice_research_sessions(complete, calendar[-22:-1])
     restored = restore_tracking_checkpoint(checkpoint, research_data=short_prior_data)
+    from thesistrace.daily_track.checkpoint import terminal_strategy_state
+
+    assert terminal_strategy_state(restored) == checkpoint["strategy_state"]["terminal"]
     short_target_data = slice_research_sessions(complete, calendar[-22:])
 
     advanced = advance(
@@ -530,7 +534,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
         prior_observation_state=initial_tracking_observation_state(
             prior.boundary_session, "10000000",
         ),
-        retained_strategy_sessions=[prior.boundary_session, advanced.boundary_session],
+        retained_strategy_sessions=[advanced.boundary_session],
     )
     invalid = copy.deepcopy(checkpoint)
     invalid["tracking_observation_state"]["boundary_session"] = "2099-01-01"
@@ -544,7 +548,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
         == frozen_input.alpha_execution_plan().effective_lookback
     )
     delta = checkpoint["strategy_state"]["retained_delta"]
-    assert len(delta) == 2
+    assert len(delta) == 1
     assert set(delta[0]) == {
         "session",
         "gross_nav",
@@ -558,17 +562,9 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
         "suspension_rejections",
     }
     terminal = checkpoint["strategy_state"]["terminal"]
-    assert set(terminal["continuation_observation"]) == {
-        "session",
-        "gross_cash",
-        "net_cash",
-        "cumulative_transaction_cost",
-        "gross_nav",
-        "net_nav",
-    }
+    assert terminal["last_daily_observation"] == advanced.strategy_resume_snapshot()["daily"][-1]
     assert terminal["positions"] == advanced.output_snapshot()["strategy_backtest"]["positions"]
-    assert terminal["continuation_positions"] == advanced.strategy_resume_snapshot()["positions"]
-    assert terminal["positions"] != terminal["continuation_positions"]
+    assert terminal["positions"] == advanced.strategy_resume_snapshot()["positions"]
     restored = restore_tracking_checkpoint(
         checkpoint,
         research_data=_research_data(complete, definition),
@@ -598,7 +594,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
     assert continuation_snapshot(actual) == continuation_snapshot(expected)
     actual_strategy = actual.output_snapshot()["strategy_backtest"]
     expected_strategy = expected.output_snapshot()["strategy_backtest"]
-    assert actual_strategy["daily"][1:] == expected_strategy["daily"][-2:]
+    assert actual_strategy["daily"][1:] == expected_strategy["daily"][-1:]
     assert actual_strategy["positions"] == expected_strategy["positions"]
     assert _compact_metrics(actual_strategy["metrics"]) == _compact_metrics(
         expected_strategy["metrics"]

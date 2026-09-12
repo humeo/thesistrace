@@ -15,13 +15,13 @@ from thesistrace.research_kernel.numeric import (
     require_finite_decimal,
 )
 from thesistrace.research_kernel.serialization import canonical_json_bytes
+from thesistrace.research_kernel.terminal_state_schema import PendingSignal
 from thesistrace.research_series import (
     AlignedResearchData,
     ColumnarResearchSeries,
     ExecutionPrice,
     InstrumentProfile,
     PriceLimit,
-    slice_research_sessions,
 )
 
 
@@ -64,14 +64,13 @@ def transition_strategy(
     origin_session: str,
     continuation: dict[str, object] | None = None,
 ) -> StrategyTransition:
-    """Calculate a boundary and retain the state immediately before its terminal."""
+    """Execute every included Open and retain the completed account boundary."""
     return _transition_strategy(
         research_data,
         alpha_matrix,
         definition,
         origin_session=origin_session,
         continuation=continuation,
-        slice_resumable=lambda sessions: slice_research_sessions(research_data, sessions),
     )
 
 
@@ -90,7 +89,6 @@ def transition_columnar_strategy(
         definition,
         origin_session=origin_session,
         continuation=continuation,
-        slice_resumable=lambda sessions: research_data.slice_sessions(sessions),
         cancellation_check=cancellation_check,
     )
 
@@ -102,9 +100,6 @@ def _transition_strategy(
     *,
     origin_session: str,
     continuation: dict[str, object] | None,
-    slice_resumable: Callable[
-        [tuple[str, ...]], AlignedResearchData | ColumnarResearchSeries
-    ],
     cancellation_check: Callable[[], None] | None = None,
 ) -> StrategyTransition:
     ledger: list[dict[str, object]] = []
@@ -117,24 +112,9 @@ def _transition_strategy(
         ledger=ledger,
         cancellation_check=cancellation_check,
     )
-    calendar = list(research_data.sessions)
-    resumable_research_data = (
-        research_data
-        if calendar[-1] == origin_session
-        else slice_resumable(tuple(calendar[:-1]))
-    )
-    resumable = run_strategy(
-        resumable_research_data,
-        alpha_matrix,
-        definition,
-        origin_session=origin_session,
-        terminal_cutoff=False,
-        continuation=continuation,
-        cancellation_check=cancellation_check,
-    )
     return StrategyTransition(
         finalized=finalized,
-        resumable=resumable,
+        resumable=finalized,
         ledger=tuple(ledger),
     )
 
@@ -231,9 +211,7 @@ def run_strategy(
     definition: dict[str, object],
     *,
     origin_session: str | None = None,
-    terminal_cutoff: bool = True,
     continuation: dict[str, object] | None = None,
-    skip_execution_sessions: set[str] | None = None,
     ledger: list[dict[str, object]] | None = None,
     cancellation_check: Callable[[], None] | None = None,
 ) -> dict[str, object]:
@@ -242,9 +220,7 @@ def run_strategy(
         alpha_matrix,
         definition,
         origin_session=origin_session,
-        terminal_cutoff=terminal_cutoff,
         continuation=continuation,
-        skip_execution_sessions=skip_execution_sessions,
         ledger=ledger,
         cancellation_check=cancellation_check,
     )
@@ -262,9 +238,7 @@ def run_strategy_with_metric_state(
     definition: dict[str, object],
     *,
     origin_session: str | None = None,
-    terminal_cutoff: bool = True,
     continuation: dict[str, object] | None = None,
-    skip_execution_sessions: set[str] | None = None,
     ledger: list[dict[str, object]] | None = None,
     cancellation_check: Callable[[], None] | None = None,
 ) -> dict[str, object]:
@@ -273,9 +247,7 @@ def run_strategy_with_metric_state(
         alpha_matrix,
         definition,
         origin_session=origin_session,
-        terminal_cutoff=terminal_cutoff,
         continuation=continuation,
-        skip_execution_sessions=skip_execution_sessions,
         ledger=ledger,
         cancellation_check=cancellation_check,
     )
@@ -288,9 +260,7 @@ def _execute_strategy(
     definition: dict[str, object],
     *,
     origin_session: str | None = None,
-    terminal_cutoff: bool = True,
     continuation: dict[str, object] | None = None,
-    skip_execution_sessions: set[str] | None = None,
     ledger: list[dict[str, object]] | None = None,
     cancellation_check: Callable[[], None] | None = None,
 ) -> _StrategyExecution:
@@ -334,7 +304,6 @@ def _execute_strategy(
                 "continuation Initial Cash differs from account baseline"
             )
     costs = {name: Decimal(str(value)) for name, value in definition["costs"].items()}
-    skipped_sessions = skip_execution_sessions or set()
 
     instruments = research_data.instruments
     prices = research_data.execution_prices
@@ -346,6 +315,12 @@ def _execute_strategy(
         if isinstance(value_store, Mapping)
         else {str(item["session"]): item["values"] for item in alpha_matrix["sessions"]}
     )
+    contract_checksum = hashlib.sha256(canonical_json_bytes(definition)).hexdigest()
+    pending_signal = None if continuation is None else continuation["pending_signal"]
+    if pending_signal is not None:
+        pending_signal = PendingSignal.model_validate(pending_signal).model_dump(mode="json")
+        if pending_signal["contract_checksum"] != contract_checksum:
+            raise StrategyCalculationError("Pending decision differs from Strategy contract")
     if continuation is None:
         positions: dict[str, Position] = {}
         gross_cash = initial_cash
@@ -421,11 +396,7 @@ def _execute_strategy(
         pre_gross_nav = money(gross_cash + sum_position_values(positions, marks))
         pre_net_nav = money(net_cash + sum_position_values(positions, marks))
         pre_weights = account_weights(net_cash, pre_net_nav, positions, marks)
-        cycle_type = (
-            "terminal_valuation"
-            if terminal_cutoff and global_index == len(calendar) - 1
-            else "open"
-        )
+        cycle_type = "open"
         rebalance = False
         event_side_order: list[str] = []
         event_intended_orders: list[dict[str, object]] = []
@@ -439,20 +410,16 @@ def _execute_strategy(
         signal_index = global_index - 1
         if (
             report_index > 0
-            and (not terminal_cutoff or global_index < len(calendar) - 1)
-            and session not in skipped_sessions
             and (signal_index - origin_index) % rebalance_interval == 0
         ):
             rebalance = True
             signal_session = calendar[signal_index]
-            alpha_values = alpha_by_session[signal_session]
-            selected = nsmallest(holdings_count, alpha_values, key=_alpha_rank_key)
-            candidates = [str(item["instrument_id"]) for item in selected]
+            if pending_signal is None or pending_signal["signal_session"] != signal_session:
+                raise StrategyCalculationError("Scheduled Open has no frozen decision")
+            candidates = list(pending_signal["selected_instrument_ids"])
             if ledger is not None:
-                ranked = sorted(alpha_values, key=_alpha_rank_key)
                 execution_signal = {
                     "session": signal_session,
-                    "alpha_values": [dict(item) for item in ranked],
                     "selected_instrument_ids": candidates,
                 }
             if not candidates:
@@ -763,12 +730,31 @@ def _execute_strategy(
                     "valuation_events": unique_events(valuation_events),
                 }
             )
+        pending_signal = None
+        if report_index % rebalance_interval == 0:
+            alpha_values = alpha_by_session[session]
+            selected = nsmallest(holdings_count, alpha_values, key=_alpha_rank_key)
+            selected_ids = [str(item["instrument_id"]) for item in selected]
+            pending_signal = {
+                "signal_session": session,
+                "execution": "next_research_session_open",
+                "selected_instrument_ids": selected_ids,
+                "relative_weights": {
+                    instrument_id: 1 / len(selected_ids) for instrument_id in selected_ids
+                },
+                "signal_checksum": hashlib.sha256(canonical_json_bytes({
+                    "session": session,
+                    "values": [dict(item) for item in selected],
+                })).hexdigest(),
+                "contract_checksum": contract_checksum,
+            }
         if cancellation_check is not None:
             cancellation_check()
 
     positions_payload = _position_payload(positions)
     payload = {
         "alpha_checksum": alpha_matrix["checksum"],
+        "pending_signal": pending_signal,
         "initial_cash_cny": canonical_decimal(initial_cash),
         "daily": daily,
         "positions": positions_payload,
@@ -1363,12 +1349,6 @@ def advance_strategy_metric_state(
         state["weight_ending"] = weight
         _add_binary64(state, "cash_sum", cash)
         state["cash_ending"] = cash
-
-    if state.get("entry_session") is None and daily:
-        terminal = daily[-1]
-        if terminal.get("cycle_type") == "terminal_valuation":
-            state["entry_session"] = str(terminal["session"])
-            state["entry_session_ordinal"] = int(state["session_count"])
 
     for item in turnover_events:
         _add_binary64(

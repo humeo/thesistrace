@@ -255,3 +255,15 @@ def test_strategy_comparison_summary_preserves_unavailable_contract() -> None:
         "status": "unavailable",
         "reason": "benchmark_snapshot_unavailable",
     }
+
+
+def test_cash_only_account_without_entry_has_no_benchmark_comparison(tmp_path):
+    service = StrategyComparisonService(BenchmarkSnapshotStore(tmp_path))
+    facts = StrategyComparisonFacts(
+        entry_session=None, terminal_session="2026-08-03", session_interval_count=0,
+        initial_cash_cny="100000", terminal_net_nav="100000",
+    )
+    assert service.annualized_excess_return(facts) is None
+    assert service.comparison(facts, [{"session": "2026-08-03", "net_nav": "100000"}]) == {
+        "status": "unavailable", "reason": "no_entry_open",
+    }

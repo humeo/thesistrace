@@ -231,7 +231,7 @@ def test_forward_labels_and_results_never_read_after_the_period_end(research_kin
         assert "forward_labels" not in baseline
 
 
-def test_terminal_valuation_retains_holdings_without_a_final_order() -> None:
+def test_terminal_open_runs_the_scheduled_decision_without_forced_liquidation() -> None:
     canonical = _canonical(session_count=3)
     output = run(
         _run_input(
@@ -243,9 +243,10 @@ def test_terminal_valuation_retains_holdings_without_a_final_order() -> None:
     ).artifacts_snapshot()
     strategy = output["strategy_backtest"]
 
-    assert strategy["daily"][-1]["cycle_type"] == "terminal_valuation"
+    assert strategy["daily"][-1]["cycle_type"] == "open"
+    assert strategy["daily"][-1]["rebalance"] is True
     assert strategy["positions"]
-    assert all(order["session"] != SESSIONS[2] for order in strategy["orders"])
+    assert strategy["rebalance_events"][-1]["session"] == SESSIONS[2]
 
 
 @pytest.mark.parametrize(

@@ -1007,7 +1007,11 @@ def test_repeated_strategy_consumption_has_a_shared_stage_performance_gate(
 
     def record_strategy_serialization(value: object) -> bytes:
         encoded = original_strategy_serialize(value)
-        strategy_serialization_sizes.append(len(encoded))
+        if isinstance(value, Mapping) and "daily" in value:
+            strategy_serialization_sizes.append(len(encoded))
+        if isinstance(value, Mapping) and set(value) == {"session", "values"}:
+            # Only the selected decision may be encoded, never the shared cross-section.
+            assert len(value["values"]) <= holdings_count
         return encoded
 
     monkeypatch.setattr(

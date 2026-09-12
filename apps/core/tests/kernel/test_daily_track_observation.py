@@ -41,7 +41,12 @@ def account(
                 "rebalance_interval": 5,
                 "completed_intervals": count - 1,
             },
-            "pending_signal": {"signal_session": session, "execution": "next_research_session_open"}
+            "pending_signal": {
+                "signal_session": session, "execution": "next_research_session_open",
+                "selected_instrument_ids": ["000001.SZ"],
+                "relative_weights": {"000001.SZ": 1.0},
+                "signal_checksum": "signal", "contract_checksum": "contract",
+            }
             if pending
             else None,
         }
@@ -150,8 +155,8 @@ def observe(*, origin, current, observations):
     if not rows or rows[0]["session"] != origin.session:
         rows.insert(0, {"session": origin.session, "net_nav": origin.net_nav})
     state = initial_tracking_observation_state(origin.session, origin.net_nav)
-    if current.session >= origin.session:
-        state = advance_tracking_observation_state(state, rows)
+    if current.session > origin.session:
+        state = advance_tracking_observation_state(state, rows[1:])
     return project_daily_observation(
         origin=origin, current=current, observations=observations, tracking_observation_state=state,
     )

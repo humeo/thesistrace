@@ -110,7 +110,7 @@ type StrategyBacktestResearchResult = {
   strategy: {
     summary: {
       alpha_checksum: string;
-      entry_session: string;
+      entry_session: string | null;
       initial_cash_cny: string;
       source_checksum: string;
       metrics: StrategyMetrics;
@@ -1453,6 +1453,7 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
       {strategyResult !== null ? <section className="research-result-section">
         <div className="section-heading">
           <h2>Strategy Summary</h2>
+          <p>Account completed through {strategyResult.terminal_strategy_state.session}. Scheduled orders execute at each Open, including the final session; the ending account is not liquidated.</p>
         </div>
         <div className="strategy-metrics">
           <Metric label="Net cumulative" help={strategyMetricHelp.netCumulative} value={formatPercent(strategyResult.strategy.summary.metrics.net_cumulative_return)} />

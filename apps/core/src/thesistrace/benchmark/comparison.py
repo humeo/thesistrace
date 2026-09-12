@@ -30,7 +30,7 @@ class _BenchmarkCoverageUnavailable(ValueError):
 
 @dataclass(frozen=True)
 class StrategyComparisonFacts:
-    entry_session: str
+    entry_session: str | None
     terminal_session: str
     session_interval_count: int
     initial_cash_cny: str
@@ -46,6 +46,8 @@ class StrategyComparisonService:
         facts: StrategyComparisonFacts,
     ) -> float | None:
         validated = _validate_facts(facts)
+        if validated.entry_session is None:
+            return None
         snapshot = self._read_snapshot()
         if snapshot is None:
             return None
@@ -65,6 +67,8 @@ class StrategyComparisonService:
             observations,
             facts=validated,
         )
+        if validated.entry_session is None:
+            return {"status": "unavailable", "reason": "no_entry_open"}
         snapshot = self._read_snapshot()
         if snapshot is None:
             return _unavailable()
@@ -133,7 +137,7 @@ class StrategyComparisonService:
 
 @dataclass(frozen=True)
 class _ValidatedFacts:
-    entry_session: str
+    entry_session: str | None
     terminal_session: str
     session_interval_count: int
     initial_cash: Decimal
@@ -142,7 +146,10 @@ class _ValidatedFacts:
 
 def _validate_facts(facts: StrategyComparisonFacts) -> _ValidatedFacts:
     try:
-        entry = date.fromisoformat(facts.entry_session).isoformat()
+        entry = (
+            date.fromisoformat(facts.entry_session).isoformat()
+            if facts.entry_session is not None else None
+        )
         terminal = date.fromisoformat(facts.terminal_session).isoformat()
         initial_cash = Decimal(facts.initial_cash_cny)
         terminal_net_nav = Decimal(facts.terminal_net_nav)
@@ -151,7 +158,9 @@ def _validate_facts(facts: StrategyComparisonFacts) -> _ValidatedFacts:
     if (
         entry != facts.entry_session
         or terminal != facts.terminal_session
-        or terminal < entry
+        or (entry is not None and terminal < entry)
+        or (entry is None
+            and (facts.session_interval_count != 0 or terminal_net_nav != initial_cash))
         or isinstance(facts.session_interval_count, bool)
         or not isinstance(facts.session_interval_count, int)
         or facts.session_interval_count < 0
@@ -203,7 +212,8 @@ def _validate_observations(
             entry_index is not None
             and len(sessions) - entry_index - 1 != facts.session_interval_count
         )
-        or not any(session >= facts.entry_session for session in sessions)
+        or (facts.entry_session is not None
+            and not any(session >= facts.entry_session for session in sessions))
     ):
         raise StrategyComparisonError("Strategy observations are invalid")
     return tuple(validated)
@@ -269,9 +279,9 @@ def strategy_comparison_summary(
 ) -> dict[str, object]:
     status = comparison.get("status")
     if status == "unavailable":
-        if comparison.get("reason") != BENCHMARK_SNAPSHOT_UNAVAILABLE_REASON:
+        if comparison.get("reason") not in {BENCHMARK_SNAPSHOT_UNAVAILABLE_REASON, "no_entry_open"}:
             raise StrategyComparisonError("Strategy comparison unavailable reason is invalid")
-        return _unavailable()
+        return {"status": "unavailable", "reason": comparison["reason"]}
     if status != "available":
         raise StrategyComparisonError("Strategy comparison status is invalid")
     required = ("benchmark", "entry", "terminal", "metrics")

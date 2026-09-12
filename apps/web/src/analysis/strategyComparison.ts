@@ -43,7 +43,7 @@ type AvailableStrategyComparison = {
 
 type UnavailableStrategyComparison = {
   status: "unavailable";
-  reason: "benchmark_snapshot_unavailable";
+  reason: "benchmark_snapshot_unavailable" | "no_entry_open";
 };
 
 export type StrategyComparison =

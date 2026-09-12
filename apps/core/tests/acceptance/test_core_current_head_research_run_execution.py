@@ -4155,7 +4155,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
 
         impact_sessions = (
             *seed_sessions,
-            *_weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=3),
+            *_weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=2),
         )
         corrected_impact = _two_instrument_canonical(impact_sessions, corrected=True)
         impact_outcome = _refresh_via_private_operator(
@@ -4168,11 +4168,24 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         assert impact_outcome["status"] == "succeeded"
         assert impact_outcome["outcome"] == "published"
         _refresh_daily_track(client, track_id, "forward-only-impact-refresh")
-        assert runtime.daily_tracks.process_next() is True
+        cold_processor = DailyTrackService(
+            runtime.database, publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            working_cache_root=tmp_path / "fresh-forward-only-cache",
+        )
+        assert cold_processor.process_next() is True
 
         impact_detail = client.get(f"/api/daily-tracks/{track_id}")
         assert impact_detail.status_code == 200
         assert impact_detail.json()["strategy_session"] == impact_sessions[-1]
+        observations = impact_detail.json()["strategy"]["observations"]
+        assert observations[:len(seed_sessions) - 1] == before_detail["strategy"]["observations"]
+        by_session = {row["session"]: row for row in observations}
+        # Aug 6 executes the already-frozen A target. The corrected Aug 5 close
+        # affects the Aug 6 mean, whose B decision first trades on Aug 7.
+        assert Decimal(by_session[impact_sessions[-2]]["transaction_cost_cny"]) == 0
+        assert Decimal(by_session[impact_sessions[-1]]["transaction_cost_cny"]) > 0
         assert "correction" not in impact_detail.text.lower()
         impact_state = _stored_tracking_activation(settings, track_id)
         assert impact_state["checkpoint_count"] == 2

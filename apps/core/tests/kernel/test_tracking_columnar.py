@@ -116,7 +116,9 @@ def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
     calendar = list(row.sessions)
     initial = slice_research_sessions(row, calendar[:45])
     prior = run(run_input(initial, source, neutralization, holdings, rebalance)).track_state
-    observation = initial_tracking_observation_state(prior.boundary_session, "10000000")
+    observation = initial_tracking_observation_state(
+        calendar[43], prior.output_snapshot()["strategy_backtest"]["daily"][-2]["net_nav"],
+    )
     checkpoint = project_tracking_checkpoint(
         prior, prior_observation_state=observation,
         retained_strategy_sessions=[prior.boundary_session],
@@ -146,7 +148,7 @@ def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
             ))
             outputs.append((
                 project_tracking_checkpoint(
-                    state, retained_strategy_sessions=[calendar[start - 1], *appended],
+                    state, retained_strategy_sessions=appended,
                     prior_observation_state=TrackingObservationState.model_validate(
                         checkpoint["tracking_observation_state"],
                     ),

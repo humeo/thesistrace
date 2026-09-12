@@ -606,10 +606,14 @@ class TerminalPendingSignal(BaseModel):
 
     signal_session: str
     execution: Literal["next_research_session_open"]
+    selected_instrument_ids: list[str]
+    relative_weights: dict[str, float]
+    signal_checksum: str
+    contract_checksum: str
 
 
 class TerminalStrategyStateView(BaseModel):
-    """Product account boundary; continuation accumulators remain private."""
+    """Completed account after scheduled Open trades, retaining final Close decisions."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -743,7 +747,7 @@ class StrategySummaryResultSection(BaseModel):
     section: Literal["strategy_summary"] = "strategy_summary"
     run_id: str
     research_kind: Literal["strategy_backtest"] = "strategy_backtest"
-    entry_session: str
+    entry_session: str | None
     initial_cash_cny: str
     metrics: StrategyMetrics
     comparison: StrategyComparisonSummary

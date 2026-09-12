@@ -150,7 +150,7 @@ class StrategyMetrics(DurableResultModel):
 
 class StrategySummaryValue(DurableResultModel):
     alpha_checksum: StrictStr
-    entry_session: StrictStr
+    entry_session: StrictStr | None
     initial_cash_cny: StrictStr
     source_checksum: StrictStr
     metrics: StrategyMetrics

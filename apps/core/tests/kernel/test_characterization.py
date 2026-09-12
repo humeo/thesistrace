@@ -15,7 +15,7 @@ EXPECTED_CHECKSUMS = {
         "5": "f3a1105c1b77af3999b0da993348e6707fadd1b4863941e03ca478b372e555b5",
         "20": "c4f4a77935c35417c95d66edbcff6b761afb212eef9698e9704f563892ad3a73",
     },
-    "strategy": "580ce4d3959f43104526f811dbf429a56725e92b5fcd9fa44a34e6cf83f17cb2",
+    "strategy": "3bbec290d6262443bbfe60a74df679b3de98430ed788ba48bc179b3afa5821be",
 }
 
 
@@ -80,7 +80,7 @@ def test_accepted_quantitative_boundaries_are_frozen(
         "net_cash": "92552382e-5",
         "holdings_count": 10,
         "rebalance": False,
-        "cycle_type": "terminal_valuation",
+        "cycle_type": "open",
     }
     assert [
         {key: order[key] for key in ("order_id", "instrument_id", "side", "legal_quantity")}

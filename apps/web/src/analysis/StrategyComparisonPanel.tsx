@@ -16,7 +16,9 @@ export function StrategyComparisonPanel({
       >
         <strong>{STRATEGY_BENCHMARK_DISPLAY_NAME} comparison unavailable</strong>
         <p>
-          The fixed Benchmark Snapshot is unavailable. No comparison chart is shown.
+          {comparison.reason === "no_entry_open"
+            ? "The account has not reached its first scheduled trading Open. No entry-period comparison is available yet."
+            : "The fixed Benchmark Snapshot is unavailable. No comparison chart is shown."}
         </p>
       </section>
     );

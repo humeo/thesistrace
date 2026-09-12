@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from math import isclose, isfinite
 from typing import Literal
 
 from pydantic import (
@@ -37,6 +38,27 @@ class RebalancePhase(TerminalStateModel):
 class PendingSignal(TerminalStateModel):
     signal_session: StrictStr
     execution: Literal["next_research_session_open"]
+    selected_instrument_ids: list[StrictStr]
+    relative_weights: dict[StrictStr, StrictFloat]
+    signal_checksum: StrictStr
+    contract_checksum: StrictStr
+
+    @model_validator(mode="after")
+    def target_weights_match_selection(self) -> PendingSignal:
+        selected = self.selected_instrument_ids
+        weights = self.relative_weights
+        if len(selected) != len(set(selected)) or set(weights) != set(selected):
+            raise ValueError("Pending target weights do not match the unique selection")
+        if any(not isfinite(weight) or not 0 < weight <= 1 for weight in weights.values()):
+            raise ValueError("Pending target weights must be finite and positive")
+        if selected and not isclose(sum(weights.values()), 1.0, abs_tol=1e-12):
+            raise ValueError("Pending target weights must sum to one")
+        if selected and any(
+            not isclose(weight, 1.0 / len(selected), rel_tol=0.0, abs_tol=1e-12)
+            for weight in weights.values()
+        ):
+            raise ValueError("Pending target weights must follow the equal-weight contract")
+        return self
 
 
 class ValuationEvent(TerminalStateModel):

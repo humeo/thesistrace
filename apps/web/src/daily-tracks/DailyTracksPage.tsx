@@ -393,7 +393,8 @@ export function TrackingOriginView({ origin }: { origin: DailyTrackDetail["origi
             <span>{origin.seed_run_id} (deleted)</span>
           )}
         </p>
-        <p><strong>Origin strategy session</strong> {origin.strategy_session}</p>
+        <p><strong>Completed origin session</strong> {origin.strategy_session}</p>
+        <p>Refresh continues after this session. Earlier published observations stay unchanged; saved Close decisions execute at the next session’s Open.</p>
         <p>
           <strong>Origin net NAV</strong>{" "}
           <span title={origin.terminal_account.net_nav}>

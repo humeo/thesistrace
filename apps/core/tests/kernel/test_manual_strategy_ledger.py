@@ -59,9 +59,9 @@ def test_kernel_transient_ledger_reconciles_every_session_from_the_strategy_tran
     ]
     assert ledger[2]["signal"]["session"] == SESSIONS[1]
     assert ledger[2]["signal"]["selected_instrument_ids"] == [A]
-    assert ledger[-1]["cycle_type"] == "terminal_valuation"
-    assert ledger[-1]["signal"] is None
-    assert ledger[-1]["intended_orders"] == []
+    assert ledger[-1]["cycle_type"] == "open"
+    assert ledger[-1]["signal"]["session"] == SESSIONS[-2]
+    assert ledger[-1]["signal"]["selected_instrument_ids"] == [B]
 
     _assert_ledger_reconciles(ledger)
 
@@ -125,8 +125,8 @@ def test_manual_switch_ledger_reconciles_signal_orders_fills_cash_and_positions(
         },
         {
             "session": SESSIONS[3],
-            "cycle_type": "terminal_valuation",
-            "rebalance": False,
+            "cycle_type": "open",
+            "rebalance": True,
             "gross_cash": Decimal("17200"),
             "net_cash": Decimal("670.708"),
             "gross_nav": Decimal("13197400"),
@@ -208,8 +208,8 @@ def test_manual_small_order_uses_minimum_commission_without_negative_cash() -> N
         },
         {
             "session": SESSIONS[3],
-            "cycle_type": "terminal_valuation",
-            "rebalance": False,
+            "cycle_type": "open",
+            "rebalance": True,
             "gross_cash": Decimal("4000"),
             "net_cash": Decimal("901.04"),
             "gross_nav": Decimal("10000020"),
@@ -388,7 +388,8 @@ def test_manual_rejections_never_create_false_fills_or_discard_a_holding() -> No
 
     sell_order = next(order for order in _orders(rejected_sell) if order[2] == "sell")
     assert sell_order == (SESSIONS[2], A, "sell", 999_600, 999_600)
-    assert all(fill[2] != "sell" for fill in _fills(rejected_sell))
+    assert all(fill[2] != "sell" for fill in _fills(rejected_sell) if fill[0] == SESSIONS[2])
+    assert any(fill[2] == "sell" for fill in _fills(rejected_sell) if fill[0] == SESSIONS[3])
     assert any(item["reason"] == "lower_limit_sell" for item in rejected_sell["rejections"])
     assert _position_ledger(lower_limit_sell, sell_matrix)[SESSIONS[2]] == (
         (A, 999_600, Decimal("999600")),
@@ -721,7 +722,6 @@ def _run(
     *,
     holdings_count: int = 1,
     rebalance_interval: int = 1,
-    terminal_cutoff: bool = True,
 ) -> dict[str, object]:
     return run_strategy(
         aligned_market_data(copy.deepcopy(canonical), universe="manual"),
@@ -731,7 +731,6 @@ def _run(
             rebalance_interval=rebalance_interval,
         ),
         origin_session=SESSIONS[0],
-        terminal_cutoff=terminal_cutoff,
     )
 
 
@@ -797,7 +796,6 @@ def _position_ledger(
             matrix,
             holdings_count=holdings_count,
             rebalance_interval=rebalance_interval,
-            terminal_cutoff=index == len(SESSIONS),
         )
         ledger[session] = tuple(
             (

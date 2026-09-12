@@ -158,7 +158,7 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
     assert result["daily"][1]["holdings_count"] > 0
     assert result["daily"][1]["gross_return"] == 0
     assert result["daily"][1]["net_return"] < 0
-    assert result["daily"][-1]["cycle_type"] == "terminal_valuation"
+    assert result["daily"][-1]["cycle_type"] == "open"
     assert result["daily"][-1]["rebalance"] is False
     assert all(Decimal(day["net_cash"]) >= 0 for day in result["daily"])
     assert all(isinstance(position["execution_shares"], int) for position in result["positions"])

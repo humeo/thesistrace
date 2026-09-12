@@ -85,7 +85,7 @@ def test_daily_track_read_cost_is_bounded_at_1000_advances(
             checkpoint = copy.deepcopy(template)
             rows = [
                 dict(template["strategy_state"]["retained_delta"][-1], session=session)
-                for session in (prior_day, day)
+                for session in (day,)
             ]
             if index in {4, 500}:
                 rows[0]["net_nav"] = str(Decimal(rows[0]["net_nav"]) * Decimal("0.8"))
@@ -191,12 +191,20 @@ def test_daily_track_read_cost_is_bounded_at_1000_advances(
                     ),
                 )
                 assert str(page.items[-1].net_nav) == str(detail.strategy.observations[3].net_nav)
-                assert Decimal(str(page.items[-1].net_nav)) == (
-                    Decimal(template["strategy_state"]["retained_delta"][-1]["net_nav"])
-                    * Decimal("0.8")
+                baseline_nav = Decimal(template["strategy_state"]["retained_delta"][-1]["net_nav"])
+                assert Decimal(str(page.items[-1].net_nav)) == baseline_nav
+                assert page.next_cursor is not None
+                next_page = runtime.daily_tracks.get_result_section(
+                    TEST_RESEARCHER.researcher_id,
+                    DailyTrackStrategyObservationsResultSectionInput(
+                        track_id=track_id, section="strategy_observations",
+                        cursor=page.next_cursor, limit=1,
+                    ),
                 )
+                assert next_page.items[0].session == sessions[4]
+                assert Decimal(str(next_page.items[0].net_nav)) == baseline_nav * Decimal("0.8")
             if index - 2 == 1000:
-                assert Decimal(str(detail.strategy.observations[0].net_nav)) == (
+                assert Decimal(str(detail.strategy.observations[1].net_nav)) == (
                     Decimal(template["strategy_state"]["retained_delta"][-1]["net_nav"])
                     * Decimal("0.8")
                 )
