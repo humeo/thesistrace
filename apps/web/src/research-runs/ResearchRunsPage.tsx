@@ -920,8 +920,8 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
             <>
               <p><strong>Initial cash (CNY)</strong> {input.initial_cash_cny}</p>
               <p><strong>Holdings count</strong> {input.holdings_count}</p>
+              <p><strong>Portfolio weighting</strong> {input.weighting === "rank_weight" ? "Rank weight" : "Equal weight"}</p>
               <p><strong>Exposure expression</strong> <code>{input.exposure_expression}</code></p>
-              <p><strong>Weighting</strong> Equal weight</p>
               <p>
                 <strong>Selection</strong>{" "}
                 {selectionLabel(input.selection_every_sessions)}

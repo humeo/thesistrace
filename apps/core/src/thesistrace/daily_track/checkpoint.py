@@ -67,6 +67,7 @@ def project_tracking_checkpoint(
             "neutralization": run_input.neutralization,
             "holdings_count": strategy_input.holdings_count,
             "selection_interval": strategy_input.selection_interval,
+            "weighting": strategy_input.weighting,
             "initial_cash_cny": strategy_input.initial_cash_cny,
             "exposure_expression": strategy_input.exposure_expression_snapshot(),
             "commission_rate_all_in": strategy_input.commission_rate_all_in,
@@ -111,6 +112,7 @@ def restore_tracking_checkpoint(
         strategy=StrategyRunInput(
             holdings_count=int(contract["holdings_count"]),
             selection_interval=int(contract["selection_interval"]),
+            weighting=contract["weighting"],
             initial_cash_cny=str(contract["initial_cash_cny"]),
             exposure_expression_json=canonical_json_bytes(contract["exposure_expression"]),
             commission_rate_all_in=str(contract["commission_rate_all_in"]),
@@ -298,6 +300,7 @@ def _origin_run_input(
         strategy=StrategyRunInput(
             holdings_count=int(strategy["holdings_count"]),
             selection_interval=int(strategy["selection_every_sessions"]),
+            weighting=strategy["weighting"],
             initial_cash_cny=str(strategy["initial_cash_cny"]),
             exposure_expression_json=canonical_json_bytes(strategy["exposure_expression"]),
             commission_rate_all_in=str(costs["commission_rate_all_in"]),

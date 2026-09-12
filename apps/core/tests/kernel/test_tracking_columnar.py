@@ -69,7 +69,9 @@ def columnar_fixture(canonical) -> ColumnarResearchData:
     )
 
 
-def run_input(data, source, neutralization, holdings=10, rebalance=5, exposure="1"):
+def run_input(
+    data, source, neutralization, holdings=10, rebalance=5, exposure="1", weighting="equal_weight",
+):
     compiled = alpha_language.compile(source)
     exposure_compiled = alpha_language.compile(exposure, context="exposure")
     return RunInput(
@@ -84,7 +86,7 @@ def run_input(data, source, neutralization, holdings=10, rebalance=5, exposure="
         neutralization=neutralization,
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
-            holdings_count=holdings, selection_interval=rebalance,
+            holdings_count=holdings, selection_interval=rebalance, weighting=weighting,
             exposure_expression_json=json.dumps(exposure_compiled.expression).encode(),
             initial_cash_cny="10000000", commission_rate_all_in="0.0003",
             commission_min_cny="5", stamp_duty_sell_rate="0.0005", transfer_fee_rate="0.00001",
@@ -104,8 +106,9 @@ def run_input(data, source, neutralization, holdings=10, rebalance=5, exposure="
 @pytest.mark.parametrize("exposure", [
     "1", "if_else(universe_advancing_fraction() > 0.5, 1, 0.3)",
 ])
+@pytest.mark.parametrize("weighting", ["equal_weight", "rank_weight"])
 def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
-    source, neutralization, holdings, rebalance, exposure, monkeypatch,
+    source, neutralization, holdings, rebalance, exposure, weighting, monkeypatch,
 ) -> None:
     from thesistrace.research_kernel import factor, kernel_advance, tracking_advance
 
@@ -124,7 +127,7 @@ def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
     calendar = list(row.sessions)
     initial = slice_research_sessions(row, calendar[:45])
     prior = run(
-        run_input(initial, source, neutralization, holdings, rebalance, exposure),
+        run_input(initial, source, neutralization, holdings, rebalance, exposure, weighting),
     ).track_state
     observation = initial_tracking_observation_state(
         calendar[43], prior.output_snapshot()["strategy_backtest"]["daily"][-2]["net_nav"],
@@ -133,6 +136,7 @@ def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
         prior, prior_observation_state=observation,
         retained_strategy_sessions=[prior.boundary_session],
     )
+    assert checkpoint["run_input"]["weighting"] == weighting
     continuation = continuation_snapshot(prior)
     # Include a revised historical fact. Stored Alpha stays frozen; new Alpha
     # sees the corrected lookback without computing future labels.

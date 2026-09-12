@@ -253,7 +253,7 @@ def _run_command(
     start_date: str,
     end_date: str,
 ) -> dict[str, object]:
-    return {
+    return {"weighting": "equal_weight",
         "request_id": request_id,
         "folder_id": "folder_default",
         "name": "DailyTrack latest 504",

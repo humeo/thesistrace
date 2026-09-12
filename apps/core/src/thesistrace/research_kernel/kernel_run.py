@@ -22,6 +22,7 @@ from thesistrace.research_kernel.common_observations import (
 )
 from thesistrace.research_kernel.exposure import validate_exposure
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
+from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.series_plan import (
     ExecutableAlpha,
@@ -56,10 +57,13 @@ class StrategyRunInput:
     commission_min_cny: str
     stamp_duty_sell_rate: str
     transfer_fee_rate: str
+    weighting: PortfolioWeighting = "equal_weight"
     exposure_expression_json: bytes = b'{"kind":"number","value":1}'
 
     def __post_init__(self) -> None:
         validate_exposure(self.exposure_expression_snapshot())
+        if self.weighting not in {"equal_weight", "rank_weight"}:
+            raise ValueError("Unsupported portfolio weighting")
 
     def exposure_expression_snapshot(self) -> dict[str, object]:
         value = json.loads(self.exposure_expression_json)
@@ -71,6 +75,7 @@ class StrategyRunInput:
         return {
             "holdings_count": self.holdings_count,
             "selection_interval": self.selection_interval,
+            "weighting": self.weighting,
             "initial_cash_cny": self.initial_cash_cny,
             "exposure_expression": self.exposure_expression_snapshot(),
             "commission_rate_all_in": self.commission_rate_all_in,
@@ -561,6 +566,7 @@ def calculation_definition(
         "strategy": {
             "holdings_count": strategy.holdings_count,
             "selection_interval": strategy.selection_interval,
+            "weighting": strategy.weighting,
             "initial_cash_cny": strategy.initial_cash_cny,
             "exposure_expression": strategy.exposure_expression_snapshot(),
         },

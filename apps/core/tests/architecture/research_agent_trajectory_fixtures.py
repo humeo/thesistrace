@@ -226,7 +226,7 @@ def run_polling_payload(
         "research_kind": research_kind,
     }
     if research_kind == "strategy_backtest":
-        input_payload.update({
+        input_payload.update({"weighting": "equal_weight",
             "initial_cash_cny": "10000000", "holdings_count": 10, "selection_every_sessions": 5,
             "exposure_expression": "1",
         })

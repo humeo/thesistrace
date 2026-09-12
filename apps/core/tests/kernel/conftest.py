@@ -30,7 +30,7 @@ def accepted_calculation_case() -> dict[str, object]:
         "alpha": {"expression": PCT_CHANGE_20},
         "neutralization": "none",
         "universe": "top300",
-        "strategy": {
+        "strategy": {"weighting": "equal_weight",
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},

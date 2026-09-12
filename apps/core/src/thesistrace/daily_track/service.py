@@ -1967,6 +1967,7 @@ class DailyTrackService:
                         "holdings_count": strategy["holdings_count"],
                         "selection_every_sessions": strategy["selection_every_sessions"],
                         "exposure_expression": strategy["exposure_source"],
+                        "weighting": strategy["weighting"],
                     },
                     "origin_data_through_session": origin.seed_data_through_session,
                     "tracking_strategy_session": current_session,

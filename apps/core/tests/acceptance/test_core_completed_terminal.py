@@ -218,6 +218,7 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
                 **_run_command("common-result", start_date=sessions[1], end_date=sessions[3]),
                 "initial_cash_cny": "100000",
                 "formula": formula, "exposure_expression": exposure,
+                "weighting": "rank_weight",
                 "selection_every_sessions": 5,
             },
         )
@@ -316,6 +317,13 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
             assert observations[1]["holdings_count"] > 0
             assert all(Decimal(row["transaction_cost_cny"]) > 0 for row in observations)
         runtime = client.app.state.core_runtime
+        from thesistrace.daily_track.models import DailyTrackProvenanceResultSectionInput
+
+        provenance = runtime.daily_tracks.get_result_section(
+            TEST_RESEARCHER.researcher_id,
+            DailyTrackProvenanceResultSectionInput(track_id=track_id, section="provenance"),
+        )
+        assert provenance.frozen_research_input.weighting == "rank_weight"
         with runtime.database.transaction() as transaction:
             latest = transaction.execute(
                 "SELECT manifest_sha256, provenance FROM daily_tracks.session_checkpoints "

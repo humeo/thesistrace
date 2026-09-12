@@ -3745,6 +3745,7 @@ def _child_commands(
                 holdings_count=item.holdings_count,
                 selection_every_sessions=item.selection_every_sessions,
                 exposure_expression=item.exposure_expression,
+                weighting=item.weighting,
                 **common,
             ),
         )

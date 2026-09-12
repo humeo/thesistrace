@@ -3,6 +3,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from thesistrace.research_batch.models import ResearchBatchKind
+from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting
 from thesistrace.research_run.models import (
     ResearchKind,
     ResearchNeutralization,
@@ -67,5 +68,5 @@ class ResearchAuthoringConstraints(BaseModel):
     batch_items: IntegerRange
     batch_kinds: tuple[ResearchBatchKind, ...]
     exposure: ExposureAuthoringConstraints
-    weighting: tuple[Literal["equal_weight"], ...]
+    weighting: tuple[PortfolioWeighting, ...]
     formula: FormulaAuthoringConstraints

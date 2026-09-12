@@ -176,6 +176,7 @@ describe("browser Research Draft", () => {
       initial_cash_cny: "100000",
       selection_every_sessions: 2,
       exposure_expression: "1",
+      weighting: "equal_weight",
     });
   });
 
@@ -233,6 +234,7 @@ describe("browser Research Draft", () => {
       initial_cash_cny: "100000",
       selection_every_sessions: 5,
       exposure_expression: "1",
+      weighting: "equal_weight",
     }, confirmDiscard);
 
     expect(copied).toBe(true);
@@ -298,6 +300,7 @@ describe("browser Research Draft", () => {
       initial_cash_cny: "100000",
       selection_every_sessions: 5,
       exposure_expression: "1",
+      weighting: "equal_weight",
     }, () => true)).toBe(true);
 
     expect(loadResearchDraft(storage, researcherId, "folder_batch_research")).toMatchObject({
@@ -336,6 +339,7 @@ describe("browser Research Draft", () => {
       initial_cash_cny: "100000",
       selection_every_sessions: 2,
       exposure_expression: "1",
+      weighting: "equal_weight",
     }, confirmDiscard);
 
     expect(copied).toBe(false);
@@ -375,6 +379,7 @@ describe("browser Research Draft", () => {
       initial_cash_cny: "100000",
       selection_every_sessions: 2,
       exposure_expression: "1",
+      weighting: "equal_weight",
     });
 
     const editedWhilePending = { ...first.draft, formula: "ts_mean(close, 60)" };
@@ -451,7 +456,7 @@ describe("browser Research Draft", () => {
     expect(hasUnexecutedChanges({ ...emptyResearchDraft(), formula: "close" })).toBe(true);
     const admitted = { ...emptyResearchDraft(), formula: "close" };
     expect(hasUnexecutedChanges({ ...admitted, lastAdmittedBaseline: {
-      researchKind: "factor_evaluation", name: "", formula: "close", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "", initialCashCny: "", holdingsCount: "", selectionEverySessions: "", exposureExpression: "1",
+      researchKind: "factor_evaluation", name: "", formula: "close", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "", initialCashCny: "", holdingsCount: "", selectionEverySessions: "", exposureExpression: "1", weighting: "equal_weight",
     } })).toBe(false);
   });
 
@@ -648,6 +653,7 @@ it("restores a frozen Exposure source exactly when reusing a Run as a draft", ()
     start_date: "2026-08-03", end_date: "2026-08-05", universe: "top300", neutralization: "none",
     initial_cash_cny: "100000", holdings_count: 10, selection_every_sessions: 5,
     exposure_expression: "7 / 10",
+    weighting: "equal_weight",
   }, () => false)).toBe(true);
   const restored = loadResearchDraft(storage, "exposure", "folder_default");
   expect(restored.exposureExpression).toBe("7 / 10");

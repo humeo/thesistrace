@@ -1,3 +1,5 @@
+export type PortfolioWeighting = "equal_weight" | "rank_weight";
+
 export type EditorState = {
   anchor: number;
   head: number;
@@ -16,6 +18,7 @@ export type ResearchInputs = {
   holdingsCount: string;
   selectionEverySessions: string;
   exposureExpression: string;
+  weighting: PortfolioWeighting;
 };
 
 type PendingResearchRun = {
@@ -57,6 +60,7 @@ export type FrozenResearchAuthorableInput = CommonFrozenResearchAuthorableInput 
   holdings_count: number;
   selection_every_sessions: number;
   exposure_expression: string;
+  weighting: PortfolioWeighting;
 });
 
 export type ResearchDraft = ResearchInputs & {
@@ -84,6 +88,7 @@ export function emptyResearchDraft(): ResearchDraft {
     holdingsCount: "",
     selectionEverySessions: "",
     exposureExpression: "1",
+    weighting: "equal_weight",
     editor: { anchor: 0, head: 0 },
     lastAdmittedBaseline: null,
     pendingAdmission: null,
@@ -145,6 +150,7 @@ export function selectResearchKind(
     holdingsCount: "",
     selectionEverySessions: "",
     exposureExpression: "1",
+    weighting: "equal_weight",
   } : {
     ...draft,
     researchKind,
@@ -181,6 +187,7 @@ export type ResearchSpec = Omit<CommonResearchRunAdmissionCommand, "request_id" 
     holdings_count: number;
     selection_every_sessions: number;
     exposure_expression: string;
+  weighting: PortfolioWeighting;
   }
 );
 
@@ -201,6 +208,7 @@ export function researchSpec(inputs: ResearchInputs): ResearchSpec {
     holdings_count: Number(inputs.holdingsCount),
     selection_every_sessions: Number(inputs.selectionEverySessions),
     exposure_expression: inputs.exposureExpression,
+    weighting: inputs.weighting,
   };
 }
 
@@ -296,6 +304,7 @@ export function useResearchAsDraft(
       ? String(input.holdings_count)
       : "",
     exposureExpression: input.research_kind === "strategy_backtest" ? input.exposure_expression : "1",
+    weighting: input.research_kind === "strategy_backtest" ? input.weighting : "equal_weight",
     selectionEverySessions: input.research_kind === "strategy_backtest"
       ? String(input.selection_every_sessions)
       : "",
@@ -331,6 +340,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "holdingsCount",
     "selectionEverySessions",
     "exposureExpression",
+    "weighting",
   ] as const;
   return copiedKeys.some((key) => current[key] !== baseline[key] && current[key] !== next[key]);
 }
@@ -389,11 +399,13 @@ function readInputs(value: unknown): ResearchInputs | null {
     "holdingsCount",
     "selectionEverySessions",
     "exposureExpression",
+    "weighting",
   ] as const;
   if (keys.some((key) => typeof value[key] !== "string")) return null;
   const strings = value as Record<(typeof keys)[number], string>;
   if (
     !["factor_evaluation", "strategy_backtest"].includes(strings.researchKind) ||
+    !["equal_weight", "rank_weight"].includes(strings.weighting) ||
     strings.formula.length > MAX_FORMULA_LENGTH ||
     strings.exposureExpression.length > MAX_FORMULA_LENGTH ||
     keys.some((key) => strings[key].length > MAX_TEXT_LENGTH)

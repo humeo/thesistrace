@@ -44,7 +44,7 @@ def account(
             "target_selection": {
                 "signal_session": session,
                 "selected_instrument_ids": ["000001.SZ"],
-                "relative_weights": {"000001.SZ": 1.0},
+                "relative_weights": {"000001.SZ": "1"},
                 "signal_checksum": "signal", "contract_checksum": "contract",
             },
             "target_exposure": 1.0,
@@ -53,7 +53,7 @@ def account(
                 "exposure": 1.0,
                 "signal_session": session, "execution": "next_research_session_open",
                 "selected_instrument_ids": ["000001.SZ"],
-                "relative_weights": {"000001.SZ": 1.0},
+                "relative_weights": {"000001.SZ": "1"},
                 "signal_checksum": "signal", "contract_checksum": "contract",
             }
             if pending

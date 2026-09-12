@@ -26,6 +26,7 @@ from thesistrace.research_kernel.common_observations import CommonInputObservati
 from thesistrace.research_kernel.exposure import validate_exposure
 from thesistrace.research_kernel.factor_evidence import FactorDailyObservation
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
+from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting
 from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
 from thesistrace.research_run.result_schema import FactorPeriodStatistic, StrategyMetrics
 
@@ -210,6 +211,7 @@ class StrategyBacktestSpec(_ResearchSpecBase):
     holdings_count: HoldingsCount
     selection_every_sessions: SelectionInterval
     exposure_expression: Formula = "1"
+    weighting: PortfolioWeighting = "equal_weight"
 
 
 type ResearchSpec = Annotated[
@@ -383,11 +385,12 @@ class ImmutableRunInput(BaseModel):
         if self.strategy is not None:
             if set(self.strategy) != {
                 "kind", "holdings_count", "selection_every_sessions", "initial_cash_cny",
-                "execution", "exposure_source", "exposure_expression",
+                "execution", "exposure_source", "exposure_expression", "weighting",
             }:
                 raise ValueError("Frozen Strategy input does not match the current contract")
             TypeAdapter(InitialCash).validate_python(self.strategy["initial_cash_cny"])
             TypeAdapter(HoldingsCount).validate_python(self.strategy["holdings_count"])
+            TypeAdapter(PortfolioWeighting).validate_python(self.strategy["weighting"])
             TypeAdapter(SelectionInterval).validate_python(self.strategy["selection_every_sessions"])
             TypeAdapter(Formula).validate_python(self.strategy["exposure_source"])
             validate_exposure(self.strategy["exposure_expression"])
@@ -505,6 +508,9 @@ class ResearchRunAuthorableInput(BaseModel):
         default=None, exclude_if=lambda value: value is None,
     )
     holdings_count: int | None = Field(default=None, exclude_if=lambda value: value is None)
+    weighting: PortfolioWeighting | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
     exposure_expression: Formula | None = Field(
         default=None, exclude_if=lambda value: value is None,
     )
@@ -517,7 +523,7 @@ class ResearchRunAuthorableInput(BaseModel):
     def validate_research_kind_contract(self) -> ResearchRunAuthorableInput:
         strategy_values = (
             self.initial_cash_cny, self.holdings_count, self.selection_every_sessions,
-            self.exposure_expression,
+            self.exposure_expression, self.weighting,
         )
         if self.research_kind == "factor_evaluation" and any(
             value is not None for value in strategy_values

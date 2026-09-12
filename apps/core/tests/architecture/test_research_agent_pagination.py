@@ -153,6 +153,7 @@ def test_complete_provenance_with_maximum_text_preserves_every_character_under_b
         holdings_count=100,
         selection_every_sessions=20,
         exposure_expression="1 #" + "\x01" * 4093,
+        weighting="equal_weight",
     )
     from thesistrace.alpha_language import alpha_language
 
@@ -182,7 +183,7 @@ def test_complete_provenance_with_maximum_text_preserves_every_character_under_b
         tracking_strategy_session=date(2024, 2, 1),
         calculation_contracts={
             "numeric_execution_contract": "float64",
-            "strategy": {
+            "strategy": {"weighting": "equal_weight",
                 "initial_cash_cny": "10000000", "holdings_count": 100,
                 "selection_every_sessions": 20,
             },

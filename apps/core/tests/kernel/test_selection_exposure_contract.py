@@ -5,7 +5,7 @@ from thesistrace.research_run.models import ResearchRunAdmissionCommand
 
 
 def strategy_command():
-    return {
+    return {"weighting": "equal_weight",
         "request_id": "selection-exposure-contract",
         "folder_id": "folder_default",
         "research_kind": "strategy_backtest",

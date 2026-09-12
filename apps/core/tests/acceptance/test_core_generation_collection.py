@@ -41,7 +41,7 @@ def test_private_collection_removes_retired_input_without_losing_run_or_track(
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
             "/api/research-runs",
-            json={
+            json={"weighting": "equal_weight",
                 "request_id": "collection-acceptance-run",
                 "folder_id": "folder_default",
                 "name": "Collected input remains an audit coordinate",

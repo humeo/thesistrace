@@ -200,7 +200,7 @@ def test_compact_advance_retains_only_bounded_strategy_alpha() -> None:
         "alpha": {"expression": CLOSE_ADJUSTED},
         "neutralization": "none",
         "universe": "top300",
-        "strategy": {
+        "strategy": {"weighting": "equal_weight",
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -269,7 +269,7 @@ def test_warm_continuation_with_short_data_slice_has_no_factor_state() -> None:
         "alpha": {"expression": CLOSE_ADJUSTED},
         "neutralization": "none",
         "universe": "top300",
-        "strategy": {
+        "strategy": {"weighting": "equal_weight",
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},
@@ -334,7 +334,7 @@ def test_cold_continuation_rebuild_uses_lookback_before_504_retained_sessions() 
         },
         "neutralization": "none",
         "universe": "top300",
-        "strategy": {
+        "strategy": {"weighting": "equal_weight",
             "holdings_count": 10,
             "selection_interval": 5,
             "exposure_expression": {"kind": "number", "value": 1},

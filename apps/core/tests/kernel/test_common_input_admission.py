@@ -64,7 +64,7 @@ def test_fixed_exposure_is_compiled_and_frozen_with_strategy_input(source):
     from thesistrace.research_run.models import StrategyBacktestAdmissionCommand
 
     factor, compiled, snapshot = inputs("close")
-    command = StrategyBacktestAdmissionCommand.model_validate({
+    command = StrategyBacktestAdmissionCommand.model_validate({"weighting": "equal_weight",
         **factor.model_dump(), "research_kind": "strategy_backtest",
         "initial_cash_cny": "100000", "holdings_count": 10,
         "selection_every_sessions": 5, "exposure_expression": source,
@@ -83,7 +83,7 @@ def test_invalid_exposure_is_rejected_by_shared_admission(source):
     from thesistrace.research_run.models import StrategyBacktestAdmissionCommand
 
     factor, compiled, snapshot = inputs("close")
-    command = StrategyBacktestAdmissionCommand.model_validate({
+    command = StrategyBacktestAdmissionCommand.model_validate({"weighting": "equal_weight",
         **factor.model_dump(), "research_kind": "strategy_backtest",
         "initial_cash_cny": "100000", "holdings_count": 10,
         "selection_every_sessions": 5, "exposure_expression": source,
@@ -115,7 +115,7 @@ def test_whole_spec_diagnosis_reuses_admission_and_has_no_persistence_side_effec
     values = command.model_dump(exclude={"request_id", "folder_id", "name"})
     factor = FactorEvaluationSpec.model_validate(values)
     assert service.diagnose_research_spec(factor).valid
-    strategy = StrategyBacktestSpec.model_validate({
+    strategy = StrategyBacktestSpec.model_validate({"weighting": "equal_weight",
         **values, "research_kind": "strategy_backtest", "initial_cash_cny": "100000",
         "holdings_count": 10, "selection_every_sessions": 5, "exposure_expression": "1.1",
     })
@@ -142,7 +142,7 @@ def test_daily_exposure_adds_its_real_window_fields_and_industry_requirement():
 
     factor, compiled, snapshot = inputs('close')
     source = 'if_else(ts_mean(industry_return(801010), 3) > 0, 1, 0.3)'
-    command = StrategyBacktestAdmissionCommand.model_validate({
+    command = StrategyBacktestAdmissionCommand.model_validate({"weighting": "equal_weight",
         **factor.model_dump(), 'research_kind': 'strategy_backtest',
         'initial_cash_cny': '100000', 'holdings_count': 10,
         'selection_every_sessions': 5, 'exposure_expression': source,

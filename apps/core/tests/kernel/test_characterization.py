@@ -15,7 +15,7 @@ EXPECTED_CHECKSUMS = {
         "5": "c108d8430db5949afce51e5f17a6f88242a15164b834e5358ebb4517880cc691",
         "20": "ba3006a470cefea9bf194baef1328bc4e3343d9f1c32b8ccd14c96fac43c8b5e",
     },
-    "strategy": "e960a085ff3dc68261518db224019842ea3d27190ab874f6f53426aa864694f2",
+    "strategy": "2fdbe31bc2bf68526fbe590836822da76dbdf9acf0fe6ebf34af1c818d41ce68",
 }
 
 

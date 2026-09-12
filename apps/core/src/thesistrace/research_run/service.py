@@ -303,7 +303,7 @@ class ResearchRunAdmissionRejected(ValueError):
         self.issues = issues
 
 
-FIXED_STRATEGY_KIND = "long_only_top_n_equal_weight"
+FIXED_STRATEGY_KIND = "long_only_top_n"
 FIXED_EXECUTION = "next_open_full_fill"
 FIXED_COSTS = {
     "commission_rate_all_in": "0.0003",
@@ -4218,6 +4218,7 @@ def _admitted_input(
                 "kind": FIXED_STRATEGY_KIND,
                 "holdings_count": command.holdings_count,
                 "selection_every_sessions": command.selection_every_sessions,
+                "weighting": command.weighting,
                 "exposure_source": exposure.source,
                 "exposure_expression": exposure.expression,
                 "initial_cash_cny": command.initial_cash_cny,
@@ -4572,6 +4573,7 @@ def _authorable_input(row: object) -> ResearchRunAuthorableInput:
             "initial_cash_cny": str(immutable_input.strategy["initial_cash_cny"]),
             "holdings_count": int(immutable_input.strategy["holdings_count"]),
             "selection_every_sessions": int(immutable_input.strategy["selection_every_sessions"]),
+            "weighting": immutable_input.strategy["weighting"],
             "exposure_expression": str(immutable_input.strategy["exposure_source"]),
         }
     return ResearchRunAuthorableInput(

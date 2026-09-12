@@ -1504,6 +1504,7 @@ def _strategy_run_input(
         strategy=StrategyRunInput(
             holdings_count=int(strategy["holdings_count"]),
             selection_interval=int(strategy["selection_every_sessions"]),
+            weighting=strategy["weighting"],
             initial_cash_cny=str(strategy["initial_cash_cny"]),
             exposure_expression_json=canonical_json_bytes(strategy["exposure_expression"]),
             commission_rate_all_in=str(costs["commission_rate_all_in"]),

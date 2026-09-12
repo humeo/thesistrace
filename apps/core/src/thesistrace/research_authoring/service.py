@@ -47,7 +47,7 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
     ),
     batch_kinds=RESEARCH_BATCH_KINDS,
     exposure=ExposureAuthoringConstraints(),
-    weighting=("equal_weight",),
+    weighting=("equal_weight", "rank_weight"),
     formula=FormulaAuthoringConstraints(
         maximum_length=MAX_FORMULA_LENGTH,
         maximum_expression_nodes=MAX_EXPRESSION_NODES,

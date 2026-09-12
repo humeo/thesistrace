@@ -109,7 +109,7 @@ def test_strategy_requires_explicit_cash_and_factor_rejects_it() -> None:
 
 
 def _command() -> dict[str, object]:
-    return {
+    return {"weighting": "equal_weight",
         "request_id": "cash",
         "folder_id": "folder_default",
         "formula": "close",

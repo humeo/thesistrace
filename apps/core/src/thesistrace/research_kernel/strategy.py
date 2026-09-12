@@ -5,7 +5,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal, DecimalException, localcontext
 from fractions import Fraction
-from heapq import nsmallest
 from statistics import stdev
 
 from thesistrace.research_kernel.exposure import evaluate_exposure_series, require_exposure_value
@@ -15,6 +14,7 @@ from thesistrace.research_kernel.numeric import (
     canonical_decimal,
     require_finite_decimal,
 )
+from thesistrace.research_kernel.portfolio_weighting import select_portfolio
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.series_plan import CommonInputObserver
 from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
@@ -29,10 +29,6 @@ from thesistrace.research_series import (
 
 class StrategyCalculationError(RuntimeError):
     pass
-
-
-def _alpha_rank_key(item: Mapping[str, object]) -> tuple[Decimal, str]:
-    return -Decimal(str(item["value"])), str(item["instrument_id"])
 
 
 @dataclass
@@ -466,12 +462,12 @@ def _execute_strategy(
                     }
                 )
             target_capital = money(pre_net_nav * Decimal(str(pending_target["exposure"])))
-            target_values = {
-                instrument_id: money(
-                    target_capital * Decimal(str(pending_target["relative_weights"][instrument_id]))
+            target_values = {}
+            for instrument_id in candidates:
+                ratio = Fraction(pending_target["relative_weights"][instrument_id])
+                target_values[instrument_id] = money(
+                    target_capital * ratio.numerator / ratio.denominator
                 )
-                for instrument_id in candidates
-            }
             actual_stock_value = sum_position_values(positions, marks)
             buy_budget = max(Decimal(0), target_capital - actual_stock_value)
             if mode == "reduce":
@@ -797,14 +793,14 @@ def _execute_strategy(
         selection_updated = report_index % selection_interval == 0
         if selection_updated:
             alpha_values = alpha_by_session[session]
-            selected = nsmallest(holdings_count, alpha_values, key=_alpha_rank_key)
+            selected, relative_weights = select_portfolio(
+                alpha_values, holdings_count, strategy["weighting"],
+            )
             selected_ids = [str(item["instrument_id"]) for item in selected]
             target_selection = {
                 "signal_session": session,
                 "selected_instrument_ids": selected_ids,
-                "relative_weights": {
-                    instrument_id: 1 / len(selected_ids) for instrument_id in selected_ids
-                },
+                "relative_weights": relative_weights,
                 "signal_checksum": hashlib.sha256(canonical_json_bytes({
                     "session": session,
                     "values": [dict(item) for item in selected],

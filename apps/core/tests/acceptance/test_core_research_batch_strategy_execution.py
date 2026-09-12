@@ -573,8 +573,11 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
             "end_date": "2026-08-05",
         }
         command["strategies"] = [
-            {**item, "initial_cash_cny": "100000", "exposure_expression": exposure}
-            for item, exposure in zip(command["strategies"], exposures, strict=True)
+            {**item, "initial_cash_cny": "100000", "exposure_expression": exposure,
+             "weighting": "rank_weight" if ordinal == 0 else "equal_weight"}
+            for ordinal, (item, exposure) in enumerate(
+                zip(command["strategies"], exposures, strict=True)
+            )
         ]
         batch = client.post("/api/research-batches", json=command).json()
         assert "items" in batch, batch
@@ -617,6 +620,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                     "formula": formula,
                     "initial_cash_cny": item["initial_cash_cny"],
                     "exposure_expression": item["exposure_expression"],
+                    "weighting": item["weighting"],
                 },
             ).json()
             for ordinal, item in enumerate(command["strategies"], start=1)
@@ -657,6 +661,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
             frozen = detail["input"]
             expected_source = command["strategies"][item["ordinal"] - 1]["exposure_expression"]
             assert frozen["exposure_expression"] == expected_source
+            assert frozen["weighting"] == command["strategies"][item["ordinal"] - 1]["weighting"]
             assert frozen["initial_cash_cny"] == "100000"
             assert batch_stored["key_metrics"]["annualized_excess_return"] is not None
             if expected_source == "0":
@@ -1470,7 +1475,7 @@ def test_strategy_sweep_isolates_one_strategy_failure_and_keeps_order(
                 "strategies": [
                     command["strategies"][0],
                     command["strategies"][1],
-                    {
+                    {"weighting": "equal_weight",
                         "item_key": "later",
                         "initial_cash_cny": "10000000",
                         "holdings_count": 3,
@@ -1550,7 +1555,7 @@ def test_strategy_sweep_one_and_twenty_items_use_the_same_ordered_contract(
         _publish_current_data(settings)
         command = _strategy_command(f"strategy-sweep-{item_count}")
         strategies = [
-            {
+            {"weighting": "equal_weight",
                 "item_key": f"strategy-{ordinal}",
                 "initial_cash_cny": "10000000",
                 "holdings_count": ordinal,
@@ -1821,7 +1826,7 @@ def _ordinary_strategy_command(
     end_date: str = "2026-08-04",
     formula: str = "close",
 ) -> dict[str, object]:
-    return {
+    return {"weighting": "equal_weight",
         "request_id": request_id,
         "folder_id": "folder_default",
         "name": request_id,

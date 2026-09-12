@@ -17,6 +17,7 @@ from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
 from thesistrace.daily_track.observation_state import TrackingObservationState
 from thesistrace.research_kernel.common_inputs import common_input_references
 from thesistrace.research_kernel.common_observations import CommonInputObservation
+from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting
 from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
@@ -585,6 +586,7 @@ class DailyTrackFrozenResearchInput(BaseModel):
     holdings_count: int
     selection_every_sessions: int
     exposure_expression: str
+    weighting: PortfolioWeighting
 
 
 class DailyTrackProvenanceResultSection(BaseModel):
@@ -706,6 +708,7 @@ class KernelRunInputSnapshot(BaseModel):
     holdings_count: int
     selection_interval: int
     exposure_expression: dict[str, object]
+    weighting: PortfolioWeighting
     initial_cash_cny: str
     commission_rate_all_in: str
     commission_min_cny: str

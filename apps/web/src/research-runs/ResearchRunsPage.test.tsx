@@ -74,10 +74,24 @@ const STRATEGY_RUN: ResearchRun = {
     initial_cash_cny: "100000",
     selection_every_sessions: 2,
     exposure_expression: "1",
+    weighting: "equal_weight",
   },
 };
 
 describe("ResearchRunFacts", () => {
+  it.each([
+    ["equal_weight", "Equal weight"], ["rank_weight", "Rank weight"],
+  ] as const)("shows one accurate frozen %s weighting", (weighting, label) => {
+    const input = STRATEGY_RUN.input;
+    if (input?.research_kind !== "strategy_backtest") throw new Error("Invalid Strategy fixture");
+    const markup = renderToStaticMarkup(<ResearchRunFacts run={{
+      ...STRATEGY_RUN, input: { ...input, weighting },
+    }} />);
+    expect(markup).toContain(`<strong>Portfolio weighting</strong> ${label}`);
+    expect(markup).not.toContain("<strong>Weighting</strong>");
+    if (weighting === "rank_weight") expect(markup).not.toContain("Equal weight");
+  });
+
   it("shows the frozen Strategy execution conditions in user language", () => {
     const markup = renderToStaticMarkup(<ResearchRunFacts run={STRATEGY_RUN} />);
 
@@ -661,6 +675,7 @@ describe("UseAsDraftPanel", () => {
           initial_cash_cny: "100000",
           selection_every_sessions: 2,
           exposure_expression: "1",
+          weighting: "equal_weight",
         }}
         confirmDiscard={() => true}
         navigate={() => undefined}

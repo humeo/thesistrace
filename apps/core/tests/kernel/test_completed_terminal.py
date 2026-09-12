@@ -85,7 +85,9 @@ def test_next_open_uses_frozen_selection_when_past_alpha_is_unavailable():
     assert advanced.finalized["daily"][:2] == prefix.finalized["daily"]
 
 
-@pytest.mark.parametrize("weights", [{A: 0.5}, {B: 1.0}, {A: float("nan")}, {A: -1.0}])
+@pytest.mark.parametrize("weights", [
+    {A: "1/2"}, {B: "1"}, {A: "nan"}, {A: "-1"}, {A: 1.0}, {A: "2/2"},
+])
 def test_resume_rejects_invalid_frozen_weights(weights):
     import copy
 
@@ -98,13 +100,13 @@ def test_resume_rejects_invalid_frozen_weights(weights):
     )
     invalid = copy.deepcopy(prefix.resumable)
     invalid["pending_target"]["relative_weights"] = weights
-    with pytest.raises(ValueError, match="Pending target"):
+    with pytest.raises(ValueError, match="(Target weights|Pending target|relative_weights)"):
         transition_strategy(
             data, matrix, definition, origin_session=SESSIONS[0], continuation=invalid
         )
 
 
-def test_resume_rejects_non_equal_weights_under_equal_weight_contract():
+def test_resume_rejects_pending_weights_different_from_retained_selection():
     import copy
 
     data, matrix, definition = _scenario()
@@ -116,8 +118,8 @@ def test_resume_rejects_non_equal_weights_under_equal_weight_contract():
     )
     invalid = copy.deepcopy(prefix.resumable)
     invalid["pending_target"]["selected_instrument_ids"] = [A, B]
-    invalid["pending_target"]["relative_weights"] = {A: 0.7, B: 0.3}
-    with pytest.raises(ValueError, match="Pending target.*equal"):
+    invalid["pending_target"]["relative_weights"] = {A: "7/10", B: "3/10"}
+    with pytest.raises(RuntimeError, match="Pending decision differs"):
         transition_strategy(
             data, matrix, definition, origin_session=SESSIONS[0], continuation=invalid
         )

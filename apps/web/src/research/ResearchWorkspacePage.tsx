@@ -722,6 +722,21 @@ export function ResearchDraftWorkspace({
                   />
                   <small>Share of account equity invested; remaining equity stays in cash.</small>
                 </label>
+                <label className="research-weighting-field">Portfolio weighting
+                  <select
+                    value={draft.weighting}
+                    onChange={(event) => {
+                      const weighting = event.target.value;
+                      if (weighting === "equal_weight" || weighting === "rank_weight") {
+                        updateDraft((current) => ({ ...current, weighting }));
+                      }
+                    }}
+                  >
+                    <option value="equal_weight">Equal weight</option>
+                    <option value="rank_weight">Rank weight</option>
+                  </select>
+                  <small>Rank weight gives higher-ranked selected stocks more weight; tied scores share rank weight.</small>
+                </label>
                 <div className="research-exposure-expression">
                   <h3>Exposure expression</h3>
                   <AlphaFormulaEditor
@@ -735,7 +750,7 @@ export function ResearchDraftWorkspace({
                       updateDraft((current) => ({ ...current, exposureExpression }));
                     }}
                   />
-                  <small>Constants and common market or industry inputs; output 0–1. Calculated each Close, changes trade at the next Open. Stocks remain equally weighted within the selected allocation.</small>
+                  <small>Constants and common market or industry inputs; output 0–1. Calculated each Close, changes trade at the next Open. Stock allocation follows the selected portfolio weighting.</small>
                 </div>
                 {exposureDiagnosticState.kind === "complete" && !exposureDiagnosticState.result.valid ? (
                   <ul aria-label="Exposure diagnostics" className="formula-diagnostics research-spec-feedback">

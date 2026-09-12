@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from math import isclose, isfinite
+from fractions import Fraction
+from math import isfinite
 from typing import Literal
 
 from pydantic import (
@@ -38,7 +39,7 @@ class SelectionPhase(TerminalStateModel):
 class TargetSelection(TerminalStateModel):
     signal_session: StrictStr
     selected_instrument_ids: list[StrictStr]
-    relative_weights: dict[StrictStr, StrictFloat]
+    relative_weights: dict[StrictStr, StrictStr]
     signal_checksum: StrictStr
     contract_checksum: StrictStr
 
@@ -48,15 +49,15 @@ class TargetSelection(TerminalStateModel):
         weights = self.relative_weights
         if len(selected) != len(set(selected)) or set(weights) != set(selected):
             raise ValueError("Pending target weights do not match the unique selection")
-        if any(not isfinite(weight) or not 0 < weight <= 1 for weight in weights.values()):
-            raise ValueError("Pending target weights must be finite and positive")
-        if selected and not isclose(sum(weights.values()), 1.0, abs_tol=1e-12):
-            raise ValueError("Pending target weights must sum to one")
-        if selected and any(
-            not isclose(weight, 1.0 / len(selected), rel_tol=0.0, abs_tol=1e-12)
-            for weight in weights.values()
-        ):
-            raise ValueError("Pending target weights must follow the equal-weight contract")
+        try:
+            ratios = [Fraction(weight) for weight in weights.values()]
+        except (ValueError, ZeroDivisionError):
+            raise ValueError("Target weights must be canonical positive ratios") from None
+        if any(str(ratio) != weight or not 0 < ratio <= 1
+               for weight, ratio in zip(weights.values(), ratios, strict=True)):
+            raise ValueError("Target weights must be canonical positive ratios")
+        if selected and sum(ratios) != 1:
+            raise ValueError("Target weights must sum to one")
         return self
 
 

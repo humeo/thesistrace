@@ -21,8 +21,8 @@
     "cursor_characters": 1024
   },
   "deterministic_payloads": {
-    "v1_contract_sha256": "677b84fb2fc53516aa1166688b609ad2d049f723f0de075a40902905d91ad85c",
-    "v1_contract_bytes": 172316,
+    "v1_contract_sha256": "52860b7ef786c56096197ed5842a9affde29c537db1414cc542908fa145f9eb9",
+    "v1_contract_bytes": 173032,
     "maximum_factor_batch_call_bytes": 84536
   },
   "observed": {

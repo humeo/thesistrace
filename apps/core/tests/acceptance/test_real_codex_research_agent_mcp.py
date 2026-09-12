@@ -2009,7 +2009,7 @@ def _submission_calls_for_failure_test(
         if invalid_diagnostics is None
         else invalid_diagnostics
     )
-    common = {
+    common = {"weighting": "equal_weight",
         "hypothesis": "fixture-hypothesis-canary",
         "research_kind": "strategy_backtest",
         "initial_cash_cny": "10000000",
@@ -2109,7 +2109,7 @@ def test_codex_event_contract_is_strict_and_preserves_structured_result() -> Non
 
 
 def test_trajectory_evidence_is_derived_from_tool_arguments_and_results() -> None:
-    submitted_arguments = {
+    submitted_arguments = {"weighting": "equal_weight",
         "formula": "ts_mean(close, 5)",
         "hypothesis": "fixture-hypothesis-canary",
         "research_kind": "strategy_backtest",
@@ -2226,7 +2226,7 @@ def test_trajectory_evidence_is_derived_from_tool_arguments_and_results() -> Non
 
 
 def test_submission_trajectory_accepts_structured_rejection_recovery() -> None:
-    common = {
+    common = {"weighting": "equal_weight",
         "hypothesis": "fixture-hypothesis-canary",
         "research_kind": "strategy_backtest",
         "initial_cash_cny": "10000000",

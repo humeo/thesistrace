@@ -636,7 +636,7 @@ def _definition(
 ) -> dict[str, object]:
     return {
         "universe": "manual",
-        "strategy": {
+        "strategy": {"weighting": "equal_weight",
             "holdings_count": holdings_count,
             "selection_interval": selection_interval,
             "initial_cash_cny": "10000000",
@@ -1060,4 +1060,36 @@ def test_daily_exposure_keeps_new_selection_while_cash_then_restores_without_ret
         assert all(row['positions'] == [] for row in ledger[3:7])
     assert Decimal(ledger[2]['net_cash']) == 70000
     assert Decimal(ledger[3]['net_cash']) == (70000 if blocked else 100000)
+    _assert_ledger_reconciles(ledger)
+
+
+def test_rank_weighted_selection_survives_cash_and_drives_exposure_restore():
+    from thesistrace.alpha_language import alpha_language
+
+    canonical = _canonical(opens={session: {A: '10', B: '10'} for session in SESSIONS})
+    _set_alpha_closes(canonical, {
+        session: {A: close, B: close}
+        for session, close in zip(SESSIONS, ('10', '9', '11', '11'), strict=True)
+    })
+    definition = _definition(holdings_count=2, selection_interval=5)
+    definition['strategy']['weighting'] = 'rank_weight'
+    definition['strategy']['initial_cash_cny'] = '100000'
+    definition['strategy']['exposure_expression'] = alpha_language.compile(
+        'if_else(universe_return() > 0, 0.6, 0)', context='exposure',
+    ).expression
+    definition['costs'] = dict.fromkeys(definition['costs'], '0')
+    ledger = []
+    result = run_strategy(
+        aligned_market_data(canonical, universe='manual'),
+        _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS}),
+        definition, origin_session=SESSIONS[1], ledger=ledger,
+    )
+    selection = result['target_selection']
+    assert selection['signal_session'] == SESSIONS[1]
+    assert selection['relative_weights'] == {A: '2/3', B: '1/3'}
+    assert ledger[0]['positions'] == ledger[1]['positions'] == []
+    assert [(row['instrument_id'], row['execution_shares']) for row in ledger[2]['positions']] == [
+        (A, 4000), (B, 2000),
+    ]
+    assert Decimal(ledger[2]['net_cash']) == Decimal('40000')
     _assert_ledger_reconciles(ledger)
