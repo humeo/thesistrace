@@ -156,7 +156,9 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
         strategy_resume={
             "daily": resume_daily[-504:],
             "positions": resume["positions"],
-            "pending_signal": resume["pending_signal"],
+            "target_selection": resume["target_selection"],
+            "target_exposure": resume["target_exposure"],
+            "pending_target": resume["pending_target"],
             "report_session_count": metric_state["session_count"],
             "metric_state": metric_state,
         },
@@ -200,7 +202,8 @@ def test_compact_advance_retains_only_bounded_strategy_alpha() -> None:
         "universe": "top300",
         "strategy": {
             "holdings_count": 10,
-            "rebalance_interval": 5,
+            "selection_interval": 5,
+            "exposure_expression": {"kind": "number", "value": 1},
             "initial_cash_cny": "10000000",
         },
         "costs": {
@@ -268,7 +271,8 @@ def test_warm_continuation_with_short_data_slice_has_no_factor_state() -> None:
         "universe": "top300",
         "strategy": {
             "holdings_count": 10,
-            "rebalance_interval": 5,
+            "selection_interval": 5,
+            "exposure_expression": {"kind": "number", "value": 1},
             "initial_cash_cny": "10000000",
         },
         "costs": {
@@ -332,7 +336,8 @@ def test_cold_continuation_rebuild_uses_lookback_before_504_retained_sessions() 
         "universe": "top300",
         "strategy": {
             "holdings_count": 10,
-            "rebalance_interval": 5,
+            "selection_interval": 5,
+            "exposure_expression": {"kind": "number", "value": 1},
             "initial_cash_cny": "10000000",
         },
         "costs": {
@@ -649,7 +654,7 @@ def test_track_seed_is_the_seed_run_terminal_strategy_state(
     assert isinstance(definition, dict)
     strategy = definition["strategy"]
     assert isinstance(strategy, dict)
-    strategy["rebalance_interval"] = 1
+    strategy["selection_interval"] = 1
 
     result = run(_run_input(canonical, definition))
 
@@ -717,7 +722,7 @@ def _run_input(
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
             holdings_count=int(strategy["holdings_count"]),
-            rebalance_interval=int(strategy["rebalance_interval"]),
+            selection_interval=int(strategy["selection_interval"]),
             initial_cash_cny=str(strategy["initial_cash_cny"]),
             commission_rate_all_in=str(costs["commission_rate_all_in"]),
             commission_min_cny=str(costs["commission_min_cny"]),

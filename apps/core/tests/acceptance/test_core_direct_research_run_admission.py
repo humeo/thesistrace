@@ -454,9 +454,11 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "strategy": {
                 "kind": "long_only_top_n_equal_weight",
                 "holdings_count": 1,
-                "rebalance_every_sessions": 1,
+                "selection_every_sessions": 1,
                 "initial_cash_cny": "10000000",
                 "execution": "next_open_full_fill",
+                "exposure_source": "1",
+                "exposure_expression": {"kind": "number", "value": 1},
             },
             "costs": {
                 "commission_rate_all_in": "0.0003",
@@ -535,7 +537,8 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "research_kind": "strategy_backtest",
             "initial_cash_cny": "10000000",
             "holdings_count": 1,
-            "rebalance_every_sessions": 1,
+            "selection_every_sessions": 1,
+            "exposure_expression": "1",
         }
         assert completed.json()["result"]["provenance"]["research_run_id"] == queued["id"]
 
@@ -811,7 +814,7 @@ def _valid_command(
             {
                 "initial_cash_cny": "10000000",
                 "holdings_count": 1,
-                "rebalance_every_sessions": 1,
+                "selection_every_sessions": 1,
             }
         )
     return command

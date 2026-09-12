@@ -14,6 +14,7 @@ from thesistrace.alpha_language.models import (
     BuiltinWorkEstimate,
     CompiledAlpha,
     DiagnosticDetails,
+    FormulaContext,
     FormulaDiagnostic,
     FormulaDiagnostics,
     SourcePosition,
@@ -30,6 +31,7 @@ from thesistrace.research_kernel.common_inputs import (
     COMMON_INPUT_WORK,
     common_reference,
 )
+from thesistrace.research_kernel.exposure import constant_exposure
 from thesistrace.research_kernel.expression_limits import (
     MAX_EFFECTIVE_LOOKBACK,
     MAX_ESTIMATED_WORK,
@@ -139,14 +141,20 @@ class AlphaLanguage:
             }
         )
 
-    def diagnose(self, source: str) -> FormulaDiagnostics:
+    def diagnose(
+        self, source: str, *, context: FormulaContext = "signal"
+    ) -> FormulaDiagnostics:
         try:
-            self.compile(source)
+            self.compile(source, context=context)
         except FormulaCompilationError as error:
             return FormulaDiagnostics(valid=False, diagnostics=error.diagnostics)
         return FormulaDiagnostics(valid=True, diagnostics=[])
 
-    def compile(self, source: str) -> CompiledAlpha:
+    def compile(
+        self, source: str, *, context: FormulaContext = "signal"
+    ) -> CompiledAlpha:
+        if context not in {"signal", "exposure"}:
+            raise ValueError("Unknown expression context")
         if len(source) > MAX_FORMULA_LENGTH:
             self._raise(
                 source,
@@ -164,15 +172,19 @@ class AlphaLanguage:
             raise FormulaCompilationError([_syntax_diagnostic(source, error)]) from None
 
         built = self._build(source, parsed.body, depth=1)
-        if built.value_type is not ValueType.NUMERIC_SERIES:
+        expected_type = ValueType.NUMERIC_SERIES if context == "signal" else ValueType.NUMBER
+        if built.value_type is not expected_type:
             self._raise(
                 source,
-                "ROOT_MUST_BE_SERIES",
-                "Alpha Formula must produce a Numeric Series",
+                "ROOT_MUST_BE_SERIES" if context == "signal" else "EXPOSURE_MUST_BE_CONSTANT",
+                (
+                    "Alpha Formula must produce a Numeric Series"
+                    if context == "signal" else "Exposure must produce a constant Number"
+                ),
                 parsed.body,
                 details=DiagnosticDetails(
                     kind="value_type",
-                    expected=ValueType.NUMERIC_SERIES.value,
+                    expected=expected_type.value,
                     actual=built.value_type.value,
                 ),
             )
@@ -212,8 +224,9 @@ class AlphaLanguage:
                     actual=built.estimated_work,
                 ),
             )
-        return CompiledAlpha(
+        compiled = CompiledAlpha(
             source=source,
+            context=context,
             expression=built.expression,
             field_ids_by_identifier=built.field_ids_by_identifier,
             result_type=built.value_type,
@@ -222,6 +235,17 @@ class AlphaLanguage:
             depth=built.depth,
             estimated_work=built.estimated_work,
         )
+        if context == "exposure":
+            try:
+                constant_exposure(compiled.expression)
+            except ValueError:
+                self._raise(
+                    source,
+                    "EXPOSURE_OUT_OF_RANGE",
+                    "Exposure must be a finite number between 0 and 1",
+                    parsed.body,
+                )
+        return compiled
 
     def _build(self, source: str, node: ast.expr, *, depth: int) -> _BuiltExpression:
         if depth > MAX_EXPRESSION_DEPTH:

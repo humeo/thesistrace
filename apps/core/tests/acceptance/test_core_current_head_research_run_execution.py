@@ -750,13 +750,13 @@ def test_research_kinds_publish_separate_evidence_when_strategy_changes(
         _run_command(
             "strategy-scientific-equivalence-a",
             holdings_count=3,
-            rebalance_every_sessions=2,
+            selection_every_sessions=2,
             **common,
         ),
         _run_command(
             "strategy-scientific-equivalence-b",
             holdings_count=12,
-            rebalance_every_sessions=7,
+            selection_every_sessions=7,
             **common,
         ),
     )
@@ -2639,8 +2639,8 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             "net_nav",
             "cumulative_transaction_cost",
             "positions",
-            "rebalance_phase",
-            "pending_signal",
+            "selection_phase",
+            "pending_target",
         }
         assert "generation" not in str(public_run).lower()
 
@@ -4306,7 +4306,7 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
         expected = build_result_payload(
             run(_kernel_input(canonical_a, sessions=sessions)),
             research_kind="strategy_backtest",
-            rebalance_interval=1,
+            selection_interval=1,
         )
         assert actual == expected
         assert stored["active_pin_count"] == 0
@@ -4813,7 +4813,7 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
             terminal = result["terminal_strategy_state"]
             assert terminal["session"] == sessions[-1]
             assert terminal["last_daily_observation"]["session"] == sessions[-1]
-            assert terminal["rebalance_phase"]["report_session_count"] == session_count
+            assert terminal["selection_phase"]["report_session_count"] == session_count
             assert terminal["metric_state"]["session_count"] == session_count
             assert isinstance(terminal["positions"], list)
         assert stored["active_pin_count"] == 0
@@ -5046,7 +5046,7 @@ def _run_command(
     neutralization: str = "none",
     research_kind: str = "strategy_backtest",
     holdings_count: int = 1,
-    rebalance_every_sessions: int = 1,
+    selection_every_sessions: int = 1,
 ) -> dict[str, object]:
     command: dict[str, object] = {
         "request_id": request_id,
@@ -5064,7 +5064,7 @@ def _run_command(
             {
                 "initial_cash_cny": "10000000",
                 "holdings_count": holdings_count,
-                "rebalance_every_sessions": rebalance_every_sessions,
+                "selection_every_sessions": selection_every_sessions,
             }
         )
     return command
@@ -5713,7 +5713,7 @@ def _kernel_input(
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
             holdings_count=1,
-            rebalance_interval=1,
+            selection_interval=1,
             initial_cash_cny="10000000",
             commission_rate_all_in="0.0003",
             commission_min_cny="5",
@@ -5776,7 +5776,7 @@ def _reference_result(
                 research_kind=immutable.research_kind,
                 strategy=None if strategy is None else StrategyRunInput(
                     holdings_count=int(strategy["holdings_count"]),
-                    rebalance_interval=int(strategy["rebalance_every_sessions"]),
+                    selection_interval=int(strategy["selection_every_sessions"]),
                     initial_cash_cny=str(strategy["initial_cash_cny"]),
                     commission_rate_all_in=str(costs["commission_rate_all_in"]),
                     commission_min_cny=str(costs["commission_min_cny"]),
@@ -5788,7 +5788,7 @@ def _reference_result(
             )
         ),
         research_kind=immutable.research_kind,
-        rebalance_interval=None if strategy is None else int(strategy["rebalance_every_sessions"]),
+        selection_interval=None if strategy is None else int(strategy["selection_every_sessions"]),
     )
 
 

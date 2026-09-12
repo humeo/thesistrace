@@ -268,6 +268,6 @@ def _predecessor_instrument_ids(predecessor: Mapping[str, object]) -> frozenset[
     positions = terminal.get("positions")
     if not isinstance(positions, list) or any(not isinstance(item, Mapping) for item in positions):
         raise RuntimeError("Tracking predecessor Positions are invalid")
-    pending = terminal["pending_signal"]
+    pending = terminal["pending_target"]
     pending_ids = pending["selected_instrument_ids"] if pending is not None else []
     return frozenset([*(str(item["instrument_id"]) for item in positions), *pending_ids])

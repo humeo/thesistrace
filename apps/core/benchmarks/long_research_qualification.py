@@ -556,7 +556,7 @@ def _admit(
             {
                 "initial_cash_cny": "10000000",
                 "holdings_count": 100,
-                "rebalance_every_sessions": 5,
+                "selection_every_sessions": 5,
             }
         )
     accepted = _request_json(

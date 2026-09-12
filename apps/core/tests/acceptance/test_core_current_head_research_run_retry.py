@@ -987,7 +987,7 @@ def _run_command(
             {
                 "initial_cash_cny": "10000000",
                 "holdings_count": 1,
-                "rebalance_every_sessions": 1,
+                "selection_every_sessions": 1,
             }
         )
     return command
@@ -1092,7 +1092,7 @@ def _reference_result(
         strategy=(
             StrategyRunInput(
                 holdings_count=1,
-                rebalance_interval=1,
+                selection_interval=1,
                 initial_cash_cny="10000000",
                 commission_rate_all_in="0.0003",
                 commission_min_cny="5",
@@ -1140,7 +1140,7 @@ def _reference_result(
     return build_result_payload(
         output,
         research_kind=research_kind,
-        rebalance_interval=(1 if research_kind == "strategy_backtest" else None),
+        selection_interval=(1 if research_kind == "strategy_backtest" else None),
     )
 
 

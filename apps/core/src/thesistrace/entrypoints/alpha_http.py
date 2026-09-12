@@ -27,4 +27,4 @@ def install_alpha_http(
 
     @app.post("/api/alpha/diagnostics", response_model=FormulaDiagnostics)
     def diagnose_alpha_formula(formula: FormulaSource) -> FormulaDiagnostics:
-        return alpha_language.diagnose(formula.source)
+        return alpha_language.diagnose(formula.source, context=formula.context)

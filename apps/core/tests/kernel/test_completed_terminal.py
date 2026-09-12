@@ -19,7 +19,7 @@ def _scenario():
             for index, session in enumerate(SESSIONS)
         }
     )
-    definition = _definition(rebalance_interval=1)
+    definition = _definition(selection_interval=1)
     definition["strategy"]["initial_cash_cny"] = "100000"
     return data, matrix, definition
 
@@ -97,7 +97,7 @@ def test_resume_rejects_invalid_frozen_weights(weights):
         origin_session=SESSIONS[0],
     )
     invalid = copy.deepcopy(prefix.resumable)
-    invalid["pending_signal"]["relative_weights"] = weights
+    invalid["pending_target"]["relative_weights"] = weights
     with pytest.raises(ValueError, match="Pending target"):
         transition_strategy(
             data, matrix, definition, origin_session=SESSIONS[0], continuation=invalid
@@ -115,8 +115,8 @@ def test_resume_rejects_non_equal_weights_under_equal_weight_contract():
         origin_session=SESSIONS[0],
     )
     invalid = copy.deepcopy(prefix.resumable)
-    invalid["pending_signal"]["selected_instrument_ids"] = [A, B]
-    invalid["pending_signal"]["relative_weights"] = {A: 0.7, B: 0.3}
+    invalid["pending_target"]["selected_instrument_ids"] = [A, B]
+    invalid["pending_target"]["relative_weights"] = {A: 0.7, B: 0.3}
     with pytest.raises(ValueError, match="Pending target.*equal"):
         transition_strategy(
             data, matrix, definition, origin_session=SESSIONS[0], continuation=invalid

@@ -55,7 +55,7 @@ def _strategy_command(request_id: str) -> dict[str, object]:
         "research_kind": "strategy_backtest",
         "initial_cash_cny": "10000000",
         "holdings_count": 10,
-        "rebalance_every_sessions": 5,
+        "selection_every_sessions": 5,
     }
 def _tool_error(
     *,
@@ -864,7 +864,7 @@ def test_schema_failures_and_model_strings_cannot_leak_or_bloat_diagnostics() ->
 def test_tool_discovery_uses_official_mcp_envelopes() -> None:
     tools = _discovered_tools(SAFE_SCOPES)
 
-    assert len(tools) == 16
+    assert len(tools) == 17
     assert {
         "cancel_research_batch",
         "cancel_research_run",

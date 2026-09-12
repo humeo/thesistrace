@@ -38,6 +38,17 @@ class InitialCashConstraints(BaseModel):
     required: Literal[True] = True
 
 
+class ExposureAuthoringConstraints(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    context: Literal["exposure"] = "exposure"
+    mode: Literal["constant_expression"] = "constant_expression"
+    default_expression: Literal["1"] = "1"
+    minimum: Literal[0] = 0
+    maximum: Literal[1] = 1
+    data_series_allowed: Literal[False] = False
+
+
 class ResearchAuthoringConstraints(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -46,7 +57,9 @@ class ResearchAuthoringConstraints(BaseModel):
     neutralizations: tuple[ResearchNeutralization, ...]
     initial_cash_cny: InitialCashConstraints
     holdings_count: IntegerRange
-    rebalance_every_sessions: IntegerRange
+    selection_every_sessions: IntegerRange
     batch_items: IntegerRange
     batch_kinds: tuple[ResearchBatchKind, ...]
+    exposure: ExposureAuthoringConstraints
+    weighting: tuple[Literal["equal_weight"], ...]
     formula: FormulaAuthoringConstraints

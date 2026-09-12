@@ -22,9 +22,16 @@ from thesistrace.entrypoints.schema import initialize_core
 
 @pytest.mark.skipif(not core_environment_is_configured(), reason="isolated runtime required")
 @pytest.mark.parametrize(
-    "formula", ["close", "if_else(close > 0 and not (close == 0), close, -close)"]
+    "formula,exposure,terminal_nav",
+    [
+        ("close", "1", "99969.31"),
+        ("if_else(close > 0 and not (close == 0), close, -close)", "7 / 10", "99978.3"),
+        ("close", "0", "100000"),
+    ]
 )
-def test_one_session_cash_account_publishes_and_tracks_its_first_entry(tmp_path: Path, formula):
+def test_fixed_exposure_publishes_and_tracks_its_first_entry(
+    tmp_path: Path, formula, exposure, terminal_nav,
+):
     settings = replace(
         CoreSettings.from_environment(),
         data_mount=tmp_path / "data",
@@ -42,25 +49,69 @@ def test_one_session_cash_account_publishes_and_tracks_its_first_entry(tmp_path:
     )
     _publish_head(settings, sessions=sessions, expected_manifest=None, operation_id="one-day")
     with TestClient(create_app(settings)) as client:
-        accepted = client.post(
-            "/api/research-runs",
-            json={
-                **_run_command("one-day", start_date=sessions[0], end_date=sessions[0]),
-                "initial_cash_cny": "100000",
-                "formula": formula,
-            },
+        command = {
+            **_run_command("one-day", start_date=sessions[0], end_date=sessions[0]),
+            "initial_cash_cny": "100000", "formula": formula, "exposure_expression": exposure,
+            "selection_every_sessions": 5,
+        }
+        spec = {
+            key: value for key, value in command.items()
+            if key not in {"request_id", "folder_id", "name"}
+        }
+        runtime = client.app.state.core_runtime
+
+        def persistent_counts():
+            with runtime.database.transaction() as transaction:
+                return transaction.execute(
+                    "SELECT (SELECT count(*) FROM research_runs.runs) AS runs, "
+                    "(SELECT count(*) FROM data.generation_pins) AS pins"
+                ).fetchone()
+
+        before = persistent_counts()
+        diagnosis = client.post("/api/research/diagnostics", json=spec)
+        assert diagnosis.status_code == 200, diagnosis.text
+        assert diagnosis.json() == {"valid": True, "issues": []}
+        rejected = client.post(
+            "/api/research/diagnostics", json={**spec, "exposure_expression": "1.1"},
         )
+        assert rejected.status_code == 200, rejected.text
+        assert rejected.json()["valid"] is False
+        assert rejected.json()["issues"][0]["field"] == "exposure_expression"
+        assert persistent_counts() == before
+        if exposure == "7 / 10":
+            import anyio
+            from test_core_research_agent_mcp_runs import _mcp_client
+
+            async def native_diagnosis():
+                async with _mcp_client(settings, tmp_path / "exposure-mcp.stderr.log") as agent:
+                    result = await agent.call_tool("diagnose_research_spec", {"spec": spec})
+                    assert result.is_error is False, result
+                    assert result.structured_content == {"valid": True, "issues": []}
+                    local = await agent.call_tool("diagnose_alpha_formula", {
+                        "source": exposure, "context": "exposure",
+                    })
+                    assert local.is_error is False, local
+                    assert local.structured_content["valid"] is True
+
+            anyio.run(native_diagnosis)
+            assert persistent_counts() == before
+        accepted = client.post("/api/research-runs", json=command)
         assert accepted.status_code == 202, accepted.text
         run_id = accepted.json()["id"]
         worker = _run_worker_once(settings, "research")
         assert worker.returncode == 0, worker.stdout + worker.stderr
         detail = client.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "succeeded", detail
+        assert detail["input"]["selection_every_sessions"] == 5
+        assert detail["input"]["exposure_expression"] == exposure
         result = detail["result"]
         account = result["terminal_strategy_state"]
+        assert account["target_exposure"] == (0.7 if exposure == "7 / 10" else float(exposure))
+        assert account["pending_target"]["exposure"] == account["target_exposure"]
+        assert account["target_selection"]["selected_instrument_ids"]
         assert account["positions"] == []
         assert Decimal(account["net_nav"]) == Decimal("100000")
-        assert account["pending_signal"]["signal_session"] == sessions[0]
+        assert account["pending_target"]["signal_session"] == sessions[0]
         assert result["strategy"]["summary"]["entry_session"] is None
         assert result["strategy"]["comparison"] == {
             "status": "unavailable",
@@ -79,8 +130,14 @@ def test_one_session_cash_account_publishes_and_tracks_its_first_entry(tmp_path:
         assert worker.returncode == 0, worker.stdout + worker.stderr
         tracked = client.get(f"/api/daily-tracks/{track_id}").json()
         assert tracked["strategy_session"] == sessions[-1], tracked
+        assert tracked["strategy"]["comparison"]["status"] == "available"
         assert tracked["strategy"]["comparison"]["entry"]["session"] == sessions[1]
-        assert Decimal(tracked["strategy"]["observations"][-1]["net_nav"]) == Decimal("99969.31")
+        if exposure == "0":
+            assert tracked["observation"]["holdings"] == []
+            metrics = tracked["strategy"]["comparison"]["metrics"]
+            assert metrics["net_strategy_cumulative_return"] == 0
+            assert metrics["benchmark_cumulative_return"] == 0
+        assert Decimal(tracked["strategy"]["observations"][-1]["net_nav"]) == Decimal(terminal_nav)
 
 
 @pytest.mark.skipif(not core_environment_is_configured(), reason="isolated runtime required")

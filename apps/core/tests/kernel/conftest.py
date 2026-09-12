@@ -32,7 +32,8 @@ def accepted_calculation_case() -> dict[str, object]:
         "universe": "top300",
         "strategy": {
             "holdings_count": 10,
-            "rebalance_interval": 5,
+            "selection_interval": 5,
+            "exposure_expression": {"kind": "number", "value": 1},
             "initial_cash_cny": "10000000",
         },
         "costs": {
@@ -118,7 +119,7 @@ def accepted_kernel_run(
             research_kind="strategy_backtest",
             strategy=StrategyRunInput(
                 holdings_count=int(strategy["holdings_count"]),
-                rebalance_interval=int(strategy["rebalance_interval"]),
+                selection_interval=int(strategy["selection_interval"]),
                 initial_cash_cny=str(strategy["initial_cash_cny"]),
                 commission_rate_all_in=str(costs["commission_rate_all_in"]),
                 commission_min_cny=str(costs["commission_min_cny"]),

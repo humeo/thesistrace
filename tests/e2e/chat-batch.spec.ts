@@ -77,7 +77,7 @@ test(`Chat Batch ${mode} preserves ordered child Results independently of its Se
       await expect(row).toContainText(value === null ? "Unavailable" : value.toFixed(4));
     } else {
       expect(run.input.holdings_count).toBe(ordinal === 0 ? 10 : 20);
-      expect(run.input.rebalance_every_sessions).toBe(5);
+      expect(run.input.selection_every_sessions).toBe(5);
       const value = run.result.strategy?.summary.metrics.sharpe;
       expect(value).not.toBeUndefined();
       await expect(row).toContainText(value === null ? "Unavailable" : value!.toFixed(4));
@@ -187,7 +187,7 @@ async function batch(page: Page, id: string): Promise<Batch> {
 
 type ChildRun = Readonly<{
   id: string; status: string;
-  input: { formula: string; holdings_count?: number; rebalance_every_sessions?: number };
+  input: { formula: string; holdings_count?: number; selection_every_sessions?: number };
   result: {
     factor: { horizons: Record<string, { summary: { rank_ic: { mean: number | null } } }> };
     strategy?: { summary: { metrics: { sharpe: number | null } } };

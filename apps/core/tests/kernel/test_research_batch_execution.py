@@ -162,9 +162,11 @@ def _batch_request(
             strategy={
                 "kind": FIXED_STRATEGY_KIND,
                 "holdings_count": holdings,
-                "rebalance_every_sessions": rebalance,
+                "selection_every_sessions": rebalance,
                 "initial_cash_cny": "10000000",
                 "execution": FIXED_EXECUTION,
+                "exposure_source": "1",
+                "exposure_expression": {"kind": "number", "value": 1},
             }
             if strategy
             else None,

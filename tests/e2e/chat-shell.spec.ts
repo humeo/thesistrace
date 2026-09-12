@@ -1412,7 +1412,7 @@ test("the same Chat entry runs and explains a real Strategy Backtest", async ({
       formula: "rank(-abs(pct_change(close, 1)))",
       holdings_count: 10,
       neutralization: "none",
-      rebalance_every_sessions: 5,
+      selection_every_sessions: 5,
       research_kind: "strategy_backtest",
       universe: "top1000",
     },

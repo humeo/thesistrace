@@ -23,8 +23,10 @@ from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
 from thesistrace.daily_track.models import DailyTrackSummary
 from thesistrace.data.models import FinancialResearchReadiness
 from thesistrace.research_kernel.common_observations import CommonInputObservation
+from thesistrace.research_kernel.exposure import constant_exposure
 from thesistrace.research_kernel.factor_evidence import FactorDailyObservation
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
+from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
 from thesistrace.research_run.result_schema import FactorPeriodStatistic, StrategyMetrics
 
 
@@ -68,8 +70,8 @@ ResearchHypothesis = Annotated[str, Field(strict=True, max_length=1024)]
 Formula = Annotated[str, Field(strict=True, max_length=MAX_FORMULA_LENGTH)]
 MIN_HOLDINGS_COUNT = 1
 MAX_HOLDINGS_COUNT = 100
-MIN_REBALANCE_INTERVAL = 1
-MAX_REBALANCE_INTERVAL = 20
+MIN_SELECTION_INTERVAL = 1
+MAX_SELECTION_INTERVAL = 20
 def _normalize_initial_cash(value: str) -> str:
     amount = Decimal(value)
     if amount <= 0 or amount > MAX_INITIAL_CASH_CNY:
@@ -95,9 +97,9 @@ HoldingsCount = Annotated[
     int,
     Field(strict=True, ge=MIN_HOLDINGS_COUNT, le=MAX_HOLDINGS_COUNT),
 ]
-RebalanceInterval = Annotated[
+SelectionInterval = Annotated[
     int,
-    Field(strict=True, ge=MIN_REBALANCE_INTERVAL, le=MAX_REBALANCE_INTERVAL),
+    Field(strict=True, ge=MIN_SELECTION_INTERVAL, le=MAX_SELECTION_INTERVAL),
 ]
 type ResearchKind = Literal["factor_evaluation", "strategy_backtest"]
 type ResearchRunStatus = Literal[
@@ -181,18 +183,47 @@ def _natural_date(value: object) -> date:
 NaturalDate = Annotated[date, BeforeValidator(_natural_date)]
 
 
-class _ResearchRunAdmissionBase(BaseModel):
+class _ResearchSpecBase(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    request_id: RequestId
-    folder_id: FolderId
-    name: ResearchName | None = None
     formula: Formula
     hypothesis: ResearchHypothesis | None = None
     start_date: NaturalDate
     end_date: NaturalDate
     universe: ResearchUniverse
     neutralization: ResearchNeutralization
+
+    @model_validator(mode="after")
+    def validate_research_period(self) -> _ResearchSpecBase:
+        if self.start_date > self.end_date:
+            raise ValueError("Research end date must not precede start date")
+        return self
+
+
+class FactorEvaluationSpec(_ResearchSpecBase):
+    research_kind: Literal["factor_evaluation"]
+
+
+class StrategyBacktestSpec(_ResearchSpecBase):
+    research_kind: Literal["strategy_backtest"]
+    initial_cash_cny: InitialCash
+    holdings_count: HoldingsCount
+    selection_every_sessions: SelectionInterval
+    exposure_expression: Formula = "1"
+
+
+type ResearchSpec = Annotated[
+    FactorEvaluationSpec | StrategyBacktestSpec,
+    Field(discriminator="research_kind"),
+]
+
+
+class _ResearchRunSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    request_id: RequestId
+    folder_id: FolderId
+    name: ResearchName | None = None
 
     @field_validator("name")
     @classmethod
@@ -202,22 +233,13 @@ class _ResearchRunAdmissionBase(BaseModel):
         normalized = value.strip()
         return normalized or None
 
-    @model_validator(mode="after")
-    def validate_research_period(self) -> _ResearchRunAdmissionBase:
-        if self.start_date > self.end_date:
-            raise ValueError("Research end date must not precede start date")
-        return self
+
+class FactorEvaluationAdmissionCommand(FactorEvaluationSpec, _ResearchRunSubmission):
+    pass
 
 
-class FactorEvaluationAdmissionCommand(_ResearchRunAdmissionBase):
-    research_kind: Literal["factor_evaluation"]
-
-
-class StrategyBacktestAdmissionCommand(_ResearchRunAdmissionBase):
-    research_kind: Literal["strategy_backtest"]
-    initial_cash_cny: InitialCash
-    holdings_count: HoldingsCount
-    rebalance_every_sessions: RebalanceInterval
+class StrategyBacktestAdmissionCommand(StrategyBacktestSpec, _ResearchRunSubmission):
+    pass
 
 
 type ResearchRunAdmissionCommand = Annotated[
@@ -235,6 +257,13 @@ class ResearchRunAdmissionIssue(BaseModel):
     severity: Literal["error"] = "error"
     range: SourceRange | None = None
     details: DiagnosticDetails | None = None
+
+
+class ResearchSpecDiagnostics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    valid: bool
+    issues: list[ResearchRunAdmissionIssue]
 
 
 class ResearchRunAdmissionRejection(BaseModel):
@@ -352,7 +381,16 @@ class ImmutableRunInput(BaseModel):
         ):
             raise ValueError("Strategy Backtest immutable input requires Strategy values")
         if self.strategy is not None:
-            TypeAdapter(InitialCash).validate_python(self.strategy.get("initial_cash_cny"))
+            if set(self.strategy) != {
+                "kind", "holdings_count", "selection_every_sessions", "initial_cash_cny",
+                "execution", "exposure_source", "exposure_expression",
+            }:
+                raise ValueError("Frozen Strategy input does not match the current contract")
+            TypeAdapter(InitialCash).validate_python(self.strategy["initial_cash_cny"])
+            TypeAdapter(HoldingsCount).validate_python(self.strategy["holdings_count"])
+            TypeAdapter(SelectionInterval).validate_python(self.strategy["selection_every_sessions"])
+            TypeAdapter(Formula).validate_python(self.strategy["exposure_source"])
+            constant_exposure(self.strategy["exposure_expression"])
         return self
 
     def canonical_value(self) -> dict[str, object]:
@@ -461,7 +499,10 @@ class ResearchRunAuthorableInput(BaseModel):
         default=None, exclude_if=lambda value: value is None,
     )
     holdings_count: int | None = Field(default=None, exclude_if=lambda value: value is None)
-    rebalance_every_sessions: int | None = Field(
+    exposure_expression: Formula | None = Field(
+        default=None, exclude_if=lambda value: value is None,
+    )
+    selection_every_sessions: int | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
@@ -469,7 +510,8 @@ class ResearchRunAuthorableInput(BaseModel):
     @model_validator(mode="after")
     def validate_research_kind_contract(self) -> ResearchRunAuthorableInput:
         strategy_values = (
-            self.initial_cash_cny, self.holdings_count, self.rebalance_every_sessions,
+            self.initial_cash_cny, self.holdings_count, self.selection_every_sessions,
+            self.exposure_expression,
         )
         if self.research_kind == "factor_evaluation" and any(
             value is not None for value in strategy_values
@@ -601,24 +643,13 @@ class TerminalStrategyPosition(BaseModel):
     last_adjusted_price: str
 
 
-class TerminalRebalancePhase(BaseModel):
+class TerminalSelectionPhase(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     origin_session: str
     report_session_count: int
-    rebalance_interval: int
+    selection_interval: int
     completed_intervals: int
-
-
-class TerminalPendingSignal(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    signal_session: str
-    execution: Literal["next_research_session_open"]
-    selected_instrument_ids: list[str]
-    relative_weights: dict[str, float]
-    signal_checksum: str
-    contract_checksum: str
 
 
 class TerminalStrategyStateView(BaseModel):
@@ -633,8 +664,10 @@ class TerminalStrategyStateView(BaseModel):
     net_nav: str
     cumulative_transaction_cost: str
     positions: list[TerminalStrategyPosition]
-    rebalance_phase: TerminalRebalancePhase
-    pending_signal: TerminalPendingSignal | None
+    selection_phase: TerminalSelectionPhase
+    target_selection: TargetSelection
+    target_exposure: float = Field(ge=0, le=1, allow_inf_nan=False)
+    pending_target: PendingTarget | None
 
 
 class _ResultProvenanceBase(BaseModel):
@@ -878,8 +911,10 @@ class TerminalStrategyStateResultSection(BaseModel):
     gross_nav: str
     net_nav: str
     cumulative_transaction_cost: str
-    rebalance_phase: TerminalRebalancePhase
-    pending_signal: TerminalPendingSignal | None
+    selection_phase: TerminalSelectionPhase
+    target_selection: TargetSelection
+    target_exposure: float = Field(ge=0, le=1, allow_inf_nan=False)
+    pending_target: PendingTarget | None
 
 
 class TerminalPositionsResultSection(BaseModel):

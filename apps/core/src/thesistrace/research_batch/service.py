@@ -3743,7 +3743,8 @@ def _child_commands(
                 hypothesis=command.alpha.hypothesis,
                 initial_cash_cny=item.initial_cash_cny,
                 holdings_count=item.holdings_count,
-                rebalance_every_sessions=item.rebalance_every_sessions,
+                selection_every_sessions=item.selection_every_sessions,
+                exposure_expression=item.exposure_expression,
                 **common,
             ),
         )
@@ -3800,9 +3801,12 @@ def _validate_duplicate_computation(
             seen[identity] = item.item_key
         return
     assert isinstance(command, StrategySweepBatchAdmissionCommand)
-    seen_strategy: dict[tuple[str, int, int], str] = {}
+    seen_strategy: dict[tuple[str, int, int, str], str] = {}
     for item in command.strategies:
-        identity = (item.initial_cash_cny, item.holdings_count, item.rebalance_every_sessions)
+        identity = (
+            item.initial_cash_cny, item.holdings_count,
+            item.selection_every_sessions, item.exposure_expression,
+        )
         conflicting = seen_strategy.get(identity)
         if conflicting is not None:
             raise ResearchBatchAdmissionRejected(

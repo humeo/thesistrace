@@ -44,7 +44,7 @@ def test_strategy_run_does_not_require_future_labels(
     assert "factor_evaluation" not in artifacts
     assert artifacts["strategy_backtest"] == accepted_calculation_case["strategy_backtest"]
     payload = build_result_payload(
-        result, research_kind="strategy_backtest", rebalance_interval=5,
+        result, research_kind="strategy_backtest", selection_interval=5,
     )
     assert "factor_summary" not in payload
 
@@ -83,7 +83,7 @@ def test_strategy_ledger_is_transient_and_rejected_from_product_state(
     result = build_result_payload(
         accepted_kernel_run,
         research_kind="strategy_backtest",
-        rebalance_interval=5,
+        selection_interval=5,
     )
     assert set(result) == {
         "strategy_summary",
@@ -163,7 +163,7 @@ def test_kernel_run_input_rejects_string_alpha_expression(
             research_kind="strategy_backtest",
             strategy=StrategyRunInput(
                 holdings_count=int(strategy["holdings_count"]),
-                rebalance_interval=int(strategy["rebalance_interval"]),
+                selection_interval=int(strategy["selection_interval"]),
                 initial_cash_cny=str(strategy["initial_cash_cny"]),
                 commission_rate_all_in=str(costs["commission_rate_all_in"]),
                 commission_min_cny=str(costs["commission_min_cny"]),
@@ -223,7 +223,7 @@ def _run_input(
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
             holdings_count=int(strategy["holdings_count"]),
-            rebalance_interval=int(strategy["rebalance_interval"]),
+            selection_interval=int(strategy["selection_interval"]),
             initial_cash_cny=str(strategy["initial_cash_cny"]),
             commission_rate_all_in=str(costs["commission_rate_all_in"]),
             commission_min_cny=str(costs["commission_min_cny"]),

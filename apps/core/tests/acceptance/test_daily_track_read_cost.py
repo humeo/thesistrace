@@ -98,8 +98,8 @@ def test_daily_track_read_cost_is_bounded_at_1000_advances(
             account["session"] = day
             account["last_daily_observation"]["session"] = day
             account["metric_state"]["last_session"] = day
-            account["pending_signal"] = None
-            account["rebalance_phase"]["report_session_count"] = index + 1
+            account["pending_target"] = None
+            account["selection_phase"]["report_session_count"] = index + 1
             provenance = dict(
                 stored["current_checkpoint_provenance"],
                 boundary_session=day,

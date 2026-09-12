@@ -741,12 +741,12 @@ def _before_restart(
                 {
                     "item_key": "focused",
                     "holdings_count": 1,
-                    "rebalance_every_sessions": 1,
+                    "selection_every_sessions": 1,
                 },
                 {
                     "item_key": "broad",
                     "holdings_count": 2,
-                    "rebalance_every_sessions": 2,
+                    "selection_every_sessions": 2,
                 },
             ],
         },
@@ -794,7 +794,7 @@ def _before_restart(
             "neutralization": "none",
             "research_kind": "strategy_backtest",
             "holdings_count": 1,
-            "rebalance_every_sessions": 1,
+            "selection_every_sessions": 1,
         },
     )
     assert accepted["status"] == "queued"
@@ -843,7 +843,7 @@ def _before_restart(
             "neutralization": "none",
             "research_kind": "strategy_backtest",
             "holdings_count": 1,
-            "rebalance_every_sessions": 1,
+            "selection_every_sessions": 1,
         },
     )
     market_detail = _wait_for_run(
@@ -875,7 +875,7 @@ def _before_restart(
             "neutralization": "none",
             "research_kind": "strategy_backtest",
             "holdings_count": 1,
-            "rebalance_every_sessions": 1,
+            "selection_every_sessions": 1,
         },
     )
     stop_detail = _wait_for_run(
@@ -984,17 +984,17 @@ def _qualify_research_batches(
         {
             "item_key": "baseline",
             "holdings_count": 1,
-            "rebalance_every_sessions": 1,
+            "selection_every_sessions": 1,
         },
         {
             "item_key": "holdings-only",
             "holdings_count": 2,
-            "rebalance_every_sessions": 1,
+            "selection_every_sessions": 1,
         },
         {
             "item_key": "rebalance-only",
             "holdings_count": 1,
-            "rebalance_every_sessions": 5,
+            "selection_every_sessions": 5,
         },
     )
     scope = {
@@ -1095,7 +1095,7 @@ def _qualify_research_batches(
                     "formula": "rank(close)",
                     "research_kind": "strategy_backtest",
                     "holdings_count": item["holdings_count"],
-                    "rebalance_every_sessions": item["rebalance_every_sessions"],
+                    "selection_every_sessions": item["selection_every_sessions"],
                 }
                 accepted = _request_json(
                     api_origin,

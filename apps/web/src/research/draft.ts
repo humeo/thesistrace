@@ -14,7 +14,8 @@ export type ResearchInputs = {
   neutralization: string;
   initialCashCny: string;
   holdingsCount: string;
-  rebalanceEverySessions: string;
+  selectionEverySessions: string;
+  exposureExpression: string;
 };
 
 type PendingResearchRun = {
@@ -35,14 +36,9 @@ type CommonResearchRunAdmissionCommand = {
   neutralization: string;
 };
 
-export type ResearchRunAdmissionCommand = CommonResearchRunAdmissionCommand & ({
-  research_kind: "factor_evaluation";
-} | {
-  research_kind: "strategy_backtest";
-  initial_cash_cny: string;
-  holdings_count: number;
-  rebalance_every_sessions: number;
-});
+export type ResearchRunAdmissionCommand = ResearchSpec & Pick<
+  CommonResearchRunAdmissionCommand, "request_id" | "folder_id" | "name"
+>;
 
 type CommonFrozenResearchAuthorableInput = {
   formula: string;
@@ -59,7 +55,8 @@ export type FrozenResearchAuthorableInput = CommonFrozenResearchAuthorableInput 
   research_kind: "strategy_backtest";
   initial_cash_cny: string;
   holdings_count: number;
-  rebalance_every_sessions: number;
+  selection_every_sessions: number;
+  exposure_expression: string;
 });
 
 export type ResearchDraft = ResearchInputs & {
@@ -85,7 +82,8 @@ export function emptyResearchDraft(): ResearchDraft {
     neutralization: "",
     initialCashCny: "",
     holdingsCount: "",
-    rebalanceEverySessions: "",
+    selectionEverySessions: "",
+    exposureExpression: "1",
     editor: { anchor: 0, head: 0 },
     lastAdmittedBaseline: null,
     pendingAdmission: null,
@@ -145,7 +143,8 @@ export function selectResearchKind(
     researchKind,
     initialCashCny: "",
     holdingsCount: "",
-    rebalanceEverySessions: "",
+    selectionEverySessions: "",
+    exposureExpression: "1",
   } : {
     ...draft,
     researchKind,
@@ -166,33 +165,55 @@ export function beginResearchRun(
     : { requestId: createRequestId(), folderId, inputs };
   return {
     draft: { ...draft, pendingAdmission: pending },
-    command: pending.inputs.researchKind === "factor_evaluation" ? {
+    command: {
+      ...researchSpec(inputs),
       request_id: pending.requestId,
       folder_id: pending.folderId,
-      name: pending.inputs.name.trim() === "" ? null : pending.inputs.name,
-      formula: pending.inputs.formula,
-      hypothesis: pending.inputs.hypothesis.trim() === "" ? null : pending.inputs.hypothesis,
-      start_date: pending.inputs.startDate,
-      end_date: pending.inputs.endDate,
-      universe: pending.inputs.universe,
-      neutralization: pending.inputs.neutralization,
-      research_kind: "factor_evaluation",
-    } : {
-      request_id: pending.requestId,
-      folder_id: pending.folderId,
-      name: pending.inputs.name.trim() === "" ? null : pending.inputs.name,
-      formula: pending.inputs.formula,
-      hypothesis: pending.inputs.hypothesis.trim() === "" ? null : pending.inputs.hypothesis,
-      start_date: pending.inputs.startDate,
-      end_date: pending.inputs.endDate,
-      universe: pending.inputs.universe,
-      neutralization: pending.inputs.neutralization,
-      research_kind: "strategy_backtest",
-      initial_cash_cny: pending.inputs.initialCashCny,
-      holdings_count: Number(pending.inputs.holdingsCount),
-      rebalance_every_sessions: Number(pending.inputs.rebalanceEverySessions),
+      name: inputs.name.trim() === "" ? null : inputs.name,
     },
   };
+}
+
+export type ResearchSpec = Omit<CommonResearchRunAdmissionCommand, "request_id" | "folder_id" | "name"> & (
+  { research_kind: "factor_evaluation" } | {
+    research_kind: "strategy_backtest";
+    initial_cash_cny: string;
+    holdings_count: number;
+    selection_every_sessions: number;
+    exposure_expression: string;
+  }
+);
+
+export function researchSpec(inputs: ResearchInputs): ResearchSpec {
+  const common = {
+    formula: inputs.formula,
+    hypothesis: inputs.hypothesis.trim() === "" ? null : inputs.hypothesis,
+    start_date: inputs.startDate,
+    end_date: inputs.endDate,
+    universe: inputs.universe,
+    neutralization: inputs.neutralization,
+  };
+  return inputs.researchKind === "factor_evaluation" ? {
+    ...common, research_kind: "factor_evaluation",
+  } : {
+    ...common, research_kind: "strategy_backtest",
+    initial_cash_cny: inputs.initialCashCny,
+    holdings_count: Number(inputs.holdingsCount),
+    selection_every_sessions: Number(inputs.selectionEverySessions),
+    exposure_expression: inputs.exposureExpression,
+  };
+}
+
+export function exposurePercentage(source: string): string {
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(source.trim())) return "";
+  const value = Number(source);
+  return Number.isFinite(value) ? String(Number((value * 100).toPrecision(12))) : "";
+}
+
+export function percentageExposureSource(percentage: string): string {
+  if (percentage.trim() === "") return "";
+  const value = Number(percentage);
+  return Number.isFinite(value) ? String(value / 100) : "";
 }
 
 export function acceptPendingResearchRun(
@@ -228,7 +249,7 @@ export function isValidInitialCash(value: string): boolean {
 
 export function isCompleteResearchInputs(inputs: ResearchInputs): boolean {
   const holdingsCount = Number(inputs.holdingsCount);
-  const rebalanceEverySessions = Number(inputs.rebalanceEverySessions);
+  const selectionEverySessions = Number(inputs.selectionEverySessions);
   const commonComplete = inputs.formula.trim() !== "" &&
     Array.from(inputs.hypothesis).length <= MAX_HYPOTHESIS_LENGTH &&
     /^\d{4}-\d{2}-\d{2}$/.test(inputs.startDate) &&
@@ -237,10 +258,11 @@ export function isCompleteResearchInputs(inputs: ResearchInputs): boolean {
     ["top300", "top1000", "top2000", "top3000"].includes(inputs.universe) &&
     ["none", "industry"].includes(inputs.neutralization);
   return commonComplete && (inputs.researchKind === "factor_evaluation" || (
+    inputs.exposureExpression.trim() !== "" &&
     isValidInitialCash(inputs.initialCashCny) &&
     Number.isInteger(holdingsCount) && holdingsCount >= 1 && holdingsCount <= 100 &&
-    Number.isInteger(rebalanceEverySessions) &&
-    rebalanceEverySessions >= 1 && rebalanceEverySessions <= 20
+    Number.isInteger(selectionEverySessions) &&
+    selectionEverySessions >= 1 && selectionEverySessions <= 20
   ));
 }
 
@@ -273,8 +295,9 @@ export function useResearchAsDraft(
     holdingsCount: input.research_kind === "strategy_backtest"
       ? String(input.holdings_count)
       : "",
-    rebalanceEverySessions: input.research_kind === "strategy_backtest"
-      ? String(input.rebalance_every_sessions)
+    exposureExpression: input.research_kind === "strategy_backtest" ? input.exposure_expression : "1",
+    selectionEverySessions: input.research_kind === "strategy_backtest"
+      ? String(input.selection_every_sessions)
       : "",
   };
   if (
@@ -306,7 +329,8 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "researchKind",
     "initialCashCny",
     "holdingsCount",
-    "rebalanceEverySessions",
+    "selectionEverySessions",
+    "exposureExpression",
   ] as const;
   return copiedKeys.some((key) => current[key] !== baseline[key] && current[key] !== next[key]);
 }
@@ -363,13 +387,15 @@ function readInputs(value: unknown): ResearchInputs | null {
     "neutralization",
     "initialCashCny",
     "holdingsCount",
-    "rebalanceEverySessions",
+    "selectionEverySessions",
+    "exposureExpression",
   ] as const;
   if (keys.some((key) => typeof value[key] !== "string")) return null;
   const strings = value as Record<(typeof keys)[number], string>;
   if (
     !["factor_evaluation", "strategy_backtest"].includes(strings.researchKind) ||
     strings.formula.length > MAX_FORMULA_LENGTH ||
+    strings.exposureExpression.length > MAX_FORMULA_LENGTH ||
     keys.some((key) => strings[key].length > MAX_TEXT_LENGTH)
   ) return null;
   return Object.fromEntries(keys.map((key) => [key, strings[key]])) as ResearchInputs;

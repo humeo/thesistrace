@@ -82,7 +82,7 @@ def run_input(data, source, neutralization, holdings=10, rebalance=5):
         neutralization=neutralization,
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
-            holdings_count=holdings, rebalance_interval=rebalance,
+            holdings_count=holdings, selection_interval=rebalance,
             initial_cash_cny="10000000", commission_rate_all_in="0.0003",
             commission_min_cny="5", stamp_duty_sell_rate="0.0005", transfer_fee_rate="0.00001",
         ),

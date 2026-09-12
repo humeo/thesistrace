@@ -100,7 +100,7 @@ def test_actual_initial_cash_publishes_independent_runs_batch_and_track(tmp_path
                     {
                         "item_key": cash,
                         "holdings_count": 1,
-                        "rebalance_every_sessions": 1,
+                        "selection_every_sessions": 1,
                         "initial_cash_cny": cash,
                     }
                     for cash in ("100000", "10000000")

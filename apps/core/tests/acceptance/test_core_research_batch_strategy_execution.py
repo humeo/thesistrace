@@ -568,6 +568,10 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
             "alpha": {"formula": formula, "hypothesis": "shared"},
             "end_date": "2026-08-05",
         }
+        command["strategies"] = [
+            {**item, "initial_cash_cny": "100000", "exposure_expression": exposure}
+            for item, exposure in zip(command["strategies"], ("0", "7 / 10"), strict=True)
+        ]
         batch = client.post("/api/research-batches", json=command).json()
         assert "items" in batch, batch
         child_ids = [str(item["research_run_id"]) for item in batch["items"]]
@@ -603,10 +607,12 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                     **_ordinary_strategy_command(
                         f"ordinary-strategy-{ordinal}",
                         holdings_count=int(item["holdings_count"]),
-                        rebalance_every_sessions=int(item["rebalance_every_sessions"]),
+                        selection_every_sessions=int(item["selection_every_sessions"]),
                         end_date="2026-08-05",
                     ),
                     "formula": formula,
+                    "initial_cash_cny": item["initial_cash_cny"],
+                    "exposure_expression": item["exposure_expression"],
                 },
             ).json()
             for ordinal, item in enumerate(command["strategies"], start=1)
@@ -643,7 +649,17 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                 == (ordinary_stored["result_provenance"]["semantic_versions"])
             )
             assert batch_stored["key_metrics"] == ordinary_stored["key_metrics"]
+            detail = client.get(f"/api/research-runs/{item['research_run_id']}").json()
+            frozen = detail["input"]
+            expected_source = command["strategies"][item["ordinal"] - 1]["exposure_expression"]
+            assert frozen["exposure_expression"] == expected_source
+            assert frozen["initial_cash_cny"] == "100000"
             assert batch_stored["key_metrics"]["annualized_excess_return"] is not None
+            if expected_source == "0":
+                assert batch_stored["key_metrics"]["annualized_excess_return"] < 0
+                comparison = detail["result"]["strategy"]["comparison"]
+                assert comparison["metrics"]["net_strategy_cumulative_return"] == 0
+                assert comparison["metrics"]["benchmark_cumulative_return"] > 0
 
         ordinary_in_batch_folder = client.post(
             "/api/research-runs",
@@ -651,7 +667,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                 **_ordinary_strategy_command(
                     "ordinary-in-batch-folder",
                     holdings_count=1,
-                    rebalance_every_sessions=1,
+                    selection_every_sessions=1,
                 ),
                 "folder_id": BATCH_RESEARCH_FOLDER_ID,
             },
@@ -1454,7 +1470,7 @@ def test_strategy_sweep_isolates_one_strategy_failure_and_keeps_order(
                         "item_key": "later",
                         "initial_cash_cny": "10000000",
                         "holdings_count": 3,
-                        "rebalance_every_sessions": 1,
+                        "selection_every_sessions": 1,
                     },
                 ],
             },
@@ -1534,7 +1550,7 @@ def test_strategy_sweep_one_and_twenty_items_use_the_same_ordered_contract(
                 "item_key": f"strategy-{ordinal}",
                 "initial_cash_cny": "10000000",
                 "holdings_count": ordinal,
-                "rebalance_every_sessions": ordinal,
+                "selection_every_sessions": ordinal,
             }
             for ordinal in range(1, item_count + 1)
         ]
@@ -1599,7 +1615,7 @@ def test_long_strategy_sweep_preserves_ordinary_result_partitions_and_equivalenc
             json=_ordinary_strategy_command(
                 "ordinary-strategy-long-result",
                 holdings_count=1,
-                rebalance_every_sessions=1,
+                selection_every_sessions=1,
                 start_date=sessions[0],
                 end_date=sessions[-1],
             ),
@@ -1692,7 +1708,7 @@ def _assert_strategy_capacity_is_bounded_by_chunk(
                     **_ordinary_strategy_command(
                         "capacity-probe-full",
                         holdings_count=1,
-                        rebalance_every_sessions=1,
+                        selection_every_sessions=1,
                         start_date=sessions[effective_lookback],
                         end_date=sessions[-1],
                         formula=formula,
@@ -1713,7 +1729,7 @@ def _assert_strategy_capacity_is_bounded_by_chunk(
                     **_ordinary_strategy_command(
                         "capacity-probe-short",
                         holdings_count=1,
-                        rebalance_every_sessions=1,
+                        selection_every_sessions=1,
                         start_date=sessions[short_start_index],
                         end_date=sessions[-1],
                         formula=formula,
@@ -1796,7 +1812,7 @@ def _ordinary_strategy_command(
     request_id: str,
     *,
     holdings_count: int,
-    rebalance_every_sessions: int,
+    selection_every_sessions: int,
     start_date: str = "2026-08-03",
     end_date: str = "2026-08-04",
     formula: str = "close",
@@ -1813,7 +1829,7 @@ def _ordinary_strategy_command(
         "research_kind": "strategy_backtest",
         "initial_cash_cny": "10000000",
         "holdings_count": holdings_count,
-        "rebalance_every_sessions": rebalance_every_sessions,
+        "selection_every_sessions": selection_every_sessions,
     }
 
 

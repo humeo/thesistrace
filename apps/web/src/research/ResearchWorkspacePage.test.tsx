@@ -123,7 +123,7 @@ describe("browser Research Draft", () => {
       research_kind: "factor_evaluation",
     });
     expect(begun.command).not.toHaveProperty("holdings_count");
-    expect(begun.command).not.toHaveProperty("rebalance_every_sessions");
+    expect(begun.command).not.toHaveProperty("selection_every_sessions");
   });
 
   it("clears Strategy-only values when Factor Evaluation is selected", () => {
@@ -132,20 +132,20 @@ describe("browser Research Draft", () => {
       researchKind: "strategy_backtest" as const,
       holdingsCount: "25",
       initialCashCny: "100000",
-      rebalanceEverySessions: "5",
+      selectionEverySessions: "5",
     };
 
     expect(selectResearchKind(strategy, "factor_evaluation")).toMatchObject({
       researchKind: "factor_evaluation",
       holdingsCount: "",
       initialCashCny: "",
-      rebalanceEverySessions: "",
+      selectionEverySessions: "",
     });
     expect(selectResearchKind(emptyResearchDraft(), "strategy_backtest")).toMatchObject({
       researchKind: "strategy_backtest",
       holdingsCount: "",
       initialCashCny: "",
-      rebalanceEverySessions: "",
+      selectionEverySessions: "",
     });
   });
 
@@ -165,7 +165,7 @@ describe("browser Research Draft", () => {
       ...incompleteStrategy,
       holdingsCount: "10",
       initialCashCny: "100000",
-      rebalanceEverySessions: "2",
+      selectionEverySessions: "2",
     };
     expect(isCompleteResearchInputs(strategy)).toBe(true);
     const begun = beginResearchRun(strategy, folder.id, () => "strategy-request");
@@ -174,7 +174,8 @@ describe("browser Research Draft", () => {
       research_kind: "strategy_backtest",
       holdings_count: 10,
       initial_cash_cny: "100000",
-      rebalance_every_sessions: 2,
+      selection_every_sessions: 2,
+      exposure_expression: "1",
     });
   });
 
@@ -230,7 +231,8 @@ describe("browser Research Draft", () => {
       research_kind: "strategy_backtest",
       holdings_count: 25,
       initial_cash_cny: "100000",
-      rebalance_every_sessions: 5,
+      selection_every_sessions: 5,
+      exposure_expression: "1",
     }, confirmDiscard);
 
     expect(copied).toBe(true);
@@ -245,7 +247,7 @@ describe("browser Research Draft", () => {
       neutralization: "industry",
       holdingsCount: "25",
       initialCashCny: "100000",
-      rebalanceEverySessions: "5",
+      selectionEverySessions: "5",
       editor: { anchor: 18, head: 18 },
       pendingAdmission: null,
     });
@@ -259,7 +261,7 @@ describe("browser Research Draft", () => {
       researchKind: "strategy_backtest",
       holdingsCount: "25",
       initialCashCny: "100000",
-      rebalanceEverySessions: "5",
+      selectionEverySessions: "5",
     });
 
     expect(useResearchAsDraft(storage, researcherId, folder.id, {
@@ -276,7 +278,7 @@ describe("browser Research Draft", () => {
       formula: "rank(close)",
       holdingsCount: "",
       initialCashCny: "",
-      rebalanceEverySessions: "",
+      selectionEverySessions: "",
       pendingAdmission: null,
     });
   });
@@ -294,7 +296,8 @@ describe("browser Research Draft", () => {
       research_kind: "strategy_backtest",
       holdings_count: 25,
       initial_cash_cny: "100000",
-      rebalance_every_sessions: 5,
+      selection_every_sessions: 5,
+      exposure_expression: "1",
     }, () => true)).toBe(true);
 
     expect(loadResearchDraft(storage, researcherId, "folder_batch_research")).toMatchObject({
@@ -307,7 +310,7 @@ describe("browser Research Draft", () => {
       neutralization: "industry",
       holdingsCount: "25",
       initialCashCny: "100000",
-      rebalanceEverySessions: "5",
+      selectionEverySessions: "5",
       pendingAdmission: null,
     });
   });
@@ -331,7 +334,8 @@ describe("browser Research Draft", () => {
       research_kind: "strategy_backtest",
       holdings_count: 10,
       initial_cash_cny: "100000",
-      rebalance_every_sessions: 2,
+      selection_every_sessions: 2,
+      exposure_expression: "1",
     }, confirmDiscard);
 
     expect(copied).toBe(false);
@@ -351,7 +355,7 @@ describe("browser Research Draft", () => {
       researchKind: "strategy_backtest" as const,
       holdingsCount: "10",
       initialCashCny: "100000",
-      rebalanceEverySessions: "2",
+      selectionEverySessions: "2",
     };
     const first = beginResearchRun(initial, "folder_default", () => "run-request-1");
     const retry = beginResearchRun(first.draft, "folder_default", () => "run-request-2");
@@ -369,7 +373,8 @@ describe("browser Research Draft", () => {
       research_kind: "strategy_backtest",
       holdings_count: 10,
       initial_cash_cny: "100000",
-      rebalance_every_sessions: 2,
+      selection_every_sessions: 2,
+      exposure_expression: "1",
     });
 
     const editedWhilePending = { ...first.draft, formula: "ts_mean(close, 60)" };
@@ -391,7 +396,7 @@ describe("browser Research Draft", () => {
       neutralization: "none",
       holdingsCount: "10",
       initialCashCny: "100000",
-      rebalanceEverySessions: "2",
+      selectionEverySessions: "2",
     };
     const begun = beginResearchRun(initial, folder.id, () => "run-request-1");
     persistResearchDraft(storage, researcherId, folder.id, {
@@ -446,7 +451,7 @@ describe("browser Research Draft", () => {
     expect(hasUnexecutedChanges({ ...emptyResearchDraft(), formula: "close" })).toBe(true);
     const admitted = { ...emptyResearchDraft(), formula: "close" };
     expect(hasUnexecutedChanges({ ...admitted, lastAdmittedBaseline: {
-      researchKind: "factor_evaluation", name: "", formula: "close", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "", initialCashCny: "", holdingsCount: "", rebalanceEverySessions: "",
+      researchKind: "factor_evaluation", name: "", formula: "close", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "", initialCashCny: "", holdingsCount: "", selectionEverySessions: "", exposureExpression: "1",
     } })).toBe(false);
   });
 
@@ -468,7 +473,7 @@ describe("browser Research Draft", () => {
     expect(markup).toContain("Factor Evaluation");
     expect(markup).toContain("Strategy Backtest");
     expect(markup).not.toContain("Holdings count");
-    expect(markup).not.toContain("Rebalance sessions");
+    expect(markup).not.toContain("Selection sessions");
     expect(markup).toContain('aria-label="Open start date calendar"');
     expect(markup).toContain('aria-label="Open end date calendar"');
     expect(markup).toContain('aria-label="Use last 1 year"');
@@ -514,14 +519,14 @@ describe("browser Research Draft", () => {
     );
     expect(markup).toMatch(/<input[^>]*checked=""[^>]*value="strategy_backtest"/);
     expect(markup).toContain("Holdings count");
-    expect(markup).toContain("Rebalance sessions");
+    expect(markup).toContain("Selection sessions");
     expect(markup.match(/required="" step="1" type="number"/g)).toHaveLength(2);
     expect(markup).toMatch(/<input[^>]*id="research-holdings-count"[^>]*max="100"[^>]*min="1"[^>]*required=""[^>]*step="1"[^>]*type="number"/);
-    expect(markup).toMatch(/<input[^>]*id="research-rebalance-sessions"[^>]*max="20"[^>]*min="1"[^>]*required=""[^>]*step="1"[^>]*type="number"/);
+    expect(markup).toMatch(/<input[^>]*id="research-selection-sessions"[^>]*max="20"[^>]*min="1"[^>]*required=""[^>]*step="1"[^>]*type="number"/);
     expect(markup).toContain('aria-label="Decrease number of holdings" disabled=""');
     expect(markup).toContain('aria-label="Increase number of holdings"');
-    expect(markup).toContain('aria-label="Decrease rebalance interval" disabled=""');
-    expect(markup).toContain('aria-label="Increase rebalance interval"');
+    expect(markup).toContain('aria-label="Decrease selection interval" disabled=""');
+    expect(markup).toContain('aria-label="Increase selection interval"');
   });
 
   it("enables Run for one complete retained Draft", () => {
@@ -535,7 +540,7 @@ describe("browser Research Draft", () => {
       neutralization: "none",
       holdingsCount: "10",
       initialCashCny: "100000",
-      rebalanceEverySessions: "2",
+      selectionEverySessions: "2",
     });
 
     const markup = renderToStaticMarkup(
@@ -612,4 +617,40 @@ it.each([
   ["10000000000000000000000000000000001", false],
 ])("validates exact CNY amount %s", (cash, valid) => {
   expect(isValidInitialCash(cash as string)).toBe(valid);
+});
+
+
+it("freezes the single Exposure source and renews pending identity when it changes", () => {
+  const draft = {
+    ...emptyResearchDraft(), researchKind: "strategy_backtest" as const,
+    formula: "close", startDate: "2026-08-03", endDate: "2026-08-05",
+    universe: "top300", neutralization: "none", initialCashCny: "100000",
+    holdingsCount: "10", selectionEverySessions: "5", exposureExpression: "7 / 10",
+  };
+  const first = beginResearchRun(draft, "folder_default", () => "first");
+  expect(first.command).toMatchObject({ exposure_expression: "7 / 10" });
+  const second = beginResearchRun(
+    { ...first.draft, exposureExpression: "0" }, "folder_default", () => "second",
+  );
+  expect(second.command).toMatchObject({ request_id: "second", exposure_expression: "0" });
+  const factor = beginResearchRun(
+    selectResearchKind(second.draft, "factor_evaluation"), "folder_default", () => "factor",
+  );
+  expect(factor.command).not.toHaveProperty("exposure_expression");
+  expect(emptyResearchDraft().exposureExpression).toBe("1");
+});
+
+
+it("restores a frozen Exposure source exactly when reusing a Run as a draft", () => {
+  const storage = new MemoryStorage();
+  expect(useResearchAsDraft(storage, "exposure", "folder_default", {
+    research_kind: "strategy_backtest", formula: "close", hypothesis: null,
+    start_date: "2026-08-03", end_date: "2026-08-05", universe: "top300", neutralization: "none",
+    initial_cash_cny: "100000", holdings_count: 10, selection_every_sessions: 5,
+    exposure_expression: "7 / 10",
+  }, () => false)).toBe(true);
+  const restored = loadResearchDraft(storage, "exposure", "folder_default");
+  expect(restored.exposureExpression).toBe("7 / 10");
+  expect(beginResearchRun(restored, "folder_default", () => "reuse").command)
+    .toMatchObject({ exposure_expression: "7 / 10" });
 });

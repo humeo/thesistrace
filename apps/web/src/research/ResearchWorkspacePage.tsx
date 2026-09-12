@@ -22,6 +22,9 @@ import {
 import {
   beginResearchRun,
   emptyResearchDraft,
+  exposurePercentage,
+  percentageExposureSource,
+  researchSpec,
   finishResearchRun,
   hasUnexecutedChanges,
   isCompleteResearchInputs,
@@ -379,6 +382,13 @@ export function ResearchDraftWorkspace({
   const [diagnosticState, setDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
   const [admissionFeedback, setAdmissionFeedback] = useState<AdmissionFeedback | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [exposureDiagnosticState, setExposureDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
+  const exposureDiagnostics = useRef(createDiagnosticsScheduler(coreFetch, 300, "exposure"));
+  const [specFeedback, setSpecFeedback] = useState<{
+    key: string; checking: boolean; message: string; issues: ResearchRunAdmissionRejection["issues"];
+  } | null>(null);
+  const specController = useRef<AbortController | null>(null);
+  const specKey = JSON.stringify(researchSpec(researchInputs(draft)));
   const diagnostics = useRef(createDiagnosticsScheduler());
   const handledGlobalNew = useRef(false);
   const admissionGeneration = useRef(0);
@@ -387,8 +397,19 @@ export function ResearchDraftWorkspace({
   useEffect(() => {
     diagnostics.current.diagnose(draft.formula, setDiagnosticState);
   }, [draft.formula]);
+  useEffect(() => {
+    exposureDiagnostics.current.diagnose(
+      draft.researchKind === "strategy_backtest" ? draft.exposureExpression : "",
+      setExposureDiagnosticState,
+    );
+  }, [draft.researchKind, draft.exposureExpression]);
+  useEffect(() => {
+    specController.current?.abort();
+  }, [specKey]);
   useEffect(() => () => {
     diagnostics.current.dispose();
+    exposureDiagnostics.current.dispose();
+    specController.current?.abort();
     admissionGeneration.current += 1;
     admissionController.current?.abort();
   }, []);
@@ -421,6 +442,31 @@ export function ResearchDraftWorkspace({
     setDraft(emptyResearchDraft());
     setStorageError(null);
     setAdmissionFeedback(null);
+  }
+
+  async function checkConfiguration(): Promise<void> {
+    if (!isCompleteResearchInputs(researchInputs(draft))) return;
+    specController.current?.abort();
+    const controller = new AbortController();
+    specController.current = controller;
+    const key = specKey;
+    setSpecFeedback({ key, checking: true, message: "Checking configuration…", issues: [] });
+    try {
+      const response = await coreFetch("/api/research/diagnostics", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: key, signal: controller.signal,
+      });
+      if (!response.ok) throw new Error("Configuration check is unavailable. Try again.");
+      const result = await response.json() as { valid: boolean; issues: ResearchRunAdmissionRejection["issues"] };
+      if (controller.signal.aborted) return;
+      setSpecFeedback({
+        key, checking: false, issues: result.issues,
+        message: result.valid ? "Configuration is valid. Data and capacity are checked again when submitted." : "Resolve the configuration issues below.",
+      });
+    } catch {
+      if (controller.signal.aborted) return;
+      setSpecFeedback({ key, checking: false, issues: [], message: "Configuration check is unavailable. Try again." });
+    }
   }
 
   async function runResearch(): Promise<void> {
@@ -619,7 +665,7 @@ export function ResearchDraftWorkspace({
                 />
                 <span>
                   <strong>Strategy Backtest</strong>
-                  <small>Evaluate the factor and its portfolio execution.</small>
+                  <small>Simulate the strategy, trading costs and account returns.</small>
                 </span>
               </label>
             </fieldset>
@@ -666,6 +712,30 @@ export function ResearchDraftWorkspace({
                     ? "Enter 0.01–1,000,000,000 CNY, with up to two decimal places."
                     : "0.01–1,000,000,000 CNY, up to two decimal places."}</small>
                 </label>
+                <label>Fixed exposure (%)
+                  <input
+                    aria-label="Fixed exposure (%)" inputMode="decimal" type="number" min={0} max={100} step="any"
+                    value={exposurePercentage(draft.exposureExpression)}
+                    placeholder="Custom expression"
+                    onChange={(event) => updateDraft((current) => ({ ...current, exposureExpression: percentageExposureSource(event.target.value) }))}
+                  />
+                  <small>Share of account equity invested; remaining equity stays in cash.</small>
+                </label>
+                <label className="research-exposure-expression">Exposure expression
+                  <input
+                    aria-label="Exposure expression" type="text" value={draft.exposureExpression} maxLength={4096}
+                    onChange={(event) => updateDraft((current) => ({ ...current, exposureExpression: event.target.value }))}
+                  />
+                  <small>Constant expression from 0 to 1, for example 0.7 or 7 / 10. Selected stocks use equal weights.</small>
+                </label>
+                {exposureDiagnosticState.kind === "complete" && !exposureDiagnosticState.result.valid ? (
+                  <ul aria-label="Exposure diagnostics" className="formula-diagnostics research-spec-feedback">
+                    {exposureDiagnosticState.result.diagnostics.map((issue) => (
+                      <li key={`${issue.code}-${issue.range.start.offset}`}>{issue.message}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {exposureDiagnosticState.kind === "unavailable" ? <p className="research-spec-feedback">Exposure check is unavailable.</p> : null}
                 <ResearchNumberStepper
                   actionLabel="number of holdings"
                   id="research-holdings-count"
@@ -676,17 +746,30 @@ export function ResearchDraftWorkspace({
                   value={draft.holdingsCount}
                 />
                 <ResearchNumberStepper
-                  actionLabel="rebalance interval"
-                  id="research-rebalance-sessions"
-                  label="Rebalance sessions"
+                  actionLabel="selection interval"
+                  id="research-selection-sessions"
+                  label="Selection sessions"
                   maximum={20}
                   minimum={1}
-                  onChange={(value) => updateDraft((current) => ({ ...current, rebalanceEverySessions: value }))}
-                  value={draft.rebalanceEverySessions}
+                  onChange={(value) => updateDraft((current) => ({ ...current, selectionEverySessions: value }))}
+                  value={draft.selectionEverySessions}
                 />
               </>
             ) : null}
+            {specFeedback?.key === specKey ? (
+              <div className="research-spec-feedback" role="status">
+                <p>{specFeedback.message}</p>
+                {specFeedback.issues.length > 0 ? <ul aria-label="Configuration issues">
+                  {specFeedback.issues.map((issue, index) => <li key={`${issue.field}-${issue.code}-${index}`}><strong>{issue.field}</strong>: {issue.message}</li>)}
+                </ul> : null}
+              </div>
+            ) : null}
             <footer>
+              <button
+                className="button" type="button"
+                disabled={!isCompleteResearchInputs(researchInputs(draft)) || submitting || (specFeedback?.key === specKey && specFeedback.checking)}
+                onClick={() => void checkConfiguration()}
+              >Check configuration</button>
               <p>{isCompleteResearchInputs(researchInputs(draft)) ? "Ready to run." : "Complete the formula and research parameters to start a run."}</p>
               <button
                 className="button button-primary"

@@ -124,6 +124,7 @@ class CompiledAlpha(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     source: str
+    context: FormulaContext = "signal"
     expression: dict[str, object]
     field_ids_by_identifier: dict[str, str]
     result_type: ValueType
@@ -133,7 +134,11 @@ class CompiledAlpha(BaseModel):
     estimated_work: int
 
 
+type FormulaContext = Literal["signal", "exposure"]
+
+
 class FormulaSource(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     source: str
+    context: FormulaContext = "signal"

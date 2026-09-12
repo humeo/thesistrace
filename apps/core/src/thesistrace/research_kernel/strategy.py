@@ -8,6 +8,7 @@ from fractions import Fraction
 from heapq import nsmallest
 from statistics import stdev
 
+from thesistrace.research_kernel.exposure import constant_exposure
 from thesistrace.research_kernel.numeric import (
     ACCOUNTING_CONTEXT,
     MAX_INITIAL_CASH_CNY,
@@ -15,7 +16,7 @@ from thesistrace.research_kernel.numeric import (
     require_finite_decimal,
 )
 from thesistrace.research_kernel.serialization import canonical_json_bytes
-from thesistrace.research_kernel.terminal_state_schema import PendingSignal
+from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
 from thesistrace.research_series import (
     AlignedResearchData,
     ColumnarResearchSeries,
@@ -283,9 +284,10 @@ def _execute_strategy(
     report_calendar = calendar[processing_start:]
     strategy = definition["strategy"]
     holdings_count = int(strategy["holdings_count"])
-    rebalance_interval = int(strategy["rebalance_interval"])
-    if not 1 <= holdings_count <= 100 or not 1 <= rebalance_interval <= 20:
+    selection_interval = int(strategy["selection_interval"])
+    if not 1 <= holdings_count <= 100 or not 1 <= selection_interval <= 20:
         raise StrategyCalculationError("invalid Strategy breadth or schedule")
+    exposure = constant_exposure(strategy["exposure_expression"])
     initial_cash = Decimal(str(strategy["initial_cash_cny"]))
     if (
         not initial_cash.is_finite() or initial_cash <= 0
@@ -316,10 +318,22 @@ def _execute_strategy(
         else {str(item["session"]): item["values"] for item in alpha_matrix["sessions"]}
     )
     contract_checksum = hashlib.sha256(canonical_json_bytes(definition)).hexdigest()
-    pending_signal = None if continuation is None else continuation["pending_signal"]
-    if pending_signal is not None:
-        pending_signal = PendingSignal.model_validate(pending_signal).model_dump(mode="json")
-        if pending_signal["contract_checksum"] != contract_checksum:
+    target_selection = None if continuation is None else continuation["target_selection"]
+    if target_selection is not None:
+        target_selection = TargetSelection.model_validate(target_selection).model_dump(mode="json")
+        if target_selection["contract_checksum"] != contract_checksum:
+            raise StrategyCalculationError("Retained Selection differs from Strategy contract")
+    if continuation is not None and continuation["target_exposure"] != exposure:
+        raise StrategyCalculationError("Continuation Exposure differs from Strategy contract")
+    pending_target = None if continuation is None else continuation["pending_target"]
+    if pending_target is not None:
+        pending_target = PendingTarget.model_validate(pending_target).model_dump(mode="json")
+        if (
+            pending_target["contract_checksum"] != contract_checksum
+            or pending_target["exposure"] != exposure
+            or {key: value for key, value in pending_target.items()
+                if key not in {"execution", "exposure"}} != target_selection
+        ):
             raise StrategyCalculationError("Pending decision differs from Strategy contract")
     if continuation is None:
         positions: dict[str, Position] = {}
@@ -410,13 +424,13 @@ def _execute_strategy(
         signal_index = global_index - 1
         if (
             report_index > 0
-            and (signal_index - origin_index) % rebalance_interval == 0
+            and (signal_index - origin_index) % selection_interval == 0
         ):
             rebalance = True
             signal_session = calendar[signal_index]
-            if pending_signal is None or pending_signal["signal_session"] != signal_session:
+            if pending_target is None or pending_target["signal_session"] != signal_session:
                 raise StrategyCalculationError("Scheduled Open has no frozen decision")
-            candidates = list(pending_signal["selected_instrument_ids"])
+            candidates = list(pending_target["selected_instrument_ids"])
             if ledger is not None:
                 execution_signal = {
                     "session": signal_session,
@@ -430,14 +444,22 @@ def _execute_strategy(
                         "available": 0,
                     }
                 )
-            target_value = money(pre_net_nav / max(1, len(candidates)))
+            target_capital = money(pre_net_nav * Decimal(str(pending_target["exposure"])))
+            target_values = {
+                instrument_id: money(
+                    target_capital * Decimal(str(pending_target["relative_weights"][instrument_id]))
+                )
+                for instrument_id in candidates
+            }
             candidate_set = set(candidates)
             alpha_order = {instrument_id: index for index, instrument_id in enumerate(candidates)}
 
             for instrument_id in sorted(list(positions)):
                 position = positions[instrument_id]
                 current_value = money(position.adjusted_units * marks[instrument_id])
-                desired_value = target_value if instrument_id in candidate_set else Decimal(0)
+                desired_value = (
+                    target_values[instrument_id] if instrument_id in candidate_set else Decimal(0)
+                )
                 if current_value <= desired_value:
                     continue
                 complete = desired_value == 0
@@ -508,7 +530,7 @@ def _execute_strategy(
                     if instrument_id in positions
                     else Decimal(0)
                 )
-                deficit = target_value - current_value
+                deficit = target_values[instrument_id] - current_value
                 if price is None:
                     if deficit <= 0:
                         continue
@@ -659,7 +681,7 @@ def _execute_strategy(
                     "fill_count": len(fills) - event_fill_start,
                     "turnover": turnover,
                     "target_weights": {
-                        instrument_id: float(target_value / pre_net_nav)
+                        instrument_id: float(target_values[instrument_id] / pre_net_nav)
                         for instrument_id in candidates
                     },
                     "actual_weights": {
@@ -730,14 +752,13 @@ def _execute_strategy(
                     "valuation_events": unique_events(valuation_events),
                 }
             )
-        pending_signal = None
-        if report_index % rebalance_interval == 0:
+        pending_target = None
+        if report_index % selection_interval == 0:
             alpha_values = alpha_by_session[session]
             selected = nsmallest(holdings_count, alpha_values, key=_alpha_rank_key)
             selected_ids = [str(item["instrument_id"]) for item in selected]
-            pending_signal = {
+            target_selection = {
                 "signal_session": session,
-                "execution": "next_research_session_open",
                 "selected_instrument_ids": selected_ids,
                 "relative_weights": {
                     instrument_id: 1 / len(selected_ids) for instrument_id in selected_ids
@@ -748,13 +769,20 @@ def _execute_strategy(
                 })).hexdigest(),
                 "contract_checksum": contract_checksum,
             }
+            pending_target = {
+                **target_selection,
+                "execution": "next_research_session_open",
+                "exposure": exposure,
+            }
         if cancellation_check is not None:
             cancellation_check()
 
     positions_payload = _position_payload(positions)
     payload = {
         "alpha_checksum": alpha_matrix["checksum"],
-        "pending_signal": pending_signal,
+        "target_selection": target_selection,
+        "target_exposure": exposure,
+        "pending_target": pending_target,
         "initial_cash_cny": canonical_decimal(initial_cash),
         "daily": daily,
         "positions": positions_payload,
@@ -1492,7 +1520,7 @@ def maximum_drawdown(daily: list[dict[str, object]], net_nav: list[Decimal]) -> 
         (
             index
             for index in range(worst_trough + 1, len(net_nav))
-            if net_nav[index] >= net_nav[worst_peak]
+            if worst_value > 0 and net_nav[index] >= net_nav[worst_peak]
         ),
         None,
     )

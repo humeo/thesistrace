@@ -72,7 +72,8 @@ const STRATEGY_RUN: ResearchRun = {
     research_kind: "strategy_backtest",
     holdings_count: 10,
     initial_cash_cny: "100000",
-    rebalance_every_sessions: 2,
+    selection_every_sessions: 2,
+    exposure_expression: "1",
   },
 };
 
@@ -84,7 +85,8 @@ describe("ResearchRunFacts", () => {
     expect(markup).toContain("<strong>Universe</strong> Top 300");
     expect(markup).toContain("<strong>Neutralization</strong> Industry");
     expect(markup).toContain("<strong>Holdings count</strong> 10");
-    expect(markup).toContain("<strong>Rebalance</strong> Every 2 sessions");
+    expect(markup).toContain("<strong>Exposure expression</strong> <code>1</code>");
+    expect(markup).toContain("<strong>Selection</strong> Every 2 sessions");
   });
 
   it("omits Strategy-only conditions from a Factor Evaluation", () => {
@@ -245,13 +247,13 @@ const TERMINAL_STATE: TerminalStrategyState = {
       last_adjusted_price: "10.01",
     },
   ],
-  rebalance_phase: {
+  selection_phase: {
     origin_session: "2026-08-03",
     report_session_count: 3,
-    rebalance_interval: 1,
+    selection_interval: 1,
     completed_intervals: 2,
   },
-  pending_signal: {
+  pending_target: {
     signal_session: "2026-08-05",
     execution: "next_research_session_open",
   },
@@ -655,7 +657,8 @@ describe("UseAsDraftPanel", () => {
           research_kind: "strategy_backtest",
           holdings_count: 10,
           initial_cash_cny: "100000",
-          rebalance_every_sessions: 2,
+          selection_every_sessions: 2,
+          exposure_expression: "1",
         }}
         confirmDiscard={() => true}
         navigate={() => undefined}

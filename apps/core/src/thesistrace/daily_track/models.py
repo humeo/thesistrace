@@ -17,6 +17,7 @@ from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
 from thesistrace.daily_track.observation_state import TrackingObservationState
 from thesistrace.research_kernel.common_inputs import common_input_references
 from thesistrace.research_kernel.common_observations import CommonInputObservation
+from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 type DailyTrackResultSection = Literal[
@@ -119,8 +120,10 @@ class InitialStrategyState(BaseModel):
     net_nav: str
     cumulative_transaction_cost: str
     positions: list[dict[str, object]]
-    rebalance_phase: dict[str, object]
-    pending_signal: dict[str, object] | None
+    selection_phase: dict[str, object]
+    target_selection: TargetSelection
+    target_exposure: float = Field(ge=0, le=1, allow_inf_nan=False)
+    pending_target: dict[str, object] | None
     last_daily_observation: dict[str, object]
     metric_state: dict[str, object]
 
@@ -314,24 +317,13 @@ class DailyTrackOriginPosition(BaseModel):
     last_adjusted_price: str
 
 
-class DailyTrackOriginRebalancePhase(BaseModel):
+class DailyTrackOriginSelectionPhase(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     origin_session: str
     report_session_count: int
-    rebalance_interval: int
+    selection_interval: int
     completed_intervals: int
-
-
-class DailyTrackOriginPendingSignal(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    signal_session: str
-    execution: Literal["next_research_session_open"]
-    selected_instrument_ids: list[str]
-    relative_weights: dict[str, float]
-    signal_checksum: str
-    contract_checksum: str
 
 
 class DailyTrackOriginAccount(BaseModel):
@@ -344,8 +336,10 @@ class DailyTrackOriginAccount(BaseModel):
     net_nav: str
     cumulative_transaction_cost: str
     positions: list[DailyTrackOriginPosition]
-    rebalance_phase: DailyTrackOriginRebalancePhase
-    pending_signal: DailyTrackOriginPendingSignal | None
+    selection_phase: DailyTrackOriginSelectionPhase
+    target_selection: TargetSelection
+    target_exposure: float = Field(ge=0, le=1, allow_inf_nan=False)
+    pending_target: PendingTarget | None
 
 
 class DailyTrackOriginView(BaseModel):
@@ -552,8 +546,10 @@ class DailyTrackOriginAccountSummary(BaseModel):
     gross_nav: str
     net_nav: str
     cumulative_transaction_cost: str
-    rebalance_phase: DailyTrackOriginRebalancePhase
-    pending_signal: DailyTrackOriginPendingSignal | None
+    selection_phase: DailyTrackOriginSelectionPhase
+    target_selection: TargetSelection
+    target_exposure: float = Field(ge=0, le=1, allow_inf_nan=False)
+    pending_target: PendingTarget | None
 
 
 class DailyTrackOriginResultSection(BaseModel):
@@ -580,7 +576,8 @@ class DailyTrackFrozenResearchInput(BaseModel):
     neutralization: str
     initial_cash_cny: str
     holdings_count: int
-    rebalance_every_sessions: int
+    selection_every_sessions: int
+    exposure_expression: str
 
 
 class DailyTrackProvenanceResultSection(BaseModel):
@@ -668,8 +665,8 @@ class DailyTrackObservation(BaseModel):
     transaction_cost_cny: str
     session_count: int
     holdings: list[DailyTrackHolding]
-    rebalance_interval: int
-    pending_signal_session: str | None
+    selection_interval: int
+    pending_target_session: str | None
     sessions_until_next_signal: int
     returns: list[DailyTrackObservationPoint]
 
@@ -699,7 +696,8 @@ class KernelRunInputSnapshot(BaseModel):
     universe: str
     neutralization: str
     holdings_count: int
-    rebalance_interval: int
+    selection_interval: int
+    exposure_expression: dict[str, object]
     initial_cash_cny: str
     commission_rate_all_in: str
     commission_min_cny: str

@@ -151,11 +151,13 @@ def test_complete_provenance_with_maximum_text_preserves_every_character_under_b
         neutralization="none",
         initial_cash_cny="10000000",
         holdings_count=100,
-        rebalance_every_sessions=20,
+        selection_every_sessions=20,
+        exposure_expression="1 #" + "\x01" * 4093,
     )
     from thesistrace.alpha_language import alpha_language
 
     assert alpha_language.diagnose(inputs["formula"]).valid
+    assert alpha_language.diagnose(inputs["exposure_expression"], context="exposure").valid
     run = ProvenanceResultSection(
         run_id="run_" + "a" * 20,
         research_kind="strategy_backtest",
@@ -182,7 +184,7 @@ def test_complete_provenance_with_maximum_text_preserves_every_character_under_b
             "numeric_execution_contract": "float64",
             "strategy": {
                 "initial_cash_cny": "10000000", "holdings_count": 100,
-                "rebalance_every_sessions": 20,
+                "selection_every_sessions": 20,
             },
             "costs": {
                 "commission_rate_all_in": "0.0003",
@@ -204,8 +206,30 @@ def test_complete_provenance_with_maximum_text_preserves_every_character_under_b
             )
         }
     )
+    import json
+
+    from mcp.types import CallToolResult, JSONRPCResponse, TextContent
+
+    from thesistrace.research_agent.mcp_server import RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+
+    # Complete provenance includes both full expressions; its bound is the wire
+    # response limit, not the 32KiB target used for paginated observation records.
     for result in (run, track):
-        assert len(result.model_dump_json().encode("utf-8")) < 32 * 1024
+        structured = result.model_dump(mode="json")
+        envelope = CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(
+                structured, ensure_ascii=True, separators=(",", ":"), sort_keys=True,
+            ))],
+            structured_content=structured,
+        )
+        response = JSONRPCResponse(
+            jsonrpc="2.0", id="provenance", result=envelope.model_dump(mode="json", by_alias=True),
+        )
+        wire_bytes = len(response.model_dump_json(by_alias=True).encode())
+        assert wire_bytes < RESEARCH_AGENT_MAX_WIRE_RESPONSE_BYTES
+        retained = (result.authoring_input if isinstance(result, ProvenanceResultSection)
+                    else result.frozen_research_input)
+        assert retained.exposure_expression == inputs["exposure_expression"]
     assert (
         run.authoring_input.hypothesis
         == track.frozen_research_input.hypothesis

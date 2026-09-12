@@ -12,13 +12,13 @@ import {
   DailyTrackAnalysisView,
   type DailyTrackAnalysis,
 } from "./DailyTrackAnalysisView";
-import { CurrentHoldings, ObservationSummary, RebalanceSchedule, TrackingReturnChart, type DailyTrackObservation } from "./DailyTrackObservationView";
+import { CurrentHoldings, ObservationSummary, SelectionSchedule, TrackingReturnChart, type DailyTrackObservation } from "./DailyTrackObservationView";
 
 const observation: DailyTrackObservation = {
   session: "2026-08-18", net_asset_value_cny: "1100", cash_cny: "200",
   net_change_cny: "100", net_return: 0.1, maximum_drawdown: 0.025, transaction_cost_cny: "2.75", session_count: 1,
   holdings: [{ instrument_id: "000001.SZ", shares: 100, market_value_cny: "900", weight: 9 / 11 }],
-  rebalance_interval: 5, pending_signal_session: null, sessions_until_next_signal: 4,
+  selection_interval: 5, pending_target_session: null, sessions_until_next_signal: 4,
   returns: [{ session: "2026-08-17", net_return: 0 }, { session: "2026-08-18", net_return: 0.1 }],
 };
 
@@ -45,11 +45,11 @@ describe("Daily observation presentation", () => {
   });
 
   it("keeps stale schedules distinct from available trade instructions", () => {
-    const markup = renderToStaticMarkup(<RebalanceSchedule observation={observation} isBehind isStopped={false} />);
+    const markup = renderToStaticMarkup(<SelectionSchedule observation={observation} isBehind isStopped={false} />);
     expect(markup).toContain("Next signal in 4 trading sessions");
     expect(markup).toContain("Tracking is behind the available data");
     expect(markup).toContain("Buy and sell instructions are not available yet");
-    const stopped = renderToStaticMarkup(<RebalanceSchedule observation={observation} isBehind isStopped />);
+    const stopped = renderToStaticMarkup(<SelectionSchedule observation={observation} isBehind isStopped />);
     expect(stopped).toContain("Tracking stopped");
     expect(stopped).not.toContain("Update the track");
   });
@@ -272,13 +272,13 @@ describe("TrackingOriginView", () => {
         net_nav: "10000995",
         cumulative_transaction_cost: "5",
         positions: [],
-        rebalance_phase: {
+        selection_phase: {
           origin_session: "2026-08-03",
           report_session_count: 3,
-          rebalance_interval: 1,
+          selection_interval: 1,
           completed_intervals: 2,
         },
-        pending_signal: null,
+        pending_target: null,
       },
     };
 
@@ -308,13 +308,13 @@ describe("TrackingOriginView", () => {
         net_nav: "10000995",
         cumulative_transaction_cost: "5",
         positions: [],
-        rebalance_phase: {
+        selection_phase: {
           origin_session: "2026-08-03",
           report_session_count: 3,
-          rebalance_interval: 1,
+          selection_interval: 1,
           completed_intervals: 2,
         },
-        pending_signal: null,
+        pending_target: null,
       },
     };
     const markup = renderToStaticMarkup(<TrackingOriginView origin={origin} />);

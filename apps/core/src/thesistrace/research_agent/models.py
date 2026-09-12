@@ -11,6 +11,7 @@ from thesistrace.alpha_language.models import (
     AlphaBuiltinCatalogEntry,
     AlphaFieldCatalogEntry,
     AlphaIndustryCatalogEntry,
+    FormulaContext,
 )
 from thesistrace.data.models import DataOverview
 from thesistrace.research_authoring.models import ResearchAuthoringConstraints
@@ -24,6 +25,7 @@ from thesistrace.research_run.models import (
     ResearchKind,
     ResearchRunAdmissionIssue,
     ResearchRunStatus,
+    ResearchSpec,
 )
 
 
@@ -141,6 +143,13 @@ class DiagnoseAlphaFormulaInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     source: FormulaSource
+    context: FormulaContext = "signal"
+
+
+class DiagnoseResearchSpecInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    spec: ResearchSpec
 
 
 class AlphaCatalogView(BaseModel):

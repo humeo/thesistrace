@@ -200,14 +200,14 @@ function batchCommand(context: JsonRecord, mode: BatchMode, requestId: string): 
   if (mode === "factor_evaluation") return { ...common, factors: FACTORS.map((factor) => ({ ...factor })) };
   const focused = boundedConstraintDefault(context, "holdings_count", 10);
   const broad = boundedConstraintDefault(context, "holdings_count", 20);
-  const rebalance = boundedConstraintDefault(context, "rebalance_every_sessions", 5);
-  if (focused === null || broad === null || focused === broad || rebalance === null) return null;
+  const selectionInterval = boundedConstraintDefault(context, "selection_every_sessions", 5);
+  if (focused === null || broad === null || focused === broad || selectionInterval === null) return null;
   return {
     ...common,
-    alpha: { formula: "rank(close)", hypothesis: "Compare portfolio breadth while holding the price-rank Alpha and rebalance schedule fixed." },
+    alpha: { formula: "rank(close)", hypothesis: "Compare portfolio breadth while holding the price-rank Alpha and selection schedule fixed." },
     strategies: [
-      { item_key: "focused-holdings", name: "Focused holdings", initial_cash_cny: "100000", holdings_count: focused, rebalance_every_sessions: rebalance },
-      { item_key: "broad-holdings", name: "Broad holdings", initial_cash_cny: "100000", holdings_count: broad, rebalance_every_sessions: rebalance },
+      { item_key: "focused-holdings", name: "Focused holdings", initial_cash_cny: "100000", holdings_count: focused, selection_every_sessions: selectionInterval },
+      { item_key: "broad-holdings", name: "Broad holdings", initial_cash_cny: "100000", holdings_count: broad, selection_every_sessions: selectionInterval },
     ],
   };
 }

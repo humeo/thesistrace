@@ -17,6 +17,7 @@ export type DiagnosticState =
 export function createDiagnosticsScheduler(
   request: typeof fetch = coreFetch,
   delayMilliseconds = 300,
+  context: "signal" | "exposure" = "signal",
 ) {
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -38,7 +39,7 @@ export function createDiagnosticsScheduler(
         const response = await request("/api/alpha/diagnostics", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ source }),
+          body: JSON.stringify({ source, context }),
           signal: controller.signal,
         });
         if (!response.ok) throw new Error("Formula diagnostics unavailable");

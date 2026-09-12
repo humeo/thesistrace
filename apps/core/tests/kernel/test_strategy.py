@@ -126,7 +126,8 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
         "universe": "top300",
         "strategy": {
             "holdings_count": 10,
-            "rebalance_interval": 5,
+            "selection_interval": 5,
+            "exposure_expression": {"kind": "number", "value": 1},
             "initial_cash_cny": "10000000",
         },
         "costs": {
@@ -251,7 +252,8 @@ def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() ->
         "universe": "top300",
         "strategy": {
             "holdings_count": 10,
-            "rebalance_interval": 1,
+            "selection_interval": 1,
+            "exposure_expression": {"kind": "number", "value": 1},
             "initial_cash_cny": "10000000",
         },
         "costs": {
@@ -291,7 +293,7 @@ def test_suspended_holding_carries_valuation() -> None:
         compiled_alpha=validate_alpha(CLOSE_ADJUSTED, field_bindings=FIELD_BINDINGS),
         neutralization="none",
     )
-    definition = strategy_definition(rebalance_interval=20)
+    definition = strategy_definition(selection_interval=20)
     report_start = 0
     suspended_session = canonical["research_calendar"][report_start + 2]
     held_candidate = matrix["sessions"][report_start]["values"][-1]["instrument_id"]
@@ -340,7 +342,7 @@ def test_suspended_new_target_creates_one_logical_rejection_without_children() -
     result = run_strategy(
         aligned_market_data(canonical),
         matrix,
-        strategy_definition(rebalance_interval=20),
+        strategy_definition(selection_interval=20),
         origin_session=str(canonical["research_calendar"][report_start]),
     )
 
@@ -379,7 +381,7 @@ def test_data_unavailable_new_target_is_rejected_without_execution() -> None:
     result = run_strategy(
         aligned_market_data(canonical),
         matrix,
-        strategy_definition(rebalance_interval=20),
+        strategy_definition(selection_interval=20),
         origin_session=str(canonical["research_calendar"][0]),
     )
 
@@ -399,7 +401,7 @@ def test_terminal_delisting_writes_off_without_an_order_or_cost() -> None:
         compiled_alpha=validate_alpha(CLOSE_ADJUSTED, field_bindings=FIELD_BINDINGS),
         neutralization="none",
     )
-    definition = strategy_definition(rebalance_interval=20)
+    definition = strategy_definition(selection_interval=20)
     report_start = 0
     delist_session = canonical["research_calendar"][report_start + 2]
     held_candidate = matrix["sessions"][report_start]["values"][-1]["instrument_id"]
@@ -454,12 +456,13 @@ def test_drawdown_is_a_non_negative_loss_with_recovery() -> None:
     assert all(point["drawdown"] >= 0 for point in drawdown["series"])
 
 
-def strategy_definition(*, rebalance_interval: int) -> dict[str, object]:
+def strategy_definition(*, selection_interval: int) -> dict[str, object]:
     return {
         "universe": "top300",
         "strategy": {
             "holdings_count": 10,
-            "rebalance_interval": rebalance_interval,
+            "selection_interval": selection_interval,
+            "exposure_expression": {"kind": "number", "value": 1},
             "initial_cash_cny": "10000000",
         },
         "costs": {

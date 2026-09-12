@@ -30,7 +30,7 @@ def test_research_run_admission_is_discriminated_by_research_kind() -> None:
             "research_kind": "strategy_backtest",
             "initial_cash_cny": "100000",
             "holdings_count": 10,
-            "rebalance_every_sessions": 5,
+            "selection_every_sessions": 5,
         }
     )
 
@@ -49,7 +49,7 @@ def test_research_run_admission_is_discriminated_by_research_kind() -> None:
     }
     assert strategy.research_kind == "strategy_backtest"
     assert strategy.holdings_count == 10
-    assert strategy.rebalance_every_sessions == 5
+    assert strategy.selection_every_sessions == 5
 
     with pytest.raises(ValidationError):
         adapter.validate_python(
@@ -58,7 +58,7 @@ def test_research_run_admission_is_discriminated_by_research_kind() -> None:
                 "research_kind": "factor_evaluation",
                 "initial_cash_cny": "100000",
             "holdings_count": 10,
-                "rebalance_every_sessions": 5,
+                "selection_every_sessions": 5,
             }
         )
     with pytest.raises(ValidationError):

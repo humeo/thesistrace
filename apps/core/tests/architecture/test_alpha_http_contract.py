@@ -153,3 +153,22 @@ def test_conditional_signal_diagnostics_share_backend_type_rules() -> None:
             assert response.status_code == 200
             assert response.json() == alpha_language.diagnose(source).model_dump(mode="json")
             assert response.json()["valid"] is valid
+
+
+def test_expression_diagnostic_context_selects_the_required_root_type() -> None:
+    with _client() as client:
+        for context, source, valid in (
+            ("exposure", "7 / 10", True),
+            ("signal", "7 / 10", False),
+            ("exposure", "close", False),
+            ("signal", "close", True),
+            ("exposure", "1.1", False),
+        ):
+            response = client.post(
+                "/api/alpha/diagnostics", json={"source": source, "context": context},
+            )
+            assert response.status_code == 200
+            assert response.json()["valid"] is valid
+        assert client.post(
+            "/api/alpha/diagnostics", json={"source": "close", "context": "unknown"},
+        ).status_code == 422

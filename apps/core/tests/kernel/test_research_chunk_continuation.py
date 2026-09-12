@@ -316,7 +316,7 @@ def _strategy_input(
     factor_input: RunInput,
     *,
     holdings_count: int,
-    rebalance_interval: int,
+    selection_interval: int,
 ) -> RunInput:
     return RunInput(
         research_data=factor_input.research_data_snapshot(),
@@ -328,7 +328,7 @@ def _strategy_input(
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
             holdings_count=holdings_count,
-            rebalance_interval=rebalance_interval,
+            selection_interval=selection_interval,
             initial_cash_cny="10000000",
             commission_rate_all_in="0.0003",
             commission_min_cny="5",
@@ -342,7 +342,7 @@ def _strategy_input(
 
 def test_strategy_chunk_has_no_factor_work_or_state(monkeypatch: pytest.MonkeyPatch) -> None:
     fixture, factor_input = _minimal_alpha_factor_case()
-    strategy_input = _strategy_input(factor_input, holdings_count=5, rebalance_interval=5)
+    strategy_input = _strategy_input(factor_input, holdings_count=5, selection_interval=5)
 
     def forbidden_labels(*args, **kwargs):
         raise AssertionError("Strategy chunks must not evaluate future returns")
@@ -442,7 +442,7 @@ def test_alpha_factor_chunk_outcome_is_bound_immutable_and_chunk_equivalent() ->
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
             holdings_count=5,
-            rebalance_interval=5,
+            selection_interval=5,
             initial_cash_cny="10000000",
             commission_rate_all_in="0.0003",
             commission_min_cny="5",
@@ -639,7 +639,7 @@ def test_alpha_factor_outcome_hot_path_has_a_performance_regression_gate(
 
 def test_one_alpha_factor_outcome_produces_independent_strategy_outcomes() -> None:
     fixture, factor_input = _minimal_alpha_factor_case()
-    factor_input = _strategy_input(factor_input, holdings_count=5, rebalance_interval=5)
+    factor_input = _strategy_input(factor_input, holdings_count=5, selection_interval=5)
     binding = _alpha_factor_binding(factor_input)
     shared = execute_alpha_factor_chunk(
         run_input=factor_input,
@@ -657,7 +657,7 @@ def test_one_alpha_factor_outcome_produces_independent_strategy_outcomes() -> No
         run_input=_strategy_input(
             factor_input,
             holdings_count=3,
-            rebalance_interval=2,
+            selection_interval=2,
         ),
         binding=binding,
         alpha_factor_outcome=shared,
@@ -670,7 +670,7 @@ def test_one_alpha_factor_outcome_produces_independent_strategy_outcomes() -> No
         run_input=_strategy_input(
             factor_input,
             holdings_count=12,
-            rebalance_interval=7,
+            selection_interval=7,
         ),
         binding=binding,
         alpha_factor_outcome=shared,
@@ -694,7 +694,7 @@ def test_one_alpha_factor_outcome_produces_independent_strategy_outcomes() -> No
             _strategy_input(
                 factor_input,
                 holdings_count=12,
-                rebalance_interval=7,
+                selection_interval=7,
             )
         )
 
@@ -839,7 +839,7 @@ def test_private_alpha_factor_artifact_is_streamed_complete_and_batch_scoped(
 
 def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None:
     fixture, factor_input = _minimal_alpha_factor_case()
-    factor_input = _strategy_input(factor_input, holdings_count=5, rebalance_interval=5)
+    factor_input = _strategy_input(factor_input, holdings_count=5, selection_interval=5)
     binding = _alpha_factor_binding(factor_input)
     shared = execute_alpha_factor_chunk(
         run_input=factor_input,
@@ -854,7 +854,7 @@ def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None
     strategy_input = _strategy_input(
         factor_input,
         holdings_count=5,
-        rebalance_interval=5,
+        selection_interval=5,
     )
 
     with pytest.raises(ValueError, match="binding does not match expected contract"):
@@ -940,7 +940,7 @@ def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None
             run_input=_strategy_input(
                 factor_input,
                 holdings_count=12,
-                rebalance_interval=7,
+                selection_interval=7,
             ),
             binding=binding,
             alpha_factor_outcome=shared,
@@ -996,7 +996,7 @@ def test_repeated_strategy_consumption_has_a_shared_stage_performance_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture, factor_input = _minimal_alpha_factor_case(session_count=80)
-    factor_input = _strategy_input(factor_input, holdings_count=5, rebalance_interval=5)
+    factor_input = _strategy_input(factor_input, holdings_count=5, selection_interval=5)
     binding = _alpha_factor_binding(factor_input)
     shared = execute_alpha_factor_chunk(
         run_input=factor_input,
@@ -1060,12 +1060,12 @@ def test_repeated_strategy_consumption_has_a_shared_stage_performance_gate(
         record_strategy_serialization,
     )
     started = perf_counter()
-    for holdings_count, rebalance_interval in ((3, 2), (12, 7)):
+    for holdings_count, selection_interval in ((3, 2), (12, 7)):
         execute_strategy_chunk_from_alpha_factor_outcome(
             run_input=_strategy_input(
                 factor_input,
                 holdings_count=holdings_count,
-                rebalance_interval=rebalance_interval,
+                selection_interval=selection_interval,
             ),
             binding=binding,
             alpha_factor_outcome=shared,
@@ -1083,7 +1083,10 @@ def test_repeated_strategy_consumption_has_a_shared_stage_performance_gate(
     "rank(ts_mean(close, 5)) + rank(revenue)",
     "if_else(close > ts_mean(close, 5) and not (revenue < 1000), rank(close), rank(revenue))",
 ])
-def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(formula) -> None:
+@pytest.mark.parametrize("exposure", [0.0, 0.7, 1.0])
+def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
+    formula, exposure,
+) -> None:
     sessions = tuple(f"s{index:02d}" for index in range(80))
     instruments = tuple(f"equity:{index:03d}.SH" for index in range(40))
     profiles = {
@@ -1162,8 +1165,9 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
             holdings_count=5,
-            rebalance_interval=5,
-            initial_cash_cny="10000000",
+            selection_interval=5,
+            initial_cash_cny="100000",
+            exposure_expression_json=canonical_json_bytes({"kind": "number", "value": exposure}),
             commission_rate_all_in="0.0003",
             commission_min_cny="5",
             stamp_duty_sell_rate="0.0005",
@@ -1187,7 +1191,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
     legacy = build_result_payload(
         run_columnar_chunk(run_input, cancellation_check=lambda: None),
         research_kind="strategy_backtest",
-        rebalance_interval=5,
+        selection_interval=5,
     )
     for boundaries in (
         ((20, 40), (40, 60), (60, 80)),

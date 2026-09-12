@@ -265,7 +265,7 @@ def _run_command(
         "research_kind": "strategy_backtest",
         "initial_cash_cny": "10000000",
         "holdings_count": 1,
-        "rebalance_every_sessions": 1,
+        "selection_every_sessions": 1,
     }
 
 

@@ -391,7 +391,7 @@ test("uses the same entry for a model-owned Strategy Backtest", async () => {
     .toMatchObject({
       initial_cash_cny: "100000",
       holdings_count: 10,
-      rebalance_every_sessions: 5,
+      selection_every_sessions: 5,
       research_kind: "strategy_backtest",
     });
   expect(trajectory.calls.at(-1)).toMatchObject({
@@ -979,7 +979,7 @@ function researchContext(): Record<string, unknown> {
     authoring_constraints: {
       holdings_count: { maximum: 100, minimum: 1 },
       neutralizations: ["none", "industry"],
-      rebalance_every_sessions: { maximum: 20, minimum: 1 },
+      selection_every_sessions: { maximum: 20, minimum: 1 },
       universes: ["top300", "top1000"],
     },
     data_overview: {

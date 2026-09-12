@@ -17,12 +17,12 @@ from thesistrace.research_run.models import (
     HoldingsCount,
     InitialCash,
     NaturalDate,
-    RebalanceInterval,
     RequestId,
     ResearchHypothesis,
     ResearchName,
     ResearchNeutralization,
     ResearchUniverse,
+    SelectionInterval,
 )
 
 
@@ -100,7 +100,8 @@ class StrategySweepItem(BaseModel):
     name: ResearchName | None = None
     initial_cash_cny: InitialCash
     holdings_count: HoldingsCount
-    rebalance_every_sessions: RebalanceInterval
+    selection_every_sessions: SelectionInterval
+    exposure_expression: Formula = "1"
 
 
 class StrategySweepBatchAdmissionCommand(_ResearchBatchAdmissionBase):

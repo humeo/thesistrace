@@ -19,7 +19,7 @@ export function batchFixtureOutput(
       authoring_constraints: {
         holdings_count: { maximum: 100, minimum: 1 },
         neutralizations: ["none", "industry"],
-        rebalance_every_sessions: { maximum: 20, minimum: 1 },
+        selection_every_sessions: { maximum: 20, minimum: 1 },
         universes: ["top300", "top1000"],
       },
       data_overview: { market_coverage: { end: "2024-01-31", start: "2024-01-02" } },

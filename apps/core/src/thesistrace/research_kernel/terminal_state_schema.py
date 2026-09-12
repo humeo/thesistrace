@@ -28,23 +28,22 @@ class TerminalPosition(TerminalStateModel):
     last_adjusted_price: StrictStr
 
 
-class RebalancePhase(TerminalStateModel):
+class SelectionPhase(TerminalStateModel):
     origin_session: StrictStr
     report_session_count: StrictInt
-    rebalance_interval: StrictInt
+    selection_interval: StrictInt
     completed_intervals: StrictInt
 
 
-class PendingSignal(TerminalStateModel):
+class TargetSelection(TerminalStateModel):
     signal_session: StrictStr
-    execution: Literal["next_research_session_open"]
     selected_instrument_ids: list[StrictStr]
     relative_weights: dict[StrictStr, StrictFloat]
     signal_checksum: StrictStr
     contract_checksum: StrictStr
 
     @model_validator(mode="after")
-    def target_weights_match_selection(self) -> PendingSignal:
+    def target_weights_match_selection(self) -> TargetSelection:
         selected = self.selected_instrument_ids
         weights = self.relative_weights
         if len(selected) != len(set(selected)) or set(weights) != set(selected):
@@ -58,6 +57,17 @@ class PendingSignal(TerminalStateModel):
             for weight in weights.values()
         ):
             raise ValueError("Pending target weights must follow the equal-weight contract")
+        return self
+
+
+class PendingTarget(TargetSelection):
+    execution: Literal["next_research_session_open"]
+    exposure: StrictFloat
+
+    @model_validator(mode="after")
+    def exposure_is_valid(self) -> PendingTarget:
+        if not isfinite(self.exposure) or not 0 <= self.exposure <= 1:
+            raise ValueError("Pending Exposure must be finite and between zero and one")
         return self
 
 
@@ -160,19 +170,31 @@ class TerminalStrategyStateValue(TerminalStateModel):
     net_nav: StrictStr
     cumulative_transaction_cost: StrictStr
     positions: list[TerminalPosition]
-    rebalance_phase: RebalancePhase
-    pending_signal: PendingSignal | None
+    selection_phase: SelectionPhase
+    target_selection: TargetSelection
+    target_exposure: StrictFloat
+    pending_target: PendingTarget | None
     last_daily_observation: LastDailyObservation
     metric_state: StrategyMetricState
 
     @model_validator(mode="after")
     def continuation_sessions_must_match_boundary(self) -> TerminalStrategyStateValue:
+        if not isfinite(self.target_exposure) or not 0 <= self.target_exposure <= 1:
+            raise ValueError("Target Exposure must be finite and between zero and one")
+        if self.target_selection.signal_session > self.session:
+            raise ValueError("Retained Selection cannot come from the future")
+        if self.pending_target is not None and (
+            self.pending_target.exposure != self.target_exposure
+            or self.pending_target.model_dump(exclude={"execution", "exposure"})
+            != self.target_selection.model_dump()
+        ):
+            raise ValueError("Pending target differs from the decided Selection and Exposure")
         if (
             self.last_daily_observation.session != self.session
             or self.metric_state.last_session != self.session
             or (
-                self.pending_signal is not None
-                and self.pending_signal.signal_session != self.session
+                self.pending_target is not None
+                and self.pending_target.signal_session != self.session
             )
         ):
             raise ValueError("Terminal continuation sessions do not match")

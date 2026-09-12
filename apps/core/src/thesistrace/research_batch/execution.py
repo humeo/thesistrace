@@ -37,6 +37,7 @@ from thesistrace.research_kernel.research_chunks import (
     execute_research_chunk,
     execute_strategy_chunk_from_alpha_factor_outcome,
 )
+from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_run.execution import (
     ResearchExecutionCalculationFailed,
     ResearchExecutionError,
@@ -1417,7 +1418,7 @@ def _continuation_instrument_ids(
     positions = strategy.get("positions")
     if not isinstance(positions, list):
         raise ResearchExecutionInputInvalid("Research Strategy continuation is invalid")
-    pending = strategy["pending_signal"]
+    pending = strategy["pending_target"]
     pending_ids = pending["selected_instrument_ids"] if pending is not None else []
     return frozenset([
         *(str(position["instrument_id"]) for position in positions), *pending_ids,
@@ -1481,8 +1482,9 @@ def _strategy_run_input(
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
             holdings_count=int(strategy["holdings_count"]),
-            rebalance_interval=int(strategy["rebalance_every_sessions"]),
+            selection_interval=int(strategy["selection_every_sessions"]),
             initial_cash_cny=str(strategy["initial_cash_cny"]),
+            exposure_expression_json=canonical_json_bytes(strategy["exposure_expression"]),
             commission_rate_all_in=str(costs["commission_rate_all_in"]),
             commission_min_cny=str(costs["commission_min_cny"]),
             stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),

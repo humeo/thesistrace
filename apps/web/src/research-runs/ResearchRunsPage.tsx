@@ -81,13 +81,13 @@ export type TerminalStrategyState = {
     adjusted_units: string;
     last_adjusted_price: string;
   }>;
-  rebalance_phase: {
+  selection_phase: {
     origin_session: string;
     report_session_count: number;
-    rebalance_interval: number;
+    selection_interval: number;
     completed_intervals: number;
   };
-  pending_signal: {
+  pending_target: {
     signal_session: string;
     execution: "next_research_session_open";
   } | null;
@@ -917,9 +917,11 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
             <>
               <p><strong>Initial cash (CNY)</strong> {input.initial_cash_cny}</p>
               <p><strong>Holdings count</strong> {input.holdings_count}</p>
+              <p><strong>Exposure expression</strong> <code>{input.exposure_expression}</code></p>
+              <p><strong>Weighting</strong> Equal weight</p>
               <p>
-                <strong>Rebalance</strong>{" "}
-                {rebalanceLabel(input.rebalance_every_sessions)}
+                <strong>Selection</strong>{" "}
+                {selectionLabel(input.selection_every_sessions)}
               </p>
             </>
           ) : null}
@@ -1566,6 +1568,6 @@ function neutralizationLabel(
   return value === "none" ? "None" : "Industry";
 }
 
-function rebalanceLabel(sessions: number): string {
+function selectionLabel(sessions: number): string {
   return sessions === 1 ? "Every session" : `Every ${sessions} sessions`;
 }

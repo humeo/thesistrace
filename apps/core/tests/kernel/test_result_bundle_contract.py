@@ -430,13 +430,19 @@ def _legal_result() -> dict[str, object]:
             "net_nav": "1e+7",
             "cumulative_transaction_cost": "0",
             "positions": [],
-            "rebalance_phase": {
+            "selection_phase": {
                 "origin_session": "2024-01-02",
                 "report_session_count": 1,
-                "rebalance_interval": 1,
+                "selection_interval": 1,
                 "completed_intervals": 0,
             },
-            "pending_signal": None,
+            "target_selection": {
+                "signal_session": "2024-01-02", "selected_instrument_ids": [],
+                "relative_weights": {},
+                "signal_checksum": "signal", "contract_checksum": "contract",
+            },
+            "target_exposure": 1.0,
+            "pending_target": None,
             "last_daily_observation": last_daily,
             "metric_state": metric_state,
         },

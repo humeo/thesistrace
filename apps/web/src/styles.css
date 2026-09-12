@@ -2227,6 +2227,8 @@ select { color-scheme: dark; }
 }
 .run-configuration-grid fieldset legend { grid-column: 1 / -1; margin-bottom: 7px; color: var(--ink-muted); font-size: 12px; font-weight: 500; }
 .run-configuration-grid fieldset > p { display: none; }
+.run-configuration-grid .research-exposure-expression,
+.run-configuration-grid .research-spec-feedback { grid-column: 1 / -1; }
 .run-configuration-grid .research-kind-control { grid-column: 1 / -1; gap: 8px; }
 .research-kind-option {
   display: grid;

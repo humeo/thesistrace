@@ -13,6 +13,7 @@ from thesistrace.alpha_language.models import (
     AlphaAuthoringCatalog,
     AlphaBuiltinCatalogEntry,
     AlphaFieldCatalogEntry,
+    FormulaContext,
     FormulaDiagnostics,
 )
 from thesistrace.daily_track import (
@@ -51,6 +52,7 @@ from thesistrace.research_agent.models import (
     CancelResearchRunInput,
     CancelResearchRunOutcome,
     DiagnoseAlphaFormulaInput,
+    DiagnoseResearchSpecInput,
     FormulaSource,
     GetAlphaCatalogInput,
     GetDailyTrackInput,
@@ -124,7 +126,7 @@ from thesistrace.research_run import (
     ResearchRunTrackingUnavailable,
     StartTrackingCommand,
 )
-from thesistrace.research_run.models import ResearchKind
+from thesistrace.research_run.models import ResearchKind, ResearchSpec, ResearchSpecDiagnostics
 
 
 class DataOverviewReader(Protocol):
@@ -138,7 +140,9 @@ class ResearchFolderReader(Protocol):
 class AlphaAuthoringLanguage(Protocol):
     def catalog(self, *, financial_authoring_ready: bool = True) -> AlphaAuthoringCatalog: ...
 
-    def diagnose(self, source: str) -> FormulaDiagnostics: ...
+    def diagnose(
+        self, source: str, *, context: FormulaContext = "signal",
+    ) -> FormulaDiagnostics: ...
 
 
 class ResearchAuthoringReader(Protocol):
@@ -146,6 +150,8 @@ class ResearchAuthoringReader(Protocol):
 
 
 class ResearchRunReader(Protocol):
+    def diagnose_research_spec(self, spec: ResearchSpec) -> ResearchSpecDiagnostics: ...
+
     def list(
         self,
         researcher_id: UUID,
@@ -349,6 +355,7 @@ RESEARCH_AGENT_TOOL_NAMES = frozenset(
         "get_research_context",
         "get_alpha_catalog",
         "diagnose_alpha_formula",
+        "diagnose_research_spec",
         "list_research_runs",
         "get_research_run",
         "get_research_run_result",
@@ -416,12 +423,28 @@ class ResearchAgentCapabilityRegistry:
             ),
             ResearchAgentCapability(
                 name="diagnose_alpha_formula",
-                description="Diagnose an Alpha Formula without creating a ResearchRun.",
+                description=(
+                    "Diagnose an expression in signal or exposure context without creating a Run. "
+                    "Exposure currently accepts only finite constant expressions from 0 to 1."
+                ),
                 required_scope=ResearchAgentScope.RESEARCH_READ,
                 input_model=DiagnoseAlphaFormulaInput,
                 output_model=FormulaDiagnostics,
                 annotations=READ_ONLY_TOOL_ANNOTATIONS,
                 handler=self.diagnose_alpha_formula,
+            ),
+            ResearchAgentCapability(
+                name="diagnose_research_spec",
+                description=(
+                    "Validate a complete research configuration against current data, expression "
+                    "dependencies and execution budget. Creates no Run or data reservation. "
+                    "Submission revalidates independently; this is not a capacity reservation."
+                ),
+                required_scope=ResearchAgentScope.RESEARCH_READ,
+                input_model=DiagnoseResearchSpecInput,
+                output_model=ResearchSpecDiagnostics,
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                handler=self.diagnose_research_spec,
             ),
             ResearchAgentCapability(
                 name="list_research_runs",
@@ -855,10 +878,20 @@ class ResearchAgentCapabilityRegistry:
         except InvalidPageCursor as error:
             raise ResearchAgentExpectedFailure(ResearchAgentErrorCode.INVALID_INPUT) from error
 
-    def diagnose_alpha_formula(self, source: FormulaSource) -> FormulaDiagnostics:
+    def diagnose_alpha_formula(
+        self, source: FormulaSource, context: FormulaContext = "signal",
+    ) -> FormulaDiagnostics:
         self._require(ResearchAgentScope.RESEARCH_READ)
-        request = DiagnoseAlphaFormulaInput(source=source)
-        return self._modules.alpha_language.diagnose(request.source)
+        request = DiagnoseAlphaFormulaInput(source=source, context=context)
+        return self._modules.alpha_language.diagnose(request.source, context=request.context)
+
+    def diagnose_research_spec(self, spec: ResearchSpec) -> ResearchSpecDiagnostics:
+        self._require(ResearchAgentScope.RESEARCH_READ)
+        request = DiagnoseResearchSpecInput(spec=spec)
+        try:
+            return self._modules.research_runs.diagnose_research_spec(request.spec)
+        except ResearchRunTemporarilyUnavailable as error:
+            raise _temporarily_unavailable() from error
 
     def list_research_runs(
         self,

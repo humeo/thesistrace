@@ -31,7 +31,7 @@ test.each([
   if (mode === "strategy_sweep") {
     expect(items.map((item) => item.initial_cash_cny)).toEqual(["100000", "100000"]);
     expect(items.map((item) => item.holdings_count)).toEqual([10, 20]);
-    expect(items.map((item) => item.rebalance_every_sessions)).toEqual([5, 5]);
+    expect(items.map((item) => item.selection_every_sessions)).toEqual([5, 5]);
   } else expect(items.map((item) => item.formula)).toEqual(["rank(close)", "-rank(close)"]);
   expect(output.calls.filter((call) => call.name === "get_research_run_result").map((call) => call.input.run_id)).toEqual(CHILD_IDS);
   const surfaces = output.calls.filter((call) => call.name === "render_a2ui");

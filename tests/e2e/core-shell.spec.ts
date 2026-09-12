@@ -334,7 +334,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(factorEvaluation).toBeChecked();
     await expect(strategyBacktest).not.toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveCount(0);
-    await expect(page.getByLabel("Rebalance sessions")).toHaveCount(0);
+    await expect(page.getByLabel("Selection sessions")).toHaveCount(0);
     await page.setViewportSize({ width: 480, height: 900 });
     await expect(factorEvaluation).toBeVisible();
     await expect(strategyBacktest).toBeVisible();
@@ -367,11 +367,11 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(initialCash).toHaveAttribute("aria-invalid", "false");
     const holdingsCount = page.getByLabel("Holdings count");
     await expect(holdingsCount).toBeVisible();
-    await expect(page.getByLabel("Rebalance sessions")).toBeVisible();
+    await expect(page.getByLabel("Selection sessions")).toBeVisible();
     const decreaseHoldings = page.getByRole("button", { name: "Decrease number of holdings" });
     const increaseHoldings = page.getByRole("button", { name: "Increase number of holdings" });
-    const decreaseRebalance = page.getByRole("button", { name: "Decrease rebalance interval" });
-    const increaseRebalance = page.getByRole("button", { name: "Increase rebalance interval" });
+    const decreaseRebalance = page.getByRole("button", { name: "Decrease selection interval" });
+    const increaseRebalance = page.getByRole("button", { name: "Increase selection interval" });
     await expect(decreaseHoldings).toBeDisabled();
     for (const stepperButton of [decreaseHoldings, increaseHoldings, decreaseRebalance, increaseRebalance]) {
       await expect(stepperButton).toBeVisible();
@@ -422,17 +422,17 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.getByLabel("Neutralization").selectOption("none");
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
-    await page.getByLabel("Rebalance sessions").fill("2");
+    await page.getByLabel("Selection sessions").fill("2");
 
     await strategyBacktest.focus();
     await page.keyboard.press("ArrowLeft");
     await expect(factorEvaluation).toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveCount(0);
-    await expect(page.getByLabel("Rebalance sessions")).toHaveCount(0);
+    await expect(page.getByLabel("Selection sessions")).toHaveCount(0);
     await strategyBacktest.check();
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
-    await page.getByLabel("Rebalance sessions").fill("2");
+    await page.getByLabel("Selection sessions").fill("2");
 
     const browserKeys = await page.evaluate(() => Object.keys(localStorage));
     expect(browserKeys).toEqual([defaultDraftKey]);
@@ -446,7 +446,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
       neutralization: "none",
       researchKind: "strategy_backtest",
       holdingsCount: "10",
-      rebalanceEverySessions: "2",
+      selectionEverySessions: "2",
       lastAdmittedBaseline: null,
     });
 
@@ -697,7 +697,7 @@ test("Financial catalog composes one Formula and starts its DailyTrack", { tag: 
     await page.getByRole("tab", { name: /Holdings/ }).click();
     await expect(page.getByRole("table")).toContainText("Symbol");
     await page.getByRole("tab", { name: "Rebalance", exact: true }).click();
-    await expect(page.getByRole("region", { name: "Rebalance schedule" })).toContainText("Buy and sell instructions are not available yet");
+    await expect(page.getByRole("region", { name: "Selection schedule" })).toContainText("Buy and sell instructions are not available yet");
     await page.getByRole("tab", { name: "Performance", exact: true }).click();
     await page.getByRole("button", { name: "Full strategy", exact: true }).click();
     const dailyTrackChart = page.getByLabel(comparisonChartLabel, { exact: true });
@@ -915,13 +915,13 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
           item_key: "browser-focused",
           name: "Browser Batch Focused",
           holdings_count: 10,
-          rebalance_every_sessions: 1,
+          selection_every_sessions: 1,
         },
         {
           item_key: "browser-broad",
           name: "Browser Batch Broad",
           holdings_count: 20,
-          rebalance_every_sessions: 2,
+          selection_every_sessions: 2,
         },
       ],
     },
@@ -975,7 +975,7 @@ test("Batch children keep ordinary Research organization, reuse, tracking, and d
   await expect(page.locator(".cm-content")).toHaveText("close");
   await expect(page.getByLabel("Notes")).toHaveValue("Browser Batch hypothesis");
   await expect(page.getByLabel("Holdings count")).toHaveValue("10");
-  await expect(page.getByLabel("Rebalance sessions")).toHaveValue("1");
+  await expect(page.getByLabel("Selection sessions")).toHaveValue("1");
   expect((await page.request.get(`/api/research-runs/${firstRunId}`)).status()).toBe(200);
 
   await page.goto(`/research-runs/${firstRunId}`);
@@ -1071,7 +1071,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
       research_kind: "strategy_backtest",
       initial_cash_cny: "100000",
       holdings_count: 10,
-      rebalance_every_sessions: 2,
+      selection_every_sessions: 2,
     });
     await expect(
       page.locator(".research-workspace-header").getByRole("button", { name: "New research" }),
@@ -1182,7 +1182,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page).toHaveURL(/\/research$/);
     await expect(page.getByRole("radio", { name: /Factor Evaluation/ })).toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveCount(0);
-    await expect(page.getByLabel("Rebalance sessions")).toHaveCount(0);
+    await expect(page.getByLabel("Selection sessions")).toHaveCount(0);
     const factorHistoryAfterReuse = await page.request.get("/api/research-runs");
     expect(((await factorHistoryAfterReuse.json()).items as unknown[])).toHaveLength(factorHistoryCount);
 
@@ -1191,7 +1191,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.getByLabel("Research name").fill("Converted Factor Strategy");
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
-    await page.getByLabel("Rebalance sessions").fill("2");
+    await page.getByLabel("Selection sessions").fill("2");
     await page.getByRole("button", { name: "Run research", exact: true }).click();
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const convertedRunId = page.url().split("/").at(-1);
@@ -1211,7 +1211,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
       input: {
         research_kind: "strategy_backtest",
         holdings_count: 10,
-        rebalance_every_sessions: 2,
+        selection_every_sessions: 2,
       },
     });
     await page.goto(`/research-runs/${customRunId}`);
@@ -1318,7 +1318,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByLabel("Neutralization")).toHaveValue("none");
     await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveValue("10");
-    await expect(page.getByLabel("Rebalance sessions")).toHaveValue("2");
+    await expect(page.getByLabel("Selection sessions")).toHaveValue("2");
     const historyAfterCopy = await page.request.get("/api/research-runs");
     expect(((await historyAfterCopy.json()).items as unknown[])).toHaveLength(historyCountBeforeReuse);
 
@@ -1462,10 +1462,10 @@ async function fillCompleteDraft(
   if (researchKind === "strategy_backtest") {
     await page.getByLabel("Initial cash (CNY)").fill("100000");
     await page.getByLabel("Holdings count").fill("10");
-    await page.getByLabel("Rebalance sessions").fill("2");
+    await page.getByLabel("Selection sessions").fill("2");
   } else {
     await expect(page.getByLabel("Holdings count")).toHaveCount(0);
-    await expect(page.getByLabel("Rebalance sessions")).toHaveCount(0);
+    await expect(page.getByLabel("Selection sessions")).toHaveCount(0);
   }
   await expect(page.getByRole("button", { name: "Run research", exact: true })).toBeEnabled();
 }

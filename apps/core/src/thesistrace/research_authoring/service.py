@@ -6,6 +6,7 @@ from thesistrace.alpha_language.language import (
     MAX_FORMULA_LENGTH,
 )
 from thesistrace.research_authoring.models import (
+    ExposureAuthoringConstraints,
     FormulaAuthoringConstraints,
     InitialCashConstraints,
     IntegerRange,
@@ -19,9 +20,9 @@ from thesistrace.research_batch.models import (
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
 from thesistrace.research_run.models import (
     MAX_HOLDINGS_COUNT,
-    MAX_REBALANCE_INTERVAL,
+    MAX_SELECTION_INTERVAL,
     MIN_HOLDINGS_COUNT,
-    MIN_REBALANCE_INTERVAL,
+    MIN_SELECTION_INTERVAL,
     RESEARCH_KINDS,
     RESEARCH_NEUTRALIZATIONS,
     RESEARCH_UNIVERSES,
@@ -36,15 +37,17 @@ CURRENT_RESEARCH_AUTHORING_CONSTRAINTS = ResearchAuthoringConstraints(
         minimum=MIN_HOLDINGS_COUNT,
         maximum=MAX_HOLDINGS_COUNT,
     ),
-    rebalance_every_sessions=IntegerRange(
-        minimum=MIN_REBALANCE_INTERVAL,
-        maximum=MAX_REBALANCE_INTERVAL,
+    selection_every_sessions=IntegerRange(
+        minimum=MIN_SELECTION_INTERVAL,
+        maximum=MAX_SELECTION_INTERVAL,
     ),
     batch_items=IntegerRange(
         minimum=MIN_RESEARCH_BATCH_ITEMS,
         maximum=MAX_RESEARCH_BATCH_ITEMS,
     ),
     batch_kinds=RESEARCH_BATCH_KINDS,
+    exposure=ExposureAuthoringConstraints(),
+    weighting=("equal_weight",),
     formula=FormulaAuthoringConstraints(
         maximum_length=MAX_FORMULA_LENGTH,
         maximum_expression_nodes=MAX_EXPRESSION_NODES,

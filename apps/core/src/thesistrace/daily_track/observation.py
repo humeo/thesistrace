@@ -48,8 +48,8 @@ def project_daily_observation(
                     "weight": float(market_value / current_nav),
                 }
             )
-        phase = current.rebalance_phase
-        signal_offset = (phase.report_session_count - 1) % phase.rebalance_interval
+        phase = current.selection_phase
+        signal_offset = (phase.report_session_count - 1) % phase.selection_interval
         return DailyTrackObservation.model_validate(
             {
                 "session": current.session,
@@ -63,16 +63,16 @@ def project_daily_observation(
                     - Decimal(origin.cumulative_transaction_cost)
                 ),
                 "session_count": phase.report_session_count
-                - origin.rebalance_phase.report_session_count,
+                - origin.selection_phase.report_session_count,
                 "holdings": sorted(
                     holdings, key=lambda row: (-row["weight"], row["instrument_id"])
                 ),
-                "rebalance_interval": phase.rebalance_interval,
-                "pending_signal_session": (
-                    current.pending_signal.signal_session if current.pending_signal else None
+                "selection_interval": phase.selection_interval,
+                "pending_target_session": (
+                    current.pending_target.signal_session if current.pending_target else None
                 ),
                 "sessions_until_next_signal": (
-                    phase.rebalance_interval - signal_offset if signal_offset else 0
+                    phase.selection_interval - signal_offset if signal_offset else 0
                 ),
                 "returns": points[-504:],
             }

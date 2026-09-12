@@ -31,7 +31,7 @@ def test_initial_cash_drives_lot_affordability_costs_and_return_baseline(
         universe="manual",
     )
     matrix = _alpha_matrix({session: ((A, 1),) for session in SESSIONS})
-    definition = _definition(rebalance_interval=5)
+    definition = _definition(selection_interval=5)
     definition["strategy"]["initial_cash_cny"] = cash
     full = run_strategy(data, matrix, definition, origin_session=SESSIONS[0])
     compact = run_strategy_with_metric_state(
@@ -100,7 +100,7 @@ def test_strategy_requires_explicit_cash_and_factor_rejects_it() -> None:
     factor = {
         key: value
         for key, value in _command().items()
-        if key not in ("holdings_count", "rebalance_every_sessions")
+        if key not in ("holdings_count", "selection_every_sessions")
     }
     with pytest.raises(ValidationError):
         adapter.validate_python(
@@ -119,7 +119,7 @@ def _command() -> dict[str, object]:
         "neutralization": "none",
         "research_kind": "strategy_backtest",
         "holdings_count": 1,
-        "rebalance_every_sessions": 5,
+        "selection_every_sessions": 5,
     }
 
 
@@ -136,7 +136,7 @@ def test_continuation_keeps_initial_cash_without_reinjecting_it(runner) -> None:
         universe="manual",
     )
     matrix = _alpha_matrix({session: ((A, 1),) for session in SESSIONS})
-    definition = _definition(rebalance_interval=5)
+    definition = _definition(selection_interval=5)
     definition["strategy"]["initial_cash_cny"] = "100000"
     prefix = runner(
         slice_research_sessions(data, SESSIONS[:2]),
@@ -174,7 +174,7 @@ def test_kernel_rejects_cash_outside_executable_range(cash: str) -> None:
     data = aligned_market_data(
         _canonical(opens={session: {A: "10", B: "10"} for session in SESSIONS}), universe="manual"
     )
-    definition = _definition(rebalance_interval=5)
+    definition = _definition(selection_interval=5)
     definition["strategy"]["initial_cash_cny"] = cash
     with pytest.raises(StrategyCalculationError):
         run_strategy(

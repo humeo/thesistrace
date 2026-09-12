@@ -440,6 +440,7 @@ def test_http_route_and_action_inventory_is_exactly_the_core_resources() -> None
         ("post", "/api/research-batches/{batch_id}/cancel"),
         ("get", "/api/research-runs"),
         ("post", "/api/research-runs"),
+        ("post", "/api/research/diagnostics"),
         ("patch", "/api/research-runs/{run_id}"),
         ("delete", "/api/research-runs/{run_id}"),
         ("get", "/api/research-runs/{run_id}"),

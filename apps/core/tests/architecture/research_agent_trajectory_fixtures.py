@@ -160,9 +160,15 @@ def research_context_payload() -> dict[str, object]:
                                      "maximum_decimal_places": 2,
                                      "required": True},
                 "holdings_count": {"minimum": 1, "maximum": 100},
-                "rebalance_every_sessions": {"minimum": 1, "maximum": 20},
+                "selection_every_sessions": {"minimum": 1, "maximum": 20},
                 "batch_items": {"minimum": 1, "maximum": 20},
                 "batch_kinds": ("factor_evaluation", "strategy_sweep"),
+                "exposure": {
+                    "context": "exposure", "mode": "constant_expression",
+                    "default_expression": "1", "minimum": 0, "maximum": 1,
+                    "data_series_allowed": False,
+                },
+                "weighting": ("equal_weight",),
                 "formula": {
                     "maximum_length": 4096,
                     "maximum_expression_nodes": 256,
@@ -218,7 +224,8 @@ def run_polling_payload(
     }
     if research_kind == "strategy_backtest":
         input_payload.update({
-            "initial_cash_cny": "10000000", "holdings_count": 10, "rebalance_every_sessions": 5,
+            "initial_cash_cny": "10000000", "holdings_count": 10, "selection_every_sessions": 5,
+            "exposure_expression": "1",
         })
     phase = "queued" if status == "queued" else "research"
     completed_sessions = 0 if status == "queued" else 10

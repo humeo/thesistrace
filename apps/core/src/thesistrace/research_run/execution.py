@@ -23,6 +23,7 @@ from thesistrace.research_kernel.research_chunks import (
     empty_research_continuation,
     execute_research_chunk,
 )
+from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_run.models import ImmutableRunInput
 from thesistrace.research_run.supervised_child import (
     ChildTransportCancelled,
@@ -646,7 +647,7 @@ def _continuation_instrument_ids(
     positions = strategy.get("positions")
     if not isinstance(positions, list):
         raise ResearchExecutionInputInvalid("Research Strategy continuation is invalid")
-    pending = strategy["pending_signal"]
+    pending = strategy["pending_target"]
     pending_ids = pending["selected_instrument_ids"] if pending is not None else []
     return frozenset([
         *(str(position["instrument_id"]) for position in positions), *pending_ids,
@@ -740,8 +741,9 @@ def _kernel_input(
             raise ResearchExecutionInputInvalid("Strategy Backtest input is incomplete")
         strategy_input = StrategyRunInput(
             holdings_count=int(strategy["holdings_count"]),
-            rebalance_interval=int(strategy["rebalance_every_sessions"]),
+            selection_interval=int(strategy["selection_every_sessions"]),
             initial_cash_cny=str(strategy["initial_cash_cny"]),
+            exposure_expression_json=canonical_json_bytes(strategy["exposure_expression"]),
             commission_rate_all_in=str(costs["commission_rate_all_in"]),
             commission_min_cny=str(costs["commission_min_cny"]),
             stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),

@@ -323,7 +323,7 @@ def test_strategy_metric_sorting_precedes_pagination(ownership_database, sort_by
             **_command(f"metric-{index}").model_dump(mode="json"),
             "research_kind": "strategy_backtest", "initial_cash_cny": "10000000",
             "holdings_count": 10,
-            "rebalance_every_sessions": 5,
+            "selection_every_sessions": 5,
         })
         run = service.admit(RESEARCHER_A.researcher_id, command)
         runs.append(run)

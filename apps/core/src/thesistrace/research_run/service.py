@@ -140,12 +140,14 @@ from thesistrace.research_run.models import (
     ResearchRunSortKey,
     ResearchRunStartTrackingOutcome,
     ResearchRunSummary,
+    ResearchSpec,
+    ResearchSpecDiagnostics,
     ResultDataProvenance,
     ResultExecutionProvenance,
     StartTrackingCommand,
-    StrategyBacktestAdmissionCommand,
     StrategyBacktestResearchRunKeyMetrics,
     StrategyBacktestResearchRunResult,
+    StrategyBacktestSpec,
     StrategyObservationsResultSection,
     StrategyObservationsResultSectionInput,
     StrategySummaryResultSection,
@@ -941,13 +943,21 @@ class ResearchRunService:
             self._validate_batch_owned_run_in_transaction(transaction, claim)
             yield
 
-    def prepare_child_admission(
-        self,
-        researcher_id: UUID,
-        command: ResearchRunAdmissionCommand,
-        *,
-        dataset: DatasetAdmissionSnapshot | None,
-    ) -> PreparedResearchRunAdmission:
+    def diagnose_research_spec(self, spec: ResearchSpec) -> ResearchSpecDiagnostics:
+        """Validate against current data without reserving data or creating a Run."""
+        try:
+            self._prepare_research_input(spec, dataset=self.current_admission_dataset())
+        except ResearchRunAdmissionRejected as error:
+            return ResearchSpecDiagnostics(valid=False, issues=error.issues)
+        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+            raise ResearchRunTemporarilyUnavailable(
+                "Research specification diagnosis is temporarily unavailable"
+            ) from error
+        return ResearchSpecDiagnostics(valid=True, issues=[])
+
+    def _prepare_research_input(
+        self, command: ResearchSpec, *, dataset: DatasetAdmissionSnapshot | None,
+    ) -> ImmutableRunInput:
         if self._compile_formula is None:
             raise RuntimeError("ResearchRun admission compiler is not configured")
         try:
@@ -965,12 +975,21 @@ class ResearchRunService:
                     for diagnostic in error.diagnostics
                 ]
             ) from error
-        immutable_input = _admitted_input(
+        return _admitted_input(
             command,
             compiled,
             dataset,
             execution_memory_bytes=self._execution_memory_bytes,
         )
+
+    def prepare_child_admission(
+        self,
+        researcher_id: UUID,
+        command: ResearchRunAdmissionCommand,
+        *,
+        dataset: DatasetAdmissionSnapshot | None,
+    ) -> PreparedResearchRunAdmission:
+        immutable_input = self._prepare_research_input(command, dataset=dataset)
         run_id = f"run_{uuid4().hex[:20]}"
         return PreparedResearchRunAdmission(
             researcher_id=researcher_id,
@@ -2946,6 +2965,12 @@ class ResearchRunService:
         try:
             require_current_numeric_contract(immutable_input.numeric_execution_contract)
             compiled = alpha_language.compile(immutable_input.formula_source)
+            exposure = (
+                alpha_language.compile(
+                    str(immutable_input.strategy["exposure_source"]), context="exposure",
+                )
+                if immutable_input.strategy is not None else None
+            )
         except (NumericContractError, FormulaCompilationError) as error:
             raise ResearchRunContractMismatch(
                 "frozen Research execution contract is obsolete"
@@ -2969,6 +2994,8 @@ class ResearchRunService:
             strategy is None
             or strategy.get("kind") != FIXED_STRATEGY_KIND
             or strategy.get("execution") != FIXED_EXECUTION
+            or exposure is None
+            or strategy["exposure_expression"] != exposure.expression
             or immutable_input.costs != FIXED_COSTS
             or immutable_input.risk_free_rate != "0"
         )
@@ -3982,12 +4009,27 @@ def _decode_list_cursor(
 
 
 def _admitted_input(
-    command: ResearchRunAdmissionCommand,
+    command: ResearchSpec,
     compiled: CompiledAlpha,
     snapshot: DatasetAdmissionSnapshot | None,
     *,
     execution_memory_bytes: int,
 ) -> ImmutableRunInput:
+    exposure = None
+    if isinstance(command, StrategyBacktestSpec):
+        try:
+            exposure = alpha_language.compile(command.exposure_expression, context="exposure")
+        except FormulaCompilationError as error:
+            raise ResearchRunAdmissionRejected([
+                ResearchRunAdmissionIssue(
+                    code=diagnostic.code,
+                    field="exposure_expression",
+                    message=diagnostic.message,
+                    range=diagnostic.range,
+                    details=diagnostic.details,
+                )
+                for diagnostic in error.diagnostics
+            ]) from error
     if snapshot is None:
         raise ResearchRunAdmissionRejected(
             [
@@ -4163,12 +4205,15 @@ def _admitted_input(
             ]
         ) from error
     strategy_values: dict[str, object] = {}
-    if isinstance(command, StrategyBacktestAdmissionCommand):
+    if isinstance(command, StrategyBacktestSpec):
+        assert exposure is not None
         strategy_values = {
             "strategy": {
                 "kind": FIXED_STRATEGY_KIND,
                 "holdings_count": command.holdings_count,
-                "rebalance_every_sessions": command.rebalance_every_sessions,
+                "selection_every_sessions": command.selection_every_sessions,
+                "exposure_source": exposure.source,
+                "exposure_expression": exposure.expression,
                 "initial_cash_cny": command.initial_cash_cny,
                 "execution": FIXED_EXECUTION,
             },
@@ -4523,7 +4568,8 @@ def _authorable_input(row: object) -> ResearchRunAuthorableInput:
         strategy_values = {
             "initial_cash_cny": str(immutable_input.strategy["initial_cash_cny"]),
             "holdings_count": int(immutable_input.strategy["holdings_count"]),
-            "rebalance_every_sessions": int(immutable_input.strategy["rebalance_every_sessions"]),
+            "selection_every_sessions": int(immutable_input.strategy["selection_every_sessions"]),
+            "exposure_expression": str(immutable_input.strategy["exposure_source"]),
         }
     return ResearchRunAuthorableInput(
         formula=immutable_input.formula_source,
@@ -5102,8 +5148,10 @@ def _public_result(
                     "net_nav",
                     "cumulative_transaction_cost",
                     "positions",
-                    "rebalance_phase",
-                    "pending_signal",
+                    "selection_phase",
+                    "target_selection",
+                    "target_exposure",
+                    "pending_target",
                 )
             },
         }

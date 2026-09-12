@@ -3810,7 +3810,7 @@ function researchLoopTools(
           authoring_constraints: {
             holdings_count: { maximum: 100, minimum: 1 },
             neutralizations: ["none", "industry"],
-            rebalance_every_sessions: { maximum: 20, minimum: 1 },
+            selection_every_sessions: { maximum: 20, minimum: 1 },
             universes: ["top300", "top1000"],
           },
           data_overview: {
@@ -3871,7 +3871,7 @@ function researchLoopTools(
         hypothesis: z.string(),
         name: z.string(),
         neutralization: z.string(),
-        rebalance_every_sessions: z.number().int().optional(),
+        selection_every_sessions: z.number().int().optional(),
         request_id: z.string(),
         research_kind: z.enum(["factor_evaluation", "strategy_backtest"]),
         start_date: z.string(),

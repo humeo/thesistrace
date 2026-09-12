@@ -140,6 +140,8 @@ from thesistrace.research_run.models import (
     FactorObservationsResultSectionInput,
     FactorPeriodsResultSection,
     FactorPeriodsResultSectionInput,
+    ResearchSpec,
+    ResearchSpecDiagnostics,
 )
 from thesistrace.research_run.service import (
     ResearchRunInvalidCursor,
@@ -1076,6 +1078,16 @@ def create_app(
         if batch is None:
             raise HTTPException(status_code=404, detail="Research Batch not found")
         return batch
+
+    @app.post("/api/research/diagnostics", response_model=ResearchSpecDiagnostics)
+    def diagnose_research_spec(request: Request, spec: ResearchSpec) -> ResearchSpecDiagnostics:
+        _researcher_id(request)
+        try:
+            return _runtime(request).research_runs.diagnose_research_spec(spec)
+        except ResearchRunTemporarilyUnavailable as error:
+            raise HTTPException(
+                status_code=503, detail="Research specification diagnosis temporarily unavailable",
+            ) from error
 
     @app.post(
         "/api/research-runs",

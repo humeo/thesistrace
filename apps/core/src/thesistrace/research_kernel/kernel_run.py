@@ -13,6 +13,7 @@ from thesistrace.research_kernel.alpha import (
     evaluate_columnar_alpha_matrix,
 )
 from thesistrace.research_kernel.alpha_expression import AlphaExpression
+from thesistrace.research_kernel.exposure import constant_exposure
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.series_plan import (
@@ -42,18 +43,29 @@ class InsufficientCalculationWarmupError(KernelRunError):
 @dataclass(frozen=True)
 class StrategyRunInput:
     holdings_count: int
-    rebalance_interval: int
+    selection_interval: int
     initial_cash_cny: str
     commission_rate_all_in: str
     commission_min_cny: str
     stamp_duty_sell_rate: str
     transfer_fee_rate: str
+    exposure_expression_json: bytes = b'{"kind":"number","value":1}'
+
+    def __post_init__(self) -> None:
+        constant_exposure(self.exposure_expression_snapshot())
+
+    def exposure_expression_snapshot(self) -> dict[str, object]:
+        value = json.loads(self.exposure_expression_json)
+        if not isinstance(value, dict):
+            raise ValueError("Exposure expression must be a normalized tree")
+        return value
 
     def contract_snapshot(self) -> dict[str, object]:
         return {
             "holdings_count": self.holdings_count,
-            "rebalance_interval": self.rebalance_interval,
+            "selection_interval": self.selection_interval,
             "initial_cash_cny": self.initial_cash_cny,
+            "exposure_expression": self.exposure_expression_snapshot(),
             "commission_rate_all_in": self.commission_rate_all_in,
             "commission_min_cny": self.commission_min_cny,
             "stamp_duty_sell_rate": self.stamp_duty_sell_rate,
@@ -523,8 +535,9 @@ def calculation_definition(
         "neutralization": run_input.neutralization,
         "strategy": {
             "holdings_count": strategy.holdings_count,
-            "rebalance_interval": strategy.rebalance_interval,
+            "selection_interval": strategy.selection_interval,
             "initial_cash_cny": strategy.initial_cash_cny,
+            "exposure_expression": strategy.exposure_expression_snapshot(),
         },
         "costs": {
             "commission_rate_all_in": strategy.commission_rate_all_in,

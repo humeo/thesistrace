@@ -11,8 +11,8 @@ export type DailyTrackObservation = {
   transaction_cost_cny: string;
   session_count: number;
   holdings: Array<{ instrument_id: string; shares: number; market_value_cny: string; weight: number }>;
-  rebalance_interval: number;
-  pending_signal_session: string | null;
+  selection_interval: number;
+  pending_target_session: string | null;
   sessions_until_next_signal: number;
   returns: Array<{ session: string; net_return: number }>;
 };
@@ -89,24 +89,24 @@ export function CurrentHoldings({ observation }: { observation: DailyTrackObserv
   );
 }
 
-export function RebalanceSchedule({ observation, isStopped, isBehind }: {
+export function SelectionSchedule({ observation, isStopped, isBehind }: {
   observation: DailyTrackObservation; isStopped: boolean; isBehind: boolean;
 }) {
   return (
-    <section className="track-rebalance" aria-label="Rebalance schedule">
-      <div className="track-section-heading"><div><h2>Rebalance schedule</h2>
-        <p>The strategy keeps the rebalance cycle selected in the original backtest.</p></div></div>
+    <section className="track-rebalance" aria-label="Selection schedule">
+      <div className="track-section-heading"><div><h2>Selection schedule</h2>
+        <p>The strategy keeps the selection cycle selected in the original backtest.</p></div></div>
       <dl className="track-schedule-facts">
-        <div><dt>Frequency</dt><dd>Every {observation.rebalance_interval} {observation.rebalance_interval === 1 ? "trading session" : "trading sessions"}</dd></div>
-        <div><dt>Signal at last observation</dt><dd>{observation.pending_signal_session ?? "No pending signal"}</dd></div>
-        <div><dt>Next scheduled step</dt><dd>{isStopped ? "Tracking stopped" : observation.pending_signal_session
+        <div><dt>Frequency</dt><dd>Every {observation.selection_interval} {observation.selection_interval === 1 ? "trading session" : "trading sessions"}</dd></div>
+        <div><dt>Signal at last observation</dt><dd>{observation.pending_target_session ?? "No pending signal"}</dd></div>
+        <div><dt>Next scheduled step</dt><dd>{isStopped ? "Tracking stopped" : observation.pending_target_session
           ? "Rebalance at the next trading session open"
           : `Next signal in ${observation.sessions_until_next_signal} trading ${observation.sessions_until_next_signal === 1 ? "session" : "sessions"}`}</dd></div>
       </dl>
       {isBehind && !isStopped ? <p className="track-inline-notice">Tracking is behind the available data. Update the track before using its next signal.</p> : null}
       <div className="track-guidance-empty">
         <h3>Buy and sell instructions are not available yet</h3>
-        <p>The current result publishes holdings and the rebalance schedule. It does not publish a target portfolio or an order list for the next session.</p>
+        <p>The current result publishes holdings and the selection schedule. It does not publish a target portfolio or an order list for the next session.</p>
       </div>
     </section>
   );

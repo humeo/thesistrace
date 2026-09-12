@@ -5,7 +5,7 @@ import { ArrowLeftIcon, CalendarBlankIcon, WarningCircleIcon } from "@phosphor-i
 import type { DailyTrackDetail } from "./DailyTracksPage";
 import { TrackingOriginView, TrackingProgressView } from "./DailyTracksPage";
 import { DailyTrackAnalysisView } from "./DailyTrackAnalysisView";
-import { CurrentHoldings, ObservationSummary, RebalanceSchedule, TrackingReturnChart, formatMoney } from "./DailyTrackObservationView";
+import { CurrentHoldings, ObservationSummary, SelectionSchedule, TrackingReturnChart, formatMoney } from "./DailyTrackObservationView";
 
 const VIEWS = ["Performance", "Holdings", "Rebalance"] as const;
 type View = typeof VIEWS[number];
@@ -80,7 +80,7 @@ export function DailyTrackWorkspace({ track, actions, notices }: {
               <span>{formatMoney(track.observation.transaction_cost_cny)} tracking costs</span></div>
           </> : <DailyTrackAnalysisView analysis={{ strategy: track.strategy }} />}
         </> : view === "Holdings" ? <CurrentHoldings observation={track.observation} />
-          : <RebalanceSchedule observation={track.observation} isStopped={track.status === "stopped" || track.status === "stopping"} isBehind={track.lag_sessions > 0} />}
+          : <SelectionSchedule observation={track.observation} isStopped={track.status === "stopped" || track.status === "stopping"} isBehind={track.lag_sessions > 0} />}
       </div>
       <div className="track-supporting">
         <CommonInputObservations key={`${track.id}:${track.strategy_session}`} endpoint={`/api/daily-tracks/${encodeURIComponent(track.id)}/common-input-observations`} />

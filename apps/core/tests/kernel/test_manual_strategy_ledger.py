@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import copy
+import json
 from decimal import Decimal
 
+import pytest
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 from series import aligned_market_data
 
@@ -260,7 +262,7 @@ def test_kernel_ledger_records_star_board_specific_order_quantity() -> None:
         {session: {A: "2", B: "1"} for session in SESSIONS},
     )
 
-    _, ledger = _kernel_ledger(canonical, rebalance_interval=20)
+    _, ledger = _kernel_ledger(canonical, selection_interval=20)
 
     intent = ledger[1]["intended_orders"][0]
     filled_quantity = sum(int(fill["quantity"]) for fill in ledger[1]["fills"])
@@ -279,7 +281,7 @@ def test_kernel_ledger_explains_when_minimum_lot_is_not_affordable() -> None:
         {session: {A: "2", B: "1"} for session in SESSIONS},
     )
 
-    _, ledger = _kernel_ledger(canonical, rebalance_interval=20)
+    _, ledger = _kernel_ledger(canonical, selection_interval=20)
 
     assert ledger[1]["intended_orders"] == [
         {
@@ -312,7 +314,7 @@ def test_manual_rejections_never_create_false_fills_or_discard_a_holding() -> No
     )
     buy_matrix = _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS})
 
-    rejected_buy = _run(upper_limit_buy, buy_matrix, rebalance_interval=20)
+    rejected_buy = _run(upper_limit_buy, buy_matrix, selection_interval=20)
 
     assert _orders(rejected_buy) == [(SESSIONS[1], A, "buy", 1_000_000, 999_600)]
     assert _fills(rejected_buy) == []
@@ -327,7 +329,7 @@ def test_manual_rejections_never_create_false_fills_or_discard_a_holding() -> No
             "reason": "upper_limit_buy",
         }
     ]
-    assert _position_ledger(upper_limit_buy, buy_matrix, rebalance_interval=20) == {
+    assert _position_ledger(upper_limit_buy, buy_matrix, selection_interval=20) == {
         session: () for session in SESSIONS
     }
     assert all(day["net_cash"] == Decimal("10000000") for day in _daily_ledger(rejected_buy))
@@ -335,7 +337,7 @@ def test_manual_rejections_never_create_false_fills_or_discard_a_holding() -> No
         upper_limit_buy,
         {session: {A: "2", B: "1"} for session in SESSIONS},
     )
-    _, upper_ledger = _kernel_ledger(upper_limit_buy, rebalance_interval=20)
+    _, upper_ledger = _kernel_ledger(upper_limit_buy, selection_interval=20)
     assert upper_ledger[1]["fills"] == []
     assert upper_ledger[1]["rejections"][0]["reason"] == "upper_limit_buy"
     _assert_ledger_reconciles(upper_ledger)
@@ -350,18 +352,18 @@ def test_manual_rejections_never_create_false_fills_or_discard_a_holding() -> No
         states={(SESSIONS[1], A): "full_session_suspension"},
     )
 
-    rejected_suspension = _run(suspended_buy, buy_matrix, rebalance_interval=20)
+    rejected_suspension = _run(suspended_buy, buy_matrix, selection_interval=20)
 
     assert _fills(rejected_suspension) == []
     assert rejected_suspension["rejections"][0]["reason"] == "suspension"
-    assert _position_ledger(suspended_buy, buy_matrix, rebalance_interval=20) == {
+    assert _position_ledger(suspended_buy, buy_matrix, selection_interval=20) == {
         session: () for session in SESSIONS
     }
     _set_alpha_closes(
         suspended_buy,
         {session: {A: "2", B: "1"} for session in SESSIONS},
     )
-    _, suspension_ledger = _kernel_ledger(suspended_buy, rebalance_interval=20)
+    _, suspension_ledger = _kernel_ledger(suspended_buy, selection_interval=20)
     assert suspension_ledger[1]["fills"] == []
     assert suspension_ledger[1]["rejections"][0]["reason"] == "suspension"
     _assert_ledger_reconciles(suspension_ledger)
@@ -421,13 +423,13 @@ def test_manual_adjusted_return_keeps_the_position_and_value_continuous() -> Non
     )
     matrix = _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS})
 
-    result = _run(canonical, matrix, rebalance_interval=20)
+    result = _run(canonical, matrix, selection_interval=20)
     ledger = _daily_ledger(result)
 
     assert ledger[1]["net_nav"] == Decimal("9996901.24")
     assert ledger[2]["net_nav"] == ledger[1]["net_nav"]
     assert ledger[3]["net_nav"] == ledger[1]["net_nav"]
-    assert _position_ledger(canonical, matrix, rebalance_interval=20) == {
+    assert _position_ledger(canonical, matrix, selection_interval=20) == {
         SESSIONS[0]: (),
         SESSIONS[1]: ((A, 999_600, Decimal("999600")),),
         SESSIONS[2]: ((A, 999_600, Decimal("999600")),),
@@ -438,7 +440,7 @@ def test_manual_adjusted_return_keeps_the_position_and_value_continuous() -> Non
         canonical,
         {session: {A: "2", B: "1"} for session in SESSIONS},
     )
-    _, kernel_ledger = _kernel_ledger(canonical, rebalance_interval=20)
+    _, kernel_ledger = _kernel_ledger(canonical, selection_interval=20)
     assert kernel_ledger[2]["net_nav"] == kernel_ledger[1]["net_nav"]
     assert kernel_ledger[3]["net_nav"] == kernel_ledger[1]["net_nav"]
     _assert_ledger_reconciles(kernel_ledger)
@@ -629,14 +631,15 @@ def _alpha_matrix(
 def _definition(
     *,
     holdings_count: int = 1,
-    rebalance_interval: int = 1,
+    selection_interval: int = 1,
 ) -> dict[str, object]:
     return {
         "universe": "manual",
         "strategy": {
             "holdings_count": holdings_count,
-            "rebalance_interval": rebalance_interval,
+            "selection_interval": selection_interval,
             "initial_cash_cny": "10000000",
+            "exposure_expression": {"kind": "number", "value": 1},
         },
         "costs": {
             "commission_rate_all_in": "0.0003",
@@ -651,7 +654,8 @@ def _kernel_run(
     canonical: dict[str, object],
     *,
     holdings_count: int = 1,
-    rebalance_interval: int = 1,
+    selection_interval: int = 1,
+    exposure: float = 1.0,
 ):
     return run(
         RunInput(
@@ -664,8 +668,9 @@ def _kernel_run(
             research_kind="strategy_backtest",
             strategy=StrategyRunInput(
                 holdings_count=holdings_count,
-                rebalance_interval=rebalance_interval,
+                selection_interval=selection_interval,
                 initial_cash_cny="10000000",
+                exposure_expression_json=json.dumps({"kind": "number", "value": exposure}).encode(),
                 commission_rate_all_in="0.0003",
                 commission_min_cny="5",
                 stamp_duty_sell_rate="0.0005",
@@ -681,12 +686,12 @@ def _kernel_ledger(
     canonical: dict[str, object],
     *,
     holdings_count: int = 1,
-    rebalance_interval: int = 1,
+    selection_interval: int = 1,
 ):
     output = _kernel_run(
         canonical,
         holdings_count=holdings_count,
-        rebalance_interval=rebalance_interval,
+        selection_interval=selection_interval,
     )
     ledger = output.strategy_ledger_snapshot()
     return output, ledger
@@ -721,14 +726,14 @@ def _run(
     matrix: dict[str, object],
     *,
     holdings_count: int = 1,
-    rebalance_interval: int = 1,
+    selection_interval: int = 1,
 ) -> dict[str, object]:
     return run_strategy(
         aligned_market_data(copy.deepcopy(canonical), universe="manual"),
         copy.deepcopy(matrix),
         _definition(
             holdings_count=holdings_count,
-            rebalance_interval=rebalance_interval,
+            selection_interval=selection_interval,
         ),
         origin_session=SESSIONS[0],
     )
@@ -786,7 +791,7 @@ def _position_ledger(
     matrix: dict[str, object],
     *,
     holdings_count: int = 1,
-    rebalance_interval: int = 1,
+    selection_interval: int = 1,
 ) -> dict[str, tuple[tuple[str, int, Decimal], ...]]:
     ledger: dict[str, tuple[tuple[str, int, Decimal], ...]] = {}
     for index, session in enumerate(SESSIONS, start=1):
@@ -795,7 +800,7 @@ def _position_ledger(
             prefix,
             matrix,
             holdings_count=holdings_count,
-            rebalance_interval=rebalance_interval,
+            selection_interval=selection_interval,
         )
         ledger[session] = tuple(
             (
@@ -823,3 +828,82 @@ def _slice_sessions(
         for name, rows in sliced["liquidity_universes"].items()
     }
     return sliced
+
+
+def test_fixed_exposure_targets_pretrade_equity_before_fees_and_rounding():
+    canonical = _canonical(opens={session: {A: "10", B: "20"} for session in SESSIONS})
+    matrix = _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS})
+    definition = _definition()
+    definition["strategy"].update({
+        "initial_cash_cny": "100000",
+        "exposure_expression": {"kind": "number", "value": 0.7},
+    })
+    result = run_strategy(
+        aligned_market_data(canonical, universe="manual"), matrix, definition,
+        origin_session=SESSIONS[0],
+    )
+    first_buy = next(order for order in result["orders"] if order["side"] == "buy")
+    assert first_buy["legal_quantity"] == 7000
+    first = result["daily"][1]
+    assert Decimal(first["net_cash"]) == Decimal("29978.30")
+    assert Decimal(first["net_nav"]) == Decimal("99978.30")
+    # Next target still uses total equity, not the remaining ~30k cash.
+    assert result["positions"][0]["execution_shares"] >= 6900
+    assert len([order for order in result["orders"] if order["side"] == "sell"]) <= 1
+
+
+def test_zero_exposure_preserves_cash_baseline_and_latest_selection():
+    canonical = _canonical(opens={session: {A: "10", B: "20"} for session in SESSIONS})
+    matrix = _alpha_matrix({
+        SESSIONS[0]: ((A, 2), (B, 1)),
+        SESSIONS[1]: ((A, 2), (B, 1)),
+        SESSIONS[2]: ((B, 2), (A, 1)),
+        SESSIONS[3]: ((A, 2), (B, 1)),
+    })
+    definition = _definition(selection_interval=2)
+    definition["strategy"].update({
+        "initial_cash_cny": "100000",
+        "exposure_expression": {"kind": "number", "value": 0.0},
+    })
+    result = run_strategy(
+        aligned_market_data(canonical, universe="manual"), matrix, definition,
+        origin_session=SESSIONS[0],
+    )
+    assert result["orders"] == []
+    assert result["positions"] == []
+    assert [Decimal(row["net_nav"]) for row in result["daily"]] == [Decimal("100000")] * 4
+    assert [row["rebalance"] for row in result["daily"]] == [False, True, False, True]
+    assert result["target_selection"]["selected_instrument_ids"] == [B]
+    assert result["target_selection"]["signal_session"] == SESSIONS[2]
+    assert result["metrics"]["maximum_drawdown"]["recovery_session"] is None
+    assert result["target_exposure"] == 0.0
+    assert result["pending_target"] is None
+
+
+@pytest.mark.parametrize("exposure", [0.0, 0.7])
+@pytest.mark.parametrize("interval", [2, 3])
+def test_tracking_checkpoint_restores_retained_selection_and_exposure(exposure, interval):
+    from thesistrace.daily_track.checkpoint import (
+        project_tracking_checkpoint,
+        restore_tracking_checkpoint,
+        terminal_strategy_state,
+    )
+    from thesistrace.daily_track.observation_state import initial_tracking_observation_state
+
+    canonical = _canonical(opens={session: {A: "10", B: "20"} for session in SESSIONS})
+    state = _kernel_run(canonical, selection_interval=interval, exposure=exposure).track_state
+    checkpoint = project_tracking_checkpoint(
+        state, retained_strategy_sessions=SESSIONS[1:],
+        prior_observation_state=initial_tracking_observation_state(SESSIONS[0], "10000000"),
+    )
+    restored = restore_tracking_checkpoint(
+        checkpoint, research_data=aligned_market_data(canonical, universe="manual"),
+    )
+    original = checkpoint["strategy_state"]["terminal"]
+    actual = terminal_strategy_state(restored)
+    assert actual == original
+    assert restored.output_snapshot()["alpha_matrix"]["sessions"] == []
+    assert actual["target_exposure"] == exposure
+    assert actual["target_selection"]["selected_instrument_ids"] == [B]
+    assert (actual["pending_target"] is not None) == (interval == 3)
+    assert checkpoint["run_input"]["exposure_expression"] == {"kind": "number", "value": exposure}

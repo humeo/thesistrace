@@ -172,7 +172,7 @@ export function scriptedResearchDecision(
         strategy: proposal.research_kind === "strategy_backtest"
           ? [
               { label: "Holdings", value: String(proposal.holdings_count) },
-              { label: "Rebalance", value: `Every ${String(proposal.rebalance_every_sessions)} sessions` },
+              { label: "Selection", value: `Every ${String(proposal.selection_every_sessions)} sessions` },
               { label: "Neutralization", value: String(proposal.neutralization) },
             ]
           : [{ label: "Neutralization", value: String(proposal.neutralization) }],
@@ -519,14 +519,14 @@ function researchCommand(options: Readonly<{
   const holdingsCount = strategy
     ? boundedConstraintDefault(options.context, "holdings_count", 10)
     : null;
-  const rebalanceEverySessions = strategy
-    ? boundedConstraintDefault(options.context, "rebalance_every_sessions", 5)
+  const selectionEverySessions = strategy
+    ? boundedConstraintDefault(options.context, "selection_every_sessions", 5)
     : null;
   if (
     boundedStart === null
     || universe === null
     || neutralization === null
-    || (strategy && (holdingsCount === null || rebalanceEverySessions === null))
+    || (strategy && (holdingsCount === null || selectionEverySessions === null))
   ) return null;
   // Core derives Formula warmup from sessions before the Research start. When
   // the selected start is the Dataset boundary, moving it later makes the
@@ -551,7 +551,7 @@ function researchCommand(options: Readonly<{
       ? {
           initial_cash_cny: "100000",
           holdings_count: holdingsCount,
-          rebalance_every_sessions: rebalanceEverySessions,
+          selection_every_sessions: selectionEverySessions,
         }
       : {}),
   };

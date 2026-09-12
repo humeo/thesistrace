@@ -66,8 +66,9 @@ def project_tracking_checkpoint(
             "universe": run_input.universe,
             "neutralization": run_input.neutralization,
             "holdings_count": strategy_input.holdings_count,
-            "rebalance_interval": strategy_input.rebalance_interval,
+            "selection_interval": strategy_input.selection_interval,
             "initial_cash_cny": strategy_input.initial_cash_cny,
+            "exposure_expression": strategy_input.exposure_expression_snapshot(),
             "commission_rate_all_in": strategy_input.commission_rate_all_in,
             "commission_min_cny": strategy_input.commission_min_cny,
             "stamp_duty_sell_rate": strategy_input.stamp_duty_sell_rate,
@@ -109,8 +110,9 @@ def restore_tracking_checkpoint(
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
             holdings_count=int(contract["holdings_count"]),
-            rebalance_interval=int(contract["rebalance_interval"]),
+            selection_interval=int(contract["selection_interval"]),
             initial_cash_cny=str(contract["initial_cash_cny"]),
+            exposure_expression_json=canonical_json_bytes(contract["exposure_expression"]),
             commission_rate_all_in=str(contract["commission_rate_all_in"]),
             commission_min_cny=str(contract["commission_min_cny"]),
             stamp_duty_sell_rate=str(contract["stamp_duty_sell_rate"]),
@@ -150,7 +152,9 @@ def restore_tracking_checkpoint(
                 "positions": copy.deepcopy(positions),
                 "metrics": dict(summary),
                 "metric_state": dict(metric_state),
-                "pending_signal": copy.deepcopy(terminal["pending_signal"]),
+                "target_selection": copy.deepcopy(terminal["target_selection"]),
+                "target_exposure": terminal["target_exposure"],
+                "pending_target": copy.deepcopy(terminal["pending_target"]),
                 "orders": [],
                 "child_orders": [],
                 "fills": [],
@@ -165,9 +169,11 @@ def restore_tracking_checkpoint(
         strategy_resume={
             "daily": [dict(resume_observation)],
             "positions": copy.deepcopy(positions),
-            "report_session_count": int(terminal["rebalance_phase"]["report_session_count"]),
+            "report_session_count": int(terminal["selection_phase"]["report_session_count"]),
             "metric_state": dict(metric_state),
-            "pending_signal": copy.deepcopy(terminal["pending_signal"]),
+            "target_selection": copy.deepcopy(terminal["target_selection"]),
+            "target_exposure": terminal["target_exposure"],
+            "pending_target": copy.deepcopy(terminal["pending_target"]),
         },
         origin_session=str(value["origin_session"]),
     )
@@ -198,9 +204,11 @@ def restore_tracking_origin(
                 "daily": [last_daily],
                 "positions": positions,
                 "metrics": strategy_metrics_from_state(metric_state),
-                "pending_signal": (
-                    terminal.pending_signal.model_dump(mode="json")
-                    if terminal.pending_signal is not None else None
+                "target_selection": terminal.target_selection.model_dump(mode="json"),
+                "target_exposure": terminal.target_exposure,
+                "pending_target": (
+                    terminal.pending_target.model_dump(mode="json")
+                    if terminal.pending_target is not None else None
                 ),
                 "metric_state": metric_state,
                 "orders": [],
@@ -217,14 +225,16 @@ def restore_tracking_origin(
         strategy_resume={
             "daily": [last_daily],
             "positions": positions,
-            "report_session_count": terminal.rebalance_phase.report_session_count,
+            "report_session_count": terminal.selection_phase.report_session_count,
             "metric_state": metric_state,
-            "pending_signal": (
-                terminal.pending_signal.model_dump(mode="json")
-                if terminal.pending_signal is not None else None
+            "target_selection": terminal.target_selection.model_dump(mode="json"),
+            "target_exposure": terminal.target_exposure,
+            "pending_target": (
+                terminal.pending_target.model_dump(mode="json")
+                if terminal.pending_target is not None else None
             ),
         },
-        origin_session=terminal.rebalance_phase.origin_session,
+        origin_session=terminal.selection_phase.origin_session,
     )
 
 
@@ -239,9 +249,9 @@ def terminal_strategy_state(state: KernelState) -> dict[str, object]:
     metric_state = _mapping(strategy.get("metric_state"), "Strategy metric state")
     terminal = daily[-1]
     session_count = int(metric_state["session_count"])
-    rebalance_interval = _strategy_input(
+    selection_interval = _strategy_input(
         state.run_input_with_research_data(state.research_data_snapshot())
-    ).rebalance_interval
+    ).selection_interval
     return {
         "session": str(terminal["session"]),
         "gross_cash": str(terminal["gross_cash"]),
@@ -250,13 +260,15 @@ def terminal_strategy_state(state: KernelState) -> dict[str, object]:
         "net_nav": str(terminal["net_nav"]),
         "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
         "positions": [copy.deepcopy(dict(item)) for item in positions],
-        "rebalance_phase": {
+        "selection_phase": {
             "origin_session": state.origin_session,
             "report_session_count": session_count,
-            "rebalance_interval": rebalance_interval,
+            "selection_interval": selection_interval,
             "completed_intervals": session_count - 1,
         },
-        "pending_signal": copy.deepcopy(strategy["pending_signal"]),
+        "target_selection": copy.deepcopy(strategy["target_selection"]),
+        "target_exposure": strategy["target_exposure"],
+        "pending_target": copy.deepcopy(strategy["pending_target"]),
         "last_daily_observation": copy.deepcopy(dict(terminal)),
         "metric_state": copy.deepcopy(dict(metric_state)),
     }
@@ -285,8 +297,9 @@ def _origin_run_input(
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
             holdings_count=int(strategy["holdings_count"]),
-            rebalance_interval=int(strategy["rebalance_every_sessions"]),
+            selection_interval=int(strategy["selection_every_sessions"]),
             initial_cash_cny=str(strategy["initial_cash_cny"]),
+            exposure_expression_json=canonical_json_bytes(strategy["exposure_expression"]),
             commission_rate_all_in=str(costs["commission_rate_all_in"]),
             commission_min_cny=str(costs["commission_min_cny"]),
             stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
@@ -335,9 +348,9 @@ def _strategy_state(
     finalized_terminal = daily[-1]
     report_count = int(metric_state["session_count"])
     final_report_count = report_count
-    rebalance_interval = _strategy_input(
+    selection_interval = _strategy_input(
         state.run_input_with_research_data(state.research_data_snapshot())
-    ).rebalance_interval
+    ).selection_interval
     return {
         "summary": _compact_strategy_metrics(metrics),
         "retained_delta": retained_delta,
@@ -349,13 +362,15 @@ def _strategy_state(
             "net_nav": str(finalized_terminal["net_nav"]),
             "cumulative_transaction_cost": str(finalized_terminal["cumulative_transaction_cost"]),
             "positions": [copy.deepcopy(dict(item)) for item in finalized_positions],
-            "rebalance_phase": {
+            "selection_phase": {
                 "origin_session": state.origin_session,
                 "report_session_count": final_report_count,
-                "rebalance_interval": rebalance_interval,
+                "selection_interval": selection_interval,
                 "completed_intervals": final_report_count - 1,
             },
-            "pending_signal": copy.deepcopy(strategy["pending_signal"]),
+            "target_selection": copy.deepcopy(strategy["target_selection"]),
+            "target_exposure": strategy["target_exposure"],
+            "pending_target": copy.deepcopy(strategy["pending_target"]),
             "last_daily_observation": copy.deepcopy(dict(finalized_terminal)),
             "metric_state": copy.deepcopy(dict(metric_state)),
         },

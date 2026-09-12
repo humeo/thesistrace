@@ -477,7 +477,7 @@ class _ExplodingAlphaLanguage:
             "observation=private-observation-canary position=private-position-canary"
         )
 
-    def diagnose(self, source: str) -> FormulaDiagnostics:
+    def diagnose(self, source: str, *, context="signal") -> FormulaDiagnostics:
         del source
         raise RuntimeError("private-formula-canary")
 
@@ -504,8 +504,8 @@ class _OversizedAlphaLanguage:
             builtins=[],
         )
 
-    def diagnose(self, source: str) -> FormulaDiagnostics:
-        return alpha_language.diagnose(source)
+    def diagnose(self, source: str, *, context="signal") -> FormulaDiagnostics:
+        return alpha_language.diagnose(source, context=context)
 
 
 def _run_summary() -> ResearchRunSummary:
@@ -820,7 +820,7 @@ def test_registry_composes_context_without_generation_or_folder_mutation() -> No
         "minimum": 1,
         "maximum": 100,
     }
-    assert first["authoring_constraints"]["rebalance_every_sessions"] == {
+    assert first["authoring_constraints"]["selection_every_sessions"] == {
         "minimum": 1,
         "maximum": 20,
     }
@@ -1772,6 +1772,7 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
         "get_research_context",
         "get_alpha_catalog",
         "diagnose_alpha_formula",
+        "diagnose_research_spec",
         "list_research_runs",
         "get_research_run",
         "get_research_run_result",
@@ -1792,9 +1793,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "b6ee47950327b5624dc5c71d96ebcce38181f9d619ddb2a7e971cb08396f5bbc"
+        "7f49c3259b9af85bc3e64ce71ad27c535658161f728fdd7ffd2be01142560888"
     )
-    assert len(canonical) == 161626
+    assert len(canonical) == 171406
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -2058,6 +2059,7 @@ async def _exercise_in_memory_protocol() -> None:
             "get_research_context",
             "get_alpha_catalog",
             "diagnose_alpha_formula",
+            "diagnose_research_spec",
             "list_research_runs",
             "get_research_run",
             "get_research_run_result",
@@ -2194,7 +2196,7 @@ async def _exercise_in_memory_protocol() -> None:
             if "StrategyBacktest" in branch["$ref"]
         )
         strategy_schema = submit_schema["$defs"][strategy_ref.rsplit("/", 1)[-1]]
-        assert {"initial_cash_cny", "holdings_count", "rebalance_every_sessions"} <= set(
+        assert {"initial_cash_cny", "holdings_count", "selection_every_sessions"} <= set(
             strategy_schema["required"]
         )
         assert strategy_schema["properties"]["initial_cash_cny"]["type"] == "string"
@@ -3105,3 +3107,38 @@ def test_registry_common_inputs_share_formal_industry_choices_and_diagnostics():
         assert result.valid is valid
         if not valid:
             assert result.diagnostics[0].range.end.offset > result.diagnostics[0].range.start.offset
+
+
+def test_registry_expression_diagnostics_apply_the_requested_context():
+    registry = _registry()
+    assert registry.diagnose_alpha_formula("0.7", context="exposure").valid
+    assert not registry.diagnose_alpha_formula("0.7", context="signal").valid
+    assert not registry.diagnose_alpha_formula("close", context="exposure").valid
+
+
+def test_registry_whole_spec_diagnosis_is_read_only_and_uses_formal_validation():
+    from thesistrace.research_run.service import ResearchRunService
+
+    class NoPersistence:
+        def __getattr__(self, name):
+            raise AssertionError(f"Unexpected diagnosis persistence: {name}")
+
+    service = ResearchRunService(
+        NoPersistence(), compile_formula=alpha_language.compile, current_dataset=lambda: None,
+    )
+    registry = _registry(research_runs=service)
+    capability = next(
+        item for item in registry.accessible_capabilities() if item.name == "diagnose_research_spec"
+    )
+    assert capability.required_scope is ResearchAgentScope.RESEARCH_READ
+    assert capability.annotations.read_only_hint is True
+    assert capability.annotations.destructive_hint is False
+    result = registry.invoke("diagnose_research_spec", {"spec": {
+        "research_kind": "strategy_backtest", "formula": "close",
+        "start_date": "2026-08-03", "end_date": "2026-08-05",
+        "universe": "top300", "neutralization": "none", "initial_cash_cny": "100000",
+        "holdings_count": 10, "selection_every_sessions": 5, "exposure_expression": "1.1",
+    }}, trace_id="trace_spec_diagnosis")
+    assert result.error is None
+    assert result.result.valid is False
+    assert result.result.issues[0].field == "exposure_expression"

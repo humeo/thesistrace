@@ -30,7 +30,7 @@ from thesistrace.research_kernel.strategy import (
     run_strategy_with_metric_state,
     strategy_metrics_from_state,
 )
-from thesistrace.research_kernel.terminal_state_schema import PendingSignal
+from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
 from thesistrace.research_series import ColumnarResearchSeries
 
 _STATISTIC_NAMES = (
@@ -652,7 +652,9 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
         "rejections": [],
         "diagnostics": [],
         "report_session_count": completed_count,
-        "pending_signal": strategy["pending_signal"],
+        "target_selection": strategy["target_selection"],
+        "target_exposure": strategy["target_exposure"],
+        "pending_target": strategy["pending_target"],
         "metric_state": metric_state,
     }
     final_values: dict[str, object] | None = None
@@ -688,13 +690,15 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
                 "net_nav": str(terminal["net_nav"]),
                 "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
                 "positions": [dict(value) for value in strategy["positions"]],
-                "rebalance_phase": {
+                "selection_phase": {
                     "origin_session": str(run_input.research_start_session),
                     "report_session_count": completed_count,
-                    "rebalance_interval": strategy_settings.rebalance_interval,
+                    "selection_interval": strategy_settings.selection_interval,
                     "completed_intervals": completed_count - 1,
                 },
-                "pending_signal": strategy["pending_signal"],
+                "target_selection": strategy["target_selection"],
+                "target_exposure": strategy["target_exposure"],
+                "pending_target": strategy["pending_target"],
                 "last_daily_observation": terminal,
                 "metric_state": metric_state,
             },
@@ -1312,7 +1316,9 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
         "diagnostics",
         "report_session_count",
         "metric_state",
-        "pending_signal",
+        "target_selection",
+        "target_exposure",
+        "pending_target",
     }
     daily = state.get("daily")
     positions = state.get("positions")
@@ -1354,8 +1360,15 @@ def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, obj
     if not required_daily <= set(last_daily) or not isinstance(last_daily["session"], str):
         raise ValueError("Strategy continuation is invalid")
     try:
-        if state["pending_signal"] is not None:
-            PendingSignal.model_validate(state["pending_signal"])
+        TargetSelection.model_validate(state["target_selection"])
+        if (
+            type(state["target_exposure"]) is not float
+            or not math.isfinite(state["target_exposure"])
+            or not 0 <= state["target_exposure"] <= 1
+        ):
+            raise ValueError("Strategy continuation Exposure is invalid")
+        if state["pending_target"] is not None:
+            PendingTarget.model_validate(state["pending_target"])
         for name in required_daily - {"session"}:
             if not Decimal(str(last_daily[name])).is_finite():
                 raise ValueError("Strategy continuation is invalid")

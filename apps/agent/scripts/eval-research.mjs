@@ -359,7 +359,7 @@ async function prepareFixture(researcher, testCase, corpus) {
     request_id: `eval-fixture-${randomUUID()}`, folder_id: "folder_default", name: "Isolated evaluation fixture",
     formula: "rank(close)", hypothesis: null, start_date: corpus.clock_window.start, end_date: corpus.clock_window.end,
     universe: "top300", neutralization: "none", research_kind: testCase.fixture === "factor" ? "factor_evaluation" : "strategy_backtest",
-    ...(testCase.fixture === "factor" ? {} : { holdings_count: 10, rebalance_every_sessions: 1 }),
+    ...(testCase.fixture === "factor" ? {} : { holdings_count: 10, selection_every_sessions: 1 }),
   }) });
   fixture.runId = run.id;
   await poll(() => json(researcher, `/api/research-runs/${run.id}`), (value) => value.status === "succeeded");
@@ -429,7 +429,7 @@ async function checkArtifact(researcher, testCase, fixture, corpus, threadId) {
   const admissionCase = testCase.outcome === "admission-repaired-factor";
   let passed = validRun(run, kind, corpus, admissionCase ? corpus.admission_window.corrected_start : corpus.clock_window.start);
   passed &&= formulaMatches(run.input.formula, ["factor", "clarified-factor"].includes(testCase.outcome) ? "momentum" : admissionCase ? "two-session-mean" : "price-rank");
-  if (kind === "strategy_backtest") passed &&= run.input.holdings_count === 10 && run.input.rebalance_every_sessions === 1;
+  if (kind === "strategy_backtest") passed &&= run.input.holdings_count === 10 && run.input.selection_every_sessions === 1;
   let admissionCorrection = false;
   if (passed && (testCase.outcome === "repaired-factor" || admissionCase)) {
     const expectedRun = Object.fromEntries(["formula", "start_date", "end_date", "universe", "neutralization", "research_kind"].map((key) => [key, run.input[key]]));

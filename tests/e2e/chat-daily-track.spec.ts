@@ -78,7 +78,7 @@ test("Chat DailyTrack replays lost Start and Retry responses while Tracking adva
       request_id: `daily-track-origin-${researcher.id}`, folder_id: "folder_default",
       name: "Tracking advance fixture", formula: "rank(close)", hypothesis: null,
       start_date: "2026-08-03", end_date: "2026-08-04", universe: "top300", neutralization: "none",
-      research_kind: "strategy_backtest", holdings_count: 10, rebalance_every_sessions: 1,
+      research_kind: "strategy_backtest", holdings_count: 10, selection_every_sessions: 1,
     }, headers: sameOriginHeaders(),
   });
   expect(admitted.status()).toBe(202);

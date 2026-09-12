@@ -98,7 +98,7 @@ SAFE_LEDGER_FIELDS = {
     "metrics",
     "next_cursor",
     "outcome",
-    "rebalance_every_sessions",
+    "selection_every_sessions",
     "request_id",
     "research_kind",
     "retry_after_seconds",
@@ -126,7 +126,7 @@ SAFE_ASSERTION_CODES = {
     "formula_diagnostic_contract",
     "holdings_count_contract",
     "rationale_presence_contract",
-    "rebalance_interval_contract",
+    "selection_interval_contract",
     "request_id_contract",
     "research_kind_contract",
     "trajectory_inventory_contract",
@@ -761,7 +761,7 @@ files, product HTTP routes, SQL, or internal Python APIs. Complete one research 
    then diagnose the corrected Formula and require valid=true.
 4. Submit one strategy_backtest using the default folder, dates 2026-08-03 through
    {end_session}, top300, neutralization none, holdings_count 51,
-   rebalance_every_sessions 1, and a unique request_id beginning codex-real-acceptance-.
+   selection_every_sessions 1, and a unique request_id beginning codex-real-acceptance-.
 5. Call get_research_run exactly once for the returned durable run_id. No Worker is running,
    so require status queued and preserve its retry_after_seconds.
 Return only the exact visible Tool names requested by the output Schema. Do not include Formula
@@ -996,8 +996,8 @@ def _assert_submission_trajectory(calls: list[_ObservedMcpCall]) -> dict[str, ob
             "holdings_count_contract",
         )
         _require_trajectory(
-            call.arguments.get("rebalance_every_sessions") == 1,
-            "rebalance_interval_contract",
+            call.arguments.get("selection_every_sessions") == 1,
+            "selection_interval_contract",
         )
         request_id = call.arguments.get("request_id")
         _require_trajectory(
@@ -2014,7 +2014,7 @@ def _submission_calls_for_failure_test(
         "research_kind": "strategy_backtest",
         "initial_cash_cny": "10000000",
         "holdings_count": 51,
-        "rebalance_every_sessions": 1,
+        "selection_every_sessions": 1,
     }
     if submission_overrides is not None:
         common.update(submission_overrides)
@@ -2115,7 +2115,7 @@ def test_trajectory_evidence_is_derived_from_tool_arguments_and_results() -> Non
         "research_kind": "strategy_backtest",
         "initial_cash_cny": "10000000",
         "holdings_count": 51,
-        "rebalance_every_sessions": 1,
+        "selection_every_sessions": 1,
         "request_id": "codex-real-acceptance-test",
     }
     first = [
@@ -2231,7 +2231,7 @@ def test_submission_trajectory_accepts_structured_rejection_recovery() -> None:
         "research_kind": "strategy_backtest",
         "initial_cash_cny": "10000000",
         "holdings_count": 51,
-        "rebalance_every_sessions": 1,
+        "selection_every_sessions": 1,
     }
     calls = [
         _call(
@@ -2470,9 +2470,9 @@ def test_tool_discovery_failure_persists_only_closed_names_and_code(
         ),
         (
             _submission_calls_for_failure_test(
-                submission_overrides={"rebalance_every_sessions": 2}
+                submission_overrides={"selection_every_sessions": 2}
             ),
-            "rebalance_interval_contract",
+            "selection_interval_contract",
         ),
         (
             _submission_calls_for_failure_test(

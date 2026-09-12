@@ -714,7 +714,7 @@ async def _assert_first_semantic_result_pages(
         "research_kind": "strategy_backtest",
         "initial_cash_cny": "10000000",
         "holdings_count": 51,
-        "rebalance_every_sessions": 1,
+        "selection_every_sessions": 1,
     }
     assert provenance.structured_content["data"]["data_through_session"] >= (
         strategy_command["end_date"]
@@ -1097,6 +1097,6 @@ def _command(request_id: str, *, research_kind: str = "strategy_backtest") -> di
     }
     if research_kind == "strategy_backtest":
         command.update({
-            "initial_cash_cny": "10000000", "holdings_count": 1, "rebalance_every_sessions": 1,
+            "initial_cash_cny": "10000000", "holdings_count": 1, "selection_every_sessions": 1,
         })
     return command

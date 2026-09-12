@@ -375,7 +375,7 @@ async function admitStrategyRun(page: Page, requestId: string): Promise<string> 
       neutralization: "none",
       research_kind: "strategy_backtest",
       holdings_count: 10,
-      rebalance_every_sessions: 1,
+      selection_every_sessions: 1,
     },
     headers: sameOriginHeaders(),
   });

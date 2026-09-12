@@ -35,13 +35,21 @@ def account(
                     "last_adjusted_price": "4.5",
                 }
             ],
-            "rebalance_phase": {
+            "selection_phase": {
                 "origin_session": "2026-08-03",
                 "report_session_count": count,
-                "rebalance_interval": 5,
+                "selection_interval": 5,
                 "completed_intervals": count - 1,
             },
-            "pending_signal": {
+            "target_selection": {
+                "signal_session": session,
+                "selected_instrument_ids": ["000001.SZ"],
+                "relative_weights": {"000001.SZ": 1.0},
+                "signal_checksum": "signal", "contract_checksum": "contract",
+            },
+            "target_exposure": 1.0,
+            "pending_target": {
+                "exposure": 1.0,
                 "signal_session": session, "execution": "next_research_session_open",
                 "selected_instrument_ids": ["000001.SZ"],
                 "relative_weights": {"000001.SZ": 1.0},
@@ -71,7 +79,7 @@ def test_observation_starts_at_zero_without_reusing_the_seed_backtest_return() -
     assert [point.model_dump() for point in result.returns] == [
         {"session": "2026-08-17", "net_return": 0.0},
     ]
-    assert result.pending_signal_session == "2026-08-17"
+    assert result.pending_target_session == "2026-08-17"
     assert result.sessions_until_next_signal == 0
 
 
@@ -89,7 +97,7 @@ def test_observation_uses_published_holdings_and_adjusted_valuation_coordinates(
     assert result.holdings[0].shares == 100
     assert Decimal(result.holdings[0].market_value_cny) == 900
     assert result.holdings[0].weight == pytest.approx(9 / 11)
-    assert result.pending_signal_session is None
+    assert result.pending_target_session is None
     assert result.sessions_until_next_signal == 4
 
 

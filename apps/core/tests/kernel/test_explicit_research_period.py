@@ -86,7 +86,7 @@ def test_explicit_research_period_projects_three_variable_length_result_values(
     result = build_result_payload(
         output,
         research_kind="strategy_backtest",
-        rebalance_interval=1,
+        selection_interval=1,
     )
     payloads = result_publication_payloads(
         result, research_kind="strategy_backtest"
@@ -456,7 +456,7 @@ def _run_input(
         research_kind=research_kind,
         strategy=None if research_kind == "factor_evaluation" else StrategyRunInput(
             holdings_count=1,
-            rebalance_interval=1,
+            selection_interval=1,
             initial_cash_cny="10000000",
             commission_rate_all_in="0.0003",
             commission_min_cny="5",

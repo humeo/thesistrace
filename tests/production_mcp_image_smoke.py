@@ -278,7 +278,7 @@ async def _http_before() -> dict[str, object]:
                 "neutralization": "none",
                 "research_kind": "strategy_backtest",
                 "holdings_count": 1,
-                "rebalance_every_sessions": 1,
+                "selection_every_sessions": 1,
             },
             transport="streamable_http",
         )
