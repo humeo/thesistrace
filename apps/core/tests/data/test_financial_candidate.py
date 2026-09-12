@@ -2097,3 +2097,111 @@ def _read_manifest(root: Path, sha256: str) -> dict[str, object]:
             / f"{sha256}.json"
         ).read_bytes()
     )
+
+
+def test_old_generation_keeps_its_field_subset_when_supported_catalog_grows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import thesistrace.data.fields as fields
+
+    market = _market_generation(tmp_path)
+    candidates = FinancialCandidateStore(tmp_path)
+    candidate = candidates.materialize(
+        _empty_complete_snapshot(
+            tmp_path, market, idempotency_key="stable-field-subset",
+            fields=FULL_EXECUTABLE_FIELDS,
+        ),
+        observation_through_session="2026-08-13",
+    )
+    store = MountedGenerationStore(tmp_path)
+    generation = store.compose_financial_candidate(
+        market, candidate.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+    )
+    extra = replace(
+        fields.FINANCIAL_FIELDS[0],
+        field_id="financial.income.test_amount.latest_fy",
+        source_column="test_amount",
+        alpha=fields.AlphaFieldCapability("test_amount"),
+    )
+    monkeypatch.setattr(fields, "FINANCIAL_FIELDS", (*fields.FINANCIAL_FIELDS, extra))
+    monkeypatch.setattr(fields, "FIELD_DEFINITIONS", (*fields.FIELD_DEFINITIONS, extra))
+
+    reopened = MountedGenerationStore(tmp_path).validate_generation(generation.manifest_sha256)
+    assert reopened.field_availability == generation.field_availability
+    assert extra.field_id not in reopened.field_availability
+    refresh_base = store.open_refresh_base(generation.manifest_sha256)
+    refreshed = store.materialize_refresh(
+        predecessor_manifest_sha256=generation.manifest_sha256,
+        replacement_canonical=refresh_base.canonical,
+        replace_from_session=str(refresh_base.canonical["research_calendar"][-1]),
+        prepared_at=datetime(2026, 8, 14, 10, tzinfo=UTC),
+        source_name="market-refresh", source_lineage={"snapshot": "next-market"},
+    )
+    assert refreshed.field_availability == generation.field_availability
+    assert refreshed.financial_research_readiness == generation.financial_research_readiness
+    assert refreshed.families[-1] == generation.families[-1]
+    assert store.open_admission(generation.manifest_sha256).financial_research_readiness == "ready"
+    with pytest.raises(RuntimeError, match="unavailable in Generation"):
+        store.read_composite_slice(
+            generation.manifest_sha256,
+            sessions=["2010-04-21"], universe_name="top300", neutralization="none",
+            field_bindings={extra.field_id: "test_amount"},
+        )
+
+
+def test_industry_and_financial_publications_preserve_other_family_evidence(tmp_path: Path) -> None:
+    market = _market_generation(tmp_path)
+    store = MountedGenerationStore(tmp_path)
+    candidate = FinancialCandidateStore(tmp_path).materialize(
+        _empty_complete_snapshot(
+            tmp_path, market, idempotency_key="family-preservation",
+            fields=FULL_EXECUTABLE_FIELDS,
+        ),
+        observation_through_session="2026-08-13",
+    )
+    financial = store.compose_financial_candidate(
+        market, candidate.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+    )
+    industry = store.materialize_industry_candidate(
+        financial.manifest_sha256,
+        [{
+            "instrument_id": "equity:000001.SZ",
+            "active_from": SESSIONS[0], "active_to": "",
+            "sw2021_l1": "801780", "sw2021_l2": "801783", "sw2021_l3": "851911",
+        }],
+        observation_through_session=SESSIONS[-2],
+    )
+    combined = store.compose_industry_candidate(
+        financial.manifest_sha256, industry.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 11, tzinfo=UTC),
+        publication_coordinate="b" * 64,
+    )
+    assert {
+        family.family_id: family for family in combined.families
+        if family.family_id != "equity.industry_membership"
+    } == {
+        family.family_id: family for family in financial.families
+        if family.family_id != "equity.industry_membership"
+    }
+    assert combined.field_availability == financial.field_availability
+    assert combined.financial_research_readiness == financial.financial_research_readiness
+    assert combined.financial_publication_coordinate == financial.financial_publication_coordinate
+    assert store.validate_generation(combined.manifest_sha256) == combined
+    from thesistrace.data.dependencies import generation_family_coverage
+
+    coverage = generation_family_coverage(combined)
+    assert coverage["equity.eod_price"].end.isoformat() == SESSIONS[-1]
+    assert coverage["equity.financial_pit"].end.isoformat() == SESSIONS[-1]
+    assert coverage["equity.industry_membership"].end.isoformat() == SESSIONS[-2]
+
+    republished = store.compose_financial_candidate(
+        combined.manifest_sha256, candidate.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 12, tzinfo=UTC),
+    )
+    assert republished.families == combined.families
+    assert republished.field_availability == combined.field_availability
+    assert republished.industry_publication_coordinate == combined.industry_publication_coordinate
+    assert store.validate_generation(republished.manifest_sha256) == republished

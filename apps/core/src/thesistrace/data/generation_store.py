@@ -607,12 +607,9 @@ class MountedGenerationStore:
         ):
             raise GenerationStoreError("Financial candidate is incompatible with Market Data")
         root = self._read_family_generation_root(market_generation_manifest_sha256)
-        market_families = [
-            reference
-            for reference in root["families"]
-            if isinstance(reference, Mapping)
-            and reference.get("family_id") != "equity.financial_pit"
-        ]
+        family_references = _replace_family_references(
+            root["families"], {"equity.financial_pit": financial_reference},
+        )
         market_field_ids = {
             str(field_id)
             for field_id in root["field_availability"]
@@ -625,12 +622,10 @@ class MountedGenerationStore:
             "field_availability": sorted(
                 {*market_field_ids, *(field.field_id for field in FINANCIAL_FIELDS)}
             ),
-            "families": [
-                *market_families,
-                financial_reference,
-            ],
+            "families": family_references,
             "financial_research_readiness": _financial_readiness_declaration(
-                financial_reference["dataset_coverage"]
+                financial_reference["dataset_coverage"],
+                field_ids=[field.field_id for field in FINANCIAL_FIELDS],
             ),
         }
         manifest = {
@@ -716,21 +711,9 @@ class MountedGenerationStore:
             or str(coverage["end"]) > current.data_through_session
         ):
             raise GenerationStoreError("Industry candidate is incompatible with Market Data")
-        non_financial = {
-            str(reference["family_id"]): dict(reference)
-            for reference in root["families"]
-            if isinstance(reference, Mapping)
-            and reference.get("family_id") != "equity.financial_pit"
-            and reference.get("family_id") != INDUSTRY_FAMILY_SPEC.family_id
-        }
-        non_financial[INDUSTRY_FAMILY_SPEC.family_id] = candidate_reference
-        family_references = [
-            non_financial[spec.family_id]
-            for spec in ordered_non_financial_specs(frozenset(non_financial))
-        ]
-        financial_reference = _family_reference(root, "equity.financial_pit")
-        if financial_reference is not None:
-            family_references.append(dict(financial_reference))
+        family_references = _replace_family_references(
+            root["families"], {INDUSTRY_FAMILY_SPEC.family_id: candidate_reference},
+        )
         identity = {
             "schema_contract": root["schema_contract"],
             "data_through_session": root["data_through_session"],
@@ -859,6 +842,8 @@ class MountedGenerationStore:
             raise GenerationStoreError(str(error)) from error
         root = self._read_family_generation_root(manifest_sha256)
         descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
+        if set(field_bindings) - set(descriptor.field_availability):
+            raise GenerationStoreError("Market Series field unavailable in Generation")
         full_calendar = list(descriptor.research_sessions)
         if any(session not in full_calendar for session in sessions):
             raise GenerationStoreError("Market Series sessions are outside Coverage")
@@ -961,31 +946,8 @@ class MountedGenerationStore:
         field_bindings: Mapping[str, str],
     ) -> MountedMarketSeries:
         """Resolve one storage-independent market/financial calculation slice."""
-        from thesistrace.data.fields import FINANCIAL_FIELDS, MARKET_FIELDS
-        from thesistrace.data.financial_candidate import (
-            FinancialCandidateError,
-            FinancialCandidateStore,
-        )
-        from thesistrace.data.financial_series import (
-            FinancialSeriesError,
-            FinancialSeriesResolver,
-        )
-
-        market_field_ids = {field.field_id for field in MARKET_FIELDS}
-        financial_field_ids = {field.field_id for field in FINANCIAL_FIELDS}
-        unknown = set(field_bindings) - market_field_ids - financial_field_ids
-        if unknown:
-            raise GenerationStoreError("Composite Series field binding is unsupported")
-        market_bindings = {
-            field_id: evaluation_name
-            for field_id, evaluation_name in field_bindings.items()
-            if field_id in market_field_ids
-        }
-        financial_bindings = {
-            field_id: evaluation_name
-            for field_id, evaluation_name in field_bindings.items()
-            if field_id in financial_field_ids
-        }
+        bindings = _field_family_bindings(field_bindings, neutralization)
+        market_bindings = bindings.pop("equity.eod_price", {})
         market = self.read_market_slice(
             manifest_sha256,
             sessions=sessions,
@@ -993,27 +955,36 @@ class MountedGenerationStore:
             neutralization=neutralization,
             field_bindings=market_bindings,
         )
-        if not financial_bindings:
-            return market
-        financial_manifest = market.generation.financial_candidate_manifest_sha256
-        if financial_manifest is None:
-            raise GenerationStoreError("Composite Series lacks Financial Data")
-        try:
-            financial_values = FinancialSeriesResolver(FinancialCandidateStore(self._root)).resolve(
-                manifest_sha256=financial_manifest,
-                field_ids=tuple(financial_bindings),
-                sessions=tuple(sessions),
+        if set(field_bindings) - set(market.generation.field_availability):
+            raise GenerationStoreError("Composite Series field unavailable in Generation")
+        fields = dict(market.research_data.fields)
+        for family_id, family_bindings in bindings.items():
+            reader, family_manifest = self._series_family_reader(market.generation, family_id)
+            fields.update(reader.resolve(
+                manifest_sha256=family_manifest,
+                field_ids=tuple(family_bindings), sessions=tuple(sessions),
                 instrument_ids=tuple(sorted(market.research_data.instruments)),
-            )
-        except (FinancialCandidateError, FinancialSeriesError) as error:
-            raise GenerationStoreError(str(error)) from error
+            ))
         return MountedMarketSeries(
             generation=market.generation,
-            research_data=replace(
-                market.research_data,
-                fields={**market.research_data.fields, **financial_values},
-            ),
+            research_data=replace(market.research_data, fields=fields),
         )
+
+    def _series_family_reader(self, generation: MountedFamilyGenerationDescriptor, family_id: str):
+        from thesistrace.data.financial_candidate import FinancialCandidateStore
+        from thesistrace.data.financial_series import FinancialSeriesResolver
+
+        readers = {
+            "equity.financial_pit": lambda: FinancialSeriesResolver(
+                FinancialCandidateStore(self._root)
+            ),
+        }
+        reference = next(
+            (item for item in generation.families if item.family_id == family_id), None,
+        )
+        if reference is None or family_id not in readers:
+            raise GenerationStoreError(f"Research Series family is unavailable: {family_id}")
+        return readers[family_id](), reference.manifest_sha256
 
     def read_columnar_slice(
         self,
@@ -1026,9 +997,6 @@ class MountedGenerationStore:
         fact_instrument_ids: frozenset[str],
     ):
         from thesistrace.data.columnar_series import ColumnarResearchData
-        from thesistrace.data.fields import FINANCIAL_FIELDS, MARKET_FIELDS
-        from thesistrace.data.financial_candidate import FinancialCandidateStore
-        from thesistrace.data.financial_series import FinancialSeriesResolver
 
         if not sessions or sessions != sorted(set(sessions)):
             raise GenerationStoreError("Columnar Research sessions are invalid")
@@ -1036,24 +1004,15 @@ class MountedGenerationStore:
             raise GenerationStoreError("Columnar Research Universe is invalid")
         if neutralization not in {"none", "industry"}:
             raise GenerationStoreError("Columnar Research Neutralization is invalid")
-        market_field_ids = {field.field_id for field in MARKET_FIELDS}
-        financial_field_ids = {field.field_id for field in FINANCIAL_FIELDS}
-        unknown = set(field_bindings) - market_field_ids - financial_field_ids
-        if unknown:
-            raise GenerationStoreError("Columnar Research field binding is unsupported")
-        market_bindings = {
-            field_id: evaluation_name
-            for field_id, evaluation_name in field_bindings.items()
-            if field_id in market_field_ids
-        }
-        financial_bindings = tuple(
-            field_id for field_id in field_bindings if field_id in financial_field_ids
-        )
+        bindings = _field_family_bindings(field_bindings, neutralization)
+        market_bindings = bindings.pop("equity.eod_price", {})
         requested_columns = market_field_columns(market_bindings)
         root = self._read_family_generation_root(manifest_sha256)
         descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
         if any(session not in descriptor.research_sessions for session in sessions):
             raise GenerationStoreError("Columnar Research sessions are outside Coverage")
+        if set(field_bindings) - set(descriptor.field_availability):
+            raise GenerationStoreError("Columnar Research field unavailable in Generation")
         selected = set(sessions)
         universe_spec, universe_reference = self._family_table_reference(
             root,
@@ -1133,19 +1092,22 @@ class MountedGenerationStore:
                 }
             ),
         )
-        financial_values = None
-        if financial_bindings:
-            financial_manifest = descriptor.financial_candidate_manifest_sha256
-            if financial_manifest is None:
-                raise GenerationStoreError("Columnar Research lacks Financial Data")
-            financial_values = FinancialSeriesResolver(
-                FinancialCandidateStore(self._root)
-            ).resolve_table(
-                manifest_sha256=financial_manifest,
-                field_ids=financial_bindings,
-                sessions=tuple(sessions),
+        family_values = None
+        for family_id, family_bindings in bindings.items():
+            reader, family_manifest = self._series_family_reader(descriptor, family_id)
+            values = reader.resolve_table(
+                manifest_sha256=family_manifest,
+                field_ids=tuple(family_bindings), sessions=tuple(sessions),
                 instrument_ids=tuple(sorted(instrument_ids)),
             )
+            if family_values is None:
+                family_values = values
+            else:
+                coordinates = ("session", "instrument_id")
+                if not family_values.select(coordinates).equals(values.select(coordinates)):
+                    raise GenerationStoreError("Research Series family coordinates disagree")
+                for field_id in family_bindings:
+                    family_values = family_values.append_column(field_id, values[field_id])
         return ColumnarResearchData(
             sessions=tuple(sessions),
             _instruments=tables["instruments"],
@@ -1154,10 +1116,10 @@ class MountedGenerationStore:
             _trading_states=tables["trading_states"],
             _price_limits=tables["price_limits"],
             _industries=industries,
-            _financial_values=financial_values,
+            _family_values=family_values,
             _field_columns={
                 **market_field_column_bindings(market_bindings),
-                **{field_id: field_id for field_id in financial_bindings},
+                **{field_id: field_id for family in bindings.values() for field_id in family},
             },
         )
 
@@ -1443,28 +1405,30 @@ class MountedGenerationStore:
             )
             for family_spec in CORE_MARKET_FAMILY_SPECS
         }
-        predecessor_industry_reference = _family_reference(
-            predecessor_root,
-            INDUSTRY_FAMILY_SPEC.family_id,
+        # Refresh owns only the core market families. Preserve every other
+        # reference and its declared fields without requalifying it against a
+        # newer supported catalog.
+        family_references = _replace_family_references(
+            predecessor_root["families"], refreshed_family_references,
         )
-        if predecessor_industry_reference is not None:
-            refreshed_family_references[INDUSTRY_FAMILY_SPEC.family_id] = dict(
-                predecessor_industry_reference
-            )
-        family_references = [
-            refreshed_family_references[spec.family_id]
-            for spec in ordered_non_financial_specs(frozenset(refreshed_family_references))
-        ]
-        field_availability = tuple(
-            sorted(str(row["field_id"]) for row in normalized["field_catalog"])
+        catalog_spec, catalog_reference = self._family_table_reference(
+            predecessor_root, "data.field_catalog", "field_catalog"
         )
+        prior_market_fields = {
+            str(row["field_id"])
+            for row in self._open_table(catalog_spec, catalog_reference, predecessor_calendar)
+        }
+        retained_fields = set(predecessor_root["field_availability"]) - prior_market_fields
+        field_availability = tuple(sorted(
+            retained_fields | {str(row["field_id"]) for row in normalized["field_catalog"]}
+        ))
         identity = {
             "schema_contract": "canonical-research",
             "data_through_session": new_calendar[-1],
             "research_sessions": list(new_calendar),
             "field_availability": list(field_availability),
             "families": family_references,
-            "financial_research_readiness": None,
+            "financial_research_readiness": predecessor_root["financial_research_readiness"],
         }
         data_identity = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
         preparation = _preparation(prepared_at, source_name, source_lineage)
@@ -1473,7 +1437,9 @@ class MountedGenerationStore:
             "version": _MANIFEST_VERSION,
             "data_identity": data_identity,
             **identity,
-            "financial_publication_coordinate": None,
+            "financial_publication_coordinate": predecessor_root[
+                "financial_publication_coordinate"
+            ],
             "industry_publication_coordinate": predecessor_root.get(
                 "industry_publication_coordinate"
             ),
@@ -1495,17 +1461,12 @@ class MountedGenerationStore:
 
         prior_candidate = str(prior_financial_reference["manifest_sha256"])
         financial_store = FinancialCandidateStore(self._root)
-        financial = financial_store.reopen_against_prevalidated_market_generation(
+        financial_store.reopen_against_prevalidated_market_generation(
             prior_candidate, market_generation.manifest_sha256
         )
         if dict(prior_financial_reference) != financial_store.family_reference(prior_candidate):
             raise GenerationStoreError("Financial Dataset Family reference is incompatible")
-        return self._compose_prevalidated_financial_candidate(
-            market_generation.manifest_sha256,
-            financial.manifest_sha256,
-            prepared_at=prepared_at,
-            publication_coordinate=str(predecessor_root["financial_publication_coordinate"]),
-        )
+        return market_generation
 
     def _family_table_reference(
         self,
@@ -2542,18 +2503,56 @@ def _family_spec_for_reference(
     return selected
 
 
+def _field_family_bindings(
+    field_bindings: Mapping[str, str], neutralization: str,
+) -> dict[str, dict[str, str]]:
+    from thesistrace.data.dependencies import resolve_data_dependencies
+
+    try:
+        dependencies = resolve_data_dependencies(
+            field_ids=frozenset(field_bindings), neutralization=neutralization,
+        )
+    except ValueError as error:
+        raise GenerationStoreError("Research Series field binding is unsupported") from error
+    return {
+        family_id: {field_id: field_bindings[field_id] for field_id in sorted(field_ids)}
+        for family_id, field_ids in dependencies.field_ids_by_family.items()
+    }
+
+
+def _generation_family_order() -> tuple[str, ...]:
+    return (*(spec.family_id for spec in NON_FINANCIAL_FAMILY_SPECS), "equity.financial_pit")
+
+
 def _valid_generation_family_ids(family_ids: list[object]) -> bool:
-    core_ids = {spec.family_id for spec in CORE_MARKET_FAMILY_SPECS}
-    without_industry = [
-        spec.family_id for spec in NON_FINANCIAL_FAMILY_SPECS if spec.family_id in core_ids
-    ]
-    with_industry = [spec.family_id for spec in NON_FINANCIAL_FAMILY_SPECS]
-    return family_ids in (
-        without_industry,
-        [*without_industry, "equity.financial_pit"],
-        with_industry,
-        [*with_industry, "equity.financial_pit"],
+    if not all(isinstance(family_id, str) for family_id in family_ids):
+        return False
+    selected = set(family_ids)
+    required = {spec.family_id for spec in CORE_MARKET_FAMILY_SPECS}
+    order = _generation_family_order()
+    return (
+        required <= selected <= set(order)
+        and family_ids == [family_id for family_id in order if family_id in selected]
     )
+
+
+def _replace_family_references(
+    references: Sequence[Mapping[str, object]],
+    replacements: Mapping[str, Mapping[str, object]],
+) -> list[Mapping[str, object]]:
+    """Replace only owned families, retaining every other validated reference."""
+    combined = {str(reference["family_id"]): reference for reference in references}
+    if len(combined) != len(references) or any(
+        family_id != reference.get("family_id")
+        for family_id, reference in replacements.items()
+    ):
+        raise GenerationStoreError("Family Generation candidate set is incompatible")
+    combined.update(replacements)
+    order = _generation_family_order()
+    family_ids = [family_id for family_id in order if family_id in combined]
+    if set(combined) != set(family_ids) or not _valid_generation_family_ids(family_ids):
+        raise GenerationStoreError("Family Generation candidate set is incompatible")
+    return [combined[family_id] for family_id in family_ids]
 
 
 def _family_generation_descriptor_from_root(
@@ -2627,9 +2626,17 @@ def _family_generation_descriptor_from_root(
     if financial_candidate is None:
         readiness_valid = readiness is None and coordinate is None
     else:
+        from thesistrace.data.fields import FINANCIAL_FIELDS
+
+        declared_financial_fields = sorted(
+            set(field_availability) & {field.field_id for field in FINANCIAL_FIELDS}
+        )
         readiness_valid = (
             financial_coverage is not None
-            and readiness == _financial_readiness_declaration(financial_coverage)
+            and bool(declared_financial_fields)
+            and readiness == _financial_readiness_declaration(
+                financial_coverage, field_ids=declared_financial_fields
+            )
             and isinstance(coordinate, str)
             and len(coordinate) == 64
             and all(character in "0123456789abcdef" for character in coordinate)
@@ -2674,11 +2681,11 @@ def _family_generation_descriptor_from_root(
 
 def _financial_readiness_declaration(
     coverage: Mapping[str, object],
+    *,
+    field_ids: Sequence[str],
 ) -> dict[str, object]:
-    from thesistrace.data.fields import FINANCIAL_FIELDS
-
     common = {
-        "field_ids": sorted(field.field_id for field in FINANCIAL_FIELDS),
+        "field_ids": sorted(field_ids),
         "series_reader": "session-aligned-financial-fields",
         "research_run": "composite-alpha",
         "daily_track": "batch-incremental-composite-alpha",
@@ -3110,10 +3117,8 @@ def _validate_candidate_projection(
     assert isinstance(calendar, list)
     assert isinstance(field_catalog, list)
     actual_fields = {str(row["field_id"]) for row in field_catalog}
-    if descriptor.financial_candidate_manifest_sha256 is not None:
-        from thesistrace.data.fields import FINANCIAL_FIELDS
-
-        actual_fields.update(field.field_id for field in FINANCIAL_FIELDS)
+    if descriptor.financial_research_readiness is not None:
+        actual_fields.update(descriptor.financial_research_readiness["field_ids"])
     if (
         descriptor.data_through_session != str(calendar[-1])
         or descriptor.research_sessions != tuple(str(session) for session in calendar)

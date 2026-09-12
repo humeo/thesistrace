@@ -2112,11 +2112,8 @@ def test_financial_admission_explains_coverage_without_blocking_market_only_form
         assert len(issues) == 1
         assert issues[0]["code"] == "FINANCIAL_CALCULATION_OUTSIDE_COVERAGE"
         assert issues[0]["field"] == "formula"
-        assert issues[0]["message"] == (
-            "Financial Formula needs its requested period and lookback inside "
-            "Financial Coverage; current Financial Coverage is "
-            "2010-01-04 to 2026-08-06."
-        )
+        assert "equity.financial_pit" in issues[0]["message"]
+        assert "2010-01-04 to 2026-08-06" in issues[0]["message"]
 
         market_only = client.post(
             "/api/research-runs",
@@ -2168,7 +2165,8 @@ def test_industry_admission_requires_only_neutralized_period_coverage(
         issues = missing.json()["issues"]
         assert len(issues) == 1
         assert issues[0]["code"] == "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE"
-        assert issues[0]["message"].endswith("Industry Coverage is not ready.")
+        assert "equity.industry_membership" in issues[0]["message"]
+        assert "not ready" in issues[0]["message"]
 
     _publish_composite_head(
         settings,
@@ -2192,11 +2190,8 @@ def test_industry_admission_requires_only_neutralized_period_coverage(
         assert len(issues) == 1
         assert issues[0]["code"] == "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE"
         assert issues[0]["field"] == "neutralization"
-        assert issues[0]["message"] == (
-            "Industry Neutralization needs its requested period inside "
-            "Industry Coverage; current Industry Coverage is "
-            "2010-01-04 to 2026-08-06."
-        )
+        assert "equity.industry_membership" in issues[0]["message"]
+        assert "2010-01-04 to 2026-08-06" in issues[0]["message"]
 
         market_only = client.post(
             "/api/research-runs",
@@ -4131,6 +4126,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         overview = client.get("/api/data")
         assert overview.status_code == 200
         assert set(overview.json()) == {
+            "catalog", "generation_manifest_sha256", "available_field_ids", "field_families",
             "market_coverage",
             "financial_coverage",
             "industry_coverage",
@@ -4148,6 +4144,15 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
             "financial_research_readiness",
             "industry_research_readiness",
         }
+        assert overview.json()["generation_manifest_sha256"] == (
+            correction_head.generation_manifest_sha256
+        )
+        assert overview.json()["catalog"]["generation_manifest_sha256"] == (
+            overview.json()["generation_manifest_sha256"]
+        )
+        assert {field["field_id"] for field in overview.json()["catalog"]["fields"]} == set(
+            overview.json()["available_field_ids"]
+        )
         assert "correction" not in overview.text.lower()
 
         impact_sessions = (
@@ -5007,6 +5012,46 @@ def test_result_read_failure_stays_sanitized(tmp_path: Path) -> None:
         assert "object" not in response.text.lower()
 
 
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_admission_rechecks_head_after_catalog_read(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2010-01-04", "2010-04-20", "2010-04-21",
+                "2026-08-03", "2026-08-04", "2026-08-05")
+    head_a = _publish_composite_head(settings, sessions=sessions, all_market_fields=True)
+    with TestClient(create_app(settings)) as client:
+        snapshot = client.get("/api/data").json()
+        assert snapshot["generation_manifest_sha256"] == head_a
+        assert snapshot["catalog"]["generation_manifest_sha256"] == head_a
+        assert len(snapshot["catalog"]["fields"]) == 12
+        assert "revenue" in {field["identifier"] for field in snapshot["catalog"]["fields"]}
+
+        head_b = _publish_head(
+            settings, sessions=sessions, price_offset=2, expected_manifest=head_a,
+        )
+        rejected = client.post(
+            "/api/research-runs", json=_run_command("stale-catalog-finance", formula="revenue"),
+        )
+        assert rejected.status_code == 422
+        assert rejected.json()["issues"][0]["code"] == "FIELD_UNAVAILABLE_IN_CURRENT_DATA"
+        runtime = client.app.state.core_runtime
+        with runtime.database.transaction() as transaction:
+            row = transaction.execute("SELECT count(*) AS n FROM research_runs.runs").fetchone()
+            assert row["n"] == 0
+        accepted = client.post(
+            "/api/research-runs", json=_run_command("new-head-market", formula="close"),
+        )
+        assert accepted.status_code == 202
+        run_id = accepted.json()["id"]
+        assert runtime.research_runs.process_next() is True
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "succeeded"
+        assert _stored_execution(settings, run_id)["attempt_data_generation_id"] == head_b
+
+
 def _run_command(
     request_id: str,
     *,
@@ -5401,6 +5446,7 @@ def _publish_composite_head(
     settings: CoreSettings,
     *,
     sessions: tuple[str, ...],
+    all_market_fields: bool = False,
     financial_through: str | None = None,
     financial_readiness_status: str = "ready",
     industry_through: str | None = None,
@@ -5411,6 +5457,10 @@ def _publish_composite_head(
     finished_date = max(observation_through, "2026-08-05")
     store = MountedGenerationStore(settings.data_mount)
     market_canonical = _two_instrument_canonical(sessions, corrected=False)
+    if all_market_fields:
+        market_canonical["field_catalog"] = [
+            row for row in field_catalog(sessions[0]) if row["alpha_authorable"]
+        ]
     prepared_at = datetime(2026, 8, 5, 10, tzinfo=UTC)
     if expected_manifest is None:
         market = store.materialize(

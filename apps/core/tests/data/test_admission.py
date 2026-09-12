@@ -3,11 +3,15 @@ from datetime import date
 import pytest
 
 from thesistrace.data import DatasetAdmissionSnapshot, DatasetWarmupUnavailable
+from thesistrace.data.models import DatasetCoverage
 
 
 def test_calculation_shape_rejects_a_truncated_warmup_window() -> None:
     sessions = (date(2026, 8, 3), date(2026, 8, 4), date(2026, 8, 5))
     snapshot = DatasetAdmissionSnapshot(
+        family_coverage={
+            "equity.eod_price": DatasetCoverage(start=sessions[0], end=sessions[-1]),
+        },
         generation_manifest_sha256="a" * 64,
         data_through_session=sessions[-1],
         coverage_start=sessions[0],
@@ -31,6 +35,10 @@ def test_calculation_shape_rejects_a_truncated_warmup_window() -> None:
 def test_admission_snapshot_preserves_degraded_financial_readiness() -> None:
     session = date(2026, 8, 14)
     snapshot = DatasetAdmissionSnapshot(
+        family_coverage={
+            "equity.eod_price": DatasetCoverage(start=session, end=session),
+            "equity.financial_pit": DatasetCoverage(start=session, end=session),
+        },
         generation_manifest_sha256="a" * 64,
         data_through_session=session,
         coverage_start=session,
@@ -39,8 +47,6 @@ def test_admission_snapshot_preserves_degraded_financial_readiness() -> None:
         available_field_ids=frozenset({"financial.income.total_revenue.latest_fy"}),
         maximum_universe_cardinality=lambda _universe, _start, _end: 300,
         universe_member_union_cardinalities=lambda _universe, windows: tuple(300 for _ in windows),
-        financial_coverage_start=session,
-        financial_coverage_end=session,
         financial_research_readiness="ready_with_gaps",
     )
 
@@ -50,6 +56,9 @@ def test_admission_snapshot_preserves_degraded_financial_readiness() -> None:
 def test_admission_snapshot_exposes_exact_universe_member_union_measurement() -> None:
     sessions = (date(2026, 8, 3), date(2026, 8, 4))
     snapshot = DatasetAdmissionSnapshot(
+        family_coverage={
+            "equity.eod_price": DatasetCoverage(start=sessions[0], end=sessions[-1]),
+        },
         generation_manifest_sha256="a" * 64,
         data_through_session=sessions[-1],
         coverage_start=sessions[0],

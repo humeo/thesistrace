@@ -2,14 +2,20 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from thesistrace.alpha_language import alpha_language
+from thesistrace.data.fields import MARKET_FIELDS, alpha_field_catalog
 from thesistrace.entrypoints.alpha_http import install_alpha_http
 
 
-def _client(*, financial_authoring_ready: bool = False) -> TestClient:
+def _client(*, available_field_ids: frozenset[str] = frozenset(
+    field.field_id for field in MARKET_FIELDS
+)) -> TestClient:
     app = FastAPI()
     install_alpha_http(
         app,
-        financial_authoring_ready=lambda _request: financial_authoring_ready,
+        catalog_snapshot=lambda _request: alpha_language.catalog(
+            available_field_ids=available_field_ids,
+            generation_manifest_sha256="a" * 64,
+        ),
     )
     return TestClient(app)
 
@@ -47,7 +53,9 @@ def test_alpha_catalog_is_public_and_contains_no_execution_implementation() -> N
 
 
 def test_alpha_catalog_exposes_financial_fields_and_cross_sectional_rank() -> None:
-    with _client(financial_authoring_ready=True) as client:
+    with _client(
+        available_field_ids=frozenset(field.field_id for field in alpha_field_catalog())
+    ) as client:
         catalog = client.get("/api/alpha/catalog").json()
 
     financial = {
@@ -138,3 +146,13 @@ def test_alpha_diagnostics_rejects_request_shape_errors() -> None:
 
     assert missing.status_code == 422
     assert extra.status_code == 422
+
+
+def test_alpha_http_catalog_keeps_a_partial_family_partial() -> None:
+    with _client(
+        available_field_ids=frozenset({"financial.balance_sheet.total_assets.latest_reported"})
+    ) as client:
+        catalog = client.get("/api/alpha/catalog").json()
+
+    assert [field["identifier"] for field in catalog["fields"]] == ["assets"]
+    assert catalog["generation_manifest_sha256"] == "a" * 64

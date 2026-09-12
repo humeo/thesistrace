@@ -249,7 +249,7 @@ class ColumnarResearchData:
     _trading_states: pa.Table
     _price_limits: pa.Table
     _industries: pa.Table
-    _financial_values: pa.Table | None
+    _family_values: pa.Table | None
     _field_columns: Mapping[str, str]
 
     @cached_property
@@ -286,11 +286,11 @@ class ColumnarResearchData:
         )
 
     @cached_property
-    def _financial_index(self) -> _CoordinateIndex | None:
-        if self._financial_values is None:
+    def _family_index(self) -> _CoordinateIndex | None:
+        if self._family_values is None:
             return None
         return _CoordinateIndex(
-            self._financial_values,
+            self._family_values,
             session_column="session",
             sessions=self.sessions,
             instruments=self._instrument_axis,
@@ -315,16 +315,16 @@ class ColumnarResearchData:
             for field_id, column in self._field_columns.items()
             if column in self._eod_prices.column_names
         }
-        if self._financial_values is not None:
+        if self._family_values is not None:
             market.update(
                 {
                     field_id: _CoordinateValues(
-                        self._financial_index,
+                        self._family_index,
                         value_columns=(field_id,),
                         convert=lambda value: value,
                     )
                     for field_id in self._field_columns
-                    if field_id in self._financial_values.column_names
+                    if field_id in self._family_values.column_names
                 }
             )
         return market
@@ -369,11 +369,11 @@ class ColumnarResearchData:
         matrices: dict[str, np.ndarray] = {}
         for field_id in field_ids:
             if (
-                self._financial_values is not None
-                and field_id in self._financial_values.column_names
+                self._family_values is not None
+                and field_id in self._family_values.column_names
             ):
                 matrices[field_id] = _numeric_matrix(
-                    self._financial_index,
+                    self._family_index,
                     value_column=field_id,
                     instruments=instruments,
                     shape=shape,
@@ -427,10 +427,10 @@ class ColumnarResearchData:
     def slice_sessions(self, sessions: tuple[str, ...]) -> ColumnarResearchData:
         if not sessions or any(session not in self.sessions for session in sessions):
             raise ValueError("Columnar Research Sessions are outside the input slice")
-        financial = (
+        family_values = (
             None
-            if self._financial_values is None
-            else _session_filter(self._financial_values, "session", sessions)
+            if self._family_values is None
+            else _session_filter(self._family_values, "session", sessions)
         )
         return ColumnarResearchData(
             sessions=sessions,
@@ -440,7 +440,7 @@ class ColumnarResearchData:
             _trading_states=_session_filter(self._trading_states, "session", sessions),
             _price_limits=_session_filter(self._price_limits, "session", sessions),
             _industries=self._industries,
-            _financial_values=financial,
+            _family_values=family_values,
             _field_columns=self._field_columns,
         )
 

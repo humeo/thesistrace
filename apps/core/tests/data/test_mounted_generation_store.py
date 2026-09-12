@@ -7,6 +7,7 @@ import os
 import threading
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -17,6 +18,7 @@ import pytest
 
 import thesistrace.data.generation_store as generation_store_module
 import thesistrace.publication.serialization as serialization_module
+from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.generation_schema import MARKET_CANDIDATE_TABLE_SPECS
 from thesistrace.data.generation_store import (
@@ -601,6 +603,30 @@ def test_industry_publication_reuses_prevalidated_unchanged_families(
     assert store.validate_generation(composed.manifest_sha256) == composed
 
 
+@pytest.mark.parametrize("include_industry", (True, False))
+def test_registered_optional_family_does_not_invalidate_existing_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, include_industry: bool,
+) -> None:
+    canonical = _canonical()
+    if not include_industry:
+        del canonical["industry_membership"]
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 13, tzinfo=UTC),
+        source_name="existing-families",
+        source_lineage={"snapshot": "fixed"},
+    )
+    supported = generation_store_module.NON_FINANCIAL_FAMILY_SPECS
+    optional = replace(supported[-1], family_id="equity.optional_test")
+    monkeypatch.setattr(
+        generation_store_module, "NON_FINANCIAL_FAMILY_SPECS", (*supported, optional),
+    )
+
+    assert store.validate_generation(generation.manifest_sha256) == generation
+    assert store.open_admission(generation.manifest_sha256).generation == generation
+
+
 def test_industry_candidate_replaces_only_industry_family(tmp_path: Path) -> None:
     canonical = _canonical()
     del canonical["industry_membership"]
@@ -845,8 +871,35 @@ def test_market_slice_skips_unrequested_families_and_session_partitions(
     }
 
 
+@pytest.mark.parametrize(
+    "reader", ("read_market_slice", "read_composite_slice", "read_columnar_slice")
+)
+def test_slice_rejects_fields_absent_from_frozen_generation(tmp_path: Path, reader: str) -> None:
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    extra = {"fact_instrument_ids": frozenset()} if reader == "read_columnar_slice" else {}
+    with pytest.raises(GenerationStoreError, match="unavailable in Generation"):
+        getattr(store, reader)(
+            generation.manifest_sha256,
+            sessions=[generation.research_sessions[-1]],
+            universe_name="top300",
+            neutralization="none",
+            field_bindings={"price.high.adjusted": "high"},
+            **extra,
+        )
+
+
 def test_columnar_slice_resolves_alpha_names_to_physical_columns(tmp_path: Path) -> None:
     canonical = _canonical()
+    canonical["field_catalog"] = [
+        field for field in field_catalog(str(canonical["research_calendar"][-1]))
+        if field["alpha_authorable"]
+    ]
     store = MountedGenerationStore(tmp_path)
     generation = store.materialize(
         canonical,

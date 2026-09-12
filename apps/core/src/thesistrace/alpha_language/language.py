@@ -62,6 +62,7 @@ class AlphaLanguage:
         builtins: tuple[BuiltinDefinition, ...] = BUILTIN_DEFINITIONS,
     ) -> None:
         field_by_identifier: dict[str, FieldDefinition] = {}
+        field_ids: set[str] = set()
         for field in fields:
             if field.alpha is None:
                 continue
@@ -73,6 +74,11 @@ class AlphaLanguage:
                 )
             if identifier in field_by_identifier:
                 raise AlphaLanguageCatalogError(f"duplicate Alpha identifier: {identifier}")
+            if field.field_id in field_ids:
+                raise AlphaLanguageCatalogError(
+                    f"duplicate Canonical Field: {field.field_id}"
+                )
+            field_ids.add(field.field_id)
             field_by_identifier[identifier] = field
 
         builtin_by_identifier: dict[str, BuiltinDefinition] = {}
@@ -95,6 +101,14 @@ class AlphaLanguage:
                     description=field.description,
                     unit=field.unit,
                     family_id=field.family_id,
+                    research_category=field.research_category,
+                    display_name=field.display_name,
+                    research_purpose=field.research_purpose,
+                    source_unit=field.source_unit,
+                    source_endpoint=field.source_endpoint,
+                    source_column=field.source_column,
+                    source_lineage=field.source_lineage,
+                    reporting_scope=field.reporting_scope,
                     availability=field.availability,
                     report_period_selection=field.report_period_selection,
                     applicable_company_types=list(field.applicable_company_types),
@@ -106,15 +120,20 @@ class AlphaLanguage:
             builtins=[_public_builtin(builtin) for builtin in builtins],
         )
 
-    def catalog(self, *, financial_authoring_ready: bool = True) -> AlphaAuthoringCatalog:
-        if financial_authoring_ready:
-            return self._catalog
+    def catalog(
+        self,
+        *,
+        available_field_ids: frozenset[str] | None = None,
+        generation_manifest_sha256: str | None = None,
+    ) -> AlphaAuthoringCatalog:
+        """Describe supported fields, or the actual subset in a frozen Generation."""
         return self._catalog.model_copy(
             update={
+                "generation_manifest_sha256": generation_manifest_sha256,
                 "fields": [
                     field
                     for field in self._catalog.fields
-                    if field.family_id != "equity.financial_pit"
+                    if available_field_ids is None or field.field_id in available_field_ids
                 ]
             }
         )

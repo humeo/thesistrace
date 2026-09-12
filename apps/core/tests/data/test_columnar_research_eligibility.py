@@ -46,7 +46,7 @@ def test_research_universe_excludes_members_without_positive_turnover_observatio
         _trading_states=_empty_table(),
         _price_limits=_empty_table(),
         _industries=_empty_table(),
-        _financial_values=None,
+        _family_values=None,
         _field_columns={"price.close.adjusted": "close_adj"},
     )
 
@@ -85,7 +85,7 @@ def test_decimal_fields_follow_the_numeric_execution_contract_bit_exactly() -> N
         _trading_states=_empty_table(),
         _price_limits=_empty_table(),
         _industries=_empty_table(),
-        _financial_values=None,
+        _family_values=None,
         _field_columns={"price.close.adjusted": "close_adj"},
     )
 
@@ -133,7 +133,7 @@ def test_decimal_fields_keep_correct_rounding_when_arrow_cast_selects_adjacent_f
         _trading_states=_empty_table(),
         _price_limits=_empty_table(),
         _industries=_empty_table(),
-        _financial_values=None,
+        _family_values=None,
         _field_columns={"price.close.adjusted": "close_adj"},
     )
 

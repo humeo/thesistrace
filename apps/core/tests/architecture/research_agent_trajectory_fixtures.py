@@ -9,6 +9,7 @@ from mcp.client import Client
 from mcp.types import Tool
 
 from thesistrace.alpha_language import alpha_language
+from thesistrace.data.fields import MARKET_FIELDS
 from thesistrace.research_agent import (
     ResearchAgentAuthority,
     ResearchAgentCapabilityRegistry,
@@ -120,6 +121,16 @@ def research_context_payload() -> dict[str, object]:
     return ResearchContext.model_validate(
         {
             "data_overview": {
+                "generation_manifest_sha256": "a" * 64,
+                "available_field_ids": [field.field_id for field in MARKET_FIELDS],
+                "field_families": [{
+                    "family_id": "equity.eod_price", "research_category": "market",
+                    "source_endpoints": ["daily"],
+                    "supported_field_ids": [field.field_id for field in MARKET_FIELDS],
+                    "available_field_ids": [field.field_id for field in MARKET_FIELDS],
+                    "coverage_start": "2024-01-02", "coverage_end": "2024-01-31",
+                    "readiness": "ready",
+                }],
                 "market_coverage": {"start": "2024-01-02", "end": "2024-01-31"},
                 "financial_coverage": None,
                 "industry_coverage": None,
@@ -137,7 +148,7 @@ def research_context_payload() -> dict[str, object]:
                 "industry_refresh_failure_code": None,
                 "market_research_readiness": True,
                 "benchmark_research_readiness": True,
-                "financial_research_readiness": "ready",
+                "financial_research_readiness": "not_ready",
                 "industry_research_readiness": False,
             },
             "folders": {
@@ -174,6 +185,7 @@ def research_context_payload() -> dict[str, object]:
 def alpha_catalog_payload() -> dict[str, object]:
     catalog = alpha_language.catalog()
     return AlphaCatalogView(
+        generation_manifest_sha256="a" * 64,
         fields=[item for item in catalog.fields if item.identifier == "close"],
         builtins=[item for item in catalog.builtins if item.identifier == "ts_mean"],
         unknown_identifiers=[],

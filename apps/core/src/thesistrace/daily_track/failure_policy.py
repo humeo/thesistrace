@@ -12,6 +12,12 @@ class TrackingAttemptFailurePolicy:
 MAX_TRACKING_CYCLE_ATTEMPTS = 3
 
 TRACKING_ATTEMPT_FAILURE_POLICIES = {
+    "FamilyCoverageUnavailable": TrackingAttemptFailurePolicy(
+        code="DATA_FAMILY_COVERAGE_UNAVAILABLE", max_cycle_attempts=1,
+    ),
+    "IndustryCoverageUnavailable": TrackingAttemptFailurePolicy(
+        code="INDUSTRY_COVERAGE_UNAVAILABLE", max_cycle_attempts=1,
+    ),
     "InfrastructureFailure": TrackingAttemptFailurePolicy(
         code="INFRASTRUCTURE_FAILURE",
         max_cycle_attempts=MAX_TRACKING_CYCLE_ATTEMPTS,

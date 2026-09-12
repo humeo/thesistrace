@@ -139,6 +139,9 @@ TEST_RESEARCHER_ID = UUID("018f6f7e-8342-7c9a-a4df-9a86147d2e01")
 class _DataOverviewReader:
     def overview(self) -> DataOverview:
         return DataOverview(
+            generation_manifest_sha256="a" * 64,
+            field_families=[],
+            available_field_ids=[field.field_id for field in alpha_language.catalog().fields],
             market_coverage=DatasetCoverage(
                 start=date(2024, 1, 2),
                 end=date(2024, 1, 31),
@@ -467,9 +470,10 @@ class _ExplodingAlphaLanguage:
     def catalog(
         self,
         *,
-        financial_authoring_ready: bool = True,
+        available_field_ids: frozenset[str] | None = None,
+        generation_manifest_sha256: str | None = None,
     ) -> AlphaAuthoringCatalog:
-        del financial_authoring_ready
+        del available_field_ids, generation_manifest_sha256
         raise RuntimeError(
             "private-formula-canary private-hypothesis-canary "
             "SELECT private-sql-canary FROM secret_table "
@@ -486,10 +490,12 @@ class _OversizedAlphaLanguage:
     def catalog(
         self,
         *,
-        financial_authoring_ready: bool = True,
+        available_field_ids: frozenset[str] | None = None,
+        generation_manifest_sha256: str | None = None,
     ) -> AlphaAuthoringCatalog:
         catalog = alpha_language.catalog(
-            financial_authoring_ready=financial_authoring_ready,
+            available_field_ids=available_field_ids,
+            generation_manifest_sha256=generation_manifest_sha256,
         )
         first = catalog.fields[0]
         return AlphaAuthoringCatalog(
@@ -810,7 +816,7 @@ def test_registry_filters_discovery_and_rechecks_scope_at_invocation() -> None:
         denied.get_research_context()
 
 
-def test_registry_composes_context_without_generation_or_folder_mutation() -> None:
+def test_registry_composes_context_with_frozen_data_and_without_folder_mutation() -> None:
     first = _registry().get_research_context().model_dump(mode="json")
     second = _registry().get_research_context().model_dump(mode="json")
 
@@ -829,7 +835,7 @@ def test_registry_composes_context_without_generation_or_folder_mutation() -> No
         "maximum": 20,
     }
     serialized = str(first).lower()
-    assert "generation" not in serialized
+    assert first["data_overview"]["generation_manifest_sha256"] == "a" * 64
     assert "create_folder" not in serialized
     assert "rename_folder" not in serialized
     assert "delete_folder" not in serialized
@@ -1790,9 +1796,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "e00ef7bf365b978fbe071083e2e09428e64f0309bd2907d547dca0fa09b89979"
+        "eabbe9938240d62ced94bedf2d04b8be6d4b9bbbda316d7be7511f562b2eb07e"
     )
-    assert len(canonical) == 146969
+    assert len(canonical) == 149368
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:

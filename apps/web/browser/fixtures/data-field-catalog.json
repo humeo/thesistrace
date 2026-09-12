@@ -1,0 +1,601 @@
+{
+  "generation_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "fields": [
+    {
+      "identifier": "open",
+      "field_id": "price.open.adjusted",
+      "value_type": "numeric_series",
+      "description": "causal cumulative-adjusted open",
+      "unit": "CNY/share",
+      "family_id": "equity.eod_price",
+      "research_category": "market",
+      "display_name": "复权开盘价",
+      "research_purpose": "行情",
+      "source_unit": "CNY/share",
+      "source_endpoint": "daily",
+      "source_column": "open",
+      "source_lineage": "tushare.daily",
+      "reporting_scope": "market-observation",
+      "availability": "after_close",
+      "report_period_selection": "research-session",
+      "applicable_company_types": [],
+      "missingness": "missing_when_no_valid_session_bar",
+      "example": ""
+    },
+    {
+      "identifier": "high",
+      "field_id": "price.high.adjusted",
+      "value_type": "numeric_series",
+      "description": "causal cumulative-adjusted high",
+      "unit": "CNY/share",
+      "family_id": "equity.eod_price",
+      "research_category": "market",
+      "display_name": "复权最高价",
+      "research_purpose": "行情",
+      "source_unit": "CNY/share",
+      "source_endpoint": "daily",
+      "source_column": "high",
+      "source_lineage": "tushare.daily",
+      "reporting_scope": "market-observation",
+      "availability": "after_close",
+      "report_period_selection": "research-session",
+      "applicable_company_types": [],
+      "missingness": "missing_when_no_valid_session_bar",
+      "example": ""
+    },
+    {
+      "identifier": "low",
+      "field_id": "price.low.adjusted",
+      "value_type": "numeric_series",
+      "description": "causal cumulative-adjusted low",
+      "unit": "CNY/share",
+      "family_id": "equity.eod_price",
+      "research_category": "market",
+      "display_name": "复权最低价",
+      "research_purpose": "行情",
+      "source_unit": "CNY/share",
+      "source_endpoint": "daily",
+      "source_column": "low",
+      "source_lineage": "tushare.daily",
+      "reporting_scope": "market-observation",
+      "availability": "after_close",
+      "report_period_selection": "research-session",
+      "applicable_company_types": [],
+      "missingness": "missing_when_no_valid_session_bar",
+      "example": ""
+    },
+    {
+      "identifier": "close",
+      "field_id": "price.close.adjusted",
+      "value_type": "numeric_series",
+      "description": "causal cumulative-adjusted close",
+      "unit": "CNY/share",
+      "family_id": "equity.eod_price",
+      "research_category": "market",
+      "display_name": "复权收盘价",
+      "research_purpose": "行情",
+      "source_unit": "CNY/share",
+      "source_endpoint": "daily",
+      "source_column": "close",
+      "source_lineage": "tushare.daily",
+      "reporting_scope": "market-observation",
+      "availability": "after_close",
+      "report_period_selection": "research-session",
+      "applicable_company_types": [],
+      "missingness": "missing_when_no_valid_session_bar",
+      "example": ""
+    },
+    {
+      "identifier": "volume",
+      "field_id": "market.volume.shares",
+      "value_type": "numeric_series",
+      "description": "traded share volume",
+      "unit": "shares",
+      "family_id": "equity.eod_price",
+      "research_category": "market",
+      "display_name": "成交股数",
+      "research_purpose": "流动性",
+      "source_unit": "100 shares",
+      "source_endpoint": "daily",
+      "source_column": "vol",
+      "source_lineage": "tushare.daily",
+      "reporting_scope": "market-observation",
+      "availability": "after_close",
+      "report_period_selection": "research-session",
+      "applicable_company_types": [],
+      "missingness": "missing_when_no_valid_session_bar",
+      "example": ""
+    },
+    {
+      "identifier": "amount",
+      "field_id": "market.turnover.cny",
+      "value_type": "numeric_series",
+      "description": "turnover amount",
+      "unit": "CNY",
+      "family_id": "equity.eod_price",
+      "research_category": "market",
+      "display_name": "成交金额",
+      "research_purpose": "流动性",
+      "source_unit": "thousand CNY",
+      "source_endpoint": "daily",
+      "source_column": "amount",
+      "source_lineage": "tushare.daily",
+      "reporting_scope": "market-observation",
+      "availability": "after_close",
+      "report_period_selection": "research-session",
+      "applicable_company_types": [],
+      "missingness": "missing_when_no_valid_session_bar",
+      "example": ""
+    },
+    {
+      "identifier": "revenue",
+      "field_id": "financial.income.total_revenue.latest_fy",
+      "value_type": "numeric_series",
+      "description": "latest visible full-year consolidated total revenue",
+      "unit": "CNY",
+      "family_id": "equity.financial_pit",
+      "research_category": "financial",
+      "display_name": "营业总收入",
+      "research_purpose": "盈利",
+      "source_unit": "CNY",
+      "source_endpoint": "income",
+      "source_column": "total_revenue",
+      "source_lineage": "tushare.income.total_revenue",
+      "reporting_scope": "report_type_1_consolidated",
+      "availability": "next_research_session_after_source_publication",
+      "report_period_selection": "latest_visible_full_year",
+      "applicable_company_types": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ],
+      "missingness": "missing_when_no_visible_eligible_fact",
+      "example": "rank(revenue)"
+    },
+    {
+      "identifier": "net_profit",
+      "field_id": "financial.income.net_profit_parent.latest_fy",
+      "value_type": "numeric_series",
+      "description": "latest visible full-year consolidated net profit attributable to parent owners",
+      "unit": "CNY",
+      "family_id": "equity.financial_pit",
+      "research_category": "financial",
+      "display_name": "归母净利润",
+      "research_purpose": "盈利",
+      "source_unit": "CNY",
+      "source_endpoint": "income",
+      "source_column": "n_income_attr_p",
+      "source_lineage": "tushare.income.n_income_attr_p",
+      "reporting_scope": "report_type_1_consolidated",
+      "availability": "next_research_session_after_source_publication",
+      "report_period_selection": "latest_visible_full_year",
+      "applicable_company_types": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ],
+      "missingness": "missing_when_no_visible_eligible_fact",
+      "example": "rank(net_profit)"
+    },
+    {
+      "identifier": "operating_cash_flow",
+      "field_id": "financial.cashflow.operating_cash_flow.latest_fy",
+      "value_type": "numeric_series",
+      "description": "latest visible full-year consolidated net operating cash flow",
+      "unit": "CNY",
+      "family_id": "equity.financial_pit",
+      "research_category": "financial",
+      "display_name": "经营现金流净额",
+      "research_purpose": "现金流",
+      "source_unit": "CNY",
+      "source_endpoint": "cashflow",
+      "source_column": "n_cashflow_act",
+      "source_lineage": "tushare.cashflow.n_cashflow_act",
+      "reporting_scope": "report_type_1_consolidated",
+      "availability": "next_research_session_after_source_publication",
+      "report_period_selection": "latest_visible_full_year",
+      "applicable_company_types": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ],
+      "missingness": "missing_when_no_visible_eligible_fact",
+      "example": "rank(operating_cash_flow)"
+    },
+    {
+      "identifier": "assets",
+      "field_id": "financial.balance_sheet.total_assets.latest_reported",
+      "value_type": "numeric_series",
+      "description": "latest visible quarterly or annual consolidated total assets",
+      "unit": "CNY",
+      "family_id": "equity.financial_pit",
+      "research_category": "financial",
+      "display_name": "资产总计",
+      "research_purpose": "资产负债",
+      "source_unit": "CNY",
+      "source_endpoint": "balancesheet",
+      "source_column": "total_assets",
+      "source_lineage": "tushare.balancesheet.total_assets",
+      "reporting_scope": "report_type_1_consolidated",
+      "availability": "next_research_session_after_source_publication",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "applicable_company_types": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ],
+      "missingness": "missing_when_no_visible_eligible_fact",
+      "example": "rank(assets)"
+    },
+    {
+      "identifier": "liabilities",
+      "field_id": "financial.balance_sheet.total_liabilities.latest_reported",
+      "value_type": "numeric_series",
+      "description": "latest visible quarterly or annual consolidated total liabilities",
+      "unit": "CNY",
+      "family_id": "equity.financial_pit",
+      "research_category": "financial",
+      "display_name": "负债合计",
+      "research_purpose": "资产负债",
+      "source_unit": "CNY",
+      "source_endpoint": "balancesheet",
+      "source_column": "total_liab",
+      "source_lineage": "tushare.balancesheet.total_liab",
+      "reporting_scope": "report_type_1_consolidated",
+      "availability": "next_research_session_after_source_publication",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "applicable_company_types": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ],
+      "missingness": "missing_when_no_visible_eligible_fact",
+      "example": "rank(liabilities)"
+    },
+    {
+      "identifier": "equity",
+      "field_id": "financial.balance_sheet.equity_parent.latest_reported",
+      "value_type": "numeric_series",
+      "description": "latest visible quarterly or annual consolidated equity attributable to parent owners",
+      "unit": "CNY",
+      "family_id": "equity.financial_pit",
+      "research_category": "financial",
+      "display_name": "归母权益",
+      "research_purpose": "资产负债",
+      "source_unit": "CNY",
+      "source_endpoint": "balancesheet",
+      "source_column": "total_hldr_eqy_exc_min_int",
+      "source_lineage": "tushare.balancesheet.total_hldr_eqy_exc_min_int",
+      "reporting_scope": "report_type_1_consolidated",
+      "availability": "next_research_session_after_source_publication",
+      "report_period_selection": "latest_visible_quarterly_or_annual",
+      "applicable_company_types": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ],
+      "missingness": "missing_when_no_visible_eligible_fact",
+      "example": "rank(equity)"
+    }
+  ],
+  "builtins": [
+    {
+      "identifier": "abs",
+      "parameters": [
+        {
+          "name": "value",
+          "value_type": "numeric",
+          "minimum": null,
+          "maximum": null
+        }
+      ],
+      "result_type": "same_as_first",
+      "description": "Absolute numeric value.",
+      "examples": [
+        "abs(close)"
+      ],
+      "missing_value_behavior": "Missing input produces a missing result.",
+      "numeric_behavior": "Returns the non-negative magnitude of each finite input.",
+      "work_estimate": {
+        "base_operations": 1,
+        "per_window_operations": 0
+      }
+    },
+    {
+      "identifier": "log",
+      "parameters": [
+        {
+          "name": "value",
+          "value_type": "numeric",
+          "minimum": null,
+          "maximum": null
+        }
+      ],
+      "result_type": "same_as_first",
+      "description": "Natural logarithm; non-positive inputs are missing.",
+      "examples": [
+        "log(close)"
+      ],
+      "missing_value_behavior": "Missing or non-positive input produces a missing result.",
+      "numeric_behavior": "Returns the natural logarithm of each positive finite input.",
+      "work_estimate": {
+        "base_operations": 1,
+        "per_window_operations": 0
+      }
+    },
+    {
+      "identifier": "sign",
+      "parameters": [
+        {
+          "name": "value",
+          "value_type": "numeric",
+          "minimum": null,
+          "maximum": null
+        }
+      ],
+      "result_type": "same_as_first",
+      "description": "Map a numeric value to -1, 0, or 1.",
+      "examples": [
+        "sign(delta(close, 1))"
+      ],
+      "missing_value_behavior": "Missing input produces a missing result.",
+      "numeric_behavior": "Maps negative, zero, and positive finite values to -1, 0, and 1.",
+      "work_estimate": {
+        "base_operations": 1,
+        "per_window_operations": 0
+      }
+    },
+    {
+      "identifier": "rank",
+      "parameters": [
+        {
+          "name": "series",
+          "value_type": "numeric_series",
+          "minimum": null,
+          "maximum": null
+        }
+      ],
+      "result_type": "numeric_series",
+      "description": "Ascending cross-sectional rank within the selected Universe.",
+      "examples": [
+        "rank(close)"
+      ],
+      "missing_value_behavior": "Missing and non-finite values stay missing and do not enter the denominator.",
+      "numeric_behavior": "Average ordinal ranks map to 0 through 1; ties share rank and one value is 0.5.",
+      "work_estimate": {
+        "base_operations": 1,
+        "per_window_operations": 0
+      }
+    },
+    {
+      "identifier": "lag",
+      "parameters": [
+        {
+          "name": "series",
+          "value_type": "numeric_series",
+          "minimum": null,
+          "maximum": null
+        },
+        {
+          "name": "window",
+          "value_type": "window",
+          "minimum": 1,
+          "maximum": 252
+        }
+      ],
+      "result_type": "numeric_series",
+      "description": "Value from a prior Research Session.",
+      "examples": [
+        "lag(close, 1)"
+      ],
+      "missing_value_behavior": "Sessions without the requested history are missing.",
+      "numeric_behavior": "Returns the value exactly window Research Sessions earlier.",
+      "work_estimate": {
+        "base_operations": 1,
+        "per_window_operations": 0
+      }
+    },
+    {
+      "identifier": "delta",
+      "parameters": [
+        {
+          "name": "series",
+          "value_type": "numeric_series",
+          "minimum": null,
+          "maximum": null
+        },
+        {
+          "name": "window",
+          "value_type": "window",
+          "minimum": 1,
+          "maximum": 252
+        }
+      ],
+      "result_type": "numeric_series",
+      "description": "Difference from a prior Research Session.",
+      "examples": [
+        "delta(close, 5)"
+      ],
+      "missing_value_behavior": "Missing current or lagged input produces a missing result.",
+      "numeric_behavior": "Subtracts the value window Research Sessions earlier.",
+      "work_estimate": {
+        "base_operations": 1,
+        "per_window_operations": 0
+      }
+    },
+    {
+      "identifier": "pct_change",
+      "parameters": [
+        {
+          "name": "series",
+          "value_type": "numeric_series",
+          "minimum": null,
+          "maximum": null
+        },
+        {
+          "name": "window",
+          "value_type": "window",
+          "minimum": 1,
+          "maximum": 252
+        }
+      ],
+      "result_type": "numeric_series",
+      "description": "Fractional change from a prior Research Session.",
+      "examples": [
+        "pct_change(close, 20)"
+      ],
+      "missing_value_behavior": "Missing input or a zero lagged value produces a missing result.",
+      "numeric_behavior": "Returns current divided by lagged value minus one.",
+      "work_estimate": {
+        "base_operations": 1,
+        "per_window_operations": 0
+      }
+    },
+    {
+      "identifier": "ts_mean",
+      "parameters": [
+        {
+          "name": "series",
+          "value_type": "numeric_series",
+          "minimum": null,
+          "maximum": null
+        },
+        {
+          "name": "window",
+          "value_type": "window",
+          "minimum": 1,
+          "maximum": 252
+        }
+      ],
+      "result_type": "numeric_series",
+      "description": "Complete-window rolling mean.",
+      "examples": [
+        "ts_mean(close, 20)"
+      ],
+      "missing_value_behavior": "Any missing value in the complete window produces a missing result.",
+      "numeric_behavior": "Returns the arithmetic mean over the complete window.",
+      "work_estimate": {
+        "base_operations": 1,
+        "per_window_operations": 1
+      }
+    },
+    {
+      "identifier": "ts_sum",
+      "parameters": [
+        {
+          "name": "series",
+          "value_type": "numeric_series",
+          "minimum": null,
+          "maximum": null
+        },
+        {
+          "name": "window",
+          "value_type": "window",
+          "minimum": 1,
+          "maximum": 252
+        }
+      ],
+      "result_type": "numeric_series",
+      "description": "Complete-window rolling sum.",
+      "examples": [
+        "ts_sum(volume, 20)"
+      ],
+      "missing_value_behavior": "Any missing value in the complete window produces a missing result.",
+      "numeric_behavior": "Returns the sum over the complete window.",
+      "work_estimate": {
+        "base_operations": 1,
+        "per_window_operations": 1
+      }
+    },
+    {
+      "identifier": "ts_std",
+      "parameters": [
+        {
+          "name": "series",
+          "value_type": "numeric_series",
+          "minimum": null,
+          "maximum": null
+        },
+        {
+          "name": "window",
+          "value_type": "window",
+          "minimum": 1,
+          "maximum": 252
+        }
+      ],
+      "result_type": "numeric_series",
+      "description": "Complete-window population standard deviation.",
+      "examples": [
+        "ts_std(close, 20)"
+      ],
+      "missing_value_behavior": "Any missing value in the complete window produces a missing result.",
+      "numeric_behavior": "Returns population standard deviation over the complete window.",
+      "work_estimate": {
+        "base_operations": 1,
+        "per_window_operations": 1
+      }
+    },
+    {
+      "identifier": "ts_min",
+      "parameters": [
+        {
+          "name": "series",
+          "value_type": "numeric_series",
+          "minimum": null,
+          "maximum": null
+        },
+        {
+          "name": "window",
+          "value_type": "window",
+          "minimum": 1,
+          "maximum": 252
+        }
+      ],
+      "result_type": "numeric_series",
+      "description": "Complete-window rolling minimum.",
+      "examples": [
+        "ts_min(close, 20)"
+      ],
+      "missing_value_behavior": "Any missing value in the complete window produces a missing result.",
+      "numeric_behavior": "Returns the minimum finite value over the complete window.",
+      "work_estimate": {
+        "base_operations": 1,
+        "per_window_operations": 1
+      }
+    },
+    {
+      "identifier": "ts_max",
+      "parameters": [
+        {
+          "name": "series",
+          "value_type": "numeric_series",
+          "minimum": null,
+          "maximum": null
+        },
+        {
+          "name": "window",
+          "value_type": "window",
+          "minimum": 1,
+          "maximum": 252
+        }
+      ],
+      "result_type": "numeric_series",
+      "description": "Complete-window rolling maximum.",
+      "examples": [
+        "ts_max(close, 20)"
+      ],
+      "missing_value_behavior": "Any missing value in the complete window produces a missing result.",
+      "numeric_behavior": "Returns the maximum finite value over the complete window.",
+      "work_estimate": {
+        "base_operations": 1,
+        "per_window_operations": 1
+      }
+    }
+  ]
+}

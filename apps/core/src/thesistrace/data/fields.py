@@ -37,6 +37,10 @@ class FieldDefinition:
     authoring_example: str = ""
     source_endpoint: str = ""
     source_column: str = ""
+    research_category: Literal["market", "financial"] = "market"
+    display_name: str = ""
+    research_purpose: str = ""
+    source_unit: str = ""
 
 
 def _row_series(column: str) -> AlphaSeriesReader:
@@ -61,6 +65,11 @@ MARKET_FIELDS = (
         "equity.eod_price",
         AlphaFieldCapability("open"),
         _row_series("open_adj"),
+        display_name="复权开盘价",
+        research_purpose="行情",
+        source_endpoint="daily",
+        source_column="open",
+        source_unit="CNY/share",
     ),
     FieldDefinition(
         "price.high.adjusted",
@@ -73,6 +82,11 @@ MARKET_FIELDS = (
         "equity.eod_price",
         AlphaFieldCapability("high"),
         _row_series("high_adj"),
+        display_name="复权最高价",
+        research_purpose="行情",
+        source_endpoint="daily",
+        source_column="high",
+        source_unit="CNY/share",
     ),
     FieldDefinition(
         "price.low.adjusted",
@@ -85,6 +99,11 @@ MARKET_FIELDS = (
         "equity.eod_price",
         AlphaFieldCapability("low"),
         _row_series("low_adj"),
+        display_name="复权最低价",
+        research_purpose="行情",
+        source_endpoint="daily",
+        source_column="low",
+        source_unit="CNY/share",
     ),
     FieldDefinition(
         "price.close.adjusted",
@@ -97,6 +116,11 @@ MARKET_FIELDS = (
         "equity.eod_price",
         AlphaFieldCapability("close"),
         _row_series("close_adj"),
+        display_name="复权收盘价",
+        research_purpose="行情",
+        source_endpoint="daily",
+        source_column="close",
+        source_unit="CNY/share",
     ),
     FieldDefinition(
         "market.volume.shares",
@@ -109,6 +133,11 @@ MARKET_FIELDS = (
         "equity.eod_price",
         AlphaFieldCapability("volume"),
         _row_series("volume_shares"),
+        display_name="成交股数",
+        research_purpose="流动性",
+        source_endpoint="daily",
+        source_column="vol",
+        source_unit="100 shares",
     ),
     FieldDefinition(
         "market.turnover.cny",
@@ -121,6 +150,11 @@ MARKET_FIELDS = (
         "equity.eod_price",
         AlphaFieldCapability("amount"),
         _row_series("turnover_cny"),
+        display_name="成交金额",
+        research_purpose="流动性",
+        source_endpoint="daily",
+        source_column="amount",
+        source_unit="thousand CNY",
     ),
 )
 
@@ -130,6 +164,8 @@ def _financial_field(
     identifier: str,
     description: str,
     *,
+    display_name: str,
+    research_purpose: str,
     endpoint: str,
     column: str,
     period_selection: str,
@@ -152,6 +188,10 @@ def _financial_field(
         authoring_example=f"rank({identifier})",
         source_endpoint=endpoint,
         source_column=column,
+        research_category="financial",
+        display_name=display_name,
+        research_purpose=research_purpose,
+        source_unit="CNY",
     )
 
 
@@ -160,6 +200,8 @@ FINANCIAL_FIELDS = (
         "financial.income.total_revenue.latest_fy",
         "revenue",
         "latest visible full-year consolidated total revenue",
+        display_name="营业总收入",
+        research_purpose="盈利",
         endpoint="income",
         column="total_revenue",
         period_selection="latest_visible_full_year",
@@ -168,6 +210,8 @@ FINANCIAL_FIELDS = (
         "financial.income.net_profit_parent.latest_fy",
         "net_profit",
         "latest visible full-year consolidated net profit attributable to parent owners",
+        display_name="归母净利润",
+        research_purpose="盈利",
         endpoint="income",
         column="n_income_attr_p",
         period_selection="latest_visible_full_year",
@@ -176,6 +220,8 @@ FINANCIAL_FIELDS = (
         "financial.cashflow.operating_cash_flow.latest_fy",
         "operating_cash_flow",
         "latest visible full-year consolidated net operating cash flow",
+        display_name="经营现金流净额",
+        research_purpose="现金流",
         endpoint="cashflow",
         column="n_cashflow_act",
         period_selection="latest_visible_full_year",
@@ -184,6 +230,8 @@ FINANCIAL_FIELDS = (
         "financial.balance_sheet.total_assets.latest_reported",
         "assets",
         "latest visible quarterly or annual consolidated total assets",
+        display_name="资产总计",
+        research_purpose="资产负债",
         endpoint="balancesheet",
         column="total_assets",
         period_selection="latest_visible_quarterly_or_annual",
@@ -192,6 +240,8 @@ FINANCIAL_FIELDS = (
         "financial.balance_sheet.total_liabilities.latest_reported",
         "liabilities",
         "latest visible quarterly or annual consolidated total liabilities",
+        display_name="负债合计",
+        research_purpose="资产负债",
         endpoint="balancesheet",
         column="total_liab",
         period_selection="latest_visible_quarterly_or_annual",
@@ -200,6 +250,8 @@ FINANCIAL_FIELDS = (
         "financial.balance_sheet.equity_parent.latest_reported",
         "equity",
         "latest visible quarterly or annual consolidated equity attributable to parent owners",
+        display_name="归母权益",
+        research_purpose="资产负债",
         endpoint="balancesheet",
         column="total_hldr_eqy_exc_min_int",
         period_selection="latest_visible_quarterly_or_annual",

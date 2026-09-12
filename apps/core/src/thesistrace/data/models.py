@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 FinancialAvailableReadiness = Literal[
     "ready",
@@ -48,9 +48,29 @@ class IndustryCoverage(BaseModel):
     classification_version: Literal["SW2021"] = "SW2021"
 
 
+class FieldFamilyAvailability(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    family_id: str
+    research_category: Literal["market", "financial"]
+    source_endpoints: list[str]
+    supported_field_ids: list[str]
+    available_field_ids: list[str]
+    coverage_start: date | None
+    coverage_end: date | None
+    readiness: Literal[
+        "ready", "partial", "not_ready", "ready_with_pending", "ready_with_gaps"
+    ]
+
+
 class DataOverview(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    generation_manifest_sha256: str | None = Field(
+        min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+    available_field_ids: list[str]
+    field_families: list[FieldFamilyAvailability]
     market_coverage: DatasetCoverage | None
     financial_coverage: FinancialCoverage | None
     industry_coverage: IndustryCoverage | None

@@ -63,7 +63,7 @@ def columnar_fixture(canonical) -> ColumnarResearchData:
         _trading_states=pa.Table.from_pylist(coordinates(canonical["trading_states"])),
         _price_limits=pa.Table.from_pylist(coordinates(canonical["price_limits"])),
         _industries=pa.Table.from_pylist(canonical["industry_membership"]),
-        _financial_values=None,
+        _family_values=None,
         _field_columns=columns,
     )
 
@@ -192,7 +192,7 @@ def test_columnar_tracking_preserves_aligned_financial_missingness_and_updates()
     columnar = replace(
         columnar,
         _field_columns={**columnar._field_columns, field_id: field_id},
-        _financial_values=pa.Table.from_pylist([
+        _family_values=pa.Table.from_pylist([
             {"session": session, "instrument_id": instrument, field_id: value}
             for (session, instrument), value in sorted(values.items())
         ]),

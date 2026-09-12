@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from thesistrace._postgres import PostgresDatabase
@@ -10,11 +11,14 @@ from thesistrace.benchmark import (
     BenchmarkSnapshotStore,
     validate_independent_benchmark_mount,
 )
+from thesistrace.data.fields import alpha_field_catalog
+from thesistrace.data.generation_family import MountedFamilyGenerationDescriptor
 from thesistrace.data.head_store import DatasetHeadPointer, MountedDatasetHeadStore
 from thesistrace.data.lifecycle import lock_data_lifecycle
 from thesistrace.data.models import (
     DataOverview,
     DatasetCoverage,
+    FieldFamilyAvailability,
     FinancialCoverage,
     IndustryCoverage,
 )
@@ -57,6 +61,9 @@ class DatasetOverviewService:
                 return DatasetOverviewSnapshot(
                     pointer=None,
                     overview=DataOverview(
+                        generation_manifest_sha256=None,
+                        available_field_ids=[],
+                        field_families=describe_family_fields(None),
                         market_coverage=None,
                         financial_coverage=None,
                         industry_coverage=None,
@@ -122,9 +129,17 @@ class DatasetOverviewService:
             industry_coverage = None if industry is None else industry.dataset_coverage
             market_start = pointer.dataset_coverage["start"]
             market_end = pointer.dataset_coverage["end"]
+            field_families = describe_family_fields(descriptor)
             return DatasetOverviewSnapshot(
                 pointer=pointer,
                 overview=DataOverview(
+                    generation_manifest_sha256=pointer.generation_manifest_sha256,
+                    available_field_ids=sorted(
+                        field_id
+                        for family in field_families
+                        for field_id in family.available_field_ids
+                    ),
+                    field_families=field_families,
                     market_coverage=DatasetCoverage(
                         start=market_start,
                         end=market_end,
@@ -179,6 +194,55 @@ class DatasetOverviewService:
             return self._benchmark.read()
         except (BenchmarkSnapshotError, OSError):
             return None
+
+
+def describe_family_fields(
+    descriptor: MountedFamilyGenerationDescriptor | None,
+) -> list[FieldFamilyAvailability]:
+    """Describe actual coverage and fields independently of catalog support."""
+    fields = alpha_field_catalog()
+    references = {} if descriptor is None else {
+        family.family_id: family for family in descriptor.families
+    }
+    declared = set() if descriptor is None else set(descriptor.field_availability)
+    result: list[FieldFamilyAvailability] = []
+    for family_id in dict.fromkeys(field.family_id for field in fields):
+        supported = tuple(field for field in fields if field.family_id == family_id)
+        supported_ids = sorted(field.field_id for field in supported)
+        reference = references.get(family_id)
+        available = [] if reference is None else sorted(declared & set(supported_ids))
+        start = end = None
+        readiness = "not_ready"
+        if reference is not None:
+            if supported[0].research_category == "financial":
+                financial = _financial_coverage(reference.dataset_coverage)
+                start = financial.start
+                end = financial.discovery_attempted_through_session
+                readiness = financial.readiness_status
+            else:
+                start = date.fromisoformat(str(reference.dataset_coverage["start"]))
+                end = date.fromisoformat(str(reference.dataset_coverage["end"]))
+                readiness = "ready"
+        if not available:
+            readiness = "not_ready"
+        elif descriptor is not None and (
+            available != supported_ids
+            or start is None or end is None
+            or start.isoformat() > descriptor.research_sessions[0]
+            or end.isoformat() < descriptor.data_through_session
+        ):
+            readiness = "partial"
+        result.append(FieldFamilyAvailability(
+            family_id=family_id,
+            research_category=supported[0].research_category,
+            source_endpoints=sorted({field.source_endpoint for field in supported}),
+            supported_field_ids=supported_ids,
+            available_field_ids=available,
+            coverage_start=start,
+            coverage_end=end,
+            readiness=readiness,
+        ))
+    return result
 
 
 def _benchmark_coverage(

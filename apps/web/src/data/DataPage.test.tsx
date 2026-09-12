@@ -6,6 +6,16 @@ import type { AlphaCatalog } from "../alphaCatalog";
 import { DataOverviewView, loadDataPage, type DataOverview } from "./DataPage";
 
 const overview: DataOverview = {
+  generation_manifest_sha256: "b".repeat(64),
+  available_field_ids: ["price.close.adjusted", "financial.income.total_revenue.latest_fy"],
+  field_families: [
+    { family_id: "equity.eod_price", research_category: "market", source_endpoints: ["daily"],
+      supported_field_ids: ["price.close.adjusted"], available_field_ids: ["price.close.adjusted"],
+      coverage_start: "2025-08-08", coverage_end: "2026-08-07", readiness: "ready" },
+    { family_id: "equity.financial_pit", research_category: "financial", source_endpoints: ["income"],
+      supported_field_ids: ["financial.income.total_revenue.latest_fy"], available_field_ids: ["financial.income.total_revenue.latest_fy"],
+      coverage_start: "2010-01-04", coverage_end: "2026-08-07", readiness: "ready" },
+  ],
   market_coverage: { start: "2025-08-08", end: "2026-08-07" },
   financial_coverage: {
     start: "2010-01-04",
@@ -42,6 +52,7 @@ const overview: DataOverview = {
 };
 
 const catalog: AlphaCatalog = {
+  generation_manifest_sha256: "a".repeat(64),
   fields: [
     {
       identifier: "close",
@@ -50,6 +61,14 @@ const catalog: AlphaCatalog = {
       description: "Causal cumulative-adjusted close",
       unit: "CNY/share",
       family_id: "equity.eod_price",
+      research_category: "market",
+      display_name: "复权收盘价",
+      research_purpose: "行情",
+      source_unit: "CNY/share",
+      source_endpoint: "daily",
+      source_column: "close",
+      source_lineage: "tushare.daily",
+      reporting_scope: "market-observation",
       availability: "after_close",
       report_period_selection: "research-session",
       applicable_company_types: [],
@@ -63,6 +82,14 @@ const catalog: AlphaCatalog = {
       description: "Latest visible full-year consolidated total revenue",
       unit: "CNY",
       family_id: "equity.financial_pit",
+      research_category: "financial",
+      display_name: "营业总收入",
+      research_purpose: "盈利",
+      source_unit: "CNY",
+      source_endpoint: "income",
+      source_column: "total_revenue",
+      source_lineage: "tushare.income.total_revenue",
+      reporting_scope: "report_type_1_consolidated",
       availability: "next_research_session_after_source_publication",
       report_period_selection: "latest_visible_full_year",
       applicable_company_types: ["1", "2", "3", "4"],
@@ -132,8 +159,11 @@ describe("DataOverviewView", () => {
 
   it("does not fabricate coverage or unavailable dataset fields", () => {
     const markup = renderToStaticMarkup(createElement(DataOverviewView, {
-      catalog: { fields: catalog.fields.slice(0, 1), builtins: [] },
+      catalog: { generation_manifest_sha256: null, fields: catalog.fields.slice(0, 1), builtins: [] },
       overview: {
+        generation_manifest_sha256: null,
+        available_field_ids: [],
+        field_families: [],
         market_coverage: null,
         financial_coverage: null,
         industry_coverage: null,
@@ -194,6 +224,8 @@ describe("DataOverviewView", () => {
         },
         data_through_session: "2026-08-14",
         financial_research_readiness: readiness,
+        field_families: overview.field_families.map((family) => family.research_category === "financial"
+          ? { ...family, readiness } : family),
       },
       onRefresh: vi.fn(),
     }));
@@ -249,19 +281,36 @@ describe("DataOverviewView", () => {
     });
 
     const recovered = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify(overview), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(catalog), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }));
+      .mockResolvedValueOnce(Response.json({ ...overview, catalog }));
     await expect(loadDataPage(recovered)).resolves.toEqual({
       resources: { overview, catalog },
       error: null,
     });
     expect(recovered).toHaveBeenNthCalledWith(1, "/api/data");
-    expect(recovered).toHaveBeenNthCalledWith(2, "/api/alpha/catalog");
+    expect(recovered).toHaveBeenCalledTimes(1);
   });
+});
+
+it("groups fields by research category across different source families", () => {
+  const markup = renderToStaticMarkup(createElement(DataOverviewView, {
+    overview,
+    onRefresh: vi.fn(),
+    catalog: {
+      ...catalog,
+      fields: [...catalog.fields, {
+        ...catalog.fields[1],
+        identifier: "roe",
+        field_id: "financial.indicator.roe",
+        family_id: "equity.financial_indicator",
+        source_endpoint: "fina_indicator",
+        display_name: "净资产收益率",
+      }],
+    },
+  }));
+  expect(markup).toContain("净资产收益率");
+  expect(markup).toContain("2 fields");
+  expect(markup).toContain('aria-label="Search fields"');
+  expect(markup).toContain('aria-label="Research purpose"');
+  expect(markup).toContain('aria-label="Field source"');
+  expect(markup).toContain('aria-label="Field period"');
 });

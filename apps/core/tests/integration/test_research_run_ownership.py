@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
 from thesistrace.data import DatasetAdmissionSnapshot
+from thesistrace.data.models import DatasetCoverage
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import CORE_SCHEMAS, initialize_core
 from thesistrace.research_run import (
@@ -60,6 +61,9 @@ def test_research_run_service_scopes_resources_receipts_and_cursors(
     researchers.bootstrap(RESEARCHER_A)
     researchers.bootstrap(RESEARCHER_B)
     snapshot = DatasetAdmissionSnapshot(
+        family_coverage={
+            "equity.eod_price": DatasetCoverage(start=date(2026, 8, 3), end=date(2026, 8, 5)),
+        },
         generation_manifest_sha256="a" * 64,
         data_through_session=date(2026, 8, 5),
         coverage_start=date(2026, 8, 3),
@@ -240,6 +244,9 @@ def test_daily_run_quota_is_atomic_retained_and_operator_exempt(ownership_databa
     ResearcherService(ownership_database).bootstrap(RESEARCHER_A)
     ResearcherService(ownership_database).bootstrap(RESEARCHER_B)
     snapshot = DatasetAdmissionSnapshot(
+        family_coverage={
+            "equity.eod_price": DatasetCoverage(start=date(2026, 8, 3), end=date(2026, 8, 5)),
+        },
         generation_manifest_sha256="a" * 64,
         data_through_session=date(2026, 8, 5),
         coverage_start=date(2026, 8, 3),
@@ -306,6 +313,9 @@ def _drop_core_schemas(database_url: str) -> None:
 def test_strategy_metric_sorting_precedes_pagination(ownership_database, sort_by):
     ResearcherService(ownership_database).bootstrap(RESEARCHER_A)
     snapshot = DatasetAdmissionSnapshot(
+        family_coverage={
+            "equity.eod_price": DatasetCoverage(start=date(2026, 8, 3), end=date(2026, 8, 5)),
+        },
         generation_manifest_sha256="a" * 64,
         data_through_session=date(2026, 8, 5),
         coverage_start=date(2026, 8, 3), coverage_end=date(2026, 8, 5),
