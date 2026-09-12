@@ -89,6 +89,19 @@ test("retains the same sidebar, history scroll, and collapsed state across Chat 
   expect(document.querySelector(".app-shell-collapsed")).toBeNull();
 });
 
+test("brand opens the landing page through browser navigation", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () => root!.render(<Routes />));
+  const home = document.querySelector<HTMLAnchorElement>('[aria-label="QuantTrace home"]')!;
+  expect(home.getAttribute("href")).toBe("/");
+  const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+  await act(async () => home.dispatchEvent(event));
+  expect(event.defaultPrevented).toBe(false);
+  expect(document.querySelector("h1")?.textContent).toBe("Conversation");
+});
+
 test("leaves modified navigation clicks to the browser", async () => {
   const container = document.createElement("div");
   document.body.append(container);

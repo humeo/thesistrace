@@ -129,8 +129,7 @@ export function AppShell({
           role={mobileViewport && isNavigationOpen ? "dialog" : undefined}
         >
           <div className="sidebar-brand-row">
-            <a className="brand" aria-label="QuantTrace home" href="/data"
-              onClick={(event) => handleWorkspaceNavigation(event, () => openPage("/data"))}>
+            <a className="brand" aria-label="QuantTrace home" href="/">
               <img className="brand-mark" src="/quanttrace-logo.png" alt="" width={30} height={30} />
               <span className="sidebar-label">QuantTrace</span>
             </a>
