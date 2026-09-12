@@ -152,7 +152,8 @@ The choice of Factor Evaluation or Strategy Backtest fixed for one ResearchRun.
 _避免混用_: Research Batch Kind, execution progress
 
 **ResearchRun**:
-One accepted research question with fixed Alpha, Research Kind, Research Period, and Data Generation, followed through completion, failure, or cancellation.
+One accepted research question with fixed inputs appropriate to its Research Kind,
+Research Period, and Data Generation, followed through completion, failure, or cancellation.
 _避免混用_: Research Folder, Browser Draft, Result Bundle
 
 **Research Batch**:
@@ -194,9 +195,14 @@ The fixed, authoritative result of one successful ResearchRun, containing the fi
 _避免混用_: Alpha Formula, provisional calculation, Research Batch
 
 **Factor Evaluation**:
-The Research Period summary of an Alpha's predictive ranking and correlation
-quality independently of a Strategy's portfolio outcome.
+The assessment of an Alpha's predictive ranking and correlation quality over a
+Research Period, pursued as a separate research question from a Strategy's portfolio outcome.
 _避免混用_: Strategy Backtest, Factor curve, Alpha Values
+
+**Factor Daily Observation**:
+The correlation, group-return, and sample-coverage findings for one signal
+Research Session and one Forward Return Label horizon.
+_避免混用_: Alpha Values, individual Forward Return Labels, Strategy Daily Observation
 
 **Label Maturation**:
 The point when a signal-session Forward Return Label becomes resolvable because
@@ -288,13 +294,32 @@ _避免混用_: Research Batch, approximate similarity, a rolling backtest
 ## Strategy Execution
 
 **Strategy**:
-The rules that translate Alpha Values into portfolio targets and changes over
-time.
+The portfolio decision rules that determine target instruments, allocations,
+and changes over time.
 _避免混用_: Alpha, Factor, Investment Hypothesis
 
+**Simulation Conditions**:
+The fixed Initial Cash baseline and execution, valuation, and cost assumptions
+under which a Strategy account is simulated.
+_避免混用_: Strategy, current account state, actual brokerage conditions
+
+**Portfolio Weighting**:
+The rule assigning Relative Target Weights to instruments in a Target Selection.
+_避免混用_: Alpha ranking, Target Exposure, Actual Holdings
+
+**Weighting Eligibility**:
+The applicability of the selected Portfolio Weighting rule to a candidate at a
+Target Selection Update, determining whether it can receive a Relative Target Weight.
+_避免混用_: Research Eligibility, missing Canonical Data, execution eligibility
+
+**Relative Target Weight**:
+An instrument's intended share of a Target Selection's stock allocation before
+Target Exposure is applied.
+_避免混用_: Actual Holding weight, account-level target weight, Alpha Value
+
 **Strategy Candidate Order**:
-The deterministic order used to select equal-weight targets and prioritize buy
-deficits at a Rebalance.
+The deterministic order recorded in a Target Selection and used to prioritize
+buy deficits when its allocation is restored.
 _避免混用_: Source order, Factor quantile rank
 
 **Holdings Count**:
@@ -307,14 +332,45 @@ starts.
 _避免混用_: Current cash, deployable cash after costs
 
 **Rebalance**:
-A scheduled Strategy decision that replaces the complete Target Portfolio using
-the signal session's Final Alpha Cross-Section.
-_避免混用_: Every-session signal cohort, Factor Label
+A retargeting of stock and cash allocation following a Target Selection Update
+or an Exposure Adjustment, before execution constraints are applied.
+_避免混用_: Selection Interval, every-session signal cohort, guaranteed trade
+
+**Target Selection**:
+The ranked stock list and Relative Target Weights established by the
+latest Target Selection Update, retained even when the Strategy holds only cash.
+_避免混用_: Actual Holdings, today's Alpha ranking, Target Exposure
+
+**Target Selection Update**:
+A scheduled refresh of Target Selection from the signal session's Final Alpha
+Cross-Section that forms a new allocation target, even if the stock list is unchanged.
+_避免混用_: Every Alpha evaluation, membership change only, filled order
 
 **Target Portfolio**:
-The ideal equal-weight allocation selected at a Rebalance before execution
-constraints are applied.
+The intended per-instrument stock and cash allocation for one Rebalance before
+execution constraints are applied.
 _避免混用_: Actual Holdings, guaranteed allocation
+
+**Target Decision**:
+A Strategy decision to establish a new Target Portfolio or make no target
+update at a Research Session.
+_避免混用_: Simulated Order, Simulated Fill, automatic rebalancing to old targets
+
+**Target Exposure**:
+The intended fraction of a Strategy account's net asset value allocated to
+stocks, distinct from the fraction actually invested after execution constraints.
+_避免混用_: Actual Holdings, guaranteed exposure, available cash
+
+**Exposure Adjustment**:
+A change in stock allocation requested by a changed Target Exposure from a
+completed Research Session and attempted at the following Open, independently
+of the Target Selection Update schedule.
+_避免混用_: New stock selection, price-drift rebalancing, guaranteed allocation
+
+**Exposure Reduction**:
+An Exposure Adjustment that scales down Actual Holdings proportionally between
+Target Selection Updates, subject to execution constraints.
+_避免混用_: Equal-weight reset, immediate guaranteed liquidation, intraday trading
 
 **Actual Holdings**:
 The positions and cash that remain after order eligibility, costs, and quantity
@@ -372,6 +428,16 @@ _避免混用_: Fractional share, universal lot rule
 One exchange-limit-compliant piece of a larger logical Strategy order.
 _避免混用_: Partial fill, replacement order
 
+**Simulated Order**:
+A Strategy buy or sell instruction submitted under the Simulation Conditions,
+whose outcome may be filled or blocked.
+_避免混用_: Target Decision, Simulated Fill, brokerage order
+
+**Simulated Fill**:
+A completed execution of a Simulated Order with an execution quantity, price,
+and Transaction Costs under the Simulation Conditions.
+_避免混用_: Target Portfolio, Research Settlement, brokerage execution report
+
 **Transaction Costs**:
 The fixed deductions charged to filled Strategy orders under the current
 research cost contract.
@@ -385,9 +451,9 @@ _避免混用_: Annualized drag, relative return ratio
 The half-sum of absolute same-open changes in actual instrument and cash weights.
 _避免混用_: Order count, target-weight change
 
-**Rebalance Interval**:
-The number of Research Sessions between scheduled Strategy signal sessions.
-_避免混用_: Natural-day interval, holding cohort
+**Selection Interval**:
+The number of Research Sessions between scheduled Target Selection Updates.
+_避免混用_: Rebalance Interval, natural-day interval, minimum time between trades
 
 **Open Execution Model**:
 The synthetic contract that attempts eligible Strategy orders at the next
@@ -416,13 +482,18 @@ _避免混用_: Immediate liquidation, permanent eligibility
 ## Strategy Results
 
 **Strategy Backtest**:
-The historical portfolio result produced by applying Strategy execution, costs,
-and adjusted valuation to Alpha Values.
+The historical portfolio result produced by running a Strategy under fixed
+Simulation Conditions over a Research Period.
 _避免混用_: Factor Evaluation, broker statement
 
 **Strategy Daily Observation**:
 The minimal retained Strategy result for one Research Session.
 _避免混用_: Position history, order ledger, fill ledger
+
+**Daily Holding Observation**:
+The actual per-instrument holdings and valuations at one Research Session's
+reporting point, used to inspect a simulated Strategy account's behavior.
+_避免混用_: Target Selection, Strategy Daily Observation, Terminal Strategy State
 
 **Terminal Strategy State**:
 The ending holdings, cash, and accumulated performance of a Strategy Backtest or Tracking Advance.
@@ -480,9 +551,9 @@ position exists.
 _避免混用_: Warm-up position, first holding return
 
 **Terminal Valuation**:
-The final Research Period Open valuation recorded without another Rebalance or
-forced liquidation.
-_避免混用_: Final Rebalance, hypothetical exit
+The final Research Period Open valuation after any due Strategy execution and
+Transaction Costs, without a forced liquidation solely because the period ends.
+_避免混用_: Valuation-only trading cutoff, hypothetical exit, unfinished observation
 
 **Strategy Benchmark**:
 The fixed CSI 300 Price Index used to compare Strategy performance over the same
@@ -533,7 +604,7 @@ _避免混用_: Complete history, Calculation Warm-up
 
 **Calculation Warm-up**:
 The Research Sessions before a Research Period required only to evaluate the
-Alpha Formula's Effective Alpha Lookback.
+accepted research's expression and Portfolio Weighting dependencies.
 _避免混用_: Research Period, reported results
 
 **Dataset Head**:
@@ -741,6 +812,16 @@ _避免混用_: Liquidity ranking, permanent exclusion
 **Industry Classification**:
 The point-in-time primary SW2021 industry path of an instrument for a Research Session.
 _避免混用_: Raw overlapping memberships, current industry applied to all history, Liquidity Universe
+
+**Market Indicator**:
+A Research Session series describing a defined market population, with the same
+observation available to every instrument in a research calculation.
+_避免混用_: Individual instrument price, Alpha Values, Strategy Benchmark
+
+**Industry Indicator**:
+A Market Indicator derived from observations for a specified industry under
+point-in-time Industry Classification and an explicit member population.
+_避免混用_: Industry Classification, Industry Neutralization, published industry index
 
 **Industry Neutralization**:
 The optional cross-sectional demeaning of Alpha Values within each instrument's

@@ -1,3 +1,3 @@
-# Use one long-only Top-N equal-weight Strategy
+# Use long-only signal selection with configurable portfolio weighting
 
-ThesisTrace supports one unlevered long-only Strategy that selects the highest valid Alpha Values and assigns equal target weight, leaving unallocated capital as cash. It deliberately excludes shorting, optimizers, risk models, and alternative portfolio-construction engines.
+The score-based Strategy remains unlevered and long-only, selecting the highest eligible Alpha Values while an explicit Portfolio Weighting rule determines Relative Target Weights; Target Exposure determines the account's intended stock allocation and leaves the remainder in cash. Equal weighting is the default rather than an engine-wide restriction, allowing the same signal to be researched under different allocation rules without changing its Factor meaning. Between selection updates, exposure reductions scale Actual Holdings proportionally and increases restore allocation toward the retained Target Selection; direct target-weight strategies, shorting, and portfolio optimizers are separate capabilities rather than consequences of opening Portfolio Weighting.

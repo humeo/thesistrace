@@ -27,8 +27,8 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 
 ## Strategy execution and reporting
 
-- [ADR-0040 — Use one long-only Top-N equal-weight Strategy](0040-use-one-long-only-top-n-equal-weight-strategy.md)
-- [ADR-0042 — Use scheduled Alpha snapshots for periodic full rebalancing](0042-use-only-scheduled-alpha-snapshots-for-periodic-full-rebalancing.md)
+- [ADR-0040 — Use long-only signal selection with configurable portfolio weighting](0040-use-one-long-only-top-n-equal-weight-strategy.md)
+- [ADR-0042 — Separate scheduled stock selection from exposure adjustments](0042-use-only-scheduled-alpha-snapshots-for-periodic-full-rebalancing.md)
 - [ADR-0044 — Use a conservative full-fill Open Execution Model](0044-use-a-conservative-full-fill-open-execution-model.md)
 - [ADR-0045 — Cancel blocked Open orders without retry or substitution](0045-cancel-blocked-open-orders-without-retry-or-substitution.md)
 - [ADR-0046 — Reassess existing-position eligibility only at scheduled Rebalances](0046-reassess-existing-position-eligibility-only-at-scheduled-rebalances.md)
@@ -69,7 +69,7 @@ Number gaps are intentional and numbers are never reused. When a decision stops 
 - [ADR-0146 — Store Canonical and analytical tables as partitioned Parquet](0146-store-canonical-and-analytical-tables-as-partitioned-parquet.md)
 - [ADR-0151 — Keep research authority inside a module-first Core](0151-keep-research-authority-inside-a-module-first-core.md)
 - [ADR-0152 — Use one full Compose topology for local Development and Test](0152-use-one-full-compose-topology-for-local-development-and-test.md)
-- [ADR-0153 — Use user-selected Research Periods and derived Alpha warm-up](0153-use-user-selected-research-periods-and-derived-alpha-warm-up.md)
+- [ADR-0153 — Use user-selected Research Periods and complete dependency warm-up](0153-use-user-selected-research-periods-and-derived-alpha-warm-up.md)
 - [ADR-0154 — Use a mounted current Dataset Head and temporary Data Generations](0154-use-a-mounted-current-dataset-head-and-temporary-data-generations.md)
 - [ADR-0155 — Refresh market data by validating an overlap merge](0155-refresh-market-data-by-validating-an-overlap-merge.md)
 - [ADR-0194 — Admit complete research by bounded execution footprint](0194-admit-long-research-by-peak-execution-footprint.md)
