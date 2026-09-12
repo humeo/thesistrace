@@ -545,9 +545,13 @@ def test_strategy_deterministic_start_failure_is_not_retried(
     "close", "if_else(close > 0, close, -close)",
     pytest.param("close * universe_advancing_fraction()", id="common_input"),
 ])
+@pytest.mark.parametrize("exposures", [
+    ("0", "7 / 10"), ("1", "if_else(universe_return() >= 0, 0.3, 0)"),
+])
 def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
     tmp_path: Path,
     formula,
+    exposures,
 ) -> None:
     settings = isolated_core_settings(tmp_path)
     drop_product_schemas(settings)
@@ -570,7 +574,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         }
         command["strategies"] = [
             {**item, "initial_cash_cny": "100000", "exposure_expression": exposure}
-            for item, exposure in zip(command["strategies"], ("0", "7 / 10"), strict=True)
+            for item, exposure in zip(command["strategies"], exposures, strict=True)
         ]
         batch = client.post("/api/research-batches", json=command).json()
         assert "items" in batch, batch
@@ -625,7 +629,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         assert runtime.research_batches.process_next(on_execution_event=events.append) is True
 
         completed = client.get(f"/api/research-batches/{batch['id']}").json()
-        assert completed["status"] == "succeeded"
+        assert completed["status"] == "succeeded", str(completed)
         assert completed["progress"] == {
             "shared_alpha_factor_status": "succeeded",
             "completed_strategy_tasks": 2,
@@ -1626,7 +1630,7 @@ def test_long_strategy_sweep_preserves_ordinary_result_partitions_and_equivalenc
         assert runtime.research_batches.process_next() is True
 
         completed = client.get(f"/api/research-batches/{batch['id']}").json()
-        assert completed["status"] == "succeeded"
+        assert completed["status"] == "succeeded", str(completed)
         batch_stored = _stored_run(
             settings,
             str(completed["items"][0]["research_run_id"]),

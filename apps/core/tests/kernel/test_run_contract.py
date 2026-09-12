@@ -157,7 +157,7 @@ def test_kernel_run_input_rejects_string_alpha_expression(
             research_data=accepted_calculation_case["research_data"],
             alpha_expression="pct_change($close, 20)",  # type: ignore[arg-type]
             field_bindings=FIELD_BINDINGS,
-            effective_alpha_lookback=20,
+            effective_lookback=20,
             universe=str(definition["universe"]),
             neutralization=str(definition["neutralization"]),
             research_kind="strategy_backtest",
@@ -215,7 +215,7 @@ def _run_input(
         ),
         alpha_expression=alpha["expression"],
         field_bindings=FIELD_BINDINGS,
-        effective_alpha_lookback=validate_normalized_alpha(
+        effective_lookback=validate_normalized_alpha(
             alpha["expression"], field_bindings=FIELD_BINDINGS
         ).effective_lookback,
         universe=str(definition["universe"]),

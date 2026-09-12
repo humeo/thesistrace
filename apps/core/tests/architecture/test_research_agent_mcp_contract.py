@@ -1793,9 +1793,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "7f49c3259b9af85bc3e64ce71ad27c535658161f728fdd7ffd2be01142560888"
+        "677b84fb2fc53516aa1166688b609ad2d049f723f0de075a40902905d91ad85c"
     )
-    assert len(canonical) == 171406
+    assert len(canonical) == 172316
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -3112,6 +3112,9 @@ def test_registry_common_inputs_share_formal_industry_choices_and_diagnostics():
 def test_registry_expression_diagnostics_apply_the_requested_context():
     registry = _registry()
     assert registry.diagnose_alpha_formula("0.7", context="exposure").valid
+    assert registry.diagnose_alpha_formula(
+        "if_else(universe_return() > 0, 1, 0.3)", context="exposure",
+    ).valid
     assert not registry.diagnose_alpha_formula("0.7", context="signal").valid
     assert not registry.diagnose_alpha_formula("close", context="exposure").valid
 

@@ -142,23 +142,29 @@ def test_fixed_exposure_publishes_and_tracks_its_first_entry(
 
 @pytest.mark.skipif(not core_environment_is_configured(), reason="isolated runtime required")
 @pytest.mark.parametrize(
-    "formula, identifiers",
+    "formula, identifiers, exposure",
     [
-        ("close * universe_advancing_fraction()", ("universe_advancing_fraction",)),
+        ("close * universe_advancing_fraction()", ("universe_advancing_fraction",), "1"),
         (
             "close * (1 + universe_advancing_fraction() + universe_return())",
-            ("universe_advancing_fraction", "universe_return"),
+            ("universe_advancing_fraction", "universe_return"), "1",
         ),
         (
             "close * (1 + industry_return(801010) + industry_advancing_fraction(801010))",
-            ("industry_advancing_fraction", "industry_return"),
+            ("industry_advancing_fraction", "industry_return"), "1",
         ),
+        ("close", ("universe_return",),
+         "if_else(universe_return() > 0, 1, if_else(universe_return() > -0.15, 0.3, 0))"),
+        ("close", ("industry_return",),
+         "if_else(industry_return(801010) > 0, 1, "
+         "if_else(industry_return(801010) > -0.15, 0.3, 0))"),
     ],
 )
 def test_common_statistics_publish_from_checkpoint_to_completed_result(
     tmp_path: Path,
     formula,
     identifiers,
+    exposure,
     monkeypatch,
 ):
     import test_core_daily_track_detail as fixture_module
@@ -168,13 +174,24 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
     from thesistrace.research_run.result import read_result_bundle
 
     is_industry = identifiers[0].startswith("industry_")
-    if is_industry:
+    dynamic = exposure != "1"
+    if is_industry or dynamic:
         original_canonical = fixture_module._canonical
 
         def industry_canonical(sessions):
             canonical = original_canonical(sessions)
-            for membership in canonical["industry_membership"]:
-                membership["sw2021_l1"] = "801010"
+            if is_industry:
+                for membership in canonical["industry_membership"]:
+                    membership["sw2021_l1"] = "801010"
+            if dynamic:
+                closes = ("100", "110", "99", "79.2", "87.12", "95.832")
+                for price in canonical["prices"]:
+                    from thesistrace.data.canonical_mapping import adjusted_price_string
+
+                    price["close_raw"] = closes[sessions.index(price["session"])]
+                    price["close_adj"] = adjusted_price_string(
+                        Decimal(price["close_raw"]), Decimal(price["adjustment_factor"]),
+                    )
             return canonical
 
         monkeypatch.setattr(fixture_module, "_canonical", industry_canonical)
@@ -186,7 +203,7 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
     )
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
-    sessions = _business_sessions(date(2024, 8, 1), count=5)
+    sessions = _business_sessions(date(2024, 8, 1), count=6 if dynamic else 5)
     BenchmarkSnapshotStore(settings.benchmark_mount).publish(
         (BenchmarkLevel("2010-01-04", "3500"), *(BenchmarkLevel(day, "4000") for day in sessions)),
         published_at=datetime(2026, 8, 10, 8, tzinfo=UTC),
@@ -200,7 +217,8 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
             json={
                 **_run_command("common-result", start_date=sessions[1], end_date=sessions[3]),
                 "initial_cash_cny": "100000",
-                "formula": formula,
+                "formula": formula, "exposure_expression": exposure,
+                "selection_every_sessions": 5,
             },
         )
         assert accepted.status_code == 202, accepted.text
@@ -284,6 +302,19 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
         assert worker.returncode == 0, worker.stdout + worker.stderr
         tracked = client.get(f"/api/daily-tracks/{track_id}").json()
         assert tracked["strategy_session"] == sessions[-1], tracked
+        if dynamic:
+            run_detail = client.get(f"/api/research-runs/{run_id}").json()
+            terminal = run_detail["result"]["terminal_strategy_state"]
+            assert run_detail["input"]["exposure_expression"] == exposure
+            assert terminal["target_exposure"] == 0
+            assert terminal["pending_target"]["mode"] == "reduce"
+            assert terminal["target_selection"]["signal_session"] == sessions[1]
+            assert tracked["observation"]["target_exposure"] == 1
+            assert tracked["observation"]["holdings"]
+            observations = tracked["strategy"]["observations"][-2:]
+            assert observations[0]["holdings_count"] == 0
+            assert observations[1]["holdings_count"] > 0
+            assert all(Decimal(row["transaction_cost_cny"]) > 0 for row in observations)
         runtime = client.app.state.core_runtime
         with runtime.database.transaction() as transaction:
             latest = transaction.execute(
@@ -301,7 +332,9 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
             payload_name="checkpoint",
         )
         common = checkpoint["common_input_observations"]
-        assert [item["session"] for item in common] == [sessions[-1]] * len(identifiers)
+        assert [item["session"] for item in common] == [
+            day for day in sessions[4:] for _ in identifiers
+        ]
         assert {item["identifier"] for item in common} == set(identifiers)
         assert common[0]["valid_count"] == common[0]["member_count"] > 0
 

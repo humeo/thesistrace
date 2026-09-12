@@ -143,6 +143,13 @@ class TrackingOrigin(BaseModel):
     initial_strategy_state: InitialStrategyState
     calculation_contracts: dict[str, object]
 
+    @property
+    def expression_trees(self) -> tuple[dict[str, object], ...]:
+        return (
+            self.immutable_input["alpha_expression"],
+            self.immutable_input["strategy"]["exposure_expression"],
+        )
+
 
 class DailyTrackSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -665,6 +672,7 @@ class DailyTrackObservation(BaseModel):
     transaction_cost_cny: str
     session_count: int
     holdings: list[DailyTrackHolding]
+    target_exposure: float = Field(ge=0, le=1)
     selection_interval: int
     pending_target_session: str | None
     sessions_until_next_signal: int
@@ -692,7 +700,7 @@ class KernelRunInputSnapshot(BaseModel):
     research_kind: Literal["strategy_backtest"]
     alpha_expression: dict[str, object]
     field_bindings: dict[str, str]
-    effective_alpha_lookback: int
+    effective_lookback: int
     universe: str
     neutralization: str
     holdings_count: int
@@ -726,7 +734,9 @@ class KernelStateCheckpoint(BaseModel):
     def observation_boundary_matches(self) -> KernelStateCheckpoint:
         if self.tracking_observation_state.boundary_session != self.boundary_session:
             raise ValueError("Checkpoint observation boundary differs")
-        references = common_input_references(self.run_input.alpha_expression)
+        references = common_input_references(
+            self.run_input.alpha_expression, self.run_input.exposure_expression,
+        )
         delta = self.strategy_state.get("retained_delta")
         if not isinstance(delta, list) or any(
             not isinstance(row, dict) or not isinstance(row.get("session"), str) for row in delta

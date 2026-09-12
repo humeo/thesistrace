@@ -55,7 +55,7 @@ def test_factor_evidence_censors_at_requested_end_even_when_later_prices_exist(
             research_data=data,
             alpha_expression=PCT_CHANGE_20,
             field_bindings=FIELD_BINDINGS,
-            effective_alpha_lookback=20,
+            effective_lookback=20,
             universe="top300",
             neutralization="none",
             research_kind="factor_evaluation",

@@ -541,7 +541,7 @@ def _calculate_chunks(
             fact_instrument_ids = _continuation_instrument_ids(continuation)
             first_research_index = calendar.index(research_sessions[0])
             context_session_count = max(
-                immutable_input.alpha_admission.effective_lookback,
+                immutable_input.expression_admission.effective_lookback,
                 21,
                 2,
             )
@@ -556,7 +556,7 @@ def _calculate_chunks(
                 sessions=context_sessions,
                 universe_name=immutable_input.universe,
                 neutralization=immutable_input.neutralization,
-                require_industry=requires_common_industry(immutable_input.alpha_expression),
+                require_industry=requires_common_industry(*immutable_input.expression_trees),
                 field_bindings=immutable_input.field_bindings,
                 fact_instrument_ids=fact_instrument_ids,
             )
@@ -753,7 +753,7 @@ def _kernel_input(
         research_data=research_data,
         alpha_expression=immutable_input.alpha_expression,
         field_bindings=immutable_input.field_bindings,
-        effective_alpha_lookback=immutable_input.alpha_admission.effective_lookback,
+        effective_lookback=immutable_input.expression_admission.effective_lookback,
         universe=immutable_input.universe,
         neutralization=immutable_input.neutralization,
         research_kind=immutable_input.research_kind,

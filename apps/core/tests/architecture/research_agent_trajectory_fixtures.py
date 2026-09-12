@@ -164,9 +164,12 @@ def research_context_payload() -> dict[str, object]:
                 "batch_items": {"minimum": 1, "maximum": 20},
                 "batch_kinds": ("factor_evaluation", "strategy_sweep"),
                 "exposure": {
-                    "context": "exposure", "mode": "constant_expression",
+                    "context": "exposure", "mode": "daily_expression",
                     "default_expression": "1", "minimum": 0, "maximum": 1,
-                    "data_series_allowed": False,
+                    "data_series_allowed": True,
+                    "result_types": ("number", "common_numeric_series"),
+                    "stock_fields_allowed": False, "decision_time": "session_close",
+                    "execution_time": "next_session_open",
                 },
                 "weighting": ("equal_weight",),
                 "formula": {

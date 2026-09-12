@@ -11,8 +11,7 @@ from thesistrace.research_kernel.alpha_expression import (
     ParsedAlpha,
     validate_normalized_alpha,
 )
-from thesistrace.research_kernel.common_inputs import COMMON_INPUTS
-from thesistrace.research_kernel.common_market import CommonMarketSeries
+from thesistrace.research_kernel.common_observations import record_common_input
 from thesistrace.research_kernel.numeric import canonical_binary64_bytes
 from thesistrace.research_kernel.series_plan import (
     CompiledAlphaLike,
@@ -92,7 +91,7 @@ def evaluate_alpha_matrix(
         sessions=tuple(calendar),
         industries=research_data.industries,
         historical_universe_members=research_data.historical_universe_members,
-        observe_common=lambda identifier, code, values: _record_common_input(
+        observe_common=lambda identifier, code, values: record_common_input(
             common_observations,
             calendar,
             identifier,
@@ -178,7 +177,7 @@ def _evaluate_columnar_alpha(
         cancellation_check=cancellation_check,
         industries=research_data.industries,
         historical_universe_members=research_data.historical_universe_members,
-        observe_common=lambda identifier, code, values: _record_common_input(
+        observe_common=lambda identifier, code, values: record_common_input(
             common_observations,
             calendar,
             identifier,
@@ -374,24 +373,3 @@ def issue(reason_code: str, column: int, message: str) -> AlphaValidationIssue:
         location=f"alpha.expression:{column}",
         message=message,
     )
-
-
-def _record_common_input(
-    observations: dict[str, list[dict[str, object]]],
-    sessions: list[str] | tuple[str, ...],
-    identifier: str,
-    industry_code: str | None,
-    series: CommonMarketSeries,
-) -> None:
-    values = getattr(series, COMMON_INPUTS[identifier][0])
-    for index, session in enumerate(sessions):
-        observations.setdefault(session, []).append(
-            {
-                "identifier": identifier,
-                "industry_code": industry_code,
-                "value": finite_or_missing(float(values[index])),
-                "member_count": series.member_count[index],
-                "valid_count": series.valid_count[index],
-                "exclusions": dict(series.exclusions[index]),
-            }
-        )

@@ -133,11 +133,11 @@ def test_chunk_statistics_must_exactly_cover_frozen_inputs_and_new_sessions():
 
     expression = alpha_language.compile("close * universe_return()").expression
     values = [observation()]
-    validate_common_chunk_observations(values, expression=expression, sessions=("2026-01-06",))
+    validate_common_chunk_observations(values, expressions=(expression,), sessions=("2026-01-06",))
     for invalid in ([], values * 2, [observation(session="2026-01-05")]):
         with pytest.raises(ResearchResultError):
             validate_common_chunk_observations(
-                invalid, expression=expression, sessions=("2026-01-06",)
+                invalid, expressions=(expression,), sessions=("2026-01-06",)
             )
 
 

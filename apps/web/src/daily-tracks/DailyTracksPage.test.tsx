@@ -18,7 +18,7 @@ const observation: DailyTrackObservation = {
   session: "2026-08-18", net_asset_value_cny: "1100", cash_cny: "200",
   net_change_cny: "100", net_return: 0.1, maximum_drawdown: 0.025, transaction_cost_cny: "2.75", session_count: 1,
   holdings: [{ instrument_id: "000001.SZ", shares: 100, market_value_cny: "900", weight: 9 / 11 }],
-  selection_interval: 5, pending_target_session: null, sessions_until_next_signal: 4,
+  target_exposure: 0.7, selection_interval: 5, pending_target_session: null, sessions_until_next_signal: 4,
   returns: [{ session: "2026-08-17", net_return: 0 }, { session: "2026-08-18", net_return: 0.1 }],
 };
 
@@ -265,6 +265,7 @@ describe("TrackingOriginView", () => {
       result_checksum_sha256: "a".repeat(64),
       strategy_session: "2026-08-05",
       terminal_account: {
+        target_exposure: 1,
         session: "2026-08-05",
         gross_cash: "9000000",
         net_cash: "8999995",
@@ -301,6 +302,7 @@ describe("TrackingOriginView", () => {
       result_checksum_sha256: "a".repeat(64),
       strategy_session: "2026-08-05",
       terminal_account: {
+        target_exposure: 1,
         session: "2026-08-05",
         gross_cash: "9000000",
         net_cash: "8999995",

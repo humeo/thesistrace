@@ -47,9 +47,11 @@ def validate_common_reference(node: Mapping[str, object]) -> dict[str, object]:
     return expected
 
 
-def common_input_references(expression: Mapping[str, object]) -> tuple[tuple[str, str | None], ...]:
+def common_input_references(
+    *expressions: Mapping[str, object],
+) -> tuple[tuple[str, str | None], ...]:
     """Return distinct, validated common identities from a frozen expression."""
-    pending: list[object] = [expression]
+    pending: list[object] = list(expressions)
     references: set[tuple[str, str | None]] = set()
     while pending:
         node = pending.pop()
@@ -63,5 +65,5 @@ def common_input_references(expression: Mapping[str, object]) -> tuple[tuple[str
     return tuple(sorted(references, key=lambda value: (value[0], value[1] or "")))
 
 
-def requires_common_industry(expression: Mapping[str, object]) -> bool:
-    return any(code is not None for _, code in common_input_references(expression))
+def requires_common_industry(*expressions: Mapping[str, object]) -> bool:
+    return any(code is not None for _, code in common_input_references(*expressions))

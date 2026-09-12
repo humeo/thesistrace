@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import replace
 from decimal import Decimal
 
@@ -68,8 +69,9 @@ def columnar_fixture(canonical) -> ColumnarResearchData:
     )
 
 
-def run_input(data, source, neutralization, holdings=10, rebalance=5):
+def run_input(data, source, neutralization, holdings=10, rebalance=5, exposure="1"):
     compiled = alpha_language.compile(source)
+    exposure_compiled = alpha_language.compile(exposure, context="exposure")
     return RunInput(
         research_data=data,
         alpha_expression=compiled.expression,
@@ -77,12 +79,13 @@ def run_input(data, source, neutralization, holdings=10, rebalance=5):
             **FIELD_BINDINGS,
             **{value: key for key, value in compiled.field_ids_by_identifier.items()},
         },
-        effective_alpha_lookback=compiled.effective_lookback,
+        effective_lookback=max(compiled.effective_lookback, exposure_compiled.effective_lookback),
         universe="top300",
         neutralization=neutralization,
         research_kind="strategy_backtest",
         strategy=StrategyRunInput(
             holdings_count=holdings, selection_interval=rebalance,
+            exposure_expression_json=json.dumps(exposure_compiled.expression).encode(),
             initial_cash_cny="10000000", commission_rate_all_in="0.0003",
             commission_min_cny="5", stamp_duty_sell_rate="0.0005", transfer_fee_rate="0.00001",
         ),
@@ -98,8 +101,11 @@ def run_input(data, source, neutralization, holdings=10, rebalance=5):
     ("-rank(pct_change(close, 20))", "none", 3, 1),
     ("ts_mean(close, 3) + ts_mean(close, 3)", "industry", 5, 3),
 ])
+@pytest.mark.parametrize("exposure", [
+    "1", "if_else(universe_advancing_fraction() > 0.5, 1, 0.3)",
+])
 def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
-    source, neutralization, holdings, rebalance, monkeypatch,
+    source, neutralization, holdings, rebalance, exposure, monkeypatch,
 ) -> None:
     from thesistrace.research_kernel import factor, kernel_advance, tracking_advance
 
@@ -117,7 +123,9 @@ def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
     row = aligned_market_data(canonical, neutralization=neutralization)
     calendar = list(row.sessions)
     initial = slice_research_sessions(row, calendar[:45])
-    prior = run(run_input(initial, source, neutralization, holdings, rebalance)).track_state
+    prior = run(
+        run_input(initial, source, neutralization, holdings, rebalance, exposure),
+    ).track_state
     observation = initial_tracking_observation_state(
         calendar[43], prior.output_snapshot()["strategy_backtest"]["daily"][-2]["net_nav"],
     )
@@ -162,7 +170,7 @@ def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
             ))
         assert outputs[0] == outputs[1]
         checkpoint, continuation, *_ = outputs[1]
-        if "universe_advancing_fraction" in source:
+        if "universe_advancing_fraction" in source or "universe_advancing_fraction" in exposure:
             common = checkpoint["common_input_observations"]
             assert [item["session"] for item in common] == appended
             assert all(item["identifier"] == "universe_advancing_fraction" for item in common)

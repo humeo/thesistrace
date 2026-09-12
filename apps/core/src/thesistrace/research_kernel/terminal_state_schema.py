@@ -61,6 +61,8 @@ class TargetSelection(TerminalStateModel):
 
 
 class PendingTarget(TargetSelection):
+    decision_session: StrictStr
+    mode: Literal["selection", "reduce", "increase"]
     execution: Literal["next_research_session_open"]
     exposure: StrictFloat
 
@@ -185,7 +187,9 @@ class TerminalStrategyStateValue(TerminalStateModel):
             raise ValueError("Retained Selection cannot come from the future")
         if self.pending_target is not None and (
             self.pending_target.exposure != self.target_exposure
-            or self.pending_target.model_dump(exclude={"execution", "exposure"})
+            or self.pending_target.model_dump(
+                exclude={"execution", "exposure", "decision_session", "mode"},
+            )
             != self.target_selection.model_dump()
         ):
             raise ValueError("Pending target differs from the decided Selection and Exposure")
@@ -194,7 +198,7 @@ class TerminalStrategyStateValue(TerminalStateModel):
             or self.metric_state.last_session != self.session
             or (
                 self.pending_target is not None
-                and self.pending_target.signal_session != self.session
+                and self.pending_target.decision_session != self.session
             )
         ):
             raise ValueError("Terminal continuation sessions do not match")

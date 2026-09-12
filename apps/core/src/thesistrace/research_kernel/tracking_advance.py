@@ -12,6 +12,10 @@ from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
     evaluate_columnar_alpha_sessions,
 )
+from thesistrace.research_kernel.common_observations import (
+    attach_common_input_evidence,
+    record_common_input,
+)
 from thesistrace.research_kernel.kernel_advance import (
     AdvanceInput,
     _accept_target_research_data,
@@ -44,12 +48,17 @@ def advance_tracking(value: AdvanceInput) -> KernelState:
     matrix = _tracking_delta(
         run_input, data, restored, appended,
     )
+    exposure_observations = {}
     strategy = transition_columnar_strategy(
         data, matrix, calculation_definition(run_input),
         origin_session=prior.origin_session,
+        observe_common=lambda identifier, code, values: record_common_input(
+            exposure_observations, tuple(data.sessions), identifier, code, values,
+        ),
         continuation=prior.strategy_resume_snapshot(),
         cancellation_check=lambda: None,
     )
+    attach_common_input_evidence(matrix, exposure_observations, tuple(appended))
     return KernelState(
         run_input=run_input,
         output=compose_output(matrix, strategy.finalized),

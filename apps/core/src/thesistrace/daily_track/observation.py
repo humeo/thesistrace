@@ -67,9 +67,10 @@ def project_daily_observation(
                 "holdings": sorted(
                     holdings, key=lambda row: (-row["weight"], row["instrument_id"])
                 ),
+                "target_exposure": current.target_exposure,
                 "selection_interval": phase.selection_interval,
                 "pending_target_session": (
-                    current.pending_target.signal_session if current.pending_target else None
+                    current.pending_target.decision_session if current.pending_target else None
                 ),
                 "sessions_until_next_signal": (
                     phase.selection_interval - signal_offset if signal_offset else 0

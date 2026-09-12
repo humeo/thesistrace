@@ -12,7 +12,15 @@ if (localStorage.getItem(researchDraftKey(researcherId, folder.id)) === null) {
   });
 }
 createRoot(document.getElementById("root")!).render(<ResearchDraftWorkspace
-  researcherId={researcherId} folder={folder} catalog={{ fields: [], builtins: [], industries: [] }}
+  researcherId={researcherId} folder={folder} catalog={{
+    fields: [{ identifier: "close", field_id: "price.close.adjusted", value_type: "numeric_series",
+      description: "Adjusted Close", unit: "CNY", family_id: "price", availability: "ready",
+      report_period_selection: "", applicable_company_types: [], missingness: "", example: "close" }],
+    builtins: [
+      { identifier: "rank", result_type: "numeric_series", description: "Stock cross-sectional rank", parameters: [], examples: [], missing_value_behavior: "", numeric_behavior: "" },
+      { identifier: "universe_return", result_type: "common_series", description: "Common Universe return", parameters: [], examples: [], missing_value_behavior: "", numeric_behavior: "" },
+    ], industries: [],
+  }}
   data={{
     market_coverage: { start: "2025-01-01", end: "2026-08-12" }, financial_coverage: null,
     industry_coverage: null, benchmark_coverage: null, benchmark_snapshot_sha256: null,

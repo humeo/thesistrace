@@ -1085,7 +1085,7 @@ def _reference_result(
             if alpha_expression is None else alpha_expression
         ),
         field_bindings={"price.close.adjusted": "close"},
-        effective_alpha_lookback=effective_lookback,
+        effective_lookback=effective_lookback,
         universe="top300",
         neutralization="none",
         research_kind=research_kind,

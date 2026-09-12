@@ -13,6 +13,10 @@ from thesistrace.research_kernel.alpha import (
     advance_alpha_checksum,
     evaluate_columnar_alpha_sessions,
 )
+from thesistrace.research_kernel.common_observations import (
+    merge_common_input_sessions,
+    record_common_input,
+)
 from thesistrace.research_kernel.factor import (
     HORIZONS,
     PreparedColumnarForwardLabels,
@@ -348,6 +352,7 @@ class StrategyChunkOutcome:
     _phase_seconds: tuple[tuple[str, float], ...]
     binding_checksum: str
     strategy_input_checksum: str
+    common_input_sessions: tuple[dict[str, object], ...]
 
     @classmethod
     def _from_validated(
@@ -357,6 +362,7 @@ class StrategyChunkOutcome:
         run_input: RunInput,
         continuation: dict[str, object],
         daily_observations: list[dict[str, object]],
+        common_input_sessions: tuple[dict[str, object], ...],
         final_values: dict[str, object] | None,
         phase_seconds: Mapping[str, float],
     ) -> StrategyChunkOutcome:
@@ -369,6 +375,7 @@ class StrategyChunkOutcome:
         ):
             raise ValueError("Strategy phase timing is invalid")
         instance = object.__new__(cls)
+        object.__setattr__(instance, "common_input_sessions", common_input_sessions)
         object.__setattr__(instance, "_continuation", continuation)
         object.__setattr__(instance, "_daily_observations", tuple(daily_observations))
         object.__setattr__(instance, "_final_values", final_values)
@@ -540,7 +547,7 @@ def execute_research_chunk(
     state.update(strategy_outcome._continuation_for_current_process())
     return ResearchChunkCalculation(
         continuation=state,
-        common_input_sessions=common_input_sessions,
+        common_input_sessions=strategy_outcome.common_input_sessions,
         factor_daily_observations=(),
         strategy_daily_observations=(strategy_outcome._daily_observations_for_current_process()),
         final_values=strategy_outcome._final_values_for_current_process(),
@@ -615,12 +622,16 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
         prior_daily_count = 1
     else:
         strategy_continuation = None
+    exposure_observations = {}
     strategy = run_strategy_with_metric_state(
         research_data,
         alpha_factor_outcome._alpha_matrix_for_current_process(),
         calculation_definition(run_input),
         origin_session=str(run_input.research_start_session),
         continuation=strategy_continuation,
+        observe_common=lambda identifier, code, values: record_common_input(
+            exposure_observations, tuple(research_data.sessions), identifier, code, values,
+        ),
         cancellation_check=cancellation_check,
     )
     new_daily = [dict(value) for value in strategy["daily"][prior_daily_count:]]
@@ -708,6 +719,10 @@ def _execute_strategy_chunk_from_validated_alpha_factor(
         run_input=run_input,
         continuation=continuation,
         daily_observations=observations,
+        common_input_sessions=merge_common_input_sessions(
+            alpha_factor_outcome._alpha_matrix_for_current_process()["sessions"],
+            exposure_observations, tuple(row["session"] for row in new_daily),
+        ),
         final_values=final_values,
         phase_seconds={
             "strategy": strategy_seconds,
@@ -848,7 +863,7 @@ def _execute_alpha_factor_chunk_from_validated(
         alpha_and_pending_seconds = monotonic() - alpha_started
     completed_count = int(state["completed_research_session_count"]) + len(research_sessions)
     state["completed_research_session_count"] = completed_count
-    lookback = max(run_input.alpha_execution_plan().effective_lookback, 2)
+    lookback = max(run_input.effective_lookback, 2)
     state["rolling_tail_sessions"] = list(calendar[-lookback:])
     finalize_started = monotonic()
     factor_summary: dict[str, object] | None = None

@@ -50,7 +50,7 @@ def test_common_industry_requires_its_calculation_history_and_points_to_formula(
     assert issue.range.end.offset == len(command.formula)
     ready = replace(snapshot, industry_coverage_start=snapshot.coverage_start)
     admitted = _admitted_input(command, compiled, ready, execution_memory_bytes=1536 * 1024**2)
-    assert admitted.alpha_admission.effective_lookback == 3
+    assert admitted.expression_admission.effective_lookback == 3
 
 
 def test_neutralization_without_common_industry_keeps_requested_period_coverage():
@@ -74,11 +74,11 @@ def test_fixed_exposure_is_compiled_and_frozen_with_strategy_input(source):
     assert admitted.strategy["exposure_expression"] == alpha_language.compile(
         source, context="exposure",
     ).expression
-    assert admitted.alpha_admission.effective_lookback == 0
+    assert admitted.expression_admission.effective_lookback == 0
     assert admitted.requested_start_date == command.start_date
 
 
-@pytest.mark.parametrize("source", ["1.1", "1 / 0", "close", "universe_return()"])
+@pytest.mark.parametrize("source", ["1.1", "1 / 0", "close", "universe_return() > 0"])
 def test_invalid_exposure_is_rejected_by_shared_admission(source):
     from thesistrace.research_run.models import StrategyBacktestAdmissionCommand
 
@@ -135,3 +135,30 @@ def test_whole_spec_diagnosis_reuses_admission_and_has_no_persistence_side_effec
     assert service.diagnose_research_spec(factor).valid
     with pytest.raises(ResearchRunAdmissionRejected):
         service.prepare_child_admission(UUID(int=1), command, dataset=None)
+
+
+def test_daily_exposure_adds_its_real_window_fields_and_industry_requirement():
+    from thesistrace.research_run.models import StrategyBacktestAdmissionCommand
+
+    factor, compiled, snapshot = inputs('close')
+    source = 'if_else(ts_mean(industry_return(801010), 3) > 0, 1, 0.3)'
+    command = StrategyBacktestAdmissionCommand.model_validate({
+        **factor.model_dump(), 'research_kind': 'strategy_backtest',
+        'initial_cash_cny': '100000', 'holdings_count': 10,
+        'selection_every_sessions': 5, 'exposure_expression': source,
+    })
+    with pytest.raises(ResearchRunAdmissionRejected) as caught:
+        _admitted_input(command, compiled, snapshot, execution_memory_bytes=1536 * 1024**2)
+    assert caught.value.issues[0].code == 'INDUSTRY_CALCULATION_OUTSIDE_COVERAGE'
+    assert caught.value.issues[0].field == 'exposure_expression'
+    ready = replace(snapshot, industry_coverage_start=snapshot.coverage_start)
+    admitted = _admitted_input(command, compiled, ready, execution_memory_bytes=1536 * 1024**2)
+    exposure = alpha_language.compile(source, context='exposure')
+    assert admitted.expression_admission.effective_lookback == 3
+    assert admitted.expression_admission.formula_work == (
+        compiled.estimated_work + exposure.estimated_work
+    )
+    assert admitted.expression_admission.node_count == compiled.node_count + exposure.node_count
+    assert admitted.execution_plan.research_session_offset == 3
+    assert admitted.data_admission.first_research_session == command.start_date
+    assert admitted.execution_plan.calculation_sessions[0] == snapshot.research_sessions[1]

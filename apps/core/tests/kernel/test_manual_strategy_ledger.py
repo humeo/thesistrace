@@ -537,18 +537,19 @@ def test_manual_historical_universe_excludes_a_future_stock_and_changes_on_sched
 
 def _canonical(
     *,
+    sessions: tuple[str, ...] = SESSIONS,
     opens: dict[str, dict[str, str | tuple[str, str] | None]],
     states: dict[tuple[str, str], str] | None = None,
     universes: dict[str, tuple[str, ...]] | None = None,
     limit_overrides: dict[tuple[str, str], tuple[str, str]] | None = None,
 ) -> dict[str, object]:
     selected_states = states or {}
-    selected_universes = universes or {session: (A, B) for session in SESSIONS}
+    selected_universes = universes or {session: (A, B) for session in sessions}
     selected_limits = limit_overrides or {}
     prices: list[dict[str, object]] = []
     trading_states: list[dict[str, object]] = []
     price_limits: list[dict[str, object]] = []
-    for session in SESSIONS:
+    for session in sessions:
         for instrument_id in (A, B):
             state = selected_states.get((session, instrument_id), "normal")
             trading_states.append(
@@ -586,18 +587,18 @@ def _canonical(
                 }
             )
     return {
-        "research_calendar": list(SESSIONS),
+        "research_calendar": list(sessions),
         "instruments": [
             {
                 "instrument_id": A,
                 "board": "main",
-                "listed_from": SESSIONS[0],
+                "listed_from": sessions[0],
                 "listed_to": "",
             },
             {
                 "instrument_id": B,
                 "board": "main",
-                "listed_from": SESSIONS[0],
+                "listed_from": sessions[0],
                 "listed_to": "",
             },
         ],
@@ -607,7 +608,7 @@ def _canonical(
         "liquidity_universes": {
             "manual": [
                 {"session": session, "instrument_ids": list(selected_universes[session])}
-                for session in SESSIONS
+                for session in sessions
             ]
         },
         "industry_membership": [],
@@ -662,7 +663,7 @@ def _kernel_run(
             research_data=aligned_market_data(canonical, universe="manual"),
             alpha_expression=CLOSE_ADJUSTED,
             field_bindings=FIELD_BINDINGS,
-            effective_alpha_lookback=0,
+            effective_lookback=0,
             universe="manual",
             neutralization="none",
             research_kind="strategy_backtest",
@@ -907,3 +908,156 @@ def test_tracking_checkpoint_restores_retained_selection_and_exposure(exposure, 
     assert actual["target_selection"]["selected_instrument_ids"] == [B]
     assert (actual["pending_target"] is not None) == (interval == 3)
     assert checkpoint["run_input"]["exposure_expression"] == {"kind": "number", "value": exposure}
+
+
+@pytest.mark.parametrize("blocked,interval", [(False, 5), (True, 5), (False, 1)])
+def test_daily_exposure_uses_proportional_reduction_unless_selection_is_due(blocked, interval):
+    from thesistrace.alpha_language import alpha_language
+
+    canonical = _canonical(
+        limit_overrides={(SESSIONS[3], A): ('14', '12')} if blocked else None,
+        opens={
+        SESSIONS[0]: {A: '10', B: '10'},
+        SESSIONS[1]: {A: '10', B: '10'},
+        SESSIONS[2]: {A: '10', B: '10'},
+        SESSIONS[3]: {A: '12', B: '8'},
+    })
+    _set_alpha_closes(canonical, {
+        SESSIONS[0]: {A: '10', B: '10'},
+        SESSIONS[1]: {A: '11', B: '11'},
+        SESSIONS[2]: {A: '9', B: '9'},
+        SESSIONS[3]: {A: '9', B: '9'},
+    })
+    definition = _definition(holdings_count=2, selection_interval=interval)
+    definition['strategy']['initial_cash_cny'] = '100000'
+    definition['strategy']['exposure_expression'] = alpha_language.compile(
+        'if_else(universe_return() > 0, 1, 0.3)', context='exposure',
+    ).expression
+    definition['costs'] = dict.fromkeys(definition['costs'], '0')
+    ledger = []
+    result = run_strategy(
+        aligned_market_data(canonical, universe='manual'),
+        _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS}),
+        definition, origin_session=SESSIONS[1], ledger=ledger,
+    )
+    assert result['target_selection']['signal_session'] == (
+        SESSIONS[1] if interval == 5 else SESSIONS[3]
+    )
+    assert result['target_exposure'] == 0.3
+    assert ledger[0]['submitted_orders'] == []
+    assert [(row['side'], row['instrument_id']) for row in ledger[1]['submitted_orders']] == [
+        ('buy', A), ('buy', B),
+    ]
+    assert [(row['instrument_id'], Decimal(row['intended_value']))
+            for row in ledger[2]['intended_orders']] == [
+                (A, Decimal('42000' if interval == 5 else '45000')),
+                (B, Decimal('28000' if interval == 5 else '25000')),
+            ]
+    assert [(row['instrument_id'], row['execution_shares'])
+            for row in ledger[2]['positions']] == (
+        [(A, 5000 if blocked else 1500), (B, 1500)] if interval == 5
+        else [(A, 1300), (B, 1900)]
+    )
+    assert Decimal(ledger[2]['net_cash']) == (
+        (28000 if blocked else 70000) if interval == 5 else 69200
+    )
+    _assert_ledger_reconciles(ledger)
+
+
+@pytest.mark.parametrize('initial,next_value,last_open,expected_shares,expected_cash', [
+    (0.3, 0.7, {A: '40', B: '10'}, {A: 1500, B: 4100}, '44000'),
+    (0.7, 0.3, {A: '1', B: '1'}, {A: 3500, B: 3500}, '30000'),
+    (0.0, 0.7, {A: '10', B: '10'}, {A: 3500, B: 3500}, '30000'),
+])
+def test_daily_exposure_only_adjustment_respects_direction_and_total_buy_budget(
+    initial, next_value, last_open, expected_shares, expected_cash,
+):
+    from thesistrace.alpha_language import alpha_language
+
+    canonical = _canonical(opens={
+        SESSIONS[0]: {A: '10', B: '10'},
+        SESSIONS[1]: {A: '10', B: '10'},
+        SESSIONS[2]: {A: '10', B: '10'},
+        SESSIONS[3]: last_open,
+    })
+    _set_alpha_closes(canonical, {
+        SESSIONS[0]: {A: '10', B: '10'},
+        SESSIONS[1]: {A: '11', B: '11'},
+        SESSIONS[2]: {A: '9', B: '9'},
+        SESSIONS[3]: {A: '9', B: '9'},
+    })
+    definition = _definition(holdings_count=2, selection_interval=5)
+    definition['strategy']['initial_cash_cny'] = '100000'
+    definition['strategy']['exposure_expression'] = alpha_language.compile(
+        f'if_else(universe_return() > 0, {initial}, {next_value})', context='exposure',
+    ).expression
+    definition['costs'] = dict.fromkeys(definition['costs'], '0')
+    ledger = []
+    result = run_strategy(
+        aligned_market_data(canonical, universe='manual'),
+        _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS}),
+        definition, origin_session=SESSIONS[1], ledger=ledger,
+    )
+    assert result['target_selection']['signal_session'] == SESSIONS[1]
+    assert result['pending_target'] is None
+    assert {row['instrument_id']: row['execution_shares']
+            for row in ledger[-1]['positions']} == expected_shares
+    assert Decimal(ledger[-1]['net_cash']) == Decimal(expected_cash)
+    assert all(row['side'] == 'buy' for row in ledger[-1]['submitted_orders'])
+    if initial > next_value:
+        assert ledger[-1]['submitted_orders'] == []
+    _assert_ledger_reconciles(ledger)
+
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+def test_daily_exposure_keeps_new_selection_while_cash_then_restores_without_retry(blocked):
+    from thesistrace.alpha_language import alpha_language
+
+    sessions = tuple(f"2026-01-{day:02d}" for day in (5, 6, 7, 8, 9, 12, 13, 14, 15))
+    closes = (100, 110, 99, 79.2, 63.36, 50.688, 40.5504, 44.60544, 49.065984)
+    canonical = _canonical(
+        sessions=sessions, opens={session: {A: '10', B: '10'} for session in sessions},
+        limit_overrides={(sessions[4], A): ('11', '10')} if blocked else None,
+    )
+    _set_alpha_closes(canonical, {
+        session: {A: str(close), B: str(close)}
+        for session, close in zip(sessions, closes, strict=True)
+    })
+    definition = _definition(holdings_count=1, selection_interval=5)
+    definition['strategy']['initial_cash_cny'] = '100000'
+    definition['strategy']['exposure_expression'] = alpha_language.compile(
+        'if_else(universe_return() > 0, 1, if_else(universe_return() > -0.15, 0.3, 0))',
+        context='exposure',
+    ).expression
+    definition['costs'] = dict.fromkeys(definition['costs'], '0')
+    matrix = _alpha_matrix({
+        session: (((A, 2), (B, 1)) if index == 1 else ((B, 2), (A, 1)))
+        for index, session in enumerate(sessions)
+    })
+    ledger = []
+    result = run_strategy(
+        aligned_market_data(canonical, universe='manual'), matrix, definition,
+        origin_session=sessions[1], ledger=ledger,
+    )
+    assert [(row['session'], order['instrument_id'], order['side'])
+            for row in ledger for order in row['submitted_orders']] == [
+        (sessions[2], A, 'buy'), (sessions[3], A, 'sell'),
+        (sessions[4], A, 'sell'),
+        *([(sessions[7], A, 'sell')] if blocked else []),
+        (sessions[8], B, 'buy'),
+    ]
+    assert result['target_selection']['signal_session'] == sessions[6]
+    assert result['target_selection']['selected_instrument_ids'] == [B]
+    assert result['pending_target'] is None
+    assert [row['instrument_id'] for row in result['positions']] == [B]
+    assert all(row['positions'] == [] for row in ledger[6:7])
+    assert ledger[4]['submitted_orders'] == ledger[5]['submitted_orders'] == []
+    if blocked:
+        assert ledger[3]['rejections'][0]['reason'] == 'lower_limit_sell'
+        assert all(row['positions'][0]['execution_shares'] == 3000 for row in ledger[3:6])
+    else:
+        assert all(row['positions'] == [] for row in ledger[3:7])
+    assert Decimal(ledger[2]['net_cash']) == 70000
+    assert Decimal(ledger[3]['net_cash']) == (70000 if blocked else 100000)
+    _assert_ledger_reconciles(ledger)

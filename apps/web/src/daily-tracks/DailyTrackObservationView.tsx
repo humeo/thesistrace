@@ -11,6 +11,7 @@ export type DailyTrackObservation = {
   transaction_cost_cny: string;
   session_count: number;
   holdings: Array<{ instrument_id: string; shares: number; market_value_cny: string; weight: number }>;
+  target_exposure: number;
   selection_interval: number;
   pending_target_session: string | null;
   sessions_until_next_signal: number;
@@ -59,7 +60,7 @@ export function CurrentHoldings({ observation }: { observation: DailyTrackObserv
   return (
     <section className="track-holdings" aria-label="Current holdings">
       <div className="track-section-heading">
-        <div><h2>Current holdings</h2><p>Published positions as of {observation.session}.</p></div>
+        <div><h2>Current holdings</h2><p>Published positions as of {observation.session}. Close target {formatReturn(observation.target_exposure)} · actual Open allocation {formatReturn(1 - Number(observation.cash_cny) / Number(observation.net_asset_value_cny))}. Orders, costs and rounding can leave a difference.</p></div>
         <input aria-label="Filter holdings by symbol" placeholder="Find a symbol…" type="search"
           value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>

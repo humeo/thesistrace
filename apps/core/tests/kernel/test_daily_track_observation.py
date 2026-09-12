@@ -49,6 +49,7 @@ def account(
             },
             "target_exposure": 1.0,
             "pending_target": {
+                "decision_session": session, "mode": "selection",
                 "exposure": 1.0,
                 "signal_session": session, "execution": "next_research_session_open",
                 "selected_instrument_ids": ["000001.SZ"],

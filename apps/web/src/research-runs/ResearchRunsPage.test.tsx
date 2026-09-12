@@ -253,7 +253,9 @@ const TERMINAL_STATE: TerminalStrategyState = {
     selection_interval: 1,
     completed_intervals: 2,
   },
+  target_exposure: 1,
   pending_target: {
+    decision_session: "2026-08-05", mode: "selection",
     signal_session: "2026-08-05",
     execution: "next_research_session_open",
   },

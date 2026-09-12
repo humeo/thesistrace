@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from thesistrace._paging import fit_page
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.alpha_language import CompiledAlpha, FormulaCompilationError, alpha_language
+from thesistrace.alpha_language.requirements import expression_requirements
 from thesistrace.benchmark import (
     AnnualizedExcessCalculator,
     StrategyComparisonFacts,
@@ -100,10 +101,10 @@ from thesistrace.research_run.failure_policy import (
     attempt_retry_eligible,
 )
 from thesistrace.research_run.models import (
-    AlphaAdmissionFacts,
     CommonInputObservationsResultSection,
     CommonInputObservationsResultSectionInput,
     DataAdmissionFacts,
+    ExpressionAdmissionFacts,
     FactorEvaluationResearchRunKeyMetrics,
     FactorEvaluationResearchRunResult,
     FactorObservationsResultSection,
@@ -2495,7 +2496,7 @@ class ResearchRunService:
                     query.end_session
                     if isinstance(query, FactorObservationsResultSectionInput) else None
                 ),
-                has_common_inputs=bool(common_input_references(immutable_input.alpha_expression)),
+                has_common_inputs=bool(common_input_references(*immutable_input.expression_trees)),
                 after=after,
                 limit=limit,
             )
@@ -2975,20 +2976,18 @@ class ResearchRunService:
             raise ResearchRunContractMismatch(
                 "frozen Research execution contract is obsolete"
             ) from error
-        current_bindings = {
-            field_id: identifier
-            for identifier, field_id in compiled.field_ids_by_identifier.items()
-        }
-        admission = immutable_input.alpha_admission
+        requirements = expression_requirements(compiled, *(() if exposure is None else (exposure,)))
+        current_bindings = requirements.field_bindings
+        admission = immutable_input.expression_admission
         strategy = immutable_input.strategy
         common_contract_mismatch = (
             immutable_input.semantic_versions != SEMANTIC_VERSIONS
             or compiled.expression != immutable_input.alpha_expression
             or current_bindings != immutable_input.field_bindings
-            or compiled.effective_lookback != admission.effective_lookback
-            or compiled.node_count != admission.node_count
-            or compiled.depth != admission.depth
-            or compiled.estimated_work != admission.formula_work
+            or requirements.effective_lookback != admission.effective_lookback
+            or requirements.node_count != admission.node_count
+            or requirements.depth != admission.depth
+            or requirements.estimated_work != admission.formula_work
         )
         strategy_contract_mismatch = immutable_input.research_kind == "strategy_backtest" and (
             strategy is None
@@ -3126,7 +3125,7 @@ class ResearchRunService:
                         raise ResearchCheckpointIntegrityError
                     common_rows = read_common_input_observation_partition(common_payload.content)
                 validate_common_chunk_observations(
-                    common_rows, expression=claim.immutable_input.alpha_expression,
+                    common_rows, expressions=claim.immutable_input.expression_trees,
                     sessions=_checkpoint_research_sessions(claim.immutable_input, expected_ordinal),
                 )
                 factor_rows = []
@@ -3244,7 +3243,7 @@ class ResearchRunService:
             for row in rows
         ]
         common_partitions = []
-        input_count = len(common_input_references(claim.immutable_input.alpha_expression))
+        input_count = len(common_input_references(*claim.immutable_input.expression_trees))
         for row in common_rows:
             sessions = _checkpoint_research_sessions(claim.immutable_input, int(row["ordinal"]))
             if not sessions or input_count == 0:
@@ -3378,7 +3377,7 @@ class ResearchRunService:
         ):
             raise ResearchResultError("Common Chunk observations are invalid")
         validate_common_chunk_observations(
-            common_rows, expression=claim.immutable_input.alpha_expression,
+            common_rows, expressions=claim.immutable_input.expression_trees,
             sessions=_checkpoint_research_sessions(claim.immutable_input, ordinal),
         )
         _validate_factor_checkpoint_rows(claim.immutable_input, ordinal, factor_rows)
@@ -4030,6 +4029,7 @@ def _admitted_input(
                 )
                 for diagnostic in error.diagnostics
             ]) from error
+    requirements = expression_requirements(compiled, *(() if exposure is None else (exposure,)))
     if snapshot is None:
         raise ResearchRunAdmissionRejected(
             [
@@ -4061,7 +4061,7 @@ def _admitted_input(
                 )
             ]
         )
-    field_ids = frozenset(compiled.field_ids_by_identifier.values())
+    field_ids = frozenset(requirements.field_bindings)
     if not field_ids <= snapshot.available_field_ids:
         raise ResearchRunAdmissionRejected(
             [
@@ -4075,11 +4075,11 @@ def _admitted_input(
     dependencies = resolve_data_dependencies(
         field_ids=field_ids,
         neutralization=command.neutralization,
-        require_industry=requires_common_industry(compiled.expression),
+        require_industry=requirements.require_industry,
     )
     if dependencies.financial:
         first_index = snapshot.research_sessions.index(sessions[0])
-        warmup_index = first_index - compiled.effective_lookback
+        warmup_index = first_index - requirements.effective_lookback
         financial_start = snapshot.financial_coverage_start
         financial_end = snapshot.financial_coverage_end
         if (
@@ -4107,10 +4107,14 @@ def _admitted_input(
                 ]
             )
     if dependencies.industry:
-        common_industry = requires_common_industry(compiled.expression)
+        common_industry = requirements.require_industry
+        industry_expression = (
+            compiled if requires_common_industry(compiled.expression) else exposure
+        )
+        industry_field = "formula" if industry_expression is compiled else "exposure_expression"
         first_index = snapshot.research_sessions.index(sessions[0])
         required_start = (
-            snapshot.research_sessions[max(0, first_index - compiled.effective_lookback)]
+            snapshot.research_sessions[max(0, first_index - requirements.effective_lookback)]
             if common_industry
             else sessions[0]
         )
@@ -4131,7 +4135,7 @@ def _admitted_input(
                 [
                     ResearchRunAdmissionIssue(
                         code="INDUSTRY_CALCULATION_OUTSIDE_COVERAGE",
-                        field="formula" if common_industry else "neutralization",
+                        field=industry_field if common_industry else "neutralization",
                         message=(
                             (
                                 "Common industry inputs need their calculation period "
@@ -4145,9 +4149,11 @@ def _admitted_input(
                             {
                                 "start": {"offset": 0, "line": 1, "column": 1},
                                 "end": {
-                                    "offset": len(compiled.source),
-                                    "line": compiled.source.count("\n") + 1,
-                                    "column": len(compiled.source.rsplit("\n", 1)[-1]) + 1,
+                                    "offset": len(industry_expression.source),
+                                    "line": industry_expression.source.count("\n") + 1,
+                                    "column": (
+                                        len(industry_expression.source.rsplit("\n", 1)[-1]) + 1
+                                    ),
                                 },
                             }
                             if common_industry
@@ -4160,7 +4166,7 @@ def _admitted_input(
         calculation_session_count, universe_instrument_count = snapshot.calculation_shape(
             start=sessions[0],
             end=sessions[-1],
-            lookback=compiled.effective_lookback,
+            lookback=requirements.effective_lookback,
             universe=command.universe,
         )
     except DatasetWarmupUnavailable as error:
@@ -4174,24 +4180,24 @@ def _admitted_input(
             ]
         ) from error
     estimated_run_work = estimate_alpha_run_work(
-        compiled.estimated_work,
+        requirements.estimated_work,
         research_session_count=calculation_session_count,
         universe_instrument_count=universe_instrument_count,
     )
     first_research_index = snapshot.research_sessions.index(sessions[0])
-    calculation_start_index = first_research_index - compiled.effective_lookback
+    calculation_start_index = first_research_index - requirements.effective_lookback
     calculation_sessions = snapshot.research_sessions[
         calculation_start_index : snapshot.research_sessions.index(sessions[-1]) + 1
     ]
     try:
         execution_plan = plan_research_chunks(
             calculation_sessions=calculation_sessions,
-            research_session_offset=compiled.effective_lookback,
-            formula_work=compiled.estimated_work,
-            node_count=compiled.node_count,
-            field_count=len(compiled.field_ids_by_identifier),
+            research_session_offset=requirements.effective_lookback,
+            formula_work=requirements.estimated_work,
+            node_count=requirements.node_count,
+            field_count=len(requirements.field_bindings),
             maximum_universe_cardinality=universe_instrument_count,
-            effective_lookback=compiled.effective_lookback,
+            effective_lookback=requirements.effective_lookback,
             execution_memory_bytes=execution_memory_bytes,
         )
     except ResearchChunkCapacityError as error:
@@ -4226,21 +4232,18 @@ def _admitted_input(
         hypothesis=command.hypothesis,
         requested_start_date=command.start_date,
         requested_end_date=command.end_date,
-        field_bindings={
-            field_id: identifier
-            for identifier, field_id in compiled.field_ids_by_identifier.items()
-        },
+        field_bindings=requirements.field_bindings,
         universe=command.universe,
         neutralization=command.neutralization,
         research_kind=command.research_kind,
         **strategy_values,
         numeric_execution_contract=NUMERIC_CONTRACT_ID,
         semantic_versions=SEMANTIC_VERSIONS,
-        alpha_admission=AlphaAdmissionFacts(
-            effective_lookback=compiled.effective_lookback,
-            node_count=compiled.node_count,
-            depth=compiled.depth,
-            formula_work=compiled.estimated_work,
+        expression_admission=ExpressionAdmissionFacts(
+            effective_lookback=requirements.effective_lookback,
+            node_count=requirements.node_count,
+            depth=requirements.depth,
+            formula_work=requirements.estimated_work,
             estimated_run_work=estimated_run_work,
         ),
         data_admission=DataAdmissionFacts(
@@ -4727,7 +4730,7 @@ def _checkpoint_binding(
             "field_bindings_sha256": hashlib.sha256(
                 canonical_json_bytes(immutable_value["field_bindings"])
             ).hexdigest(),
-            "alpha_admission": immutable_value["alpha_admission"],
+            "expression_admission": immutable_value["expression_admission"],
         },
         "calculation_contracts": calculation_contracts,
         "execution_plan_sha256": hashlib.sha256(
@@ -5213,7 +5216,7 @@ def _validate_batch_common_partitions(
     immutable_input: ImmutableRunInput,
     partitions: Sequence[tuple[StagedPayload, int, str, str]],
 ) -> None:
-    input_count = len(common_input_references(immutable_input.alpha_expression))
+    input_count = len(common_input_references(*immutable_input.expression_trees))
     plan = immutable_input.execution_plan
     sessions = plan.calculation_sessions[plan.research_session_offset :]
     expected = []

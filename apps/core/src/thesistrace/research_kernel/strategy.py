@@ -8,7 +8,7 @@ from fractions import Fraction
 from heapq import nsmallest
 from statistics import stdev
 
-from thesistrace.research_kernel.exposure import constant_exposure
+from thesistrace.research_kernel.exposure import evaluate_exposure_series, require_exposure_value
 from thesistrace.research_kernel.numeric import (
     ACCOUNTING_CONTEXT,
     MAX_INITIAL_CASH_CNY,
@@ -16,6 +16,7 @@ from thesistrace.research_kernel.numeric import (
     require_finite_decimal,
 )
 from thesistrace.research_kernel.serialization import canonical_json_bytes
+from thesistrace.research_kernel.series_plan import CommonInputObserver
 from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
 from thesistrace.research_series import (
     AlignedResearchData,
@@ -64,6 +65,7 @@ def transition_strategy(
     *,
     origin_session: str,
     continuation: dict[str, object] | None = None,
+    observe_common: CommonInputObserver | None = None,
 ) -> StrategyTransition:
     """Execute every included Open and retain the completed account boundary."""
     return _transition_strategy(
@@ -72,6 +74,7 @@ def transition_strategy(
         definition,
         origin_session=origin_session,
         continuation=continuation,
+        observe_common=observe_common,
     )
 
 
@@ -83,6 +86,7 @@ def transition_columnar_strategy(
     origin_session: str,
     continuation: dict[str, object] | None = None,
     cancellation_check: Callable[[], None],
+    observe_common: CommonInputObserver | None = None,
 ) -> StrategyTransition:
     return _transition_strategy(
         research_data,
@@ -90,6 +94,7 @@ def transition_columnar_strategy(
         definition,
         origin_session=origin_session,
         continuation=continuation,
+        observe_common=observe_common,
         cancellation_check=cancellation_check,
     )
 
@@ -102,6 +107,7 @@ def _transition_strategy(
     origin_session: str,
     continuation: dict[str, object] | None,
     cancellation_check: Callable[[], None] | None = None,
+    observe_common: CommonInputObserver | None = None,
 ) -> StrategyTransition:
     ledger: list[dict[str, object]] = []
     finalized = run_strategy(
@@ -110,6 +116,7 @@ def _transition_strategy(
         definition,
         origin_session=origin_session,
         continuation=continuation,
+        observe_common=observe_common,
         ledger=ledger,
         cancellation_check=cancellation_check,
     )
@@ -215,6 +222,7 @@ def run_strategy(
     continuation: dict[str, object] | None = None,
     ledger: list[dict[str, object]] | None = None,
     cancellation_check: Callable[[], None] | None = None,
+    observe_common: CommonInputObserver | None = None,
 ) -> dict[str, object]:
     execution = _execute_strategy(
         research_data,
@@ -222,6 +230,7 @@ def run_strategy(
         definition,
         origin_session=origin_session,
         continuation=continuation,
+        observe_common=observe_common,
         ledger=ledger,
         cancellation_check=cancellation_check,
     )
@@ -242,6 +251,7 @@ def run_strategy_with_metric_state(
     continuation: dict[str, object] | None = None,
     ledger: list[dict[str, object]] | None = None,
     cancellation_check: Callable[[], None] | None = None,
+    observe_common: CommonInputObserver | None = None,
 ) -> dict[str, object]:
     execution = _execute_strategy(
         research_data,
@@ -249,6 +259,7 @@ def run_strategy_with_metric_state(
         definition,
         origin_session=origin_session,
         continuation=continuation,
+        observe_common=observe_common,
         ledger=ledger,
         cancellation_check=cancellation_check,
     )
@@ -264,6 +275,7 @@ def _execute_strategy(
     continuation: dict[str, object] | None = None,
     ledger: list[dict[str, object]] | None = None,
     cancellation_check: Callable[[], None] | None = None,
+    observe_common: CommonInputObserver | None = None,
 ) -> _StrategyExecution:
     calendar = list(research_data.sessions)
     if continuation is None:
@@ -287,7 +299,12 @@ def _execute_strategy(
     selection_interval = int(strategy["selection_interval"])
     if not 1 <= holdings_count <= 100 or not 1 <= selection_interval <= 20:
         raise StrategyCalculationError("invalid Strategy breadth or schedule")
-    exposure = constant_exposure(strategy["exposure_expression"])
+    exposure_values = evaluate_exposure_series(
+        research_data, strategy["exposure_expression"], observe_common=observe_common,
+    )
+    exposure = None if continuation is None else require_exposure_value(
+        continuation["target_exposure"], str(continuation["daily"][-1]["session"]),
+    )
     initial_cash = Decimal(str(strategy["initial_cash_cny"]))
     if (
         not initial_cash.is_finite() or initial_cash <= 0
@@ -323,8 +340,6 @@ def _execute_strategy(
         target_selection = TargetSelection.model_validate(target_selection).model_dump(mode="json")
         if target_selection["contract_checksum"] != contract_checksum:
             raise StrategyCalculationError("Retained Selection differs from Strategy contract")
-    if continuation is not None and continuation["target_exposure"] != exposure:
-        raise StrategyCalculationError("Continuation Exposure differs from Strategy contract")
     pending_target = None if continuation is None else continuation["pending_target"]
     if pending_target is not None:
         pending_target = PendingTarget.model_validate(pending_target).model_dump(mode="json")
@@ -332,7 +347,8 @@ def _execute_strategy(
             pending_target["contract_checksum"] != contract_checksum
             or pending_target["exposure"] != exposure
             or {key: value for key, value in pending_target.items()
-                if key not in {"execution", "exposure"}} != target_selection
+                if key not in {"execution", "exposure", "decision_session", "mode"}}
+            != target_selection
         ):
             raise StrategyCalculationError("Pending decision differs from Strategy contract")
     if continuation is None:
@@ -422,14 +438,19 @@ def _execute_strategy(
         execution_signal: dict[str, object] | None = None
 
         signal_index = global_index - 1
-        if (
-            report_index > 0
-            and (signal_index - origin_index) % selection_interval == 0
-        ):
+        scheduled = report_index > 0 and (signal_index - origin_index) % selection_interval == 0
+        if scheduled and pending_target is None:
+            raise StrategyCalculationError("Scheduled Open has no frozen decision")
+        if pending_target is not None:
+            if (pending_target["mode"] == "selection") != scheduled:
+                raise StrategyCalculationError("Frozen decision mode differs from Selection phase")
+            if report_index <= 0:
+                raise StrategyCalculationError("Initial baseline cannot execute a prior target")
             rebalance = True
             signal_session = calendar[signal_index]
-            if pending_target is None or pending_target["signal_session"] != signal_session:
-                raise StrategyCalculationError("Scheduled Open has no frozen decision")
+            if pending_target["decision_session"] != signal_session:
+                raise StrategyCalculationError("Open target is not from the preceding Close")
+            mode = pending_target["mode"]
             candidates = list(pending_target["selected_instrument_ids"])
             if ledger is not None:
                 execution_signal = {
@@ -451,10 +472,19 @@ def _execute_strategy(
                 )
                 for instrument_id in candidates
             }
-            candidate_set = set(candidates)
+            actual_stock_value = sum_position_values(positions, marks)
+            buy_budget = max(Decimal(0), target_capital - actual_stock_value)
+            if mode == "reduce":
+                ratio = (min(Decimal(1), target_capital / actual_stock_value)
+                         if actual_stock_value else Decimal(0))
+                target_values = {
+                    item: money(position.adjusted_units * marks[item] * ratio)
+                    for item, position in positions.items()
+                }
+            candidate_set = set(target_values)
             alpha_order = {instrument_id: index for index, instrument_id in enumerate(candidates)}
 
-            for instrument_id in sorted(list(positions)):
+            for instrument_id in ([] if mode == "increase" else sorted(positions)):
                 position = positions[instrument_id]
                 current_value = money(position.adjusted_units * marks[instrument_id])
                 desired_value = (
@@ -523,7 +553,9 @@ def _execute_strategy(
                 session, positions, prices, states, instruments
             )
             valuation_events.extend(additional_events)
-            for instrument_id in sorted(candidates, key=lambda value: alpha_order[value]):
+            for instrument_id in ([] if mode == "reduce" else sorted(
+                candidates, key=lambda value: alpha_order[value],
+            )):
                 price = prices.get((session, instrument_id))
                 current_value = (
                     money(positions[instrument_id].adjusted_units * marks[instrument_id])
@@ -531,6 +563,8 @@ def _execute_strategy(
                     else Decimal(0)
                 )
                 deficit = target_values[instrument_id] - current_value
+                if mode == "increase":
+                    deficit = min(deficit, buy_budget)
                 if price is None:
                     if deficit <= 0:
                         continue
@@ -641,6 +675,7 @@ def _execute_strategy(
                         )
                     continue
                 event_side_order.append("buy")
+                cash_before_buy = net_cash
                 gross_cash, net_cash, cost = execute_order(
                     session=session,
                     instrument_id=instrument_id,
@@ -662,6 +697,8 @@ def _execute_strategy(
                     unrounded_quantity=unrounded,
                 )
                 cumulative_cost = money(cumulative_cost + cost)
+                if mode == "increase":
+                    buy_budget = max(Decimal(0), buy_budget - (cash_before_buy - net_cash - cost))
 
             post_marks, post_events = mark_positions(
                 session, positions, prices, states, instruments
@@ -682,7 +719,7 @@ def _execute_strategy(
                     "turnover": turnover,
                     "target_weights": {
                         instrument_id: float(target_values[instrument_id] / pre_net_nav)
-                        for instrument_id in candidates
+                        for instrument_id in target_values
                     },
                     "actual_weights": {
                         key: value for key, value in post_weights.items() if key != "cash"
@@ -753,7 +790,12 @@ def _execute_strategy(
                 }
             )
         pending_target = None
-        if report_index % selection_interval == 0:
+        try:
+            next_exposure = require_exposure_value(exposure_values[session], session)
+        except ValueError as error:
+            raise StrategyCalculationError(str(error)) from error
+        selection_updated = report_index % selection_interval == 0
+        if selection_updated:
             alpha_values = alpha_by_session[session]
             selected = nsmallest(holdings_count, alpha_values, key=_alpha_rank_key)
             selected_ids = [str(item["instrument_id"]) for item in selected]
@@ -769,11 +811,19 @@ def _execute_strategy(
                 })).hexdigest(),
                 "contract_checksum": contract_checksum,
             }
+        if selection_updated or next_exposure != exposure:
+            if target_selection is None:
+                raise StrategyCalculationError("Exposure decision has no retained Selection")
             pending_target = {
                 **target_selection,
+                "decision_session": session,
+                "mode": ("selection" if selection_updated else (
+                    "reduce" if next_exposure < exposure else "increase"
+                )),
                 "execution": "next_research_session_open",
-                "exposure": exposure,
+                "exposure": next_exposure,
             }
+        exposure = next_exposure
         if cancellation_check is not None:
             cancellation_check()
 

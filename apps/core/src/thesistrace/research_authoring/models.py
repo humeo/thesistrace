@@ -42,11 +42,17 @@ class ExposureAuthoringConstraints(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     context: Literal["exposure"] = "exposure"
-    mode: Literal["constant_expression"] = "constant_expression"
+    mode: Literal["daily_expression"] = "daily_expression"
     default_expression: Literal["1"] = "1"
     minimum: Literal[0] = 0
     maximum: Literal[1] = 1
-    data_series_allowed: Literal[False] = False
+    data_series_allowed: Literal[True] = True
+    result_types: tuple[Literal["number", "common_numeric_series"], ...] = (
+        "number", "common_numeric_series",
+    )
+    stock_fields_allowed: Literal[False] = False
+    decision_time: Literal["session_close"] = "session_close"
+    execution_time: Literal["next_session_open"] = "next_session_open"
 
 
 class ResearchAuthoringConstraints(BaseModel):

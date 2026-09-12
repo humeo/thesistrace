@@ -549,7 +549,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
     assert checkpoint["run_input"]["alpha_expression"] == frozen_input.alpha_expression_snapshot()
     assert checkpoint["run_input"]["field_bindings"] == frozen_input.field_bindings_snapshot()
     assert (
-        checkpoint["run_input"]["effective_alpha_lookback"]
+        checkpoint["run_input"]["effective_lookback"]
         == frozen_input.alpha_execution_plan().effective_lookback
     )
     delta = checkpoint["strategy_state"]["retained_delta"]
@@ -714,7 +714,7 @@ def _run_input(
         research_data=research_data,
         alpha_expression=alpha["expression"],
         field_bindings=FIELD_BINDINGS,
-        effective_alpha_lookback=validate_normalized_alpha(
+        effective_lookback=validate_normalized_alpha(
             alpha["expression"], field_bindings=FIELD_BINDINGS
         ).effective_lookback,
         universe=str(definition["universe"]),

@@ -172,19 +172,24 @@ class AlphaLanguage:
             raise FormulaCompilationError([_syntax_diagnostic(source, error)]) from None
 
         built = self._build(source, parsed.body, depth=1)
-        expected_type = ValueType.NUMERIC_SERIES if context == "signal" else ValueType.NUMBER
-        if built.value_type is not expected_type:
+        expected_types = (
+            (ValueType.NUMERIC_SERIES,) if context == "signal"
+            else (ValueType.NUMBER, ValueType.COMMON_NUMERIC_SERIES)
+        )
+        if built.value_type not in expected_types:
             self._raise(
                 source,
-                "ROOT_MUST_BE_SERIES" if context == "signal" else "EXPOSURE_MUST_BE_CONSTANT",
+                ("ROOT_MUST_BE_SERIES" if context == "signal"
+                 else "EXPOSURE_MUST_BE_ACCOUNT_NUMERIC"),
                 (
                     "Alpha Formula must produce a Numeric Series"
-                    if context == "signal" else "Exposure must produce a constant Number"
+                    if context == "signal"
+                    else "Exposure must produce a Number or common daily Numeric Series"
                 ),
                 parsed.body,
                 details=DiagnosticDetails(
                     kind="value_type",
-                    expected=expected_type.value,
+                    expected=" or ".join(value.value for value in expected_types),
                     actual=built.value_type.value,
                 ),
             )
@@ -235,7 +240,7 @@ class AlphaLanguage:
             depth=built.depth,
             estimated_work=built.estimated_work,
         )
-        if context == "exposure":
+        if context == "exposure" and built.value_type is ValueType.NUMBER:
             try:
                 constant_exposure(compiled.expression)
             except ValueError:

@@ -25,6 +25,7 @@ from thesistrace.research_kernel.common_inputs import (
     requires_common_industry,
 )
 from thesistrace.research_kernel.common_observations import common_input_observation_rows
+from thesistrace.research_kernel.exposure import validate_exposure
 from thesistrace.research_kernel.factor import prepare_columnar_forward_labels
 from thesistrace.research_kernel.kernel_run import RunInput, StrategyRunInput
 from thesistrace.research_kernel.research_chunks import (
@@ -530,7 +531,7 @@ def execute_research_batch_messages(
             ),
             "shared_field_count": len(union_bindings),
             "max_effective_lookback": max(
-                item.immutable_input.alpha_admission.effective_lookback for item in items
+                item.immutable_input.expression_admission.effective_lookback for item in items
             ),
         }
         if batch_kind == "strategy_sweep":
@@ -701,7 +702,9 @@ def _execute_factor_batch_messages(
     }
     first_item = items[0]
     yield _task_started_message(first_item, task_role="factor", phase="research")
-    max_lookback = max(item.immutable_input.alpha_admission.effective_lookback for item in items)
+    max_lookback = max(
+        item.immutable_input.expression_admission.effective_lookback for item in items
+    )
     total_data_read_seconds = 0.0
     common = first_item.immutable_input
     for window in research_windows:
@@ -718,7 +721,7 @@ def _execute_factor_batch_messages(
                 neutralization=common.neutralization,
                 field_bindings=union_bindings,
                 require_industry=any(
-                    requires_common_industry(item.immutable_input.alpha_expression)
+                    requires_common_industry(*item.immutable_input.expression_trees)
                     for item in items
                 ),
                 effective_lookback=max_lookback,
@@ -779,7 +782,7 @@ def _execute_factor_batch_messages(
                 for name, seconds in calculation.phase_seconds.items():
                     state.phase_seconds[name] += seconds
                     chunk_phase_seconds[name] += seconds
-                if common_input_references(item.immutable_input.alpha_expression):
+                if common_input_references(*item.immutable_input.expression_trees):
                     common_rows = common_input_observation_rows(
                         {"sessions": list(calculation.common_input_sessions)},
                         sessions=window.research_sessions,
@@ -974,8 +977,8 @@ def _execute_strategy_sweep_messages(
                         universe=shared_input.universe,
                         neutralization=shared_input.neutralization,
                         field_bindings=union_bindings,
-                        require_industry=requires_common_industry(shared_input.alpha_expression),
-                        effective_lookback=(shared_input.alpha_admission.effective_lookback),
+                        require_industry=requires_common_industry(*shared_input.expression_trees),
+                        effective_lookback=(shared_input.expression_admission.effective_lookback),
                         fact_instrument_ids=frozenset(),
                     )
                     phase_seconds["input"] += monotonic() - input_started
@@ -1121,12 +1124,22 @@ def _validate_strategy_shared_contract(
 ) -> None:
     """Reject any persisted mutation outside the admitted Strategy tuple."""
 
-    shared = items[0].immutable_input.canonical_value()
-    shared.pop("strategy")
+    def shared_contract(value: ImmutableRunInput) -> dict[str, object]:
+        contract = value.canonical_value()
+        # Each Exposure has its own dependencies, warmup and admitted budget.
+        # The shared artifact binds Signal identity, not those Strategy requirements.
+        for name in (
+            "strategy", "field_bindings", "expression_admission", "execution_plan",
+        ):
+            contract.pop(name)
+        data = contract["data_admission"]
+        for name in ("coverage_start", "calculation_session_count"):
+            data.pop(name)
+        return contract
+
+    shared = shared_contract(items[0].immutable_input)
     for item in items[1:]:
-        candidate = item.immutable_input.canonical_value()
-        candidate.pop("strategy")
-        if candidate != shared:
+        if shared_contract(item.immutable_input) != shared:
             raise ResearchExecutionInputInvalid(
                 "Strategy Sweep shared Alpha-and-Factor contract is inconsistent"
             )
@@ -1165,8 +1178,8 @@ def _execute_strategy_item_messages(
                 _require_artifact_window(stored, window)
                 data_read_started = monotonic()
                 # Scores and Factor state are frozen in the shared artifact.
-                # Load only execution facts, retaining the continuation context
-                # and held instruments needed across Strategy window boundaries.
+                # Read this Strategy's Exposure dependencies as well as execution facts.
+                # Exposure evidence is never stored in the shared Signal artifact.
                 research_data = _read_shared_window(
                     store,
                     generation_id=generation_id,
@@ -1174,8 +1187,17 @@ def _execute_strategy_item_messages(
                     research_sessions=window.research_sessions,
                     universe=item.immutable_input.universe,
                     neutralization="none",
-                    field_bindings={},
-                    effective_lookback=0,
+                    field_bindings={
+                        field_id: identifier for identifier, field_id in validate_exposure(
+                            item.immutable_input.strategy["exposure_expression"],
+                        ).field_ids_by_identifier.items()
+                    },
+                    effective_lookback=validate_exposure(
+                        item.immutable_input.strategy["exposure_expression"],
+                    ).effective_lookback,
+                    require_industry=requires_common_industry(
+                        item.immutable_input.strategy["exposure_expression"],
+                    ),
                     fact_instrument_ids=_continuation_instrument_ids(strategy_continuation),
                 )
                 data_read_seconds += monotonic() - data_read_started
@@ -1183,13 +1205,6 @@ def _execute_strategy_item_messages(
                     stored.outcome_payload,
                     binding=binding,
                 )
-                if common_input_references(item.immutable_input.alpha_expression):
-                    common_rows = common_input_observation_rows(
-                        {"sessions": list(alpha_factor_outcome.common_input_sessions_snapshot())},
-                        sessions=window.research_sessions,
-                    )
-                    yield _common_input_chunk_message(item, window, common_rows)
-                    del common_rows
                 run_input = _strategy_run_input(
                     item.immutable_input,
                     research_data,
@@ -1205,6 +1220,12 @@ def _execute_strategy_item_messages(
                     continuation=strategy_continuation,
                     cancellation_check=lambda: None,
                 )
+                if common_input_references(*item.immutable_input.expression_trees):
+                    common_rows = common_input_observation_rows(
+                        {"sessions": list(outcome.common_input_sessions)},
+                        sessions=window.research_sessions,
+                    )
+                    yield _common_input_chunk_message(item, window, common_rows)
                 strategy_continuation = outcome.continuation_snapshot()
                 observations = outcome.daily_observations_snapshot()
                 final_values = outcome.final_values_snapshot()
@@ -1353,7 +1374,7 @@ def _factor_run_input(
         research_data=research_data,
         alpha_expression=immutable_input.alpha_expression,
         field_bindings=immutable_input.field_bindings,
-        effective_alpha_lookback=immutable_input.alpha_admission.effective_lookback,
+        effective_lookback=immutable_input.expression_admission.effective_lookback,
         universe=immutable_input.universe,
         neutralization=immutable_input.neutralization,
         research_kind="factor_evaluation",
@@ -1476,7 +1497,7 @@ def _strategy_run_input(
         research_data=research_data,
         alpha_expression=immutable_input.alpha_expression,
         field_bindings=immutable_input.field_bindings,
-        effective_alpha_lookback=immutable_input.alpha_admission.effective_lookback,
+        effective_lookback=immutable_input.expression_admission.effective_lookback,
         universe=immutable_input.universe,
         neutralization=immutable_input.neutralization,
         research_kind="strategy_backtest",

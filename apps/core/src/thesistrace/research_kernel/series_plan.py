@@ -435,6 +435,32 @@ def evaluate_columnar_execution_matrix(
     return _columnar_array(values[plan.root], shape)
 
 
+
+def evaluate_common_execution_series(
+    plan: SeriesExecutionPlan,
+    instruments: tuple[str, ...],
+    sessions: tuple[str, ...],
+    closes: np.ndarray,
+    universe_members: Mapping[str, tuple[str, ...]],
+    industries: Mapping[tuple[str, str], str],
+    *,
+    observe_common: CommonInputObserver | None = None,
+) -> list[float | None]:
+    """Evaluate one account series after resolving its governed common dependencies."""
+    if any(node.kind == "field" or node.identifier == "rank" for node in plan.nodes):
+        raise ValueError("Account expressions cannot consume stock series")
+    common = _common_values(
+        plan, instruments, sessions, closes, universe_members, industries, observe_common,
+    )
+    # Field dependencies have been consumed by the aggregation; no stock vector is broadcast.
+    return evaluate_series_execution_plan(
+        replace(plan, field_names=()), {}, length=len(sessions),
+        common_values={
+            key: tuple(_finite_or_missing(value) for value in values)
+            for key, values in common.items()
+        },
+    )
+
 def _common_values(
     plan: SeriesExecutionPlan,
     instruments: tuple[str, ...],

@@ -87,7 +87,10 @@ export type TerminalStrategyState = {
     selection_interval: number;
     completed_intervals: number;
   };
+  target_exposure: number;
   pending_target: {
+    decision_session: string;
+    mode: "selection" | "reduce" | "increase";
     signal_session: string;
     execution: "next_research_session_open";
   } | null;
@@ -1461,8 +1464,9 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
       {strategyResult !== null ? <section className="research-result-section">
         <div className="section-heading">
           <h2>Strategy Summary</h2>
-          <p>Account completed through {strategyResult.terminal_strategy_state.session}. Scheduled orders execute at each Open, including the final session; the ending account is not liquidated.</p>
+          <p>Account completed through {strategyResult.terminal_strategy_state.session}. Decisions execute at the next Open, including the final session; the ending account is not liquidated.</p>
         </div>
+        <p>Last Close target {formatPercent(strategyResult.terminal_strategy_state.target_exposure)} · actual Open allocation {formatPercent(1 - Number(strategyResult.terminal_strategy_state.net_cash) / Number(strategyResult.terminal_strategy_state.net_nav))}. Orders, costs and rounding can leave a difference; the target is not a hard allocation limit.</p>
         <div className="strategy-metrics">
           <Metric label="Net cumulative" help={strategyMetricHelp.netCumulative} value={formatPercent(strategyResult.strategy.summary.metrics.net_cumulative_return)} />
           <Metric

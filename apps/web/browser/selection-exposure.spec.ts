@@ -49,7 +49,7 @@ test("Exposure percent, expression, retained draft and submission share one sour
   await mount();
   await expect(page.getByLabel("Fixed exposure (%)", { exact: true })).toHaveValue("100");
   await page.getByLabel("Fixed exposure (%)", { exact: true }).fill("70");
-  await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveValue("0.7");
+  await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveText("0.7");
   await mount();
   await expect(page.getByLabel("Fixed exposure (%)", { exact: true })).toHaveValue("70");
   await page.getByLabel("Exposure expression", { exact: true }).fill("7 / 10");
@@ -104,4 +104,37 @@ test("configuration checks show rejection and recover from an unavailable servic
   await check.click();
   await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
   expect(checks).toBe(3);
+});
+
+
+test("Exposure completion excludes stock scope and keeps daily expression in the draft", async ({ page }) => {
+  await page.route("https://exposure.test/**", route => {
+    if (new URL(route.request().url()).pathname === "/api/alpha/diagnostics") {
+      return route.fulfill({ json: { valid: true, diagnostics: [] } });
+    }
+    return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+  });
+  const mount = async () => {
+    await page.goto("https://exposure.test/");
+    await page.addStyleTag({ content: styles });
+    await page.addScriptTag({ content: script });
+  };
+  await mount();
+  const editor = page.getByLabel("Exposure expression", { exact: true });
+  await editor.fill("");
+  await editor.press("Control+Space");
+  await expect(page.getByRole("option").filter({ hasText: "universe_return" })).toBeVisible();
+  await expect(page.getByRole("option").filter({ hasText: "rank" })).toHaveCount(0);
+  await expect(page.getByRole("option").filter({ hasText: "close" })).toHaveCount(0);
+  await editor.press("Escape");
+  const expression = "if_else(universe_return() > 0, 1, 0.3)";
+  await editor.fill(expression);
+  await expect(page.getByLabel("Fixed exposure (%)", { exact: true })).toHaveValue("");
+  await mount();
+  await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveText(expression);
+  const signal = page.getByLabel("Alpha formula", { exact: true });
+  await signal.fill("");
+  await signal.press("Control+Space");
+  await expect(page.getByRole("option").filter({ hasText: "rank" })).toBeVisible();
+  await expect(page.getByRole("option").filter({ hasText: "close" })).toBeVisible();
 });

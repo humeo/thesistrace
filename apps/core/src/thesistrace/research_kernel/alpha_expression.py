@@ -61,13 +61,14 @@ def validate_normalized_alpha(
     field_bindings: Mapping[str, str],
 ) -> ParsedAlpha:
     return _validate_normalized_expression(
-        expression, field_bindings=field_bindings, expected_type=ValueType.NUMERIC_SERIES,
+        expression, field_bindings=field_bindings, expected_types=(ValueType.NUMERIC_SERIES,),
     )
 
 
 def validate_normalized_exposure(expression: Mapping[str, object]) -> ParsedAlpha:
     return _validate_normalized_expression(
-        expression, field_bindings={}, expected_type=ValueType.NUMBER,
+        expression, field_bindings={CLOSE_FIELD_ID: "close"},
+        expected_types=(ValueType.NUMBER, ValueType.COMMON_NUMERIC_SERIES),
     )
 
 
@@ -75,7 +76,7 @@ def _validate_normalized_expression(
     expression: Mapping[str, object],
     *,
     field_bindings: Mapping[str, str],
-    expected_type: ValueType,
+    expected_types: tuple[ValueType, ...],
 ) -> ParsedAlpha:
     pending = [(expression, 1)]
     count = 0
@@ -104,13 +105,13 @@ def _validate_normalized_expression(
     )
     if estimated_work > MAX_ESTIMATED_WORK:
         _reject("WORK_EXCEEDS_LIMIT", "alpha.expression", "Expression exceeds work limit")
-    if result_type is not expected_type:
+    if result_type not in expected_types:
         _reject(
-            "ROOT_MUST_BE_SERIES" if expected_type is ValueType.NUMERIC_SERIES
-            else "EXPOSURE_MUST_BE_CONSTANT",
-            "alpha.expression" if expected_type is ValueType.NUMERIC_SERIES
+            "ROOT_MUST_BE_SERIES" if expected_types == (ValueType.NUMERIC_SERIES,)
+            else "EXPOSURE_MUST_BE_ACCOUNT_NUMERIC",
+            "alpha.expression" if expected_types == (ValueType.NUMERIC_SERIES,)
             else "exposure.expression",
-            f"Expression must produce {expected_type.value}",
+            "Expression must produce " + " or ".join(value.value for value in expected_types),
         )
     if effective_lookback > 252:
         _reject(

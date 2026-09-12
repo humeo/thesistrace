@@ -3332,3 +3332,8 @@ select { color-scheme: dark; }
 @media (forced-colors: active) {
   .chat-current-activity-running > span { animation: none; background: none; color: CanvasText; }
 }
+
+.research-exposure-expression .alpha-formula-editor { height: 120px; min-height: 120px; border: 1px solid var(--line); }
+.research-exposure-expression h3 { margin: 0 0 8px; font-size: 12px; font-weight: 500; }
+
+.research-exposure-expression > small { display: block; margin-top: 6px; color: var(--ink-subtle); font-size: 12px; line-height: 1.5; }

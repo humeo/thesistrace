@@ -5707,7 +5707,7 @@ def _kernel_input(
         research_data=_research_data(canonical),
         alpha_expression={"kind": "field", "field_id": "price.close.adjusted"},
         field_bindings={"price.close.adjusted": "close"},
-        effective_alpha_lookback=0,
+        effective_lookback=0,
         universe="top300",
         neutralization="none",
         research_kind="strategy_backtest",
@@ -5748,8 +5748,8 @@ def _reference_result(
     ]
     start_index = calendar.index(selected[0])
     calculation_sessions = calendar[
-        start_index - immutable.alpha_admission.effective_lookback : calendar.index(selected[-1])
-        + 1
+        start_index - immutable.expression_admission.effective_lookback
+        : calendar.index(selected[-1]) + 1
     ]
     research_data = (
         MountedGenerationStore(settings.data_mount)
@@ -5770,7 +5770,7 @@ def _reference_result(
                 research_data=research_data,
                 alpha_expression=immutable.alpha_expression,
                 field_bindings=immutable.field_bindings,
-                effective_alpha_lookback=immutable.alpha_admission.effective_lookback,
+                effective_lookback=immutable.expression_admission.effective_lookback,
                 universe=immutable.universe,
                 neutralization=immutable.neutralization,
                 research_kind=immutable.research_kind,

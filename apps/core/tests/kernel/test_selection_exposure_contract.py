@@ -70,7 +70,7 @@ def test_signal_compilation_preserves_its_context():
 
 @pytest.mark.parametrize("source", [
     "-0.01", "1.01", "1 / 0", "1e309", "1 > 0", "True", "close",
-    "universe_return()", "if_else(close > 0, 0.7, 1)",
+    "if_else(close > 0, 0.7, 1)",
 ])
 def test_exposure_rejects_invalid_values_and_data_scopes(source):
     from thesistrace.alpha_language import FormulaCompilationError, alpha_language

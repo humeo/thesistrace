@@ -1099,7 +1099,7 @@ def read_common_input_observation_partition(data: bytes) -> list[dict[str, objec
 def validate_common_chunk_observations(
     rows: Sequence[Mapping[str, object]],
     *,
-    expression: Mapping[str, object],
+    expressions: tuple[Mapping[str, object], ...],
     sessions: tuple[str, ...],
 ) -> None:
     from thesistrace.research_kernel.common_inputs import common_input_references
@@ -1110,7 +1110,7 @@ def validate_common_chunk_observations(
     expected = {
         (session, identifier, code)
         for session in sessions
-        for identifier, code in common_input_references(expression)
+        for identifier, code in common_input_references(*expressions)
     }
     actual = {(row["session"], row["identifier"], row["industry_code"]) for row in rows}
     if actual != expected:

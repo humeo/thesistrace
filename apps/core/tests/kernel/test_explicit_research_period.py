@@ -448,7 +448,7 @@ def _run_input(
         research_data=(_research_data(canonical) if isinstance(canonical, dict) else canonical),
         alpha_expression=expression,
         field_bindings=FIELD_BINDINGS,
-        effective_alpha_lookback=validate_normalized_alpha(
+        effective_lookback=validate_normalized_alpha(
             expression, field_bindings=FIELD_BINDINGS
         ).effective_lookback,
         universe="manual",

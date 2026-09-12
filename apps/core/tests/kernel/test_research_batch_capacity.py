@@ -322,7 +322,7 @@ def _prepared_child(
             neutralization="none",
             strategy={"holdings_count": 10},
             field_bindings={field_id: object()},
-            alpha_admission=SimpleNamespace(
+            expression_admission=SimpleNamespace(
                 formula_work=1,
                 node_count=1,
                 effective_lookback=0,

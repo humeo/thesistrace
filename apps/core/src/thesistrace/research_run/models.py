@@ -23,7 +23,7 @@ from thesistrace.benchmark import StrategyComparison, StrategyComparisonSummary
 from thesistrace.daily_track.models import DailyTrackSummary
 from thesistrace.data.models import FinancialResearchReadiness
 from thesistrace.research_kernel.common_observations import CommonInputObservation
-from thesistrace.research_kernel.exposure import constant_exposure
+from thesistrace.research_kernel.exposure import validate_exposure
 from thesistrace.research_kernel.factor_evidence import FactorDailyObservation
 from thesistrace.research_kernel.numeric import MAX_INITIAL_CASH_CNY
 from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
@@ -295,7 +295,7 @@ class OrganizeResearchRunCommand(BaseModel):
         return self
 
 
-class AlphaAdmissionFacts(BaseModel):
+class ExpressionAdmissionFacts(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     effective_lookback: int
@@ -365,7 +365,7 @@ class ImmutableRunInput(BaseModel):
     risk_free_rate: str | None = None
     numeric_execution_contract: str
     semantic_versions: dict[str, str]
-    alpha_admission: AlphaAdmissionFacts
+    expression_admission: ExpressionAdmissionFacts
     data_admission: DataAdmissionFacts
     execution_plan: ResearchExecutionPlan
 
@@ -390,8 +390,14 @@ class ImmutableRunInput(BaseModel):
             TypeAdapter(HoldingsCount).validate_python(self.strategy["holdings_count"])
             TypeAdapter(SelectionInterval).validate_python(self.strategy["selection_every_sessions"])
             TypeAdapter(Formula).validate_python(self.strategy["exposure_source"])
-            constant_exposure(self.strategy["exposure_expression"])
+            validate_exposure(self.strategy["exposure_expression"])
         return self
+
+    @property
+    def expression_trees(self) -> tuple[dict[str, object], ...]:
+        return (self.alpha_expression,) + (
+            () if self.strategy is None else (self.strategy["exposure_expression"],)
+        )
 
     def canonical_value(self) -> dict[str, object]:
         value = self.model_dump(mode="json")

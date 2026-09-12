@@ -283,7 +283,7 @@ def _minimal_alpha_factor_case(
             field_id: identifier
             for identifier, field_id in compiled.field_ids_by_identifier.items()
         },
-        effective_alpha_lookback=compiled.effective_lookback,
+        effective_lookback=compiled.effective_lookback,
         universe="top300",
         neutralization="industry",
         research_kind="factor_evaluation",
@@ -322,7 +322,7 @@ def _strategy_input(
         research_data=factor_input.research_data_snapshot(),
         alpha_expression=factor_input.alpha_expression_snapshot(),
         field_bindings=factor_input.field_bindings_snapshot(),
-        effective_alpha_lookback=factor_input.alpha_execution_plan().effective_lookback,
+        effective_lookback=factor_input.alpha_execution_plan().effective_lookback,
         universe=factor_input.universe,
         neutralization=factor_input.neutralization,
         research_kind="strategy_backtest",
@@ -436,7 +436,7 @@ def test_alpha_factor_chunk_outcome_is_bound_immutable_and_chunk_equivalent() ->
         research_data=fixture,
         alpha_expression=factor_input.alpha_expression_snapshot(),
         field_bindings=factor_input.field_bindings_snapshot(),
-        effective_alpha_lookback=factor_input.alpha_execution_plan().effective_lookback,
+        effective_lookback=factor_input.alpha_execution_plan().effective_lookback,
         universe=factor_input.universe,
         neutralization=factor_input.neutralization,
         research_kind="strategy_backtest",
@@ -480,7 +480,7 @@ def test_alpha_factor_chunk_rejects_contract_mismatch_and_non_finite_state() -> 
         field_bindings={
             field_id: identifier for identifier, field_id in changed.field_ids_by_identifier.items()
         },
-        effective_alpha_lookback=changed.effective_lookback,
+        effective_lookback=changed.effective_lookback,
         universe=run_input.universe,
         neutralization=run_input.neutralization,
         research_kind="factor_evaluation",
@@ -903,7 +903,7 @@ def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None
         field_bindings={
             field_id: identifier for identifier, field_id in changed.field_ids_by_identifier.items()
         },
-        effective_alpha_lookback=changed.effective_lookback,
+        effective_lookback=changed.effective_lookback,
         universe=factor_input.universe,
         neutralization=factor_input.neutralization,
         research_kind="strategy_backtest",
@@ -1159,7 +1159,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
             field_id: identifier
             for identifier, field_id in compiled.field_ids_by_identifier.items()
         },
-        effective_alpha_lookback=compiled.effective_lookback,
+        effective_lookback=compiled.effective_lookback,
         universe="top300",
         neutralization="industry",
         research_kind="strategy_backtest",
@@ -1247,7 +1247,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
             field_id: identifier
             for identifier, field_id in compiled.field_ids_by_identifier.items()
         },
-        effective_alpha_lookback=compiled.effective_lookback,
+        effective_lookback=compiled.effective_lookback,
         universe="top300",
         neutralization="industry",
         research_kind="factor_evaluation",
@@ -1396,3 +1396,51 @@ def test_research_chunks_emit_common_statistics_only_for_new_sessions():
             row["common_inputs"][0]["member_count"] == 40
             for row in result.common_input_sessions
         )
+
+
+@pytest.mark.parametrize('source', ['rank(close)', 'rank(close) * universe_return()'])
+def test_shared_signal_artifact_keeps_strategy_exposure_evidence_private(source):
+    fixture, factor_input = _minimal_alpha_factor_case(formula=source)
+    sessions = fixture.sessions[1:]
+
+    def strategy_input(exposure):
+        compiled = alpha_language.compile(exposure, context='exposure')
+        return RunInput(
+            research_data=fixture,
+            alpha_expression=factor_input.alpha_expression_snapshot(),
+            field_bindings=factor_input.field_bindings_snapshot(),
+            effective_lookback=max(compiled.effective_lookback, factor_input.effective_lookback),
+            universe=factor_input.universe, neutralization='none',
+            research_kind='strategy_backtest',
+            strategy=StrategyRunInput(
+                holdings_count=5, selection_interval=5, initial_cash_cny='100000',
+                exposure_expression_json=canonical_json_bytes(compiled.expression),
+                commission_rate_all_in='0.0003', commission_min_cny='5',
+                stamp_duty_sell_rate='0.0005', transfer_fee_rate='0.00001',
+            ),
+            research_start_session=sessions[0], research_end_session=sessions[-1],
+        )
+
+    baseline = strategy_input('1')
+    dynamic = strategy_input('if_else(universe_return() > 0, 0.3, 0)')
+    binding = _alpha_factor_binding(baseline)
+    assert binding.checksum == _alpha_factor_binding(dynamic).checksum
+    shared = execute_alpha_factor_chunk(
+        run_input=baseline, binding=binding, research_data=fixture, forward_labels=None,
+        research_sessions=sessions, final_chunk=True,
+        continuation=empty_alpha_factor_continuation('strategy_backtest'),
+        cancellation_check=lambda: None,
+    )
+    before = shared.compact_for_reuse()
+    for run_input in (dynamic, baseline):
+        outcome = execute_strategy_chunk_from_alpha_factor_outcome(
+            run_input=run_input, binding=binding, alpha_factor_outcome=shared,
+            research_data=fixture, final_chunk=True,
+            continuation=empty_strategy_continuation(), cancellation_check=lambda: None,
+        )
+        expected_common = run_input is dynamic or 'universe_return' in source
+        assert bool(outcome.common_input_sessions) == expected_common
+        if expected_common:
+            assert tuple(row['session'] for row in outcome.common_input_sessions) == sessions
+            assert all(len(row['common_inputs']) == 1 for row in outcome.common_input_sessions)
+        assert shared.compact_for_reuse() == before

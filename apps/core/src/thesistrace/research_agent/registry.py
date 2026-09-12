@@ -425,7 +425,9 @@ class ResearchAgentCapabilityRegistry:
                 name="diagnose_alpha_formula",
                 description=(
                     "Diagnose an expression in signal or exposure context without creating a Run. "
-                    "Exposure currently accepts only finite constant expressions from 0 to 1."
+                    "Exposure accepts constants or common daily numeric expressions, "
+                    "producing 0 to 1; "
+                    "stock fields, cross-sectional rank and account state are not allowed."
                 ),
                 required_scope=ResearchAgentScope.RESEARCH_READ,
                 input_model=DiagnoseAlphaFormulaInput,

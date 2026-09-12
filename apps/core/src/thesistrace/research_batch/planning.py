@@ -95,7 +95,7 @@ def validate_research_batch_capacity(
         raise ValueError("Research Batch plan has no Research Sessions")
     context_session_count = max(
         _MAX_PENDING_ALPHA_SESSIONS,
-        max(value.alpha_admission.effective_lookback for value in inputs),
+        max(value.expression_admission.effective_lookback for value in inputs),
         2,
     )
     candidate_windows = {
@@ -155,11 +155,11 @@ def validate_research_batch_capacity(
         ordinary_chunk_peak_bytes = max(
             estimate_session_peak_bytes(
                 session_count=session_count,
-                formula_work=value.alpha_admission.formula_work,
-                node_count=value.alpha_admission.node_count,
+                formula_work=value.expression_admission.formula_work,
+                node_count=value.expression_admission.node_count,
                 field_count=len(value.field_bindings),
                 maximum_universe_cardinality=maximum_execution_cardinality,
-                effective_lookback=value.alpha_admission.effective_lookback,
+                effective_lookback=value.expression_admission.effective_lookback,
                 execution_memory_bytes=execution_memory_bytes,
             )
             for value in inputs
@@ -167,7 +167,7 @@ def validate_research_batch_capacity(
         ordinary_chunk_work = max(
             estimate_session_work(
                 session_count=session_count,
-                formula_work=value.alpha_admission.formula_work,
+                formula_work=value.expression_admission.formula_work,
                 maximum_universe_cardinality=maximum_execution_cardinality,
             )
             for value in inputs

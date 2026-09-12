@@ -1987,7 +1987,7 @@ class DailyTrackService:
         assert self._publication is not None
         if self._read_semantic_result_section is None:
             raise DailyTrackResultUnavailable("DailyTrack semantic Result reader is unavailable")
-        if not common_input_references(origin.immutable_input["alpha_expression"]):
+        if not common_input_references(*origin.expression_trees):
             return [], None
         boundary = tuple(after.split("|")) if after is not None else None
         seed = self._read_semantic_result_section(
@@ -2327,7 +2327,7 @@ class DailyTrackService:
             sessions=calculation_calendar,
             universe_name=origin_universe(origin),
             neutralization=origin_neutralization(origin),
-            require_industry=requires_common_industry(origin.immutable_input["alpha_expression"]),
+            require_industry=requires_common_industry(*origin.expression_trees),
             field_bindings={
                 str(key): str(value)
                 for key, value in origin.immutable_input["field_bindings"].items()
@@ -3627,12 +3627,12 @@ def _origin_dependencies(origin: TrackingOrigin) -> DataDependencies:
     return resolve_data_dependencies(
         field_ids=set(field_bindings),
         neutralization=origin_neutralization(origin),
-        require_industry=requires_common_industry(origin.immutable_input["alpha_expression"]),
+        require_industry=requires_common_industry(*origin.expression_trees),
     )
 
 
 def _origin_planning_facts(origin: TrackingOrigin) -> dict[str, int]:
-    admission = origin.immutable_input.get("alpha_admission")
+    admission = origin.immutable_input.get("expression_admission")
     field_bindings = origin.immutable_input.get("field_bindings")
     if not isinstance(admission, Mapping) or not isinstance(field_bindings, Mapping):
         raise RuntimeError("DailyTrack frozen planning input is invalid")

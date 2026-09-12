@@ -61,12 +61,14 @@ const alphaEditorTheme = EditorView.theme({
 
 export function AlphaFormulaEditor({
   catalog,
+  context = "signal",
   diagnostics,
   formula,
   selection,
   onChange,
 }: {
   catalog: AlphaCatalog;
+  context?: "signal" | "exposure";
   diagnostics: FormulaDiagnostic[];
   formula: string;
   selection: StoredEditorState;
@@ -91,13 +93,13 @@ export function AlphaFormulaEditor({
         detail: `SW2021 L1 · ${industry.name}`,
         info: "Historical industry subset of the selected research Universe; not an official index.",
       })),
-      ...catalog.fields.map((field) => ({
+      ...(context === "signal" ? catalog.fields : []).map((field) => ({
         label: field.identifier,
         type: "variable",
         detail: `${field.value_type} · ${field.unit}`,
         info: `${field.description}\nCanonical field: ${field.field_id}`,
       })),
-      ...catalog.builtins.map((builtin) => ({
+      ...catalog.builtins.filter((builtin) => context === "signal" || builtin.result_type !== "numeric_series").map((builtin) => ({
         label: builtin.identifier,
         type: "function",
         detail: `(${builtin.parameters.map((parameter) => parameter.name).join(", ")})`,
@@ -117,8 +119,8 @@ export function AlphaFormulaEditor({
         alphaLanguageExtensions,
         alphaEditorTheme,
         EditorView.lineWrapping,
-        EditorView.contentAttributes.of({ "aria-labelledby": "alpha-formula-title", spellcheck: "false" }),
-        placeholder("Start with a field or function"),
+        EditorView.contentAttributes.of({ "aria-label": context === "signal" ? "Alpha formula" : "Exposure expression", spellcheck: "false" }),
+        placeholder(context === "signal" ? "Start with a field or function" : "1 or if_else(universe_return() > 0, 1, 0.3)"),
         keymap.of([]),
         autocompletion({
           override: [(context) => {
@@ -140,7 +142,7 @@ export function AlphaFormulaEditor({
       view.current?.destroy();
       view.current = null;
     };
-  }, [catalog]);
+  }, [catalog, context]);
 
   useEffect(() => {
     const editor = view.current;
@@ -172,5 +174,5 @@ export function AlphaFormulaEditor({
     editor.dispatch(setDiagnostics(editor.state, mapped));
   }, [diagnostics]);
 
-  return <div aria-label="Alpha formula editor" className="alpha-formula-editor" ref={host} />;
+  return <div aria-label={context === "signal" ? "Alpha formula editor" : "Exposure formula editor"} className="alpha-formula-editor" ref={host} />;
 }

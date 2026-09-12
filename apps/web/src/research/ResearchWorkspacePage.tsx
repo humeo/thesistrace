@@ -382,6 +382,7 @@ export function ResearchDraftWorkspace({
   const [diagnosticState, setDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
   const [admissionFeedback, setAdmissionFeedback] = useState<AdmissionFeedback | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [exposureSelection, setExposureSelection] = useState({ anchor: 0, head: 0 });
   const [exposureDiagnosticState, setExposureDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
   const exposureDiagnostics = useRef(createDiagnosticsScheduler(coreFetch, 300, "exposure"));
   const [specFeedback, setSpecFeedback] = useState<{
@@ -721,13 +722,21 @@ export function ResearchDraftWorkspace({
                   />
                   <small>Share of account equity invested; remaining equity stays in cash.</small>
                 </label>
-                <label className="research-exposure-expression">Exposure expression
-                  <input
-                    aria-label="Exposure expression" type="text" value={draft.exposureExpression} maxLength={4096}
-                    onChange={(event) => updateDraft((current) => ({ ...current, exposureExpression: event.target.value }))}
+                <div className="research-exposure-expression">
+                  <h3>Exposure expression</h3>
+                  <AlphaFormulaEditor
+                    catalog={catalog}
+                    context="exposure"
+                    diagnostics={exposureDiagnosticState.kind === "complete" ? exposureDiagnosticState.result.diagnostics : []}
+                    formula={draft.exposureExpression}
+                    selection={exposureSelection}
+                    onChange={(exposureExpression, selection) => {
+                      setExposureSelection(selection);
+                      updateDraft((current) => ({ ...current, exposureExpression }));
+                    }}
                   />
-                  <small>Constant expression from 0 to 1, for example 0.7 or 7 / 10. Selected stocks use equal weights.</small>
-                </label>
+                  <small>Constants and common market or industry inputs; output 0–1. Calculated each Close, changes trade at the next Open. Stocks remain equally weighted within the selected allocation.</small>
+                </div>
                 {exposureDiagnosticState.kind === "complete" && !exposureDiagnosticState.result.valid ? (
                   <ul aria-label="Exposure diagnostics" className="formula-diagnostics research-spec-feedback">
                     {exposureDiagnosticState.result.diagnostics.map((issue) => (

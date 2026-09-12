@@ -146,3 +146,66 @@ def test_daily_track_calendar_and_head_snapshot_exclude_concurrent_dataset_publi
             publishing.result(timeout=40)
         latest = runtime.daily_tracks.get(TEST_RESEARCHER.researcher_id, track_id)
         assert latest.strategy_session == latest.data_through_session == "2026-08-06"
+
+
+@pytest.mark.skipif(not core_environment_is_configured(), reason="isolated runtime required")
+def test_daily_exposure_invalid_advance_preserves_published_account(tmp_path: Path, monkeypatch):
+    from decimal import Decimal
+
+    import test_core_current_head_research_run_execution as fixture_module
+
+    from thesistrace.data.canonical_mapping import adjusted_price_string
+
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    head = _publish_head(settings, sessions=sessions, price_offset=0)
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        accepted = client.post("/api/research-runs", json={
+            **_run_command("invalid-exposure", start_date=sessions[1]),
+            "exposure_expression": "if_else(universe_return() < 0, 2, 1)",
+            "selection_every_sessions": 5,
+        })
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()["id"]
+        assert runtime.research_runs.process_next()
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "succeeded"
+        track_id = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "invalid-exposure-activate"},
+        ).json()["id"]
+        before = _stored_tracking_activation(settings, track_id)
+        before_detail = client.get(f"/api/daily-tracks/{track_id}").json()
+        canonical = fixture_module._canonical
+
+        def falling_close(*args, **kwargs):
+            result = canonical(*args, **kwargs)
+            for price in result["prices"]:
+                if price["session"] == "2026-08-06":
+                    price["close_raw"] = str(Decimal(price["close_raw"]) / 2)
+                    price["close_adj"] = adjusted_price_string(
+                        Decimal(price["close_raw"]), Decimal(price["adjustment_factor"]),
+                    )
+            return result
+
+        with monkeypatch.context() as patch:
+            patch.setattr(fixture_module, "_canonical", falling_close)
+            _publish_head(
+                settings, sessions=(*sessions, "2026-08-06"),
+                price_offset=0, expected_manifest=head,
+            )
+        _refresh_daily_track(client, track_id, "invalid-exposure-refresh")
+        with pytest.raises(DailyTrackProgressionFailed):
+            runtime.daily_tracks.process_next()
+        after = _stored_tracking_activation(settings, track_id)
+        assert after["failed_attempt_count"] == 1
+        assert after["checkpoint_count"] == before["checkpoint_count"]
+        assert after["current_checkpoint_manifest_sha256"] == before[
+            "current_checkpoint_manifest_sha256"
+        ]
+        assert after["terminal_strategy_state"] == before["terminal_strategy_state"]
+        after_detail = client.get(f"/api/daily-tracks/{track_id}").json()
+        for field in ("strategy_session", "observation", "strategy"):
+            assert after_detail[field] == before_detail[field]

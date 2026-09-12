@@ -62,7 +62,7 @@ def project_tracking_checkpoint(
             "research_kind": "strategy_backtest",
             "alpha_expression": run_input.alpha_expression_snapshot(),
             "field_bindings": run_input.field_bindings_snapshot(),
-            "effective_alpha_lookback": run_input.alpha_execution_plan().effective_lookback,
+            "effective_lookback": run_input.alpha_execution_plan().effective_lookback,
             "universe": run_input.universe,
             "neutralization": run_input.neutralization,
             "holdings_count": strategy_input.holdings_count,
@@ -104,7 +104,7 @@ def restore_tracking_checkpoint(
             str(key): str(item)
             for key, item in _mapping(contract.get("field_bindings"), "field bindings").items()
         },
-        effective_alpha_lookback=int(contract["effective_alpha_lookback"]),
+        effective_lookback=int(contract["effective_lookback"]),
         universe=str(contract["universe"]),
         neutralization=str(contract["neutralization"]),
         research_kind="strategy_backtest",
@@ -280,7 +280,7 @@ def _origin_run_input(
 ) -> RunInput:
     immutable_input = origin.immutable_input
     alpha = _mapping(immutable_input.get("alpha_expression"), "Tracking Alpha")
-    admission = _mapping(immutable_input.get("alpha_admission"), "Tracking Alpha admission")
+    admission = _mapping(immutable_input.get("expression_admission"), "Tracking Alpha admission")
     strategy = _mapping(immutable_input.get("strategy"), "Tracking Strategy")
     costs = _mapping(immutable_input.get("costs"), "Tracking Costs")
     field_bindings = _mapping(
@@ -291,7 +291,7 @@ def _origin_run_input(
         research_data=research_data,
         alpha_expression=dict(alpha),
         field_bindings={str(key): str(value) for key, value in field_bindings.items()},
-        effective_alpha_lookback=int(admission["effective_lookback"]),
+        effective_lookback=int(admission["effective_lookback"]),
         universe=str(immutable_input["universe"]),
         neutralization=str(immutable_input["neutralization"]),
         research_kind="strategy_backtest",

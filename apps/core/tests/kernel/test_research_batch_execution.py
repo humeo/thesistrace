@@ -14,8 +14,8 @@ from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_batch.execution import execute_research_batch_messages
 from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
 from thesistrace.research_run.models import (
-    AlphaAdmissionFacts,
     DataAdmissionFacts,
+    ExpressionAdmissionFacts,
     ImmutableRunInput,
 )
 from thesistrace.research_run.planning import plan_research_chunks
@@ -174,7 +174,7 @@ def _batch_request(
             risk_free_rate="0" if strategy else None,
             numeric_execution_contract=NUMERIC_CONTRACT_ID,
             semantic_versions=SEMANTIC_VERSIONS,
-            alpha_admission=AlphaAdmissionFacts(
+            expression_admission=ExpressionAdmissionFacts(
                 effective_lookback=compiled.effective_lookback,
                 node_count=compiled.node_count,
                 depth=compiled.depth,

@@ -113,7 +113,7 @@ def accepted_kernel_run(
             research_data=research_data,
             alpha_expression=alpha["expression"],
             field_bindings=FIELD_BINDINGS,
-            effective_alpha_lookback=20,
+            effective_lookback=20,
             universe=str(definition["universe"]),
             neutralization=str(definition["neutralization"]),
             research_kind="strategy_backtest",

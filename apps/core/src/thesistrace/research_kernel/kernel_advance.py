@@ -11,6 +11,10 @@ from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
     evaluate_alpha_matrix,
 )
+from thesistrace.research_kernel.common_observations import (
+    attach_common_input_evidence,
+    record_common_input,
+)
 from thesistrace.research_kernel.kernel_run import (
     KernelRunError,
     KernelState,
@@ -125,13 +129,18 @@ def advance(advance_input: AdvanceInput) -> KernelState:
             matrix = _rebuild_explicit_alpha(run_input, research_data, selected_sessions)
     strategy_resume = prior.strategy_resume_snapshot()
     definition = calculation_definition(run_input)
+    exposure_observations = {}
     strategy = transition_strategy(
         research_data,
         matrix,
         definition,
         origin_session=prior.origin_session,
+        observe_common=lambda identifier, code, values: record_common_input(
+            exposure_observations, tuple(research_data.sessions), identifier, code, values,
+        ),
         continuation=strategy_resume,
     )
+    attach_common_input_evidence(matrix, exposure_observations, tuple(new_sessions))
     return KernelState(
         run_input=run_input,
         output=compose_output(matrix, strategy.finalized),

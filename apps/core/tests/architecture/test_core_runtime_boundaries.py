@@ -835,8 +835,13 @@ def test_research_kernel_run_has_no_product_or_infrastructure_dependency() -> No
         "temporalio",
     ):
         assert forbidden not in source
-    assert "mode:" not in source
-    assert "mode =" not in source
+    # Kernel input must not select hosted/local execution infrastructure.
+    # Pending Target decision modes are domain state, not infrastructure choices.
+    import inspect
+
+    from thesistrace.research_kernel import RunInput
+
+    assert "mode" not in inspect.signature(RunInput).parameters
 
 
 def test_importing_research_kernel_does_not_load_infrastructure() -> None:

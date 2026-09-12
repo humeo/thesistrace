@@ -285,7 +285,7 @@ def _immutable_run_input() -> dict[str, object]:
         "research_kind": "factor_evaluation",
         "numeric_execution_contract": "thesistrace-numeric-v1",
         "semantic_versions": {"factor": "factor-v1", "kernel": "kernel-v4"},
-        "alpha_admission": {
+        "expression_admission": {
             "effective_lookback": 0,
             "node_count": 1,
             "depth": 1,

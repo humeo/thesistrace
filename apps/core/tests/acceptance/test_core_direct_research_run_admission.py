@@ -315,7 +315,7 @@ def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan()
 
     assert admitted.status == "queued"
     frozen = _stored_run(settings, admitted.id)["immutable_input"]
-    assert frozen["alpha_admission"]["estimated_run_work"] > 15_000_000
+    assert frozen["expression_admission"]["estimated_run_work"] > 15_000_000
     plan = frozen["execution_plan"]
     assert plan["execution_memory_bytes"] == 1536 * 1024**2
     assert 1 <= plan["chunk_session_count"] <= 64
@@ -473,7 +473,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
                 "strategy": "strategy-v2",
                 "kernel": "kernel-v5",
             },
-            "alpha_admission": {
+            "expression_admission": {
                 "effective_lookback": 0,
                 "node_count": 1,
                 "depth": 1,

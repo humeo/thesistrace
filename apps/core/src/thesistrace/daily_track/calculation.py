@@ -37,7 +37,7 @@ def origin_calculation_start_index(
     calendar: list[str],
 ) -> int:
     requested_start = origin.immutable_input.get("requested_start_date")
-    admission = origin.immutable_input.get("alpha_admission")
+    admission = origin.immutable_input.get("expression_admission")
     if not isinstance(requested_start, str) or not isinstance(admission, Mapping):
         raise RuntimeError("DailyTrack frozen calculation input is invalid")
     try:
@@ -54,7 +54,7 @@ def origin_calculation_start_index(
 
 
 def origin_effective_lookback(origin: TrackingOrigin) -> int:
-    admission = origin.immutable_input.get("alpha_admission")
+    admission = origin.immutable_input.get("expression_admission")
     if not isinstance(admission, Mapping):
         raise RuntimeError("DailyTrack frozen Alpha admission is invalid")
     try:
@@ -135,7 +135,7 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
         sessions=dependency_sessions,
         universe_name=origin_universe(origin),
         neutralization=origin_neutralization(origin),
-        require_industry=requires_common_industry(origin.immutable_input["alpha_expression"]),
+        require_industry=requires_common_industry(*origin.expression_trees),
         field_bindings={
             str(key): str(binding)
             for key, binding in origin.immutable_input["field_bindings"].items()
@@ -223,7 +223,7 @@ def _rebuild_continuation(
             sessions=calendar[context_start : chunk_end + 1],
             universe_name=origin_universe(origin),
             neutralization=origin_neutralization(origin),
-            require_industry=requires_common_industry(origin.immutable_input["alpha_expression"]),
+            require_industry=requires_common_industry(*origin.expression_trees),
             field_bindings={
                 str(key): str(binding)
                 for key, binding in origin.immutable_input["field_bindings"].items()

@@ -508,7 +508,7 @@ class ResearchBatchService:
                         if not sessions or not isinstance(rows, list):
                             raise RuntimeError("Common Batch partition scope is invalid")
                         validate_common_chunk_observations(
-                            rows, expression=run_claim.immutable_input.alpha_expression,
+                            rows, expressions=run_claim.immutable_input.expression_trees,
                             sessions=sessions,
                         )
                         if not rows:

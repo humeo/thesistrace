@@ -12,8 +12,15 @@ from thesistrace.research_kernel.alpha import (
     evaluate_alpha_matrix,
     evaluate_columnar_alpha_matrix,
 )
-from thesistrace.research_kernel.alpha_expression import AlphaExpression
-from thesistrace.research_kernel.exposure import constant_exposure
+from thesistrace.research_kernel.alpha_expression import (
+    AlphaExpression,
+    validate_normalized_alpha,
+)
+from thesistrace.research_kernel.common_observations import (
+    attach_common_input_evidence,
+    record_common_input,
+)
+from thesistrace.research_kernel.exposure import validate_exposure
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.series_plan import (
@@ -52,7 +59,7 @@ class StrategyRunInput:
     exposure_expression_json: bytes = b'{"kind":"number","value":1}'
 
     def __post_init__(self) -> None:
-        constant_exposure(self.exposure_expression_snapshot())
+        validate_exposure(self.exposure_expression_snapshot())
 
     def exposure_expression_snapshot(self) -> dict[str, object]:
         value = json.loads(self.exposure_expression_json)
@@ -78,7 +85,7 @@ class RunInput:
     _research_data: AlignedResearchData | ColumnarResearchSeries = field(repr=False)
     _alpha_expression_json: bytes = field(repr=False)
     _field_bindings: tuple[tuple[str, str], ...] = field(repr=False)
-    _effective_alpha_lookback: int = field(repr=False)
+    _effective_lookback: int = field(repr=False)
     universe: str
     neutralization: str
     research_kind: Literal["factor_evaluation", "strategy_backtest"]
@@ -92,7 +99,7 @@ class RunInput:
         research_data: AlignedResearchData | ColumnarResearchSeries,
         alpha_expression: AlphaExpression,
         field_bindings: Mapping[str, str],
-        effective_alpha_lookback: int,
+        effective_lookback: int,
         universe: str,
         neutralization: str,
         research_kind: Literal["factor_evaluation", "strategy_backtest"],
@@ -102,8 +109,8 @@ class RunInput:
     ) -> None:
         if not isinstance(alpha_expression, Mapping):
             raise KernelRunError("Alpha expression must be a normalized tree")
-        if effective_alpha_lookback < 0 or effective_alpha_lookback > 252:
-            raise KernelRunError("Effective Alpha Lookback is invalid")
+        if effective_lookback < 0 or effective_lookback > 252:
+            raise KernelRunError("Effective calculation lookback is invalid")
         if research_kind == "factor_evaluation" and strategy is not None:
             raise KernelRunError("Factor Evaluation cannot contain Strategy input")
         if research_kind == "strategy_backtest" and strategy is None:
@@ -119,10 +126,13 @@ class RunInput:
             "_field_bindings",
             tuple(sorted((str(key), str(value)) for key, value in field_bindings.items())),
         )
-        object.__setattr__(self, "_effective_alpha_lookback", effective_alpha_lookback)
+        object.__setattr__(self, "_effective_lookback", effective_lookback)
         plan = self.alpha_execution_plan()
-        if set(plan.field_names) != set(field_bindings):
-            raise KernelRunError("Alpha expression and field bindings disagree")
+        required_fields = set(plan.field_names)
+        if strategy is not None:
+            required_fields.update(validate_exposure(strategy.exposure_expression_snapshot()).field_ids)
+        if not required_fields <= set(field_bindings):
+            raise KernelRunError("Research expressions and field bindings disagree")
         object.__setattr__(self, "universe", universe)
         object.__setattr__(self, "neutralization", neutralization)
         object.__setattr__(self, "research_kind", research_kind)
@@ -143,14 +153,18 @@ class RunInput:
         return dict(self._field_bindings)
 
     def compiled_alpha_snapshot(self) -> ExecutableAlpha:
-        return ExecutableAlpha(
-            expression=self.alpha_expression_snapshot(),
-            field_ids_by_identifier={
-                identifier: field_id
-                for field_id, identifier in self._field_bindings
-            },
-            effective_lookback=self._effective_alpha_lookback,
+        parsed = validate_normalized_alpha(
+            self.alpha_expression_snapshot(), field_bindings=self.field_bindings_snapshot(),
         )
+        return ExecutableAlpha(
+            expression=parsed.expression,
+            field_ids_by_identifier=parsed.field_ids_by_identifier,
+            effective_lookback=parsed.effective_lookback,
+        )
+
+    @property
+    def effective_lookback(self) -> int:
+        return self._effective_lookback
 
     def alpha_execution_plan(self) -> SeriesExecutionPlan:
         return build_series_execution_plan(self.compiled_alpha_snapshot())
@@ -164,7 +178,10 @@ class RunInput:
             "research_kind": self.research_kind,
             "alpha": {
                 "expression": self.alpha_expression_snapshot(),
-                "field_bindings": self.field_bindings_snapshot(),
+                "field_bindings": {
+                    field_id: identifier for identifier, field_id
+                    in self.compiled_alpha_snapshot().field_ids_by_identifier.items()
+                },
                 "execution_plan": {
                     "nodes": [
                         {
@@ -203,7 +220,7 @@ class RunInput:
             research_data=research_data,
             alpha_expression=self.alpha_expression_snapshot(),
             field_bindings=self.field_bindings_snapshot(),
-            effective_alpha_lookback=self._effective_alpha_lookback,
+            effective_lookback=self._effective_lookback,
             universe=self.universe,
             neutralization=self.neutralization,
             research_kind=self.research_kind,
@@ -383,12 +400,12 @@ def _period_boundaries(
     if start_index > end_index:
         raise KernelRunError("Research Period first session is after its last session")
 
-    warmup_start = start_index - run_input.alpha_execution_plan().effective_lookback
+    warmup_start = start_index - run_input.effective_lookback
     if warmup_start < 0:
         raise InsufficientCalculationWarmupError(
             "insufficient Calculation Warm-up: "
             "requires "
-            f"{run_input.alpha_execution_plan().effective_lookback} sessions before "
+            f"{run_input.effective_lookback} sessions before "
             f"{start_session}"
         )
     period_sessions = calendar[start_index : end_index + 1]
@@ -484,12 +501,18 @@ def _calculate_from_matrix(
             ),
         )
     definition = calculation_definition(run_input)
+    exposure_observations = {}
+    def observe_common(identifier, code, values):
+        record_common_input(
+            exposure_observations, tuple(research_data.sessions), identifier, code, values,
+        )
     strategy = (
         transition_strategy(
             research_data,
             matrix,
             definition,
             origin_session=origin_session,
+            observe_common=observe_common,
         )
         if isinstance(research_data, AlignedResearchData)
         else transition_columnar_strategy(
@@ -497,11 +520,13 @@ def _calculate_from_matrix(
             matrix,
             definition,
             origin_session=origin_session,
+            observe_common=observe_common,
             cancellation_check=cancellation_check,
         )
     )
     if cancellation_check is not None:
         cancellation_check()
+    attach_common_input_evidence(matrix, exposure_observations, tuple(period_sessions))
     artifacts = compose_output(matrix, strategy.finalized)
     track_state = KernelState(
         run_input=run_input,

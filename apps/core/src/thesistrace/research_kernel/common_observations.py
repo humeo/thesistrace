@@ -17,6 +17,9 @@ from pydantic import (
     model_validator,
 )
 
+from thesistrace.research_kernel.common_inputs import COMMON_INPUTS
+from thesistrace.research_kernel.common_market import CommonMarketSeries
+
 
 class CommonInputObservation(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
@@ -122,3 +125,65 @@ def common_input_observation_rows(
             value["industry_code"] or "",
         ),
     )
+
+
+def record_common_input(
+    observations: dict[str, list[dict[str, object]]],
+    sessions: list[str] | tuple[str, ...],
+    identifier: str,
+    industry_code: str | None,
+    series: CommonMarketSeries,
+) -> None:
+    values = getattr(series, COMMON_INPUTS[identifier][0])
+    for index, session in enumerate(sessions):
+        observations.setdefault(session, []).append(
+            {
+                "identifier": identifier,
+                "industry_code": industry_code,
+                "value": (float(values[index]) if math.isfinite(float(values[index])) else None),
+                "member_count": series.member_count[index],
+                "valid_count": series.valid_count[index],
+                "exclusions": dict(series.exclusions[index]),
+            }
+        )
+
+
+def merge_common_input_sessions(
+    signal_sessions: list[dict[str, object]],
+    exposure_observations: Mapping[str, list[dict[str, object]]],
+    sessions: tuple[str, ...],
+) -> tuple[dict[str, object], ...]:
+    """Combine per-strategy evidence without mutating a shared Signal artifact."""
+    signal = {row["session"]: row.get("common_inputs", []) for row in signal_sessions}
+    result = []
+    for session in sessions:
+        combined = {}
+        for row in [*signal.get(session, []), *exposure_observations.get(session, [])]:
+            key = (row["identifier"], row["industry_code"] or "")
+            if key in combined and combined[key] != row:
+                raise CommonInputObservationError("Signal and Exposure common evidence disagrees")
+            combined[key] = dict(row)
+        if combined:
+            result.append({
+                "session": session,
+                "common_inputs": [combined[key] for key in sorted(combined)],
+            })
+    return tuple(result)
+
+
+def attach_common_input_evidence(
+    matrix: dict[str, object],
+    exposure_observations: Mapping[str, list[dict[str, object]]],
+    sessions: tuple[str, ...],
+) -> None:
+    """Enrich a privately owned result matrix; shared Alpha artifacts stay immutable."""
+    rows = matrix["sessions"]
+    merged = {
+        row["session"]: row["common_inputs"]
+        for row in merge_common_input_sessions(
+            rows, exposure_observations, sessions,
+        )
+    }
+    for row in rows:
+        if row["session"] in merged:
+            row["common_inputs"] = merged[row["session"]]
