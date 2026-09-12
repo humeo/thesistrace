@@ -37,12 +37,14 @@ class RawSourceResponse:
 @dataclass(frozen=True)
 class CollectionPlan:
     kind: str
+    collection_key: str
     after_session: str | None = None
     overlap_start_session: str | None = None
     completed_through_date: date | None = None
     previous_canonical: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
+        _validate_collection_key(self.collection_key)
         if (
             self.kind == "bootstrap"
             and self.after_session is None
@@ -63,17 +65,20 @@ class CollectionPlan:
         raise ValueError("CollectionPlan state is invalid")
 
     @classmethod
-    def bootstrap(cls) -> CollectionPlan:
-        return cls(kind="bootstrap")
+    def bootstrap(cls, *, collection_key: str) -> CollectionPlan:
+        return cls(kind="bootstrap", collection_key=collection_key)
 
     @classmethod
     def incremental(
         cls,
         after_session: str,
         previous_canonical: Mapping[str, object] | None = None,
+        *,
+        collection_key: str,
     ) -> CollectionPlan:
         return cls(
             kind="incremental",
+            collection_key=collection_key,
             after_session=after_session,
             previous_canonical=previous_canonical,
         )
@@ -82,6 +87,7 @@ class CollectionPlan:
     def refresh(
         cls,
         *,
+        collection_key: str,
         current_data_through: str,
         overlap_start_session: str,
         completed_through_date: date,
@@ -89,6 +95,7 @@ class CollectionPlan:
     ) -> CollectionPlan:
         return cls(
             kind="refresh",
+            collection_key=collection_key,
             after_session=current_data_through,
             overlap_start_session=overlap_start_session,
             completed_through_date=completed_through_date,
@@ -130,14 +137,24 @@ class CanonicalBootstrapStream:
 
 @dataclass(frozen=True)
 class BootstrapCollectionPlan:
+    collection_key: str
     as_of: datetime
     start_date: date
     completed_through_date: date
+
+    def __post_init__(self) -> None:
+        _validate_collection_key(self.collection_key)
+
+
+def _validate_collection_key(value: str) -> None:
+    if not isinstance(value, str) or not value.strip() or value != value.strip():
+        raise ValueError("Collection key must be a non-empty operation identity")
 
 
 def bootstrap_collection_plan(
     as_of: datetime,
     *,
+    collection_key: str,
     start_date: date | None = None,
 ) -> BootstrapCollectionPlan:
     if as_of.tzinfo is None:
@@ -153,6 +170,7 @@ def bootstrap_collection_plan(
     if start_date > completed_through:
         raise ValueError("Bootstrap start date must not be after the completed market day")
     return BootstrapCollectionPlan(
+        collection_key=collection_key,
         as_of=as_of,
         start_date=start_date,
         completed_through_date=completed_through,
@@ -162,6 +180,8 @@ def bootstrap_collection_plan(
 def refresh_collection_plan(
     as_of: datetime,
     previous_canonical: Mapping[str, object],
+    *,
+    collection_key: str,
 ) -> CollectionPlan:
     if as_of.tzinfo is None:
         raise ValueError("Refresh as-of instant must include a timezone")
@@ -173,6 +193,7 @@ def refresh_collection_plan(
         raise ValueError("Refresh current Research Calendar is invalid")
     shanghai = as_of.astimezone(ZoneInfo("Asia/Shanghai"))
     return CollectionPlan.refresh(
+        collection_key=collection_key,
         current_data_through=sessions[-1],
         overlap_start_session=sessions[max(0, len(sessions) - 20)],
         completed_through_date=_completed_through_date(shanghai),

@@ -5027,7 +5027,7 @@ def test_admission_rechecks_head_after_catalog_read(tmp_path: Path) -> None:
         snapshot = client.get("/api/data").json()
         assert snapshot["generation_manifest_sha256"] == head_a
         assert snapshot["catalog"]["generation_manifest_sha256"] == head_a
-        assert len(snapshot["catalog"]["fields"]) == 12
+        assert len(snapshot["catalog"]["fields"]) == 13
         assert "revenue" in {field["identifier"] for field in snapshot["catalog"]["fields"]}
 
         head_b = _publish_head(
@@ -5050,6 +5050,67 @@ def test_admission_rechecks_head_after_catalog_read(tmp_path: Path) -> None:
         assert runtime.research_runs.process_next() is True
         assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "succeeded"
         assert _stored_execution(settings, run_id)["attempt_data_generation_id"] == head_b
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_daily_fields_http_research_and_track_use_their_frozen_generations(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2010-01-04", "2010-04-20", "2010-04-21",
+                "2026-08-03", "2026-08-04", "2026-08-05")
+    prior = _publish_composite_head(settings, sessions=sessions, all_market_fields=True)
+    formula = "rank(close_raw / pe + turnover_rate)"
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        before = client.get("/api/data").json()
+        assert "pe" not in {field["identifier"] for field in before["catalog"]["fields"]}
+        rejected = client.post("/api/research-runs", json=_run_command(
+            "daily-not-yet-available", formula=formula,
+        ))
+        assert rejected.status_code == 422
+        assert rejected.json()["issues"][0]["code"] == "FIELD_UNAVAILABLE_IN_CURRENT_DATA"
+        expanded = _publish_composite_head(
+            settings, sessions=sessions, all_market_fields=True, daily_fields=True,
+            expected_manifest=prior, operation_id="daily-fields-first-publication",
+        )
+        snapshot = client.get("/api/data").json()
+        assert snapshot["generation_manifest_sha256"] == expanded
+        fields = {field["identifier"] for field in snapshot["catalog"]["fields"]}
+        assert len(fields) == 28
+        assert {"close_raw", "pe", "turnover_rate", "revenue"} <= fields
+        accepted = client.post("/api/research-runs", json=_run_command(
+            "daily-mixed-research", formula=formula,
+        ))
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()["id"]
+        assert runtime.research_runs.process_next()
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "succeeded"
+        assert _stored_execution(settings, run_id)["attempt_data_generation_id"] == expanded
+        started = client.post(f"/api/research-runs/{run_id}/daily-tracks", json={
+            "request_id": "daily-mixed-track",
+        })
+        assert started.status_code == 201, started.text
+        track_id = started.json()["id"]
+        advanced = _publish_composite_head(
+            settings, sessions=(*sessions, "2026-08-06"), all_market_fields=True,
+            daily_fields=True, expected_manifest=expanded, operation_id="daily-fields-next-session",
+        )
+        _refresh_daily_track(client, track_id, "daily-mixed-track-refresh")
+        assert runtime.daily_tracks.process_next()
+        tracked = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert tracked["status"] == "active"
+        assert tracked["strategy_session"] == "2026-08-06"
+        assert client.get("/api/data").json()["generation_manifest_sha256"] == advanced
+        assert _stored_execution(settings, run_id)["attempt_data_generation_id"] == expanded
+        old_fields = (
+            MountedGenerationStore(settings.data_mount).inspect_root(prior).field_availability
+        )
+        assert "market.valuation.pe" not in old_fields
 
 
 def _run_command(
@@ -5284,6 +5345,7 @@ def _write_refresh_replay(
         if isinstance(price, dict)
     ]
     snapshot = {
+        "daily_basic": [],
         "benchmark_index_daily": [
             {
                 "ts_code": "399300.SZ",
@@ -5447,6 +5509,7 @@ def _publish_composite_head(
     *,
     sessions: tuple[str, ...],
     all_market_fields: bool = False,
+    daily_fields: bool = False,
     financial_through: str | None = None,
     financial_readiness_status: str = "ready",
     industry_through: str | None = None,
@@ -5461,6 +5524,17 @@ def _publish_composite_head(
         market_canonical["field_catalog"] = [
             row for row in field_catalog(sessions[0]) if row["alpha_authorable"]
         ]
+    if daily_fields:
+        from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+        from thesistrace.data.fields import DAILY_BASIC_FIELDS
+
+        market_canonical["daily_basic_sessions"] = [{"session": session} for session in sessions]
+        market_canonical["daily_basic"] = [{
+            **dict.fromkeys(field.source_column for field in DAILY_BASIC_FIELDS),
+            "session": price["session"], "instrument_id": price["instrument_id"],
+            "source_close": "999", "pe": "15", "turnover_rate": "0.025",
+        } for price in market_canonical["prices"]]
+        market_canonical["field_catalog"].extend(daily_basic_field_catalog(sessions[-1]))
     prepared_at = datetime(2026, 8, 5, 10, tzinfo=UTC)
     if expected_manifest is None:
         market = store.materialize(

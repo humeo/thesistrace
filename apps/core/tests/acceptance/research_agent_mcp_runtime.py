@@ -18,7 +18,7 @@ from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.researcher import ResearcherService
 
 
-def publish_current_data(settings: CoreSettings) -> tuple[str, ...]:
+def publish_current_data(settings: CoreSettings, *, daily_fields: bool = False) -> tuple[str, ...]:
     sessions = _weekday_sessions(date(2026, 8, 3), 75)
     BenchmarkSnapshotStore(settings.benchmark_mount).publish(
         (
@@ -102,6 +102,19 @@ def publish_current_data(settings: CoreSettings) -> tuple[str, ...]:
             for instrument_id in instrument_ids
         ],
     }
+    if daily_fields:
+        from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+        from thesistrace.data.fields import DAILY_BASIC_FIELDS
+
+        canonical["field_catalog"] = [
+            *field_catalog(sessions[0]), *daily_basic_field_catalog(sessions[0]),
+        ]
+        canonical["daily_basic_sessions"] = [{"session": session} for session in sessions]
+        canonical["daily_basic"] = [{
+            **dict.fromkeys(field.source_column for field in DAILY_BASIC_FIELDS),
+            "session": row["session"], "instrument_id": row["instrument_id"],
+            "source_close": "999", "pe": "15", "turnover_rate": "0.025",
+        } for row in canonical["prices"]]
     generation = MountedGenerationStore(settings.data_mount).materialize(
         canonical,
         prepared_at=datetime(2026, 9, 11, 12, tzinfo=UTC),

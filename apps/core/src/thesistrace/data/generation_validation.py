@@ -8,6 +8,7 @@ from thesistrace.data.canonical_mapping import (
     CanonicalMappingError,
     adjusted_price_string,
 )
+from thesistrace.data.fields import DAILY_BASIC_FIELDS
 
 UNIVERSE_NAMES = ("top300", "top1000", "top2000", "top3000")
 
@@ -152,6 +153,7 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
     if "industry_membership" in canonical:
         _validate_classification(canonical, instrument_set)
     _validate_field_catalog(canonical)
+    _validate_daily_basic(canonical, set(map(str, calendar)), instrument_set)
 
 
 def _validate_universes(
@@ -261,3 +263,23 @@ def _iso_date(value: object, name: str) -> date:
 
 
 __all__ = ("GenerationValidationError", "UNIVERSE_NAMES", "validate_canonical_generation")
+
+
+def _validate_daily_basic(
+    canonical: Mapping[str, object], calendar: set[str], instruments: set[str],
+) -> None:
+    fields = {field.field_id for field in DAILY_BASIC_FIELDS}
+    declared = {str(row["field_id"]) for row in _rows(canonical, "field_catalog")} & fields
+    present = "daily_basic" in canonical
+    if present != ("daily_basic_sessions" in canonical) or (declared and not present):
+        raise GenerationValidationError("Daily basic declared family is unavailable")
+    if not present:
+        return
+    collected = [str(row["session"]) for row in _rows(canonical, "daily_basic_sessions")]
+    if collected != sorted(set(collected)) or not set(collected) <= calendar:
+        raise GenerationValidationError("Daily basic collected Sessions are invalid")
+    observations = _rows(canonical, "daily_basic")
+    positions = _unique_positions(observations, "session", "Daily basic")
+    if any(session not in collected or instrument not in instruments
+           for session, instrument in positions):
+        raise GenerationValidationError("Daily basic observed coordinates are invalid")

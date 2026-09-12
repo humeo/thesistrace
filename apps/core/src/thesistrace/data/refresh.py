@@ -525,7 +525,10 @@ class DataRefreshService:
                     raise DataRefreshError("DATA_NOT_READY")
                 expected_manifest = head.generation_manifest_sha256
                 self._record_expected_head(claim, expected_manifest)
-                plan = refresh_collection_plan(self._as_of(claim), refresh_base.canonical)
+                plan = refresh_collection_plan(
+                    self._as_of(claim), refresh_base.canonical,
+                    collection_key=f"refresh:{claim.key}",
+                )
                 assert plan.overlap_start_session is not None
                 phase = "market"
                 with self._timed_phase(claim, phase):

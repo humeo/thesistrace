@@ -137,6 +137,7 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
         "industry_research_readiness": True,
     }
 
+    first_overview = None
     for role in ("research", "tracking"):
         port = _free_port()
         worker_environment = {
@@ -187,10 +188,22 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
                 check=False,
             )
             assert worker.returncode == 0, worker.stderr
-            assert _request_json(
+            overview = _request_json(
                 f"http://127.0.0.1:{port}/api/data",
                 headers=auth_headers,
-            ) == expected_overview
+            )
+            assert {key: overview[key] for key in expected_overview} == expected_overview
+            assert set(overview) == set(expected_overview) | {
+                "generation_manifest_sha256", "available_field_ids", "field_families", "catalog",
+            }
+            assert overview["generation_manifest_sha256"] == generation.manifest_sha256
+            assert overview["available_field_ids"] == ["price.close.adjusted"]
+            assert overview["field_families"]
+            assert overview["catalog"]
+            if first_overview is None:
+                first_overview = overview
+            else:
+                assert overview == first_overview
             assert _request_status(
                 f"http://127.0.0.1:{port}/api/data/releases",
                 headers=auth_headers,

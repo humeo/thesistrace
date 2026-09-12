@@ -4,7 +4,9 @@ import json
 import os
 import sys
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Protocol
+from uuid import uuid4
 
 from thesistrace.adapters.tushare_data import TushareDataSource
 from thesistrace.adapters.tushare_provider import (
@@ -51,8 +53,12 @@ def main(
             )
             raise SystemExit(1) from None
         try:
-            batch = TushareDataSource(provider=provider).collect_bootstrap(
-                bootstrap_collection_plan(as_of or datetime.now(UTC))
+            batch = TushareDataSource(
+                provider=provider, checkpoint_root=Path(".local/live-tushare-daily-basic"),
+            ).collect_bootstrap(
+                bootstrap_collection_plan(
+                    as_of or datetime.now(UTC), collection_key=f"qualification:{uuid4().hex}",
+                )
             )
         except DataSourceError as error:
             diagnostic: dict[str, object] = {

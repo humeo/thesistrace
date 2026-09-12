@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 from pathlib import Path
 
+from thesistrace.adapters.tushare_daily_basic import DAILY_BASIC_SOURCE_FIELDS
 from thesistrace.adapters.tushare_provider import TushareSourceError
 from thesistrace.benchmark import (
     BENCHMARK_SOURCE_API_NAME,
@@ -83,6 +84,9 @@ class ReplayTushareProvider:
         self._request_start = date.fromisoformat(str(value["request_start"]))
         self._request_end = date.fromisoformat(str(value["request_end"]))
         self._snapshot = snapshot
+        self._daily_basic_index: dict[
+            tuple[str, str | None], list[dict[str, object]]
+        ] | None = None
         self._financial = _financial_responses(value.get("financial", {}))
         self._financial_refresh = _financial_refresh(value.get("financial_refresh"))
         self._kind = (
@@ -110,6 +114,12 @@ class ReplayTushareProvider:
             raise TushareSourceError("REPLAY_WINDOW_MISMATCH", source_code=0)
         return _market_snapshot(self._snapshot)
 
+    def select_market_window(self, *, last_session: str, as_of: date) -> None:
+        if self._kind != "refresh":
+            raise TushareSourceError("REPLAY_BOOTSTRAP_ONLY", source_code=0)
+        if (date.fromisoformat(last_session), as_of) != (self._request_start, self._request_end):
+            raise TushareSourceError("REPLAY_WINDOW_MISMATCH", source_code=0)
+
     def collect_incremental_snapshot(
         self,
         *,
@@ -135,6 +145,8 @@ class ReplayTushareProvider:
     ) -> RawSourceResponse:
         if api_name == BENCHMARK_SOURCE_API_NAME:
             return self._query_benchmark(params=params, fields=fields)
+        if api_name == "daily_basic":
+            return self._query_daily_basic(params=params, fields=fields)
         ts_code = params.get("ts_code")
         if not isinstance(ts_code, str) or set(params) != {"ts_code"}:
             raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
@@ -142,6 +154,50 @@ class ReplayTushareProvider:
         if response is None or not set(fields) <= set(response.fields):
             raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
         return response
+
+    def _query_daily_basic(
+        self, *, params: Mapping[str, object], fields: Sequence[str],
+    ) -> RawSourceResponse:
+        try:
+            if set(params) not in ({"trade_date"}, {"trade_date", "ts_code"}):
+                raise ValueError("Invalid daily basic request")
+            trade_date = params["trade_date"]
+            if not isinstance(trade_date, str):
+                raise ValueError("Invalid daily basic date")
+            session = date.fromisoformat(_compact_date(trade_date))
+            if not self._request_start <= session <= self._request_end:
+                raise ValueError("Unrecorded daily basic date")
+            if "ts_code" in params and (
+                not isinstance(params["ts_code"], str) or not params["ts_code"]
+            ):
+                raise ValueError("Invalid daily basic security")
+            if not fields or len(set(fields)) != len(fields) or not set(fields) <= set(
+                DAILY_BASIC_SOURCE_FIELDS
+            ):
+                raise ValueError("Invalid daily basic columns")
+            if self._daily_basic_index is None:
+                index: dict[tuple[str, str | None], list[dict[str, object]]] = {}
+                for row in self._snapshot["daily_basic"]:
+                    if not isinstance(row, dict) or not set(DAILY_BASIC_SOURCE_FIELDS) <= set(row):
+                        raise ValueError("Incomplete daily basic recording")
+                    recorded_date, code = row["trade_date"], row["ts_code"]
+                    if not isinstance(recorded_date, str) or not isinstance(code, str) or not code:
+                        raise ValueError("Invalid daily basic recording identity")
+                    recorded_session = date.fromisoformat(_compact_date(recorded_date))
+                    if not self._request_start <= recorded_session <= self._request_end:
+                        raise ValueError("Daily basic recording outside its window")
+                    index.setdefault((recorded_date, None), []).append(row)
+                    index.setdefault((recorded_date, code), []).append(row)
+                self._daily_basic_index = index
+            code = str(params["ts_code"]) if "ts_code" in params else None
+            rows = self._daily_basic_index.get((trade_date, code), [])
+            # Reproduce the supplier cap so Replay exercises the collector's split path.
+            return RawSourceResponse(
+                fields=tuple(fields),
+                items=tuple(tuple(row[field] for field in fields) for row in rows[:6000]),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0) from error
 
     def discover(
         self,
@@ -267,6 +323,13 @@ class ReplayTushareRefreshBundle:
     ) -> dict[str, list[dict[str, object]]]:
         del start_date, completed_through_date
         raise TushareSourceError("REPLAY_REFRESH_ONLY", source_code=0)
+
+    def select_market_window(self, *, last_session: str, as_of: date) -> None:
+        provider = self._providers.get((date.fromisoformat(last_session), as_of))
+        if provider is None:
+            raise TushareSourceError("REPLAY_WINDOW_MISMATCH", source_code=0)
+        provider.select_market_window(last_session=last_session, as_of=as_of)
+        self._active = provider
 
     def collect_incremental_snapshot(
         self,
@@ -517,7 +580,10 @@ def _compact_date(value: str) -> str:
 def _market_snapshot(
     snapshot: Mapping[str, list[dict[str, object]]],
 ) -> dict[str, list[dict[str, object]]]:
-    return {name: rows for name, rows in snapshot.items() if name != "benchmark_index_daily"}
+    return {
+        name: rows for name, rows in snapshot.items()
+        if name not in {"benchmark_index_daily", "daily_basic"}
+    }
 
 
 __all__ = ("ReplayTushareProvider", "ReplayTushareRefreshBundle")

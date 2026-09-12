@@ -33,7 +33,7 @@ def test_partial_family_reports_actual_fields_without_claiming_all_ready() -> No
     market = families["equity.eod_price"]
     assert market.readiness == "partial"
     assert market.available_field_ids == ["price.close.adjusted"]
-    assert len(market.supported_field_ids) == 6
+    assert len(market.supported_field_ids) == 7
     assert market.research_category == "market"
     assert families["equity.financial_pit"].readiness == "not_ready"
     assert families["equity.financial_pit"].available_field_ids == []
@@ -46,7 +46,7 @@ def test_field_availability_requires_its_family_and_preserves_lagging_coverage()
 
     assert families["equity.eod_price"].readiness == "partial"
     assert str(families["equity.eod_price"].coverage_end) == "2026-09-08"
-    assert len(families["equity.eod_price"].available_field_ids) == 6
+    assert len(families["equity.eod_price"].available_field_ids) == 7
     assert families["equity.financial_pit"].available_field_ids == []
     absent = describe_family_fields(replace(generation, families=()))
     assert all(family.readiness == "not_ready" for family in absent)
@@ -55,6 +55,31 @@ def test_field_availability_requires_its_family_and_preserves_lagging_coverage()
 def test_empty_head_has_no_available_fields() -> None:
     families = describe_family_fields(None)
 
-    assert len(families) == 2
+    assert len(families) == 3
     assert all(family.readiness == "not_ready" for family in families)
     assert all(family.available_field_ids == [] for family in families)
+
+
+def test_daily_basic_lag_is_reported_independently_from_ready_prices() -> None:
+    fields = tuple(field.field_id for field in alpha_field_catalog())
+    generation = _generation(fields=fields)
+    daily = MountedDatasetFamilyDescriptor(
+        family_id="equity.daily_basic", schema_contract="equity-daily-basic",
+        dataset_coverage={
+            "kind": "research-session-range", "start": "2026-09-08", "end": "2026-09-08",
+        },
+        validation_summary={}, manifest_sha256="d" * 64,
+        table_names=("daily_basic", "daily_basic_sessions"),
+    )
+    available = {item.family_id: item for item in describe_family_fields(
+        replace(generation, families=(*generation.families, daily)),
+    )}
+    assert available["equity.eod_price"].readiness == "ready"
+    assert available["equity.daily_basic"].readiness == "partial"
+    assert str(available["equity.daily_basic"].coverage_end) == "2026-09-08"
+    assert len(available["equity.daily_basic"].available_field_ids) == 15
+    assert available["equity.daily_basic"].research_category == "market"
+    absent = {item.family_id: item for item in describe_family_fields(generation)}
+    assert absent["equity.eod_price"].readiness == "ready"
+    assert absent["equity.daily_basic"].readiness == "not_ready"
+    assert absent["equity.daily_basic"].available_field_ids == []

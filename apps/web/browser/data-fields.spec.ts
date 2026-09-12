@@ -37,8 +37,8 @@ test.beforeAll(async () => {
 for (const width of [1280, 390]) {
   test(`Data fields use one snapshot, show partial sources and filter at ${width}px`, async ({ page }) => {
     const requests: string[] = [];
-    const fieldsFor = (category: string) => catalog.fields
-      .filter((field) => field.research_category === category).map((field) => field.field_id);
+    const fieldsFor = (family: string) => catalog.fields
+      .filter((field) => field.family_id === family).map((field) => field.field_id);
     await page.setViewportSize({ width, height: 960 });
     await page.route("http://data.test/**", async (route) => {
       const pathname = new URL(route.request().url()).pathname;
@@ -52,18 +52,16 @@ for (const width of [1280, 390]) {
         generation_manifest_sha256: "a".repeat(64),
         available_field_ids: catalog.fields.map((field) => field.field_id),
         field_families: [
-          ...["market", "financial"].map((category) => ({
-            family_id: category === "market" ? "equity.eod_price" : "equity.financial_pit",
-            research_category: category,
-            source_endpoints: category === "market" ? ["daily"] : ["balancesheet", "cashflow", "income"],
-            supported_field_ids: fieldsFor(category), available_field_ids: fieldsFor(category),
-            coverage_start: "2010-01-04", coverage_end: "2026-09-09", readiness: "ready",
+          ...["equity.eod_price", "equity.daily_basic", "equity.financial_pit"].map((family) => ({
+            family_id: family,
+            research_category: family === "equity.financial_pit" ? "financial" : "market",
+            source_endpoints: family === "equity.daily_basic" ? ["daily_basic"]
+              : family === "equity.eod_price" ? ["daily"] : ["balancesheet", "cashflow", "income"],
+            supported_field_ids: fieldsFor(family), available_field_ids: fieldsFor(family),
+            coverage_start: "2010-01-04",
+            coverage_end: family === "equity.daily_basic" ? "2026-09-08" : "2026-09-09",
+            readiness: family === "equity.daily_basic" ? "partial" : "ready",
           })),
-          {
-            family_id: "equity.financial_indicator", research_category: "financial",
-            source_endpoints: ["fina_indicator"], supported_field_ids: ["financial.indicator.roe"],
-            available_field_ids: [], coverage_start: null, coverage_end: null, readiness: "not_ready",
-          },
         ],
         market_coverage: { start: "2010-01-04", end: "2026-09-09" },
         financial_coverage: {
@@ -88,8 +86,8 @@ for (const width of [1280, 390]) {
     await page.goto("http://data.test/");
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
-    await expect(page.getByText("12 available", { exact: true })).toBeVisible();
-    await expect(page.getByText("Finance partially ready", { exact: true })).toBeVisible();
+    await expect(page.getByText("28 available", { exact: true })).toBeVisible();
+    await expect(page.getByText("Market partially ready", { exact: true })).toBeVisible();
     expect(requests).toEqual(["/api/data"]);
     await expect(page.locator(".signal-strip")).toHaveCount(4);
     if (width < 600) {
@@ -100,6 +98,15 @@ for (const width of [1280, 390]) {
       }
     }
 
+    await page.getByRole("combobox", { name: "Field source" }).selectOption("daily_basic");
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(15);
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("自由流通换手率");
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(1);
+    await expect(page.locator(".data-field-table tbody tr")).toContainText("turnover_rate_f");
+    await page.getByRole("combobox", { name: "Field source" }).selectOption("");
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("close_raw");
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(1);
+    await expect(page.locator(".data-field-table tbody tr")).toContainText("未复权收盘价");
     await page.getByRole("searchbox", { name: "Search fields" }).fill("营业总收入");
     await expect(page.locator(".data-field-table tbody tr")).toHaveCount(1);
     await expect(page.locator(".data-field-table tbody tr").first()).toContainText("revenue");
@@ -116,6 +123,20 @@ for (const width of [1280, 390]) {
     await page.getByRole("searchbox", { name: "Search fields" }).fill("no_matching_field");
     await expect(page.locator(".data-field-table tbody tr")).toHaveCount(0);
     await expect(page.getByText("No fields match these filters.")).toHaveCount(2);
+    const editor = page.locator(".cm-content");
+    await editor.click();
+    await editor.pressSequentially("turnover_rate_");
+    const turnover = page.getByRole("option").filter({ hasText: "turnover_rate_f" });
+    await expect(turnover).toBeVisible();
+    await turnover.click();
+    await expect(editor).toHaveText("turnover_rate_f");
+    await editor.press("ControlOrMeta+A");
+    await editor.press("Backspace");
+    await editor.pressSequentially("close_r");
+    const rawClose = page.getByRole("option").filter({ hasText: "close_raw" });
+    await expect(rawClose).toBeVisible();
+    await rawClose.click();
+    await expect(editor).toHaveText("close_raw");
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
   });
 }

@@ -156,6 +156,13 @@ MARKET_FIELDS = (
         source_column="amount",
         source_unit="thousand CNY",
     ),
+    FieldDefinition(
+        "price.close.raw", "unadjusted close from the daily price source", "CNY/share", "decimal",
+        "after_close", "instrument_by_research_session", "missing_when_no_valid_session_bar",
+        "equity.eod_price", AlphaFieldCapability("close_raw"), _row_series("close_raw"),
+        display_name="未复权收盘价", research_purpose="行情", source_endpoint="daily",
+        source_column="close", source_unit="CNY/share", authoring_example="rank(close_raw)",
+    ),
 )
 
 
@@ -258,7 +265,102 @@ FINANCIAL_FIELDS = (
     ),
 )
 
-FIELD_DEFINITIONS = (*MARKET_FIELDS, *FINANCIAL_FIELDS)
+
+
+def _daily_basic_field(
+    identifier: str, field_id: str, display_name: str, unit: str,
+    source_unit: str, research_purpose: str, description: str,
+) -> FieldDefinition:
+    return FieldDefinition(
+        field_id=field_id, description=description, unit=unit, physical_type="decimal",
+        availability="after_close", grain="instrument_by_research_session",
+        missingness="missing_when_no_exact_session_source_value", family_id="equity.daily_basic",
+        alpha=AlphaFieldCapability(identifier), alpha_series_reader=_row_series(identifier),
+        source_lineage=f"tushare.daily_basic.{identifier}", source_endpoint="daily_basic",
+        source_column=identifier, display_name=display_name, research_purpose=research_purpose,
+        source_unit=source_unit, authoring_example=f"rank({identifier})",
+    )
+
+
+DAILY_BASIC_FIELDS = (
+    _daily_basic_field(
+        'total_mv', 'market.capitalization.total', '总市值',
+        'CNY', '10000 CNY', '估值',
+        'total market capitalization',
+    ),
+    _daily_basic_field(
+        'circ_mv', 'market.capitalization.float', '流通市值',
+        'CNY', '10000 CNY', '估值',
+        'circulating market capitalization',
+    ),
+    _daily_basic_field(
+        'total_share', 'market.shares.total', '总股本',
+        'shares', '10000 shares', '股本',
+        'total outstanding shares',
+    ),
+    _daily_basic_field(
+        'float_share', 'market.shares.float', '流通股本',
+        'shares', '10000 shares', '股本',
+        'unrestricted circulating shares',
+    ),
+    _daily_basic_field(
+        'free_share', 'market.shares.free_float', '自由流通股本',
+        'shares', '10000 shares', '股本',
+        'free float shares under supplier definition',
+    ),
+    _daily_basic_field(
+        'turnover_rate', 'market.turnover.float_ratio', '换手率',
+        'ratio', 'percent', '流动性',
+        'traded shares divided by unrestricted circulating shares',
+    ),
+    _daily_basic_field(
+        'turnover_rate_f', 'market.turnover.free_float_ratio', '自由流通换手率',
+        'ratio', 'percent', '流动性',
+        'traded shares divided by free float shares',
+    ),
+    _daily_basic_field(
+        'volume_ratio', 'market.volume.ratio', '量比',
+        'multiple', 'multiple', '流动性',
+        'supplier volume ratio against its moving average',
+    ),
+    _daily_basic_field(
+        'pe', 'market.valuation.pe', '市盈率',
+        'multiple', 'multiple', '估值',
+        'market capitalization divided by supplier annual net profit; losses yield missing',
+    ),
+    _daily_basic_field(
+        'pe_ttm', 'market.valuation.pe_ttm', '滚动市盈率',
+        'multiple', 'multiple', '估值',
+        'market capitalization divided by supplier TTM net profit; losses yield missing',
+    ),
+    _daily_basic_field(
+        'pb', 'market.valuation.pb', '市净率',
+        'multiple', 'multiple', '估值',
+        'market capitalization divided by net assets excluding other equity instruments',
+    ),
+    _daily_basic_field(
+        'ps', 'market.valuation.ps', '市销率',
+        'multiple', 'multiple', '估值',
+        'market capitalization divided by latest annual operating revenue',
+    ),
+    _daily_basic_field(
+        'ps_ttm', 'market.valuation.ps_ttm', '滚动市销率',
+        'multiple', 'multiple', '估值',
+        'market capitalization divided by TTM operating revenue',
+    ),
+    _daily_basic_field(
+        'dv_ratio', 'market.dividend.yield_annual', '股息率',
+        'ratio', 'percent', '股息',
+        'supplier yield from cash dividends with ex-dates in previous calendar year',
+    ),
+    _daily_basic_field(
+        'dv_ttm', 'market.dividend.yield_ttm', '滚动股息率',
+        'ratio', 'percent', '股息',
+        'supplier trailing dividend yield with ex-date and report-period restrictions',
+    ),
+)
+
+FIELD_DEFINITIONS = (*MARKET_FIELDS, *DAILY_BASIC_FIELDS, *FINANCIAL_FIELDS)
 
 
 def field_definitions() -> tuple[FieldDefinition, ...]:

@@ -103,20 +103,23 @@ async def _exercise_stdio(settings: CoreSettings, stderr_path: Path) -> None:
                 "folder_default",
                 "folder_batch_research",
             ]
-            assert "generation" not in str(context.structured_content).lower()
+            overview = context.structured_content["data_overview"]
+            assert overview["generation_manifest_sha256"] is None
+            assert overview["available_field_ids"] == []
 
             catalog = await client.call_tool(
                 "get_alpha_catalog",
                 {"identifiers": ["ts_mean", "unknown_identifier", "close"]},
             )
             assert catalog.is_error is False
-            assert [field["identifier"] for field in catalog.structured_content["fields"]] == [
-                "close"
-            ]
+            assert catalog.structured_content["fields"] == []
+            assert catalog.structured_content["generation_manifest_sha256"] is None
             assert [
                 builtin["identifier"] for builtin in catalog.structured_content["builtins"]
             ] == ["ts_mean"]
-            assert catalog.structured_content["unknown_identifiers"] == ["unknown_identifier"]
+            assert catalog.structured_content["unknown_identifiers"] == [
+                "close", "unknown_identifier",
+            ]
 
             diagnostic = await client.call_tool(
                 "diagnose_alpha_formula",

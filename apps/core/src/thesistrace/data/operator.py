@@ -127,7 +127,9 @@ class DataOperator:
     ) -> BootstrapOutcome:
         key = _identity(idempotency_key, "Bootstrap idempotency key")
         try:
-            plan = bootstrap_collection_plan(as_of, start_date=start_date)
+            plan = bootstrap_collection_plan(
+                as_of, collection_key=f"bootstrap:{key}", start_date=start_date,
+            )
         except ValueError as error:
             raise DataOperatorError("INVALID_BOOTSTRAP_WINDOW") from error
         fingerprint = hashlib.sha256(

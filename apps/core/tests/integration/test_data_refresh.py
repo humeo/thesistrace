@@ -9,7 +9,7 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
-from decimal import Inexact, localcontext
+from decimal import Decimal, Inexact, localcontext
 from pathlib import Path
 from time import monotonic
 from types import SimpleNamespace
@@ -23,7 +23,7 @@ import thesistrace.data.refresh as refresh_module
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import _append_session
 from thesistrace.adapters.tushare_data import TushareDataSource
-from thesistrace.adapters.tushare_provider import normalize_tushare_snapshot
+from thesistrace.adapters.tushare_provider import TushareSourceError, normalize_tushare_snapshot
 from thesistrace.benchmark import (
     BenchmarkLevel,
     BenchmarkLevelSource,
@@ -42,8 +42,9 @@ from thesistrace.data import (
     MountedGenerationStore,
     RefreshOutcome,
 )
+from thesistrace.data.daily_basic_evidence import MARKET_SOURCE_RECEIPT_DIRECTORY
 from thesistrace.data.head_store import MountedDatasetHeadStore
-from thesistrace.data.source import DataSourceError
+from thesistrace.data.source import DataSourceError, RawSourceResponse
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
@@ -83,6 +84,13 @@ class UnavailableRefreshSource:
 
 
 class ReplayRefreshProvider:
+    def select_market_window(self, *, last_session: str, as_of: date) -> None:
+        """This provider has no per-window replay selection."""
+
+    def query_raw(self, api_name, *, params, fields):
+        assert api_name == "daily_basic"
+        return RawSourceResponse(fields=tuple(fields), items=())
+
     def __init__(self, snapshot: dict[str, object]) -> None:
         self.snapshot = snapshot
 
@@ -724,13 +732,15 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
         )
 
         assert processed == {"status": "processed"}
-        assert [event["event"] for event in operator_events] == [
-            "data_refresh_started",
-            "data_refresh_phase_completed",
-            "data_refresh_phase_completed",
-            "data_refresh_phase_completed",
-            "data_refresh_phase_completed",
-            "data_refresh_succeeded",
+        assert operator_events[0]["event"] == "data_refresh_started"
+        assert operator_events[-1]["event"] == "data_refresh_succeeded"
+        assert all(
+            event["event"] == "data_refresh_phase_completed"
+            for event in operator_events[1:-1]
+        )
+        assert [event["phase"] for event in operator_events[1:-1]] == [
+            "current_head", "market", "validation", "materialization",
+            "benchmark", "candidate_validation", "publication",
         ]
         assert all(event["component"] == "data_operator" for event in operator_events)
         assert len({event["operation_id"] for event in operator_events}) == 1
@@ -740,11 +750,11 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
             ["inspect-refresh", "--idempotency-key", "worker-replay"],
         )
         assert terminal["status"] == "succeeded"
-        assert terminal["outcome"] == "no_change"
+        assert terminal["outcome"] == "published"
         assert terminal["last_refresh_at"] is not None
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
-        assert head.generation_manifest_sha256 == manifest
+        assert head.generation_manifest_sha256 != manifest
         assert _overview_service(database, tmp_path).overview().last_market_refresh_at is not None
     finally:
         database.close()
@@ -2467,6 +2477,91 @@ def test_candidate_receipt_and_protection_commit_atomically(
         database.close()
 
 
+def test_daily_basic_worker_retry_reuses_prices_and_publishes_complete_family(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    sessions = _tushare_sessions(20)
+
+    class InterruptedDailyProvider(ReplayRefreshProvider):
+        def __init__(self, *, interrupted: bool) -> None:
+            super().__init__(_tushare_snapshot(sessions))
+            self.interrupted = interrupted
+            self.price_requests = 0
+            self.daily_requests: list[str] = []
+
+        def collect_incremental_snapshot(self, *, last_session, as_of):
+            self.price_requests += 1
+            return super().collect_incremental_snapshot(last_session=last_session, as_of=as_of)
+
+        def query_raw(self, api_name, *, params, fields):
+            assert api_name == "daily_basic"
+            session = params["trade_date"]
+            self.daily_requests.append(session)
+            if self.interrupted and session == sessions[1]:
+                raise TushareSourceError("UPSTREAM_RATE_LIMITED", source_code=-1)
+            row = dict.fromkeys(fields)
+            row.update(ts_code="600000.SH", trade_date=session, pe="15", turnover_rate="2.5")
+            return RawSourceResponse(tuple(fields), (tuple(row[field] for field in fields),))
+
+    database = _database(core_settings)
+    try:
+        _, current = normalize_tushare_snapshot(_tushare_snapshot(sessions))
+        original = _establish_head(database, tmp_path, current)
+        original_freshness = _overview_service(database, tmp_path).overview().last_market_refresh_at
+        refresh = _refresh_service(database, tmp_path, max_attempts=2)
+        refresh.submit(idempotency_key="daily-source-retry", as_of=CORRECTION_AS_OF)
+        first = InterruptedDailyProvider(interrupted=True)
+        checkpoint_root = tmp_path / MARKET_SOURCE_RECEIPT_DIRECTORY
+        with pytest.raises(DataRefreshError) as interrupted:
+            _process_next(refresh, TushareDataSource(
+                provider=first, checkpoint_root=checkpoint_root,
+            ))
+        assert interrupted.value.code == "SOURCE_UNAVAILABLE"
+        receipt = refresh.inspect("daily-source-retry")
+        assert receipt.status == "accepted"
+        assert receipt.attempt_count == 1
+        assert first.price_requests == 1
+        assert first.daily_requests == sessions[:2]
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert head is not None and head.generation_manifest_sha256 == original
+        assert _overview_service(database, tmp_path).overview().last_market_refresh_at == (
+            original_freshness
+        )
+
+        # Recreate the worker-facing service and both sources, using only durable checkpoints.
+        resumed = _refresh_service(database, tmp_path, max_attempts=2)
+        second = InterruptedDailyProvider(interrupted=False)
+        assert _process_next(resumed, TushareDataSource(
+            provider=second, checkpoint_root=checkpoint_root,
+        ))
+        receipt = resumed.inspect("daily-source-retry")
+        assert receipt.status == "succeeded"
+        assert receipt.outcome == "published"
+        assert receipt.attempt_count == 2
+        assert second.price_requests == 0
+        assert second.daily_requests == sessions[1:]
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert head is not None and head.generation_manifest_sha256 != original
+        store = MountedGenerationStore(tmp_path)
+        store.validate_generation(head.generation_manifest_sha256)
+        published = open_complete_refresh_basis(store, head.generation_manifest_sha256)
+        assert len(published["daily_basic"]) == len(sessions)
+        assert {Decimal(row["pe"]) for row in published["daily_basic"]} == {Decimal("15")}
+        assert {Decimal(row["turnover_rate"]) for row in published["daily_basic"]} == {
+            Decimal("0.025"),
+        }
+        assert published["prices"] == current["prices"]
+        assert "daily_basic" not in open_complete_refresh_basis(store, original)
+        assert not _process_next(resumed, TushareDataSource(
+            provider=second, checkpoint_root=checkpoint_root,
+        ))
+        assert second.price_requests == 0
+        assert second.daily_requests == sessions[1:]
+    finally:
+        database.close()
+
+
 def test_real_tushare_overlap_merge_failure_keeps_prior_head_and_freshness(
     core_settings: CoreSettings,
     tmp_path: Path,
@@ -2486,7 +2581,10 @@ def test_real_tushare_overlap_merge_failure_keeps_prior_head_and_freshness(
         with pytest.raises(DataRefreshError) as failure:
             _process_next(
                 refresh,
-                TushareDataSource(provider=ReplayRefreshProvider(malformed)),
+                TushareDataSource(
+                    checkpoint_root=tmp_path / "daily-basic",
+                    provider=ReplayRefreshProvider(malformed),
+                ),
             )
 
         assert failure.value.code == "SOURCE_INVALID_SOURCE_DATA"
@@ -2534,7 +2632,10 @@ def test_real_tushare_derived_recomputation_failure_keeps_prior_head_and_freshne
             with pytest.raises(DataRefreshError) as failure:
                 _process_next(
                     refresh,
-                    TushareDataSource(provider=ReplayRefreshProvider(corrected)),
+                    TushareDataSource(
+                        checkpoint_root=tmp_path / "daily-basic",
+                        provider=ReplayRefreshProvider(corrected),
+                    ),
                 )
 
         assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"

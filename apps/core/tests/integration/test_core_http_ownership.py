@@ -85,18 +85,27 @@ def test_two_researchers_have_http_success_and_known_id_non_enumeration() -> Non
             "/api/research-runs/run-http-a",
             headers={"cookie": "session=owner-b"},
         ).status_code == 404
-        first_page = client.get(
-            "/api/research-runs",
-            headers={"cookie": "session=owner-a"},
-            params={"limit": 1},
-        )
-        assert first_page.status_code == 200
-        assert first_page.json()["next_cursor"] is not None
-        assert client.get(
-            "/api/research-runs",
-            headers={"cookie": "session=owner-b"},
-            params={"cursor": first_page.json()["next_cursor"]},
-        ).status_code == 400
+        pages = [
+            client.get(
+                "/api/research-runs",
+                headers={"cookie": "session=owner-a"},
+                params={"page": page, "page_size": 1},
+            )
+            for page in (1, 2)
+        ]
+        assert all(page.status_code == 200 for page in pages)
+        assert all(page.json()["total_count"] == 2 for page in pages)
+        assert {page.json()["items"][0]["id"] for page in pages} == {
+            "run-http-a", "run-http-a-second",
+        }
+        for page in (1, 2):
+            other = client.get(
+                "/api/research-runs",
+                headers={"cookie": "session=owner-b"},
+                params={"page": page, "page_size": 1},
+            )
+            assert other.status_code == 200
+            assert other.json() == {"items": [], "total_count": 0}
 
         batch_a = client.get(
             "/api/research-batches/batch-http-a",

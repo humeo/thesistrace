@@ -36,6 +36,7 @@ def test_alpha_catalog_is_public_and_contains_no_execution_implementation() -> N
         "high": "price.high.adjusted",
         "low": "price.low.adjusted",
         "close": "price.close.adjusted",
+        "close_raw": "price.close.raw",
         "volume": "market.volume.shares",
         "amount": "market.turnover.cny",
     }
@@ -156,3 +157,25 @@ def test_alpha_http_catalog_keeps_a_partial_family_partial() -> None:
 
     assert [field["identifier"] for field in catalog["fields"]] == ["assets"]
     assert catalog["generation_manifest_sha256"] == "a" * 64
+
+
+def test_daily_basic_http_catalog_preserves_family_units_and_actual_availability() -> None:
+    with _client(available_field_ids=frozenset(
+        field.field_id for field in alpha_field_catalog()
+    )) as client:
+        result = client.get("/api/alpha/catalog")
+    assert result.status_code == 200
+    daily = {field["identifier"]: field for field in result.json()["fields"]
+             if field["family_id"] == "equity.daily_basic"}
+    assert set(daily) == {
+        "total_mv", "circ_mv", "total_share", "float_share", "free_share",
+        "turnover_rate", "turnover_rate_f", "volume_ratio", "pe", "pe_ttm",
+        "pb", "ps", "ps_ttm", "dv_ratio", "dv_ttm",
+    }
+    assert daily["pe"]["field_id"] == "market.valuation.pe"
+    assert daily["pe"]["unit"] == "multiple"
+    assert daily["turnover_rate"]["unit"] == "ratio"
+    assert all(field["research_category"] == "market" for field in daily.values())
+    with _client() as client:
+        prices = client.get("/api/alpha/catalog").json()
+    assert not any(field["family_id"] == "equity.daily_basic" for field in prices["fields"])

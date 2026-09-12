@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
+from thesistrace.data.fields import DAILY_BASIC_FIELDS
 from thesistrace.publication.serialization import ParquetWriterContract
 
 GENERATION_MANIFEST_MAX_BYTES = 1_048_576
@@ -17,6 +18,7 @@ class TableSpec:
     name: str
     contract: ParquetWriterContract
     session_field: str | None = None
+    allows_sparse_sessions: bool = False
 
     @property
     def partitioning(self) -> dict[str, object]:
@@ -187,6 +189,31 @@ TABLE_SPECS = (
         ),
     ),
 )
+
+DAILY_BASIC_TABLE_SPECS = (
+    TableSpec(
+        "daily_basic",
+        ParquetWriterContract(
+            name="canonical-generation-daily-basic", version=1,
+            schema=pa.schema([
+                pa.field("session", pa.string(), nullable=False),
+                pa.field("instrument_id", pa.string(), nullable=False),
+                *[pa.field(name, pa.decimal128(38, 10), nullable=True)
+                  for name in ("source_close", *(f.source_column for f in DAILY_BASIC_FIELDS))],
+            ]),
+            sort_keys=("session", "instrument_id"),
+        ),
+        "session",
+        allows_sparse_sessions=True,
+    ),
+    TableSpec(
+        "daily_basic_sessions",
+        _contract("daily-basic-sessions", (("session", _STRING),), ("session",)),
+        "session",
+        allows_sparse_sessions=True,
+    ),
+)
+TABLE_SPECS = (*TABLE_SPECS, *DAILY_BASIC_TABLE_SPECS)
 
 MARKET_CANDIDATE_TABLE_SPECS = (
     *(spec for spec in TABLE_SPECS if spec.name != "prices"),

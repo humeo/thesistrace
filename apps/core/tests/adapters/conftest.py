@@ -6,4 +6,4 @@ from thesistrace.data import CanonicalSourceBatch, CollectionPlan
 
 @pytest.fixture(scope="session")
 def fixture_bootstrap_batch() -> CanonicalSourceBatch:
-    return FixtureDataSource().collect(CollectionPlan.bootstrap())
+    return FixtureDataSource().collect(CollectionPlan.bootstrap( collection_key="test-collection"))

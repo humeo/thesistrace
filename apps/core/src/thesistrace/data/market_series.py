@@ -21,6 +21,7 @@ _MARKET_FIELD_COLUMNS = {
     "high": "high_adj",
     "low": "low_adj",
     "close": "close_adj",
+    "close_raw": "close_raw",
     "volume": "volume_shares",
     "amount": "turnover_amount_cny",
 }

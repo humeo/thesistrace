@@ -137,6 +137,7 @@ def test_columnar_streaming_bootstrap_materializes_the_same_generation(
                     )
                     for spec in MARKET_CANDIDATE_TABLE_SPECS
                     if spec.session_field is not None and spec.name != "research_calendar"
+                    and spec.name not in {"daily_basic", "daily_basic_sessions"}
                 },
             )
 
@@ -2228,3 +2229,184 @@ def _write_candidate_root(storage_root: Path, root: dict[str, object]) -> str:
     root["data_identity"] = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
     sha256, _ = _write_manifest(storage_root, root)
     return sha256
+
+
+def test_daily_basic_family_reads_exact_dates_and_preserves_old_root(tmp_path: Path) -> None:
+    from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+    from thesistrace.data.fields import DAILY_BASIC_FIELDS
+
+    canonical = _canonical()
+    store = MountedGenerationStore(tmp_path)
+    prepared_at = datetime(2026, 9, 12, tzinfo=UTC)
+    original = store.materialize(canonical, prepared_at=prepared_at,
+                                 source_name='test', source_lineage={})
+    sessions = canonical['research_calendar'][-3:]
+    canonical['daily_basic_sessions'] = [{'session': s} for s in sessions]
+    canonical['daily_basic'] = [{
+        'session': sessions[0], 'instrument_id': 'equity:A.SH', 'source_close': '10',
+        **{field.source_column: '15' if field.alpha.identifier == 'pe' else None
+           for field in DAILY_BASIC_FIELDS},
+    }]
+    canonical['field_catalog'] = field_catalog(sessions[-1])
+    canonical['field_catalog'].extend(daily_basic_field_catalog(sessions[-1]))
+    expanded = store.materialize(canonical, prepared_at=prepared_at,
+                                 source_name='test', source_lineage={})
+    pe = next(field for field in DAILY_BASIC_FIELDS if field.alpha.identifier == 'pe')
+    assert pe.field_id not in store.inspect_root(original.manifest_sha256).field_availability
+    assert pe.field_id in expanded.field_availability
+    family = next(f for f in expanded.families if f.family_id == 'equity.daily_basic')
+    assert family.dataset_coverage == {
+        'kind': 'research-session-range', 'start': sessions[0], 'end': sessions[-1],
+        'session_count': 3,
+    }
+    reopened = MountedGenerationStore(tmp_path)
+    assert reopened.validate_generation(expanded.manifest_sha256) == expanded
+    result = reopened.read_composite_slice(
+        expanded.manifest_sha256, sessions=sessions, universe_name='top300',
+        neutralization='none', field_bindings={pe.field_id: 'pe', 'price.close.raw': 'close_raw'},
+    )
+    expected_raw = next(row['close_raw'] for row in canonical['prices']
+                        if row['session'] == sessions[0] and row['instrument_id'] == 'equity:A.SH')
+    assert result.research_data.fields['price.close.raw'][(sessions[0], 'equity:A.SH')] == (
+        Decimal(expected_raw)
+    )
+    # daily_basic.source_close is not a price substitute.
+    assert Decimal(expected_raw) != Decimal('10')
+    assert result.research_data.fields[pe.field_id] == {
+        (sessions[0], 'equity:A.SH'): Decimal('15'),
+    }
+    columnar = reopened.read_columnar_slice(
+        expanded.manifest_sha256, sessions=sessions, universe_name='top300',
+        neutralization='none', field_bindings={pe.field_id: 'pe'}, fact_instrument_ids=frozenset(),
+    )
+    matrix = columnar.numeric_field_matrices((pe.field_id,), ('equity:A.SH',))[pe.field_id]
+    import math
+    assert matrix[0, 0] == 15
+    assert math.isnan(matrix[0, 1]) and math.isnan(matrix[0, 2])
+
+
+    static_names = {"schema_version", "research_calendar", "instruments", "field_catalog",
+                    "industry_membership", "daily_basic_sessions"}
+    full_calendar = canonical["research_calendar"]
+
+    def partitions() -> Iterator[CanonicalSessionPartition]:
+        for start in range(0, len(full_calendar), GENERATION_SESSION_PARTITION_COUNT):
+            block = full_calendar[start:start + GENERATION_SESSION_PARTITION_COUNT]
+            selected = set(block)
+            yield CanonicalSessionPartition(sessions=tuple(block), canonical={
+                **{name: [row for row in canonical[name] if row["session"] in selected]
+                   for name in ("prices", "trading_states", "price_limits", "base_pool",
+                                "daily_basic", "daily_basic_sessions")},
+                "liquidity_universes": {
+                    name: [row for row in rows if row["session"] in selected]
+                    for name, rows in canonical["liquidity_universes"].items()
+                },
+            })
+
+    streamed = reopened.materialize_bootstrap_stream(CanonicalBootstrapStream(
+        source_name="test", source_lineage={},
+        static={name: canonical[name] for name in static_names},
+        covered_session_range=(full_calendar[0], full_calendar[-1]), partitions=partitions,
+    ), prepared_at=prepared_at)
+    assert streamed == expanded
+    assert reopened.validate_generation(streamed.manifest_sha256) == expanded
+
+    first_refresh = reopened.materialize_refresh(
+        predecessor_manifest_sha256=original.manifest_sha256,
+        replacement_canonical=canonical, replace_from_session=sessions[0],
+        prepared_at=prepared_at, source_name='test', source_lineage={},
+    )
+    assert first_refresh == expanded
+
+    price_only = copy.deepcopy(canonical)
+    del price_only['daily_basic']
+    del price_only['daily_basic_sessions']
+    price_only['field_catalog'] = field_catalog(full_calendar[-1])
+    refreshed = reopened.materialize_refresh(
+        predecessor_manifest_sha256=expanded.manifest_sha256,
+        replacement_canonical=price_only, replace_from_session=sessions[-2],
+        prepared_at=prepared_at, source_name='test', source_lineage={},
+    )
+    assert next(f for f in refreshed.families if f.family_id == 'equity.daily_basic') == family
+    assert pe.field_id in refreshed.field_availability
+    assert reopened.validate_generation(refreshed.manifest_sha256) == refreshed
+
+    updated = copy.deepcopy(canonical)
+    updated['daily_basic'][0]['pe'] = None
+    updated['daily_basic'].append({
+        **updated['daily_basic'][0], 'session': sessions[-1], 'pe': '22',
+    })
+    advanced = reopened.materialize_refresh(
+        predecessor_manifest_sha256=expanded.manifest_sha256,
+        replacement_canonical=updated, replace_from_session=sessions[0],
+        prepared_at=prepared_at, source_name='test', source_lineage={},
+    )
+    assert reopened.validate_generation(advanced.manifest_sha256) == advanced
+    values = reopened.read_composite_slice(
+        advanced.manifest_sha256, sessions=sessions, universe_name='top300',
+        neutralization='none', field_bindings={pe.field_id: 'pe'},
+    ).research_data.fields[pe.field_id]
+    assert values == {(sessions[0], 'equity:A.SH'): None,
+                      (sessions[-1], 'equity:A.SH'): Decimal('22')}
+    assert reopened.read_composite_slice(
+        expanded.manifest_sha256, sessions=sessions, universe_name='top300',
+        neutralization='none', field_bindings={pe.field_id: 'pe'},
+    ).research_data.fields[pe.field_id][(sessions[0], 'equity:A.SH')] == Decimal('15')
+
+
+def test_daily_basic_declared_coverage_cannot_skip_uncollected_session(tmp_path: Path) -> None:
+    from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+
+    canonical = _canonical()
+    sessions = canonical['research_calendar'][-3:]
+    canonical['daily_basic_sessions'] = [{'session': sessions[0]}, {'session': sessions[-1]}]
+    canonical['daily_basic'] = []
+    canonical['field_catalog'].extend(daily_basic_field_catalog(sessions[-1]))
+    with pytest.raises(GenerationStoreError, match='[Cc]overage|[Ss]ession'):
+        MountedGenerationStore(tmp_path).materialize(
+            canonical, prepared_at=datetime(2026, 9, 12, tzinfo=UTC),
+            source_name='test', source_lineage={},
+        )
+
+
+def test_price_refresh_crosses_partition_boundary_with_retained_daily_family(
+    tmp_path: Path,
+) -> None:
+    from thesistrace.data.canonical_mapping import daily_basic_field_catalog
+    from thesistrace.data.fields import DAILY_BASIC_FIELDS
+
+    canonical = _canonical(session_count=64)
+    calendar = canonical["research_calendar"]
+    canonical["daily_basic_sessions"] = [{"session": session} for session in calendar]
+    canonical["daily_basic"] = [{
+        **dict.fromkeys(field.source_column for field in DAILY_BASIC_FIELDS),
+        "session": calendar[-1], "instrument_id": "equity:A.SH",
+        "source_close": "999", "pe": "15",
+    }]
+    canonical["field_catalog"].extend(daily_basic_field_catalog(calendar[-1]))
+    store = MountedGenerationStore(tmp_path)
+    prepared_at = datetime(2026, 9, 13, tzinfo=UTC)
+    original = store.materialize(
+        canonical, prepared_at=prepared_at, source_name="test", source_lineage={},
+    )
+    store.validate_generation(original.manifest_sha256)
+    daily = next(f for f in original.families if f.family_id == "equity.daily_basic")
+    advanced = _canonical(session_count=65)
+    refreshed = store.materialize_refresh(
+        predecessor_manifest_sha256=original.manifest_sha256,
+        replacement_canonical=advanced, replace_from_session=calendar[-1],
+        prepared_at=prepared_at, source_name="test", source_lineage={},
+    )
+    assert next(f for f in refreshed.families if f.family_id == "equity.daily_basic") == daily
+    reopened = MountedGenerationStore(tmp_path)
+    assert reopened.validate_generation(refreshed.manifest_sha256) == refreshed
+    sessions = advanced["research_calendar"][-2:]
+    pe_id = "market.valuation.pe"
+    result = reopened.read_columnar_slice(
+        refreshed.manifest_sha256, sessions=sessions, universe_name="top300",
+        neutralization="none", field_bindings={pe_id: "pe"}, fact_instrument_ids=frozenset(),
+    ).numeric_field_matrices((pe_id,), ("equity:A.SH",))[pe_id]
+    import math
+    assert result[0, 0] == 15
+    assert math.isnan(result[0, 1])
+    assert reopened.validate_generation(original.manifest_sha256) == original

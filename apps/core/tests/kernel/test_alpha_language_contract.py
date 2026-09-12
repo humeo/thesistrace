@@ -685,3 +685,38 @@ def test_catalog_describes_research_category_and_source_without_changing_units()
     assert fields["revenue"].source_column == "total_revenue"
     assert fields["revenue"].reporting_scope == "report_type_1_consolidated"
     assert all(field.display_name and field.research_purpose for field in fields.values())
+
+
+def test_daily_basic_fields_bind_to_current_data_families_and_decimal_units() -> None:
+    compiled = alpha_language.compile("close_raw / pe + turnover_rate")
+    assert compiled.field_ids_by_identifier == {
+        "close_raw": "price.close.raw",
+        "pe": "market.valuation.pe",
+        "turnover_rate": "market.turnover.float_ratio",
+    }
+    catalog = alpha_language.catalog(
+        available_field_ids=frozenset(compiled.field_ids_by_identifier.values()),
+        generation_manifest_sha256="d" * 64,
+    )
+    fields = {field.identifier: field for field in catalog.fields}
+    assert set(fields) == {"close_raw", "pe", "turnover_rate"}
+    assert fields["close_raw"].family_id == "equity.eod_price"
+    assert fields["close_raw"].source_endpoint == "daily"
+    assert fields["pe"].family_id == "equity.daily_basic"
+    assert fields["pe"].unit == "multiple"
+    assert fields["turnover_rate"].unit == "ratio"
+    assert fields["turnover_rate"].source_unit == "percent"
+    price_only = alpha_language.catalog(available_field_ids=frozenset({"price.close.raw"}))
+    assert [field.identifier for field in price_only.fields] == ["close_raw"]
+
+
+def test_browser_field_fixture_matches_the_current_public_catalog() -> None:
+    import json
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parents[4] / (
+        "apps/web/browser/fixtures/data-field-catalog.json"
+    )
+    expected = alpha_language.catalog(generation_manifest_sha256="a" * 64).model_dump(mode="json")
+    assert json.loads(fixture.read_text()) == expected
+    assert len(expected["fields"]) == 28

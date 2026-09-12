@@ -747,7 +747,7 @@ def test_bootstrap_cli_passes_the_explicit_start_date_to_the_operator(
     monkeypatch.setattr(
         data_operator,
         "TushareDataSource",
-        lambda *, provider, progress: provider,
+        lambda *, provider, progress, checkpoint_root: provider,
     )
     monkeypatch.setattr(data_operator, "DataOperator", FakeOperator)
 

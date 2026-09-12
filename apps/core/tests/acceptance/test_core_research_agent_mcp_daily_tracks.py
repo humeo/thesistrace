@@ -27,6 +27,7 @@ from test_core_research_agent_mcp_runs import _command, _mcp_client
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.daily_track import DailyTrackService
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.entrypoints.quota_policy import quota_policy_lookup
 from thesistrace.entrypoints.research_agent_mcp import TRACKING_STOP_ENABLE_ENVIRONMENT
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
@@ -848,7 +849,7 @@ async def _exercise_daily_tracks(settings: CoreSettings, tmp_path: Path) -> None
         assert stop_conflict.is_error is True
         assert stop_conflict.structured_content["code"] == "IDEMPOTENCY_CONFLICT"
 
-    _seed_active_capacity_clones(settings, source_track_id=track_id, count=8)
+    _seed_capacity_with_one_remaining_slot(settings, source_track_id=track_id)
     capacity = await _concurrent_capacity_start(
         settings,
         tmp_path,
@@ -1540,12 +1541,31 @@ def _restore_track_origin(
         database.close()
 
 
-def _seed_active_capacity_clones(
+def _seed_capacity_with_one_remaining_slot(
     settings: CoreSettings,
     *,
     source_track_id: str,
-    count: int,
 ) -> None:
+    policy = quota_policy_lookup(os.environ.get("THESISTRACE_AUTH_INTERNAL_ORIGIN"))(
+        TEST_RESEARCHER.researcher_id,
+    )
+    assert policy.active_daily_track_limit is not None
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT count(*) AS occupied FROM daily_tracks.tracks
+                WHERE researcher_id = %s AND status IN ('active', 'blocked', 'stopping')
+                """,
+                (TEST_RESEARCHER.researcher_id,),
+            ).fetchone()
+            assert row is not None
+            count = policy.active_daily_track_limit - row["occupied"] - 1
+            assert count >= 0
+    finally:
+        database.close()
     _clone_tracks(
         settings,
         source_track_id=source_track_id,

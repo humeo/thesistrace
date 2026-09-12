@@ -1098,3 +1098,46 @@ def _command(request_id: str, *, research_kind: str = "strategy_backtest") -> di
     if research_kind == "strategy_backtest":
         command.update({"holdings_count": 1, "rebalance_every_sessions": 1})
     return command
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_mcp_daily_field_catalog_and_submission_complete_through_real_worker(
+    tmp_path: Path,
+) -> None:
+    settings = isolated_core_settings(tmp_path / "data")
+    settings.data_mount.mkdir(parents=True)
+    settings.batch_attempt_control_directory.mkdir(parents=True)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    try:
+        publish_current_data(settings, daily_fields=True)
+        anyio.run(_exercise_daily_fields, settings, tmp_path)
+    finally:
+        drop_product_schemas(settings)
+
+
+async def _exercise_daily_fields(settings: CoreSettings, tmp_path: Path) -> None:
+    async with _mcp_client(settings, tmp_path / "mcp-daily.stderr.log") as client:
+        catalog = await client.call_tool("get_alpha_catalog", {
+            "identifiers": ["close_raw", "pe", "turnover_rate"],
+        })
+        assert catalog.is_error is False
+        assert {field["identifier"] for field in catalog.structured_content["fields"]} == {
+            "close_raw", "pe", "turnover_rate",
+        }
+        accepted = await client.call_tool("submit_research_run", {
+            **_command("mcp-daily-fields"), "formula": "rank(close_raw / pe + turnover_rate)",
+        })
+        assert accepted.is_error is False
+        assert accepted.structured_content["outcome"] == "accepted"
+        run_id = accepted.structured_content["run_id"]
+    worker = await anyio.to_thread.run_sync(run_research_worker_once, settings)
+    assert_worker_succeeded(worker)
+    async with _mcp_client(settings, tmp_path / "mcp-daily-result.stderr.log") as client:
+        detail = await client.call_tool("get_research_run", {"run_id": run_id})
+        assert detail.is_error is False
+        assert detail.structured_content["status"] == "succeeded"
+        assert detail.structured_content["result_available"] is True

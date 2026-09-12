@@ -970,6 +970,7 @@ def _replay_payload(*, request_start: str = "2025-08-03") -> dict[str, object]:
         "amount": "1000",
     }
     snapshot = {
+        "daily_basic": [],
         "benchmark_index_daily": [
             {"ts_code": "399300.SZ", "trade_date": "20100104", "open": "3592.47"},
             {"ts_code": "399300.SZ", "trade_date": session, "open": "4102.33"},
