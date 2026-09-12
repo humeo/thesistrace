@@ -1968,6 +1968,7 @@ class DailyTrackService:
                         "selection_every_sessions": strategy["selection_every_sessions"],
                         "exposure_expression": strategy["exposure_source"],
                         "weighting": strategy["weighting"],
+                        "volatility_window": strategy["volatility_window"],
                     },
                     "origin_data_through_session": origin.seed_data_through_session,
                     "tracking_strategy_session": current_session,

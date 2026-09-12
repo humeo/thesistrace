@@ -152,6 +152,7 @@ def research_context_payload() -> dict[str, object]:
                 "next_cursor": None,
             },
             "authoring_constraints": {
+                "volatility_window": {"minimum": 1, "maximum": 252},
                 "research_kinds": ("factor_evaluation", "strategy_backtest"),
                 "universes": ("top300", "top1000", "top2000", "top3000"),
                 "neutralizations": ("none", "industry"),
@@ -171,7 +172,7 @@ def research_context_payload() -> dict[str, object]:
                     "stock_fields_allowed": False, "decision_time": "session_close",
                     "execution_time": "next_session_open",
                 },
-                "weighting": ("equal_weight",),
+                "weighting": ("equal_weight", "rank_weight", "inverse_volatility"),
                 "formula": {
                     "maximum_length": 4096,
                     "maximum_expression_nodes": 256,
@@ -226,7 +227,7 @@ def run_polling_payload(
         "research_kind": research_kind,
     }
     if research_kind == "strategy_backtest":
-        input_payload.update({"weighting": "equal_weight",
+        input_payload.update({"volatility_window": 20, "weighting": "equal_weight",
             "initial_cash_cny": "10000000", "holdings_count": 10, "selection_every_sessions": 5,
             "exposure_expression": "1",
         })

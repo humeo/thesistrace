@@ -1954,7 +1954,7 @@ def _research_command(request_id: str) -> dict[str, object]:
 
 
 def _strategy_command(request_id: str) -> dict[str, object]:
-    return {"weighting": "equal_weight",
+    return {"volatility_window": 20, "weighting": "equal_weight",
         **_research_command(request_id),
         "research_kind": "strategy_backtest",
         "initial_cash_cny": "10000000",

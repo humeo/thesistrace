@@ -557,7 +557,9 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
     drop_product_schemas(settings)
     events: list[dict[str, object]] = []
     with TestClient(create_app(settings)) as client:
-        generation_id = _publish_current_data(settings, sessions=("2026-07-31", *SESSIONS))
+        generation_id = _publish_current_data(
+            settings, sessions=("2026-07-30", "2026-07-31", *SESSIONS),
+        )
         BenchmarkSnapshotStore(settings.benchmark_mount).publish(
             (
                 BenchmarkLevel("2010-01-04", "3500"),
@@ -574,7 +576,8 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
         }
         command["strategies"] = [
             {**item, "initial_cash_cny": "100000", "exposure_expression": exposure,
-             "weighting": "rank_weight" if ordinal == 0 else "equal_weight"}
+             "weighting": "inverse_volatility" if ordinal == 0 else "rank_weight",
+             "volatility_window": 2}
             for ordinal, (item, exposure) in enumerate(
                 zip(command["strategies"], exposures, strict=True)
             )
@@ -621,6 +624,7 @@ def test_strategy_sweep_reuses_shared_alpha_factor_and_matches_ordinary_runs(
                     "initial_cash_cny": item["initial_cash_cny"],
                     "exposure_expression": item["exposure_expression"],
                     "weighting": item["weighting"],
+                    "volatility_window": item["volatility_window"],
                 },
             ).json()
             for ordinal, item in enumerate(command["strategies"], start=1)
@@ -1475,7 +1479,7 @@ def test_strategy_sweep_isolates_one_strategy_failure_and_keeps_order(
                 "strategies": [
                     command["strategies"][0],
                     command["strategies"][1],
-                    {"weighting": "equal_weight",
+                    {"volatility_window": 20, "weighting": "equal_weight",
                         "item_key": "later",
                         "initial_cash_cny": "10000000",
                         "holdings_count": 3,
@@ -1555,7 +1559,7 @@ def test_strategy_sweep_one_and_twenty_items_use_the_same_ordered_contract(
         _publish_current_data(settings)
         command = _strategy_command(f"strategy-sweep-{item_count}")
         strategies = [
-            {"weighting": "equal_weight",
+            {"volatility_window": 20, "weighting": "equal_weight",
                 "item_key": f"strategy-{ordinal}",
                 "initial_cash_cny": "10000000",
                 "holdings_count": ordinal,
@@ -1826,7 +1830,7 @@ def _ordinary_strategy_command(
     end_date: str = "2026-08-04",
     formula: str = "close",
 ) -> dict[str, object]:
-    return {"weighting": "equal_weight",
+    return {"volatility_window": 20, "weighting": "equal_weight",
         "request_id": request_id,
         "folder_id": "folder_default",
         "name": request_id,

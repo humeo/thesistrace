@@ -69,4 +69,11 @@ class ResearchAuthoringConstraints(BaseModel):
     batch_kinds: tuple[ResearchBatchKind, ...]
     exposure: ExposureAuthoringConstraints
     weighting: tuple[PortfolioWeighting, ...]
+    volatility_window: IntegerRange
+    volatility_window_default: int = 20
+    weighting_eligibility: str = (
+        "Inverse volatility uses population standard deviation of adjusted Close returns; "
+        "zero volatility, insufficient history and unavailable returns "
+        "are excluded in signal order."
+    )
     formula: FormulaAuthoringConstraints

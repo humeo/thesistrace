@@ -3,11 +3,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from fractions import Fraction
 from math import isfinite
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     StrictBool,
     StrictFloat,
     StrictInt,
@@ -15,7 +16,10 @@ from pydantic import (
     model_validator,
 )
 
+from thesistrace.research_kernel.portfolio_weighting import EligibilityReason
+
 StrictNumber = StrictInt | StrictFloat
+EligibilityExclusions = dict[EligibilityReason, Annotated[StrictInt, Field(gt=0)]]
 
 
 class TerminalStateModel(BaseModel):
@@ -40,6 +44,7 @@ class TargetSelection(TerminalStateModel):
     signal_session: StrictStr
     selected_instrument_ids: list[StrictStr]
     relative_weights: dict[StrictStr, StrictStr]
+    eligibility_exclusions: EligibilityExclusions
     signal_checksum: StrictStr
     contract_checksum: StrictStr
 

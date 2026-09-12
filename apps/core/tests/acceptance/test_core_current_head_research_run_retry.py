@@ -984,7 +984,7 @@ def _run_command(
     }
     if research_kind == "strategy_backtest":
         command.update(
-            {"weighting": "equal_weight",
+            {"volatility_window": 20, "weighting": "equal_weight",
                 "initial_cash_cny": "10000000",
                 "holdings_count": 1,
                 "selection_every_sessions": 1,

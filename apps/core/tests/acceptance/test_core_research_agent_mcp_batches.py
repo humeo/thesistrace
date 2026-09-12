@@ -526,7 +526,7 @@ def _strategy_batch_command(request_id: str, *, end_date: str) -> dict[str, obje
             "hypothesis": "Close preserves a stable cross-sectional signal.",
         },
         "strategies": [
-            {"weighting": "equal_weight",
+            {"volatility_window": 20, "weighting": "equal_weight",
                 "item_key": "focused",
                 "name": "Focused Strategy",
                 "initial_cash_cny": "10000000",

@@ -658,7 +658,7 @@ def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
             "selection_interval": 1,
             "completed_intervals": 0,
         },
-        "target_selection": {
+        "target_selection": {"eligibility_exclusions": {},
             "signal_session": session, "selected_instrument_ids": [], "relative_weights": {},
             "signal_checksum": "0" * 64, "contract_checksum": "0" * 64,
         },
@@ -672,7 +672,7 @@ def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
 def _state_with_mismatched_coordinate(coordinate: str) -> dict[str, object]:
     state = _strategy_state("2026-08-04", "10001000")
     if coordinate == "pending_target":
-        state["pending_target"] = {
+        state["pending_target"] = {"eligibility_exclusions": {},
             "selected_instrument_ids": [], "relative_weights": {}, "exposure": 1.0,
             "signal_checksum": "0" * 64, "contract_checksum": "0" * 64,
             "signal_session": "2026-08-03",

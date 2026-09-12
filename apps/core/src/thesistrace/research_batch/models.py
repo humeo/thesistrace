@@ -12,7 +12,7 @@ from pydantic import (
 )
 
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
-from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting
+from thesistrace.research_kernel.portfolio_weighting import PortfolioWeighting, VolatilityWindow
 from thesistrace.research_run.models import (
     Formula,
     HoldingsCount,
@@ -104,6 +104,7 @@ class StrategySweepItem(BaseModel):
     selection_every_sessions: SelectionInterval
     exposure_expression: Formula = "1"
     weighting: PortfolioWeighting = "equal_weight"
+    volatility_window: VolatilityWindow = 20
 
 
 class StrategySweepBatchAdmissionCommand(_ResearchBatchAdmissionBase):

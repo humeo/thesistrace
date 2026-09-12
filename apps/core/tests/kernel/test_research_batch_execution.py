@@ -159,7 +159,7 @@ def _batch_request(
             universe="top300",
             neutralization="industry",
             research_kind="strategy_backtest" if strategy else "factor_evaluation",
-            strategy={"weighting": "equal_weight",
+            strategy={"volatility_window": 20, "weighting": "equal_weight",
                 "kind": FIXED_STRATEGY_KIND,
                 "holdings_count": holdings,
                 "selection_every_sessions": rebalance,

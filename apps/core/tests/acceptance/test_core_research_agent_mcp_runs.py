@@ -704,7 +704,8 @@ async def _assert_first_semantic_result_pages(
         {"run_id": strategy_run_id, "section": "provenance"},
     )
     assert provenance.is_error is False
-    assert provenance.structured_content["authoring_input"] == {"weighting": "equal_weight",
+    assert provenance.structured_content["authoring_input"] == {
+        "volatility_window": 20, "weighting": "equal_weight",
         "formula": strategy_command["formula"],
         "hypothesis": strategy_command["hypothesis"],
         "start_date": strategy_command["start_date"],
@@ -1096,7 +1097,7 @@ def _command(request_id: str, *, research_kind: str = "strategy_backtest") -> di
         "research_kind": research_kind,
     }
     if research_kind == "strategy_backtest":
-        command.update({"weighting": "equal_weight",
+        command.update({"volatility_window": 20, "weighting": "equal_weight",
             "initial_cash_cny": "10000000", "holdings_count": 1, "selection_every_sessions": 1,
         })
     return command

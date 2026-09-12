@@ -81,7 +81,10 @@ def run_input(
             **FIELD_BINDINGS,
             **{value: key for key, value in compiled.field_ids_by_identifier.items()},
         },
-        effective_lookback=max(compiled.effective_lookback, exposure_compiled.effective_lookback),
+        effective_lookback=max(
+            compiled.effective_lookback, exposure_compiled.effective_lookback,
+            20 if weighting == "inverse_volatility" else 0,
+        ),
         universe="top300",
         neutralization=neutralization,
         research_kind="strategy_backtest",
@@ -106,7 +109,7 @@ def run_input(
 @pytest.mark.parametrize("exposure", [
     "1", "if_else(universe_advancing_fraction() > 0.5, 1, 0.3)",
 ])
-@pytest.mark.parametrize("weighting", ["equal_weight", "rank_weight"])
+@pytest.mark.parametrize("weighting", ["equal_weight", "rank_weight", "inverse_volatility"])
 def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
     source, neutralization, holdings, rebalance, exposure, weighting, monkeypatch,
 ) -> None:
@@ -137,6 +140,9 @@ def test_columnar_tracking_matches_every_checkpoint_and_recovery_boundary(
         retained_strategy_sessions=[prior.boundary_session],
     )
     assert checkpoint["run_input"]["weighting"] == weighting
+    assert checkpoint["run_input"]["volatility_window"] == 20
+    if weighting == "inverse_volatility":
+        assert checkpoint["run_input"]["effective_lookback"] == 20
     continuation = continuation_snapshot(prior)
     # Include a revised historical fact. Stored Alpha stays frozen; new Alpha
     # sees the corrected lookback without computing future labels.

@@ -319,7 +319,7 @@ def test_strategy_metric_sorting_precedes_pagination(ownership_database, sort_by
                                 quota_policy=lambda _rid: TEST_QUOTA)
     runs = []
     for index, score in enumerate((10.0, 2.0, 2.0, None)):
-        command = ADMISSION.validate_python({"weighting": "equal_weight",
+        command = ADMISSION.validate_python({"volatility_window": 20, "weighting": "equal_weight",
             **_command(f"metric-{index}").model_dump(mode="json"),
             "research_kind": "strategy_backtest", "initial_cash_cny": "10000000",
             "holdings_count": 10,

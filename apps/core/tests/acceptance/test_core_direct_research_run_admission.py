@@ -451,7 +451,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "universe": "top300",
             "neutralization": "none",
             "research_kind": "strategy_backtest",
-            "strategy": {"weighting": "equal_weight",
+            "strategy": {"volatility_window": 20, "weighting": "equal_weight",
                 "kind": "long_only_top_n",
                 "holdings_count": 1,
                 "selection_every_sessions": 1,
@@ -527,7 +527,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
         assert completed.json()["execution_timing"]["finished_at"] is not None
         assert completed.json()["execution_timing"]["elapsed_seconds"] >= 0
         assert completed.json()["execution_timing"]["is_final"] is True
-        assert completed.json()["input"] == {"weighting": "equal_weight",
+        assert completed.json()["input"] == {"volatility_window": 20, "weighting": "equal_weight",
             "formula": "close",
             "hypothesis": None,
             "start_date": "2026-08-03",
@@ -811,7 +811,7 @@ def _valid_command(
     }
     if research_kind == "strategy_backtest":
         command.update(
-            {"weighting": "equal_weight",
+            {"volatility_window": 20, "weighting": "equal_weight",
                 "initial_cash_cny": "10000000",
                 "holdings_count": 1,
                 "selection_every_sessions": 1,

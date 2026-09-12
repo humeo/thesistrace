@@ -64,7 +64,8 @@ def test_fixed_exposure_is_compiled_and_frozen_with_strategy_input(source):
     from thesistrace.research_run.models import StrategyBacktestAdmissionCommand
 
     factor, compiled, snapshot = inputs("close")
-    command = StrategyBacktestAdmissionCommand.model_validate({"weighting": "equal_weight",
+    command = StrategyBacktestAdmissionCommand.model_validate({
+        "volatility_window": 20, "weighting": "equal_weight",
         **factor.model_dump(), "research_kind": "strategy_backtest",
         "initial_cash_cny": "100000", "holdings_count": 10,
         "selection_every_sessions": 5, "exposure_expression": source,
@@ -83,7 +84,8 @@ def test_invalid_exposure_is_rejected_by_shared_admission(source):
     from thesistrace.research_run.models import StrategyBacktestAdmissionCommand
 
     factor, compiled, snapshot = inputs("close")
-    command = StrategyBacktestAdmissionCommand.model_validate({"weighting": "equal_weight",
+    command = StrategyBacktestAdmissionCommand.model_validate({
+        "volatility_window": 20, "weighting": "equal_weight",
         **factor.model_dump(), "research_kind": "strategy_backtest",
         "initial_cash_cny": "100000", "holdings_count": 10,
         "selection_every_sessions": 5, "exposure_expression": source,
@@ -115,7 +117,8 @@ def test_whole_spec_diagnosis_reuses_admission_and_has_no_persistence_side_effec
     values = command.model_dump(exclude={"request_id", "folder_id", "name"})
     factor = FactorEvaluationSpec.model_validate(values)
     assert service.diagnose_research_spec(factor).valid
-    strategy = StrategyBacktestSpec.model_validate({"weighting": "equal_weight",
+    strategy = StrategyBacktestSpec.model_validate({
+        "volatility_window": 20, "weighting": "equal_weight",
         **values, "research_kind": "strategy_backtest", "initial_cash_cny": "100000",
         "holdings_count": 10, "selection_every_sessions": 5, "exposure_expression": "1.1",
     })
@@ -142,7 +145,8 @@ def test_daily_exposure_adds_its_real_window_fields_and_industry_requirement():
 
     factor, compiled, snapshot = inputs('close')
     source = 'if_else(ts_mean(industry_return(801010), 3) > 0, 1, 0.3)'
-    command = StrategyBacktestAdmissionCommand.model_validate({"weighting": "equal_weight",
+    command = StrategyBacktestAdmissionCommand.model_validate({
+        "volatility_window": 20, "weighting": "equal_weight",
         **factor.model_dump(), 'research_kind': 'strategy_backtest',
         'initial_cash_cny': '100000', 'holdings_count': 10,
         'selection_every_sessions': 5, 'exposure_expression': source,
@@ -162,3 +166,28 @@ def test_daily_exposure_adds_its_real_window_fields_and_industry_requirement():
     assert admitted.execution_plan.research_session_offset == 3
     assert admitted.data_admission.first_research_session == command.start_date
     assert admitted.execution_plan.calculation_sessions[0] == snapshot.research_sessions[1]
+
+
+def test_inverse_volatility_admission_adds_close_history_without_moving_start():
+    from thesistrace.research_run.models import StrategyBacktestAdmissionCommand
+
+    factor, compiled, snapshot = inputs('volume')
+    signal_fields = frozenset(compiled.field_ids_by_identifier.values())
+    snapshot = replace(snapshot, available_field_ids=snapshot.available_field_ids | signal_fields)
+    command = StrategyBacktestAdmissionCommand.model_validate({
+        **factor.model_dump(), 'research_kind': 'strategy_backtest',
+        'initial_cash_cny': '100000', 'holdings_count': 2,
+        'selection_every_sessions': 5, 'weighting': 'inverse_volatility',
+        'volatility_window': 4,
+    })
+    admitted = _admitted_input(command, compiled, snapshot, execution_memory_bytes=1536 * 1024**2)
+    assert admitted.field_bindings['price.close.adjusted'] == 'close'
+    assert set(admitted.field_bindings) == signal_fields | {'price.close.adjusted'}
+    assert admitted.expression_admission.effective_lookback == 4
+    assert admitted.requested_start_date == command.start_date
+    assert admitted.strategy['volatility_window'] == 4
+    with pytest.raises(ResearchRunAdmissionRejected):
+        _admitted_input(
+            command, compiled, replace(snapshot, available_field_ids=signal_fields),
+            execution_memory_bytes=1536 * 1024**2,
+        )

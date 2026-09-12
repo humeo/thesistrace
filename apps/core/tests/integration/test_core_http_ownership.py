@@ -258,7 +258,7 @@ def _tracking_origin(run_id: str) -> dict[str, object]:
             "cumulative_transaction_cost": "0",
             "positions": [],
             "selection_phase": {},
-            "target_selection": {
+            "target_selection": {"eligibility_exclusions": {},
                 "signal_session": "2026-08-02", "selected_instrument_ids": [],
                 "relative_weights": {},
                 "signal_checksum": "signal", "contract_checksum": "contract",

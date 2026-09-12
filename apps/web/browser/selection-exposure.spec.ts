@@ -21,7 +21,8 @@ test.beforeAll(async () => {
   script = chunk.code;
 });
 
-test("Exposure percent, expression, retained draft and submission share one source", async ({ page }) => {
+for (const weighting of ["rank_weight", "inverse_volatility"] as const) {
+test(`Exposure, ${weighting}, retained draft and submission share one source`, async ({ page }) => {
   const diagnostics: Record<string, unknown>[] = [];
   const submissions: Record<string, unknown>[] = [];
   const localContexts: string[] = [];
@@ -48,33 +49,41 @@ test("Exposure percent, expression, retained draft and submission share one sour
   };
   await mount();
   await expect(page.getByLabel("Portfolio weighting", { exact: false })).toHaveValue("equal_weight");
-  await page.getByLabel("Portfolio weighting", { exact: false }).selectOption("rank_weight");
+  await page.getByLabel("Portfolio weighting", { exact: false }).selectOption(weighting);
+  if (weighting === "inverse_volatility") {
+    await expect(page.getByLabel("Volatility window", { exact: false })).toHaveValue("20");
+    await page.getByLabel("Volatility window", { exact: false }).fill("10");
+  }
   await expect(page.getByLabel("Fixed exposure (%)", { exact: true })).toHaveValue("100");
   await page.getByLabel("Fixed exposure (%)", { exact: true }).fill("70");
   await expect(page.getByLabel("Exposure expression", { exact: true })).toHaveText("0.7");
   await mount();
-  await expect(page.getByLabel("Portfolio weighting", { exact: false })).toHaveValue("rank_weight");
+  await expect(page.getByLabel("Portfolio weighting", { exact: false })).toHaveValue(weighting);
+  if (weighting === "inverse_volatility") {
+    await expect(page.getByLabel("Volatility window", { exact: false })).toHaveValue("10");
+  }
   await expect(page.getByLabel("Fixed exposure (%)", { exact: true })).toHaveValue("70");
   await page.getByLabel("Exposure expression", { exact: true }).fill("7 / 10");
   await expect(page.getByLabel("Fixed exposure (%)", { exact: true })).toHaveValue("");
   await page.getByRole("button", { name: "Check configuration" }).click();
   await expect(page.getByText("Configuration is valid.", { exact: false })).toBeVisible();
   expect(diagnostics).toHaveLength(1);
-  expect(diagnostics[0]).toMatchObject({ exposure_expression: "7 / 10", weighting: "rank_weight", selection_every_sessions: 5, initial_cash_cny: "100000" });
+  expect(diagnostics[0]).toMatchObject({ exposure_expression: "7 / 10", weighting, volatility_window: weighting === "inverse_volatility" ? 10 : 20, selection_every_sessions: 5, initial_cash_cny: "100000" });
   expect(diagnostics[0]).not.toHaveProperty("request_id");
   expect(submissions).toHaveLength(0);
   await page.getByLabel("Exposure expression", { exact: true }).fill("0");
   await expect(page.getByText("Configuration is valid.", { exact: false })).not.toBeVisible();
   await expect(page.getByLabel("Fixed exposure (%)", { exact: true })).toHaveValue("0");
   await expect.poll(() => localContexts.includes("exposure")).toBe(true);
-  await page.screenshot({ path: "../../.local/browser-tests/selection-exposure.png", fullPage: true });
+  await page.screenshot({ path: `../../.local/browser-tests/selection-${weighting}.png`, fullPage: true });
   await page.getByRole("button", { name: "Run research", exact: true }).click();
   await expect.poll(() => submissions.length).toBe(1);
-  expect(submissions[0]).toMatchObject({ exposure_expression: "0", selection_every_sessions: 5, initial_cash_cny: "100000" });
+  expect(submissions[0]).toMatchObject({ exposure_expression: "0", weighting, volatility_window: weighting === "inverse_volatility" ? 10 : 20, selection_every_sessions: 5, initial_cash_cny: "100000" });
   expect(submissions[0]).toHaveProperty("request_id");
   expect(submissions[0]).not.toHaveProperty("rebalance_every_sessions");
 });
 
+}
 
 test("configuration checks show rejection and recover from an unavailable service", async ({ page }) => {
   let checks = 0;
@@ -141,3 +150,31 @@ test("Exposure completion excludes stock scope and keeps daily expression in the
   await expect(page.getByRole("listbox", { name: "Completions" }).getByRole("option").filter({ hasText: "rank" })).toBeVisible();
   await expect(page.getByRole("listbox", { name: "Completions" }).getByRole("option").filter({ hasText: "close" })).toBeVisible();
 });
+
+for (const weighting of ["equal_weight", "rank_weight"] as const) {
+  test(`Leaving invalid inverse window for ${weighting} keeps a runnable form`, async ({ page }) => {
+    const submissions: Record<string, unknown>[] = [];
+    await page.route("https://exposure.test/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/alpha/diagnostics") return route.fulfill({ json: { valid: true, diagnostics: [] } });
+      if (path === "/api/research-runs") {
+        submissions.push(route.request().postDataJSON());
+        return route.fulfill({ json: { id: "run_window" }, status: 202 });
+      }
+      return route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' });
+    });
+    await page.goto("https://exposure.test/");
+    await page.addStyleTag({ content: styles });
+    await page.addScriptTag({ content: script });
+    const selector = page.getByLabel("Portfolio weighting", { exact: false });
+    await selector.selectOption("inverse_volatility");
+    await page.getByLabel("Volatility window", { exact: false }).fill("253");
+    await expect(page.getByRole("button", { name: "Run research", exact: true })).toBeDisabled();
+    await selector.selectOption(weighting);
+    await expect(page.getByLabel("Volatility window", { exact: false })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Check configuration" })).toBeEnabled();
+    await page.getByRole("button", { name: "Run research", exact: true }).click();
+    await expect.poll(() => submissions.length).toBe(1);
+    expect(submissions[0]).toMatchObject({ weighting, volatility_window: 20 });
+  });
+}

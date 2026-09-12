@@ -97,7 +97,7 @@ def test_actual_initial_cash_publishes_independent_runs_batch_and_track(tmp_path
                 "neutralization": "none",
                 "alpha": {"formula": "close"},
                 "strategies": [
-                    {"weighting": "equal_weight",
+                    {"volatility_window": 20, "weighting": "equal_weight",
                         "item_key": cash,
                         "holdings_count": 1,
                         "selection_every_sessions": 1,

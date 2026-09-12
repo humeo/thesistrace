@@ -1,3 +1,4 @@
+import { SelectionEligibilityView, type SelectionEligibility } from "../research/SelectionEligibility";
 import {
   CaretDown,
   CaretLeft,
@@ -69,6 +70,7 @@ type StrategyMetrics = {
 };
 
 export type TerminalStrategyState = {
+  target_selection: SelectionEligibility;
   session: string;
   gross_cash: string;
   net_cash: string;
@@ -920,7 +922,8 @@ export function ResearchRunFacts({ run }: { run: ResearchRun }) {
             <>
               <p><strong>Initial cash (CNY)</strong> {input.initial_cash_cny}</p>
               <p><strong>Holdings count</strong> {input.holdings_count}</p>
-              <p><strong>Portfolio weighting</strong> {input.weighting === "rank_weight" ? "Rank weight" : "Equal weight"}</p>
+              {input.weighting === "inverse_volatility" && <p><strong>Volatility window</strong> {input.volatility_window} sessions</p>}
+              <p><strong>Portfolio weighting</strong> {input.weighting === "inverse_volatility" ? "Inverse volatility" : input.weighting === "rank_weight" ? "Rank weight" : "Equal weight"}</p>
               <p><strong>Exposure expression</strong> <code>{input.exposure_expression}</code></p>
               <p>
                 <strong>Selection</strong>{" "}
@@ -1467,6 +1470,7 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
           <p>Account completed through {strategyResult.terminal_strategy_state.session}. Decisions execute at the next Open, including the final session; the ending account is not liquidated.</p>
         </div>
         <p>Last Close target {formatPercent(strategyResult.terminal_strategy_state.target_exposure)} · actual Open allocation {formatPercent(1 - Number(strategyResult.terminal_strategy_state.net_cash) / Number(strategyResult.terminal_strategy_state.net_nav))}. Orders, costs and rounding can leave a difference; the target is not a hard allocation limit.</p>
+        <SelectionEligibilityView selection={strategyResult.terminal_strategy_state.target_selection} />
         <div className="strategy-metrics">
           <Metric label="Net cumulative" help={strategyMetricHelp.netCumulative} value={formatPercent(strategyResult.strategy.summary.metrics.net_cumulative_return)} />
           <Metric

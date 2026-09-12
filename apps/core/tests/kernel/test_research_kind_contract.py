@@ -25,7 +25,7 @@ def test_research_run_admission_is_discriminated_by_research_kind() -> None:
         }
     )
     strategy = adapter.validate_python(
-        {"weighting": "equal_weight",
+        {"volatility_window": 20, "weighting": "equal_weight",
             **common,
             "research_kind": "strategy_backtest",
             "initial_cash_cny": "100000",
@@ -53,7 +53,7 @@ def test_research_run_admission_is_discriminated_by_research_kind() -> None:
 
     with pytest.raises(ValidationError):
         adapter.validate_python(
-            {"weighting": "equal_weight",
+            {"volatility_window": 20, "weighting": "equal_weight",
                 **common,
                 "research_kind": "factor_evaluation",
                 "initial_cash_cny": "100000",

@@ -636,7 +636,7 @@ def _definition(
 ) -> dict[str, object]:
     return {
         "universe": "manual",
-        "strategy": {"weighting": "equal_weight",
+        "strategy": {"volatility_window": 20, "weighting": "equal_weight",
             "holdings_count": holdings_count,
             "selection_interval": selection_interval,
             "initial_cash_cny": "10000000",
@@ -1093,3 +1093,54 @@ def test_rank_weighted_selection_survives_cash_and_drives_exposure_restore():
     ]
     assert Decimal(ledger[2]['net_cash']) == Decimal('40000')
     _assert_ledger_reconciles(ledger)
+
+
+@pytest.mark.parametrize('future_close', ['10', '999'])
+def test_inverse_volatility_targets_use_only_decision_close_history(future_close):
+    canonical = _canonical(opens={session: {A: '10', B: '10'} for session in SESSIONS})
+    _set_alpha_closes(canonical, {
+        SESSIONS[0]: {A: '100', B: '100'},
+        SESSIONS[1]: {A: '100', B: '100'},
+        SESSIONS[2]: {A: '120', B: '140'},
+        SESSIONS[3]: {A: future_close, B: '1'},
+    })
+    definition = _definition(holdings_count=2, selection_interval=5)
+    definition['strategy'].update({
+        'weighting': 'inverse_volatility', 'volatility_window': 2,
+        'initial_cash_cny': '100000',
+        'exposure_expression': {'kind': 'number', 'value': 0.6},
+    })
+    definition['costs'] = dict.fromkeys(definition['costs'], '0')
+    result = run_strategy(
+        aligned_market_data(canonical, universe='manual'),
+        _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS}),
+        definition, origin_session=SESSIONS[2],
+    )
+    assert result['target_selection']['relative_weights'] == {A: '2/3', B: '1/3'}
+    assert {row['instrument_id']: row['execution_shares'] for row in result['positions']} == {
+        A: 4000, B: 2000,
+    }
+    assert Decimal(result['daily'][-1]['net_cash']) == Decimal('40000')
+
+
+@pytest.mark.parametrize('exposure', [0.0, 1.0])
+def test_empty_inverse_selection_keeps_exposure_and_records_eligibility(exposure):
+    canonical = _canonical(opens={session: {A: '10', B: '10'} for session in SESSIONS})
+    _set_alpha_closes(canonical, {session: {A: '100', B: '100'} for session in SESSIONS})
+    definition = _definition(holdings_count=2, selection_interval=5)
+    definition['strategy'].update({
+        'weighting': 'inverse_volatility', 'volatility_window': 2,
+        'initial_cash_cny': '100000',
+        'exposure_expression': {'kind': 'number', 'value': exposure},
+    })
+    result = run_strategy(
+        aligned_market_data(canonical, universe='manual'),
+        _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS}),
+        definition, origin_session=SESSIONS[2],
+    )
+    assert result['target_selection']['eligibility_exclusions'] == {'zero_volatility': 2}
+    assert result['target_selection']['signal_session'] == SESSIONS[2]
+    assert result['target_selection']['selected_instrument_ids'] == []
+    assert result['target_exposure'] == exposure
+    assert result['positions'] == result['orders'] == []
+    assert Decimal(result['daily'][-1]['net_cash']) == Decimal('100000')

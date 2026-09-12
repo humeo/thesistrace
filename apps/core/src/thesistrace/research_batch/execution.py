@@ -1177,9 +1177,17 @@ def _execute_strategy_item_messages(
             for window, stored in zip(research_windows, reader, strict=True):
                 _require_artifact_window(stored, window)
                 data_read_started = monotonic()
-                # Scores and Factor state are frozen in the shared artifact.
-                # Read this Strategy's Exposure dependencies as well as execution facts.
-                # Exposure evidence is never stored in the shared Signal artifact.
+                # Shared scores are frozen; each account owns its Exposure and Weighting data.
+                strategy = item.immutable_input.strategy
+                exposure = validate_exposure(strategy["exposure_expression"])
+                strategy_fields = {
+                    field_id: identifier
+                    for identifier, field_id in exposure.field_ids_by_identifier.items()
+                }
+                strategy_lookback = exposure.effective_lookback
+                if strategy["weighting"] == "inverse_volatility":
+                    strategy_fields["price.close.adjusted"] = "close"
+                    strategy_lookback = max(strategy_lookback, strategy["volatility_window"])
                 research_data = _read_shared_window(
                     store,
                     generation_id=generation_id,
@@ -1187,14 +1195,8 @@ def _execute_strategy_item_messages(
                     research_sessions=window.research_sessions,
                     universe=item.immutable_input.universe,
                     neutralization="none",
-                    field_bindings={
-                        field_id: identifier for identifier, field_id in validate_exposure(
-                            item.immutable_input.strategy["exposure_expression"],
-                        ).field_ids_by_identifier.items()
-                    },
-                    effective_lookback=validate_exposure(
-                        item.immutable_input.strategy["exposure_expression"],
-                    ).effective_lookback,
+                    field_bindings=strategy_fields,
+                    effective_lookback=strategy_lookback,
                     require_industry=requires_common_industry(
                         item.immutable_input.strategy["exposure_expression"],
                     ),
@@ -1505,6 +1507,7 @@ def _strategy_run_input(
             holdings_count=int(strategy["holdings_count"]),
             selection_interval=int(strategy["selection_every_sessions"]),
             weighting=strategy["weighting"],
+            volatility_window=strategy["volatility_window"],
             initial_cash_cny=str(strategy["initial_cash_cny"]),
             exposure_expression_json=canonical_json_bytes(strategy["exposure_expression"]),
             commission_rate_all_in=str(costs["commission_rate_all_in"]),

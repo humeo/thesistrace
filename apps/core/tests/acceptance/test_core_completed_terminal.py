@@ -160,11 +160,13 @@ def test_fixed_exposure_publishes_and_tracks_its_first_entry(
          "if_else(industry_return(801010) > -0.15, 0.3, 0))"),
     ],
 )
+@pytest.mark.parametrize("weighting", ["rank_weight", "inverse_volatility"])
 def test_common_statistics_publish_from_checkpoint_to_completed_result(
     tmp_path: Path,
     formula,
     identifiers,
     exposure,
+    weighting,
     monkeypatch,
 ):
     import test_core_daily_track_detail as fixture_module
@@ -185,6 +187,8 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
                     membership["sw2021_l1"] = "801010"
             if dynamic:
                 closes = ("100", "110", "99", "79.2", "87.12", "95.832")
+                if weighting == "inverse_volatility":
+                    closes = ("90", *closes)
                 for price in canonical["prices"]:
                     from thesistrace.data.canonical_mapping import adjusted_price_string
 
@@ -209,7 +213,9 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
         published_at=datetime(2026, 8, 10, 8, tzinfo=UTC),
     )
     generation = _publish_head(
-        settings, sessions=sessions, expected_manifest=None, operation_id="common"
+        settings, sessions=(("2024-07-31", *sessions)
+                            if weighting == "inverse_volatility" else sessions),
+        expected_manifest=None, operation_id="common"
     )
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
@@ -218,7 +224,7 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
                 **_run_command("common-result", start_date=sessions[1], end_date=sessions[3]),
                 "initial_cash_cny": "100000",
                 "formula": formula, "exposure_expression": exposure,
-                "weighting": "rank_weight",
+                "weighting": weighting, "volatility_window": 2,
                 "selection_every_sessions": 5,
             },
         )
@@ -323,7 +329,8 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
             TEST_RESEARCHER.researcher_id,
             DailyTrackProvenanceResultSectionInput(track_id=track_id, section="provenance"),
         )
-        assert provenance.frozen_research_input.weighting == "rank_weight"
+        assert provenance.frozen_research_input.weighting == weighting
+        assert provenance.frozen_research_input.volatility_window == 2
         with runtime.database.transaction() as transaction:
             latest = transaction.execute(
                 "SELECT manifest_sha256, provenance FROM daily_tracks.session_checkpoints "
@@ -409,3 +416,48 @@ def test_common_statistics_publish_from_checkpoint_to_completed_result(
                     assert received == expected
 
         anyio.run(read_native_common_results)
+
+
+@pytest.mark.skipif(not core_environment_is_configured(), reason="isolated runtime required")
+def test_inverse_eligibility_is_published_and_preserved_in_track(tmp_path: Path):
+    settings = replace(
+        CoreSettings.from_environment(), data_mount=tmp_path / 'data',
+        benchmark_mount=tmp_path / 'benchmark',
+    )
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = _business_sessions(date(2024, 8, 1), count=5)
+    BenchmarkSnapshotStore(settings.benchmark_mount).publish(
+        (BenchmarkLevel('2010-01-04', '3500'),
+         *(BenchmarkLevel(day, '4000') for day in sessions)),
+        published_at=datetime(2026, 8, 10, 8, tzinfo=UTC),
+    )
+    _publish_head(settings, sessions=sessions, expected_manifest=None, operation_id='eligibility')
+    with TestClient(create_app(settings)) as client:
+        accepted = client.post('/api/research-runs', json={
+            **_run_command('eligibility', start_date=sessions[1], end_date=sessions[2]),
+            'initial_cash_cny': '100000', 'weighting': 'inverse_volatility',
+            'volatility_window': 1, 'selection_every_sessions': 5,
+        })
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()['id']
+        assert client.app.state.core_runtime.research_runs.process_next()
+        detail = client.get(f'/api/research-runs/{run_id}').json()
+        assert detail['status'] == 'succeeded', detail
+        terminal = detail['result']['terminal_strategy_state']
+        selection = terminal['target_selection']
+        assert selection['eligibility_exclusions']['zero_volatility'] > 0
+        assert selection['selected_instrument_ids'] == []
+        assert terminal['target_exposure'] == 1
+        assert Decimal(terminal['net_cash']) == Decimal('100000')
+        started = client.post(f'/api/research-runs/{run_id}/daily-tracks',
+                              json={'request_id': 'eligibility-track'})
+        assert started.status_code == 201, started.text
+        track_id = started.json()['id']
+        _refresh_daily_track(client, track_id, 'eligibility-refresh')
+        worker = _run_worker_once(settings, 'tracking')
+        assert worker.returncode == 0, worker.stdout + worker.stderr
+        tracked = client.get(f'/api/daily-tracks/{track_id}').json()
+        assert tracked['observation']['target_selection'] == selection
+        assert tracked['observation']['holdings'] == []
+        assert tracked['observation']['target_exposure'] == 1

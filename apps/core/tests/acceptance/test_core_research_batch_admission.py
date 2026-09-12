@@ -70,7 +70,7 @@ def test_batch_admission_rejects_all_invalid_computation_before_product_state(
                 {
                     **_strategy_command("batch-invalid-strategy"),
                     "strategies": [
-                        {"weighting": "equal_weight",
+                        {"volatility_window": 20, "weighting": "equal_weight",
                             "item_key": "invalid",
                             "initial_cash_cny": "10000000",
                             "holdings_count": 0,
@@ -180,13 +180,13 @@ def test_batch_admission_rejects_all_invalid_computation_before_product_state(
             json={
                 **_strategy_command("batch-duplicate-strategy"),
                 "strategies": [
-                    {"weighting": "equal_weight",
+                    {"volatility_window": 20, "weighting": "equal_weight",
                         "item_key": "first",
                         "initial_cash_cny": "10000000",
                         "holdings_count": 1,
                         "selection_every_sessions": 1,
                     },
-                    {"weighting": "equal_weight",
+                    {"volatility_window": 20, "weighting": "equal_weight",
                         "item_key": "second",
                         "initial_cash_cny": "10000000",
                         "holdings_count": 1,
@@ -589,14 +589,14 @@ def _strategy_command(request_id: str) -> dict[str, object]:
         "neutralization": "none",
         "alpha": {"formula": "close", "hypothesis": "shared"},
         "strategies": [
-            {"weighting": "equal_weight",
+            {"volatility_window": 20, "weighting": "equal_weight",
                 "item_key": "focused",
                 "name": "Focused",
                 "initial_cash_cny": "10000000",
                 "holdings_count": 1,
                 "selection_every_sessions": 1,
             },
-            {"weighting": "equal_weight",
+            {"volatility_window": 20, "weighting": "equal_weight",
                 "item_key": "broad",
                 "name": "Broad",
                 "initial_cash_cny": "10000000",

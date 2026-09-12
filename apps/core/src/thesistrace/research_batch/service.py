@@ -3746,6 +3746,7 @@ def _child_commands(
                 selection_every_sessions=item.selection_every_sessions,
                 exposure_expression=item.exposure_expression,
                 weighting=item.weighting,
+                volatility_window=item.volatility_window,
                 **common,
             ),
         )

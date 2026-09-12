@@ -736,7 +736,7 @@ def _legal_result() -> dict[str, object]:
                 "selection_interval": 1,
                 "completed_intervals": 0,
             },
-            "target_selection": {
+            "target_selection": {"eligibility_exclusions": {},
                 "signal_session": "2024-01-02", "selected_instrument_ids": [],
                 "relative_weights": {},
                 "signal_checksum": "signal", "contract_checksum": "contract",

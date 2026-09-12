@@ -1,7 +1,9 @@
+import { SelectionEligibilityView, type SelectionEligibility } from "../research/SelectionEligibility";
 import { useEffect, useRef, useState } from "react";
 import { ColorType, LineSeries, createChart, type Time } from "lightweight-charts";
 
 export type DailyTrackObservation = {
+  target_selection: SelectionEligibility;
   session: string;
   net_asset_value_cny: string;
   cash_cny: string;
@@ -64,6 +66,7 @@ export function CurrentHoldings({ observation }: { observation: DailyTrackObserv
         <input aria-label="Filter holdings by symbol" placeholder="Find a symbol…" type="search"
           value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
+      <SelectionEligibilityView selection={observation.target_selection} />
       <div className="track-table-scroll" tabIndex={0} role="region" aria-label="Holdings table">
         <table className="track-table">
           <thead><tr><th scope="col">Symbol</th><th scope="col">Shares</th><th scope="col">Market value</th><th scope="col">Weight</th></tr></thead>

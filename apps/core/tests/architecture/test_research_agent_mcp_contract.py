@@ -1793,9 +1793,9 @@ def test_v1_inventory_scopes_descriptions_annotations_and_schemas_are_exact() ->
     canonical = _canonical_v1_contract()
 
     assert sha256(canonical).hexdigest() == (
-        "52860b7ef786c56096197ed5842a9affde29c537db1414cc542908fa145f9eb9"
+        "74be871d2f42a4d4afb368b943e75193238a611f13aeeede2979e65c957f5964"
     )
-    assert len(canonical) == 173032
+    assert len(canonical) == 175321
 
 
 def test_v1_ingress_limits_are_fixed_and_cover_the_maximum_valid_batch() -> None:
@@ -3136,7 +3136,8 @@ def test_registry_whole_spec_diagnosis_is_read_only_and_uses_formal_validation()
     assert capability.required_scope is ResearchAgentScope.RESEARCH_READ
     assert capability.annotations.read_only_hint is True
     assert capability.annotations.destructive_hint is False
-    result = registry.invoke("diagnose_research_spec", {"spec": {"weighting": "equal_weight",
+    result = registry.invoke("diagnose_research_spec", {"spec": {
+        "volatility_window": 20, "weighting": "equal_weight",
         "research_kind": "strategy_backtest", "formula": "close",
         "start_date": "2026-08-03", "end_date": "2026-08-05",
         "universe": "top300", "neutralization": "none", "initial_cash_cny": "100000",

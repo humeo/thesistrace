@@ -39,10 +39,10 @@ def test_equal_weights_keep_current_selection_order():
 
 def test_weighting_rejects_an_unimplemented_model():
     with pytest.raises(ValueError, match='weighting'):
-        select_portfolio([], 2, 'inverse_volatility')
+        select_portfolio([], 2, 'optimized_weight')
 
 
-@pytest.mark.parametrize('weighting', [None, 'equal_weight', 'rank_weight'])
+@pytest.mark.parametrize('weighting', [None, 'equal_weight', 'rank_weight', 'inverse_volatility'])
 def test_strategy_spec_normalizes_the_public_weighting_default(weighting):
     from thesistrace.research_run.models import StrategyBacktestSpec
 
@@ -65,7 +65,7 @@ def test_factor_spec_does_not_accept_portfolio_weighting():
     from thesistrace.research_run.models import FactorEvaluationSpec
 
     with pytest.raises(ValidationError, match='weighting'):
-        FactorEvaluationSpec.model_validate({
+        FactorEvaluationSpec.model_validate({"volatility_window": 20,
             'research_kind': 'factor_evaluation', 'formula': 'close',
             'start_date': '2026-08-03', 'end_date': '2026-08-05',
             'universe': 'top300', 'neutralization': 'none', 'weighting': 'rank_weight',

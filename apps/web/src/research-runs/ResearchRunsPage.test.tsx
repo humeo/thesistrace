@@ -74,13 +74,14 @@ const STRATEGY_RUN: ResearchRun = {
     initial_cash_cny: "100000",
     selection_every_sessions: 2,
     exposure_expression: "1",
-    weighting: "equal_weight",
+    weighting: "equal_weight", volatility_window: 20,
   },
 };
 
 describe("ResearchRunFacts", () => {
   it.each([
     ["equal_weight", "Equal weight"], ["rank_weight", "Rank weight"],
+    ["inverse_volatility", "Inverse volatility"],
   ] as const)("shows one accurate frozen %s weighting", (weighting, label) => {
     const input = STRATEGY_RUN.input;
     if (input?.research_kind !== "strategy_backtest") throw new Error("Invalid Strategy fixture");
@@ -89,7 +90,10 @@ describe("ResearchRunFacts", () => {
     }} />);
     expect(markup).toContain(`<strong>Portfolio weighting</strong> ${label}`);
     expect(markup).not.toContain("<strong>Weighting</strong>");
-    if (weighting === "rank_weight") expect(markup).not.toContain("Equal weight");
+    if (weighting !== "equal_weight") expect(markup).not.toContain("Equal weight");
+    if (weighting === "inverse_volatility") {
+      expect(markup).toContain("<strong>Volatility window</strong> 20 sessions");
+    }
   });
 
   it("shows the frozen Strategy execution conditions in user language", () => {
@@ -267,6 +271,7 @@ const TERMINAL_STATE: TerminalStrategyState = {
     selection_interval: 1,
     completed_intervals: 2,
   },
+  target_selection: { signal_session: "2026-08-05", eligibility_exclusions: {} },
   target_exposure: 1,
   pending_target: {
     decision_session: "2026-08-05", mode: "selection",
@@ -675,7 +680,7 @@ describe("UseAsDraftPanel", () => {
           initial_cash_cny: "100000",
           selection_every_sessions: 2,
           exposure_expression: "1",
-          weighting: "equal_weight",
+          weighting: "equal_weight", volatility_window: 20,
         }}
         confirmDiscard={() => true}
         navigate={() => undefined}

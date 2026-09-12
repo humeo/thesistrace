@@ -7,6 +7,7 @@ from decimal import Decimal, DecimalException, localcontext
 from fractions import Fraction
 from statistics import stdev
 
+from thesistrace.research_kernel.common_inputs import CLOSE_FIELD_ID
 from thesistrace.research_kernel.exposure import evaluate_exposure_series, require_exposure_value
 from thesistrace.research_kernel.numeric import (
     ACCOUNTING_CONTEXT,
@@ -14,7 +15,10 @@ from thesistrace.research_kernel.numeric import (
     canonical_decimal,
     require_finite_decimal,
 )
-from thesistrace.research_kernel.portfolio_weighting import select_portfolio
+from thesistrace.research_kernel.portfolio_weighting import (
+    inverse_volatility_selection,
+    select_portfolio,
+)
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.series_plan import CommonInputObserver
 from thesistrace.research_kernel.terminal_state_schema import PendingTarget, TargetSelection
@@ -295,6 +299,20 @@ def _execute_strategy(
     selection_interval = int(strategy["selection_interval"])
     if not 1 <= holdings_count <= 100 or not 1 <= selection_interval <= 20:
         raise StrategyCalculationError("invalid Strategy breadth or schedule")
+    close_histories = None
+    if strategy["weighting"] == "inverse_volatility":
+        instruments = tuple(sorted(research_data.instruments))
+        if isinstance(research_data, ColumnarResearchSeries):
+            matrix = research_data.numeric_field_matrices(
+                (CLOSE_FIELD_ID,), instruments,
+            )[CLOSE_FIELD_ID]
+            close_histories = dict(zip(instruments, matrix, strict=True))
+        else:
+            close_field = research_data.fields[CLOSE_FIELD_ID]
+            close_histories = {
+                item: [close_field.get((session, item)) for session in calendar]
+                for item in instruments
+            }
     exposure_values = evaluate_exposure_series(
         research_data, strategy["exposure_expression"], observe_common=observe_common,
     )
@@ -793,14 +811,31 @@ def _execute_strategy(
         selection_updated = report_index % selection_interval == 0
         if selection_updated:
             alpha_values = alpha_by_session[session]
-            selected, relative_weights = select_portfolio(
-                alpha_values, holdings_count, strategy["weighting"],
-            )
+            exclusions = []
+            if close_histories is not None:
+                end_index = calendar.index(session) + 1
+                window = strategy["volatility_window"]
+                selected, relative_weights, exclusions = inverse_volatility_selection(
+                    alpha_values, holdings_count,
+                    {str(item["instrument_id"]): close_histories[str(item["instrument_id"])][
+                        max(0, end_index - window - 1):end_index
+                    ] for item in alpha_values}, window,
+                )
+                diagnostics.extend({
+                    "session": session, "reason": "weighting_ineligible",
+                    "instrument_id": item["instrument_id"],
+                    "eligibility_reason": item["reason"], "volatility_window": window,
+                } for item in exclusions)
+            else:
+                selected, relative_weights = select_portfolio(
+                    alpha_values, holdings_count, strategy["weighting"],
+                )
             selected_ids = [str(item["instrument_id"]) for item in selected]
             target_selection = {
                 "signal_session": session,
                 "selected_instrument_ids": selected_ids,
                 "relative_weights": relative_weights,
+                "eligibility_exclusions": dict(Counter(item["reason"] for item in exclusions)),
                 "signal_checksum": hashlib.sha256(canonical_json_bytes({
                     "session": session,
                     "values": [dict(item) for item in selected],

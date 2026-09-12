@@ -88,7 +88,7 @@ def test_strategy_sweep_has_one_shared_alpha_and_one_to_twenty_parameter_items()
             "batch_kind": "strategy_sweep",
             "alpha": {"formula": "rank(close)", "hypothesis": "shared"},
             "strategies": [
-                {"weighting": "equal_weight",
+                {"volatility_window": 20, "weighting": "equal_weight",
                     "item_key": f"strategy-{ordinal}",
                     "initial_cash_cny": "10000000",
                     "holdings_count": ordinal,
@@ -112,7 +112,7 @@ def test_strategy_sweep_has_one_shared_alpha_and_one_to_twenty_parameter_items()
                 **command.model_dump(mode="json"),
                 "strategies": [
                     *command.model_dump(mode="json")["strategies"],
-                    {"weighting": "equal_weight",
+                    {"volatility_window": 20, "weighting": "equal_weight",
                         "item_key": "strategy-21",
                         "initial_cash_cny": "10000000",
                         "holdings_count": 21,

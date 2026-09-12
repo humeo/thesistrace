@@ -49,7 +49,7 @@ def _discovered_tools(scopes: frozenset[ResearchAgentScope]):
 
 
 def _strategy_command(request_id: str) -> dict[str, object]:
-    return {"weighting": "equal_weight",
+    return {"volatility_window": 20, "weighting": "equal_weight",
         **factor_command(request_id),
         "name": "Strategy Test",
         "research_kind": "strategy_backtest",

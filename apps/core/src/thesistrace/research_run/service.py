@@ -2976,7 +2976,13 @@ class ResearchRunService:
             raise ResearchRunContractMismatch(
                 "frozen Research execution contract is obsolete"
             ) from error
-        requirements = expression_requirements(compiled, *(() if exposure is None else (exposure,)))
+        requirements = expression_requirements(
+            compiled, *(() if exposure is None else (exposure,)),
+            weighting=(immutable_input.strategy["weighting"]
+                       if immutable_input.strategy is not None else "equal_weight"),
+            volatility_window=(immutable_input.strategy["volatility_window"]
+                               if immutable_input.strategy is not None else 20),
+        )
         current_bindings = requirements.field_bindings
         admission = immutable_input.expression_admission
         strategy = immutable_input.strategy
@@ -4029,7 +4035,13 @@ def _admitted_input(
                 )
                 for diagnostic in error.diagnostics
             ]) from error
-    requirements = expression_requirements(compiled, *(() if exposure is None else (exposure,)))
+    requirements = expression_requirements(
+        compiled, *(() if exposure is None else (exposure,)),
+        weighting=(command.weighting
+                   if isinstance(command, StrategyBacktestSpec) else "equal_weight"),
+        volatility_window=(command.volatility_window
+                           if isinstance(command, StrategyBacktestSpec) else 20),
+    )
     if snapshot is None:
         raise ResearchRunAdmissionRejected(
             [
@@ -4219,6 +4231,7 @@ def _admitted_input(
                 "holdings_count": command.holdings_count,
                 "selection_every_sessions": command.selection_every_sessions,
                 "weighting": command.weighting,
+                "volatility_window": command.volatility_window,
                 "exposure_source": exposure.source,
                 "exposure_expression": exposure.expression,
                 "initial_cash_cny": command.initial_cash_cny,
@@ -4574,6 +4587,7 @@ def _authorable_input(row: object) -> ResearchRunAuthorableInput:
             "holdings_count": int(immutable_input.strategy["holdings_count"]),
             "selection_every_sessions": int(immutable_input.strategy["selection_every_sessions"]),
             "weighting": immutable_input.strategy["weighting"],
+            "volatility_window": immutable_input.strategy["volatility_window"],
             "exposure_expression": str(immutable_input.strategy["exposure_source"]),
         }
     return ResearchRunAuthorableInput(

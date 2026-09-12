@@ -29,6 +29,7 @@ import {
   hasUnexecutedChanges,
   isCompleteResearchInputs,
   isValidInitialCash,
+  isValidVolatilityWindow,
   MAX_HYPOTHESIS_LENGTH,
   loadResearchDraft,
   persistResearchDraft,
@@ -727,16 +728,36 @@ export function ResearchDraftWorkspace({
                     value={draft.weighting}
                     onChange={(event) => {
                       const weighting = event.target.value;
-                      if (weighting === "equal_weight" || weighting === "rank_weight") {
-                        updateDraft((current) => ({ ...current, weighting }));
+                      if (weighting === "equal_weight" || weighting === "rank_weight" || weighting === "inverse_volatility") {
+                        updateDraft((current) => ({
+                          ...current, weighting,
+                          volatilityWindow: weighting !== "inverse_volatility" && !isValidVolatilityWindow(current.volatilityWindow)
+                            ? "20" : current.volatilityWindow,
+                        }));
                       }
                     }}
                   >
                     <option value="equal_weight">Equal weight</option>
                     <option value="rank_weight">Rank weight</option>
+                    <option value="inverse_volatility">Inverse volatility</option>
                   </select>
-                  <small>Rank weight gives higher-ranked selected stocks more weight; tied scores share rank weight.</small>
+                  <small>{draft.weighting === "inverse_volatility"
+                    ? "Lower-volatility selected stocks receive more weight."
+                    : draft.weighting === "rank_weight"
+                      ? "Higher-ranked selected stocks receive more weight; tied scores share rank weight."
+                      : "Selected stocks receive equal relative weights."}</small>
                 </label>
+                {draft.weighting === "inverse_volatility" && (
+                  <label className="research-weighting-field">Volatility window (sessions)
+                    <input type="number" min={1} max={252} step={1}
+                      aria-invalid={!isValidVolatilityWindow(draft.volatilityWindow)}
+                      aria-describedby="volatility-window-help"
+                      value={draft.volatilityWindow}
+                      onChange={(event) => updateDraft((current) => ({ ...current, volatilityWindow: event.target.value }))}
+                    />
+                    <small id="volatility-window-help">{!isValidVolatilityWindow(draft.volatilityWindow) ? "Enter a whole number from 1 to 252. " : "Default 20, range 1–252. "}Uses adjusted Close returns through selection Close and population standard deviation. Zero volatility, insufficient history and unavailable returns are excluded; the next eligible stock is selected.</small>
+                  </label>
+                )}
                 <div className="research-exposure-expression">
                   <h3>Exposure expression</h3>
                   <AlphaFormulaEditor

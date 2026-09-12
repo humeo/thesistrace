@@ -1,4 +1,4 @@
-export type PortfolioWeighting = "equal_weight" | "rank_weight";
+export type PortfolioWeighting = "equal_weight" | "rank_weight" | "inverse_volatility";
 
 export type EditorState = {
   anchor: number;
@@ -19,6 +19,7 @@ export type ResearchInputs = {
   selectionEverySessions: string;
   exposureExpression: string;
   weighting: PortfolioWeighting;
+  volatilityWindow: string;
 };
 
 type PendingResearchRun = {
@@ -61,6 +62,7 @@ export type FrozenResearchAuthorableInput = CommonFrozenResearchAuthorableInput 
   selection_every_sessions: number;
   exposure_expression: string;
   weighting: PortfolioWeighting;
+  volatility_window: number;
 });
 
 export type ResearchDraft = ResearchInputs & {
@@ -89,6 +91,7 @@ export function emptyResearchDraft(): ResearchDraft {
     selectionEverySessions: "",
     exposureExpression: "1",
     weighting: "equal_weight",
+    volatilityWindow: "20",
     editor: { anchor: 0, head: 0 },
     lastAdmittedBaseline: null,
     pendingAdmission: null,
@@ -151,6 +154,7 @@ export function selectResearchKind(
     selectionEverySessions: "",
     exposureExpression: "1",
     weighting: "equal_weight",
+    volatilityWindow: "20",
   } : {
     ...draft,
     researchKind,
@@ -188,6 +192,7 @@ export type ResearchSpec = Omit<CommonResearchRunAdmissionCommand, "request_id" 
     selection_every_sessions: number;
     exposure_expression: string;
   weighting: PortfolioWeighting;
+  volatility_window: number;
   }
 );
 
@@ -209,6 +214,7 @@ export function researchSpec(inputs: ResearchInputs): ResearchSpec {
     selection_every_sessions: Number(inputs.selectionEverySessions),
     exposure_expression: inputs.exposureExpression,
     weighting: inputs.weighting,
+    volatility_window: Number(inputs.volatilityWindow),
   };
 }
 
@@ -249,6 +255,11 @@ export function finishResearchRun(
   return accepted;
 }
 
+export function isValidVolatilityWindow(value: string): boolean {
+  const window = Number(value);
+  return Number.isInteger(window) && window >= 1 && window <= 252;
+}
+
 export function isValidInitialCash(value: string): boolean {
   if (!/^[0-9]+(?:\.[0-9]{1,2})?$/.test(value) || !/[1-9]/.test(value)) return false;
   const [whole, fraction = ""] = value.split(".");
@@ -268,6 +279,7 @@ export function isCompleteResearchInputs(inputs: ResearchInputs): boolean {
   return commonComplete && (inputs.researchKind === "factor_evaluation" || (
     inputs.exposureExpression.trim() !== "" &&
     isValidInitialCash(inputs.initialCashCny) &&
+    isValidVolatilityWindow(inputs.volatilityWindow) &&
     Number.isInteger(holdingsCount) && holdingsCount >= 1 && holdingsCount <= 100 &&
     Number.isInteger(selectionEverySessions) &&
     selectionEverySessions >= 1 && selectionEverySessions <= 20
@@ -304,6 +316,7 @@ export function useResearchAsDraft(
       ? String(input.holdings_count)
       : "",
     exposureExpression: input.research_kind === "strategy_backtest" ? input.exposure_expression : "1",
+    volatilityWindow: input.research_kind === "strategy_backtest" ? String(input.volatility_window) : "20",
     weighting: input.research_kind === "strategy_backtest" ? input.weighting : "equal_weight",
     selectionEverySessions: input.research_kind === "strategy_backtest"
       ? String(input.selection_every_sessions)
@@ -341,6 +354,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "selectionEverySessions",
     "exposureExpression",
     "weighting",
+    "volatilityWindow",
   ] as const;
   return copiedKeys.some((key) => current[key] !== baseline[key] && current[key] !== next[key]);
 }
@@ -400,12 +414,13 @@ function readInputs(value: unknown): ResearchInputs | null {
     "selectionEverySessions",
     "exposureExpression",
     "weighting",
+    "volatilityWindow",
   ] as const;
   if (keys.some((key) => typeof value[key] !== "string")) return null;
   const strings = value as Record<(typeof keys)[number], string>;
   if (
     !["factor_evaluation", "strategy_backtest"].includes(strings.researchKind) ||
-    !["equal_weight", "rank_weight"].includes(strings.weighting) ||
+    !["equal_weight", "rank_weight", "inverse_volatility"].includes(strings.weighting) ||
     strings.formula.length > MAX_FORMULA_LENGTH ||
     strings.exposureExpression.length > MAX_FORMULA_LENGTH ||
     keys.some((key) => strings[key].length > MAX_TEXT_LENGTH)

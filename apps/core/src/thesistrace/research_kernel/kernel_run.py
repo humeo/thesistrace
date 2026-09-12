@@ -58,11 +58,14 @@ class StrategyRunInput:
     stamp_duty_sell_rate: str
     transfer_fee_rate: str
     weighting: PortfolioWeighting = "equal_weight"
+    volatility_window: int = 20
     exposure_expression_json: bytes = b'{"kind":"number","value":1}'
 
     def __post_init__(self) -> None:
+        if type(self.volatility_window) is not int or not 1 <= self.volatility_window <= 252:
+            raise ValueError("Invalid volatility window")
         validate_exposure(self.exposure_expression_snapshot())
-        if self.weighting not in {"equal_weight", "rank_weight"}:
+        if self.weighting not in {"equal_weight", "rank_weight", "inverse_volatility"}:
             raise ValueError("Unsupported portfolio weighting")
 
     def exposure_expression_snapshot(self) -> dict[str, object]:
@@ -76,6 +79,7 @@ class StrategyRunInput:
             "holdings_count": self.holdings_count,
             "selection_interval": self.selection_interval,
             "weighting": self.weighting,
+            "volatility_window": self.volatility_window,
             "initial_cash_cny": self.initial_cash_cny,
             "exposure_expression": self.exposure_expression_snapshot(),
             "commission_rate_all_in": self.commission_rate_all_in,
@@ -136,6 +140,10 @@ class RunInput:
         required_fields = set(plan.field_names)
         if strategy is not None:
             required_fields.update(validate_exposure(strategy.exposure_expression_snapshot()).field_ids)
+        if strategy is not None and strategy.weighting == "inverse_volatility":
+            required_fields.add("price.close.adjusted")
+            if effective_lookback < strategy.volatility_window:
+                raise KernelRunError("Insufficient volatility calculation lookback")
         if not required_fields <= set(field_bindings):
             raise KernelRunError("Research expressions and field bindings disagree")
         object.__setattr__(self, "universe", universe)
@@ -567,6 +575,7 @@ def calculation_definition(
             "holdings_count": strategy.holdings_count,
             "selection_interval": strategy.selection_interval,
             "weighting": strategy.weighting,
+            "volatility_window": strategy.volatility_window,
             "initial_cash_cny": strategy.initial_cash_cny,
             "exposure_expression": strategy.exposure_expression_snapshot(),
         },

@@ -68,6 +68,7 @@ def project_daily_observation(
                     holdings, key=lambda row: (-row["weight"], row["instrument_id"])
                 ),
                 "target_exposure": current.target_exposure,
+                "target_selection": current.target_selection.model_dump(mode="json"),
                 "selection_interval": phase.selection_interval,
                 "pending_target_session": (
                     current.pending_target.decision_session if current.pending_target else None
