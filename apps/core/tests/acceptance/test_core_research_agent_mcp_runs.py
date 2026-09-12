@@ -1147,8 +1147,9 @@ async def _exercise_daily_fields(settings: CoreSettings, tmp_path: Path) -> None
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_mcp_statement_stock_catalog_and_submission_complete_through_real_worker(
-    tmp_path: Path,
+@pytest.mark.parametrize("ttm", [False, True])
+def test_mcp_statement_fields_complete_through_real_worker(
+    tmp_path: Path, ttm: bool,
 ) -> None:
     from test_core_current_head_research_run_execution import _publish_composite_head
 
@@ -1172,27 +1173,35 @@ def test_mcp_statement_stock_catalog_and_submission_complete_through_real_worker
                       "2026-08-03", "2026-08-04", "2026-08-05"),
             all_market_fields=True,
         )
-        anyio.run(_exercise_statement_stocks, settings, tmp_path)
+        anyio.run(_exercise_statement_fields, settings, tmp_path, ttm)
     finally:
         drop_product_schemas(settings)
 
 
-async def _exercise_statement_stocks(settings: CoreSettings, tmp_path: Path) -> None:
+async def _exercise_statement_fields(settings: CoreSettings, tmp_path: Path, ttm: bool) -> None:
+    identifiers = (["revenue_ttm", "operating_cash_flow_ttm", "cash_paid_capex_ttm"] if ttm else
+                   ["monetary_funds", "cash_equivalents", "contract_liabilities"])
+    formula = ("rank(operating_cash_flow_ttm - cash_paid_capex_ttm)" if ttm else
+               "rank((monetary_funds + cash_equivalents) / assets)")
     async with _mcp_client(settings, tmp_path / "mcp-stocks.stderr.log") as client:
         catalog = await client.call_tool("get_alpha_catalog", {
-            "identifiers": ["monetary_funds", "cash_equivalents", "contract_liabilities"],
+            "identifiers": identifiers,
         })
         assert catalog.is_error is False
         fields = {field["identifier"]: field for field in catalog.structured_content["fields"]}
-        assert set(fields) == {"monetary_funds", "cash_equivalents", "contract_liabilities"}
-        assert fields["monetary_funds"]["unit"] == "CNY"
-        assert fields["cash_equivalents"]["report_period_selection"] == (
-            "latest_visible_quarterly_or_annual"
-        )
-        assert fields["contract_liabilities"]["applicable_company_types"] == ["1", "2", "4"]
+        assert set(fields) == set(identifiers)
+        assert all(field["unit"] == "CNY" for field in fields.values())
+        if ttm:
+            assert all(field["report_period_selection"] == "latest_visible_ttm"
+                       for field in fields.values())
+        else:
+            assert fields["cash_equivalents"]["report_period_selection"] == (
+                "latest_visible_quarterly_or_annual"
+            )
+            assert fields["contract_liabilities"]["applicable_company_types"] == ["1", "2", "4"]
         accepted = await client.call_tool("submit_research_run", {
             **_command("mcp-statement-stocks"),
-            "formula": "rank((monetary_funds + cash_equivalents) / assets)",
+            "formula": formula,
         })
         assert accepted.is_error is False
         assert accepted.structured_content["outcome"] == "accepted", accepted.structured_content

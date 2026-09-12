@@ -234,3 +234,72 @@ def test_columnar_plan_checks_cancellation_between_bounded_operator_stages() -> 
         )
 
     assert calls == 4
+
+
+@pytest.mark.parametrize("engine", ["series", "matrix_rank", "columnar"])
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_ttm_arithmetic_requires_matching_windows_through_scalar_wrappers(
+    engine: str, wrapped: bool,
+) -> None:
+    left, right = "financial.income.total_revenue.ttm", "financial.cashflow.operating_cash_flow.ttm"
+    numerator = field(left)
+    if wrapped:
+        numerator = operation("negate", operation("divide", operation("multiply", numerator,
+                              literal(2)), literal(-2)))
+    expression = operation("divide", numerator, field(right))
+    if engine == "matrix_rank":
+        expression = operation("rank", expression)
+    plan = build_series_execution_plan(validate_normalized_alpha(
+        expression, field_bindings={left: "revenue_ttm", right: "operating_cash_flow_ttm"},
+    ))
+    values = {left: [10.0, 10.0, 10.0], right: [2.0, 2.0, 2.0]}
+    windows = {left: np.array([20100331, 20100630, 0]),
+               right: np.array([20100331, 20100331, 0])}
+    sessions = ("2010-04-21", "2010-08-02", "2010-08-03")
+    universe = {day: ("equity:a",) for day in sessions}
+    expected = [0.5 if engine == "matrix_rank" else 5.0, None, None]
+    if engine == "series":
+        actual = evaluate_series_execution_plan(plan, values, ttm_windows=windows)
+    elif engine == "matrix_rank":
+        actual = evaluate_series_execution_matrix(
+            plan, ("equity:a",), lambda _: values, length=3, sessions=sessions,
+            universe_members=universe, ttm_windows_for_instrument=lambda _: windows,
+        )["equity:a"]
+    else:
+        result = evaluate_columnar_execution_matrix(
+            plan, ("equity:a",), sessions, {key: np.array([v]) for key, v in values.items()},
+            universe, cancellation_check=lambda: None,
+            ttm_windows={key: v.reshape(1, -1) for key, v in windows.items()},
+        )[0]
+        actual = [float(value) if np.isfinite(value) else None for value in result]
+    assert actual == expected
+
+
+@pytest.mark.parametrize("kind", ["market", "lag", "rank", "abs"])
+def test_ttm_window_checks_respect_non_ttm_and_explicit_transform_boundaries(kind: str) -> None:
+    left = "financial.income.total_revenue.ttm"
+    right = ("price.close.adjusted" if kind == "market"
+             else "financial.cashflow.operating_cash_flow.ttm")
+    lhs, rhs = field(left), field(right)
+    if kind == "lag":
+        lhs = operation("lag", lhs, literal(1))
+    elif kind == "rank":
+        lhs, rhs = operation("rank", lhs), operation("rank", rhs)
+    elif kind == "abs":
+        lhs = operation("abs", lhs)
+    plan = build_series_execution_plan(validate_normalized_alpha(
+        operation("divide", lhs, rhs), field_bindings={left: "revenue_ttm", right: "denominator"},
+    ))
+    windows = {left: np.array([[20100331, 20100630, 0]], dtype=np.int32)}
+    if kind != "market":
+        windows[right] = np.array([[20100331, 20100331, 0]], dtype=np.int32)
+    sessions = ("2010-04-21", "2010-08-02", "2010-08-03")
+    result = evaluate_columnar_execution_matrix(
+        plan, ("equity:a",), sessions,
+        {left: np.array([[10.0] * 3]), right: np.array([[2.0] * 3])},
+        {day: ("equity:a",) for day in sessions}, cancellation_check=lambda: None,
+        ttm_windows=windows,
+    )[0]
+    expected = {"market": [5.0, 5.0, 5.0], "lag": [None, 5.0, 5.0],
+                "rank": [1.0, 1.0, 1.0], "abs": [5.0, None, None]}
+    assert [float(value) if np.isfinite(value) else None for value in result] == expected[kind]

@@ -195,6 +195,11 @@ class _ColumnarFixture:
         positions = [tuple(self.instruments).index(instrument) for instrument in instruments]
         return {field_id: self.matrices[field_id][positions] for field_id in field_ids}
 
+    def ttm_window_matrices(
+        self, field_ids: tuple[str, ...], instruments: tuple[str, ...],
+    ) -> dict[str, np.ndarray]:
+        return {}
+
     def adjusted_open_matrix(self, instruments: tuple[str, ...]) -> np.ndarray:
         return np.asarray(
             [

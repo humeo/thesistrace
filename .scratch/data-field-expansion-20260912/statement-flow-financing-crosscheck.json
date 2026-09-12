@@ -1,0 +1,28 @@
+{
+  "source_url": "https://www.pingan.com/app_upload/images/info/upload/e63117e6-98df-4bac-b7e3-27a69e94ab22.pdf",
+  "report": "601318.SH 2026 Q1 consolidated cashflow",
+  "pdf_pages_one_based": [
+    23,
+    24
+  ],
+  "report_unit": "million CNY",
+  "sign_rule": "report cash outflows parenthesized; supplier payment fields positive amount, retain supplier sign",
+  "checks": [
+    {
+      "source_column": "c_recp_borrow",
+      "report_amount_million_cny": "19990",
+      "source_values_cny": [
+        19990000000.0
+      ],
+      "matches": true
+    },
+    {
+      "source_column": "c_prepay_amt_borr",
+      "report_amount_million_cny": "184195",
+      "source_values_cny": [
+        184195000000.0
+      ],
+      "matches": true
+    }
+  ]
+}

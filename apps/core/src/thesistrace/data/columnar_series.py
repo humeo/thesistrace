@@ -16,6 +16,7 @@ from thesistrace.research_series import (
     ExecutionPrice,
     InstrumentProfile,
     PriceLimit,
+    ttm_window_column,
 )
 
 T = TypeVar("T")
@@ -386,6 +387,18 @@ class ColumnarResearchData:
                 shape=shape,
             )
         return matrices
+
+    def ttm_window_matrices(
+        self, field_ids: tuple[str, ...], instruments: tuple[str, ...],
+    ) -> Mapping[str, np.ndarray]:
+        if self._family_values is None:
+            return {}
+        shape = (len(instruments), len(self.sessions))
+        return {field_id: np.nan_to_num(_numeric_matrix(
+            self._family_index, value_column=ttm_window_column(field_id),
+            instruments=instruments, shape=shape,
+        ), nan=0).astype(np.int32) for field_id in field_ids
+            if ttm_window_column(field_id) in self._family_values.column_names}
 
     def adjusted_open_matrix(self, instruments: tuple[str, ...]) -> np.ndarray:
         axis = self._adjusted_open_axis

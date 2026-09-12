@@ -75,10 +75,10 @@ def test_catalog_preserves_six_fields_and_adds_sixteen_statement_stocks() -> Non
         "liabilities",
         "equity",
     ]
-    assert len(FINANCIAL_FIELDS) == 22
+    assert len(FINANCIAL_FIELDS) == 41
     assert {
         (field.alpha.identifier, field.source_endpoint, field.source_column)
-        for field in FINANCIAL_FIELDS[6:] if field.alpha is not None
+        for field in FINANCIAL_FIELDS[6:22] if field.alpha is not None
     } == {
         ("monetary_funds", "balancesheet", "money_cap"),
         ("accounts_receivable", "balancesheet", "accounts_receiv"),
@@ -117,6 +117,7 @@ def test_catalog_preserves_six_fields_and_adds_sixteen_statement_stocks() -> Non
     assert {field.report_period_selection for field in FINANCIAL_FIELDS} == {
         "latest_visible_full_year",
         "latest_visible_quarterly_or_annual",
+        "latest_visible_ttm",
     }
     assert set(FINANCIAL_FIELDS) <= set(authorable_fields())
 
@@ -414,3 +415,61 @@ def test_contract_liabilities_exclude_insurance_without_hiding_other_stocks(colu
         result = resolver.resolve(**request)
         assert [result[contract].get((session, instrument)) for session in sessions] == ["10", None]
         assert [result[assets].get((session, instrument)) for session in sessions] == ["100", "200"]
+
+
+@pytest.mark.parametrize("columnar", [False, True])
+def test_ttm_recomputes_visible_components_without_changing_annual_flow(columnar: bool) -> None:
+    instrument = "equity:000001.SZ"
+    ttm = "financial.income.total_revenue.ttm"
+    annual = "financial.income.total_revenue.latest_fy"
+    rows = [
+        _row(instrument, "20090331", "2010-04-20", revenue="50"),
+        _row(instrument, "20091231", "2010-04-20", revenue="100"),
+        _row(instrument, "20100331", "2010-04-21", revenue="60"),
+        _row(instrument, "20091231", "2010-04-22", revenue="105"),
+        _row(instrument, "20100630", "2010-08-02", revenue=None),
+    ]
+    sessions = ("2010-04-20", "2010-04-21", "2010-04-22", "2010-08-02")
+    reader = (ColumnarOnlyReader if columnar else RecordingReader)({"income": rows})
+    resolver = FinancialSeriesResolver(reader)
+    request = dict(manifest_sha256="a" * 64, field_ids=(ttm, annual),
+                   sessions=sessions, instrument_ids=(instrument,))
+    expected = {ttm: ["100", "110", "115", None], annual: ["100", "100", "105", "105"]}
+    if columnar:
+        table = resolver.resolve_table(**request)
+        assert {name: table[name].to_pylist() for name in expected} == expected
+        assert table[f"ttm_window_end:{ttm}"].to_pylist() == [
+            "20091231", "20100331", "20100331", None,
+        ]
+    else:
+        resolved = resolver.resolve(**request)
+        assert {name: [resolved[name].get((day, instrument)) for day in sessions]
+                for name in expected} == expected
+
+
+@pytest.mark.parametrize("columnar", [False, True])
+@pytest.mark.parametrize("gap", ["annual", "same_quarter", "target_value", "scope"])
+def test_ttm_missing_components_do_not_reuse_previous_value(columnar: bool, gap: str) -> None:
+    instrument = "equity:000001.SZ"
+    ttm = "financial.income.total_revenue.ttm"
+    rows = [
+        _row(instrument, "20091231", "2010-04-20", revenue="100"),
+        _row(instrument, "20090331", "2010-04-20", revenue="50"),
+        _row(instrument, "20100331", "2010-04-21", revenue="60"),
+    ]
+    if gap == "annual":
+        rows.pop(0)
+    elif gap == "same_quarter":
+        rows.pop(1)
+    elif gap == "target_value":
+        rows[2]["total_revenue"] = None
+    else:
+        rows[1]["source_company_type"] = "2"
+    reader = (ColumnarOnlyReader if columnar else RecordingReader)({"income": rows})
+    resolver = FinancialSeriesResolver(reader)
+    request = dict(manifest_sha256="a" * 64, field_ids=(ttm,),
+                   sessions=("2010-04-21",), instrument_ids=(instrument,))
+    if columnar:
+        assert resolver.resolve_table(**request)[ttm].to_pylist() == [None]
+    else:
+        assert resolver.resolve(**request) == {ttm: {}}

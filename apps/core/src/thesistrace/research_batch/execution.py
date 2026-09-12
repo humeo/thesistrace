@@ -118,6 +118,7 @@ class _SharedFactorResearchData:
                 field_ids,
                 self._instrument_axis,
             )
+            self._ttm_windows = source.ttm_window_matrices(field_ids, self._instrument_axis)
             self._adjusted_opens = source.adjusted_open_matrix(self._instrument_axis)
             self._adjusted_opens_decimal: np.ndarray | None = None
             self._universe_members = {
@@ -128,6 +129,7 @@ class _SharedFactorResearchData:
             self._instrument_positions = prepared._instrument_positions
             self._session_positions = prepared._session_positions
             self._numeric_fields = prepared._numeric_fields
+            self._ttm_windows = prepared._ttm_windows
             self._adjusted_opens = prepared._adjusted_opens
             self._adjusted_opens_decimal = prepared._adjusted_opens_decimal
             self._universe_members = prepared._universe_members
@@ -184,6 +186,16 @@ class _SharedFactorResearchData:
         session_positions = [self._session_positions[session] for session in self.sessions]
         coordinates = np.ix_(instrument_positions, session_positions)
         return {field_id: self._numeric_fields[field_id][coordinates] for field_id in field_ids}
+
+    def ttm_window_matrices(
+        self,
+        field_ids: tuple[str, ...],
+        instruments: tuple[str, ...],
+    ) -> Mapping[str, np.ndarray]:
+        return {
+            field_id: self._selected_matrix(self._ttm_windows[field_id], instruments)
+            for field_id in field_ids if field_id in self._ttm_windows
+        }
 
     def adjusted_open_matrix(self, instruments: tuple[str, ...]) -> np.ndarray:
         return self._selected_matrix(self._adjusted_opens, instruments)

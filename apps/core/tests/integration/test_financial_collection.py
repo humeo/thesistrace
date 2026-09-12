@@ -71,7 +71,20 @@ FIELDS = (
 )
 
 EXECUTABLE_FIELDS = {
-    "income": (*FIELDS[:7], "total_revenue", "n_income_attr_p", "update_flag"),
+    "income": (
+        *FIELDS[:7],
+        "total_revenue",
+        "n_income_attr_p",
+        "revenue",
+        "n_income",
+        "oper_cost",
+        "rd_exp",
+        "invest_income",
+        "fv_value_chg_gain",
+        "non_oper_income",
+        "non_oper_exp",
+        "update_flag",
+    ),
     "balancesheet": (
         *FIELDS[:7],
         "total_assets",
@@ -82,7 +95,20 @@ EXECUTABLE_FIELDS = {
         "st_borr", "lt_borr", "bond_payable", "non_cur_liab_due_1y", "oth_eqt_tools",
         "update_flag",
     ),
-    "cashflow": (*FIELDS[:7], "n_cashflow_act", "c_cash_equ_end_period", "update_flag"),
+    "cashflow": (
+        *FIELDS[:7],
+        "n_cashflow_act",
+        "c_cash_equ_end_period",
+        "c_pay_acq_const_fiolta",
+        "c_fr_sale_sg",
+        "c_paid_goods_s",
+        "n_recp_disp_fiolta",
+        "n_disp_subs_oth_biz",
+        "c_paid_invest",
+        "c_recp_borrow",
+        "c_prepay_amt_borr",
+        "update_flag",
+    ),
 }
 
 
@@ -137,9 +163,9 @@ class ExecutableStatementSource(StatementSource):
         ts_code = str(params["ts_code"])
         self.requests.append((endpoint, ts_code, "complete-history"))
         values = {
-            "income": ("10", "4"),
+            "income": ("10", "4", *("2",) * 8),
             "balancesheet": ("20", "8", "12", *("2",) * 15),
-            "cashflow": ("6", "3"),
+            "cashflow": ("6", "3", *("2",) * 8),
         }[endpoint]
         return RawSourceResponse(
             fields,
@@ -786,6 +812,7 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
         bindings = {
             "financial.balance_sheet.monetary_funds.latest_reported": "monetary_funds",
             "financial.cashflow.cash_equivalents.latest_reported": "cash_equivalents",
+            "financial.cashflow.operating_cash_flow.ttm": "operating_cash_flow_ttm",
         }
         for root in (source_generation, published.generation_manifest_sha256):
             series = MountedGenerationStore(tmp_path).read_composite_slice(
@@ -799,6 +826,9 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
             assert series.research_data.fields[
                 "financial.cashflow.cash_equivalents.latest_reported"
             ][coordinate] == "3"
+            ttm = "financial.cashflow.operating_cash_flow.ttm"
+            assert series.research_data.fields[ttm][coordinate] == "6"
+            assert series.research_data.ttm_windows[ttm][coordinate] == "20091231"
 
         def reject_parquet(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("Data Overview opened Parquet")
@@ -817,7 +847,7 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
             "discovery_complete_through_session": "2026-08-13",
             "historical_reconciliation_watermark": "2026-08-13",
             "revision_coverage": "source-dated-and-first-observed-corrections",
-            "seed_policy": "latest-pre-start-annual-flow-and-reported-stock-facts",
+            "seed_policy": "annual-stock-and-ttm-dependency-seeds",
             "readiness_status": "ready",
             "pending_instrument_count": 0,
             "discovery_gap_count": 0,
@@ -916,9 +946,9 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             ts_code = str(params["ts_code"])
             self.requests.append((endpoint, ts_code, "complete-history"))
             values = {
-                "income": ("11", "5"),
+                "income": ("11", "5", *("2",) * 8),
                 "balancesheet": ("21", "8", "13", *("3",) * 15),
-                "cashflow": ("7", "4"),
+                "cashflow": ("7", "4", *("2",) * 8),
             }[endpoint]
             return RawSourceResponse(
                 fields,
@@ -1008,7 +1038,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             "discovery_complete_through_session": "2026-08-14",
             "historical_reconciliation_watermark": "2026-08-13",
             "revision_coverage": "cninfo-announcement-driven-tushare-observed",
-            "seed_policy": "latest-pre-start-annual-flow-and-reported-stock-facts",
+            "seed_policy": "annual-stock-and-ttm-dependency-seeds",
             "readiness_status": "ready",
             "pending_instrument_count": 0,
             "discovery_gap_count": 0,
@@ -1073,9 +1103,9 @@ def test_daily_financial_refresh_closes_unchanged_trigger_and_reuses_tables(
             ts_code = str(params["ts_code"])
             self.requests.append((endpoint, ts_code, "complete-history"))
             values = {
-                "income": ("10", "4"),
+                "income": ("10", "4", *("2",) * 8),
                 "balancesheet": ("20", "8", "12", *("2",) * 15),
-                "cashflow": ("6", "3"),
+                "cashflow": ("6", "3", *("2",) * 8),
             }[endpoint]
             return RawSourceResponse(
                 fields,
@@ -2369,9 +2399,9 @@ def test_daily_financial_refresh_publishes_other_stocks_when_one_stock_fails(
             if failure_mode == "source" and ts_code == "000002.SZ" and endpoint == "balancesheet":
                 raise RawSourceError("upstream unavailable")
             values = {
-                "income": ("11", "5"),
+                "income": ("11", "5", *("2",) * 8),
                 "balancesheet": ("21", "8", "13", *("3",) * 15),
-                "cashflow": ("7", "4"),
+                "cashflow": ("7", "4", *("2",) * 8),
             }[endpoint]
             return RawSourceResponse(
                 fields,
@@ -2534,9 +2564,9 @@ def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
             ts_code = str(params["ts_code"])
             self.requests.append((endpoint, ts_code, "complete-history"))
             values = {
-                "income": ("11", "5"),
+                "income": ("11", "5", *("2",) * 8),
                 "balancesheet": ("21", "8", "13", *("3",) * 15),
-                "cashflow": ("7", "4"),
+                "cashflow": ("7", "4", *("2",) * 8),
             }[endpoint]
             return RawSourceResponse(
                 fields,
@@ -3962,9 +3992,9 @@ def _daily_financial_replay(
                             "1",
                             "2",
                             *{
-                                "income": ("11", "5"),
+                                "income": ("11", "5", *("2",) * 8),
                                 "balancesheet": ("21", "8", "13", *("3",) * 15),
-                                "cashflow": ("7", "4"),
+                                "cashflow": ("7", "4", *("2",) * 8),
                             }[endpoint],
                             "0",
                         ]

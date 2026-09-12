@@ -59,6 +59,7 @@ class DailyBasicSeriesResolver:
         })
         values = table.select(["session", "instrument_id", *(_PROJECTIONS[f] for f in field_ids)])
         values = values.rename_columns(["session", "instrument_id", *field_ids])
+        values = values.append_column("source_row_present", pa.array([True] * values.num_rows))
         return axis.join(values, keys=["session", "instrument_id"], join_type="left outer").sort_by(
             [("session", "ascending"), ("instrument_id", "ascending")]
         )

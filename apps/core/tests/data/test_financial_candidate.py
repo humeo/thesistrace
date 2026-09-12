@@ -77,13 +77,29 @@ FULL_EXECUTABLE_FIELDS = (
     "non_cur_liab_due_1y",
     "oth_eqt_tools",
     "c_cash_equ_end_period",
+    "c_pay_acq_const_fiolta",
+    "c_fr_sale_sg",
+    "c_paid_goods_s",
+    "n_recp_disp_fiolta",
+    "n_disp_subs_oth_biz",
+    "c_paid_invest",
+    "c_recp_borrow",
+    "c_prepay_amt_borr",
+    "n_income",
+    "oper_cost",
+    "rd_exp",
+    "invest_income",
+    "fv_value_chg_gain",
+    "non_oper_income",
+    "non_oper_exp",
 )
 
 
 def _materialized_candidate(
     tmp_path: Path, *, extra_income_versions: int = 0, quarterly_cash_seed: bool = False,
+    income_items: list[list[object]] | None = None, market_sessions: tuple[str, ...] = SESSIONS,
 ):
-    market_manifest = _market_generation(tmp_path)
+    market_manifest = _market_generation(tmp_path, sessions=market_sessions)
     batches = RawFinancialBatchStore(tmp_path)
     checkpoints: list[FinancialShardCheckpoint] = []
 
@@ -133,7 +149,7 @@ def _materialized_candidate(
     add_batch(
         0,
         "income",
-        [
+        income_items if income_items is not None else [
             ["000001.SZ", "20080425", "", "20071231", "1", "1", "4", "70", "0"],
             ["000001.SZ", "20090425", "", "20081231", "1", "1", "4", "80", "0"],
             ["000001.SZ", "20090425", "", "20081231", "1", "1", "4", "81", "1"],
@@ -322,7 +338,7 @@ def test_materializes_sparse_versioned_financial_family_without_publishing(tmp_p
     income = store.read_table(first.manifest_sha256, "income_statement_versions")
     available = [row for row in income if row["availability_status"] == "available"]
     quarantined = [row for row in income if row["availability_status"] == "quarantined"]
-    assert {row["revenue"] for row in available} == {"70", "90", "200"}
+    assert {row["revenue"] for row in available} == {"70", "90", "200", "900"}
     assert {row["revenue"] for row in quarantined} == {"25", "80", "81", "101", None}
     assert {row["revision_basis"] for row in income} == {"source_version"}
     by_value = {row["revenue"]: row for row in income}
@@ -1363,7 +1379,7 @@ def test_daily_rebuild_publishes_targeted_evidence_and_degraded_discovery_covera
         "discovery_complete_through_session": "2026-08-13",
         "historical_reconciliation_watermark": "2026-08-13",
         "revision_coverage": "cninfo-announcement-driven-tushare-observed",
-        "seed_policy": "latest-pre-start-annual-flow-and-reported-stock-facts",
+        "seed_policy": "annual-stock-and-ttm-dependency-seeds",
         "readiness_status": "ready_with_pending",
         "pending_instrument_count": 1,
         "discovery_gap_count": 0,
@@ -1859,7 +1875,8 @@ def test_targeted_daily_rebuild_appends_only_changed_rows_to_immutable_tables(
         assert table["objects"][: len(prior_table["objects"])] == prior_table["objects"]
         assert current_reference["object_count"] > prior_reference["object_count"]
     income = store.read_table(current.manifest_sha256, "income_statement_versions")
-    assert sum(row["revenue"] == "900" for row in income) == 1
+    assert sum(row["revenue"] == "900" for row in income
+               if row["instrument_id"] == "equity:000001.SZ") == 1
     retained = MountedGenerationStore(tmp_path).financial_candidate_referenced_files(
         current.manifest_sha256
     )
@@ -1923,7 +1940,8 @@ def test_targeted_daily_rebuild_appends_only_changed_rows_to_immutable_tables(
     )
     assert store.validate(second.manifest_sha256) == second
     second_income = store.read_table(second.manifest_sha256, "income_statement_versions")
-    assert sum(row["revenue"] == "900" for row in second_income) == 1
+    assert sum(row["revenue"] == "900" for row in second_income
+               if row["instrument_id"] == "equity:000001.SZ") == 1
     assert sum(row["revenue"] == "950" for row in second_income) == 1
     second_retained = MountedGenerationStore(tmp_path).financial_candidate_referenced_files(
         second.manifest_sha256
@@ -2387,3 +2405,45 @@ def test_quarantined_stock_candidate_resolves_to_missing(
         }
     else:
         assert resolver.resolve(**request) == {field: {}}
+
+
+def test_ttm_seed_closure_supports_start_and_later_first_year_quarter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        globals(), "FIELDS",
+        tuple("total_revenue" if name == "revenue" else name for name in FIELDS),
+    )
+    items = [
+        ["000001.SZ", announcement, "", period, "1", "1", "4", amount, "0"]
+        for announcement, period, amount in (
+            ("20080425", "20071231", "70"),
+            ("20081029", "20080930", "40"),
+            ("20090425", "20081231", "100"),
+            ("20090425", "20090331", "50"),
+            ("20091029", "20090930", "90"),
+            ("20100419", "20091231", "120"),
+            ("20100420", "20100331", "60"),
+        )
+    ]
+    calendar = tuple(sorted((*SESSIONS, "2008-10-30", "2009-10-30")))
+    store, candidate, repeated, _ = _materialized_candidate(
+        tmp_path, income_items=items, market_sessions=calendar,
+    )
+    assert candidate == repeated == store.validate(candidate.manifest_sha256)
+    rows = store.read_table(candidate.manifest_sha256, "income_statement_versions")
+    assert {
+        row["source_report_period"] for row in rows
+        if row["instrument_id"] == "equity:000001.SZ" and row["coverage_role"] == "pre_start_seed"
+    } == {"20080930", "20081231", "20090331", "20090930"}
+    field = "financial.income.total_revenue.ttm"
+    request = dict(
+        manifest_sha256=candidate.manifest_sha256, field_ids=(field,),
+        sessions=("2010-01-04", "2010-04-20", "2010-04-21"),
+        instrument_ids=("equity:000001.SZ",),
+    )
+    resolver = FinancialSeriesResolver(store)
+    assert resolver.resolve_table(**request)[field].to_pylist() == ["150", "120", "130"]
+    assert list(resolver.resolve(**request)[field].values()) == ["150", "120", "130"]
+    with pytest.raises(FinancialCandidateError, match="FINANCIAL_SERIES_COVERAGE_INVALID"):
+        resolver.resolve_table(**{**request, "sessions": ("2009-10-30",)})

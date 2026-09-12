@@ -937,7 +937,7 @@ class FinancialCandidateStore:
                 "reconciliation_status": "complete",
                 "historical_reconciliation_watermark": observation_through_session,
                 "revision_coverage": "source-dated-and-first-observed-corrections",
-                "seed_policy": "latest-pre-start-annual-flow-and-reported-stock-facts",
+                "seed_policy": "annual-stock-and-ttm-dependency-seeds",
             }
             if discovery is None
             else _discovery_coverage(coverage_start, discovery)
@@ -1396,7 +1396,7 @@ class FinancialCandidateStore:
             "reconciliation_status": "complete",
             "historical_reconciliation_watermark": descriptor.observation_through_session,
             "revision_coverage": "source-dated-and-first-observed-corrections",
-            "seed_policy": "latest-pre-start-annual-flow-and-reported-stock-facts",
+            "seed_policy": "annual-stock-and-ttm-dependency-seeds",
         }:
             raise FinancialCandidateError("FINANCIAL_COVERAGE_INVALID")
         quarantine_manifest = manifest["quarantine"]
@@ -2048,7 +2048,7 @@ class FinancialCandidateStore:
             if str(source.get("report_type") or "") != "1":
                 continue
             for endpoint, selection in selections:
-                if endpoint != version.endpoint:
+                if endpoint != version.endpoint or selection == "latest_visible_ttm":
                     continue
                 if selection == "latest_visible_full_year" and not report_period.endswith("1231"):
                     continue
@@ -2067,6 +2067,13 @@ class FinancialCandidateStore:
             seed_id = (latest.endpoint, latest.instrument_id, latest.source_row_sha256)
             if seed_id not in retained_seed_ids:
                 retained[latest.endpoint].append(replace(latest, coverage_role="pre_start_seed"))
+                retained_seed_ids.add(seed_id)
+        ttm_endpoints = {endpoint for endpoint, selection in selections
+                         if selection == "latest_visible_ttm"}
+        for seed in _ttm_coverage_seeds(versions, coverage_start, ttm_endpoints):
+            seed_id = (seed.endpoint, seed.instrument_id, seed.source_row_sha256)
+            if seed_id not in retained_seed_ids:
+                retained[seed.endpoint].append(replace(seed, coverage_role="pre_start_seed"))
                 retained_seed_ids.add(seed_id)
         return retained
 
@@ -2682,6 +2689,49 @@ def _table_contract(table_name: str, source_fields: tuple[str, ...]) -> ParquetW
     )
 
 
+
+def _ttm_coverage_seeds(
+    versions: Sequence[CanonicalFinancialVersion],
+    coverage_start: str,
+    endpoints: set[str],
+) -> list[CanonicalFinancialVersion]:
+    grouped: dict[tuple[str, str], list[CanonicalFinancialVersion]] = defaultdict(list)
+    for version in versions:
+        source = version.source()
+        if (version.endpoint in endpoints and version.availability_status == "available"
+                and source.get("report_type") == "1"
+                and str(source.get("comp_type")) in {"1", "2", "3", "4"}
+                and str(source["end_date"])[-4:] in {"0331", "0630", "0930", "1231"}):
+            grouped[(version.endpoint, version.instrument_id)].append(version)
+    seeds: list[CanonicalFinancialVersion] = []
+    for group in grouped.values():
+        before: dict[tuple[str, str], list[CanonicalFinancialVersion]] = defaultdict(list)
+        targets: set[str] = set()
+        for version in group:
+            source = version.source()
+            period = str(source["end_date"])
+            if version.effective_available_session < coverage_start:
+                before[(period, str(source["comp_type"]))].append(version)
+            else:
+                targets.add(period)
+        if before:
+            targets.add(max(period for period, _ in before))
+        required = set(targets)
+        for period in targets:
+            if not period.endswith("1231"):
+                previous_year = int(period[:4]) - 1
+                required.update((f"{previous_year}1231", f"{previous_year}{period[4:]}"))
+        for (period, _company_type), candidates in before.items():
+            if period not in required:
+                continue
+            seeds.append(max(candidates, key=lambda item: (
+                item.effective_available_session,
+                str(item.source().get("update_flag") or "") == "1",
+                item.source_published_date, item.first_observed_at, item.source_row_sha256,
+            )))
+    return seeds
+
+
 def _compact_financial_history(table: pa.Table, start_session: str) -> pa.Table:
     """Keep one PIT seed per logical report plus every in-window version."""
     if table.num_rows == 0:
@@ -2951,7 +3001,7 @@ def _discovery_coverage(
         "discovery_complete_through_session": discovery.complete_through_session,
         "historical_reconciliation_watermark": discovery.baseline_session,
         "revision_coverage": "cninfo-announcement-driven-tushare-observed",
-        "seed_policy": "latest-pre-start-annual-flow-and-reported-stock-facts",
+        "seed_policy": "annual-stock-and-ttm-dependency-seeds",
         "readiness_status": discovery.readiness_status,
         "pending_instrument_count": discovery.pending_instrument_count,
         "discovery_gap_count": discovery.discovery_gap_count,

@@ -81,7 +81,7 @@ from thesistrace.publication.serialization import (
     parquet_bytes,
     parquet_table_bytes,
 )
-from thesistrace.research_series import AlignedResearchData
+from thesistrace.research_series import AlignedResearchData, ttm_window_column
 
 _FAMILY_GENERATION_FORMAT = "thesistrace-family-generation"
 _FAMILY_MANIFEST_FORMAT = "thesistrace-dataset-family"
@@ -1012,16 +1012,32 @@ class MountedGenerationStore:
         if set(field_bindings) - set(market.generation.field_availability):
             raise GenerationStoreError("Composite Series field unavailable in Generation")
         fields = dict(market.research_data.fields)
+        windows = dict(market.research_data.ttm_windows)
         for family_id, family_bindings in bindings.items():
             reader, family_manifest = self._series_family_reader(market.generation, family_id)
-            fields.update(reader.resolve(
+            table = reader.resolve_table(
                 manifest_sha256=family_manifest,
                 field_ids=tuple(family_bindings), sessions=tuple(sessions),
                 instrument_ids=tuple(sorted(market.research_data.instruments)),
-            ))
+            )
+            coordinates = tuple(zip(table["session"].to_pylist(),
+                                    table["instrument_id"].to_pylist(), strict=True))
+            present = (
+                table["source_row_present"].to_pylist()
+                if "source_row_present" in table.column_names else [False] * len(coordinates)
+            )
+            for field_id in family_bindings:
+                fields[field_id] = {coordinate: value for coordinate, value, source_present in zip(
+                    coordinates, table[field_id].to_pylist(), present, strict=True,
+                ) if value is not None or source_present}
+                column = ttm_window_column(field_id)
+                if column in table.column_names:
+                    windows[field_id] = {coordinate: value for coordinate, value in zip(
+                        coordinates, table[column].to_pylist(), strict=True,
+                    ) if value is not None}
         return MountedMarketSeries(
             generation=market.generation,
-            research_data=replace(market.research_data, fields=fields),
+            research_data=replace(market.research_data, fields=fields, ttm_windows=windows),
         )
 
     def _series_family_reader(self, generation: MountedFamilyGenerationDescriptor, family_id: str):
@@ -1182,8 +1198,9 @@ class MountedGenerationStore:
                 coordinates = ("session", "instrument_id")
                 if not family_values.select(coordinates).equals(values.select(coordinates)):
                     raise GenerationStoreError("Research Series family coordinates disagree")
-                for field_id in family_bindings:
-                    family_values = family_values.append_column(field_id, values[field_id])
+                for column in values.column_names:
+                    if column not in coordinates:
+                        family_values = family_values.append_column(column, values[column])
         return ColumnarResearchData(
             sessions=tuple(sessions),
             _instruments=tables["instruments"],

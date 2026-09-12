@@ -87,6 +87,25 @@ def test_alpha_catalog_exposes_financial_fields_and_cross_sectional_rank() -> No
         "noncurrent_liabilities_due_1y",
         "other_equity_instruments",
         "cash_equivalents",
+        "cash_paid_capex_ttm",
+        "cash_received_sales_ttm",
+        "cash_paid_goods_ttm",
+        "cash_received_asset_disposals_ttm",
+        "cash_paid_acquisitions_ttm",
+        "cash_paid_investments_ttm",
+        "cash_received_borrowing_ttm",
+        "cash_paid_debt_repayment_ttm",
+        "operating_revenue_ttm",
+        "consolidated_net_profit_ttm",
+        "operating_cost_ttm",
+        "rd_expense_ttm",
+        "investment_income_ttm",
+        "fair_value_gain_ttm",
+        "nonoperating_income_ttm",
+        "nonoperating_expense_ttm",
+        "revenue_ttm",
+        "net_profit_ttm",
+        "operating_cash_flow_ttm",
     }
     assert {
         identifier: field["field_id"] for identifier, field in financial.items()
@@ -152,6 +171,63 @@ def test_alpha_catalog_exposes_financial_fields_and_cross_sectional_rank() -> No
         ),
         "cash_equivalents": (
             "financial.cashflow.cash_equivalents.latest_reported"
+        ),
+        "cash_paid_capex_ttm": (
+            "financial.cashflow.cash_paid_capex.ttm"
+        ),
+        "cash_received_sales_ttm": (
+            "financial.cashflow.cash_received_sales.ttm"
+        ),
+        "cash_paid_goods_ttm": (
+            "financial.cashflow.cash_paid_goods.ttm"
+        ),
+        "cash_received_asset_disposals_ttm": (
+            "financial.cashflow.cash_received_asset_disposals.ttm"
+        ),
+        "cash_paid_acquisitions_ttm": (
+            "financial.cashflow.cash_paid_acquisitions.ttm"
+        ),
+        "cash_paid_investments_ttm": (
+            "financial.cashflow.cash_paid_investments.ttm"
+        ),
+        "cash_received_borrowing_ttm": (
+            "financial.cashflow.cash_received_borrowing.ttm"
+        ),
+        "cash_paid_debt_repayment_ttm": (
+            "financial.cashflow.cash_paid_debt_repayment.ttm"
+        ),
+        "operating_revenue_ttm": (
+            "financial.income.operating_revenue.ttm"
+        ),
+        "consolidated_net_profit_ttm": (
+            "financial.income.consolidated_net_profit.ttm"
+        ),
+        "operating_cost_ttm": (
+            "financial.income.operating_cost.ttm"
+        ),
+        "rd_expense_ttm": (
+            "financial.income.rd_expense.ttm"
+        ),
+        "investment_income_ttm": (
+            "financial.income.investment_income.ttm"
+        ),
+        "fair_value_gain_ttm": (
+            "financial.income.fair_value_gain.ttm"
+        ),
+        "nonoperating_income_ttm": (
+            "financial.income.nonoperating_income.ttm"
+        ),
+        "nonoperating_expense_ttm": (
+            "financial.income.nonoperating_expense.ttm"
+        ),
+        "revenue_ttm": (
+            "financial.income.total_revenue.ttm"
+        ),
+        "net_profit_ttm": (
+            "financial.income.net_profit_parent.ttm"
+        ),
+        "operating_cash_flow_ttm": (
+            "financial.cashflow.operating_cash_flow.ttm"
         ),
     }
     assert all(field["report_period_selection"] for field in financial.values())

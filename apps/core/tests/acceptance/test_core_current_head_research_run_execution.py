@@ -5027,7 +5027,7 @@ def test_admission_rechecks_head_after_catalog_read(tmp_path: Path) -> None:
         snapshot = client.get("/api/data").json()
         assert snapshot["generation_manifest_sha256"] == head_a
         assert snapshot["catalog"]["generation_manifest_sha256"] == head_a
-        assert len(snapshot["catalog"]["fields"]) == 29
+        assert len(snapshot["catalog"]["fields"]) == 48
         assert "revenue" in {field["identifier"] for field in snapshot["catalog"]["fields"]}
 
         head_b = _publish_head(
@@ -5080,7 +5080,7 @@ def test_daily_fields_http_research_and_track_use_their_frozen_generations(tmp_p
         snapshot = client.get("/api/data").json()
         assert snapshot["generation_manifest_sha256"] == expanded
         fields = {field["identifier"] for field in snapshot["catalog"]["fields"]}
-        assert len(fields) == 44
+        assert len(fields) == 63
         assert {"close_raw", "pe", "turnover_rate", "revenue"} <= fields
         accepted = client.post("/api/research-runs", json=_run_command(
             "daily-mixed-research", formula=formula,
@@ -5126,7 +5126,7 @@ def test_statement_stock_formula_completes_through_http_and_real_worker(tmp_path
         overview = client.get("/api/data").json()
         catalog = {field["identifier"]: field for field in overview["catalog"]["fields"]}
         assert overview["generation_manifest_sha256"] == generation
-        assert len(catalog) == 29
+        assert len(catalog) == 48
         assert catalog["cash_equivalents"]["report_period_selection"] == (
             "latest_visible_quarterly_or_annual"
         )
@@ -5141,6 +5141,106 @@ def test_statement_stock_formula_completes_through_http_and_real_worker(tmp_path
         detail = client.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "succeeded", detail
         assert _stored_execution(settings, run_id)["attempt_data_generation_id"] == generation
+
+
+@pytest.mark.parametrize("mismatched", [False, True])
+def test_ttm_http_research_uses_windows_without_extra_ui_contract(
+    tmp_path: Path, mismatched: bool,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2010-01-04", "2010-04-20", "2010-04-21",
+                "2026-08-03", "2026-08-04", "2026-08-05")
+    generation = _publish_composite_head(
+        settings, sessions=sessions, all_market_fields=True, mismatched_ttm=mismatched,
+    )
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        catalog = client.get("/api/data").json()["catalog"]["fields"]
+        ttm = [field for field in catalog
+               if field["report_period_selection"] == "latest_visible_ttm"]
+        assert len(ttm) == 19
+        assert all(field["unit"] == "CNY" for field in ttm)
+        accepted = client.post("/api/research-runs", json=_run_command(
+            f"ttm-window-{mismatched}",
+            formula="rank((revenue_ttm * 2) / (operating_cash_flow_ttm * 2))",
+        ))
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()["id"]
+        assert runtime.research_runs.process_next()
+        stored = _stored_execution(settings, run_id)
+        assert stored["status"] == "succeeded", stored
+        assert stored["attempt_data_generation_id"] == generation
+        result = read_result_bundle(runtime.publication.read(PublishedRef(
+            manifest_sha256=str(stored["result_manifest_sha256"]), kind="research.result",
+            provenance=stored["result_provenance"],
+        )), research_kind="strategy_backtest")
+        assert bool(result["terminal_strategy_state"]["positions"]) is not mismatched
+
+        batch_response = client.post("/api/research-batches", json={
+            "request_id": f"ttm-shared-{mismatched}",
+            "batch_kind": "strategy_sweep",
+            "start_date": "2026-08-03", "end_date": "2026-08-05",
+            "universe": "top300", "neutralization": "none",
+            "alpha": {
+                "formula": "rank((revenue_ttm * 2) / (operating_cash_flow_ttm * 2))",
+                "hypothesis": "TTM windows survive shared calculation",
+            },
+            "strategies": [
+                {"item_key": "daily", "name": "Daily", "holdings_count": 1,
+                 "rebalance_every_sessions": 1},
+                {"item_key": "alternate", "name": "Alternate", "holdings_count": 1,
+                 "rebalance_every_sessions": 2},
+            ],
+        })
+        assert batch_response.status_code == 202, batch_response.text
+        batch_id = batch_response.json()["id"]
+        assert runtime.research_batches.process_next()
+        batch = client.get(f"/api/research-batches/{batch_id}").json()
+        assert batch["status"] == "succeeded", json.dumps(batch, ensure_ascii=False)
+        assert batch["progress"]["shared_alpha_factor_status"] == "succeeded"
+        for item in batch["items"]:
+            with runtime.database.transaction() as transaction:
+                batch_stored = transaction.execute(
+                    "SELECT result_manifest_sha256, result_provenance "
+                    "FROM research_runs.runs WHERE id = %s",
+                    (item["research_run_id"],),
+                ).fetchone()
+            assert batch_stored is not None
+            assert batch_stored["result_provenance"]["data_generation_id"] == generation
+            batch_result = read_result_bundle(runtime.publication.read(PublishedRef(
+                manifest_sha256=str(batch_stored["result_manifest_sha256"]),
+                kind="research.result", provenance=batch_stored["result_provenance"],
+            )), research_kind="strategy_backtest")
+            assert bool(batch_result["terminal_strategy_state"]["positions"]) is not mismatched
+            if item["item_key"] == "daily":
+                assert canonical_json_bytes(batch_result) == canonical_json_bytes(result)
+
+        started = client.post(f"/api/research-runs/{run_id}/daily-tracks", json={
+            "request_id": f"ttm-track-{mismatched}",
+        })
+        assert started.status_code == 201, started.text
+        track_id = started.json()["id"]
+        before = _tracking_checkpoint_history(settings, track_id)
+        origin = _stored_tracking_activation(settings, track_id)["origin"]
+        advanced = _publish_composite_head(
+            settings, sessions=(*sessions, "2026-08-06", "2026-08-07"),
+            all_market_fields=True, mismatched_ttm=not mismatched,
+            expected_manifest=generation, operation_id=f"ttm-track-new-window-{mismatched}",
+        )
+        _refresh_daily_track(client, track_id, f"ttm-track-refresh-{mismatched}")
+        assert runtime.daily_tracks.process_next()
+        tracked = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert tracked["status"] == "active"
+        assert tracked["strategy_session"] == "2026-08-07"
+        state = _stored_tracking_activation(settings, track_id)
+        assert state["origin"] == origin
+        assert bool(state["terminal_strategy_state"]["positions"]) is mismatched
+        assert _tracking_checkpoint_history(settings, track_id)[:len(before)] == before
+        assert client.get("/api/data").json()["generation_manifest_sha256"] == advanced
+        assert _stored_execution(settings, run_id)["attempt_data_generation_id"] == generation
+
 
 def _run_command(
     request_id: str,
@@ -5539,6 +5639,7 @@ def _publish_composite_head(
     sessions: tuple[str, ...],
     all_market_fields: bool = False,
     daily_fields: bool = False,
+    mismatched_ttm: bool = False,
     financial_through: str | None = None,
     financial_readiness_status: str = "ready",
     industry_through: str | None = None,
@@ -5606,6 +5707,14 @@ def _publish_composite_head(
             "end_type",
             "total_revenue",
             "n_income_attr_p",
+            "revenue",
+            "n_income",
+            "oper_cost",
+            "rd_exp",
+            "invest_income",
+            "fv_value_chg_gain",
+            "non_oper_income",
+            "non_oper_exp",
             "update_flag",
         ),
         "balancesheet": (
@@ -5634,16 +5743,26 @@ def _publish_composite_head(
             "end_type",
             "n_cashflow_act",
             "c_cash_equ_end_period",
+            "c_pay_acq_const_fiolta",
+            "c_fr_sale_sg",
+            "c_paid_goods_s",
+            "n_recp_disp_fiolta",
+            "n_disp_subs_oth_biz",
+            "c_paid_invest",
+            "c_recp_borrow",
+            "c_prepay_amt_borr",
             "update_flag",
         ),
     }
     values = {
-        "income": (("100", "10"), ("200", "20")),
+        "income": (("100", "10", *("10",) * 8),
+                   ("200", "20", *("20",) * 8)),
         "balancesheet": (
             ("1000", "400", "600", "200", *("10",) * 14),
             ("2000", "800", "1200", "100", *("20",) * 14),
         ),
-        "cashflow": (("30", "50"), ("60", "75")),
+        "cashflow": (("30", "50", *("5",) * 8),
+                     ("60", "75", *("10",) * 8)),
     }
     raw = RawFinancialBatchStore(settings.data_mount)
     checkpoints: list[FinancialShardCheckpoint] = []
@@ -5663,8 +5782,14 @@ def _publish_composite_head(
                 *values[endpoint][index],
                 "0",
             ]
+            items = [item]
+            if mismatched_ttm and endpoint == "income":
+                for period, amount in (("20090331", "50"), ("20100331", "60")):
+                    quarter = list(item)
+                    quarter[3], quarter[6], quarter[7] = period, "1", amount
+                    items.append(quarter)
             payload_sha256 = hashlib.sha256(
-                canonical_json_bytes({"fields": list(fields), "items": [item]})
+                canonical_json_bytes({"fields": list(fields), "items": items})
             ).hexdigest()
             payload = {
                 "format": "thesistrace-raw-financial-batch",
@@ -5673,8 +5798,8 @@ def _publish_composite_head(
                 "endpoint": endpoint,
                 "parameters": {"ts_code": ts_code},
                 "returned_fields": list(fields),
-                "items": [item],
-                "row_count": 1,
+                "items": items,
+                "row_count": len(items),
                 "source_date_extent": ["20100420", "20100420"],
                 "payload_sha256": payload_sha256,
             }

@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from thesistrace.data.fields import FINANCIAL_FIELDS
-from thesistrace.research_series import Coordinate, NumericValue
+from thesistrace.research_series import Coordinate, NumericValue, ttm_window_column
 
 
 class FinancialSeriesError(ValueError):
@@ -52,9 +52,11 @@ _PROJECTIONS = tuple(
         field.field_id,
         field.source_endpoint,
         field.source_column,
-        "annual"
-        if field.report_period_selection == "latest_visible_full_year"
-        else "latest_reported",
+        {
+            "latest_visible_full_year": "annual",
+            "latest_visible_quarterly_or_annual": "latest_reported",
+            "latest_visible_ttm": "ttm",
+        }[field.report_period_selection],
         field.applicable_company_types,
     )
     for field in FINANCIAL_FIELDS
@@ -194,12 +196,9 @@ class FinancialSeriesResolver:
                     requested_sessions,
                     instrument_set,
                 )
-                for projection in selected:
-                    result = result.append_column(
-                        projection.field_id,
-                        aligned[projection.field_id],
-                    )
-        return result.select(("session", "instrument_id", *fields))
+                for column in _projection_columns(selected):
+                    result = result.append_column(column, aligned[column])
+        return result.select(("session", "instrument_id", *_projection_columns(projections)))
 
 
 def _resolve_projection_group(
@@ -211,7 +210,9 @@ def _resolve_projection_group(
 ) -> None:
     annual = projections[0].period_selection == "annual"
     aligned = _align_projection_group(
-        _state_transitions_rows(rows, projections, instrument_ids, annual=annual),
+        (_ttm_state_transitions(rows, projections, instrument_ids)
+         if projections[0].period_selection == "ttm" else
+         _state_transitions_rows(rows, projections, instrument_ids, annual=annual)),
         projections,
         sessions,
         instrument_ids,
@@ -241,11 +242,10 @@ def _resolve_projection_group_table(
     instrument_ids: frozenset[str],
 ) -> pa.Table:
     annual = projections[0].period_selection == "annual"
-    transitions = _state_transitions_table(
-        table,
-        projections,
-        instrument_ids,
-        annual=annual,
+    transitions = (
+        _ttm_state_transitions_table(table, projections, instrument_ids)
+        if projections[0].period_selection == "ttm" else
+        _state_transitions_table(table, projections, instrument_ids, annual=annual)
     )
     return _align_projection_group(transitions, projections, sessions, instrument_ids)
 
@@ -260,9 +260,9 @@ def _align_projection_group(
         empty = _coordinate_table(sessions, tuple(sorted(instrument_ids))).select(
             ("session", "instrument_id")
         )
-        for projection in projections:
+        for column in _projection_columns(projections):
             empty = empty.append_column(
-                projection.field_id,
+                column,
                 pa.nulls(empty.num_rows, type=pa.string()),
             )
         return empty
@@ -301,12 +301,93 @@ def _align_projection_group(
         missing[output_positions[available]] = False
     take_indices = pa.array(aligned_indices, mask=missing)
     result = coordinates.select(("session", "instrument_id"))
-    for projection in projections:
-        result = result.append_column(
-            projection.field_id,
-            pc.take(ordered[projection.field_id], take_indices),
-        )
+    for column in _projection_columns(projections):
+        result = result.append_column(column, pc.take(ordered[column], take_indices))
     return result
+
+
+
+
+def _ttm_state_transitions_table(
+    table: pa.Table,
+    projections: Sequence[_FieldProjection],
+    instrument_ids: frozenset[str],
+) -> pa.Table:
+    # Keep row objects bounded to one instrument's sparse report history.
+    ordered = table.filter(pc.is_in(
+        table["instrument_id"], value_set=pa.array(sorted(instrument_ids)),
+    )).sort_by([("instrument_id", "ascending")])
+    if not ordered.num_rows:
+        return pa.Table.from_batches([], schema=_transition_schema(projections))
+    ends = pc.run_end_encode(ordered["instrument_id"].combine_chunks()).run_ends.to_numpy()
+    transitions: list[pa.Table] = []
+    start = 0
+    for end in ends:
+        transitions.append(_ttm_state_transitions(
+            ordered.slice(start, int(end) - start).to_pylist(), projections, instrument_ids,
+        ))
+        start = int(end)
+    return pa.concat_tables(transitions)
+
+
+def _ttm_state_transitions(
+    rows: Sequence[Mapping[str, object]],
+    projections: Sequence[_FieldProjection],
+    instrument_ids: frozenset[str],
+) -> pa.Table:
+    accepted = sorted(
+        (row for row in rows
+         if row.get("instrument_id") in instrument_ids
+         and row.get("availability_status") == "available"
+         and row.get("source_report_type") == "1"
+         and str(row.get("source_company_type")) in _COMPANY_TYPES
+         and str(row.get("source_report_period", ""))[-4:] in {"0331", "0630", "0930", "1231"}),
+        key=lambda row: (str(row["instrument_id"]), _version_key(row)),
+    )
+    transitions: list[dict[str, object]] = []
+    position = 0
+    while position < len(accepted):
+        instrument = str(accepted[position]["instrument_id"])
+        latest: dict[str, Mapping[str, object]] = {}
+        while position < len(accepted) and accepted[position]["instrument_id"] == instrument:
+            session = str(accepted[position]["effective_available_session"])
+            while (position < len(accepted)
+                   and accepted[position]["instrument_id"] == instrument
+                   and accepted[position]["effective_available_session"] == session):
+                row = accepted[position]
+                latest[str(row["source_report_period"])] = row
+                position += 1
+            period = max(latest)
+            target = latest[period]
+            year = int(period[:4]) - 1
+            components = (target,) if period.endswith("1231") else (
+                target, latest.get(f"{year}1231"), latest.get(f"{year}{period[4:]}"),
+            )
+            values: dict[str, object] = {
+                "session_date": date.fromisoformat(session), "instrument_id": instrument,
+            }
+            for projection in projections:
+                value = None
+                if all(
+                    component is not None
+                    and component["source_company_type"] == target["source_company_type"]
+                    and str(component["source_company_type"]) in projection.company_types
+                    and component.get(projection.source_column) is not None
+                    for component in components
+                ):
+                    amounts = tuple(
+                        Decimal(str(component[projection.source_column]))
+                        for component in components if component is not None
+                    )
+                    if all(amount.is_finite() for amount in amounts):
+                        value = str(amounts[0] if len(amounts) == 1
+                                    else amounts[0] + amounts[1] - amounts[2])
+                values[projection.field_id] = value
+                values[ttm_window_column(projection.field_id)] = (
+                    period if value is not None else None
+                )
+            transitions.append(values)
+    return pa.Table.from_pylist(transitions, schema=_transition_schema(projections))
 
 
 def _state_transitions_rows(
@@ -474,10 +555,17 @@ def _state_transitions_table(
     )
 
 
+def _projection_columns(projections: Sequence[_FieldProjection]) -> tuple[str, ...]:
+    return tuple(column for projection in projections for column in (
+        (projection.field_id, ttm_window_column(projection.field_id))
+        if projection.period_selection == "ttm" else (projection.field_id,)
+    ))
+
+
 def _transition_schema(projections: Sequence[_FieldProjection]) -> pa.Schema:
     return pa.schema(
         [pa.field("session_date", pa.date32()), pa.field("instrument_id", pa.string())]
-        + [pa.field(projection.field_id, pa.string()) for projection in projections]
+        + [pa.field(column, pa.string()) for column in _projection_columns(projections)]
     )
 
 

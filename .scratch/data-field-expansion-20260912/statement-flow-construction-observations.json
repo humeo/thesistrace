@@ -1,0 +1,54 @@
+{
+  "observed_at": "2026-09-12T19:17:22.508854+00:00",
+  "scope": "Construction company annual cashflow; 1 bounded read-only request",
+  "evidence_limit": "Source column and non-null observations only; not proof of complete history or full unit qualification",
+  "records": [
+    {
+      "endpoint": "cashflow",
+      "ts_code": "601668.SH",
+      "period": "20251231",
+      "fields": [
+        "ts_code",
+        "ann_date",
+        "f_ann_date",
+        "end_date",
+        "report_type",
+        "comp_type",
+        "end_type",
+        "update_flag",
+        "c_pay_acq_const_fiolta",
+        "c_fr_sale_sg",
+        "c_paid_goods_s",
+        "n_recp_disp_fiolta",
+        "n_disp_subs_oth_biz",
+        "c_paid_invest",
+        "c_recp_borrow",
+        "c_prepay_amt_borr",
+        "n_cashflow_act"
+      ],
+      "items": [
+        [
+          "601668.SH",
+          "20260418",
+          "20260418",
+          "20251231",
+          "1",
+          "1",
+          "4",
+          "1",
+          26226719000.0,
+          2131180581000.0,
+          1952939461000.0,
+          4760083000.0,
+          7425135000.0,
+          8561454000.0,
+          469885077000.0,
+          534846647000.0,
+          20537132000.0
+        ]
+      ],
+      "status": "observed",
+      "missing_columns": []
+    }
+  ]
+}
