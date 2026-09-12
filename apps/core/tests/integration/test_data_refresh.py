@@ -1385,6 +1385,7 @@ def test_shared_worker_dispatches_financial_and_persists_a_safe_degraded_receipt
                 benchmark_source=FixtureBenchmarkSource(),
                 financial_announcement_source=announcement_source,
                 financial_source=financial_source,
+                indicator_provider=financial_source,
             )
             is True
         )
@@ -1392,6 +1393,7 @@ def test_shared_worker_dispatches_financial_and_persists_a_safe_degraded_receipt
         receipt = refresh.inspect("financial-degraded")
         assert received["announcement_source"] is announcement_source
         assert received["financial_source"] is financial_source
+        assert received["options"]["indicator_provider"] is financial_source
         assert received["idempotency_key"] == "financial-degraded"
         assert received["observation_through_session"] == target
         assert receipt.status == "succeeded"
@@ -1463,6 +1465,7 @@ def test_shared_worker_distinguishes_clean_financial_terminal_outcomes(
                 benchmark_source=FixtureBenchmarkSource(),
                 financial_announcement_source=object(),
                 financial_source=object(),
+                indicator_provider=object(),
             )
             is True
         )
@@ -1511,6 +1514,7 @@ def test_financial_business_rejection_is_terminal_without_retry(
                 benchmark_source=FixtureBenchmarkSource(),
                 financial_announcement_source=object(),
                 financial_source=object(),
+                indicator_provider=object(),
             )
         assert failure.value.code == "FINANCIAL_TARGET_EXCEEDS_MARKET"
 
@@ -1570,6 +1574,7 @@ def test_nonretryable_financial_internal_failure_is_not_business_rejection(
                 benchmark_source=FixtureBenchmarkSource(),
                 financial_announcement_source=object(),
                 financial_source=object(),
+                indicator_provider=object(),
             )
         assert failure.value.code == failure_code
 
@@ -1619,6 +1624,7 @@ def test_financial_infrastructure_failure_retries_then_exhausts(
                     benchmark_source=FixtureBenchmarkSource(),
                     financial_announcement_source=object(),
                     financial_source=object(),
+                    indicator_provider=object(),
                 )
             assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
             assert refresh.inspect("financial-infrastructure-failed").status == expected_status

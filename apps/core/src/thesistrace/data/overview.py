@@ -20,6 +20,7 @@ from thesistrace.data.models import (
     DatasetCoverage,
     FieldFamilyAvailability,
     FinancialCoverage,
+    FinancialResearchReadiness,
     IndustryCoverage,
 )
 
@@ -175,12 +176,7 @@ class DatasetOverviewService:
                         benchmark is not None
                         and benchmark.coverage_end_session >= market_end
                     ),
-                    financial_research_readiness=(
-                        "not_ready"
-                        if financial is None
-                        or descriptor.financial_research_readiness is None
-                        else str(descriptor.financial_research_readiness["status"])
-                    ),
+                    financial_research_readiness=financial_family_readiness(field_families),
                     industry_research_readiness=(
                         industry_coverage is not None
                         and industry_coverage["start"] <= market_start
@@ -214,11 +210,18 @@ def describe_family_fields(
         start = end = None
         readiness = "not_ready"
         if reference is not None:
-            if supported[0].research_category == "financial":
+            if reference.dataset_coverage["kind"] in {
+                "financial-announcement-observation-range", "financial-observation-range",
+            }:
                 financial = _financial_coverage(reference.dataset_coverage)
                 start = financial.start
                 end = financial.discovery_attempted_through_session
                 readiness = financial.readiness_status
+            elif reference.dataset_coverage["kind"] == "financial-indicator-observation-range":
+                start = date.fromisoformat(str(reference.dataset_coverage["start"]))
+                complete = reference.dataset_coverage["complete_through_session"]
+                end = None if complete is None else date.fromisoformat(str(complete))
+                readiness = str(reference.dataset_coverage["readiness_status"])
             else:
                 start = date.fromisoformat(str(reference.dataset_coverage["start"]))
                 end = date.fromisoformat(str(reference.dataset_coverage["end"]))
@@ -243,6 +246,20 @@ def describe_family_fields(
             readiness=readiness,
         ))
     return result
+
+
+def financial_family_readiness(
+    families: list[FieldFamilyAvailability],
+) -> FinancialResearchReadiness:
+    """Summarize all supported financial families using the current status contract."""
+    financial = [family for family in families if family.research_category == "financial"]
+    if not any(family.available_field_ids for family in financial):
+        return "not_ready"
+    if any(family.readiness in {"not_ready", "partial", "ready_with_gaps"} for family in financial):
+        return "ready_with_gaps"
+    if any(family.readiness == "ready_with_pending" for family in financial):
+        return "ready_with_pending"
+    return "ready"
 
 
 def _benchmark_coverage(

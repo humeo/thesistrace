@@ -55,7 +55,7 @@ def test_field_availability_requires_its_family_and_preserves_lagging_coverage()
 def test_empty_head_has_no_available_fields() -> None:
     families = describe_family_fields(None)
 
-    assert len(families) == 3
+    assert len(families) == 4
     assert all(family.readiness == "not_ready" for family in families)
     assert all(family.available_field_ids == [] for family in families)
 

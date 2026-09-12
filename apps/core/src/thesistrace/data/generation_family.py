@@ -135,6 +135,7 @@ class MountedDatasetFamilyDescriptor:
     validation_summary: dict[str, int | str]
     manifest_sha256: str
     table_names: tuple[str, ...]
+    field_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

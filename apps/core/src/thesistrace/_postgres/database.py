@@ -60,10 +60,15 @@ class PostgresDatabase:
             yield
 
     @contextmanager
-    def session_advisory_lock_shared(self, name: str) -> Iterator[None]:
-        if not name:
+    def session_advisory_lock_shared(
+        self, name: str, *, exclusive_name: str | None = None,
+    ) -> Iterator[None]:
+        """Hold a shared fence and optional exclusive work lock on one connection."""
+        if not name or (exclusive_name is not None and exclusive_name in {"", name}):
             raise ValueError("Advisory lock name must be non-empty")
-        with self._session_advisory_locks((name,), shared=True):
+        with self._session_advisory_locks(
+            (name,), shared=True, following_exclusive=exclusive_name,
+        ):
             yield
 
     @contextmanager
@@ -106,6 +111,7 @@ class PostgresDatabase:
         names: tuple[str, ...],
         *,
         shared: bool,
+        following_exclusive: str | None = None,
     ) -> Iterator[None]:
         lock_function = "pg_advisory_lock_shared" if shared else "pg_advisory_lock"
         with self._pool.connection() as connection:
@@ -116,13 +122,21 @@ class PostgresDatabase:
                     # following commit fails. Closing is the only unambiguous
                     # cleanup for a partially acquired sequence.
                     connection.commit()
+                if following_exclusive is not None:
+                    connection.execute(
+                        "SELECT pg_advisory_lock(hashtext(%s))", (following_exclusive,),
+                    )
+                    connection.commit()
             except BaseException:
                 connection.close()
                 raise
             try:
                 yield
             finally:
-                self._release_session_locks(connection, names, shared=shared)
+                if following_exclusive is not None:
+                    self._release_session_locks(connection, (following_exclusive,), shared=False)
+                if not connection.closed:
+                    self._release_session_locks(connection, names, shared=shared)
 
     @staticmethod
     def _release_session_locks(

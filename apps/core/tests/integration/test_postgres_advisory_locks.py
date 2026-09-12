@@ -5,14 +5,16 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import LiteralString
 
+import pytest
 from psycopg.errors import QueryCanceled
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.runtime import CoreSettings
 
 
+@pytest.mark.parametrize("mixed", [False, True])
 def test_cancelled_multi_lock_acquisition_releases_earlier_session_lock(
-    core_settings: CoreSettings,
+    core_settings: CoreSettings, mixed: bool,
 ) -> None:
     database = _open_database(core_settings)
     blocker = _open_database(core_settings)
@@ -36,7 +38,10 @@ def test_cancelled_multi_lock_acquisition_releases_earlier_session_lock(
 
     def acquire_both() -> None:
         try:
-            with database.session_advisory_locks(first, second):
+            with (
+                database.session_advisory_lock_shared(first, exclusive_name=second)
+                if mixed else database.session_advisory_locks(first, second)
+            ):
                 raise AssertionError("cancelled acquisition unexpectedly entered its body")
         except BaseException as error:
             acquisition_errors.append(error)
@@ -71,8 +76,9 @@ def test_cancelled_multi_lock_acquisition_releases_earlier_session_lock(
     assert blocker_errors == []
 
 
+@pytest.mark.parametrize("mixed", [False, True])
 def test_backend_loss_while_locked_discards_session_and_releases_all_locks(
-    core_settings: CoreSettings,
+    core_settings: CoreSettings, mixed: bool,
 ) -> None:
     database = _open_database(core_settings)
     observer = _open_database(core_settings)
@@ -93,7 +99,10 @@ def test_backend_loss_while_locked_discards_session_and_releases_all_locks(
 
     def hold_both() -> None:
         try:
-            with database.session_advisory_locks(first, second):
+            with (
+                database.session_advisory_lock_shared(first, exclusive_name=second)
+                if mixed else database.session_advisory_locks(first, second)
+            ):
                 body_entered.set()
                 if not leave_body.wait(timeout=10):
                     raise TimeoutError("test did not release the advisory-lock body")

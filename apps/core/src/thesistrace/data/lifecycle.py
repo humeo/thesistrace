@@ -36,9 +36,13 @@ class DataNotReady(DataLifecycleError):
 @contextmanager
 def mounted_data_mutation_lock(
     database: PostgresDatabase,
+    *,
+    exclusive_name: str | None = None,
 ) -> Iterator[None]:
     """Let operators coexist while excluding Reset and collection."""
-    with database.session_advisory_lock_shared(MOUNTED_DATA_MUTATION_LOCK):
+    with database.session_advisory_lock_shared(
+        MOUNTED_DATA_MUTATION_LOCK, exclusive_name=exclusive_name,
+    ):
         yield
 
 

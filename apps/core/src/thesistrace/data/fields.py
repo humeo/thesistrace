@@ -719,7 +719,45 @@ DAILY_BASIC_FIELDS = (
     ),
 )
 
-FIELD_DEFINITIONS = (*MARKET_FIELDS, *DAILY_BASIC_FIELDS, *FINANCIAL_FIELDS)
+def _indicator_field(
+    identifier: str, display_name: str, purpose: str, unit: str, source_unit: str,
+    period: str, description: str,
+) -> FieldDefinition:
+    return FieldDefinition(
+        field_id=f"financial.indicator.{identifier}", description=description,
+        unit=unit, physical_type="decimal",
+        availability="announcement_aligned_with_observed_revisions",
+        grain="instrument_by_research_session",
+        missingness="missing_when_latest_report_value_absent_or_conflicting",
+        family_id="equity.financial_indicator", alpha=AlphaFieldCapability(identifier),
+        alpha_series_reader=_row_series(f"financial.indicator.{identifier}"),
+        reporting_scope="supplier_defined", report_period_selection=period,
+        source_lineage=f"tushare.fina_indicator.{identifier}",
+        authoring_example=f"rank({identifier})", source_endpoint="fina_indicator",
+        source_column=identifier, research_category="financial", display_name=display_name,
+        research_purpose=purpose, source_unit=source_unit,
+    )
+
+
+FINANCIAL_INDICATOR_FIELDS = (
+    _indicator_field("eps", "基本每股收益", "每股指标", "CNY/share", "CNY/share",
+                     "latest_visible_report_cumulative", "supplier basic earnings per share"),
+    _indicator_field("bps", "每股净资产", "每股指标", "CNY/share", "CNY/share",
+                     "latest_visible_report_end", "supplier book value per share"),
+    _indicator_field("current_ratio", "流动比率", "财务结构与偿债", "multiple", "multiple",
+                     "latest_visible_report_end", "current assets divided by current liabilities"),
+    _indicator_field("roe", "净资产收益率", "盈利能力", "ratio", "percent",
+                     "latest_visible_supplier_report", "supplier return on equity; not annualized"),
+    _indicator_field("q_roe", "单季净资产收益率", "单季度指标", "ratio", "percent",
+                     "latest_visible_single_quarter", "supplier single-quarter return on equity"),
+    _indicator_field("netprofit_yoy", "归母净利润同比增长率", "同比增长", "ratio", "percent",
+                     "latest_visible_report_yoy", "parent-attributable net profit YoY growth"),
+)
+
+
+FIELD_DEFINITIONS = (
+    *MARKET_FIELDS, *DAILY_BASIC_FIELDS, *FINANCIAL_FIELDS, *FINANCIAL_INDICATOR_FIELDS,
+)
 
 
 def field_definitions() -> tuple[FieldDefinition, ...]:

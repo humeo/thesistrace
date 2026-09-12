@@ -147,6 +147,8 @@ class ReplayTushareProvider:
             return self._query_benchmark(params=params, fields=fields)
         if api_name == "daily_basic":
             return self._query_daily_basic(params=params, fields=fields)
+        if api_name == "fina_indicator":
+            return self._query_indicator(params=params, fields=fields)
         ts_code = params.get("ts_code")
         if not isinstance(ts_code, str) or set(params) != {"ts_code"}:
             raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
@@ -154,6 +156,40 @@ class ReplayTushareProvider:
         if response is None or not set(fields) <= set(response.fields):
             raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
         return response
+
+    def _query_indicator(
+        self, *, params: Mapping[str, object], fields: Sequence[str],
+    ) -> RawSourceResponse:
+        try:
+            if set(params) != {"ts_code", "start_date", "end_date"}:
+                raise ValueError("Invalid indicator request")
+            if any(not isinstance(value, str) for value in params.values()):
+                raise ValueError("Invalid indicator request values")
+            start = date.fromisoformat(_compact_date(params["start_date"]))
+            end = date.fromisoformat(_compact_date(params["end_date"]))
+            if start > end or end > self._request_end:
+                raise ValueError("Unrecorded indicator period")
+            response = self._financial.get(("fina_indicator", params["ts_code"]))
+            if (
+                response is None or not fields or len(set(fields)) != len(fields)
+                or not set(fields) <= set(response.fields)
+            ):
+                raise ValueError("Unrecorded indicator response")
+            identity_index = response.fields.index("ts_code")
+            period_index = response.fields.index("end_date")
+            selected = []
+            for row in response.items:
+                if row[identity_index] != params["ts_code"]:
+                    raise ValueError("Indicator response identity mismatch")
+                period = row[period_index]
+                if not isinstance(period, str):
+                    raise ValueError("Invalid indicator report date")
+                report_date = date.fromisoformat(_compact_date(period))
+                if start <= report_date <= end:
+                    selected.append(row)
+            return RawSourceResponse(fields=response.fields, items=tuple(selected[:100]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0) from error
 
     def _query_daily_basic(
         self, *, params: Mapping[str, object], fields: Sequence[str],

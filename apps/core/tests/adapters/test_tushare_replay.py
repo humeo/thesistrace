@@ -386,3 +386,32 @@ def test_daily_basic_replay_capped_day_resumes_from_raw_receipts(tmp_path: Path)
         checkpoint=DailyBasicCheckpoint(tmp_path / "receipts", collection_key="refresh:one"),
     )
     assert resumed == result
+
+
+def test_indicator_replay_filters_report_period_and_preserves_cap(tmp_path):
+    path = tmp_path / "indicator.json"
+    rows = [["000001.SZ", f"{year}1231", f"{year + 1}0420", year]
+            for year in range(1900, 2026)]
+    path.write_text(json.dumps({
+        "format": "thesistrace-tushare-product-replay", "version": 1,
+        "request_start": "2026-08-07", "request_end": "2026-08-14", "snapshot": {},
+        "financial": {"fina_indicator": {"000001.SZ": {
+            "fields": ["ts_code", "end_date", "ann_date", "eps"], "items": rows,
+        }}},
+    }))
+    provider = ReplayTushareProvider(path)
+    fields = ("ts_code", "end_date", "ann_date", "eps")
+    result = provider.query_raw("fina_indicator", params={
+        "ts_code": "000001.SZ", "start_date": "20241231", "end_date": "20251231",
+    }, fields=fields)
+    assert result.items == tuple(tuple(row) for row in rows[-2:])
+    capped = provider.query_raw("fina_indicator", params={
+        "ts_code": "000001.SZ", "start_date": "19000101", "end_date": "20260814",
+    }, fields=fields)
+    assert len(capped.items) == 100
+    for bounds in [("20250101", "20240101"), ("20260230", "20260301"),
+                   ("20250101", "20260815")]:
+        with pytest.raises(TushareSourceError, match="REPLAY_REQUEST_MISMATCH"):
+            provider.query_raw("fina_indicator", params={
+                "ts_code": "000001.SZ", "start_date": bounds[0], "end_date": bounds[1],
+            }, fields=fields)

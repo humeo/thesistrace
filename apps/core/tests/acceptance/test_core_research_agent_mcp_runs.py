@@ -1213,3 +1213,46 @@ async def _exercise_statement_fields(settings: CoreSettings, tmp_path: Path, ttm
         assert detail.is_error is False
         assert detail.structured_content["status"] == "succeeded"
         assert detail.structured_content["result_available"] is True
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_mcp_indicator_catalog_and_submission_complete_through_real_worker(tmp_path: Path) -> None:
+    settings = isolated_core_settings(tmp_path / "data")
+    settings.data_mount.mkdir(parents=True)
+    settings.batch_attempt_control_directory.mkdir(parents=True)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    try:
+        publish_current_data(settings, indicator_fields=True)
+        anyio.run(_exercise_indicator_fields, settings, tmp_path)
+    finally:
+        drop_product_schemas(settings)
+
+
+async def _exercise_indicator_fields(settings: CoreSettings, tmp_path: Path) -> None:
+    identifiers = ["eps", "bps", "current_ratio", "roe", "q_roe", "netprofit_yoy"]
+    async with _mcp_client(settings, tmp_path / "mcp-indicators.stderr.log") as client:
+        response = await client.call_tool("get_alpha_catalog", {"identifiers": identifiers})
+        assert response.is_error is False
+        fields = {item["identifier"]: item for item in response.structured_content["fields"]}
+        assert set(fields) == set(identifiers)
+        assert fields["roe"]["unit"] == "ratio"
+        assert fields["eps"]["unit"] == "CNY/share"
+        assert fields["current_ratio"]["unit"] == "multiple"
+        assert all(item["family_id"] == "equity.financial_indicator" for item in fields.values())
+        accepted = await client.call_tool("submit_research_run", {
+            **_command("mcp-indicator-pilot"), "formula": "rank(roe + q_roe + netprofit_yoy)",
+        })
+        assert accepted.is_error is False
+        assert accepted.structured_content["outcome"] == "accepted", accepted.structured_content
+        run_id = accepted.structured_content["run_id"]
+    worker = await anyio.to_thread.run_sync(run_research_worker_once, settings)
+    assert_worker_succeeded(worker)
+    async with _mcp_client(settings, tmp_path / "mcp-indicators-result.stderr.log") as client:
+        detail = await client.call_tool("get_research_run", {"run_id": run_id})
+        assert detail.is_error is False
+        assert detail.structured_content["status"] == "succeeded"
+        assert detail.structured_content["result_available"] is True

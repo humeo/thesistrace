@@ -52,11 +52,12 @@ for (const width of [1280, 390]) {
         generation_manifest_sha256: "a".repeat(64),
         available_field_ids: catalog.fields.map((field) => field.field_id),
         field_families: [
-          ...["equity.eod_price", "equity.daily_basic", "equity.financial_pit"].map((family) => ({
+          ...["equity.eod_price", "equity.daily_basic", "equity.financial_pit", "equity.financial_indicator"].map((family) => ({
             family_id: family,
-            research_category: family === "equity.financial_pit" ? "financial" : "market",
+            research_category: family.startsWith("equity.financial_") ? "financial" : "market",
             source_endpoints: family === "equity.daily_basic" ? ["daily_basic"]
-              : family === "equity.eod_price" ? ["daily"] : ["balancesheet", "cashflow", "income"],
+              : family === "equity.eod_price" ? ["daily"]
+              : family === "equity.financial_indicator" ? ["fina_indicator"] : ["balancesheet", "cashflow", "income"],
             supported_field_ids: fieldsFor(family), available_field_ids: fieldsFor(family),
             coverage_start: "2010-01-04",
             coverage_end: family === "equity.daily_basic" ? "2026-09-08" : "2026-09-09",
@@ -86,7 +87,7 @@ for (const width of [1280, 390]) {
     await page.goto("http://data.test/");
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
-    await expect(page.getByText("63 available", { exact: true })).toBeVisible();
+    await expect(page.getByText("69 available", { exact: true })).toBeVisible();
     await expect(page.getByText("Market partially ready", { exact: true })).toBeVisible();
     expect(requests).toEqual(["/api/data"]);
     await expect(page.locator(".signal-strip")).toHaveCount(4);
@@ -98,6 +99,12 @@ for (const width of [1280, 390]) {
       }
     }
 
+    await page.getByRole("combobox", { name: "Field source" }).selectOption("fina_indicator");
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(6);
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("单季净资产收益率");
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(1);
+    await expect(page.locator(".data-field-table tbody tr")).toContainText("q_roe");
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("");
     await page.getByRole("combobox", { name: "Field source" }).selectOption("daily_basic");
     await expect(page.locator(".data-field-table tbody tr")).toHaveCount(15);
     await page.getByRole("searchbox", { name: "Search fields" }).fill("自由流通换手率");
@@ -149,6 +156,13 @@ for (const width of [1280, 390]) {
     await expect(cash).toBeVisible();
     await cash.click();
     await expect(editor).toHaveText("cash_equivalents");
+    await editor.press("ControlOrMeta+A");
+    await editor.press("Backspace");
+    await editor.pressSequentially("q_ro");
+    const quarterRoe = page.getByRole("option").filter({ hasText: "q_roe" });
+    await expect(quarterRoe).toBeVisible();
+    await quarterRoe.click();
+    await expect(editor).toHaveText("q_roe");
     await page.getByRole("searchbox", { name: "Search fields" }).fill("货币资金");
     await expect(page.locator(".data-field-table tbody tr")).toHaveCount(1);
     await expect(page.locator(".data-field-table tbody tr")).toContainText("monetary_funds");

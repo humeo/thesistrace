@@ -23,6 +23,7 @@ from thesistrace.adapters.cninfo_financial_announcements import (
 from thesistrace.adapters.tushare_benchmark import TushareBenchmarkSource
 from thesistrace.adapters.tushare_data import TushareDataSource
 from thesistrace.adapters.tushare_financial import TushareFinancialSource
+from thesistrace.adapters.tushare_financial_indicator import TushareFinancialIndicatorProvider
 from thesistrace.adapters.tushare_industry import (
     IndustrySourceError,
     TushareIndustrySource,
@@ -408,6 +409,7 @@ def _run(
                             benchmark_source=benchmark_source,
                             financial_announcement_source=financial_announcement_source,
                             financial_source=financial_source,
+                            indicator_provider=TushareFinancialIndicatorProvider(provider),
                             financial_source_window_selector=financial_source_window_selector,
                             industry_source=industry_source,
                             industry_source_target_selector=industry_source_target_selector,

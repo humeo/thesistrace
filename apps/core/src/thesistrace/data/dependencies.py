@@ -91,6 +91,7 @@ def generation_family_coverage(
     }
     end_keys = {
         "research-session-range": "end",
+        "financial-indicator-observation-range": "complete_through_session",
         "membership-range": "end",
         "financial-observation-range": "observation_through_session",
         "financial-announcement-observation-range": "discovery_attempted_through_session",
@@ -103,6 +104,8 @@ def generation_family_coverage(
         end_key = end_keys.get(str(coverage["kind"]))
         if end_key is None:
             raise ValueError(f"Unsupported research coverage for {family.family_id}")
+        if coverage[end_key] is None:
+            continue
         result[family.family_id] = DatasetCoverage(
             start=date.fromisoformat(str(coverage["start"])),
             end=date.fromisoformat(str(coverage[end_key])),
