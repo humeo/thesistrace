@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from benchmark_support import FixtureBenchmarkSource, benchmark_mount_for_data_mount
+from core_runtime import drop_product_schemas
 from psycopg.errors import CheckViolation
 
 import thesistrace.data.refresh as refresh_module
@@ -76,9 +77,12 @@ EXECUTABLE_FIELDS = {
         "total_assets",
         "total_liab",
         "total_hldr_eqy_exc_min_int",
+        "money_cap", "accounts_receiv", "notes_receiv", "oth_receiv", "prepayment",
+        "inventories", "acct_payable", "contract_assets", "contract_liab", "goodwill",
+        "st_borr", "lt_borr", "bond_payable", "non_cur_liab_due_1y", "oth_eqt_tools",
         "update_flag",
     ),
-    "cashflow": (*FIELDS[:7], "n_cashflow_act", "update_flag"),
+    "cashflow": (*FIELDS[:7], "n_cashflow_act", "c_cash_equ_end_period", "update_flag"),
 }
 
 
@@ -134,8 +138,8 @@ class ExecutableStatementSource(StatementSource):
         self.requests.append((endpoint, ts_code, "complete-history"))
         values = {
             "income": ("10", "4"),
-            "balancesheet": ("20", "8", "12"),
-            "cashflow": ("6",),
+            "balancesheet": ("20", "8", "12", *("2",) * 15),
+            "cashflow": ("6", "3"),
         }[endpoint]
         return RawSourceResponse(
             fields,
@@ -779,6 +783,23 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
             for family in MountedGenerationStore(tmp_path).inspect_root(market).families
         )
 
+        bindings = {
+            "financial.balance_sheet.monetary_funds.latest_reported": "monetary_funds",
+            "financial.cashflow.cash_equivalents.latest_reported": "cash_equivalents",
+        }
+        for root in (source_generation, published.generation_manifest_sha256):
+            series = MountedGenerationStore(tmp_path).read_composite_slice(
+                root, sessions=["2026-08-13"], universe_name="top300",
+                neutralization="none", field_bindings=bindings,
+            )
+            coordinate = ("2026-08-13", "equity:000001.SZ")
+            assert series.research_data.fields[
+                "financial.balance_sheet.monetary_funds.latest_reported"
+            ][coordinate] == "2"
+            assert series.research_data.fields[
+                "financial.cashflow.cash_equivalents.latest_reported"
+            ][coordinate] == "3"
+
         def reject_parquet(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("Data Overview opened Parquet")
 
@@ -796,7 +817,7 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
             "discovery_complete_through_session": "2026-08-13",
             "historical_reconciliation_watermark": "2026-08-13",
             "revision_coverage": "source-dated-and-first-observed-corrections",
-            "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+            "seed_policy": "latest-pre-start-annual-flow-and-reported-stock-facts",
             "readiness_status": "ready",
             "pending_instrument_count": 0,
             "discovery_gap_count": 0,
@@ -896,8 +917,8 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             self.requests.append((endpoint, ts_code, "complete-history"))
             values = {
                 "income": ("11", "5"),
-                "balancesheet": ("21", "8", "13"),
-                "cashflow": ("7",),
+                "balancesheet": ("21", "8", "13", *("3",) * 15),
+                "cashflow": ("7", "4"),
             }[endpoint]
             return RawSourceResponse(
                 fields,
@@ -987,7 +1008,7 @@ def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
             "discovery_complete_through_session": "2026-08-14",
             "historical_reconciliation_watermark": "2026-08-13",
             "revision_coverage": "cninfo-announcement-driven-tushare-observed",
-            "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+            "seed_policy": "latest-pre-start-annual-flow-and-reported-stock-facts",
             "readiness_status": "ready",
             "pending_instrument_count": 0,
             "discovery_gap_count": 0,
@@ -1053,8 +1074,8 @@ def test_daily_financial_refresh_closes_unchanged_trigger_and_reuses_tables(
             self.requests.append((endpoint, ts_code, "complete-history"))
             values = {
                 "income": ("10", "4"),
-                "balancesheet": ("20", "8", "12"),
-                "cashflow": ("6",),
+                "balancesheet": ("20", "8", "12", *("2",) * 15),
+                "cashflow": ("6", "3"),
             }[endpoint]
             return RawSourceResponse(
                 fields,
@@ -2349,8 +2370,8 @@ def test_daily_financial_refresh_publishes_other_stocks_when_one_stock_fails(
                 raise RawSourceError("upstream unavailable")
             values = {
                 "income": ("11", "5"),
-                "balancesheet": ("21", "8", "13"),
-                "cashflow": ("7",),
+                "balancesheet": ("21", "8", "13", *("3",) * 15),
+                "cashflow": ("7", "4"),
             }[endpoint]
             return RawSourceResponse(
                 fields,
@@ -2514,8 +2535,8 @@ def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
             self.requests.append((endpoint, ts_code, "complete-history"))
             values = {
                 "income": ("11", "5"),
-                "balancesheet": ("21", "8", "13"),
-                "cashflow": ("7",),
+                "balancesheet": ("21", "8", "13", *("3",) * 15),
+                "cashflow": ("7", "4"),
             }[endpoint]
             return RawSourceResponse(
                 fields,
@@ -3303,54 +3324,10 @@ def test_successful_refresh_candidate_survives_gc_until_composed_and_released(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
-    composable_fields = {
-        "income": (*FIELDS[:7], "total_revenue", "n_income_attr_p", "update_flag"),
-        "balancesheet": (
-            *FIELDS[:7],
-            "total_assets",
-            "total_liab",
-            "total_hldr_eqy_exc_min_int",
-            "update_flag",
-        ),
-        "cashflow": (*FIELDS[:7], "n_cashflow_act", "update_flag"),
-    }
-
-    class ComposableSource(StatementSource):
-        def query_raw(
-            self,
-            endpoint: str,
-            *,
-            params: dict[str, object],
-            fields: tuple[str, ...],
-        ) -> RawSourceResponse:
-            assert fields == composable_fields[endpoint]
-            self.requests.append((endpoint, str(params["ts_code"]), "complete-history"))
-            values = {
-                "income": ("10", "4"),
-                "balancesheet": ("20", "8", "12"),
-                "cashflow": ("6",),
-            }[endpoint]
-            return RawSourceResponse(
-                fields,
-                (
-                    (
-                        str(params["ts_code"]),
-                        "20100420",
-                        "",
-                        "20091231",
-                        "1",
-                        "1",
-                        "4",
-                        *values,
-                        "0",
-                    ),
-                ),
-            )
-
     composable_contract = FinancialCollectionContract(
         capability_sha256="c" * 64,
         endpoint_fields=tuple(
-            (endpoint, composable_fields[endpoint]) for endpoint in FINANCIAL_ENDPOINTS
+            (endpoint, EXECUTABLE_FIELDS[endpoint]) for endpoint in FINANCIAL_ENDPOINTS
         ),
         suspected_truncation_row_counts=tuple((endpoint, None) for endpoint in FINANCIAL_ENDPOINTS),
         shards=(FinancialDateShard("complete-history"),),
@@ -3361,7 +3338,7 @@ def test_successful_refresh_candidate_survives_gc_until_composed_and_released(
         prior = _initial_candidate(
             database,
             tmp_path,
-            ComposableSource(),
+            ExecutableStatementSource(),
             manifest,
             idempotency_key="retained-refresh-prior",
             contract=composable_contract,
@@ -3369,7 +3346,7 @@ def test_successful_refresh_candidate_survives_gc_until_composed_and_released(
         service = FinancialRefreshService(
             database,
             tmp_path,
-            ComposableSource(),
+            ExecutableStatementSource(),
             clock=lambda: COLLECTED_AT + timedelta(days=1),
         )
         outcome = service.rebuild(
@@ -3986,8 +3963,8 @@ def _daily_financial_replay(
                             "2",
                             *{
                                 "income": ("11", "5"),
-                                "balancesheet": ("21", "8", "13"),
-                                "cashflow": ("7",),
+                                "balancesheet": ("21", "8", "13", *("3",) * 15),
+                                "cashflow": ("7", "4"),
                             }[endpoint],
                             "0",
                         ]
@@ -4187,3 +4164,33 @@ def _database(settings: CoreSettings) -> PostgresDatabase:
             "WHERE singleton = 1"
         )
     return database
+
+
+def test_gc_preserves_a_generation_produced_before_stock_projection_expansion(
+    core_settings: CoreSettings, tmp_path: Path,
+) -> None:
+    import zipfile
+
+    fixture = Path(__file__).parents[1] / "fixtures/financial-stored-facts/generation-de55453.zip"
+    with zipfile.ZipFile(fixture) as archive:
+        archive.extractall(tmp_path)
+    generation = "611f1a80a541819b29b57112eed4a2a9d2cef501d2388904e103ee3636f2ef0e"
+    store = MountedGenerationStore(tmp_path)
+    before = store.validate_generation(generation)
+    # This golden mount must not inherit retained roots from other tests' mounts.
+    drop_product_schemas(core_settings)
+    database = _database(core_settings)
+    try:
+        _establish_head(database, tmp_path, generation, operation_id="preserved-old-head")
+        referenced = store.referenced_files(generation)
+        DataGarbageCollector(database, tmp_path).collect(idempotency_key="preserved-old-gc")
+        after = store.validate_generation(generation)
+        assert after == before
+        assert referenced <= store.inventory()
+        assert "financial.cashflow.cash_equivalents.latest_reported" not in after.field_availability
+        assert "financial.cashflow.operating_cash_flow.latest_fy" in after.field_availability
+        head = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert head is not None and head.generation_manifest_sha256 == generation
+    finally:
+        database.close()
+        drop_product_schemas(core_settings)

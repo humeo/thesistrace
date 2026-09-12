@@ -25,8 +25,10 @@ from thesistrace.data.financial_collection import (
     FinancialShardCheckpoint,
     RawFinancialBatchStore,
 )
+from thesistrace.data.financial_series import FinancialSeriesResolver
 from thesistrace.data.generation_files import AddressedFileStore
 from thesistrace.data.generation_store import GenerationFileRef, MountedGenerationStore
+from thesistrace.data.io_metrics import measure_data_io
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication.serialization import canonical_json_bytes
 
@@ -59,10 +61,28 @@ FULL_EXECUTABLE_FIELDS = (
     "total_assets",
     "total_liab",
     "total_hldr_eqy_exc_min_int",
+    "money_cap",
+    "accounts_receiv",
+    "notes_receiv",
+    "oth_receiv",
+    "prepayment",
+    "inventories",
+    "acct_payable",
+    "contract_assets",
+    "contract_liab",
+    "goodwill",
+    "st_borr",
+    "lt_borr",
+    "bond_payable",
+    "non_cur_liab_due_1y",
+    "oth_eqt_tools",
+    "c_cash_equ_end_period",
 )
 
 
-def _materialized_candidate(tmp_path: Path, *, extra_income_versions: int = 0):
+def _materialized_candidate(
+    tmp_path: Path, *, extra_income_versions: int = 0, quarterly_cash_seed: bool = False,
+):
     market_manifest = _market_generation(tmp_path)
     batches = RawFinancialBatchStore(tmp_path)
     checkpoints: list[FinancialShardCheckpoint] = []
@@ -172,7 +192,13 @@ def _materialized_candidate(tmp_path: Path, *, extra_income_versions: int = 0):
     add_batch(
         4,
         "cashflow",
-        [["000001.SZ", "20090425", "", "20081231", "1", "1", "4", "30", "0"]],
+        [
+            ["000001.SZ", "20090425", "", "20081231", "1", "1", "4", "30", "0"],
+            *(
+                [["000001.SZ", "20090425", "", "20090331", "1", "1", "1", "45", "0"]]
+                if quarterly_cash_seed else []
+            ),
+        ],
         datetime(2026, 4, 24, 8, tzinfo=UTC),
         shard="complete-history",
     )
@@ -294,42 +320,32 @@ def test_materializes_sparse_versioned_financial_family_without_publishing(tmp_p
     assert first.revision_coverage == "source-dated-and-first-observed-corrections"
     assert first.raw_batch_count == 6
     income = store.read_table(first.manifest_sha256, "income_statement_versions")
-    assert [row["revenue"] for row in income] == ["25", "81", "90", "101", None, "200"]
-    assert [row["availability_status"] for row in income] == [
-        "quarantined",
-        "available",
-        "available",
-        "available",
-        "available",
-        "available",
-    ]
+    available = [row for row in income if row["availability_status"] == "available"]
+    quarantined = [row for row in income if row["availability_status"] == "quarantined"]
+    assert {row["revenue"] for row in available} == {"70", "90", "200"}
+    assert {row["revenue"] for row in quarantined} == {"25", "80", "81", "101", None}
     assert {row["revision_basis"] for row in income} == {"source_version"}
-    assert [row["coverage_role"] for row in income] == [
-        "quarantined",
-        "pre_start_seed",
-        "in_coverage",
-        "in_coverage",
-        "in_coverage",
-        "in_coverage",
-    ]
-    assert income[0]["source_available_session"] == ""
-    assert income[0]["effective_available_session"] == ""
-    assert income[1]["source_available_session"] == "2009-04-27"
-    assert income[1]["effective_available_session"] == "2009-04-27"
-    assert income[2]["source_available_session"] == "2010-01-04"
-    assert income[2]["coverage_role"] == "in_coverage"
-    assert income[3]["source_available_session"] == "2010-04-21"
-    assert income[3]["effective_available_session"] == "2010-04-21"
-    assert income[4]["effective_available_session"] == "2010-04-21"
-    assert income[5]["source_published_date"] == "20100421"
-    assert income[5]["source_available_session"] == "2010-04-22"
-    assert income[5]["source_report_type"] == "2"
-    assert income[5]["source_company_type"] == "2"
-    assert income[3]["source_row_sha256"] != income[4]["source_row_sha256"]
-    assert income[3]["logical_revision_group_sha256"] == income[4]["logical_revision_group_sha256"]
-    assert income[3]["source_batch_sha256"] == income[4]["source_batch_sha256"]
-    assert store.quarantined_row_count(first.manifest_sha256) == 1
-    assert {"70", "80"}.isdisjoint(row["revenue"] for row in income)
+    by_value = {row["revenue"]: row for row in income}
+    assert by_value["70"]["coverage_role"] == "pre_start_seed"
+    assert by_value["70"]["effective_available_session"] == "2008-04-28"
+    assert by_value["90"]["coverage_role"] == "in_coverage"
+    assert by_value["90"]["effective_available_session"] == "2010-01-04"
+    assert by_value["200"]["source_published_date"] == "20100421"
+    assert by_value["200"]["effective_available_session"] == "2010-04-22"
+    assert by_value["200"]["source_report_type"] == "2"
+    assert by_value["200"]["source_company_type"] == "2"
+    assert all(row["effective_available_session"] == "" for row in quarantined)
+    assert all(row["coverage_role"] == "quarantined" for row in quarantined)
+    assert by_value["25"]["source_available_session"] == ""
+    assert by_value["101"]["source_available_session"] == "2010-04-21"
+    assert by_value["101"]["source_row_sha256"] != by_value[None]["source_row_sha256"]
+    assert by_value["101"]["logical_revision_group_sha256"] == (
+        by_value[None]["logical_revision_group_sha256"]
+    )
+    assert by_value["101"]["source_batch_sha256"] == by_value[None]["source_batch_sha256"]
+    # Income has four conflicting observations plus one undated observation;
+    # balance sheet has another two conflicting observations. All remain evidence.
+    assert store.quarantined_row_count(first.manifest_sha256) == 7
     balance = store.read_table(first.manifest_sha256, "balance_sheet_versions")
     pending_balance = [row for row in balance if row["availability_status"] == "pending_calendar"]
     assert {row["revenue"] for row in pending_balance} == {"999"}
@@ -380,7 +396,7 @@ def test_validation_does_not_open_whole_financial_tables(
     assert store.validate(candidate.manifest_sha256) == candidate
 
 
-def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
+def test_only_a_complete_financial_candidate_can_form_a_composite_generation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -401,7 +417,7 @@ def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
         _empty_complete_snapshot(
             tmp_path,
             market_manifest,
-            idempotency_key="complete-six-fields",
+            idempotency_key="complete-financial-fields",
             fields=FULL_EXECUTABLE_FIELDS,
         ),
         observation_through_session="2026-08-13",
@@ -693,18 +709,21 @@ def test_financial_table_read_keeps_python_memory_bounded(tmp_path: Path) -> Non
     gc.collect()
     tracemalloc.start()
     try:
-        table = store.read_financial_table(
-            candidate.manifest_sha256,
-            "income",
-            ("instrument_id", "effective_available_session", "revenue"),
-            ("2010-04-21", "2010-04-22"),
-            frozenset({"equity:000001.SZ"}),
-        )
+        with measure_data_io() as measurement:
+            table = store.read_financial_table(
+                candidate.manifest_sha256,
+                "income",
+                ("instrument_id", "effective_available_session", "revenue"),
+                ("2010-04-21", "2010-04-22"),
+                frozenset({"equity:000001.SZ"}),
+            )
         _current, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
 
-    assert table.num_rows >= 12000
+    assert measurement.rows_scanned >= 12000
+    assert table.column_names == ["instrument_id", "effective_available_session", "revenue"]
+    assert store.quarantined_row_count(candidate.manifest_sha256) >= 12000
     assert peak < 4 * 1024**2, f"Projected read allocated {peak} Python bytes"
 
 
@@ -731,10 +750,16 @@ def test_financial_series_read_compacts_superseded_pre_window_versions(tmp_path:
         frozenset({"equity:000001.SZ"}),
     )
 
-    revenues = [row["revenue"] for row in rows]
-    assert len(revenues) == 5
-    assert None not in revenues
-    assert set(revenues) == {"25", "81", "90", "101", "200"}
+    available = [row for row in rows if row["availability_status"] == "available"]
+    assert {row["revenue"] for row in available} == {"70", "90", "200"}
+    assert len(available) == 3
+    # Query compaction is a projection only: every quarantined original stays
+    # in the immutable candidate, and none acquires an effective session.
+    original = store.read_table(candidate.manifest_sha256, "income_statement_versions")
+    quarantined = [row for row in original if row["availability_status"] == "quarantined"]
+    assert {row["revenue"] for row in quarantined} == {"25", "80", "81", "101", None}
+    assert all(row["effective_available_session"] == "" for row in quarantined)
+
 
 
 @pytest.mark.parametrize("target", ["raw", "parquet"])
@@ -1147,11 +1172,12 @@ def test_rebuild_checks_prior_references_without_deep_revalidation(
         ),
     )
 
-    assert store.rebuild(
+    rebuilt = store.rebuild(
         replace(snapshot, idempotency_key="head-anchored-prior-rebuild"),
         prior_candidate_manifest_sha256=prior.manifest_sha256,
         observation_through_session=prior.observation_through_session,
-    ) == prior
+    )
+    assert rebuilt == prior
     assert validated == []
 
 
@@ -1337,7 +1363,7 @@ def test_daily_rebuild_publishes_targeted_evidence_and_degraded_discovery_covera
         "discovery_complete_through_session": "2026-08-13",
         "historical_reconciliation_watermark": "2026-08-13",
         "revision_coverage": "cninfo-announcement-driven-tushare-observed",
-        "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+        "seed_policy": "latest-pre-start-annual-flow-and-reported-stock-facts",
         "readiness_status": "ready_with_pending",
         "pending_instrument_count": 1,
         "discovery_gap_count": 0,
@@ -2205,3 +2231,159 @@ def test_industry_and_financial_publications_preserve_other_family_evidence(tmp_
     assert republished.field_availability == combined.field_availability
     assert republished.industry_publication_coordinate == combined.industry_publication_coordinate
     assert store.validate_generation(republished.manifest_sha256) == republished
+
+
+def test_candidate_keeps_quarterly_cash_stock_and_annual_flow_start_seeds(tmp_path: Path) -> None:
+    store, candidate, repeated, _ = _materialized_candidate(tmp_path, quarterly_cash_seed=True)
+    assert candidate == repeated == store.reopen(candidate.manifest_sha256)
+    rows = store.read_table(candidate.manifest_sha256, "cash_flow_statement_versions")
+    seeds = [
+        row for row in rows
+        if row["instrument_id"] == "equity:000001.SZ"
+        and row["coverage_role"] == "pre_start_seed"
+    ]
+    assert {row["source_report_period"] for row in seeds} == {"20081231", "20090331"}
+    assert {row["revenue"] for row in seeds} == {"30", "45"}
+    assert all(row["effective_available_session"] < candidate.coverage_start for row in seeds)
+    assert candidate.coverage_start == "2010-01-04"
+    assert store.validate(candidate.manifest_sha256) == candidate
+
+
+def test_projector_quarantines_simultaneous_conflicts_without_choosing_payload_order() -> None:
+    observations = tuple(
+        FinancialSourceObservation(
+            endpoint="balancesheet",
+            instrument_id="equity:000001.SZ",
+            ts_code="000001.SZ",
+            source_fields=FIELDS,
+            source_values=(
+                "000001.SZ", "20100420", "", "20091231", "1", "1", "4", value, flag,
+            ),
+            first_observed_at="2026-04-24T08:00:00+00:00",
+            raw_batch_sha256=digest * 64,
+        )
+        for value, flag, digest in (("100", "0", "a"), ("101", "1", "b"))
+    )
+    for ordered in (observations, tuple(reversed(observations))):
+        versions = FinancialVersionProjector().project(ordered, SESSIONS)
+        assert len(versions) == 2
+        assert {version.availability_status for version in versions} == {"quarantined"}
+        assert {version.coverage_role for version in versions} == {"quarantined"}
+        assert {version.source()["revenue"] for version in versions} == {"100", "101"}
+        assert all(not version.effective_available_session for version in versions)
+
+
+def test_explicit_rebuild_reprojects_saved_receipts_without_new_source_batches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import thesistrace.data.financial_candidate as candidate_module
+
+    with monkeypatch.context() as previous_catalog:
+        previous_catalog.setattr(
+            candidate_module, "FINANCIAL_FIELDS", candidate_module.FINANCIAL_FIELDS[:6],
+        )
+        store, prior, _, snapshot = _materialized_candidate(tmp_path, quarterly_cash_seed=True)
+    rebuilt = store.rebuild(
+        snapshot,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session=prior.observation_through_session,
+    )
+    assert rebuilt.manifest_sha256 != prior.manifest_sha256
+    assert rebuilt.raw_batch_count == prior.raw_batch_count
+    rows = store.read_table(rebuilt.manifest_sha256, "cash_flow_statement_versions")
+    assert {
+        row["source_report_period"] for row in rows
+        if row["instrument_id"] == "equity:000001.SZ" and row["coverage_role"] == "pre_start_seed"
+    } == {"20081231", "20090331"}
+    old_rows = store.read_table(prior.manifest_sha256, "cash_flow_statement_versions")
+    assert {
+        row["source_report_period"] for row in old_rows
+        if row["instrument_id"] == "equity:000001.SZ" and row["coverage_role"] == "pre_start_seed"
+    } == {"20081231"}
+
+
+def test_projector_preserves_equal_values_with_different_update_flags() -> None:
+    observations = tuple(
+        FinancialSourceObservation(
+            endpoint="balancesheet",
+            instrument_id="equity:000001.SZ",
+            ts_code="000001.SZ",
+            source_fields=FIELDS,
+            source_values=(
+                "000001.SZ", "20100420", "", "20091231", "1", "1", "4", "100", flag,
+            ),
+            first_observed_at="2026-04-24T08:00:00+00:00",
+            raw_batch_sha256=digest * 64,
+        )
+        for flag, digest in (("0", "a"), ("1", "b"))
+    )
+    for ordered in (observations, tuple(reversed(observations))):
+        versions = FinancialVersionProjector().project(ordered, SESSIONS)
+        assert len(versions) == 2
+        assert {version.availability_status for version in versions} == {"available"}
+        assert {version.source()["revenue"] for version in versions} == {"100"}
+        assert {version.source()["update_flag"] for version in versions} == {"0", "1"}
+        assert {version.raw_batch_sha256 for version in versions} == {"a" * 64, "b" * 64}
+        assert {version.effective_available_session for version in versions} == {"2010-04-21"}
+
+
+@pytest.mark.parametrize("damage", [None, "raw", "object"])
+def test_preserved_candidate_from_prior_code_retains_verified_bytes(
+    tmp_path: Path, damage: str | None,
+) -> None:
+    import zipfile
+
+    fixture = Path(__file__).parents[1] / "fixtures/financial-stored-facts/candidate-de55453.zip"
+    with zipfile.ZipFile(fixture) as archive:
+        archive.extractall(tmp_path)
+    manifest = "afd76a941766d3471ec95a22383a9ce9ce4e10ec558a530b3e2e0c12eacf9917"
+    store = FinancialCandidateStore(tmp_path)
+    before = {
+        str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()
+    }
+    if damage is not None:
+        family_path = tmp_path / "manifests/sha256" / manifest[:2] / f"{manifest}.json"
+        family = json.loads(family_path.read_text())
+        if damage == "object":
+            table_sha = family["tables"][0]["manifest_sha256"]
+            table_path = tmp_path / "manifests/sha256" / table_sha[:2] / f"{table_sha}.json"
+            table = json.loads(table_path.read_text())
+            sha = table["objects"][0]["sha256"]
+            path = tmp_path / "objects/sha256" / sha[:2] / f"{sha}.parquet"
+        else:
+            path = next((tmp_path / "financial/raw").rglob("*.json"))
+        path.write_bytes(b"corrupt")
+        with pytest.raises((FinancialCandidateError, RuntimeError)):
+            MountedGenerationStore(tmp_path).financial_candidate_referenced_files(manifest)
+        return
+    assert store.validate_stored(manifest).manifest_sha256 == manifest
+    assert MountedGenerationStore(tmp_path).financial_candidate_referenced_files(manifest)
+    assert before == {
+        str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()
+    }
+
+
+@pytest.mark.parametrize("columnar", [False, True])
+def test_quarantined_stock_candidate_resolves_to_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, columnar: bool,
+) -> None:
+    monkeypatch.setitem(
+        globals(), "FIELDS", tuple("money_cap" if name == "revenue" else name for name in FIELDS),
+    )
+    store, candidate, _, _ = _materialized_candidate(tmp_path)
+    field = "financial.balance_sheet.monetary_funds.latest_reported"
+    resolver = FinancialSeriesResolver(store)
+    request = {
+        "manifest_sha256": candidate.manifest_sha256,
+        "field_ids": (field,),
+        "sessions": ("2010-04-21",),
+        "instrument_ids": ("equity:000001.SZ",),
+    }
+    if columnar:
+        assert resolver.resolve_table(**request).to_pydict() == {
+            "session": ["2010-04-21"],
+            "instrument_id": ["equity:000001.SZ"],
+            field: [None],
+        }
+    else:
+        assert resolver.resolve(**request) == {field: {}}

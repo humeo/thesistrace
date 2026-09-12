@@ -70,7 +70,7 @@ for (const width of [1280, 390]) {
           discovery_complete_through_session: "2026-09-09",
           historical_reconciliation_watermark: "2026-09-08",
           revision_coverage: "announcement-aligned-observed",
-          seed_policy: "latest-pre-start-annual-flow-and-balance-facts",
+          seed_policy: "latest-pre-start-annual-flow-and-reported-stock-facts",
           readiness_status: "ready", pending_instrument_count: 0,
           discovery_gap_count: 0, earliest_unresolved_date: null, sparse_facts: true,
         },
@@ -86,7 +86,7 @@ for (const width of [1280, 390]) {
     await page.goto("http://data.test/");
     await page.addStyleTag({ content: styles });
     await page.addScriptTag({ content: script });
-    await expect(page.getByText("28 available", { exact: true })).toBeVisible();
+    await expect(page.getByText("44 available", { exact: true })).toBeVisible();
     await expect(page.getByText("Market partially ready", { exact: true })).toBeVisible();
     expect(requests).toEqual(["/api/data"]);
     await expect(page.locator(".signal-strip")).toHaveCount(4);
@@ -112,14 +112,17 @@ for (const width of [1280, 390]) {
     await expect(page.locator(".data-field-table tbody tr").first()).toContainText("revenue");
     await page.getByRole("searchbox", { name: "Search fields" }).fill("");
     await page.getByRole("combobox", { name: "Field source" }).selectOption("cashflow");
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(2);
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("期末现金");
     await expect(page.locator(".data-field-table tbody tr")).toHaveCount(1);
-    await expect(page.locator(".data-field-table tbody tr").first()).toContainText("operating_cash_flow");
+    await expect(page.locator(".data-field-table tbody tr")).toContainText("cash_equivalents");
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("");
     await page.getByRole("combobox", { name: "Field source" }).selectOption("");
     await page.getByRole("combobox", { name: "Research purpose" }).selectOption("盈利");
     await expect(page.locator(".data-field-table tbody tr")).toHaveCount(2);
     await page.getByRole("combobox", { name: "Research purpose" }).selectOption("");
     await page.getByRole("combobox", { name: "Field period" }).selectOption("latest_visible_quarterly_or_annual");
-    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(3);
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(19);
     await page.getByRole("searchbox", { name: "Search fields" }).fill("no_matching_field");
     await expect(page.locator(".data-field-table tbody tr")).toHaveCount(0);
     await expect(page.getByText("No fields match these filters.")).toHaveCount(2);
@@ -137,6 +140,16 @@ for (const width of [1280, 390]) {
     await expect(rawClose).toBeVisible();
     await rawClose.click();
     await expect(editor).toHaveText("close_raw");
+    await editor.press("ControlOrMeta+A");
+    await editor.press("Backspace");
+    await editor.pressSequentially("cash_equ");
+    const cash = page.getByRole("option").filter({ hasText: "cash_equivalents" });
+    await expect(cash).toBeVisible();
+    await cash.click();
+    await expect(editor).toHaveText("cash_equivalents");
+    await page.getByRole("searchbox", { name: "Search fields" }).fill("货币资金");
+    await expect(page.locator(".data-field-table tbody tr")).toHaveCount(1);
+    await expect(page.locator(".data-field-table tbody tr")).toContainText("monetary_funds");
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
   });
 }

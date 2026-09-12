@@ -127,7 +127,7 @@
       "report_period_selection": "latest_visible_quarterly_or_annual",
       "reporting_scope": "report_type_1_consolidated",
       "target_unit": "CNY",
-      "note": "最新可见报告期的期末存量；不是订单总额或必然实现的收入。"
+      "note": "最新可见报告期的收入合同负债；不是订单总额或必然实现的收入。不适用于保险公司，来源列可能表示保险合同负债。"
     },
     {
       "status": "拟新增",

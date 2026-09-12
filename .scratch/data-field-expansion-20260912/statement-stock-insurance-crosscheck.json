@@ -1,0 +1,51 @@
+{
+  "source_url": "https://www.pingan.com/app_upload/images/info/upload/e63117e6-98df-4bac-b7e3-27a69e94ab22.pdf",
+  "report": "Ping An 2026 Q1 consolidated balance sheet, audited 2025-12-31 comparative column",
+  "pdf_pages_one_based": [
+    19,
+    20
+  ],
+  "checks": [
+    {
+      "source_column": "money_cap",
+      "report_value_million_cny": "745679",
+      "source_value_cny": "745679000000.0",
+      "matches": true
+    },
+    {
+      "source_column": "goodwill",
+      "report_value_million_cny": "38130",
+      "source_value_cny": "38130000000.0",
+      "matches": true
+    },
+    {
+      "source_column": "st_borr",
+      "report_value_million_cny": "84520",
+      "source_value_cny": "84520000000.0",
+      "matches": true
+    },
+    {
+      "source_column": "lt_borr",
+      "report_value_million_cny": "150094",
+      "source_value_cny": "150094000000.0",
+      "matches": true
+    },
+    {
+      "source_column": "bond_payable",
+      "report_value_million_cny": "853661",
+      "source_value_cny": "853661000000.0",
+      "matches": true
+    },
+    {
+      "source_column": "contract_liab",
+      "report_value_million_cny": "5360910",
+      "source_value_cny": "5360910000000.0",
+      "matches": true
+    }
+  ],
+  "semantic_exception": {
+    "source_column": "contract_liab",
+    "actual_report_label": "保险合同负债",
+    "conclusion": "Insurance values are excluded from contract_liabilities via field company-type applicability; row and columnar readers return missing for the selected insurance report without falling back to older eligible reports. Other fields remain independently available."
+  }
+}

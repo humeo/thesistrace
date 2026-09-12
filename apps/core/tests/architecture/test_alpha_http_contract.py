@@ -71,6 +71,22 @@ def test_alpha_catalog_exposes_financial_fields_and_cross_sectional_rank() -> No
         "assets",
         "liabilities",
         "equity",
+        "monetary_funds",
+        "accounts_receivable",
+        "notes_receivable",
+        "other_receivables",
+        "prepayments",
+        "inventories",
+        "accounts_payable",
+        "contract_assets",
+        "contract_liabilities",
+        "goodwill",
+        "short_term_borrowings",
+        "long_term_borrowings",
+        "bonds_payable",
+        "noncurrent_liabilities_due_1y",
+        "other_equity_instruments",
+        "cash_equivalents",
     }
     assert {
         identifier: field["field_id"] for identifier, field in financial.items()
@@ -89,11 +105,61 @@ def test_alpha_catalog_exposes_financial_fields_and_cross_sectional_rank() -> No
         "equity": (
             "financial.balance_sheet.equity_parent.latest_reported"
         ),
+        "monetary_funds": (
+            "financial.balance_sheet.monetary_funds.latest_reported"
+        ),
+        "accounts_receivable": (
+            "financial.balance_sheet.accounts_receivable.latest_reported"
+        ),
+        "notes_receivable": (
+            "financial.balance_sheet.notes_receivable.latest_reported"
+        ),
+        "other_receivables": (
+            "financial.balance_sheet.other_receivables.latest_reported"
+        ),
+        "prepayments": (
+            "financial.balance_sheet.prepayments.latest_reported"
+        ),
+        "inventories": (
+            "financial.balance_sheet.inventories.latest_reported"
+        ),
+        "accounts_payable": (
+            "financial.balance_sheet.accounts_payable.latest_reported"
+        ),
+        "contract_assets": (
+            "financial.balance_sheet.contract_assets.latest_reported"
+        ),
+        "contract_liabilities": (
+            "financial.balance_sheet.contract_liabilities.latest_reported"
+        ),
+        "goodwill": (
+            "financial.balance_sheet.goodwill.latest_reported"
+        ),
+        "short_term_borrowings": (
+            "financial.balance_sheet.short_term_borrowings.latest_reported"
+        ),
+        "long_term_borrowings": (
+            "financial.balance_sheet.long_term_borrowings.latest_reported"
+        ),
+        "bonds_payable": (
+            "financial.balance_sheet.bonds_payable.latest_reported"
+        ),
+        "noncurrent_liabilities_due_1y": (
+            "financial.balance_sheet.noncurrent_liabilities_due_1y.latest_reported"
+        ),
+        "other_equity_instruments": (
+            "financial.balance_sheet.other_equity_instruments.latest_reported"
+        ),
+        "cash_equivalents": (
+            "financial.cashflow.cash_equivalents.latest_reported"
+        ),
     }
     assert all(field["report_period_selection"] for field in financial.values())
     assert all(
-        field["applicable_company_types"] == ["1", "2", "3", "4"]
-        for field in financial.values()
+        field["applicable_company_types"] == (
+            ["1", "2", "4"] if identifier == "contract_liabilities" else ["1", "2", "3", "4"]
+        )
+        for identifier, field in financial.items()
     )
     assert all(field["example"] for field in financial.values())
     assert "rank" in {builtin["identifier"] for builtin in catalog["builtins"]}

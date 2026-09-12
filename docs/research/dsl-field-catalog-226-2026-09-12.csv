@@ -198,7 +198,7 @@
 "拟新增","三表扩展：报告期存量","inventories","存货","balancesheet","inventories","latest_visible_quarterly_or_annual","financial.balance_sheet.inventories.latest_reported","最新可见报告期的期末存量；行业适用性与源非空覆盖需分别核验。"
 "拟新增","三表扩展：报告期存量","accounts_payable","应付账款","balancesheet","acct_payable","latest_visible_quarterly_or_annual","financial.balance_sheet.accounts_payable.latest_reported","最新可见报告期的期末存量；不同于应付票据及应付账款合计。"
 "拟新增","三表扩展：报告期存量","contract_assets","合同资产","balancesheet","contract_assets","latest_visible_quarterly_or_annual","financial.balance_sheet.contract_assets.latest_reported","最新可见报告期的期末存量；不自动并入应收账款；科目出现前缺失不填零。"
-"拟新增","三表扩展：报告期存量","contract_liabilities","合同负债","balancesheet","contract_liab","latest_visible_quarterly_or_annual","financial.balance_sheet.contract_liabilities.latest_reported","最新可见报告期的期末存量；不是订单总额或必然实现的收入。"
+"拟新增","三表扩展：报告期存量","contract_liabilities","合同负债","balancesheet","contract_liab","latest_visible_quarterly_or_annual","financial.balance_sheet.contract_liabilities.latest_reported","最新可见报告期的收入合同负债；不是订单总额或必然实现的收入。不适用于保险公司，来源列可能表示保险合同负债。"
 "拟新增","三表扩展：报告期存量","goodwill","商誉","balancesheet","goodwill","latest_visible_quarterly_or_annual","financial.balance_sheet.goodwill.latest_reported","最新可见报告期的期末存量；余额不同于当期减值损失。"
 "拟新增","三表扩展：报告期存量","short_term_borrowings","短期借款","balancesheet","st_borr","latest_visible_quarterly_or_annual","financial.balance_sheet.short_term_borrowings.latest_reported","最新可见报告期的期末存量；不是全部短期到期债务。"
 "拟新增","三表扩展：报告期存量","long_term_borrowings","长期借款","balancesheet","lt_borr","latest_visible_quarterly_or_annual","financial.balance_sheet.long_term_borrowings.latest_reported","最新可见报告期的期末存量；不是全部非流动负债。"

@@ -5027,7 +5027,7 @@ def test_admission_rechecks_head_after_catalog_read(tmp_path: Path) -> None:
         snapshot = client.get("/api/data").json()
         assert snapshot["generation_manifest_sha256"] == head_a
         assert snapshot["catalog"]["generation_manifest_sha256"] == head_a
-        assert len(snapshot["catalog"]["fields"]) == 13
+        assert len(snapshot["catalog"]["fields"]) == 29
         assert "revenue" in {field["identifier"] for field in snapshot["catalog"]["fields"]}
 
         head_b = _publish_head(
@@ -5080,7 +5080,7 @@ def test_daily_fields_http_research_and_track_use_their_frozen_generations(tmp_p
         snapshot = client.get("/api/data").json()
         assert snapshot["generation_manifest_sha256"] == expanded
         fields = {field["identifier"] for field in snapshot["catalog"]["fields"]}
-        assert len(fields) == 28
+        assert len(fields) == 44
         assert {"close_raw", "pe", "turnover_rate", "revenue"} <= fields
         accepted = client.post("/api/research-runs", json=_run_command(
             "daily-mixed-research", formula=formula,
@@ -5112,6 +5112,35 @@ def test_daily_fields_http_research_and_track_use_their_frozen_generations(tmp_p
         )
         assert "market.valuation.pe" not in old_fields
 
+
+
+def test_statement_stock_formula_completes_through_http_and_real_worker(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2010-01-04", "2010-04-20", "2010-04-21",
+                "2026-08-03", "2026-08-04", "2026-08-05")
+    generation = _publish_composite_head(settings, sessions=sessions, all_market_fields=True)
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        overview = client.get("/api/data").json()
+        catalog = {field["identifier"]: field for field in overview["catalog"]["fields"]}
+        assert overview["generation_manifest_sha256"] == generation
+        assert len(catalog) == 29
+        assert catalog["cash_equivalents"]["report_period_selection"] == (
+            "latest_visible_quarterly_or_annual"
+        )
+        assert catalog["monetary_funds"]["unit"] == "CNY"
+        accepted = client.post("/api/research-runs", json=_run_command(
+            "statement-stock-mixed",
+            formula="rank((monetary_funds + cash_equivalents) / assets)",
+        ))
+        assert accepted.status_code == 202, accepted.text
+        run_id = accepted.json()["id"]
+        assert runtime.research_runs.process_next()
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "succeeded", detail
+        assert _stored_execution(settings, run_id)["attempt_data_generation_id"] == generation
 
 def _run_command(
     request_id: str,
@@ -5590,6 +5619,9 @@ def _publish_composite_head(
             "total_assets",
             "total_liab",
             "total_hldr_eqy_exc_min_int",
+            "money_cap", "accounts_receiv", "notes_receiv", "oth_receiv", "prepayment",
+            "inventories", "acct_payable", "contract_assets", "contract_liab", "goodwill",
+            "st_borr", "lt_borr", "bond_payable", "non_cur_liab_due_1y", "oth_eqt_tools",
             "update_flag",
         ),
         "cashflow": (
@@ -5601,13 +5633,17 @@ def _publish_composite_head(
             "comp_type",
             "end_type",
             "n_cashflow_act",
+            "c_cash_equ_end_period",
             "update_flag",
         ),
     }
     values = {
         "income": (("100", "10"), ("200", "20")),
-        "balancesheet": (("1000", "400", "600"), ("2000", "800", "1200")),
-        "cashflow": (("30",), ("60",)),
+        "balancesheet": (
+            ("1000", "400", "600", "200", *("10",) * 14),
+            ("2000", "800", "1200", "100", *("20",) * 14),
+        ),
+        "cashflow": (("30", "50"), ("60", "75")),
     }
     raw = RawFinancialBatchStore(settings.data_mount)
     checkpoints: list[FinancialShardCheckpoint] = []

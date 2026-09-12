@@ -332,7 +332,7 @@
 | `inventories` | 存货 | `balancesheet.inventories` | 最新可见报告期的期末存量；行业适用性与源非空覆盖需分别核验。 |
 | `accounts_payable` | 应付账款 | `balancesheet.acct_payable` | 最新可见报告期的期末存量；不同于应付票据及应付账款合计。 |
 | `contract_assets` | 合同资产 | `balancesheet.contract_assets` | 最新可见报告期的期末存量；不自动并入应收账款；科目出现前缺失不填零。 |
-| `contract_liabilities` | 合同负债 | `balancesheet.contract_liab` | 最新可见报告期的期末存量；不是订单总额或必然实现的收入。 |
+| `contract_liabilities` | 合同负债 | `balancesheet.contract_liab` | 最新可见报告期的收入合同负债；不是订单总额或必然实现的收入。不适用于保险公司，来源列可能表示保险合同负债。 |
 | `goodwill` | 商誉 | `balancesheet.goodwill` | 最新可见报告期的期末存量；余额不同于当期减值损失。 |
 | `short_term_borrowings` | 短期借款 | `balancesheet.st_borr` | 最新可见报告期的期末存量；不是全部短期到期债务。 |
 | `long_term_borrowings` | 长期借款 | `balancesheet.lt_borr` | 最新可见报告期的期末存量；不是全部非流动负债。 |

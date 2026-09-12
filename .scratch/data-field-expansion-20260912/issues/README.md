@@ -2,7 +2,7 @@
 
 **Status:** ready-for-agent
 
-2026-09-12 已获用户确认，发布 8 张正式工单。01、02 已完成独立验收与串行复审；02 随本次独立提交交付。03—08 尚未开始。
+2026-09-12 已获用户确认，发布 8 张正式工单。01—03 已完成独立验收与串行复审；03 随本次独立提交交付。04—08 尚未开始。
 
 母规格：[226 字段规格](../spec.md)。逐字段定义沿用该规格的权威附件；母规格没有修改或关闭。
 
@@ -21,7 +21,7 @@
 | --- | --- | --- | --- | --- |
 | 01 | [统一现有字段目录、准入和家族合同](01-unify-field-contract.md) | 无 | 无 | complete |
 | 02 | [接入 daily_basic 的 16 个 DSL 入口](02-daily-basic-fields.md) | 01 | 01 完成并提交 | complete |
-| 03 | [开放三表的 16 个期末存量字段](03-statement-stock-fields.md) | 01 | 02 完成并提交 | ready-for-agent |
+| 03 | [开放三表的 16 个期末存量字段](03-statement-stock-fields.md) | 01 | 02 完成并提交 | complete |
 | 04 | [提供 19 个 TTM 流量及不同期缺失规则](04-ttm-flow-fields.md) | 01 | 03 完成并提交 | ready-for-agent |
 | 05 | [贯通 fina_indicator 的代表性指标链路](05-financial-indicator-pilot.md) | 01 | 04 完成并提交 | ready-for-agent |
 | 06 | [补齐 fina_indicator 全部 163 个指标](06-financial-indicator-catalog.md) | 05 | 05 完成并提交 | ready-for-agent |

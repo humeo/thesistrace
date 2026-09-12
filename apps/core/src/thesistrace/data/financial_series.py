@@ -44,6 +44,7 @@ class _FieldProjection:
     endpoint: str
     source_column: str
     period_selection: str
+    company_types: tuple[str, ...]
 
 
 _PROJECTIONS = tuple(
@@ -54,6 +55,7 @@ _PROJECTIONS = tuple(
         "annual"
         if field.report_period_selection == "latest_visible_full_year"
         else "latest_reported",
+        field.applicable_company_types,
     )
     for field in FINANCIAL_FIELDS
 )
@@ -347,7 +349,11 @@ def _state_transitions_rows(
                     "session_date": date.fromisoformat(available_session),
                     "instrument_id": instrument_id,
                     **{
-                        projection.field_id: selected.get(projection.source_column)
+                        projection.field_id: (
+                            selected.get(projection.source_column)
+                            if str(selected.get("source_company_type", ""))
+                            in projection.company_types else None
+                        )
                         for projection in projections
                     },
                 }
@@ -388,6 +394,8 @@ def _state_transitions_table(
             pc.ends_with(table["source_report_period"], "1231"),
         )
     accepted = table.filter(pc.fill_null(accepted_mask, False))
+    if accepted.num_rows == 0:
+        return pa.Table.from_batches([], schema=schema)
     accepted = accepted.append_column(
         "_report_period_order",
         pc.cast(accepted["source_report_period"], pa.int64()),
@@ -448,7 +456,14 @@ def _state_transitions_table(
             "session_date": pc.cast(latest["effective_available_session"], pa.date32()),
             "instrument_id": latest["instrument_id"],
             **{
-                projection.field_id: latest[projection.source_column]
+                projection.field_id: pc.if_else(
+                    pc.is_in(
+                        latest["source_company_type"],
+                        value_set=pa.array(projection.company_types),
+                    ),
+                    latest[projection.source_column],
+                    None,
+                )
                 for projection in projections
             },
         },

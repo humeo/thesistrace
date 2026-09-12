@@ -419,7 +419,9 @@ class MountedGenerationStore:
 
         financial_store = FinancialCandidateStore(self._root)
         try:
-            financial = financial_store.validate(descriptor.financial_candidate_manifest_sha256)
+            financial = financial_store.validate_stored(
+                descriptor.financial_candidate_manifest_sha256
+            )
             expected_reference = financial_store.family_reference(
                 descriptor.financial_candidate_manifest_sha256
             )
@@ -1679,7 +1681,7 @@ class MountedGenerationStore:
         )
 
         try:
-            FinancialCandidateStore(self._root).validate(manifest_sha256)
+            FinancialCandidateStore(self._root).validate_stored(manifest_sha256)
         except FinancialCandidateError as error:
             raise GenerationStoreError("Financial retained candidate is invalid") from error
         return frozenset(self._financial_referenced_files(manifest_sha256))
